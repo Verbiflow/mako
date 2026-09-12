@@ -2,6 +2,7 @@ import { RelayJobPayloadSchema as SharedRelayJobPayloadSchema } from "@mako/rela
 import { z } from "zod"
 
 export {
+  relayThreadMappingFromCompletion,
   RelayCanonicalEventSchema,
   RelayCompletionSchema,
   RelayControlPollSchema,

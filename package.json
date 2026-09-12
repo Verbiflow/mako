@@ -73,7 +73,7 @@
     "release": "npm run package:mac",
     "test:live": "tsx scripts/test-live-conversations.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
     "verify:sessions": "npm run typecheck && npm test --workspace @mako/sessions && npm run test:live && npm run test:codex-protocol && npm run test:providers && npm run test:host && npm run test:stage && npm run test:performance && npm run lint && npm run build",
-    "test:conversation-control": "tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-child-workspace.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-relay-conversations.ts",
+    "test:conversation-control": "tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-child-workspace.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-relay-conversations.ts && tsx scripts/test-relay-workspace.ts",
     "test:provider-e2e": "npm run build:electron && node scripts/test-provider-e2e.mjs",
     "clean:fixture-sessions": "tsx scripts/clean-fixture-sessions.ts",
     "test:desk-browser-electron": "npm run build:electron && node scripts/test-desk-browser-electron.mjs",

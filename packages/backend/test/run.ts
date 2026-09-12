@@ -34,6 +34,7 @@ import {
 } from "../src/relay/auth"
 import { parseRelayJobPayload } from "../src/relay/types"
 import {
+  describeWorker,
   prepareSlackRelayWebhook,
   slackActionCommand,
 } from "../src/relay/slack-ingress"
@@ -326,6 +327,79 @@ if (explicitNew.kind === "enqueue") {
       threadPath: "/threads/existing",
     }).kind,
     "new"
+  )
+}
+// Projects: listing, choosing by name, and carrying the choice into new work.
+const projectsCommand = parseSlackRelayCommand({
+  mapping: null,
+  origin,
+  text: "projects ui",
+})
+assert.equal(projectsCommand.kind, "enqueue")
+if (projectsCommand.kind === "enqueue") {
+  assert.equal(projectsCommand.payload.kind, "inspect-projects")
+  if (projectsCommand.payload.kind === "inspect-projects")
+    assert.equal(projectsCommand.payload.query, "ui")
+}
+const projectCommand = parseSlackRelayCommand({
+  mapping: {
+    cwd: "/Users/me/old",
+    harness: "claude",
+    model: "sonnet",
+    threadPath: "/tmp/thread",
+  },
+  origin,
+  text: "project pi-ui",
+})
+assert.equal(projectCommand.kind, "enqueue")
+if (projectCommand.kind === "enqueue") {
+  assert.equal(projectCommand.payload.kind, "configure")
+  if (projectCommand.payload.kind === "configure") {
+    assert.equal(projectCommand.payload.selection.cwd, "pi-ui")
+    assert.equal(projectCommand.payload.selection.model, "sonnet")
+    assert.equal(
+      projectCommand.payload.threadPath,
+      undefined,
+      "a new project starts fresh; the resumed session stayed in the old one"
+    )
+  }
+}
+assert.equal(
+  parseSlackRelayCommand({ mapping: null, origin, text: "project" }).kind,
+  "help"
+)
+const tuningWithoutSession = parseSlackRelayCommand({
+  mapping: { cwd: "/Users/me/pi-ui", harness: "codex" },
+  origin,
+  text: "model gpt-5.6",
+})
+assert.equal(tuningWithoutSession.kind, "enqueue")
+if (tuningWithoutSession.kind === "enqueue") {
+  assert.equal(tuningWithoutSession.payload.kind, "configure")
+  assert.equal(tuningWithoutSession.payload.selection.cwd, "/Users/me/pi-ui")
+  if (tuningWithoutSession.payload.kind === "configure")
+    assert.equal(tuningWithoutSession.payload.threadPath, undefined)
+}
+const projectOnlyPrompt = parseSlackRelayCommand({
+  mapping: { cwd: "/Users/me/pi-ui", harness: "codex" },
+  origin,
+  text: "fix the flaky test",
+})
+if (projectOnlyPrompt.kind === "enqueue") {
+  assert.equal(projectOnlyPrompt.payload.kind, "new")
+  assert.equal(projectOnlyPrompt.payload.selection.cwd, "/Users/me/pi-ui")
+}
+if (explicitNew.kind === "enqueue") {
+  const forced = applyRelayThreadMapping(explicitNew.payload, {
+    cwd: "/Users/me/pi-ui",
+    harness: "claude",
+    threadPath: "/threads/existing",
+  })
+  assert.equal(forced.kind, "new")
+  assert.equal(
+    forced.selection.cwd,
+    "/Users/me/pi-ui",
+    "a forced new session still runs in the thread's project"
   )
 }
 assert.equal(
@@ -649,6 +723,30 @@ if (action.kind === "block_actions") {
       }),
       "select /threads/selected"
     )
+}
+// `status` answers from the worker's own heartbeat, never from transcripts.
+{
+  const seen = new Date().toISOString()
+  const base = {
+    partitionKey: "workers:TTEST",
+    rowKey: "8b452bc3-0000-4000-8000-000000000000",
+    defaultHarness: "codex",
+    deviceName: "Studio",
+    lastSeenAt: seen,
+    version: "1.0.0",
+  }
+  assert.equal(describeWorker(null), "Mako is offline.")
+  assert.equal(describeWorker(base), "Mako is online on *Studio*.")
+  assert.equal(
+    describeWorker({ ...base, activity: "idle", workspace: "pi-ui" }),
+    "Mako is online on *Studio*. New requests run in `pi-ui`."
+  )
+  assert.equal(
+    describeWorker({ ...base, activity: "busy", workspace: "pi-ui" }),
+    "Mako is online on *Studio*. It is working on a request now."
+  )
+  assert.match(describeWorker({ ...base, activity: "failing" }), /last attempts failed/)
+  assert.match(describeWorker({ ...base, kind: "cloud" }), /in the cloud on \*Studio\*/)
 }
 const controls = JSON.stringify(slackControlBlocks())
 for (const actionId of [

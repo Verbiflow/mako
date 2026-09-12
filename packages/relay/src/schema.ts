@@ -37,7 +37,11 @@ export const RemoteAttachmentSchema = z.object({
 })
 export type RemoteAttachment = z.infer<typeof RemoteAttachmentSchema>
 
+const WorkspacePathSchema = z.string().min(1).max(4_000)
+
 export const RuntimeSelectionSchema = z.object({
+  /** The project directory on the worker. Absent means the worker chooses. */
+  cwd: WorkspacePathSchema.optional(),
   effort: z.string().min(1).max(80).optional(),
   fast: z.boolean().optional(),
   harness: RelayHarnessSchema.optional(),
@@ -84,10 +88,20 @@ export const RelayJobPayloadSchema = z.discriminatedUnion("kind", [
     selection: RuntimeSelectionSchema,
   }),
   z.object({
+    kind: z.literal("inspect-projects"),
+    origin: RemoteOriginSchema,
+    query: z.string().max(500).optional(),
+    selection: RuntimeSelectionSchema,
+  }),
+  /**
+   * Bind this remote thread to a local thread, a project, or both. With only
+   * `selection.cwd` the next message starts fresh in that project.
+   */
+  z.object({
     kind: z.literal("configure"),
     origin: RemoteOriginSchema,
     selection: RuntimeSelectionSchema,
-    threadPath: z.string().min(1).max(4_000),
+    threadPath: WorkspacePathSchema.optional(),
   }),
 ])
 export type RelayJobPayload = z.infer<typeof RelayJobPayloadSchema>
@@ -96,12 +110,33 @@ export function parseRelayJobPayload<Value>(value: Value): RelayJobPayload {
   return RelayJobPayloadSchema.parse(value)
 }
 
+/** Where a worker runs. A cloud worker is the same loop in a container. */
+export const RelayWorkerKindSchema = z.enum(["desktop", "cloud"])
+export type RelayWorkerKind = z.infer<typeof RelayWorkerKindSchema>
+
+/** What the worker is doing, as the gateway may tell the user. */
+export const RelayWorkerActivitySchema = z.enum(["idle", "busy", "failing"])
+export type RelayWorkerActivity = z.infer<typeof RelayWorkerActivitySchema>
+
+/**
+ * A heartbeat is the worker's presence and its sanitized state: the gateway
+ * answers "is anything listening, and what is it doing" from this row alone,
+ * never from transcripts. `generation` changes on every worker start so a
+ * restarted worker is distinguishable from one that kept running.
+ */
 export const WorkerHeartbeatSchema = z.object({
   defaultHarness: RelayHarnessSchema,
   defaultModel: z.string().min(1).max(160).optional(),
   deviceId: z.uuid(),
   deviceName: z.string().min(1).max(160),
   version: z.string().min(1).max(80),
+  kind: RelayWorkerKindSchema.optional(),
+  generation: z.uuid().optional(),
+  startedAt: z.iso.datetime().optional(),
+  activity: RelayWorkerActivitySchema.optional(),
+  currentJobId: z.uuid().optional(),
+  /** The project a new request would run in, by name. */
+  workspace: z.string().min(1).max(256).optional(),
 })
 export type WorkerHeartbeat = z.infer<typeof WorkerHeartbeatSchema>
 
@@ -110,12 +145,17 @@ export const RelayLeaseRequestSchema = WorkerHeartbeatSchema.extend({
 })
 export type RelayLeaseRequest = z.infer<typeof RelayLeaseRequestSchema>
 
+/**
+ * A renewal may carry the heartbeat too: a worker busy with a long job sends
+ * no lease requests, and without this it looked offline while working.
+ */
 export const RelayRenewalSchema = z.object({
   deviceId: z.uuid(),
   jobId: z.uuid(),
   messageId: z.string().min(1),
   popReceipt: z.string().min(1),
   visibilityTimeoutSeconds: z.number().int().min(30).max(300).default(120),
+  heartbeat: WorkerHeartbeatSchema.optional(),
 })
 export type RelayRenewal = z.infer<typeof RelayRenewalSchema>
 
@@ -176,10 +216,23 @@ export const RelayPresentationSchema = z.discriminatedUnion("kind", [
       )
       .max(100),
   }),
+  z.object({
+    kind: z.literal("projects"),
+    items: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(256),
+          path: WorkspacePathSchema,
+        })
+      )
+      .max(15),
+  }),
 ])
 export type RelayPresentation = z.infer<typeof RelayPresentationSchema>
 
 export const RelayCompletionSchema = z.object({
+  /** The project the work ran in; the gateway remembers it for the thread. */
+  cwd: WorkspacePathSchema.optional(),
   deviceId: z.uuid(),
   effort: z.string().min(1).max(80).optional(),
   fast: z.boolean().optional(),

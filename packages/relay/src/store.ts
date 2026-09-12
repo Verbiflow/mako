@@ -10,13 +10,19 @@ import type {
   WorkerHeartbeat,
 } from "./schema.js"
 
+/**
+ * What a remote thread remembers between jobs: the device that served it, the
+ * local thread it continues, and the project it runs in. A mapping with only
+ * `cwd` starts fresh in that project on the next message.
+ */
 export interface RelayThreadMapping {
+  cwd?: string
   deviceId: string
   effort?: string
   fast?: boolean
   harness: string
   model?: string
-  threadPath: string
+  threadPath?: string
   updatedAt: string
 }
 

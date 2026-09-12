@@ -51,8 +51,8 @@ import {
   type BrowserWindowConstructorOptions,
 } from "electron"
 import { watch } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+import { homedir, hostname } from "node:os"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { AgentHost } from "./host.js"
 import {
@@ -62,6 +62,7 @@ import {
   listCrashes,
   record,
 } from "./crash.js"
+import { hostLog, hostLogPath, installHostLog } from "./host-log.js"
 import { installAutomation } from "./automation.js"
 import {
   computerPermissions,
@@ -168,7 +169,13 @@ import {
   backendConnectionStatus,
   ensureBackendConnectionEnvironment,
 } from "./backend-connection.js"
-import { startSlackRelay, stopSlackRelay } from "./slack-relay.js"
+import {
+  disableRelayWorker,
+  relayPresence,
+  startRelayWorker,
+  stopRelayWorker,
+} from "./relay-worker.js"
+import type { RelayWorkspaceCandidate } from "./relay-workspace.js"
 import { applyMcpSync, previewMcpSync } from "./mcp-sync.js"
 import { discoverSkillRegistry } from "./skill-registry.js"
 import {
@@ -216,10 +223,22 @@ const isDev = !app.isPackaged && !process.env.MAKO_PROD
  */
 const persistentHost = process.env.MAKO_HOST_ONLY === "1"
 const instanceProfile = process.env.MAKO_PROFILE || (isDev ? "dev" : "")
+/** The installed app's own directory; a launcher passes it back as MAKO_DATA_ROOT. */
+const defaultUserData = app.getPath("userData")
 if (process.env.MAKO_DATA_ROOT)
   app.setPath("userData", process.env.MAKO_DATA_ROOT)
 else if (instanceProfile)
   app.setPath("userData", `${app.getPath("userData")}-${instanceProfile}`)
+installHostLog(join(app.getPath("userData"), "logs", "host.log"))
+hostLog("host", "starting", {
+  pid: process.pid,
+  version: app.getVersion(),
+  profile: instanceProfile || "default",
+  persistent: persistentHost,
+  electron: process.versions.electron ?? "",
+  node: process.versions.node ?? "",
+  dataRoot: app.getPath("userData"),
+})
 if (!app.requestSingleInstanceLock()) {
   console.error(
     "Mako is already running. Close the existing desk host before starting another desktop or web host."
@@ -455,6 +474,63 @@ function relaunch() {
 /** Start the first tab once, however many callers race for it. */
 async function ready(): Promise<HostPool> {
   return workspaceClients.ready(hostClient())
+}
+
+/**
+ * Why the relay worker is not running here, or `null` when it should be.
+ *
+ * Every profile used to register itself with the backend and poll the same
+ * queue: thirty-odd review and test profiles heartbeating as workers, any of
+ * which could lease a request meant for the installed app. Only the default
+ * profile serves remote work unless `MAKO_RELAY=1` says otherwise.
+ */
+function relayDisabledReason(): string | null {
+  if (process.env.MAKO_RELAY === "0") return "MAKO_RELAY=0"
+  if (process.env.MAKO_RELAY === "1") return null
+  if (instanceProfile)
+    return `the ${instanceProfile} profile; set MAKO_RELAY=1 to serve remote work`
+  // The desktop launcher hands the installed app its own directory as
+  // MAKO_DATA_ROOT, so the variable alone means nothing; a different root is a
+  // packaged test host.
+  if (resolve(app.getPath("userData")) !== resolve(defaultUserData))
+    return "a separate data root; set MAKO_RELAY=1 to serve remote work"
+  return null
+}
+
+/** Directories the user has actually worked in, for remote requests. */
+function recentRelayWorkspaces(): RelayWorkspaceCandidate[] {
+  const candidates: RelayWorkspaceCandidate[] = liveConversations
+    .summaries()
+    .map((summary) => ({
+      cwd: summary.session.cwd,
+      at: new Date(summary.createdAt).toISOString(),
+    }))
+  for (const ref of listThreads())
+    candidates.push({ cwd: ref.workspace ?? ref.cwd, at: ref.updatedAt })
+  return candidates
+}
+
+async function startRelay(): Promise<void> {
+  const disabled = relayDisabledReason()
+  if (disabled) {
+    disableRelayWorker(disabled)
+    return
+  }
+  const userData = app.getPath("userData")
+  await startRelayWorker({
+    conversations: new RelayConversations(
+      liveConversations,
+      join(userData, "conversations", "remote-assets")
+    ),
+    assetRoot: join(userData, "conversations", "remote-assets"),
+    deviceFile: join(userData, "slack-relay", "device-id"),
+    deviceName: instanceProfile
+      ? `${hostname()} (${instanceProfile})`
+      : hostname(),
+    logFile: join(userData, "logs", "relay.log"),
+    recentWorkspaces: recentRelayWorkspaces,
+    version: app.getVersion(),
+  })
 }
 
 /**
@@ -1319,6 +1395,7 @@ function bindIpc() {
 
   handle("mako:crashes", () => listCrashes())
   handle("mako:crashes-dir", () => crashesDir())
+  handle("mako:host-log-path", () => hostLogPath() ?? "")
   handle("mako:clear-crashes", () => clearCrashes())
   handle(
     "mako:report-crash",

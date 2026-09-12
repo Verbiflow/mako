@@ -17,6 +17,7 @@ import {
   RelayLeaseSchema,
   RelayPresentationSchema,
   parseRelayJobPayload,
+  relayThreadMappingFromCompletion,
   type RelayCompletion,
   type RelayControl,
   type RelayJobPayload,
@@ -63,13 +64,18 @@ export interface RelayJobEntity extends TableEntity {
   workerId?: string
 }
 
-interface RelayThreadEntity extends TableEntity {
+/**
+ * One row per chat thread: the local session it resumes, or only the project
+ * and tuning its next session starts with.
+ */
+export interface RelayThreadEntity extends TableEntity {
+  cwd?: string
   deviceId: string
   effort?: string
   fast?: boolean
   harness: string
   model?: string
-  threadPath: string
+  threadPath?: string
   updatedAt: string
 }
 
@@ -320,10 +326,10 @@ export async function leaseRelayJob({
     )
     return { kind: "empty" }
   }
+  // Even a forced `new` inherits the thread's project and tuning; only the
+  // resumed session is dropped, and applyRelayThreadMapping knows that.
   const mapping =
-    payload.kind === "new" && !payload.forceNew
-      ? await readThreadMapping(payload.origin)
-      : null
+    payload.kind === "new" ? await readThreadMapping(payload.origin) : null
   const executablePayload = applyRelayThreadMapping(payload, mapping)
   const updated: RelayJobEntity = {
     ...entity,
@@ -456,19 +462,17 @@ export async function markRelayDelivered({
   if (entity.status !== "completed" || entity.workerId !== completion.deviceId) {
     throw new Error("Relay result is not ready for delivery")
   }
-  if (completion.threadPath) {
-    const mapping: RelayThreadEntity = {
+  const mapping = relayThreadMappingFromCompletion(
+    completion,
+    new Date().toISOString()
+  )
+  if (mapping) {
+    const entity: RelayThreadEntity = {
+      ...mapping,
       partitionKey: relayThreadPartition(payload),
       rowKey: payload.origin.threadId,
-      deviceId: completion.deviceId,
-      effort: completion.effort,
-      fast: completion.fast,
-      harness: completion.harness,
-      model: completion.model,
-      threadPath: completion.threadPath,
-      updatedAt: new Date().toISOString(),
     }
-    await relayClients().threads.upsertEntity(mapping, "Replace")
+    await relayClients().threads.upsertEntity(entity, "Replace")
   }
   await relayClients().jobs.updateEntity(
     {
@@ -826,12 +830,18 @@ export async function markRelayArtifactUploaded({
   )
 }
 
+/**
+ * Repairs the two half-written states a crash can leave behind. It runs on
+ * every lease, so it selects only rows that can need repair instead of
+ * walking the tenant's whole history.
+ */
 export async function reconcileRelayStore(
   tenantId: string
 ): Promise<{ processed: number; failed: number }> {
   const filter = [
     "PartitionKey eq 'jobs'",
     `originTenantId eq '${escapeRelayFilter(tenantId)}'`,
+    "(status eq 'pending' or status eq 'delivered')",
   ].join(" and ")
   let processed = 0
   let failed = 0

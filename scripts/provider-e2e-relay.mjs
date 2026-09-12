@@ -102,7 +102,7 @@ export async function runRelayFixture(owner, root) {
         return execution
       } finally { await staged.cleanup() }
     },
-  }, { heartbeat: { deviceId, deviceName: "disposable fixture", defaultHarness: "codex", version: "test" }, controlIntervalMs: 250, renewIntervalMs: 10_000, eventFlushMs: 50 })
+  }, { heartbeat: () => ({ deviceId, deviceName: "disposable fixture", defaultHarness: "codex", version: "test" }), controlIntervalMs: 250, renewIntervalMs: 10_000, eventFlushMs: 50 })
   try {
     assert.equal((await fetch(`${url}/api/relay/lease`, { method: "POST", headers: { Authorization: "Bearer invalid" }, body: "{}" })).status, 401)
     assert.equal((await backendRelayPost("/api/relay/attachment", JSON.stringify({ jobId: queued.jobId, deviceId: randomUUID(), attachmentId: "large" }))).status, 403)

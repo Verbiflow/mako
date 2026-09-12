@@ -1,4 +1,9 @@
 import type { BackendConnectionStatus } from "./backend-connection.js"
+import {
+  describeRelayPresence,
+  relayIsFailing,
+  type RelayPresence,
+} from "./relay-status.js"
 import type {
   IntegrationCatalogSnapshot,
   IntegrationCategory,
@@ -215,13 +220,23 @@ function localConnection(
   }
 }
 
+/**
+ * The health endpoint answering is necessary, not sufficient: a request from
+ * Slack only runs if this Mac's relay worker is leasing work. Report both.
+ */
 function backendConnection(
-  status: BackendConnectionStatus
+  status: BackendConnectionStatus,
+  relay?: RelayPresence
 ): IntegrationConnection {
   if (status.kind === "connected") {
+    const relayDetail = relay ? describeRelayPresence(relay) : null
+    if (relay && relayIsFailing(relay))
+      return { kind: "unavailable", detail: relayDetail ?? "Relay failing" }
     return {
       kind: "ready",
-      detail: `${status.environment} · ${status.version}`,
+      detail: [`${status.environment} · ${status.version}`, relayDetail]
+        .filter((part) => part !== null)
+        .join(" · "),
     }
   }
   if (status.kind === "missing-token") {
@@ -236,7 +251,8 @@ export function integrationCatalog(
   githubConnected: boolean,
   backendStatus: BackendConnectionStatus,
   browsers: BrowserControlStatus[] = [],
-  driver?: CuaDriverStatus
+  driver?: CuaDriverStatus,
+  relay?: RelayPresence
 ): IntegrationCatalogSnapshot {
   const localControl = snapshot.servers.find(
     (server) => server.name === "mako-local-control"
@@ -248,7 +264,7 @@ export function integrationCatalog(
     ...definition,
     connection:
       definition.auth === "mako-backend"
-        ? backendConnection(backendStatus)
+        ? backendConnection(backendStatus, relay)
         : definition.auth === "local-browser"
           ? localBrowserConnection(localBrowser, browsers)
           : serviceConnection(definition, snapshot.servers, githubConnected),
@@ -264,7 +280,7 @@ export function integrationCatalog(
       auth: "mako-backend",
       capabilities: ["MCP", "Skills", "Slack", "Durable agent"],
       events: [],
-      connection: backendConnection(backendStatus),
+      connection: backendConnection(backendStatus, relay),
     },
     {
       id: "local-browser",

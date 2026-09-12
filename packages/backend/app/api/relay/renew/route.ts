@@ -15,6 +15,9 @@ export async function POST(request: Request): Promise<Response> {
   if (!auth) return relayUnauthorized()
   const renewal = RelayRenewalSchema.parse(z.json().parse(await request.json()))
   if (!relayDeviceAuthorized(auth, renewal.deviceId)) return relayUnauthorized()
+  // A busy worker sends no lease requests; its renewals keep it online.
+  if (renewal.heartbeat && renewal.heartbeat.deviceId === renewal.deviceId)
+    await azureRelayStore.heartbeat(auth.tenantId, renewal.heartbeat)
   return Response.json({
     popReceipt: await azureRelayStore.renew(renewal),
   })

@@ -58,6 +58,7 @@ const card: SlackCardElement = {
         { type: "button", id: "mako-fast-off", label: "Fast off", value: "off" },
         { type: "button", id: "mako-stop", label: "Stop", style: "danger" },
         { type: "button", id: "mako-status", label: "Status" },
+        { type: "button", id: "mako-projects", label: "Projects" },
         { type: "button", id: "mako-threads", label: "Threads" },
         { type: "button", id: "mako-models", label: "Models" },
       ],

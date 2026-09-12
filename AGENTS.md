@@ -260,6 +260,65 @@ the temporary legacy migration flag. Keep event persistence idempotent, validate
 batch and lease ownership before writes, reconcile queue/table partial failures,
 and stream attachment bodies through measured limits rather than buffering them.
 
+The desktop worker (`electron/relay-worker.ts`) is gateway-neutral; nothing in
+it names Slack. A remote request never runs in `process.cwd()`: the packaged
+app starts in `/`, and the first real relay job died there with
+`ENOENT: mkdir '/.mako-relay-…'`. `relay-workspace.ts` resolves the workspace
+in order — the thread's pinned project (`selection.cwd`), the thread's session
+directory, the most recently worked-in project, then home — and treats scratch
+paths (`/`, temp roots, fixture directories) as never eligible. A pinned project
+that is missing fails the job with a message that asks for `projects`; it never
+falls back silently. Attachments stage under the profile's `remote-assets`
+directory; only `.mako-relay/<job>/outbound-files.json` touches the workspace,
+because a sandboxed agent may write nowhere else, and it is removed afterwards.
+
+Only the default profile serves remote work. `MAKO_PROFILE`, `--sandbox`, and
+`MAKO_DATA_ROOT` hosts leave the relay off unless `MAKO_RELAY=1`, and
+`MAKO_RELAY=0` turns it off anywhere; before this gate every review and test
+profile registered as a worker in the production tenant and could lease the
+installed app's requests. Opted-in profiles register as `<host> (<profile>)`.
+
+The worker never swallows a failure: `HeadlessRelayWorker` reports each lease,
+renew, control, event, execute, and complete failure with its phase, backs off
+lease failures exponentially to 60s, and publishes a `RelayWorkerStatus`
+snapshot. `relay-status.ts` turns that into the Mako Backend detail in Settings
+(`Relay listening as … · checked 3s ago · new requests run in …`,
+`Relay failing: lease — …`); three consecutive failures mark the integration
+unavailable even while `/api/health` answers. Polling is one second for two
+minutes after any work and decays to fifteen seconds when idle. A thread's
+mapping may name only a project and tuning with no session yet; `new` keeps the
+project and drops the session. The backend's per-lease reconcile selects only
+pending and delivered rows. `scripts/test-relay-workspace.ts` and
+`packages/relay/test/relay.mjs` cover the resolution order, staging locations,
+presence text, idle polling, and reported lease failures.
+
+Presence is the worker's own word, not the gateway's inference. Every lease
+request and every renewal carries a `WorkerHeartbeat` with `kind` (`desktop` or
+`cloud`), a `generation` minted per worker start, `activity` (`idle`, `busy`,
+`failing`), the current job, and the project a new request would run in. A
+worker busy with a long job sends no lease requests, so renewals run every 20
+seconds and the renew route heartbeats too; before that the desk looked offline
+whenever it was working. The host supplies the moving parts of the heartbeat as
+a function; the worker adds generation and activity. Slack `status` renders
+that row and nothing from a transcript, and `activeWorker` prefers an idle
+worker over a busy or failing one. `scripts/prune-relay-workers.ts` in the
+backend removes workers unseen for a window together with their registrations,
+never one a thread is pinned to, dry-run by default and bounded per pass.
+
+The detached host ignores its stdio, so the relay keeps its own log at
+`<userData>/logs/relay.log` (`relay-log.ts`, 1 MiB then one rotation): worker
+start and stop, each lease and completion with its job id, and de-duplicated
+failures. Every user-facing relay failure ends in `(job <first 8 of the id>)`
+so a Slack reply can be traced to that log and to the gateway's job row.
+
+The cloud option is the same worker in a container: `HeadlessRelayWorker`
+already takes an executor and transport and never imports Electron, and a cloud
+worker registers with `kind: "cloud"` so the gateway can say where a run lives.
+What remains for a run to carry on in the cloud is a headless executor that
+launches a provider CLI against a checked-out workspace, and event-cursor
+resumption (`RelayEventSequencer` epochs already make a restarted worker's
+events distinguishable). Do not build a second worker loop for it.
+
 ## Zero lint debt
 
 Every source change must leave both ESLint and Oxlint clean. Run `npm run lint`

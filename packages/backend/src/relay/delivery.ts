@@ -68,7 +68,32 @@ function taskTitle(harness: string): string {
   return `Run ${harness} on the connected Mako worker`
 }
 
+function presentationTitle(presentation: RelayPresentation): string {
+  switch (presentation.kind) {
+    case "projects":
+      return "Choose the project this thread runs in"
+    case "threads":
+      return "Choose a local thread to resume"
+    case "models":
+      return `Choose a ${presentation.harness} model`
+  }
+}
+
 function presentationBlocks(presentation: RelayPresentation) {
+  if (presentation.kind === "projects")
+    return presentation.items.map((item) => ({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*${item.name}*\n\`${item.path}\``,
+      },
+      accessory: {
+        type: "button",
+        action_id: "mako-project",
+        text: { type: "plain_text", text: "Use" },
+        value: item.path,
+      },
+    }))
   if (presentation.kind === "threads")
     return presentation.items.slice(0, 10).map((item) => ({
       type: "section",
@@ -449,10 +474,7 @@ async function deliverSlackRelayCompletion({
       blocks: presentationBlocks(completion.presentation),
       channel: payload.origin.conversationId,
       idempotencyKey: messageId(completion.jobId, 1_000),
-      text:
-        completion.presentation.kind === "threads"
-          ? "Choose a local thread to resume"
-          : `Choose a ${completion.presentation.harness} model`,
+      text: presentationTitle(completion.presentation),
       threadTs: payload.origin.threadId,
     })
   await azureRelayStore.markDelivered({ completion, payload })

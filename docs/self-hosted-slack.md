@@ -118,10 +118,35 @@ profile. On first relay contact Mako registers the installation and writes its
 separate device credential to the `dev.mako.backend.relay` Keychain service.
 Both credentials stay in Keychain and never cross the renderer bridge.
 
+Only the installed app's default profile serves remote work. A `dev`, sandbox,
+or test profile (`MAKO_PROFILE`, `--sandbox`, `MAKO_DATA_ROOT`) leaves the
+relay off so a development host cannot lease requests meant for your Mac;
+set `MAKO_RELAY=1` to opt one in, or `MAKO_RELAY=0` to keep the installed app
+out. An opted-in profile registers as `<hostname> (<profile>)` so Slack's
+`status` says which one answered.
+
+### Where a request runs
+
+A Slack thread runs in one project directory on one Mac. Mako never uses the
+app process's working directory (a packaged app starts in `/`). The first
+request in a thread runs in the project you worked in most recently; send
+`projects` to see the candidates and `project <name-or-path>` to pin the
+thread to one. After that the thread's project and tuning are remembered, and
+`new` starts a fresh session in the same project. A pinned project that no
+longer exists is an error that asks you to choose again, never a silent
+fallback. Incoming attachments are staged under Mako's own data directory,
+not inside your repository; the only thing a run leaves in the project is
+`.mako-relay/<job>/outbound-files.json`, which is removed when the run
+settles.
+
 ## 4. Verify it
 
 1. Open Mako and confirm **Settings → Integrations → Mako Backend** is ready.
-2. Mention the bot in Slack and send `status`.
+   Its detail names the relay too: `Relay listening as <Mac> · checked 3s ago ·
+   new requests run in <project>`. `Relay off: …` means this profile does not
+   serve remote work; `Relay failing: …` names the failing call and when it
+   retries.
+2. Mention the bot in Slack and send `status`, then `projects`, and pick one.
 3. Send `new codex Reply with exactly OK` and confirm Slack shows the native
    processing state, Stop button, reasoning/tool/plan task updates, and streamed
    answer.
@@ -134,8 +159,9 @@ Both credentials stay in Keychain and never cross the renderer bridge.
 8. Quit Mako, send another request, reopen Mako, and confirm the queued request
    completes in the same Slack thread with stored events replayed once.
 
-Useful commands include `threads`, `resume`, `new`, `queue`, `steer`, `stop`,
-`harness`, `models`, `model`, `reasoning`, `fast`, `status`, and `help`. Plain
+Useful commands include `projects`, `project`, `threads`, `resume`, `new`,
+`queue`, `steer`, `stop`, `harness`, `models`, `model`, `reasoning`, `fast`,
+`status`, and `help`. Plain
 messages resume the session mapped to that Slack thread; while it is working,
 plain messages queue in arrival order. `steer` stops the current native turn and
 puts the new message next rather than pretending every provider can steer live.
@@ -145,7 +171,26 @@ puts the new message next rather than pretending every provider can steer live.
 - `401 Unauthorized` on the event URL means the signing secret or Slack clock
   skew is wrong. Mako deliberately returns no more detail to Slack.
 - `status` reporting the Mac offline means the backend is healthy but no desktop
-  heartbeat is current. Check `MAKO_BACKEND_URL` and the Keychain token.
+  heartbeat is current. Check `MAKO_BACKEND_URL` and the Keychain token, then
+  the Mako Backend detail in Settings: `Relay off` names the profile gate and
+  `Relay failing` names the failing relay call. When the Mac is online,
+  `status` also says what it is doing (`working on a request now`, or which
+  project new requests run in), from the worker's own heartbeat.
+- The relay keeps its own log at `~/Library/Application Support/mako/logs/
+  relay.log` (the detached host's console output is not kept): worker start,
+  each lease and completion with its job id, and distinct failures. It rotates
+  once at 1 MiB to `relay.log.1`.
+- A thread pinned to a Mac that is offline queues for that Mac and says so,
+  because its session and project exist only there. `new <message>` starts on
+  any online Mac instead.
+- `Mako could not run this on <Mac>: … (job 29ba3a8f)` in Slack is the
+  worker's own error, not a backend one. The `job` reference is the first eight
+  characters of the job id; search `relay.log` for it. A missing project
+  directory asks you to send `projects`.
+- Old worker rows from profiles that no longer exist clutter the fleet. From
+  `packages/backend`, `node --env-file=.env.local --import tsx
+  scripts/prune-relay-workers.ts --older-than=7d` lists them; add `--delete` to
+  remove them and their registrations. Devices a thread is pinned to are kept.
 - A queued request that never leases usually means the Azure service principal
   cannot access Queue or Table Storage.
 - Rotate the bot token and signing secret in Slack, update both backend
@@ -170,8 +215,9 @@ puts the new message next rather than pretending every provider can steer live.
 - Slack bot tokens remain server-side. Workers fetch only attachment bytes that
   belong to their claimed job through the authenticated relay.
 - Incoming files are streamed through the backend, bounded to 100 MB each and
-  200 MB per job, staged with owner-only permissions, and removed when the run
-  settles. The backend does not hold a 100 MB attachment buffer.
+  200 MB per job, staged with owner-only permissions under Mako's data
+  directory, and removed when the run settles. The backend does not hold a
+  100 MB attachment buffer.
 - Outgoing files stream from the workspace through the backend, are limited to
   five files at 25 MB each, and must resolve inside
   the active workspace; symlinks cannot escape that boundary.

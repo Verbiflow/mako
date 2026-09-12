@@ -1,12 +1,20 @@
 import assert from "node:assert/strict"
 import {
   HeadlessRelayWorker,
+  RELAY_ACTIVE_POLL_MS,
+  RELAY_ACTIVE_WINDOW_MS,
+  RELAY_IDLE_POLL_MAX_MS,
+  RelayCompletionSchema,
   RelayEventBatchSchema,
   RelayEventSequencer,
+  RelayRenewalSchema,
+  applyRelayThreadMapping,
   createMemoryRelayStore,
   parseRelayJobPayload,
   relayDeviceKey,
   relayEventsAfter,
+  relayIdleDelay,
+  relayThreadMappingFromCompletion,
   signRelayToken,
   signRelayTokenRequest,
   verifyRelayToken,
@@ -138,12 +146,12 @@ const worker = new HeadlessRelayWorker(
     },
   },
   {
-    heartbeat: {
+    heartbeat: () => ({
       defaultHarness: "codex",
       deviceId: workerId,
       deviceName: "test-worker",
       version: "test",
-    },
+    }),
     eventFlushMs: 0,
   }
 )
@@ -161,6 +169,69 @@ const failedWorker = new HeadlessRelayWorker(worker.transport, {
 assert.equal(await failedWorker.runOnce(), true)
 assert.equal(completions.at(-1).status, "failed")
 assert.equal(completions.at(-1).result, "provider refused startup")
+
+// Heartbeats carry the worker's own state: a host-supplied function for the
+// moving parts (workspace), the worker's generation, and busy/idle activity.
+// Renewals carry the same heartbeat so a long job never looks offline.
+{
+  let workspace = "pi-ui"
+  const renewals = []
+  const leases = []
+  const busyWorker = new HeadlessRelayWorker(
+    {
+      ...worker.transport,
+      async lease(request) {
+        leases.push(request)
+        return lease
+      },
+      async renew(current, request) {
+        renewals.push(request)
+        return current.popReceipt
+      },
+    },
+    {
+      async execute() {
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        return { harness: "codex", result: "ok", status: "done" }
+      },
+    },
+    {
+      heartbeat: () => ({
+        defaultHarness: "codex",
+        deviceId: workerId,
+        deviceName: "test-worker",
+        version: "test",
+        kind: "desktop",
+        workspace,
+      }),
+      eventFlushMs: 0,
+      renewIntervalMs: 5,
+    }
+  )
+  const before = busyWorker.heartbeat()
+  assert.equal(before.activity, "idle")
+  assert.equal(before.workspace, "pi-ui")
+  assert.match(before.generation, /^[0-9a-f-]{36}$/)
+  workspace = "other"
+  assert.equal(await busyWorker.runOnce(), true)
+  assert.equal(leases[0].workspace, "other")
+  assert.equal(leases[0].kind, "desktop")
+  assert.ok(renewals.length >= 1, "a renewal ran during the job")
+  assert.equal(renewals[0].activity, "busy")
+  assert.equal(renewals[0].currentJobId, lease.jobId)
+  assert.equal(renewals[0].generation, before.generation)
+  assert.ok(RelayRenewalSchema.safeParse({
+    deviceId: workerId,
+    jobId: lease.jobId,
+    messageId: lease.messageId,
+    popReceipt: lease.popReceipt,
+    heartbeat: renewals[0],
+  }).success)
+  const after = busyWorker.heartbeat()
+  assert.equal(after.activity, "idle")
+  assert.equal(after.currentJobId, undefined)
+  assert.equal(after.generation, before.generation)
+}
 
 const memory = createMemoryRelayStore({ failEnqueue: 1 })
 const memoryDevice = crypto.randomUUID()
@@ -264,4 +335,139 @@ assert.equal(secondLease.lease.payload.kind, "resume")
 if (secondLease.lease.payload.kind === "resume")
   assert.equal(secondLease.lease.payload.threadPath, "/native/thread")
 
-console.log("relay schemas, auth, cursors, worker, memory store, and reconciliation passed")
+// Projects: the payload, the presentation, and a mapping that names only a
+// project (no session yet) still shapes the next `new` request.
+const inspectProjects = parseRelayJobPayload({
+  kind: "inspect-projects",
+  origin,
+  query: "ui",
+  selection: { harness: "codex" },
+})
+assert.equal(inspectProjects.kind, "inspect-projects")
+assert.equal(
+  RelayCompletionSchema.parse({
+    cwd: "/Users/me/pi-ui",
+    deviceId: memoryDevice,
+    harness: "codex",
+    jobId: crypto.randomUUID(),
+    messageId: "m",
+    popReceipt: "p",
+    presentation: {
+      kind: "projects",
+      items: [{ name: "pi-ui", path: "/Users/me/pi-ui" }],
+    },
+    result: "ok",
+    status: "done",
+  }).presentation.kind,
+  "projects"
+)
+const projectOnly = relayThreadMappingFromCompletion(
+  {
+    cwd: "/Users/me/pi-ui",
+    deviceId: memoryDevice,
+    harness: "codex",
+    jobId: crypto.randomUUID(),
+    messageId: "m",
+    model: "gpt-5.6",
+    popReceipt: "p",
+    result: "ok",
+    status: "done",
+  },
+  "2026-09-11T00:00:00.000Z"
+)
+assert.deepEqual(projectOnly, {
+  cwd: "/Users/me/pi-ui",
+  deviceId: memoryDevice,
+  effort: undefined,
+  fast: undefined,
+  harness: "codex",
+  model: "gpt-5.6",
+  threadPath: undefined,
+  updatedAt: "2026-09-11T00:00:00.000Z",
+})
+assert.equal(
+  relayThreadMappingFromCompletion(
+    {
+      deviceId: memoryDevice,
+      harness: "codex",
+      jobId: crypto.randomUUID(),
+      messageId: "m",
+      popReceipt: "p",
+      result: "listing",
+      status: "done",
+    },
+    "2026-09-11T00:00:00.000Z"
+  ),
+  null,
+  "a listing teaches the thread nothing"
+)
+const carried = applyRelayThreadMapping(
+  { kind: "new", forceNew: false, attachments: [], origin, selection: {}, text: "go" },
+  projectOnly
+)
+assert.equal(carried.kind, "new", "no session to resume")
+assert.equal(carried.selection.cwd, "/Users/me/pi-ui")
+assert.equal(carried.selection.model, "gpt-5.6")
+const explicitCwd = applyRelayThreadMapping(
+  {
+    kind: "new",
+    forceNew: true,
+    attachments: [],
+    origin,
+    selection: { cwd: "/Users/me/other" },
+    text: "go",
+  },
+  { ...projectOnly, threadPath: "/native/thread" }
+)
+assert.equal(explicitCwd.kind, "new")
+assert.equal(explicitCwd.selection.cwd, "/Users/me/other", "an explicit cwd wins")
+
+// Idle polling backs off; activity brings it back to one second.
+assert.equal(relayIdleDelay(0, 0), RELAY_ACTIVE_POLL_MS)
+assert.equal(relayIdleDelay(50, RELAY_ACTIVE_WINDOW_MS - 1), RELAY_ACTIVE_POLL_MS)
+assert.equal(relayIdleDelay(50, RELAY_ACTIVE_WINDOW_MS * 10), RELAY_IDLE_POLL_MAX_MS)
+assert.ok(
+  relayIdleDelay(1, RELAY_ACTIVE_WINDOW_MS * 10) <
+    relayIdleDelay(4, RELAY_ACTIVE_WINDOW_MS * 10)
+)
+
+// A lease failure is reported and backed off, never swallowed.
+{
+  const failures = []
+  const statuses = []
+  let attempts = 0
+  const failing = new HeadlessRelayWorker(
+    {
+      lease: async () => {
+        attempts += 1
+        throw new Error("lease returned 401")
+      },
+      renew: async () => {},
+      recordEvents: async () => ({ accepted: 0 }),
+      control: async () => null,
+      complete: async () => {},
+      heartbeat: async () => {},
+    },
+    { control: async () => {}, execute: async () => ({ harness: "codex", result: "" }) },
+    {
+      heartbeat: () => ({ defaultHarness: "codex", deviceId: memoryDevice, deviceName: "test", version: "0" }),
+      idleDelay: () => 1,
+      onFailure: (failure) => failures.push(failure),
+      onStatus: (status) => statuses.push(status),
+    }
+  )
+  failing.start()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(failing.status().phase, "backoff")
+  await failing.stop()
+  assert.equal(attempts, 1, "a failing lease waits out its backoff")
+  assert.equal(failures.length, 1)
+  assert.equal(failures[0].phase, "lease")
+  assert.equal(failures[0].message, "lease returned 401")
+  assert.equal(failing.status().consecutiveFailures, 1)
+  assert.equal(failing.status().lastFailure.phase, "lease")
+  assert.ok(statuses.some((status) => status.phase === "backoff"))
+  assert.equal(failing.status().phase, "stopped", "stop resolves after the loop exits")
+}
+
+console.log("relay schemas, auth, cursors, worker, memory store, projects, status, and reconciliation passed")

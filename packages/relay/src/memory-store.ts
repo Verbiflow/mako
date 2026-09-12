@@ -55,27 +55,59 @@ function originKey(origin: RemoteOrigin): string {
   return `${origin.provider}\0${origin.tenantId}\0${origin.conversationId}\0${origin.threadId}`
 }
 
+/**
+ * Fold what the remote thread remembers into a new-message job. A plain
+ * message continues the mapped local thread; `new` keeps the project but
+ * starts fresh; an explicit selection on the message always wins.
+ */
 export function applyRelayThreadMapping(
   payload: RelayJobPayload,
   mapping: Pick<
     RelayThreadMapping,
-    "effort" | "fast" | "harness" | "model" | "threadPath"
+    "cwd" | "effort" | "fast" | "harness" | "model" | "threadPath"
   > | null
 ): RelayJobPayload {
-  if (payload.kind !== "new" || payload.forceNew || !mapping) return payload
+  if (payload.kind !== "new" || !mapping) return payload
+  const selection = {
+    cwd: payload.selection.cwd ?? mapping.cwd,
+    effort: payload.selection.effort ?? mapping.effort,
+    fast: payload.selection.fast ?? mapping.fast,
+    harness: payload.selection.harness ?? mapping.harness,
+    model: payload.selection.model ?? mapping.model,
+  }
+  if (payload.forceNew || !mapping.threadPath)
+    return RelayJobPayloadSchema.parse({ ...payload, selection })
   return RelayJobPayloadSchema.parse({
     kind: "resume",
     attachments: payload.attachments,
     origin: payload.origin,
-    selection: {
-      effort: payload.selection.effort ?? mapping.effort,
-      fast: payload.selection.fast ?? mapping.fast,
-      harness: payload.selection.harness ?? mapping.harness,
-      model: payload.selection.model ?? mapping.model,
-    },
+    selection,
     text: payload.text,
     threadPath: mapping.threadPath,
   })
+}
+
+/**
+ * What a completed job leaves behind for the thread, or `null` when it
+ * settled nothing: a failed lookup, a list, a stop before any thread existed.
+ * A run records both its thread and its project; a project selection records
+ * only the project so the next message starts fresh there.
+ */
+export function relayThreadMappingFromCompletion(
+  completion: RelayCompletion,
+  at: string
+): RelayThreadMapping | null {
+  if (!completion.threadPath && !completion.cwd) return null
+  return {
+    cwd: completion.cwd,
+    deviceId: completion.deviceId,
+    effort: completion.effort,
+    fast: completion.fast,
+    harness: completion.harness,
+    model: completion.model,
+    threadPath: completion.threadPath,
+    updatedAt: at,
+  }
 }
 
 export function createMemoryRelayStore(
@@ -280,16 +312,11 @@ export function createMemoryRelayStore(
       if (!job || job.workerId !== completion.deviceId)
         throw new Error("Relay result is not ready for delivery")
       if (job.status === "delivered") return
-      if (completion.threadPath)
-        threads.set(originKey(payload.origin), {
-          deviceId: completion.deviceId,
-          effort: completion.effort,
-          fast: completion.fast,
-          harness: completion.harness,
-          model: completion.model,
-          threadPath: completion.threadPath,
-          updatedAt: new Date(now()).toISOString(),
-        })
+      const mapping = relayThreadMappingFromCompletion(
+        completion,
+        new Date(now()).toISOString()
+      )
+      if (mapping) threads.set(originKey(payload.origin), mapping)
       job.status = "delivered"
       const outboxId = `delete:${completion.jobId}`
       outbox.set(outboxId, {

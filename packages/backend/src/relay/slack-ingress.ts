@@ -22,8 +22,15 @@ import {
   relayQueueStatus,
   requestRelayPermission,
   requestRelayStop,
+  type RelayThreadEntity,
 } from "./storage"
-import { activeWorker, workerById } from "./storage-presence"
+import {
+  activeWorker,
+  workerById,
+  workerIsOnline,
+  workerRecord,
+  type RelayWorkerEntity,
+} from "./storage-presence"
 import {
   RelayHarnessSchema,
   type RemoteAttachment,
@@ -202,6 +209,7 @@ async function processCommand({
     attachments,
     mapping: mapping
       ? {
+          cwd: mapping.cwd,
           effort: mapping.effort,
           fast: mapping.fast,
           harness: RelayHarnessSchema.parse(mapping.harness),
@@ -259,21 +267,30 @@ async function processCommand({
     await reply({
       channel,
       idempotencyKey: `${eventId}:status`,
-      text: `${worker ? `Mako is online on *${worker.deviceName}*.` : "Mako is offline."}${mapping ? ` This thread resumes \`${mapping.threadPath}\` with ${selection}.` : " This Slack thread has no local Mako session yet."}${queue.running || queue.queued ? ` *${queue.running} working · ${queue.queued} queued.*` : ""}${worker ? "" : " New work will remain queued until your worker reconnects."}`,
+      text: `${describeWorker(worker)}${threadStatus(mapping, selection)}${queue.running || queue.queued ? ` *${queue.running} working · ${queue.queued} queued.*` : ""}${worker ? "" : " New work will remain queued until your worker reconnects."}`,
       threadTs,
     })
     return
   }
   if (command.kind === "interrupt")
     await requestRelayStop(command.payload.origin)
-  const worker = mapping
-    ? await workerById(teamId, mapping.deviceId)
+  // A thread's session and project exist on one Mac, so its work is pinned
+  // there. An explicit `new` is free to start wherever a worker is online.
+  const pinnedDevice =
+    command.payload.kind === "new" && command.payload.forceNew
+      ? undefined
+      : mapping?.deviceId
+  const pinned = pinnedDevice ? await workerRecord(teamId, pinnedDevice) : null
+  const worker = pinnedDevice
+    ? pinned && workerIsOnline(pinned)
+      ? pinned
+      : null
     : await activeWorker(teamId)
   const payload = {
     ...command.payload,
     slack: { channel, eventId, teamId, threadTs, userId },
   }
-  const queued = await enqueueRelayJob(payload, mapping?.deviceId)
+  const queued = await enqueueRelayJob(payload, pinnedDevice)
   if (!queued.created) return
   await reply({
     channel,
@@ -283,7 +300,9 @@ async function processCommand({
         ? "Stopping the current turn. Your message is next in this Slack thread."
         : worker
           ? `Queued for *${worker.deviceName}*. Mako will stream progress and the reply here.`
-          : "Queued. Mako will run this when your worker reconnects.",
+          : pinned
+            ? `Queued for *${pinned.deviceName}*, which is offline (last seen ${pinned.lastSeenAt}). Mako runs it when that Mac reconnects; send \`new <message>\` to start on any online Mac instead.`
+            : "Queued. No Mako is online right now; it runs when one reconnects.",
     threadTs,
   })
 }
@@ -298,6 +317,36 @@ function slackPermissionAction(
   } catch {
     return null
   }
+}
+
+/**
+ * Presence with the worker's own sanitized activity: what it is doing and
+ * where a new request would run, never anything from a transcript.
+ */
+export function describeWorker(worker: RelayWorkerEntity | null): string {
+  if (!worker) return "Mako is offline."
+  const where = worker.kind === "cloud" ? "in the cloud on" : "on"
+  const activity =
+    worker.activity === "busy"
+      ? " It is working on a request now."
+      : worker.activity === "failing"
+        ? " It is online but its last attempts failed; check Settings › Integrations on that Mac."
+        : worker.workspace
+          ? ` New requests run in \`${worker.workspace}\`.`
+          : ""
+  return `Mako is online ${where} *${worker.deviceName}*.${activity}`
+}
+
+function threadStatus(
+  mapping: RelayThreadEntity | null,
+  selection: string | null
+): string {
+  if (!mapping)
+    return " This Slack thread has no local Mako session yet; send `projects` to choose where it runs."
+  const where = mapping.cwd ? ` in \`${mapping.cwd}\`` : ""
+  return mapping.threadPath
+    ? ` This thread resumes \`${mapping.threadPath}\`${where} with ${selection}.`
+    : ` This thread starts its next session${where} with ${selection}.`
 }
 
 export function slackActionCommand(
@@ -315,6 +364,9 @@ export function slackActionCommand(
   if (action.actionId === "mako-fast-off") return "fast off"
   if (action.actionId === "mako-thread" && action.value)
     return `select ${action.value}`
+  if (action.actionId === "mako-project" && action.value)
+    return `project ${action.value}`
+  if (action.actionId === "mako-projects") return "projects"
   if (action.actionId === "mako-model") {
     const model = action.selectedOptionValue ?? action.value
     if (model) return `model ${model}`

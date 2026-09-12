@@ -1,28 +1,60 @@
 import { createHash } from "node:crypto"
 import { openAsBlob } from "node:fs"
-import { mkdir, open, readFile, realpath, rm, stat } from "node:fs/promises"
+import {
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rm,
+  rmdir,
+  stat,
+} from "node:fs/promises"
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { z } from "zod"
 import type { RelayJobPayload } from "@mako/relay"
 import { backendRelayPost, backendRelayUpload } from "./backend-connection.js"
 
+/** The one directory a run leaves in the workspace, removed when it settles. */
+export function relayManifestDirectory(cwd: string, jobId: string): string {
+  return join(cwd, ".mako-relay", jobId)
+}
+
+/**
+ * Attachments are staged under Mako's own asset root: every provider can read
+ * an absolute path, and the user's repository should not fill with downloads.
+ * Only the outbound manifest sits inside the workspace, because a sandboxed
+ * agent may be allowed to write nowhere else.
+ */
 export async function stageRelayAttachments(
   payload: RelayJobPayload,
-  jobId: string,
-  deviceId: string,
-  cwd: string
+  {
+    assetRoot,
+    cwd,
+    deviceId,
+    jobId,
+  }: { assetRoot: string; cwd: string; deviceId: string; jobId: string }
 ): Promise<{
   paths: string[]
   manifestPath: string
   cleanup: () => Promise<void>
 }> {
   const attachments = "attachments" in payload ? payload.attachments : []
-  const directory = join(cwd, `.mako-relay-${jobId}`)
-  await rm(directory, { recursive: true, force: true })
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  const attachmentDirectory = join(directory, "attachments")
-  await mkdir(attachmentDirectory, { recursive: true, mode: 0o700 })
-  const manifestPath = join(directory, "outbound-files.json")
+  const attachmentDirectory = join(assetRoot, jobId, "inbox")
+  const manifestDirectory = relayManifestDirectory(cwd, jobId)
+  const directories = [attachmentDirectory, manifestDirectory]
+  const cleanup = async () => {
+    await Promise.all(
+      directories.map((directory) =>
+        rm(directory, { recursive: true, force: true })
+      )
+    )
+    // The parent goes too unless another job in this workspace still uses it.
+    await rmdir(join(cwd, ".mako-relay")).catch(() => undefined)
+  }
+  await cleanup()
+  for (const directory of directories)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+  const manifestPath = join(manifestDirectory, "outbound-files.json")
   const paths: string[] = []
   let total = 0
   try {
@@ -77,13 +109,9 @@ export async function stageRelayAttachments(
       total += received
       paths.push(path)
     }
-    return {
-      paths,
-      manifestPath,
-      cleanup: () => rm(directory, { recursive: true, force: true }),
-    }
+    return { paths, manifestPath, cleanup }
   } catch (error) {
-    await rm(directory, { recursive: true, force: true })
+    await cleanup()
     throw error
   }
 }
