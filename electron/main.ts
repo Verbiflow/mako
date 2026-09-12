@@ -1033,7 +1033,8 @@ function bindIpc() {
         github.authenticated,
         backend,
         browserControl.status(),
-        driver
+        driver,
+        relayPresence()
       )
     })
   )
@@ -1679,15 +1680,7 @@ app.whenReady().then(async () => {
   })
   void ready().then((live) => {
     watchWorkspace(live.active.workspace)
-    return startSlackRelay({
-      conversations: new RelayConversations(
-        liveConversations,
-        join(app.getPath("userData"), "conversations", "remote-assets")
-      ),
-      defaultCwd: () => live.active.workspace,
-      deviceFile: join(app.getPath("userData"), "slack-relay", "device-id"),
-      version: app.getVersion(),
-    })
+    return startRelay()
   })
   app.on("activate", () => {
     void reopenWindow()
@@ -1730,7 +1723,7 @@ app.on("before-quit", (event) =>
       deskBrowser.close()
       stopWorkspaceIpc()
       stopWatching()
-      stopSlackRelay()
+      void stopRelayWorker()
       stopThreads()
       stopDrivers()
       stopAcp()
