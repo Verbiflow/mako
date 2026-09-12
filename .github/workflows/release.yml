@@ -110,7 +110,7 @@ jobs:
           > from that copied app. Install it only if you trust this repository.
 
           ```bash
-          curl -fsSL https://github.com/kashyab12/mako/releases/latest/download/install-macos.sh | bash
+          curl -fsSL https://github.com/Verbiflow/mako/releases/latest/download/install-macos.sh | bash
           ```
 
           To inspect the installer before running it, download `install-macos.sh`
@@ -118,7 +118,7 @@ jobs:
 
           NOTICE
             fi
-            gh api --method POST repos/kashyab12/mako/releases/generate-notes \
+            gh api --method POST repos/Verbiflow/mako/releases/generate-notes \
               -f tag_name="$GITHUB_REF_NAME" \
               -f target_commitish="$GITHUB_SHA" \
               --jq .body >> "$notes"
