@@ -11,6 +11,7 @@ import {
 } from "./providers/profile-loader.js"
 import type { HarnessProfile } from "./shared.js"
 import { providerProfileCache } from "./provider-profile-cache.js"
+import { hostWarn } from "./host-log.js"
 
 export { resolveHarnessTuning }
 export { normalizeAcpOptions } from "@mako/sessions/model-catalog"
@@ -77,7 +78,11 @@ export async function resolveHarnessLaunch(
   )
     return tuning
   const profile = await harnessProfileForSend(harness, cwd)
-  if (!profile.available || profile.configurationError) throw new Error(profile.error ?? profile.configurationError ?? `${profile.label} model discovery is unavailable. Refresh its settings before sending.`)
+  if (!profile.available || profile.configurationError) {
+    const reason = profile.error ?? profile.configurationError ?? `${profile.label} model discovery is unavailable. Refresh its settings before sending.`
+    hostWarn("discovery", "send refused", { harness, model: tuning.model, error: reason })
+    throw new Error(reason)
+  }
   return resolveHarnessTuning(profile, tuning)
 }
 

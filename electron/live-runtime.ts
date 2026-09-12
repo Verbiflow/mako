@@ -1,3 +1,4 @@
+import { z } from "zod"
 import type {
   PromptAttachment,
   LiveSnapshot,
@@ -86,6 +87,28 @@ export interface LiveAccess {
 export interface FailureBoundary {
   error: unknown
 }
+
+const RpcErrorSchema = z
+  .object({
+    data: z
+      .object({ message: z.string().optional(), details: z.string().optional() })
+      .loose()
+      .optional(),
+  })
+  .loose()
+
+/**
+ * A JSON-RPC error carries its reason in `data`, not in `message`: Cursor
+ * answers `session/set_config_option` with "Invalid params" and puts
+ * "Unknown model config option: effort" beside it. Dropping that once left
+ * two failed threads explained by nothing more than the generic code text.
+ */
 export function errorMessage({ error }: FailureBoundary): string {
-  return error instanceof Error ? error.message : String(error)
+  if (!(error instanceof Error)) return String(error)
+  // `data` is an own enumerable property on a JSON-RPC RequestError; the
+  // Error prototype's own fields are not, so the entries are exactly the extras.
+  const parsed = RpcErrorSchema.safeParse(Object.fromEntries(Object.entries(error)))
+  const reason = parsed.success ? (parsed.data.data?.message ?? parsed.data.data?.details) : undefined
+  if (!reason || !error.message || error.message.includes(reason)) return error.message || (reason ?? String(error))
+  return `${error.message}: ${reason}`
 }

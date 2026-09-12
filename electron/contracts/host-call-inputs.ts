@@ -102,6 +102,7 @@ export const hostCallInputs = {
     z.string().optional(),
     z.boolean().optional(),
   ]),
+  "mako:host-log-path": z.tuple([]),
   "mako:install-update": z.tuple([]),
   "mako:installation-state": z.tuple([]),
   "mako:integrations": z.tuple([]),

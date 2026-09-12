@@ -606,6 +606,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       kind: "renderer-error" | "renderer-rejection",
       payload: { message: string; stack?: string; source?: string }
     ) => invokeTrustedHost<void>("mako:report-crash", kind, payload),
+    /** The host's own log of provider starts, failures and exits; empty when no host log is open. */
+    hostLogPath: () => invokeTrustedHost<string>("mako:host-log-path"),
 
     pickFolder: () => invokeTrustedHost<string | null>("mako:pick-folder"),
     externalEditors: () =>

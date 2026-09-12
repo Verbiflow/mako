@@ -1,4 +1,5 @@
 import { app } from "electron"
+import { hostError, hostLogPath } from "./host-log.js"
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
@@ -148,7 +149,8 @@ function write(report: CrashReport) {
     // A crash reporter that throws while reporting a crash is worse than one
     // that quietly gives up; the console line below is the fallback.
   }
-  console.error(`[crash:${report.kind}] ${report.message}\n${report.stack ?? ""}`)
+  hostError("crash", report.message, { kind: report.kind, id: report.id, source: report.source })
+  if (!hostLogPath()) console.error(`[crash:${report.kind}] ${report.message}\n${report.stack ?? ""}`)
 }
 
 function prune(dir: string) {

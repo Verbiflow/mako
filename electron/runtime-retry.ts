@@ -42,6 +42,7 @@ const recoverable = [
   "mako:usage",
   "mako:crashes",
   "mako:crashes-dir",
+  "mako:host-log-path",
   "mako:daemon-status",
   "mako:daemon-login",
   "mako:utility-model-settings",

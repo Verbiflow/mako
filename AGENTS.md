@@ -480,6 +480,27 @@ Opening a thread does not start an agent; sending a prompt does. `MAKO_PROFILE`
 or `--sandbox` explicitly selects another separate host. Never silently create a
 second host when attachment fails.
 
+The host keeps its own log at `<data root>/logs/host.log` (`electron/host-log.ts`,
+rotated to `.1` at 4 MiB) because it is spawned detached with its stdio ignored.
+Every provider spawn, startup step, refused setting, failed prompt and exit is one
+line; `console.warn`/`console.error` are mirrored; crash reports add a summary
+line; Settings > Diagnostics reveals the file. Fields are explicit and stderr
+tails are scrubbed of bearer tokens: never log an environment, a header list or
+a request body. ACP startup is bounded by silence, not a fixed budget
+(`electron/acp-startup.ts`): a step fails after 20 s without any stdout or
+stderr from the process, after 120 s regardless, or at once when the process
+exits, and the error names the step, what had already finished and whether the
+process is alive. Grok once answered `initialize` in 150 ms and then sat silent
+for 19 s inside `session/new`; the old fixed 20 s budget killed it while a
+provider still connecting MCP servers one notification at a time would have
+been killed too. A failed request offers Send again in its recovery details and
+keeps the failed record. JSON-RPC error `data` reaches user-facing messages
+through `errorMessage`; "Invalid params" alone once hid "Unknown model config
+option: effort". In a running ACP session only the current model's unreported
+options are fixed; another model's catalog options stay editable because
+choosing it switches the session. `test-acp-startup.ts`, `test-host-log.ts` and
+`test-composer-settings.ts` cover these.
+
 When the host closes for a restart, install or quit it answers every pending
 call with `host-restarting` (`electron/contracts/host-connection.ts`) instead of
 resetting the connection. The client turns that, and a dropped socket, into

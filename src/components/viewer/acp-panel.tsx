@@ -6,6 +6,7 @@ import { ActivityMark } from "@/components/ui/activity-mark"
 import { TransferStatus } from "./transfer-status"
 import { LiveActionStatus } from "./live-action-status"
 import { loadEarlierLive } from "@/state/live-recovery"
+import { sendTo } from "@/state/acp-queue"
 import { useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
@@ -354,13 +355,30 @@ export function RetainedRequests() {
 function RequestRecovery({ request }: { request: LiveRequest }) {
   const text = request.displayText ?? request.text
   const { copy, copied } = useCopy(text)
+  const conversationId = useAcp((state) => activeLiveAcp(state)?.key ?? null)
+  const [resent, setResent] = useState<"sending" | "sent" | null>(null)
   const label = request.status === "uncertain" ? "Delivery unconfirmed" : request.status === "interrupted" ? "Stopped message" : "Message failed"
+  // A failed request is re-sent as a new request carrying the same text and
+  // attachments; the failed record stays, so nothing is replayed silently.
+  const resend = async () => {
+    if (!conversationId || resent) return
+    setResent("sending")
+    const accepted = await sendTo(conversationId, request.text, request.attachments)
+    setResent(accepted ? "sent" : null)
+  }
   return (
     <details className="py-2" data-request-recovery={request.id}>
       <summary className="pressable cursor-pointer">{label}. Review saved message</summary>
       {request.error ? <p className="mt-2">{request.error}</p> : null}
       <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
-      <button type="button" onClick={() => void copy()} className="pressable mt-2 rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
+      <div className="mt-2 flex items-center gap-3">
+        {request.status === "failed" && conversationId ? (
+          <button type="button" onClick={() => void resend()} disabled={resent !== null} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
+            {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : "Send again"}
+          </button>
+        ) : null}
+        <button type="button" onClick={() => void copy()} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
+      </div>
     </details>
   )
 }

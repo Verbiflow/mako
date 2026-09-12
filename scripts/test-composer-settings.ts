@@ -186,3 +186,66 @@ assert.equal(
 )
 
 console.log("composer settings: starting conversations keep their send target")
+
+// A running ACP session reports which of its current model's options it can
+// change. Another model's options are not "fixed for this session": choosing
+// that model switches the session, so its catalog options stay editable. The
+// Cursor picker once showed Grok 4.6's effort as unchangeable while the
+// session was still on Fable, which was never true.
+{
+  const cursor: HarnessProfile = {
+    id: "cursor",
+    label: "Cursor",
+    available: true,
+    transport: "acp",
+    models: [
+      {
+        id: "claude-fable-5-1",
+        label: "Claude Fable 5.1",
+        options: [
+          { kind: "select", id: "effort", label: "Effort", role: "reasoning", values: [{ value: "high", label: "High" }] },
+          { kind: "select", id: "thinking", label: "Thinking", values: [{ value: "true", label: "On" }] },
+        ],
+      },
+      {
+        id: "grok-4.6",
+        label: "Grok 4.6",
+        options: [
+          { kind: "select", id: "effort", label: "Effort", role: "reasoning", values: [{ value: "high", label: "High" }, { value: "xhigh", label: "Extra High" }] },
+          { kind: "select", id: "fast", label: "Fast", role: "speed", values: [{ value: "true", label: "Fast" }, { value: "false", label: "Off" }] },
+        ],
+      },
+    ],
+    capabilities: [],
+    settings: { model: "claude-fable-5-1" },
+  }
+  const target = { kind: "live" as const, id: "live-1", harness: "cursor", cwd }
+  const live = {
+    options: [
+      { kind: "select" as const, id: "effort", wireId: "effort", label: "Effort", role: "reasoning" as const, current: "high", values: [{ value: "high", label: "High" }] },
+    ],
+  }
+  const session = { model: "claude-fable-5-1", options: { effort: "high", thinking: "true" } }
+  const current = resolveComposerSettingsInput({ target, profile: cursor, session, live })
+  assert.equal(current.model?.id, "claude-fable-5-1")
+  assert.equal(current.options.find((option) => option.id === "effort")?.disabledReason, undefined)
+  assert.equal(
+    current.options.find((option) => option.id === "thinking")?.disabledReason,
+    "Thinking cannot be changed in this running session."
+  )
+  const switched = resolveComposerSettingsInput({
+    target,
+    profile: cursor,
+    session,
+    live,
+    overrides: { model: "grok-4.6", options: { effort: "xhigh" } },
+  })
+  assert.equal(switched.model?.id, "grok-4.6")
+  assert.deepEqual(
+    switched.options.map((option) => [option.id, option.disabledReason]),
+    [["effort", undefined], ["fast", undefined]]
+  )
+  assert.deepEqual(switched.resolved.issues, [])
+  assert.deepEqual(switched.resolved.settings, { model: "grok-4.6", options: { effort: "xhigh" } })
+  assert.equal(switched.resolved.options.fast?.kind, "unknown", "an option without a default is chosen by the user, never invented")
+}

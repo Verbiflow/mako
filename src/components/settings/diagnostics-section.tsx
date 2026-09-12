@@ -16,11 +16,13 @@ import type { CrashReport } from "../../../electron/crash.ts"
 export function DiagnosticsSection() {
   const [crashes, setCrashes] = useState<CrashReport[]>([])
   const [dir, setDir] = useState("")
+  const [hostLog, setHostLog] = useState("")
   const [openId, setOpenId] = useState<string>()
 
   const load = useCallback(() => {
     void diagnostics.list().then(setCrashes).catch(() => setCrashes([]))
     void diagnostics.directory().then(setDir).catch(() => setDir(""))
+    void diagnostics.hostLogPath().then(setHostLog).catch(() => setHostLog(""))
   }, [])
 
   useEffect(load, [load])
@@ -87,6 +89,24 @@ export function DiagnosticsSection() {
           ))}
         </div>
       )}
+
+      {hostLog ? (
+        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-surface px-3 py-2 ring-1 ring-hairline">
+          <div className="min-w-0">
+            <p className="text-ui">Host log</p>
+            <p className="truncate text-label text-faint" title={hostLog}>
+              Every provider start, startup step, failure and exit, one line
+              each. Read it when a session says it did not start.
+            </p>
+          </div>
+          <Action
+            tone="ghost"
+            onClick={() => void desktop.revealPath(hostLog)}
+          >
+            Show the log
+          </Action>
+        </div>
+      ) : null}
 
       <div className="mt-2 flex items-center gap-2">
         <Action tone="outline" onClick={load}>

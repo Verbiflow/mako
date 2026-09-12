@@ -10,6 +10,10 @@ export const diagnostics = {
     return getMako().crashesDir()
   },
 
+  hostLogPath(): Promise<string> {
+    return getMako().hostLogPath()
+  },
+
   clear(): Promise<void> {
     return getMako().clearCrashes()
   },

@@ -206,12 +206,17 @@ export function resolveComposerSettingsInput(input: ComposerSettingsInput) {
   const { target, profile, session, live } = input
   const models: SessionModel[] = (profile?.models ?? []).map((model) => {
     if (!live || profile?.transport !== "acp") return model
+    // The running session reports which of the current model's options it
+    // can change; one it does not report is fixed for this session. Another
+    // model's options are not fixed: choosing that model switches the
+    // session to it and its options are applied with the switch, so they
+    // stay editable and the catalog describes them until the provider
+    // reports the new model's own.
     const sameModel =
       modelByIdentity(profile.models, session?.model)?.id === model.id
+    if (!sameModel) return model
     const options = model.options.map((option) => {
-      const reported = sameModel
-        ? live.options?.find((entry) => entry.id === option.id)
-        : undefined
+      const reported = live.options?.find((entry) => entry.id === option.id)
       if (reported)
         return {
           ...reported,

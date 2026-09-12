@@ -1636,6 +1636,7 @@ export function installMockBridge() {
     openPreviewWindow: async () => {},
     crashes: async () => [],
     crashesDir: async () => "/tmp/mako/crashes",
+    hostLogPath: async () => "",
     clearCrashes: async () => {},
     reportCrash: async () => {},
     pickFolder: async () => null,

@@ -1,5 +1,4 @@
 import { z } from "zod"
-import { stripVTControlCharacters } from "node:util"
 import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } from "./providers/live-driver.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
@@ -51,6 +50,10 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk"
 import { accountEnv } from "./accounts.js"
+import { AcpStartupWatch, stderrDetail } from "./acp-startup.js"
+import { hostLog, hostWarn } from "./host-log.js"
+import { errorMessage } from "./live-runtime.js"
+import { basename } from "node:path"
 import { acpObservedSettings, applyAcpSettings } from "./acp-config.js"
 import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { forward } from "./acp-notifications.js"
@@ -108,30 +111,8 @@ interface Live {
 }
 
 const sessions = new Map<string, Live>()
-const STARTUP_TIMEOUT_MS = 20_000
 let emit: (event: LiveDriverEvent) => void = () => {}
 
-function startupStep<Value>(
-  work: Promise<Value>,
-  harness: string
-): Promise<Value> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${harness} did not start within 20 seconds`)),
-      STARTUP_TIMEOUT_MS
-    )
-    work.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (error: Error) => {
-        clearTimeout(timer)
-        reject(error)
-      }
-    )
-  })
-}
 
 export function bindAcp(send: (event: LiveDriverEvent) => void): void {
   emit = send
@@ -267,8 +248,28 @@ export async function liveStart(
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-4000)
   })
+  const watch = new AcpStartupWatch(child, { harness, stderr: () => stderr })
+  hostLog("acp", "spawned", {
+    harness,
+    conversation: id,
+    pid: child.pid,
+    command: basename(executable),
+    args: spec.args.join(" "),
+    cwd: workingDir,
+    resume: options.resume,
+    mcpServers: preparedServers.length,
+  })
   child.on("exit", (code, signal) => {
     live.startup.abort()
+    hostLog("acp", "exited", {
+      harness,
+      conversation: id,
+      pid: child.pid,
+      code,
+      signal,
+      status: live.state.status,
+      stderr: stderrDetail(stderr),
+    })
     for (const resolve of live.pendingPermissions.values()) resolve({ kind: "choice", optionId: null })
     if (live.state.status === "closed") return
     update(live, {
@@ -335,8 +336,7 @@ export async function liveStart(
   live.connection = connection
 
   try {
-    const initialized = await startupStep(
-      connection.initialize({
+    const initialized = await watch.step("initialize", connection.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
@@ -344,9 +344,7 @@ export async function liveStart(
           elicitation: { form: {} },
           ...providerHost.acpSources.get(harness)?.clientCapabilities,
         },
-      }),
-      harness
-    )
+      }))
     live.promptCapabilities =
       initialized.agentCapabilities?.promptCapabilities ?? {}
     const mcpCapabilities = initialized.agentCapabilities?.mcpCapabilities
@@ -385,8 +383,7 @@ export async function liveStart(
       },
       open: async () => options.resume
         ? parseLoadedAcpSession(
-            await startupStep(
-              connection.loadSession(
+            await watch.step("session/load", connection.loadSession(
                 loadSessionRequest(
                   options.resume,
                   workingDir,
@@ -394,23 +391,18 @@ export async function liveStart(
                   options.tuning,
                   live.mcpServers
                 )
-              ),
-              harness
-            ),
+              )),
             options.resume
           )
         : parseNewAcpSession(
-            await startupStep(
-              connection.newSession(
+            await watch.step("session/new", connection.newSession(
                 newSessionRequest(
                   workingDir,
                   harness,
                   options.tuning,
                   live.mcpServers
                 )
-              ),
-              harness
-            )
+              ))
           ),
     })
     live.sessionId = session.sessionId
@@ -437,6 +429,16 @@ export async function liveStart(
       configOptions: normalizeAcpOptions(applied.options),
       settings: applied.settings,
     })
+    watch.dispose()
+    hostLog("acp", "ready", {
+      harness,
+      conversation: id,
+      pid: child.pid,
+      nativeId: session.sessionId,
+      steps: watch.summary(),
+      model: applied.settings.model,
+      mode: selection.currentMode,
+    })
     return live.state
   } catch (error) {
     // The agent's stderr explains a death; it does not explain a refusal
@@ -444,11 +446,24 @@ export async function liveStart(
     // preferring stderr here once replaced "cannot change effort" with a
     // timing line and the real cause was invisible.
     const died = child.exitCode !== null || child.signalCode !== null
+    watch.dispose()
     child.kill()
     sessions.delete(id)
     const message =
-      error instanceof Error ? error.message : `The ${harness} agent failed to start`
-    throw new Error((died && stderrDetail(stderr)) || message, { cause: error })
+      error instanceof Error ? errorMessage({ error }) : `The ${harness} agent failed to start`
+    const surfaced = (died && stderrDetail(stderr)) || message
+    hostWarn("acp", "start failed", {
+      harness,
+      conversation: id,
+      pid: child.pid,
+      error: surfaced,
+      steps: watch.summary(),
+      exited: died,
+      code: child.exitCode,
+      signal: child.signalCode,
+      stderr: stderr.slice(-600),
+    })
+    throw new Error(surfaced, { cause: error })
   }
 }
 
@@ -555,11 +570,19 @@ export async function livePrompt(
     throw new Error("The agent is already working")
   const connection = live.connection
   const sessionId = live.sessionId
-  const applied = await applyTuning(live, tuning)
+  let applied: Awaited<ReturnType<typeof applyTuning>>
+  try {
+    applied = await applyTuning(live, tuning)
+  } catch (error) {
+    hostWarn("acp", "settings refused", { harness: live.harness, conversation: id, error: errorMessage({ error }) })
+    throw error
+  }
   if (live.state.status === "closed" || live.turn?.acceptsSteering)
     throw new Error("The session changed while preparing the prompt")
   const turn = new AcpPromptTurn((result) => {
     if (live.turn !== turn || live.state.status === "closed" || live.state.connection === "disconnected") return
+    if (result.kind === "failed")
+      hostWarn("acp", "prompt failed", { harness: live.harness, conversation: id, error: result.error })
     update(live, result.kind === "completed"
       ? { status: "ready", lastStop: result.stopReason }
       : { status: "failed", lastStop: "failed", error: result.error })
@@ -688,14 +711,3 @@ function updateState(live: Live, patch: Partial<LiveSessionState>): void {
   emit({ type: "acp-session", session: live.state })
 }
 
-/** Structured tracing at INFO and below is narration, not a failure reason. */
-const TRACE_LINE = /^\d{4}-\d\d-\d\dT\S+\s+(?:TRACE|DEBUG|INFO)\b/
-
-export function stderrDetail(text: string): string {
-  const lines = stripVTControlCharacters(text)
-    .trim()
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !TRACE_LINE.test(line))
-  return (lines[lines.length - 1] ?? "").trim().slice(0, 300)
-}

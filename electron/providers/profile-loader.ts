@@ -1,6 +1,7 @@
 import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import type { HarnessProfile } from "../shared.js"
 import type { ProviderCapability } from "./registry.js"
+import { hostWarn } from "../host-log.js"
 
 export interface ProviderProfileLoader extends ProviderCapability {
   label: string
@@ -36,6 +37,8 @@ export function unavailableProviderProfile(
   loader: ProviderProfileLoader,
   error: string
 ): HarnessProfile {
+  // The composer will only say "Model unavailable"; the reason lives here.
+  hostWarn("discovery", "provider profile unavailable", { harness: loader.provider, error })
   return {
     id: loader.provider,
     label: loader.label,

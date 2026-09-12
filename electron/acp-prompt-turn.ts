@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { PromptResponse } from "@agentclientprotocol/sdk"
+import { errorMessage } from "./live-runtime.js"
 
 export type AcpTurnResult =
   | { kind: "completed"; stopReason: PromptResponse["stopReason"] }
@@ -37,7 +38,7 @@ export class AcpPromptTurn {
         this.result = { kind: "completed", stopReason: response.stopReason }
     } catch (error) {
       if (kind === "prompt")
-        this.result = { kind: "failed", error: error instanceof Error ? error.message : String(error) }
+        this.result = { kind: "failed", error: errorMessage({ error }) }
       throw error
     } finally {
       this.pending -= 1
