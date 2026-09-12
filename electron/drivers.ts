@@ -30,10 +30,13 @@ import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import { accountEnv, switchSuggestion } from "./accounts.js"
 import { providerHost } from "./providers/index.js"
-import type {
-  NativeCommand,
-  NativeRunOptions,
+import {
+  dropUncarried,
+  type NativeCommand,
+  type NativeRunOptions,
+  type NativeRunner,
 } from "./providers/native-runner.js"
+import { hostWarn } from "./host-log.js"
 import type { HostEvent, ThreadRunState } from "./shared.js"
 import {
   environmentForExecutable,
@@ -153,7 +156,9 @@ export async function resumeNative(
     ref.path,
     ref.harness,
     ref.cwd,
-    runner.resume(ref.nativeId, prompt, options),
+    runner,
+    options,
+    (prepared) => runner.resume(ref.nativeId, prompt, prepared),
     tuning?.captureOutput ?? false
   )
 }
@@ -180,7 +185,9 @@ export async function startFresh(
     `fresh:${harness}:${++freshCounter}`,
     harness,
     cwd,
-    runner.fresh(prompt, options),
+    runner,
+    options,
+    (prepared) => runner.fresh(prompt, prepared),
     options.captureOutput ?? false
   )
 }
@@ -189,15 +196,42 @@ async function launch(
   key: string,
   harness: string,
   workingDir: string | undefined,
-  resume: NativeCommand,
+  runner: NativeRunner,
+  options: NativeRunOptions,
+  build: (options: NativeRunOptions) => NativeCommand,
   captureOutput: boolean
 ): Promise<ThreadRunState> {
-  const { command, args } = resume
   const cwd = workingDir && existsSync(workingDir) ? workingDir : homedir()
-  // The selected account decides who pays for this run.
+  // The selected account decides who pays for this run, and what the
+  // command line may name: the model list Cursor's CLI accepts is the
+  // account's own.
   assertLifecycleAdmission()
   preparingRuns.set(key, { id: `preparing:${key}`, token: key, title: "Starting a native agent", provider: harness, cwd, status: "finishing", stoppable: false })
-  const env = await accountEnv(harness, process.env).finally(() => preparingRuns.delete(key))
+  let env: NodeJS.ProcessEnv
+  let command: string
+  let args: string[]
+  let commandEnv: Record<string, string> | undefined
+  try {
+    env = await accountEnv(harness, process.env)
+    const prepared = runner.prepare
+      ? await runner.prepare(options, env)
+      : dropUncarried(options, runner.carries)
+    // A setting the command line cannot carry is said out loud, never
+    // silently left behind: the ACP transport would have applied it.
+    if (prepared.dropped.length) {
+      const named = prepared.dropped.join(", ")
+      hostWarn("native", "settings dropped", { harness, key, dropped: named })
+      emit({
+        type: "notice",
+        level: "info",
+        message: `This ${harness} reply runs without ${named}: its command line cannot carry ${prepared.dropped.length === 1 ? "it" : "them"}.`,
+      })
+    }
+    ;({ command, args, env: commandEnv } = build(prepared.options))
+  } finally {
+    preparingRuns.delete(key)
+  }
+  if (commandEnv) env = { ...env, ...commandEnv }
   const executable = resolveExecutable(command, env)
   if (!executable) throw new Error(`${harness} is not installed`)
   assertLifecycleAdmission()

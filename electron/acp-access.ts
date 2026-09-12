@@ -33,7 +33,7 @@ export interface AcpAccessSelection {
 
 export function acpSessionModes(
   policy: AcpAccessPolicy | undefined,
-  native: SessionModeState | null
+  native: Pick<SessionModeState, "availableModes"> | null
 ): LiveSessionMode[] {
   const tierOf = new Map<string, AccessTier>()
   for (const info of ACCESS_TIERS) {

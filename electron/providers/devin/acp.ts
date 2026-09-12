@@ -13,6 +13,13 @@ export const devinAcpSource: ProviderAcpSource = {
   access: {
     native: { edits: "accept-edits", auto: "smart", chat: "ask", plan: "plan", full: "bypass" },
   },
+  nativeModes: [
+    { id: "accept-edits", name: "Code" },
+    { id: "smart", name: "Smart" },
+    { id: "ask", name: "Ask" },
+    { id: "plan", name: "Plan" },
+    { id: "bypass", name: "Bypass Permissions" },
+  ],
   available: () => devinExecutable() !== null,
   async launch() {
     return {

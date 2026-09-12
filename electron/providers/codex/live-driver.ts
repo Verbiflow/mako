@@ -1,4 +1,5 @@
 import { codexExecutableCandidates } from "./executable.js"
+import { codexAccessModes } from "./access.js"
 import type { ProviderLiveDriver } from "../live-driver.js"
 
 export const codexLiveDriver: ProviderLiveDriver = {
@@ -22,6 +23,7 @@ export const codexLiveDriver: ProviderLiveDriver = {
     void import("../../codex-app.js").then((module) => module.codexAppClose(id))
   },
   steering: "step",
+  modes: codexAccessModes(),
   setMode: async (...args) => {
     ;(await import("../../codex-app.js")).codexAppSetMode(...args)
   },

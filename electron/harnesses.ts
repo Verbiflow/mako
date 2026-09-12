@@ -1,6 +1,7 @@
 import { accountEnv } from "./accounts.js"
 import { realpath } from "node:fs/promises"
-import { resolveHarnessTuning } from "./harness-models.js"
+import { resolveHarnessTuning, withCatalogDefaults } from "./harness-models.js"
+import type { NativeRunOptions } from "./providers/native-runner.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { providerHost } from "./providers/index.js"
 import {
@@ -86,6 +87,21 @@ export async function resolveHarnessLaunch(
   return resolveHarnessTuning(profile, tuning)
 }
 
+/**
+ * The settings a headless run is built from: the same validated selection a
+ * live session receives, plus the catalog's defaults for the runner to read.
+ */
+export async function resolveNativeLaunch(
+  harness: string,
+  cwd: string | undefined,
+  tuning: SessionSettings | undefined
+): Promise<NativeRunOptions | undefined> {
+  const settings = await resolveHarnessLaunch(harness, cwd, tuning)
+  if (!settings?.model) return settings
+  const profile = await harnessProfileForSend(harness, cwd)
+  return profile.available ? withCatalogDefaults(profile, settings) : settings
+}
+
 async function loadProfile(
   harness: string,
   cwd: string | undefined,
@@ -129,9 +145,44 @@ async function loadProfile(
     // Stale beats blank: the refresh lands as an event moments later.
     const snapshot = held?.profile ?? (await providerProfileCache.get(key))
     if (snapshot) return snapshot
+    // A workspace this account has not been seen in yet still has the
+    // account's models: the picker and a saved choice render at once, and
+    // only the workspace's own defaults wait for discovery.
+    const borrowed = await accountSnapshot(`${harness}:${accountKey}:`)
+    // Discovery may have finished while the caches were read. `now` callers
+    // re-emit what they get and `startLoad` has already reported it.
+    const landed = cache.get(key)
+    if (landed && mode !== "now") return landed.profile
+    if (borrowed) return borrowed
     if (mode === "now") return pendingProviderProfile(loader)
   }
   return request
+}
+
+async function accountSnapshot(
+  prefix: string
+): Promise<HarnessProfile | null> {
+  let held: { loadedAt: number; profile: HarnessProfile } | null = null
+  for (const [key, entry] of cache) {
+    if (!key.startsWith(prefix)) continue
+    if (!entry.profile.available || entry.profile.configurationError) continue
+    if (!held || entry.loadedAt > held.loadedAt) held = entry
+  }
+  const source = held?.profile ?? (await providerProfileCache.nearest(prefix))
+  if (!source) return null
+  // Models and capabilities belong to the account; defaults and the
+  // configured model can differ per workspace, so they stay unknown.
+  const borrowed: HarnessProfile = {
+    id: source.id,
+    label: source.label,
+    available: source.available,
+    transport: source.transport,
+    models: source.models,
+    capabilities: source.capabilities,
+    pending: true,
+  }
+  if (source.defaultModel !== undefined) borrowed.defaultModel = source.defaultModel
+  return borrowed
 }
 
 function startLoad(

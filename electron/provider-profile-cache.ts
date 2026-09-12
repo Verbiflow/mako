@@ -58,6 +58,24 @@ export class ProviderProfileCache {
     return entry ? (this.file.snapshots[entry.hash] ?? null) : null
   }
 
+  /**
+   * The most recently saved working snapshot under a key prefix: the same
+   * provider and account in any workspace. A new workspace borrows its model
+   * catalog from here until its own discovery reports.
+   */
+  async nearest(prefix: string): Promise<HarnessProfile | null> {
+    await this.load()
+    let best: { savedAt: number; profile: HarnessProfile } | null = null
+    for (const [key, entry] of Object.entries(this.file.entries)) {
+      if (!key.startsWith(prefix)) continue
+      const profile = this.file.snapshots[entry.hash]
+      if (!profile?.available || profile.configurationError) continue
+      if (!best || entry.savedAt > best.savedAt)
+        best = { savedAt: entry.savedAt, profile }
+    }
+    return best?.profile ?? null
+  }
+
   async put(key: string, profile: HarnessProfile): Promise<void> {
     await this.load()
     const hash = profileHash(profile)

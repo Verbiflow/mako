@@ -91,6 +91,8 @@ export type HostEventBody =
   | { type: "native-requests"; requests: NativeRequest[] }
   | { type: "browser-control"; browsers: BrowserControlStatus[] }
   | { type: "control-activity"; activity: ControlActivity }
+  /** The user clicked a desktop notification; open its subject. Window-wide. */
+  | { type: "notification-activated"; id: string; subject: string }
 
 /**
  * Every event says which tab it came from.

@@ -1,3 +1,4 @@
+import { acpSessionModes } from "../acp-access.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 
@@ -16,6 +17,10 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       ? async (...args) => (await import("../acp.js")).liveSteer(...args)
       : undefined,
     steering: source.steering === "interrupting-prompt" ? "interrupt" : source.steering ? "step" : undefined,
+    modes: acpSessionModes(
+      source.access,
+      source.nativeModes ? { availableModes: [...source.nativeModes] } : null
+    ),
     permission: async (...args) => {
       ;(await import("../acp.js")).acpRespondPermission(...args)
     },

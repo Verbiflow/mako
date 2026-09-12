@@ -9,6 +9,7 @@ import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { ensureRuntime, runtimeDataRoot } from "./runtime-service.js"
 import { invokeRuntime, runtimeFile, subscribeRuntime } from "./runtime-connection.js"
 import { invokeWithRecovery, type RecoveryLink } from "./runtime-retry.js"
+import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 
 const directory = dirname(fileURLToPath(import.meta.url))
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
@@ -28,6 +29,21 @@ let pendingCommand: "app.quit" | "app.updates" | null = null
 let shutdownAction: "quit" | "install" | "restart" | null = null
 const draftShutdown = new WindowShutdown()
 let closingLocally = false
+
+/**
+ * Notifications and the badge belong to this client, not the shared host: the
+ * banner is for the desk you looked away from, and the badge for its dock
+ * icon. A click surfaces the window that asked and hands it the subject.
+ */
+const desktopNotifier = electronDesktopNotifier({
+  idleBadge: "",
+  activate: (windowId, activation) => {
+    const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.id === windowId) ?? BrowserWindow.getAllWindows()[0]
+    if (!target || target.isDestroyed()) return
+    surfaceWindow(target)
+    target.webContents.send("mako:event", { type: "notification-activated", ...activation })
+  },
+})
 
 function requestCommand(command: "app.quit" | "app.updates"): void {
   const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
@@ -178,6 +194,10 @@ async function start() {
         await shell.openExternal(url)
         return
       }
+      if (channel === "mako:notify") return desktopNotifier.notify(event.sender.id, hostCallInputs["mako:notify"].parse(args)[0])
+      if (channel === "mako:notify-dismiss") { desktopNotifier.dismiss(z.string().parse(args[0])); return }
+      if (channel === "mako:set-badge-count") { desktopNotifier.setBadgeCount(z.number().parse(args[0])); return }
+      if (channel === "mako:notification-permission" || channel === "mako:request-notification-permission") return desktopNotifier.permission()
       if (channel === "mako:pick-folder") {
         const parent = BrowserWindow.fromWebContents(event.sender)
         const options: Electron.OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] }
@@ -207,6 +227,7 @@ app.on("before-quit", (event) => {
     requestCommand("app.quit")
     return
   }
+  desktopNotifier.dispose()
   for (const client of clients.values()) client.dispose()
 })
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit() })

@@ -4,6 +4,7 @@ import type {
   LivePermissionResponse,
   PromptAttachment,
   LiveSessionState,
+  LiveSessionMode,
   LiveDriverEvent,
   LiveSteering,
   McpRegistrySnapshot,
@@ -31,6 +32,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   steer?(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult>
   /** Required with `steer`; says what the provider does with the message. */
   steering?: LiveSteering
+  /** The modes a fresh session will offer, declared without starting one. */
+  modes?: readonly LiveSessionMode[]
   compact?(id: string): Promise<void>
   forkPoint?: "run" | "checkpoint"
   canResume: boolean

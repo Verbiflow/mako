@@ -2,10 +2,10 @@ import { createHash } from "node:crypto"
 import { z } from "zod"
 import type { UtilityTokenCounter } from "./utility-token-count.js"
 import type { CommitDraft } from "@kiri/client"
-import type { LanguageModel } from "ai"
 import type { CommitAnalysisMode, CommitGenerationResult, UtilityConnection } from "./shared.js"
-import { completeUtilityText, UtilityModelError } from "./utility-models.js"
+import { completeUtilityText, UtilityModelError, type UtilityLanguageModel } from "./utility-models.js"
 import { registerKiriModel, withKiriRepository, closeKiriEngine } from "./kiri-engine.js"
+import { hostWarn } from "./host-log.js"
 
 function draftKey(client: string, cwd: string): string { return JSON.stringify([client, cwd]) }
 
@@ -15,7 +15,7 @@ export class KiriCommitEngine {
   async generate(input: {
     client: string
     cwd: string
-    model: LanguageModel
+    model: UtilityLanguageModel
     mode?: CommitAnalysisMode
     connection: UtilityConnection
     prompt?: string
@@ -42,7 +42,10 @@ export class KiriCommitEngine {
         }
         catch (error) {
           const { KiriError } = await import("@kiri/client")
-          throw new KiriError(error instanceof UtilityModelError ? error.kind : "request", error instanceof UtilityModelError ? error.message : "The model request failed.")
+          const kind = error instanceof UtilityModelError ? error.kind : "request"
+          const message = error instanceof UtilityModelError ? error.message : "The model request failed."
+          hostWarn("commit-model", "Kiri model call failed", { kind, message, model: `${input.connection.provider}/${input.connection.model}`, mode, schema: JSON.stringify(call.schema).slice(0, 200), cause: error instanceof UtilityModelError ? undefined : String(error).slice(0, 200) })
+          throw new KiriError(kind, message)
         }
       })
       let prepared: number | null = null

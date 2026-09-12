@@ -22,6 +22,11 @@ import type {
   UtilityCatalog,
 } from "./utility-models.js"
 import type { RewindInput, RewindPreview } from "./workspace-snapshots.js"
+import type {
+  DesktopNotification,
+  NotificationDelivery,
+  NotificationPermission,
+} from "./notifications.js"
 import type { LiveAction, LiveActionInput } from "./live-actions.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { NativeRequest, NativeRequestInput } from "../shared.js"
@@ -38,6 +43,7 @@ import type {
   Capabilities,
   ExternalEditor,
   ExternalThreadActivity,
+  ContinuationPlan,
   FileContents,
   GitCommitEntry,
   GitCommitFile,
@@ -153,6 +159,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     unfollowThread: () => invokeTrustedHost<void>("mako:thread-unfollow"),
     resumableHarnesses: () =>
       invokeTrustedHost<string[]>("mako:thread-resumable"),
+    continuationPlan: (path: string) =>
+      invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
     continueTargets: () =>
       invokeTrustedHost<string[]>("mako:thread-continue-targets"),
     continueThreadWith: (
@@ -601,13 +609,13 @@ export function createMakoBridge(transport: BridgeTransport) {
     /* Crash reports. Local only — see electron/crash.ts. */
     crashes: () => invokeTrustedHost<CrashReport[]>("mako:crashes"),
     crashesDir: () => invokeTrustedHost<string>("mako:crashes-dir"),
+    /** The host's own log of provider starts, failures and exits; empty when no host log is open. */
+    hostLogPath: () => invokeTrustedHost<string>("mako:host-log-path"),
     clearCrashes: () => invokeTrustedHost<void>("mako:clear-crashes"),
     reportCrash: (
       kind: "renderer-error" | "renderer-rejection",
       payload: { message: string; stack?: string; source?: string }
     ) => invokeTrustedHost<void>("mako:report-crash", kind, payload),
-    /** The host's own log of provider starts, failures and exits; empty when no host log is open. */
-    hostLogPath: () => invokeTrustedHost<string>("mako:host-log-path"),
 
     pickFolder: () => invokeTrustedHost<string | null>("mako:pick-folder"),
     externalEditors: () =>
@@ -617,6 +625,25 @@ export function createMakoBridge(transport: BridgeTransport) {
     revealPath: (path: string) => invokeTrustedHost<void>("mako:reveal", path),
     openUrl: (url: string) => invokeTrustedHost<void>("mako:open-url", url),
     copy: (text: string) => invokeTrustedHost<void>("mako:copy", text),
+
+    /*
+     * Desktop notifications and the app-icon badge. These are answered by the
+     * client process that owns the window (or the web bridge in a browser),
+     * never by the shared host: a banner belongs to the desk you are looking
+     * away from, and a badge to the icon in its dock.
+     */
+    notify: (notification: DesktopNotification) =>
+      invokeTrustedHost<NotificationDelivery>("mako:notify", notification),
+    dismissNotification: (subject: string) =>
+      invokeTrustedHost<void>("mako:notify-dismiss", subject),
+    setBadgeCount: (count: number) =>
+      invokeTrustedHost<void>("mako:set-badge-count", count),
+    notificationPermission: () =>
+      invokeTrustedHost<NotificationPermission>("mako:notification-permission"),
+    requestNotificationPermission: () =>
+      invokeTrustedHost<NotificationPermission>(
+        "mako:request-notification-permission"
+      ),
 
     /** Subscribe to host events. Returns a disposer. */
     onEvent: transport.onEvent,

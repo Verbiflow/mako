@@ -42,6 +42,10 @@ export const openCodeAcpSource: ProviderAcpSource = {
     host: ["edits", "full"],
     base: "build",
   },
+  nativeModes: [
+    { id: "build", name: "build" },
+    { id: "plan", name: "plan" },
+  ],
   available: () => openCodeInstallation() !== null,
   async launch(options) {
     const generation = options.resume

@@ -1,12 +1,19 @@
 import { devinExecutable } from "./executable.js"
 import {
+  argumentAfter,
   commandTuning,
+  dropUncarried,
   type NativeRunner,
 } from "../native-runner.js"
+
+/** Devin's command line names a variant id; the variant already carries effort and speed. */
+const CARRIES: readonly string[] = []
 
 export const devinNativeRunner: NativeRunner = {
   provider: "devin",
   fastMode: "supported",
+  carries: CARRIES,
+  prepare: async (options) => dropUncarried(options, CARRIES),
   resume(id, prompt, options) {
     const tuning = commandTuning(options)
     return {
@@ -38,5 +45,8 @@ export const devinNativeRunner: NativeRunner = {
         ...(tuning.model ? ["--model", tuning.model] : []),
       ],
     }
+  },
+  describe({ args }) {
+    return { model: argumentAfter(args, "--model"), options: {} }
   },
 }

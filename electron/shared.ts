@@ -13,6 +13,7 @@ export * from "./contracts/mcp-skills-integrations.js"
 export * from "./contracts/providers-acp.js"
 export * from "./contracts/terminal.js"
 export * from "./contracts/thread-lifecycle.js"
+export * from "./contracts/thread-continuation.js"
 export * from "./contracts/runtime.js"
 export * from "./contracts/app-lifecycle.js"
 
@@ -31,6 +32,7 @@ export * from "./contracts/control-preview.js"
 export * from "./contracts/appshots.js"
 export * from "./contracts/workspace-snapshots.js"
 export * from "./contracts/live-actions.js"
+export * from "./contracts/notifications.js"
 
 export type {
   AccountCatalog,

@@ -2,7 +2,17 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
-import { APICallError, generateText, RetryError, type LanguageModel } from "ai"
+import {
+  APICallError,
+  extractJsonMiddleware,
+  generateText,
+  NoObjectGeneratedError,
+  Output,
+  RetryError,
+  TypeValidationError,
+  wrapLanguageModel,
+  type LanguageModel,
+} from "ai"
 import { z } from "zod"
 import type { UtilityConnectionInput, UtilityProviderInfo } from "./shared.js"
 
@@ -92,11 +102,14 @@ export function parseUtilityEndpoint(
 const privateFetch: typeof fetch = (input, init) =>
   fetch(input, { ...init, redirect: "error" })
 
+/** A provider model instance; gateway model-id strings are never used for utility calls. */
+export type UtilityLanguageModel = Exclude<LanguageModel, string>
+
 export function utilityLanguageModel(
   connection: UtilityConnectionInput,
   apiKey: string,
   request: typeof fetch = privateFetch
-): LanguageModel {
+): UtilityLanguageModel {
   const options = { apiKey, fetch: request }
   switch (connection.provider) {
     case "google":
@@ -110,6 +123,9 @@ export function utilityLanguageModel(
         ...options,
         name: "custom",
         baseURL: connection.baseUrl!,
+        // Send response_format json_schema (OpenRouter, Ollama, LM Studio, vLLM) instead of
+        // the bare json_object mode the SDK falls back to with a warning.
+        supportsStructuredOutputs: true,
       })(connection.model)
   }
 }
@@ -127,8 +143,32 @@ export class UtilityModelError extends Error {
   }
 }
 
+function outputLimitError(): UtilityModelError {
+  return new UtilityModelError(
+    "output",
+    "The model reached its output limit. Try a non-reasoning model or retry with shorter instructions."
+  )
+}
+
+/** Names the failing field, never the model's text, so the message stays safe to show and log. */
+export function describeStructuredFailure(error: NoObjectGeneratedError): string {
+  const cause = error.cause
+  if (TypeValidationError.isInstance(cause)) {
+    // SAFETY: Output.object validates with the zod schema passed to completeUtilityText, so a
+    // TypeValidationError's cause is a ZodError whose issues carry path and message; every
+    // field is read optionally, so any other cause degrades to the generic wording below.
+    const issues = (cause.cause as { issues?: { path?: PropertyKey[]; message?: string }[] } | undefined)?.issues
+    const first = issues?.[0]
+    if (first)
+      return `${first.path?.length ? first.path.map(String).join(".") : "response"}: ${first.message ?? "invalid"}`
+    return "response did not match the schema"
+  }
+  if (!error.text?.trim()) return "no text was returned"
+  return "the reply was not valid JSON"
+}
+
 export async function completeUtilityText(
-  model: LanguageModel,
+  model: UtilityLanguageModel,
   instructions: string,
   prompt: string,
   signal: AbortSignal,
@@ -137,8 +177,18 @@ export async function completeUtilityText(
   reasoning: "low" | "high" = "low"
 ): Promise<string> {
   try {
+    // Structured calls ask the provider for JSON natively (Gemini responseSchema, OpenAI
+    // json_schema, Anthropic output_format or JSON tool, OpenAI-compatible json_object) and
+    // strip Markdown fences before parsing. Prompt-only "return JSON" is not enough: Gemini
+    // wraps replies in ```json fences in plain text mode.
+    const structured = outputSchema
+      ? {
+          model: wrapLanguageModel({ model, middleware: extractJsonMiddleware() }),
+          output: Output.object({ schema: outputSchema }),
+        }
+      : { model }
     const result = await generateText({
-      model,
+      ...structured,
       instructions,
       prompt,
       maxOutputTokens,
@@ -150,28 +200,27 @@ export async function completeUtilityText(
         recordInputs: false,
         recordOutputs: false,
       },
-      providerOptions: { openai: { store: false } },
+      // Non-strict json_schema keeps OpenAI and OpenAI-compatible endpoints from rejecting
+      // Kiri's length and range keywords. The compatible provider reads its options under
+      // the name given to createOpenAICompatible ("custom").
+      providerOptions: {
+        openai: { store: false, strictJsonSchema: false },
+        custom: { strictJsonSchema: false },
+      },
       include: {
         requestBody: false,
         requestMessages: false,
         responseBody: false,
       },
     })
-    if (result.finishReason === "length")
-      throw new UtilityModelError(
-        "output",
-        "The model reached its output limit. Try a non-reasoning model or retry with shorter instructions."
-      )
+    if (result.finishReason === "length") throw outputLimitError()
+    if (outputSchema) return JSON.stringify(result.output)
     const text = result.text.trim()
     if (!text)
       throw new UtilityModelError(
         "output",
         "The model returned no text. Check that this is a text-generation model and try again."
       )
-    if (outputSchema) {
-      try { outputSchema.parse(JSON.parse(text)) }
-      catch { throw new UtilityModelError("output", "The model returned an invalid structured response. No partial draft was accepted.") }
-    }
     return text
   } catch (caught) {
     if (signal.aborted)
@@ -184,6 +233,13 @@ export async function completeUtilityText(
       )
     const error = RetryError.isInstance(caught) ? caught.lastError : caught
     if (error instanceof UtilityModelError) throw error
+    if (NoObjectGeneratedError.isInstance(error)) {
+      if (error.finishReason === "length") throw outputLimitError()
+      throw new UtilityModelError(
+        "output",
+        `The model returned an invalid structured response (${describeStructuredFailure(error)}). No partial draft was accepted.`
+      )
+    }
     if (APICallError.isInstance(error)) {
       const status = error.statusCode
       const message = `${error.message} ${error.responseBody ?? ""}`

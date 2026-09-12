@@ -10,8 +10,11 @@ import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
 import { imageSize } from "image-size"
 import { ControlPreviews } from "./control-previews.js"
+import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
+import type { DesktopNotification } from "./contracts/notifications.js"
 import { RelayConversations } from "./relay-conversations.js"
 import { nativeCheckpoint, canResumeBinding } from "./native-continuation.js"
+import { createContinuationPlanner } from "./continuation.js"
 import { NativeRequests } from "./native-requests.js"
 import type { LiveCapability, NativeRequestInput } from "./shared.js"
 import { startConversationMcp } from "./conversation-mcp.js"
@@ -129,6 +132,7 @@ import {
 import {
   harnessProfile,
   resolveHarnessLaunch,
+  resolveNativeLaunch,
   harnessProfiles,
   harnessProfilesNow,
   onHarnessProfile,
@@ -231,9 +235,9 @@ if (process.env.MAKO_DATA_ROOT)
 else if (instanceProfile)
   app.setPath("userData", `${app.getPath("userData")}-${instanceProfile}`)
 installHostLog(join(app.getPath("userData"), "logs", "host.log"))
+const providerChildren = installProviderChildren(app.getPath("userData"))
 hostLog("host", "starting", {
   pid: process.pid,
-const providerChildren = installProviderChildren(app.getPath("userData"))
   version: app.getVersion(),
   profile: instanceProfile || "default",
   persistent: persistentHost,
@@ -352,6 +356,18 @@ let threadArchives: ThreadArchives
 let threadLifecycle: ThreadLifecycle
 let window: BrowserWindow | null = null
 const rendererWindows = new Set<BrowserWindow>()
+
+/**
+ * Standalone-host notifications. A click surfaces the desk window and tells
+ * every renderer which subject was opened; previews ignore it, the desk acts.
+ */
+const desktopNotifier = electronDesktopNotifier({
+  idleBadge: isDev ? "DEV" : "",
+  activate: (_windowId, activation) => {
+    if (window) surfaceWindow(window)
+    emit({ type: "notification-activated", ...activation })
+  },
+})
 let webHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 const webSocket =
   isDev || persistentHost ? process.env.MAKO_WEB_SOCKET : undefined
@@ -860,6 +876,26 @@ function bindIpc() {
   ]
   handle("mako:thread-resumable", installed)
   handle("mako:thread-continue-targets", installed)
+  const continuation = createContinuationPlanner({
+    ref: async (path) =>
+      listThreads().find((ref) => ref.path === path) ??
+      (await openThread(path))?.ref,
+    live: (provider) => {
+      const driver = providerHost.liveDrivers.get(provider)
+      return driver
+        ? { available: driver.available(app.getAppPath()), canResume: driver.canResume }
+        : null
+    },
+    nativeInstalled: (provider) => {
+      const runner = providerHost.nativeRunners.get(provider)
+      return runner ? resolveExecutable(runner.fresh("", {}).command) !== null : false
+    },
+    running: (path) => threadRun(path)?.status === "running",
+    external: (path) => threadActivitySnapshot()[path]?.status ?? null,
+  })
+  handle("mako:thread-continuation-plan", (_event, path: string) =>
+    continuation.plan(path)
+  )
   /**
    * Continue a conversation on a *different* harness: render the handoff and
    * open it as the first prompt of a fresh session there. The new session
@@ -1122,6 +1158,7 @@ function bindIpc() {
         }
         if (driver.steer && driver.steering)
           capability.steering = driver.steering
+        if (driver.modes?.length) capability.modes = [...driver.modes]
         return capability
       })
   )
@@ -1136,6 +1173,10 @@ function bindIpc() {
             JSON.stringify({ stage, elapsedMs: performance.now() - began })
           )
       }
+      // A resume id is honoured only when the host's own plan reopens that
+      // store live; renderer state that says otherwise is stale, not a vote.
+      if (options.resume && options.threadPath)
+        await continuation.assertLive(options.threadPath, harness, options.resume)
       const tuning = await resolveHarnessLaunch(harness, cwd, options.tuning)
       trace("profile")
       await liveConversations.start(harness, cwd, { ...options, tuning })
@@ -1156,9 +1197,10 @@ function bindIpc() {
     return nativeRequests.editQueued(input)
   })
   handle("mako:native-requests", () => nativeRequests?.list() ?? [])
-  handle("mako:native-submit", (_event, input: NativeRequestInput) => {
+  handle("mako:native-submit", async (_event, input: NativeRequestInput) => {
     if (!nativeRequests)
       throw new Error("The native command service is not ready")
+    await continuation.assertNative(input.path)
     return nativeRequests.submit(input)
   })
   handle("mako:live-delegate", (_event, id: string, input: DelegateInput) =>
@@ -1303,7 +1345,7 @@ function bindIpc() {
     async (_e, harness: string, prompt: string, options?: SessionSettings) => {
       const live = await ready()
       const cwd = live.active.workspace
-      const tuning = await resolveHarnessLaunch(harness, cwd, options)
+      const tuning = await resolveNativeLaunch(harness, cwd, options)
       return { run: await startFresh(harness, cwd, prompt, tuning), cwd }
     }
   )
@@ -1423,6 +1465,20 @@ function bindIpc() {
   handle("mako:copy", (_e, text: string) => {
     clipboard.writeText(text)
   })
+
+  handle("mako:notify", (_e, notification: DesktopNotification) =>
+    desktopNotifier.notify(window?.webContents.id ?? 0, notification)
+  )
+  handle("mako:notify-dismiss", (_e, subject: string) =>
+    desktopNotifier.dismiss(subject)
+  )
+  handle("mako:set-badge-count", (_e, count: number) =>
+    desktopNotifier.setBadgeCount(count)
+  )
+  handle("mako:notification-permission", () => desktopNotifier.permission())
+  handle("mako:request-notification-permission", () =>
+    desktopNotifier.permission()
+  )
 }
 
 async function readFilePreview(request: Request): Promise<Response> {
@@ -1463,6 +1519,10 @@ app.whenReady().then(async () => {
       console.info("[mako-runtime]", stage)
   }
   trace("electron ready")
+  // Agents an earlier host left running are ended before this one starts any.
+  await providerChildren.reap().catch((error) => {
+    hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
+  })
   if (persistentHost) app.dock?.hide()
   app.setAboutPanelOptions({
     applicationName: "Mako",
@@ -1492,10 +1552,6 @@ app.whenReady().then(async () => {
   powerMonitor.on("unlock-screen", emitTerminalWake)
   liveConversations = new LiveConversations({
     mcpSnapshot: async (cwd) => {
-  // Agents an earlier host left running are ended before this one starts any.
-  await providerChildren.reap().catch((error) => {
-    hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
-  })
       await ensureMakoLocalControl().catch(() => null)
       return discoverMcpRegistry(cwd, app.getAppPath())
     },
@@ -1551,7 +1607,7 @@ app.whenReady().then(async () => {
       read: async (path) => (await openThread(path))?.ref ?? null,
       running: (path) => threadRun(path)?.status === "running",
       execute: async (ref, text, tuning) => {
-        const selected = await resolveHarnessLaunch(
+        const selected = await resolveNativeLaunch(
           ref.harness,
           ref.cwd,
           tuning
@@ -1709,6 +1765,7 @@ app.on("before-quit", (event) =>
       app.dock?.hide()
     },
     cleanup: () => {
+      desktopNotifier.dispose()
       application?.dispose()
       webHost?.close()
       if (persistentHost && webSocket) {

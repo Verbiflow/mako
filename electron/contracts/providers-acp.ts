@@ -15,6 +15,12 @@ export interface LiveCapability {
   canSteer?: boolean
   steering?: LiveSteering
   canCompact?: boolean
+  /**
+   * The access ladder a new session with this provider offers, known before
+   * any process starts so the desk can take the choice with the first prompt.
+   * A running session's own advertised list still governs that session.
+   */
+  modes?: LiveSessionMode[]
 }
 
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"

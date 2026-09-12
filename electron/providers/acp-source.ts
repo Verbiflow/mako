@@ -8,6 +8,12 @@ import type { AcpAccessPolicy } from "../acp-access.js"
 
 export type AcpTuning = SessionSettings
 
+export interface AcpNativeMode {
+  id: string
+  name: string
+  description?: string
+}
+
 export interface AcpLaunchOptions {
   appPath: string
   execPath: string
@@ -37,6 +43,13 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
    */
   steering?: "concurrent-prompt" | "interrupting-prompt"
   access?: AcpAccessPolicy
+  /**
+   * The session modes the installed agent advertises, recorded from a real
+   * `session/new` so the ladder can be offered before a session exists. The
+   * ids must match what the agent sends; a saved choice is validated against
+   * the live list when the session starts.
+   */
+  nativeModes?: readonly AcpNativeMode[]
   launchOptionIds?: readonly string[]
   sessionMetadata?(tuning: SessionSettings): NewSessionRequest["_meta"]
   available(appPath: string): boolean

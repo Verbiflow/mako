@@ -1,4 +1,4 @@
-import { attachmentFiles } from "@mako/sessions"
+import { attachmentFiles, threadIdentity } from "@mako/sessions"
 /**
  * The machine's sessions, whoever wrote them.
  *
@@ -100,7 +100,7 @@ let activityIndex: { refs: ThreadRef[]; byPath: Map<string, ThreadRef>; byIdenti
 
 function invalidateActivityRef(ref: ThreadRef): void {
   const old = activityIndex?.byPath.get(ref.path)
-  if (!old || old.harness !== ref.harness || old.nativeId !== ref.nativeId) activityIndex = null
+  if (!old || threadIdentity(old) !== threadIdentity(ref)) activityIndex = null
 }
 let sendEvent: (event: HostEvent) => void = () => {}
 const threadEventSubscribers = new Set<(event: HostEvent) => void>()
@@ -155,8 +155,10 @@ function refForNativeId(
 
 function reconcileProviderActivity(): void {
   if (!activityIndex) {
-    const refs = (daemon ? [...mirror.values()] : (catalog?.list() ?? [])).map((ref) => ({ path: ref.path, harness: ref.harness, nativeId: ref.nativeId }))
-    activityIndex = { refs, byPath: new Map(refs.map((ref) => [ref.path, ref])), byIdentity: new Map(refs.map((ref) => [`${ref.harness}:${ref.nativeId}`, ref])) }
+    const refs = (daemon ? [...mirror.values()] : (catalog?.list() ?? [])).map((ref) => ({ path: ref.path, harness: ref.harness, nativeId: ref.nativeId, identity: ref.identity }))
+    // Keyed by the provider's identity, so a store that shares a native id
+    // with another (a Cursor chats fork) does not shadow it here either.
+    activityIndex = { refs, byPath: new Map(refs.map((ref) => [ref.path, ref])), byIdentity: new Map(refs.map((ref) => [threadIdentity(ref), ref])) }
   }
   const { refs, byPath, byIdentity } = activityIndex
   const next = new Map<string, ExternalThreadActivity>()
