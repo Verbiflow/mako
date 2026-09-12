@@ -52,6 +52,7 @@ import {
 import { accountEnv } from "./accounts.js"
 import { AcpStartupWatch, stderrDetail } from "./acp-startup.js"
 import { hostLog, hostWarn } from "./host-log.js"
+import { trackProviderChild } from "./provider-children.js"
 import { errorMessage } from "./live-runtime.js"
 import { basename } from "node:path"
 import { acpObservedSettings, applyAcpSettings } from "./acp-config.js"
@@ -249,6 +250,7 @@ export async function liveStart(
     stderr = (stderr + chunk.toString()).slice(-4000)
   })
   const watch = new AcpStartupWatch(child, { harness, stderr: () => stderr })
+  trackProviderChild(child, { kind: `acp:${harness}`, owner: id })
   hostLog("acp", "spawned", {
     harness,
     conversation: id,

@@ -16,7 +16,7 @@ running the app.
 Read [`scripts/install-macos.sh`](../scripts/install-macos.sh), then run:
 
 ```bash
-curl -fsSL https://github.com/kashyab12/mako/releases/latest/download/install-macos.sh | bash
+curl -fsSL https://github.com/Verbiflow/mako/releases/latest/download/install-macos.sh | bash
 ```
 
 The installer:

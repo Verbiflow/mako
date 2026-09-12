@@ -53,6 +53,7 @@ import type {
   LiveDriverEvent,
   McpRegistrySnapshot,
 } from "./shared.js"
+import { trackProviderChild } from "./provider-children.js"
 
 type Live = {
   id: string
@@ -121,6 +122,7 @@ export async function codexAppStart(
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   })
+  trackProviderChild(child, { kind: "codex:app-server", owner: id })
   const live: Live = {
     id,
     cwd: workingDir,

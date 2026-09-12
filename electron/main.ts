@@ -62,7 +62,8 @@ import {
   listCrashes,
   record,
 } from "./crash.js"
-import { hostLog, hostLogPath, installHostLog } from "./host-log.js"
+import { hostLog, hostLogPath, hostWarn, installHostLog } from "./host-log.js"
+import { installProviderChildren } from "./provider-children.js"
 import { installAutomation } from "./automation.js"
 import {
   computerPermissions,
@@ -232,6 +233,7 @@ else if (instanceProfile)
 installHostLog(join(app.getPath("userData"), "logs", "host.log"))
 hostLog("host", "starting", {
   pid: process.pid,
+const providerChildren = installProviderChildren(app.getPath("userData"))
   version: app.getVersion(),
   profile: instanceProfile || "default",
   persistent: persistentHost,
@@ -1490,6 +1492,10 @@ app.whenReady().then(async () => {
   powerMonitor.on("unlock-screen", emitTerminalWake)
   liveConversations = new LiveConversations({
     mcpSnapshot: async (cwd) => {
+  // Agents an earlier host left running are ended before this one starts any.
+  await providerChildren.reap().catch((error) => {
+    hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
+  })
       await ensureMakoLocalControl().catch(() => null)
       return discoverMcpRegistry(cwd, app.getAppPath())
     },

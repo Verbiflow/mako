@@ -498,7 +498,14 @@ keeps the failed record. JSON-RPC error `data` reaches user-facing messages
 through `errorMessage`; "Invalid params" alone once hid "Unknown model config
 option: effort". In a running ACP session only the current model's unreported
 options are fixed; another model's catalog options stay editable because
-choosing it switches the session. `test-acp-startup.ts`, `test-host-log.ts` and
+choosing it switches the session. Every provider process the host spawns (ACP
+agents, the Codex app-server, the Claude SDK CLI) is recorded in
+`runtime/provider-children.json` under the data root and removed on exit; the
+next host reaps what an earlier host left, but only a pid that still runs the
+recorded executable and started when the record says (`provider-children.ts`),
+because a killed or replaced host never reaches `stopAcp()` and four idle
+cursor-agent processes from three earlier hosts were once found a day later.
+`test-acp-startup.ts`, `test-host-log.ts`, `test-provider-children.ts` and
 `test-composer-settings.ts` cover these.
 
 When the host closes for a restart, install or quit it answers every pending

@@ -216,9 +216,11 @@ export function createClaudeSdkDriver(
     canResume: true,
     forkPoint: "checkpoint",
     steering: "step",
+    modes: CLAUDE_MODES,
     available: () => dependencies.available(),
     async start(cwd, options) {
       if (!options.emit) throw new Error("A live event receiver is required")
+      const conversationId = options.conversationId
       if (
         starting.has(options.conversationId) ||
         (sessions.has(options.conversationId) &&
@@ -256,7 +258,7 @@ export function createClaudeSdkDriver(
             Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
           },
           spawnClaudeCodeProcess: (options) => {
-            const child = spawnClaudeProcess(options)
+            const child = spawnClaudeProcess(options, conversationId)
             exited = new Promise<void>((resolve) => {
               child.once("exit", () => resolve())
               child.once("error", () => resolve())
