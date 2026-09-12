@@ -515,6 +515,23 @@ resetting the connection. The client turns that, and a dropped socket, into
 channels once the event stream reattaches and never repeats a mutation. The
 renderer treats that error as the reconnect banner, not a toast.
 
+A health probe has three answers, not two. `probeRuntime` returns `absent`
+(nothing listens; a host may start), `ready`, or `closing`: a host that still
+owns the socket answered a reused keep-alive connection with a reset or a
+503 while its `close()` swept connections. `runtimeInfo` throws the typed
+disconnect for `closing` rather than passing it off as `null`, because a
+launcher that read `null` would start a second host into the old one's lock.
+Anything that polls the socket while a host leaves or arrives —
+`ensureRuntime`, the local installer's `localRuntime`, its quit wait and
+startup verification — goes through `settleRuntime`, which waits out
+`closing` for ten seconds and then reports it so the caller refuses
+explicitly. The install once died here: a probe during the quit it had asked
+for surfaced a raw `socket hang up`, the installer treated it as fatal, failed
+to cancel the quit for the same reason, and left Mako quitting with nothing
+to reinstall it. `test-runtime-transport.ts` covers all three states, both
+disconnect shapes, settling through a farewell, and the race against the real
+web host's `close()`.
+
 `npm run dev:fixtures` plus `?mock` is an explicit fixture mode for deterministic
 edge cases, not the default UI verification path. Changes to host handler
 arguments require `npm run generate:host-inputs`; `npm run test:web` checks drift

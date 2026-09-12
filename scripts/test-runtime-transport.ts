@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { createServer, type Server } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { startWebHost } from "../electron/web-host.ts"
-import { invokeRuntime, runtimeInfo, subscribeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection.ts"
+import { invokeRuntime, probeRuntime, runtimeInfo, settleRuntime, subscribeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection.ts"
 import { hostCallInputs } from "../electron/contracts/host-call-inputs.ts"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE } from "../electron/contracts/host-connection.ts"
 
@@ -99,4 +100,78 @@ try {
     assert.equal(await runtimeInfo(path), null, "a closed host no longer reports as healthy")
     console.log("Runtime transport: a closing host answers pending calls explicitly and later calls are refused, never reset")
   } finally { stream(); await rm(dir, { recursive: true, force: true }) }
+}
+
+// A health probe against a host that is leaving must never surface a raw
+// socket error or pass for an empty socket. The installer polls it every two
+// seconds while the host quits; a keep-alive connection reused at the wrong
+// moment gets a reset or a 503, and either has to read as "closing".
+{
+  const dir = await mkdtemp(join(tmpdir(), "mako-wire-probe-"))
+  const servers: Server[] = []
+  const fixture = (path: string, answer: (respond: () => void, destroy: () => void) => void) =>
+    new Promise<Server>((resolve) => {
+      const server = createServer((request, response) => {
+        answer(
+          () => response.writeHead(503, { connection: "close" }).end(),
+          () => request.socket.destroy()
+        )
+      })
+      servers.push(server)
+      server.listen(path, () => resolve(server))
+    })
+  try {
+    const absent = join(dir, "nobody.sock")
+    assert.deepEqual(await probeRuntime(absent), { state: "absent" })
+    assert.equal(await runtimeInfo(absent), null)
+    const stale = join(dir, "stale.sock")
+    await writeFile(stale, "")
+    assert.deepEqual(await probeRuntime(stale), { state: "absent" }, "a leftover file where the socket was is nobody's host")
+
+    const refusing = join(dir, "refusing.sock")
+    await fixture(refusing, (respond) => respond())
+    assert.deepEqual(await probeRuntime(refusing), { state: "closing" }, "a host answering 503 has begun its close")
+    const typed = await rejection(runtimeInfo(refusing))
+    assert.ok(typed instanceof RuntimeDisconnectedError && !typed.unconfirmed)
+    assert.equal(typed.message, HOST_RECONNECTING_MESSAGE)
+    const call = await rejection(invokeRuntime(refusing, a, "mako:echo", []))
+    assert.ok(call instanceof RuntimeDisconnectedError && !call.unconfirmed, "a 503 never dispatched the call")
+
+    const resetting = join(dir, "resetting.sock")
+    await fixture(resetting, (_respond, destroy) => destroy())
+    assert.deepEqual(await probeRuntime(resetting), { state: "closing" }, "a reset before any response is a host on its way out")
+    assert.ok((await rejection(runtimeInfo(resetting))) instanceof RuntimeDisconnectedError)
+
+    // settle: three farewells, then the host is gone.
+    const leaving = join(dir, "leaving.sock")
+    let farewells = 0
+    const leavingServer = await fixture(leaving, (respond) => {
+      farewells += 1
+      respond()
+      if (farewells === 3) leavingServer.close()
+    })
+    const settled = await settleRuntime(leaving, { intervalMs: 5 })
+    assert.deepEqual(settled, { state: "absent" })
+    assert.equal(farewells, 3, "settle keeps probing while the host says goodbye")
+
+    // settle: a host that never finishes closing is reported, not guessed at.
+    const stuck = join(dir, "stuck.sock")
+    await fixture(stuck, (respond) => respond())
+    const started = Date.now()
+    assert.deepEqual(await settleRuntime(stuck, { timeoutMs: 60, intervalMs: 5 }), { state: "closing" })
+    assert.ok(Date.now() - started >= 60, "settle honours its deadline before giving up")
+
+    // The real host: a probe racing close() reads closing or absent, never throws.
+    const racing = join(dir, "racing.sock")
+    const host = await startWebHost(racing, async () => JSON.stringify({ ok: true, value: null }), async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: [] })
+    assert.equal((await runtimeInfo(racing))?.pid, process.pid)
+    host.close()
+    const raced = await probeRuntime(racing)
+    assert.ok(raced.state === "closing" || raced.state === "absent", `a probe during close() reported ${raced.state}`)
+    assert.deepEqual(await settleRuntime(racing, { intervalMs: 5 }), { state: "absent" })
+    console.log("Runtime probe: absent, closing (503 and reset), typed disconnects, settling through a farewell, and a bounded refusal verified")
+  } finally {
+    for (const server of servers) server.close()
+    await rm(dir, { recursive: true, force: true })
+  }
 }

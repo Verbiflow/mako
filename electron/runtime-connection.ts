@@ -1,5 +1,6 @@
 import { request } from "node:http"
 import { StringDecoder } from "node:string_decoder"
+import { setTimeout as delay } from "node:timers/promises"
 import { RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, type RuntimeCall } from "./contracts/runtime.js"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import type { z } from "zod"
@@ -19,12 +20,32 @@ export class RuntimeDisconnectedError extends Error {
   }
 }
 
-const REFUSED = new Set(["ECONNREFUSED", "ENOENT"])
+// No socket, a socket nobody accepts on, or a plain file where the socket was: nothing listens.
+const REFUSED = new Set(["ECONNREFUSED", "ENOENT", "ENOTSOCK"])
 const DROPPED = new Set(["ECONNRESET", "EPIPE", "ECONNABORTED"])
 function socketCode(error: Error): string | undefined {
   if ("code" in error) return String(error.code)
   // Node reports a connection closed before any response as a bare "socket hang up".
   return error.message === "socket hang up" ? "ECONNRESET" : undefined
+}
+
+/** Nothing is listening on the socket: no host owns it and one may be started. */
+function refused(error: Error): boolean {
+  const code = socketCode(error)
+  return code !== undefined && REFUSED.has(code)
+}
+
+/**
+ * The typed disconnect a failed request stands for, or `null` when it failed
+ * for a reason other than the host leaving: a refusal never dispatched
+ * anything, a dropped socket may have.
+ */
+function disconnection(error: Error): RuntimeDisconnectedError | null {
+  if (error instanceof RuntimeDisconnectedError) return error
+  const code = socketCode(error)
+  if (code && REFUSED.has(code)) return new RuntimeDisconnectedError(false)
+  if (code && DROPPED.has(code)) return new RuntimeDisconnectedError(true)
+  return null
 }
 
 interface RuntimeRequest<Schema extends z.ZodType> {
@@ -51,6 +72,8 @@ export async function runtimeRequest<Schema extends z.ZodType>({ socket, path, s
       response.on("error", reject)
       response.on("end", () => {
         try {
+          // A host whose close() has begun answers anything but an RPC with 503 on a closing connection.
+          if (response.statusCode === 503) throw new RuntimeDisconnectedError(false)
           if (response.statusCode !== 200) throw new Error(`Mako host returned ${response.statusCode}`)
           resolve(schema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))))
         } catch (error) { reject(error) }
@@ -62,12 +85,56 @@ export async function runtimeRequest<Schema extends z.ZodType>({ socket, path, s
   })
 }
 
-export async function runtimeInfo(socket: string) {
-  try { return await runtimeRequest({ socket, path: "/health", schema: RuntimeInfoSchema, timeoutMs: 10_000 }) }
-  catch (error) {
-    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ECONNREFUSED")) return null
+export type RuntimeInfo = z.output<typeof RuntimeInfoSchema>
+
+/**
+ * What a health probe found. `absent`: nothing listens, a host may be started.
+ * `closing`: a host still owns the socket but is on its way out, or answered a
+ * connection it was already tearing down; treating it as absent races its
+ * lock and treating it as a failure aborts work that only needed to wait.
+ */
+export type RuntimeProbe =
+  | { state: "absent" }
+  | { state: "closing" }
+  | { state: "ready"; info: RuntimeInfo }
+
+export async function probeRuntime(socket: string): Promise<RuntimeProbe> {
+  try {
+    return { state: "ready", info: await runtimeRequest({ socket, path: "/health", schema: RuntimeInfoSchema, timeoutMs: 10_000 }) }
+  } catch (error) {
+    if (!(error instanceof Error)) throw error
+    if (refused(error)) return { state: "absent" }
+    if (disconnection(error)) return { state: "closing" }
     throw error
   }
+}
+
+/**
+ * Probe until the host has either left or answered. A host that is closing
+ * holds its socket for well under a second; a caller that saw `closing` and
+ * acted on it would start a second host into the old one's lock or give up
+ * on an install that only needed to wait. Still `closing` at the deadline is
+ * returned as such so the caller can refuse explicitly.
+ */
+export async function settleRuntime(socket: string, options: { timeoutMs?: number; intervalMs?: number } = {}): Promise<RuntimeProbe> {
+  const deadline = Date.now() + (options.timeoutMs ?? 10_000)
+  for (;;) {
+    const probe = await probeRuntime(socket)
+    if (probe.state !== "closing" || Date.now() >= deadline) return probe
+    await delay(options.intervalMs ?? 100)
+  }
+}
+
+/**
+ * The host's identity, or `null` when nothing listens. A host that is closing
+ * is neither: it throws the same typed disconnect a call would, so no caller
+ * mistakes a departing host for a free socket.
+ */
+export async function runtimeInfo(socket: string): Promise<RuntimeInfo | null> {
+  const probe = await probeRuntime(socket)
+  if (probe.state === "ready") return probe.info
+  if (probe.state === "absent") return null
+  throw new RuntimeDisconnectedError(false)
 }
 
 export async function invokeRuntime(socket: string, client: string, channel: string, args: unknown[]) {
@@ -77,10 +144,7 @@ export async function invokeRuntime(socket: string, client: string, channel: str
   try {
     reply = await runtimeRequest({ socket, path: "/rpc", schema: RuntimeReplySchema, body, client, timeoutMs: 5 * 60_000 })
   } catch (error) {
-    const code = error instanceof Error ? socketCode(error) : undefined
-    if (code && REFUSED.has(code)) throw new RuntimeDisconnectedError(false)
-    if (code && DROPPED.has(code)) throw new RuntimeDisconnectedError(true)
-    throw error
+    throw error instanceof Error ? (disconnection(error) ?? error) : error
   }
   if (!reply.ok) {
     if (reply.code === HOST_RESTARTING_CODE) throw new RuntimeDisconnectedError(true)

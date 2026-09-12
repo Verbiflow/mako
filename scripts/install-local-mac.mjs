@@ -10,8 +10,15 @@ import {
 
 const target = "/Applications/Mako.app"
 
+/**
+ * The default profile's shared host: `host` when one answers, `null` when
+ * none listens. A host that is quitting drops connections and answers 503
+ * for a moment; that is waited out here, and `closing` is true only when it
+ * still had not left after ten seconds.
+ */
 export async function localRuntime() {
-  const { runtimeInfo } = await import("../dist-electron/runtime-connection.js")
+  const { settleRuntime } =
+    await import("../dist-electron/runtime-connection.js")
   const { runtimeDataRoot, runtimeLocation } =
     await import("../dist-electron/runtime-service.js")
   const dataRoot = runtimeDataRoot(
@@ -19,14 +26,23 @@ export async function localRuntime() {
     {}
   )
   const { socket } = runtimeLocation(dataRoot)
-  return { socket, host: await runtimeInfo(socket) }
+  const probe = await settleRuntime(socket)
+  return {
+    socket,
+    host: probe.state === "ready" ? probe.info : null,
+    closing: probe.state === "closing",
+  }
 }
 
 export async function runningProcesses() {
   const { runningBundleProcesses } =
     await import("../dist-electron/local-update-installer.js")
   const pids = await runningBundleProcesses(target)
-  const { host } = await localRuntime()
+  const { host, closing } = await localRuntime()
+  assert.ok(
+    !closing,
+    "Mako's shared host is still shutting down and has not released its socket. Nothing was replaced; try again once it has left."
+  )
   if (host && !pids.includes(host.pid)) pids.push(host.pid)
   return pids
 }

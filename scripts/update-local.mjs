@@ -163,7 +163,7 @@ async function run(command, args, env, signal) {
 async function prepareToClose() {
   const { socket, host } = await localRuntime()
   if (!host?.methods.includes("mako:lifecycle-command")) return
-  const { invokeRuntime } =
+  const { invokeRuntime, RuntimeDisconnectedError } =
     await import("../dist-electron/runtime-connection.js")
   const client = randomUUID()
   const state = z
@@ -187,6 +187,9 @@ async function prepareToClose() {
     )
   if (result.operation.kind === "error")
     throw new Error(result.operation.message ?? "Mako could not close safely.")
+  // The host's own lifecycle state, or null once it is leaving. Between the
+  // probe and the call the host can begin its close and answer with a typed
+  // disconnect; that is the quit we asked for, not a failure to report.
   const read = async () => {
     const current = await localRuntime()
     if (!current.host) return null
@@ -194,6 +197,13 @@ async function prepareToClose() {
       throw new Error(
         "The shared host changed while waiting. Nothing was installed."
       )
+    let state
+    try {
+      state = await invokeRuntime(socket, client, "mako:lifecycle-state", [])
+    } catch (error) {
+      if (error instanceof RuntimeDisconnectedError) return null
+      throw error
+    }
     return z
       .object({
         operation: z.object({
@@ -202,7 +212,7 @@ async function prepareToClose() {
           message: z.string().optional(),
         }),
       })
-      .parse(await invokeRuntime(socket, client, "mako:lifecycle-state", []))
+      .parse(state)
   }
   return {
     async check() {
@@ -241,22 +251,30 @@ async function verifyStarted(candidate) {
         ).toString("utf8")
       )
     ).makoBuild.id
-  const { invokeRuntime } =
+  const { invokeRuntime, RuntimeDisconnectedError } =
     await import("../dist-electron/runtime-connection.js")
   const deadline = Date.now() + 45_000
   while (Date.now() < deadline) {
     const { host, socket } = await localRuntime()
     if (host) {
+      let state
+      try {
+        state = await invokeRuntime(
+          socket,
+          randomUUID(),
+          "mako:installation-state",
+          []
+        )
+      } catch (error) {
+        // The new host answered its health probe and then closed that
+        // connection; it is still coming up, so ask again.
+        if (!(error instanceof RuntimeDisconnectedError)) throw error
+        await delay(250)
+        continue
+      }
       const installed = z
         .object({ build: z.object({ id: z.string() }).nullable() })
-        .parse(
-          await invokeRuntime(
-            socket,
-            randomUUID(),
-            "mako:installation-state",
-            []
-          )
-        )
+        .parse(state)
       if (installed.build?.id !== expected)
         throw new Error(
           "Mako started a different host build. The update was installed, but startup was not verified."
