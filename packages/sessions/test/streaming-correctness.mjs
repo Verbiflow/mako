@@ -13,7 +13,8 @@ import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 
 import { SessionCatalog } from "../dist/catalog.js"
-import { EntrySink } from "../dist/format.js"
+import { CATALOG_CACHE_VERSION, parseCache } from "../dist/catalog-cache.js"
+import { EntrySink, trimToolOutput } from "../dist/format.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
@@ -471,7 +472,7 @@ async function sharedStoreRescansSerialize() {
   const provider = {
     harness: "shared",
     displayName: "Shared",
-    rescanRoot: true,
+    rescanRoot: () => true,
     roots: () => [root],
     discover: async () => [
       { path, bytes: cursor, mtimeMs: cursor },
@@ -736,6 +737,176 @@ async function externalWatcherDeliversAppend() {
   await catalog.stop()
 }
 
+// A shared-database write drops only that provider's cached threads. Cursor
+// Desktop writes state.vscdb on every keystroke, and each write once threw
+// away the Codex thread on screen, so every open re-read a multi-gigabyte
+// tail. Several threads stay warm, newest kept.
+async function cacheInvalidationIsScopedToTheProvider() {
+  const fileRoot = temp("cache-file")
+  const sharedRoot = temp("cache-shared")
+  const filePath = join(fileRoot, "session.jsonl")
+  await writeFile(filePath, "hello\n")
+  const base = fileProvider(fileRoot)
+  let fileReads = 0
+  const files = {
+    ...base,
+    read: async (path) => {
+      fileReads += 1
+      return base.read(path)
+    },
+  }
+  const sharedPaths = Array.from({ length: 5 }, (_, i) => join(sharedRoot, `store.db#${i}`))
+  let sharedReads = 0
+  const shared = {
+    harness: "shared",
+    displayName: "Shared",
+    rescanRoot: () => true,
+    roots: () => [sharedRoot],
+    discover: async () => sharedPaths.map((path) => ({ path, bytes: 1, mtimeMs: 1 })),
+    peek: async (file) => ({ harness: "shared", nativeId: file.path, path: file.path, bytes: 1 }),
+    read: async (path) => {
+      sharedReads += 1
+      return { ref: { harness: "shared", nativeId: path, path, bytes: 1 }, entries: [{ kind: "user", text: path }] }
+    },
+  }
+  const catalog = new SessionCatalog([files, shared])
+  await catalog.scan()
+  await catalog.open(filePath)
+  await catalog.open(sharedPaths[0])
+  await catalog.open(filePath)
+  assert.equal(fileReads, 1, "a second open of an unchanged file is served from the cache")
+  // Watcher noise from the shared database.
+  catalog.noticed(join(sharedRoot, "state.vscdb-wal"))
+  await catalog.open(filePath)
+  assert.equal(fileReads, 1, "another provider's write leaves this thread cached")
+  await catalog.open(sharedPaths[0])
+  assert.equal(sharedReads, 2, "the shared provider's own threads are re-read")
+  // The cache is bounded: the oldest of five falls out.
+  for (const path of sharedPaths) await catalog.open(path)
+  assert.equal(sharedReads, 6)
+  await catalog.open(filePath)
+  assert.equal(fileReads, 2, "a thread not opened for four others is re-read")
+  await catalog.open(sharedPaths[4])
+  assert.equal(sharedReads, 6, "the most recent stays warm")
+  await catalog.stop()
+}
+
+async function pagesTrimToolOutputAndBlocksRestoreIt() {
+  const long = "line of shell output\n".repeat(400)
+  const entries = [
+    { kind: "user", text: "run it" },
+    {
+      kind: "assistant",
+      blocks: [
+        { type: "text", text: "Running." },
+        { type: "tool", name: "exec", input: "ls", output: "short" },
+        { type: "tool", name: "exec", input: "cat big", output: long },
+      ],
+    },
+    { kind: "assistant", blocks: [{ type: "text", text: "Done." }] },
+  ]
+  const root = temp("paged")
+  const path = join(root, "session.db")
+  const provider = {
+    harness: "paged",
+    displayName: "Paged",
+    roots: () => [root],
+    discover: async () => [{ path, bytes: 1, mtimeMs: 1 }],
+    peek: async (file) => ({ harness: "paged", nativeId: "p", path: file.path, bytes: 1 }),
+    read: async () => ({ ref: { harness: "paged", nativeId: "p", path, bytes: 1 }, entries }),
+  }
+  const catalog = new SessionCatalog([provider])
+  await catalog.scan()
+  const full = await catalog.page(path)
+  assert.equal(full.entries[1], entries[1], "a page without a budget carries the entries as read")
+  assert.equal(trimToolOutput(entries, long.length), entries, "nothing over the budget keeps every identity")
+  const page = await catalog.page(path, undefined, 100, { toolOutputChars: 64 })
+  assert.equal(page.entries[0], entries[0], "a user entry is untouched")
+  assert.equal(page.entries[2], entries[2], "an assistant entry with no long output keeps its identity")
+  const trimmed = page.entries[1]
+  assert.notEqual(trimmed, entries[1])
+  assert.equal(trimmed.blocks[0], entries[1].blocks[0])
+  assert.equal(trimmed.blocks[1], entries[1].blocks[1], "a short output is the block itself")
+  assert.equal(trimmed.blocks[2].output, long.slice(0, 64))
+  assert.equal(trimmed.blocks[2].outputLength, long.length)
+  assert.equal(trimmed.blocks[2].input, "cat big")
+  assert.equal(entries[1].blocks[2].outputLength, undefined, "the cached thread is never mutated")
+  assert.ok(
+    JSON.stringify(page).length < JSON.stringify(full).length / 10,
+    "the viewer page is an order of magnitude smaller than the thread"
+  )
+  // A content budget cuts the page from the front, after trimming, and
+  // never below the newest entry; paging before it continues the walk.
+  const tail = await catalog.page(path, undefined, 100, { toolOutputChars: 64, maxChars: 10 })
+  assert.deepEqual(tail.entries, [entries[2]])
+  assert.equal(tail.start, 2)
+  assert.equal(tail.hasEarlier, true)
+  assert.equal(tail.total, 3)
+  const middle = await catalog.page(path, tail.start, 100, { toolOutputChars: 64, maxChars: 10 })
+  assert.equal(middle.start, 1)
+  assert.equal(middle.entries.length, 1)
+  assert.equal(middle.entries[0].blocks[2].outputLength, long.length)
+  const fits = await catalog.page(path, undefined, 100, { toolOutputChars: 64, maxChars: 1_000_000 })
+  assert.equal(fits.start, 0, "a budget the page fits in changes nothing")
+  assert.equal(fits.entries.length, 3)
+  const untrimmedBudget = await catalog.page(path, undefined, 100, { maxChars: 1_000 })
+  assert.equal(untrimmedBudget.start, 2, "the budget counts the content as it will be sent")
+  assert.deepEqual(await catalog.block(path, { entry: 1, block: 2 }), entries[1].blocks[2])
+  assert.equal(await catalog.block(path, { entry: 0, block: 0 }), null, "a user entry has no blocks")
+  assert.equal(await catalog.block(path, { entry: 1, block: 9 }), null)
+  assert.equal(await catalog.block("/missing", { entry: 0, block: 0 }), null)
+  await catalog.stop()
+}
+
+async function cacheKeepsEveryRefField() {
+  const root = temp("cache-fields")
+  const path = join(root, "session.db")
+  const ref = {
+    harness: "full",
+    nativeId: "n1",
+    identity: "n1:chats",
+    path,
+    cwd: root,
+    title: "Kept whole",
+    model: "gpt-6-astra",
+    settings: { model: "gpt-6-astra", options: { effort: "high", serviceTier: "fast" } },
+    liveResume: false,
+    workspaceMissing: true,
+    bytes: 1,
+  }
+  const provider = {
+    harness: "full",
+    displayName: "Full",
+    roots: () => [root],
+    discover: async () => [{ path, bytes: 1, mtimeMs: 1 }],
+    peek: async () => ref,
+    read: async () => ({ ref, entries: [] }),
+  }
+  const cachePath = join(root, "cache.json")
+  const first = new SessionCatalog([provider], { cachePath })
+  await first.scan()
+  await first.stop()
+  const raw = JSON.parse(await readFile(cachePath, "utf8"))
+  assert.equal(raw.version, CATALOG_CACHE_VERSION)
+  const entries = parseCache(JSON.stringify(raw))
+  const cached = entries.get(path).ref
+  assert.deepEqual(cached.settings, ref.settings, "the cache keeps a thread's settings across a restart")
+  assert.equal(cached.identity, "n1:chats")
+  assert.equal(cached.liveResume, false)
+  assert.equal(cached.workspaceMissing, true)
+  // A restarted catalog with an unchanged file serves the cached ref whole.
+  const peeks = []
+  const second = new SessionCatalog(
+    [{ ...provider, peek: async (file) => { peeks.push(file.path); return ref } }],
+    { cachePath }
+  )
+  const [served] = await second.scan()
+  assert.deepEqual(peeks, [], "an unchanged file is not peeked again")
+  assert.deepEqual(served.settings, ref.settings)
+  assert.equal(served.identity, "n1:chats")
+  await second.stop()
+}
+
 async function entrySinkBoundsMutatedPayloads() {
   const sink = new EntrySink(100, 120)
   sink.push({
@@ -763,6 +934,9 @@ const tests = [
   ["Cursor ACP session discovery", cursorDiscoversAcpSessions],
   ["canonical workspace roots", catalogCanonicalizesWorkspaceRoots],
   ["external watcher append delivery", externalWatcherDeliversAppend],
+  ["provider-scoped thread cache", cacheInvalidationIsScopedToTheProvider],
+  ["viewer pages trim tool output", pagesTrimToolOutputAndBlocksRestoreIt],
+  ["cache keeps every ref field", cacheKeepsEveryRefField],
   ["entry sink payload budget", entrySinkBoundsMutatedPayloads],
 ]
 

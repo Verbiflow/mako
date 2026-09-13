@@ -64,3 +64,28 @@ assert.equal(
   "title records are not transcript entries"
 )
 console.log("Claude titles: written titles win over prompts, latest wins, legacy summary honored")
+
+// Claude Code composes some assistant messages itself ("API error", "no
+// response requested") and stamps them `<synthetic>`. The row keeps the model
+// the conversation actually ran on, in the peek and in a later refine.
+const assistant = (model, uuid) =>
+  line({
+    type: "assistant",
+    uuid,
+    sessionId: "session-1",
+    cwd: home,
+    timestamp: "2026-09-08T21:01:00.000Z",
+    message: { role: "assistant", model, content: [{ type: "text", text: "ok" }] },
+  })
+const real = user("hello", "u1") + assistant("claude-fable-5-1", "a1")
+const synthetic = await peek("synthetic.jsonl", real + assistant("<synthetic>", "a2"))
+assert.equal(synthetic?.model, "claude-fable-5-1")
+assert.equal(synthetic?.settings?.model, "claude-fable-5-1")
+const onlySynthetic = await peek("only-synthetic.jsonl", user("hello", "u1") + assistant("<synthetic>", "a1"))
+assert.equal(onlySynthetic?.model, undefined, "a synthetic message alone records no model")
+const grown = join(home, "synthetic.jsonl")
+const before = (await stat(grown)).size
+await writeFile(grown, assistant("<synthetic>", "a3"), { flag: "a" })
+const refined = await new ClaudeProvider(home).refine(synthetic, before)
+assert.equal(refined.model, "claude-fable-5-1", "an appended synthetic message does not move the model")
+console.log("Claude titles: synthetic assistant messages never become the row's model")
