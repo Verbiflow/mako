@@ -244,6 +244,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
       existing.isError = block.isError
       existing.isCanceled = block.isCanceled
       existing.pending = block.streaming === true
+      existing.rest = block.rest
     } else {
       order.push(id)
       byId.set(id, {
@@ -255,6 +256,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
         isError: block.isError,
         isCanceled: block.isCanceled,
         pending: block.streaming === true,
+        rest: block.rest,
       })
     }
   }

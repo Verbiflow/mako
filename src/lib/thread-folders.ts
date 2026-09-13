@@ -20,8 +20,11 @@ export interface ThreadFolder {
   refs: ThreadRef[]
   current: boolean
   pinned: boolean
+  /** Position among pinned folders; -1 when not pinned. */
+  pinRank: number
   latest: string
   order: string
+  /** The most demanding status inside — for the folder's chip and warmth, never its place. */
   priority: number
   running: number
   needsInput: number
@@ -30,19 +33,32 @@ export interface ThreadFolder {
   active: number
 }
 
+/** Whether something in the folder is working, waiting on you, or unread. */
+function folderIsBusy(folder: ThreadFolder): boolean {
+  return (
+    folder.running > 0 ||
+    folder.needsInput > 0 ||
+    folder.failed > 0 ||
+    folder.unread > 0 ||
+    folder.active > 0
+  )
+}
+
 /**
  * Keep the normal project order stable while ensuring a project selected by
  * another surface is not hidden behind pagination. A project already in the
  * first page stays exactly where it was; an off-page current project is added
- * at its natural relative position.
+ * at its natural relative position. So is a folder with a thread that is
+ * working, waiting on you, or finished unread: a run you started must not
+ * scroll out of sight because the folder ranks low.
  */
 export function visibleThreadFolders(
   folders: ThreadFolder[],
   limit: number
 ): ThreadFolder[] {
   const visible = new Set(folders.slice(0, limit).map((folder) => folder.key))
-  const current = folders.find((folder) => folder.current)
-  if (current) visible.add(current.key)
+  for (const folder of folders)
+    if (folder.current || folderIsBusy(folder)) visible.add(folder.key)
   return folders.filter((folder) => visible.has(folder.key))
 }
 
@@ -139,6 +155,68 @@ export function stableThreadRanks(
   return next
 }
 
+/** Held folder ranks by folder key, from `stableFolderRanks`. */
+export interface FolderRanks {
+  [key: string]: string
+}
+
+/**
+ * A folder's place in Projects, held between renders.
+ *
+ * A folder takes its rank the first time it is seen — its newest thread's
+ * time — and keeps it. Only working there lifts it: `use` carries the moment
+ * you last sent a prompt or started a thread in each folder, and a newer one
+ * wins. Agent output, a turn finishing, a file another app is writing: none
+ * of these move a folder, so the list you are looking at is the list you
+ * looked at a minute ago. Status changes the folder's chip, not its place.
+ */
+export function stableFolderRanks(
+  folders: readonly ThreadFolder[],
+  use: Readonly<Record<string, string>>,
+  previous: FolderRanks
+): FolderRanks {
+  const next: FolderRanks = {}
+  for (const folder of folders) {
+    const held = previous[folder.key] ?? folder.order
+    const used = use[folder.key] ?? ""
+    next[folder.key] = used > held ? used : held
+  }
+  return next
+}
+
+function compareFolders(a: ThreadFolder, b: ThreadFolder, sortBy: RailSortBy): number {
+  if (a.cwd === null || b.cwd === null) return a.cwd === null ? 1 : -1
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+  if (a.pinned && b.pinned) return a.pinRank - b.pinRank
+  if (sortBy === "name") return a.name.localeCompare(b.name)
+  return b.order.localeCompare(a.order)
+}
+
+/** The folders in held order: each takes its rank from `ranks` where one is held. */
+export function orderThreadFolders(
+  folders: readonly ThreadFolder[],
+  ranks: FolderRanks,
+  sortBy: RailSortBy
+): ThreadFolder[] {
+  return folders
+    .map((folder) => {
+      const held = sortBy === "recent" ? ranks[folder.key] : undefined
+      return held !== undefined && held !== folder.order
+        ? { ...folder, order: held }
+        : folder
+    })
+    .sort((a, b) => compareFolders(a, b, sortBy))
+}
+
+/**
+ * Threads by folder, each folder's rows in order.
+ *
+ * Position never carries status. A row sits by its held recency, a folder by
+ * its newest thread — `orderThreadFolders` then applies the held folder
+ * ranks — and a thread that starts working, finishes, or fails changes its
+ * mark and its folder's chip, nothing else. `priorities` feeds only the
+ * folder's aggregate `priority` for that chip.
+ */
 export function groupThreadFolders({
   refs,
   live = [],
@@ -189,8 +267,6 @@ export function groupThreadFolders({
       .sort((left, right) => right.length - left.length)[0] ?? normalizedCurrent
   if (currentKey && !byCwd.has(currentKey)) byCwd.set(currentKey, [])
   const byOrder = (a: ThreadRef, b: ThreadRef): number => {
-    const urgency = (priorities[b.path] ?? 0) - (priorities[a.path] ?? 0)
-    if (urgency !== 0) return urgency
     if (sortBy === "name") return (a.title ?? "").localeCompare(b.title ?? "")
     if (sortBy === "created")
       return (b.startedAt ?? "").localeCompare(a.startedAt ?? "")
@@ -247,6 +323,7 @@ export function groupThreadFolders({
               (path) => Boolean(path) && pinned.has(folderPath(path))
             )
           )),
+      pinRank: -1,
       latest,
       order,
       priority,
@@ -271,13 +348,7 @@ export function groupThreadFolders({
       )
     )
   }
-  result.sort((a, b) => {
-    if (a.cwd === null || b.cwd === null) return a.cwd === null ? 1 : -1
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
-    if (a.pinned && b.pinned) return pinIndex(a) - pinIndex(b)
-    if (a.priority !== b.priority) return b.priority - a.priority
-    if (sortBy === "name") return a.name.localeCompare(b.name)
-    return b.order.localeCompare(a.order)
-  })
+  for (const folder of result) if (folder.pinned) folder.pinRank = pinIndex(folder)
+  result.sort((a, b) => compareFolders(a, b, sortBy))
   return result
 }

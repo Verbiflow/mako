@@ -1,4 +1,4 @@
-import type { Block, ChatMessage, ThreadEntry } from "@/lib/types"
+import type { Block, ChatMessage, MessageAnchor, ThreadEntry } from "@/lib/types"
 
 const INPUT_TOOLS = new Set([
   "askquestion",
@@ -44,6 +44,11 @@ export function threadToMessages(
     const messageId = entry.id
       ? `native-${entry.kind}-${entry.id}`
       : `foreign-entry-${entryIndex}`
+    // What a fork names: the provider's own message id when the store has
+    // one, its timestamp otherwise, with the index as the unchanged-store hint.
+    const anchor: MessageAnchor = { index: entryIndex }
+    if (entry.id) anchor.id = entry.id
+    if (entry.at) anchor.at = entry.at
     if (entry.kind === "user") {
       const message: ChatMessage = {
         id: messageId,
@@ -55,6 +60,7 @@ export function threadToMessages(
           { type: "text", text: entry.text },
           ...(entry.attachments ?? []),
         ],
+        anchor,
       }
       if (entry.at) message.timestamp = Date.parse(entry.at) || undefined
       messages.push(message)
@@ -112,6 +118,15 @@ export function threadToMessages(
           }
           if (block.error) result.isError = true
           if (block.canceled) result.isCanceled = true
+          if (
+            block.outputLength !== undefined &&
+            block.output !== undefined &&
+            block.outputLength > block.output.length
+          )
+            result.rest = {
+              length: block.outputLength,
+              at: { entry: entryIndex, block: blockIndex },
+            }
           blocks.push(result)
         }
       }
@@ -121,6 +136,7 @@ export function threadToMessages(
       id: messageId,
       role: "assistant",
       blocks,
+      anchor,
     }
     if (provider) message.provider = provider
     if (entry.model) message.model = entry.model

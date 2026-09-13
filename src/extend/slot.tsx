@@ -93,8 +93,6 @@ export function Slot(props: SlotInvocation): ReactNode {
         disabled: props.disabled,
         attachFiles: props.attachFiles,
       })
-    case "history.checkpoint.trailing":
-      return renderSlot(entries, props.name, { checkpoint: props.checkpoint })
     case "changes.file.trailing":
       return renderSlot(entries, props.name, { file: props.file })
   }

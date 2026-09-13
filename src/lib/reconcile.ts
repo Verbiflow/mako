@@ -56,6 +56,7 @@ function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
   if (a.isError !== b.isError) return false
   if (a.streaming !== b.streaming) return false
   if (a.toolCallId !== b.toolCallId) return false
+  if (a.anchor?.index !== b.anchor?.index || a.anchor?.id !== b.anchor?.id) return false
   if (a.blocks.length !== b.blocks.length) return false
   for (let i = 0; i < a.blocks.length; i += 1) {
     if (!sameBlock(a.blocks[i], b.blocks[i])) return false

@@ -6,9 +6,12 @@ import type {
   SessionMeta,
   SessionSummary,
 } from "@/lib/types"
-import type { AttachmentContent, ToolDetail } from "@mako/sessions"
+import type {
+  AttachmentContent,
+  BlockAddress,
+  ToolDetail,
+} from "@mako/sessions"
 import type { AttachmentInput } from "@/lib/attachments"
-import type { Checkpoint } from "@/lib/thread"
 
 /** A slot whose contributions receive nothing from the render site. */
 export type NoProps = Record<never, never>
@@ -30,10 +33,6 @@ export interface ComposerControlSlotProps extends SessionMetaSlotProps {
   disabled: boolean
   attachFiles: (files: AttachmentInput[]) => Promise<void>
   dismiss?: () => void
-}
-
-export interface HistoryCheckpointSlotProps {
-  checkpoint: Checkpoint
 }
 
 export interface ChangedFileSlotProps {
@@ -61,7 +60,6 @@ export interface SlotMap {
   "composer.controls": ComposerControlSlotProps
   "composer.trailing": ComposerControlSlotProps
   "composer.above": SessionMetaSlotProps
-  "history.checkpoint.trailing": HistoryCheckpointSlotProps
   "changes.file.trailing": ChangedFileSlotProps
 }
 
@@ -99,6 +97,11 @@ export interface ToolCall {
   isError?: boolean
   isCanceled?: boolean
   pending: boolean
+  /**
+   * Present while `result` is only the head of the output. The row asks for
+   * the rest when it opens; a tool view can show `rest.length` meanwhile.
+   */
+  rest?: { length: number; at: BlockAddress }
 }
 
 export interface ToolViewProps {

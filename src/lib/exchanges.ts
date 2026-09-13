@@ -10,6 +10,15 @@ import { textOf } from "@/lib/format"
  * each fragment of it, and the turn navigator has something meaningful to jump
  * between.
  */
+/**
+ * The one exchange without a prompt: what the agent said before the first
+ * question on screen. It is the first exchange whenever it exists, and it
+ * absorbs whatever earlier history is loaded above it, so its id must not
+ * depend on which message currently opens it — a changing id remounted the
+ * exchange and dropped the reading position every time history arrived.
+ */
+export const LEAD_EXCHANGE_ID = "lead"
+
 export interface Exchange {
   /** Stable across re-renders: the id of the message that opened the exchange. */
   id: string
@@ -129,7 +138,7 @@ export function toExchanges(
       // The agent spoke first — a resumed session, or a system note before any
       // prompt. It still needs somewhere to live.
       current = {
-        id: `lead-${message.id}`,
+        id: LEAD_EXCHANGE_ID,
         response: [],
         system: [],
         timestamp: message.timestamp,

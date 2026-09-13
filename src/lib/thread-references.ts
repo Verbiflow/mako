@@ -1,5 +1,5 @@
 import { getMako } from "@/lib/bridge"
-import { tokenize, type Segment } from "@/lib/mentions"
+import { threadReferenceId, tokenize, type Segment } from "@/lib/mentions"
 import type { ThreadRef } from "@/lib/types"
 
 interface ThreadFileContext {
@@ -42,41 +42,71 @@ export interface ThreadReferenceOptions {
 const pending = new Map<string, Promise<ThreadContext | null>>()
 const remembered = new Map<string, ThreadRef>()
 
-function tokenKey(harness: string, nativeId: string): string {
-  return `${harness}\0${nativeId}`
+function tokenKey(harness: string, id: string): string {
+  return `${harness}\0${id}`
 }
 
 /**
- * Exact ids win. A legacy shortened id resolves only when its prefix is unique;
- * an ambiguous prefix is deliberately left unavailable rather than attaching
- * the wrong conversation. Remembering a prior unique resolution lets a draft
- * survive a catalog refresh or deletion between selection and send.
+ * One row out of several that a token could mean. A provider may present one
+ * native session as more than one store (Cursor's `chats/` continuation of an
+ * ACP session carries `identity: "chats:<id>"`); the store without a derived
+ * identity is the original, and a token that names only the shared native id
+ * — every token minted before identities existed — means that one. Rows with
+ * different native ids are genuinely different conversations and stay
+ * ambiguous.
+ */
+function primary(candidates: ThreadRef[]): ThreadRef | undefined {
+  if (candidates.length === 1) return candidates[0]
+  if (candidates.length === 0) return undefined
+  const nativeId = candidates[0]!.nativeId
+  if (!candidates.every((entry) => entry.nativeId === nativeId)) return undefined
+  const originals = candidates.filter((entry) => entry.identity === undefined)
+  return originals.length === 1 ? originals[0] : undefined
+}
+
+/**
+ * The catalog row a thread token names, or `undefined` when none does. The
+ * token's id is the provider's identity (`threadReferenceId`), so an exact
+ * identity match wins; an exact native id is next, for tokens older than the
+ * identity field. A legacy shortened id resolves only when its prefix
+ * identifies one conversation. Ambiguity is deliberately left unresolved
+ * rather than attaching the wrong conversation. The same rule decides what a
+ * chip shows and what a send attaches, so the two cannot disagree.
+ */
+export function findThreadReference(
+  threads: ThreadRef[],
+  harness: string,
+  id: string
+): ThreadRef | undefined {
+  const own = threads.filter((entry) => entry.harness === harness)
+  const byIdentity = own.filter((entry) => threadReferenceId(entry) === id)
+  if (byIdentity.length > 0) return primary(byIdentity)
+  const byNativeId = own.filter((entry) => entry.nativeId === id)
+  if (byNativeId.length > 0) return primary(byNativeId)
+  return primary(
+    own.filter(
+      (entry) =>
+        threadReferenceId(entry).startsWith(id) || entry.nativeId.startsWith(id)
+    )
+  )
+}
+
+/**
+ * Remembering a prior resolution lets a draft survive a catalog refresh or
+ * deletion between selection and send.
  */
 function resolveThread(
   harness: string,
-  nativeId: string,
+  id: string,
   threads: ThreadRef[]
 ): ThreadRef | undefined {
-  const identity = tokenKey(harness, nativeId)
-  const exact = threads.filter(
-    (entry) => entry.harness === harness && entry.nativeId === nativeId
-  )
-  if (exact.length === 1) {
-    remembered.set(identity, exact[0]!)
-    return exact[0]
+  const key = tokenKey(harness, id)
+  const found = findThreadReference(threads, harness, id)
+  if (found) {
+    remembered.set(key, found)
+    return found
   }
-  if (exact.length > 1) return undefined
-
-  const prefixed = threads.filter(
-    (entry) =>
-      entry.harness === harness && entry.nativeId.startsWith(nativeId)
-  )
-  if (prefixed.length === 1) {
-    remembered.set(identity, prefixed[0]!)
-    return prefixed[0]
-  }
-  if (prefixed.length > 1) return undefined
-  return remembered.get(identity)
+  return remembered.get(key)
 }
 
 function locate(text: string, threads: ThreadRef[]): LocatedReferences {
@@ -84,10 +114,10 @@ function locate(text: string, threads: ThreadRef[]): LocatedReferences {
   const byKey = new Map<string, LocatedReference>()
   const segments = tokenize(text).map((segment): LocatedSegment => {
     if (segment.kind !== "thread") return { segment }
-    const thread = resolveThread(segment.harness, segment.nativeId, threads)
+    const thread = resolveThread(segment.harness, segment.id, threads)
     const key = thread
       ? `path\0${thread.path}`
-      : `token\0${tokenKey(segment.harness, segment.nativeId)}`
+      : `token\0${tokenKey(segment.harness, segment.id)}`
     let reference = byKey.get(key)
     if (!reference) {
       reference = { key, number: references.length + 1, thread }

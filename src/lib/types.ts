@@ -29,6 +29,7 @@ export type {
   LiveSessionState,
   LiveSteering,
   LiveUpdate,
+  BlockAddress,
   EntryBlock,
   Harness,
   Thread,
@@ -78,6 +79,9 @@ export type {
   CuaDriverStatus,
   BrowserControlStatus,
   ControlActivity,
+  DesktopNotification,
+  NotificationDelivery,
+  NotificationPermission,
   ControlPreview,
   AppshotTarget,
   AppshotWindow,
@@ -140,5 +144,9 @@ export type {
 } from "../../electron/shared"
 
 export type { NativeRequest, NativeRequestInput } from "../../electron/shared"
+export type { ContinuationPlan } from "../../electron/shared"
 
 export type { AccessEnforcement, AccessTier } from "../../electron/contracts/access"
+export type { Interruption, InterruptionReason } from "../../electron/contracts/live-conversations"
+export type { MessageAnchor } from "../../electron/contracts/message-anchor"
+export type { ProviderFailure, ProviderFailureKind } from "../../electron/contracts/provider-failure"
