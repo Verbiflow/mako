@@ -22,6 +22,7 @@ import {
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { LEAD_EXCHANGE_ID, type Exchange as ExchangeData } from "@/lib/exchanges"
 import type { TurnStop } from "@/state/prompt-delivery"
+import type { TurnContinuation } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { ArrowDownIcon } from "lucide-react"
 import { ThinkingOrb } from "thinking-orbs"
@@ -177,6 +178,7 @@ export function ConversationTimeline({
   streamingId,
   interruptedId,
   interruptedRequests,
+  continuations,
   failedId,
   empty,
   footer,
@@ -192,6 +194,8 @@ export function ConversationTimeline({
   interruptedId?: string
   /** Turns cut short, by request id, with the reason and whether the newest may be continued. */
   interruptedRequests?: ReadonlyMap<string, TurnStop>
+  /** Requests that pick up an earlier turn, by their own request id; Mako's are shown as Mako's. */
+  continuations?: ReadonlyMap<string, TurnContinuation>
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
@@ -620,6 +624,7 @@ export function ConversationTimeline({
         interruptedRequests?.get(exchange.prompt?.requestId ?? "") ??
         (exchange.id === interruptedId || exchangeInterrupted(exchange))
       }
+      continues={continuations?.get(exchange.prompt?.requestId ?? "")}
       failed={exchange.id === failedId}
     />
   )

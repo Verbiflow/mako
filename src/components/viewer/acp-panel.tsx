@@ -1,4 +1,4 @@
-import { promptDelivery, recoverableRequests, turnStops } from "@/state/prompt-delivery"
+import { promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, turnStops } from "@/state/prompt-delivery"
 import { agentActivity } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { useCopy } from "@/components/ui/use-copy"
@@ -113,6 +113,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
     session?.status === "starting" ||
     session?.status === "running"
   const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
+  const continuations = useMemo(() => turnContinuations(requests), [requests])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
   const lastExchangeId = exchanges.at(-1)?.id
 
@@ -127,6 +128,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       exchanges={exchanges}
       streamingId={running ? lastExchangeId : undefined}
       interruptedRequests={interruptedRequests}
+      continuations={continuations}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
       empty={
         <div className="mx-auto flex w-full max-w-content flex-col gap-4 px-6 py-6">
@@ -388,11 +390,10 @@ export function RetainedRequests() {
   )
 }
 
-const INTERRUPTED_LABEL = {
-  stopped: "Stopped message",
-  "host-quit": "Interrupted when Mako quit",
-  "host-crashed": "Interrupted when Mako closed unexpectedly",
-} satisfies Record<InterruptionReason, string>
+/** The recovery row's word for a stopped message; the footer's label, with the message named. */
+function interruptedLabel(reason: InterruptionReason, provider: string): string {
+  return reason === "stopped" ? "Stopped message" : turnStopLabel(reason, provider)
+}
 
 function RequestRecovery({ request }: { request: LiveRequest }) {
   const text = request.displayText ?? request.text
@@ -409,7 +410,7 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
   const label = failure
     ? failure.title
     : request.interruption
-      ? INTERRUPTED_LABEL[request.interruption.reason]
+      ? interruptedLabel(request.interruption.reason, harness ? harnessLabel(harness) : "the provider")
       : request.status === "uncertain"
         ? "Delivery unconfirmed"
         : request.status === "interrupted"

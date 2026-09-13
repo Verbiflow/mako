@@ -35,10 +35,9 @@ import {
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTurn } from "@/state/acp-queue"
-import type { TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, turnStopLabel, type TurnStop } from "@/state/prompt-delivery"
 import { useTranscriptSource } from "./source-context"
-import type { InterruptionReason } from "@/lib/types"
-import { HARNESS_LABEL } from "@/components/rail/harness-meta"
+import { HARNESS_LABEL, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
   Popover,
@@ -47,7 +46,7 @@ import {
 } from "@/components/ui/popover"
 import { usePrefs } from "@/state/prefs"
 import { cn } from "@/lib/utils"
-import type { ChatMessage } from "@/lib/types"
+import type { ChatMessage, TurnContinuation } from "@/lib/types"
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -71,12 +70,15 @@ export const Exchange = memo(function Exchange({
   exchange,
   streaming,
   interrupted,
+  continues,
   failed,
 }: {
   exchange: ExchangeData
   streaming?: boolean
   /** True when the turn stopped early; a `TurnStop` also says why and whether it can be continued. */
   interrupted?: boolean | TurnStop
+  /** This exchange picks up an earlier, cut-short turn; Mako's own continuation is drawn as Mako's line. */
+  continues?: TurnContinuation
   failed?: boolean
 }) {
   const sections = useMemo(
@@ -97,7 +99,13 @@ export const Exchange = memo(function Exchange({
   )?.provider
   return (
     <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
-      {exchange.prompt ? <Prompt message={exchange.prompt} /> : null}
+      {exchange.prompt ? (
+        continues?.auto ? (
+          <Continued continuation={continues} timestamp={exchange.prompt.timestamp} />
+        ) : (
+          <Prompt message={exchange.prompt} />
+        )
+      ) : null}
       {exchange.system.map((message) => (
         <SystemNote key={message.id} message={message} />
       ))}
@@ -153,6 +161,31 @@ function AgentByline({ provider }: { provider: string }) {
 /* ------------------------------------------------------------------ */
 /* the prompt                                                          */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Mako's own continuation of a turn the provider dropped. It is not the
+ * user's words, so it does not get the user's bubble: one quiet line where
+ * the prompt would be, saying what happened and who acted, with the moment.
+ */
+function Continued({ continuation, timestamp }: { continuation: TurnContinuation; timestamp?: number }) {
+  const { liveId } = useTranscriptSource()
+  const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
+  const provider = harness ? harnessLabel(harness) : "the provider"
+  return (
+    <div
+      data-turn-continued={continuation.reason}
+      className="flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-faint"
+    >
+      <PlayIcon className="size-3" />
+      <span>
+        {continuation.reason === "connection-lost"
+          ? `Mako continued the turn after the connection to ${provider} dropped`
+          : "Mako continued the turn"}
+      </span>
+      {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
+    </div>
+  )
+}
 
 function Prompt({ message }: { message: ChatMessage }) {
   const raw = textOf(message.blocks)
@@ -636,34 +669,39 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
   )
 }
 
-const STOP_LABEL = {
-  stopped: "Stopped",
-  "host-quit": "Interrupted when Mako quit",
-  "host-crashed": "Interrupted when Mako closed unexpectedly",
-} satisfies Record<InterruptionReason, string>
-
 /**
  * Why the turn ended early. A bare `true` is a Stop with no recorded reason
- * (a foreign transcript's own marker). When Mako itself cut the newest turn
- * short, the footer owns up to it and offers to pick the turn up; the offer
- * sends through the same path as a typed message, so it queues, steers or
- * reopens the session exactly as one would.
+ * (a foreign transcript's own marker). When Mako's exit or the provider's
+ * own connection cut the newest turn short, the footer says which and offers
+ * to pick the turn up; the offer sends through the same path as a typed
+ * message, so it queues, steers or reopens the session exactly as one would.
  */
 function Stopped({ stop }: { stop: true | TurnStop }) {
   const { liveId } = useTranscriptSource()
+  const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const [sending, setSending] = useState(false)
   const detail = stop === true ? undefined : stop
   const reason = detail?.reason ?? "stopped"
   return (
     <>
-      <span data-turn-stopped={reason}>{STOP_LABEL[reason]}</span>
+      <span data-turn-stopped={reason}>
+        {turnStopLabel(reason, harness ? harnessLabel(harness) : "the provider")}
+      </span>
+      {detail?.automatic ? (
+        // Mako is about to send the continuation itself: the live mark says
+        // the thread is not finished, and there is nothing to press.
+        <span data-turn-continuing className="flex items-center gap-1.5">
+          <span className="animate-live size-1.5 rounded-full bg-ember" />
+          <span>{AUTO_CONTINUE_NOTE}</span>
+        </span>
+      ) : null}
       {detail?.continuable && liveId ? (
         <button
           type="button"
           disabled={sending}
           onClick={() => {
             setSending(true)
-            void continueTurn(liveId).finally(() => setSending(false))
+            void continueTurn(liveId, reason).finally(() => setSending(false))
           }}
           className="pressable flex items-center gap-1 rounded px-1 text-foreground hover:bg-fill-hover disabled:opacity-50"
           title="Ask the agent to go on from where this turn stopped"
