@@ -17,12 +17,24 @@ const ArchivedThreadRefSchema = ThreadRefSchema.extend({
   }).optional(),
 })
 
-const THROTTLE_MS = 15_000
+/**
+ * A capture re-translates and rewrites the whole thread, so it waits for the
+ * session to go quiet rather than following every burst: nothing is lost by
+ * waiting, since the native store is still the source until then.
+ */
 const SETTLE_MS = 3_000
+/** A session an agent streams into for minutes is still captured this often. */
+const MAX_WAIT_MS = 60_000
 
 interface Capture {
   ref: ThreadRef
   read: () => Promise<Thread | null>
+}
+
+interface Scheduled {
+  timer: NodeJS.Timeout
+  /** When the first uncaptured change of this run was noted. */
+  since: number
 }
 
 export class SessionArchive {
@@ -31,9 +43,8 @@ export class SessionArchive {
   private index = new Map<string, ThreadRef>()
   private revisions = new Map<string, string>()
   private loaded: Promise<void> | null = null
-  private timers = new Map<string, NodeJS.Timeout>()
+  private timers = new Map<string, Scheduled>()
   private pending = new Map<string, Capture>()
-  private lastWrite = new Map<string, number>()
   private deleted = new Set<string>()
   private queue: Promise<void> = Promise.resolve()
   private stopping: Promise<void> | null = null
@@ -104,10 +115,14 @@ export class SessionArchive {
     )
       return
     this.pending.set(ref.path, { ref, read })
-    // Keep one deadline per session. Repeated updates must not postpone capture forever.
-    if (this.timers.has(ref.path)) return
-    const since = Date.now() - (this.lastWrite.get(ref.path) ?? 0)
-    const delay = Math.max(SETTLE_MS, THROTTLE_MS - since)
+    // Each change restarts the settle window, but the deadline set by the
+    // first change of the run holds: repeated updates never postpone a
+    // capture past it.
+    const now = Date.now()
+    const held = this.timers.get(ref.path)
+    if (held) clearTimeout(held.timer)
+    const since = held?.since ?? now
+    const delay = Math.max(0, Math.min(SETTLE_MS, since + MAX_WAIT_MS - now))
     const timer = setTimeout(() => {
       this.timers.delete(ref.path)
       const capture = this.pending.get(ref.path)
@@ -115,12 +130,12 @@ export class SessionArchive {
       if (capture) this.enqueue(capture)
     }, delay)
     timer.unref()
-    this.timers.set(ref.path, timer)
+    this.timers.set(ref.path, { timer, since })
   }
 
   /** Wait until all currently scheduled captures have committed. */
   async flush(): Promise<void> {
-    for (const timer of this.timers.values()) clearTimeout(timer)
+    for (const held of this.timers.values()) clearTimeout(held.timer)
     this.timers.clear()
     for (const capture of this.pending.values()) this.enqueue(capture)
     this.pending.clear()
@@ -157,7 +172,8 @@ export class SessionArchive {
 
   async forget(path: string): Promise<void> {
     this.deleted.add(path)
-    clearTimeout(this.timers.get(path))
+    const held = this.timers.get(path)
+    if (held) clearTimeout(held.timer)
     this.timers.delete(path)
     this.pending.delete(path)
     await this.load()
@@ -217,7 +233,6 @@ export class SessionArchive {
       )
     this.index.set(ref.path, { ...thread.ref, locked: false, archived: true })
     this.revisions.set(ref.path, revision)
-    this.lastWrite.set(ref.path, Date.now())
   }
 
   private legacyDir(path: string): string {

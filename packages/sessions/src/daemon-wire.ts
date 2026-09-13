@@ -1,11 +1,67 @@
-import { ThreadEntrySchema } from "./thread-schema.js"
+import { StringDecoder } from "node:string_decoder"
+import {
+  EntryBlockSchema,
+  ThreadEntrySchema,
+  ThreadRefSchema,
+} from "./thread-schema.js"
 import type {
+  EntryBlock,
   Thread,
   ThreadEntry,
-  ThreadOrigin,
   ThreadPage,
   ThreadRef,
 } from "./format.js"
+
+/**
+ * Splits a socket's chunks into NDJSON lines, scanning each chunk once.
+ *
+ * The first version appended every chunk to one string and searched and
+ * measured the whole string again: a 7 MB thread arriving in 64 KB pieces
+ * was rescanned a hundred times over, and a frame the loopback socket
+ * carries in ten milliseconds took 2.7 s to assemble. Pieces are kept apart
+ * until a newline arrives and joined once; the pending byte count is a
+ * running total, so the frame limit costs nothing per chunk.
+ */
+export class LineAssembler {
+  private readonly parts: string[] = []
+  private readonly decoder = new StringDecoder("utf8")
+  /** Bytes of the line still being assembled. */
+  pendingBytes = 0
+
+  constructor(private readonly limit: number) {}
+
+  /** Complete lines in this chunk, or `null` once the pending line exceeds the limit. */
+  push(chunk: Buffer): string[] | null {
+    let text = this.decoder.write(chunk)
+    let at = text.indexOf("\n")
+    if (at === -1) {
+      this.pendingBytes += chunk.length
+      if (this.pendingBytes > this.limit) return null
+      this.parts.push(text)
+      return []
+    }
+    const lines: string[] = []
+    while (at !== -1) {
+      const head = text.slice(0, at)
+      this.pendingBytes += Buffer.byteLength(head)
+      if (this.pendingBytes > this.limit) return null
+      if (this.parts.length) {
+        this.parts.push(head)
+        lines.push(this.parts.join(""))
+        this.parts.length = 0
+      } else lines.push(head)
+      this.pendingBytes = 0
+      text = text.slice(at + 1)
+      at = text.indexOf("\n")
+    }
+    if (text) {
+      this.pendingBytes = Buffer.byteLength(text)
+      if (this.pendingBytes > this.limit) return null
+      this.parts.push(text)
+    }
+    return lines
+  }
+}
 
 export interface DaemonStats {
   pid: number
@@ -32,7 +88,16 @@ export type DaemonRequestFrame =
   | { id: number; op: "ping" }
   | { id: number; op: "list"; cwd?: string; harness?: string }
   | { id: number; op: "open"; path: string }
-  | { id: number; op: "page"; path: string; before?: number; limit?: number }
+  | {
+      id: number
+      op: "page"
+      path: string
+      before?: number
+      limit?: number
+      toolOutput?: number
+      maxChars?: number
+    }
+  | { id: number; op: "block"; path: string; entry: number; block: number }
   | { id: number; op: "follow"; path: string; fromByte: number }
   | { id: number; op: "unfollow"; path?: string }
   | { id: number; op: "retire" }
@@ -41,7 +106,13 @@ export type DaemonResponseFrame =
   | {
       id: number
       ok: true
-      result: DaemonStats | ThreadRef[] | Thread | ThreadPage | null
+      result:
+        | DaemonStats
+        | ThreadRef[]
+        | Thread
+        | ThreadPage
+        | EntryBlock
+        | null
     }
   | { id: number; ok: false; error: string }
 
@@ -83,19 +154,30 @@ interface PagePending extends PendingBase {
   resolve: (page: ThreadPage | null) => void
 }
 
+interface BlockPending extends PendingBase {
+  kind: "block"
+  resolve: (block: EntryBlock | null) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
 }
 
 export type PendingRequest =
-  PingPending | ListPending | OpenPending | PagePending | AckPending
+  | PingPending
+  | ListPending
+  | OpenPending
+  | PagePending
+  | BlockPending
+  | AckPending
 
 export type ParsedDaemonResponse =
   | { kind: "ping"; pending: PingPending; result: DaemonStats }
   | { kind: "list"; pending: ListPending; result: ThreadRef[] }
   | { kind: "open"; pending: OpenPending; result: Thread | null }
   | { kind: "page"; pending: PagePending; result: ThreadPage | null }
+  | { kind: "block"; pending: BlockPending; result: EntryBlock | null }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -142,7 +224,23 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       const path = readString(record, "path")
       const before = readNumber(record, "before")
       const limit = readNumber(record, "limit")
-      return path ? { id, op, path, before, limit } : null
+      const toolOutput = readNumber(record, "toolOutput")
+      const maxChars = readNumber(record, "maxChars")
+      return path ? { id, op, path, before, limit, toolOutput, maxChars } : null
+    }
+    case "block": {
+      const path = readString(record, "path")
+      const entry = readNumber(record, "entry")
+      const block = readNumber(record, "block")
+      return path &&
+        entry !== undefined &&
+        Number.isInteger(entry) &&
+        entry >= 0 &&
+        block !== undefined &&
+        Number.isInteger(block) &&
+        block >= 0
+        ? { id, op, path, entry, block }
+        : null
     }
     case "follow": {
       const path = readString(record, "path")
@@ -191,6 +289,14 @@ export function parseDaemonResponse(
       if (record.result === null) return { kind: "page", pending, result: null }
       const result = parseThreadPage(record.result)
       return result ? { kind: "page", pending, result } : null
+    }
+    case "block": {
+      if (record.result === null)
+        return { kind: "block", pending, result: null }
+      const result = EntryBlockSchema.safeParse(record.result)
+      return result.success
+        ? { kind: "block", pending, result: result.data }
+        : null
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null
@@ -283,52 +389,15 @@ function parseThreadPage(value: JsonValue | undefined): ThreadPage | null {
   return result
 }
 
+/**
+ * Every field of a ref crosses the wire. A hand-written reader here once
+ * listed the fields it knew and silently dropped `settings`, `identity` and
+ * `liveResume`: a catalog served from the worker showed "Reasoning not
+ * reported" for every Codex thread and collapsed Cursor's forked stores.
+ */
 function parseThreadRef(value: JsonValue | undefined): ThreadRef | null {
-  if (!isJsonRecord(value)) return null
-  const harness = readString(value, "harness")
-  const nativeId = readString(value, "nativeId")
-  const path = readString(value, "path")
-  if (!harness || !nativeId || !path) return null
-  const ref: ThreadRef = { harness, nativeId, path }
-  const cwd = readString(value, "cwd")
-  const workspace = readString(value, "workspace")
-  const title = readString(value, "title")
-  const model = readString(value, "model")
-  const startedAt = readString(value, "startedAt")
-  const updatedAt = readString(value, "updatedAt")
-  const bytes = readNumber(value, "bytes")
-  const locked = readBoolean(value, "locked")
-  const active = readBoolean(value, "active")
-  const lineage = parseArray(value.lineage, parseThreadOrigin)
-  const modelProvider = readString(value, "modelProvider")
-  const archived = readBoolean(value, "archived")
-  if (cwd !== undefined) ref.cwd = cwd
-  if (workspace !== undefined) ref.workspace = workspace
-  if (title !== undefined) ref.title = title
-  if (model !== undefined) ref.model = model
-  if (startedAt !== undefined) ref.startedAt = startedAt
-  if (updatedAt !== undefined) ref.updatedAt = updatedAt
-  if (bytes !== undefined) ref.bytes = bytes
-  const revision = readString(value, "revision")
-  if (revision !== undefined) ref.revision = revision
-  if (locked !== undefined) ref.locked = locked
-  if (active !== undefined) ref.active = active
-  if (lineage) ref.lineage = lineage
-  if (modelProvider !== undefined) ref.modelProvider = modelProvider
-  if (archived !== undefined) ref.archived = archived
-  const resumeUnavailable = readString(value, "resumeUnavailable")
-  if (resumeUnavailable !== undefined) ref.resumeUnavailable = resumeUnavailable
-  return ref
-}
-
-function parseThreadOrigin(value: JsonValue): ThreadOrigin | null {
-  if (!isJsonRecord(value)) return null
-  const harness = readString(value, "harness")
-  if (!harness) return null
-  const origin: ThreadOrigin = { harness }
-  const title = readString(value, "title")
-  if (title !== undefined) origin.title = title
-  return origin
+  const parsed = ThreadRefSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
 }
 
 function parseThreadEntry(value: JsonValue): ThreadEntry | null {

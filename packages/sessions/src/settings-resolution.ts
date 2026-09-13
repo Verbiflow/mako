@@ -38,6 +38,11 @@ export function resolveSessionSettings(
   if (input.context === "existing") {
     if (input.session)
       layers.push({ source: "session", settings: input.session })
+    // A store that never records a model (Cursor's) continues with the
+    // provider's own default, so that is the honest reading until the
+    // session reports; a recorded model keeps its own options unfilled.
+    if (!input.session?.model && input.defaults)
+      layers.push({ source: "provider", settings: input.defaults })
   } else {
     if (input.preference) layers.push(input.preference)
     if (input.defaults)

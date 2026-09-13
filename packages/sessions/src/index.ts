@@ -12,12 +12,16 @@ export {
   threadIdentity,
   userTextFrom,
   clip,
+  entryChars,
+  trimToolOutput,
+  type BlockAddress,
   type EntryBlock,
   type Harness,
   type Thread,
   type ThreadEntry,
   type ThreadOrigin,
   type ThreadPage,
+  type ThreadPageOptions,
   type ThreadRef,
   type TurnUsage,
 } from "./format.js"
@@ -26,16 +30,21 @@ export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { SessionArchive } from "./archive.js"
 export {
   connectDaemon,
+  connectDaemonPort,
   daemonMemoryUnsafe,
   daemonSocketPath,
   MAX_DAEMON_RSS,
   pingDaemon,
   PROTOCOL_VERSION,
   serveCatalog,
+  serveCatalogOnPort,
   type DaemonClient,
   type DaemonEvent,
+  type DaemonPort,
   type DaemonStats,
+  type ServeCatalogOptions,
 } from "./daemon.js"
+export { LineAssembler } from "./daemon-wire.js"
 export {
   renderTranscript,
   renderTranscriptBundle,

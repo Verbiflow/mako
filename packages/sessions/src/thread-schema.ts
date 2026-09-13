@@ -24,6 +24,12 @@ export const EntryBlockSchema = z.discriminatedUnion("type", [
     id: z.string().optional(),
     input: z.string().optional(),
     output: z.string().optional(),
+    /**
+     * Length of the complete output when `output` holds only its head. A
+     * page trims tool output so a conversation whose bytes are almost all
+     * shell output opens in one small message; `block` reads the rest.
+     */
+    outputLength: z.number().nonnegative().optional(),
     error: z.boolean().optional(),
     canceled: z.boolean().optional(),
     details: z.array(ToolDetailSchema).optional(),
@@ -74,6 +80,11 @@ export const ThreadRefSchema = z.object({
     .array(z.object({ harness: z.string(), title: z.string().optional() }))
     .optional(),
   modelProvider: z.string().optional(),
+  identity: z.string().optional(),
+  liveResume: z.boolean().optional(),
+  workspaceMissing: z.boolean().optional(),
+  accessMode: z.string().optional(),
+  heldBy: z.string().optional(),
 })
 export const ThreadSchema = z.object({
   ref: ThreadRefSchema,

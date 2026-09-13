@@ -119,6 +119,20 @@ export interface ThreadRef {
   liveResume?: boolean
   /** The session ran in a temporary directory that no longer exists. */
   workspaceMissing?: boolean
+  /**
+   * The access mode this session last ran under in Mako, as the host that
+   * ran it recorded. No provider store records Mako's tier; the host overlays
+   * it from its per-user session memory so a reply starts where the last
+   * turn left off.
+   */
+  accessMode?: string
+  /**
+   * Another Mako host on this machine holds the session live right now,
+   * named the way a refusal names it ("the installed Mako app"). Set by the
+   * host from its per-user session memory; a reply here is refused while it
+   * is set.
+   */
+  heldBy?: string
 }
 
 /** The key two refs share when they present the same conversation. */
@@ -141,6 +155,86 @@ export interface ThreadPage {
   start: number
   total: number
   hasEarlier: boolean
+}
+
+export interface ThreadPageOptions {
+  /**
+   * Keep at most this many characters of each tool block's output, noting
+   * the full length in `outputLength`. A viewer shows tool rows collapsed,
+   * so a page is what the row needs; the rest comes through `block` when a
+   * row opens. Omit it to page complete entries.
+   */
+  toolOutputChars?: number
+  /**
+   * Stop adding earlier entries once the page holds this many characters
+   * of content, counted after trimming; the newest entry is always
+   * included. An entry limit alone lets a hundred tool-heavy turns weigh
+   * megabytes, and the viewer pages earlier history on scroll anyway.
+   */
+  maxChars?: number
+}
+
+/** Characters of content one entry carries, without serializing it. */
+export function entryChars(entry: ThreadEntry): number {
+  if (entry.kind === "user")
+    return entry.text.length + (entry.attachments?.length ?? 0) * 256
+  if (entry.kind === "event")
+    return entry.label.length + (entry.detail?.length ?? 0)
+  let chars = 0
+  for (const block of entry.blocks) {
+    if (block.type === "text" || block.type === "thinking")
+      chars += block.text.length
+    else if (block.type === "tool")
+      chars +=
+        block.name.length +
+        (block.input?.length ?? 0) +
+        (block.output?.length ?? 0) +
+        (block.details?.length ?? 0) * 256 +
+        (block.attachments?.length ?? 0) * 256 +
+        64
+    else chars += 256
+  }
+  return chars
+}
+
+/** Where one block of one entry lives in a thread. */
+export interface BlockAddress {
+  entry: number
+  block: number
+}
+
+/**
+ * The entries with each tool output beyond `chars` cut to its head. Entries
+ * that lose nothing keep their identity, so a page of short outputs costs
+ * no copies.
+ */
+export function trimToolOutput(
+  entries: ThreadEntry[],
+  chars: number
+): ThreadEntry[] {
+  let changed = false
+  const trimmed = entries.map((entry) => {
+    if (entry.kind !== "assistant") return entry
+    let touched = false
+    const blocks = entry.blocks.map((block) => {
+      if (
+        block.type !== "tool" ||
+        block.output === undefined ||
+        block.output.length <= chars
+      )
+        return block
+      touched = true
+      return {
+        ...block,
+        output: block.output.slice(0, chars),
+        outputLength: block.output.length,
+      }
+    })
+    if (!touched) return entry
+    changed = true
+    return { ...entry, blocks }
+  })
+  return changed ? trimmed : entries
 }
 
 export function userTextFrom(text: string | undefined): string | undefined {

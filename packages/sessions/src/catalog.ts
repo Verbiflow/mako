@@ -26,10 +26,15 @@ import {
   type CacheEntry,
 } from "./catalog-cache.js"
 import {
+  entryChars,
   threadIdentity,
+  trimToolOutput,
+  type BlockAddress,
+  type EntryBlock,
   type Thread,
   type ThreadEntry,
   type ThreadPage,
+  type ThreadPageOptions,
   type ThreadRef,
 } from "./format.js"
 import type {
@@ -60,7 +65,28 @@ interface RefreshState {
   promise: Promise<void>
 }
 
+interface HeldThread {
+  bytes: number
+  mtimeMs: number
+  revision?: string
+  thread: Thread
+}
+
+/**
+ * Translated threads kept warm. The one on screen, the one the rail last
+ * showed and a preview or two; a large thread's entries are tens of
+ * megabytes of objects, so this stays small.
+ */
+const THREAD_CACHE_SIZE = 4
+
 const WATCH_DEBOUNCE_MS = 24
+/**
+ * A refresh waits for writes to settle, but never longer than this many
+ * settle windows after the first write of a burst. An agent streaming into
+ * a store writes continuously; a pure trailing debounce would refresh only
+ * when it paused.
+ */
+const WATCH_MAX_SETTLE_WINDOWS = 4
 const CACHE_SAVE_DEBOUNCE_MS = 2000
 
 /** Rescan cadence where recursive watching is unavailable. Stat-only. */
@@ -137,6 +163,36 @@ function withThreadWorkspace(thread: Thread | null): Thread | null {
   return ref === thread.ref || !ref ? thread : { ...thread, ref }
 }
 
+/** Whether a write at `path` re-runs this provider's discovery or refreshes the one file. */
+function rescansFor(provider: SessionProvider, path: string): boolean {
+  return provider.rescanRoot?.(path) ?? false
+}
+
+/** The stat facts the catalog compares, from the provider when it knows better than `stat`. */
+async function nativeFileOf(
+  provider: SessionProvider,
+  path: string
+): Promise<NativeFile | null> {
+  if (provider.stat) return provider.stat(path).catch(() => null)
+  const info = await stat(path).catch(() => null)
+  return info?.isFile()
+    ? { path, bytes: info.size, mtimeMs: info.mtimeMs }
+    : null
+}
+
+/**
+ * Whether a refreshed ref says anything new to a listener. Byte growth
+ * counts: the desk reads it as a session moving under another app. The
+ * revision does not: a WAL checkpoint or a sidecar rewrite with the same
+ * content is a reason to re-peek, never a reason to make every client
+ * re-sort its rail.
+ */
+function refMoved(previous: ThreadRef | null | undefined, next: ThreadRef): boolean {
+  if (!previous) return true
+  const visible = (ref: ThreadRef) => ({ ...ref, revision: undefined })
+  return JSON.stringify(visible(previous)) !== JSON.stringify(visible(next))
+}
+
 export class SessionCatalog {
   private providers: SessionProvider[]
   private pollTimer: NodeJS.Timeout | null = null
@@ -147,7 +203,7 @@ export class SessionCatalog {
   private cacheLoaded = false
   private saveTimer: NodeJS.Timeout | null = null
   private watchers: FSWatcher[] = []
-  private pending = new Map<string, NodeJS.Timeout>()
+  private pending = new Map<string, { since: number; timer: NodeJS.Timeout }>()
   private listeners = new Set<(event: CatalogEvent) => void>()
   private follows = new Map<string, FollowState>()
   private refreshes = new Map<string, RefreshState>()
@@ -157,13 +213,13 @@ export class SessionCatalog {
     throughByte: number
     entryCount: number
   } | null = null
-  private threadCache: {
-    path: string
-    bytes: number
-    mtimeMs: number
-    revision?: string
-    thread: Thread
-  } | null = null
+  /**
+   * Translated threads by path, newest last, held while the store they came
+   * from is unchanged. The viewer reopens what the rail last showed, and a
+   * preview opens another beside it; re-translating a 3.7 GB Codex tail
+   * costs 135 ms every time, and a cached open costs nothing.
+   */
+  private threadCache = new Map<string, HeldThread>()
 
   private archive: SessionArchive | null = null
 
@@ -308,16 +364,16 @@ export class SessionCatalog {
   /** Full translation of one session, via whichever store owns its path. */
   async open(path: string, trackForFollow = true): Promise<Thread | null> {
     const stamp = this.byPath.get(path)
-    const held = this.threadCache
+    const held = this.threadCache.get(path)
     const cached =
       held &&
       stamp &&
-      held.path === path &&
       held.bytes === stamp.bytes &&
       held.mtimeMs === stamp.mtimeMs &&
       held.revision === stamp.revision
         ? held.thread
         : null
+    if (held && !cached) this.threadCache.delete(path)
     const provider = this.ownerOf(path)
     const native =
       cached ??
@@ -325,13 +381,19 @@ export class SessionCatalog {
         provider ? await provider.read(path).catch(() => null) : null
       )
     if (native) {
-      if (stamp && !cached) {
-        this.threadCache = {
-          path,
+      if (stamp) {
+        // Re-insert so the map's order is recency.
+        this.threadCache.delete(path)
+        this.threadCache.set(path, {
           bytes: stamp.bytes,
           mtimeMs: stamp.mtimeMs,
           revision: stamp.revision,
           thread: native,
+        })
+        while (this.threadCache.size > THREAD_CACHE_SIZE) {
+          const oldest = this.threadCache.keys().next().value
+          if (oldest === undefined) break
+          this.threadCache.delete(oldest)
         }
       }
       if (trackForFollow) {
@@ -351,22 +413,47 @@ export class SessionCatalog {
   async page(
     path: string,
     before?: number,
-    limit = 100
+    limit = 100,
+    options: ThreadPageOptions = {}
   ): Promise<ThreadPage | null> {
     const thread = await this.open(path)
     if (!thread) return null
     const total = thread.entries.length
     const end = Math.min(total, Math.max(0, before ?? total))
     const size = Math.min(200, Math.max(1, limit))
-    const start = Math.max(0, end - size)
+    let start = Math.max(0, end - size)
+    let entries = thread.entries.slice(start, end)
+    if (options.toolOutputChars !== undefined)
+      entries = trimToolOutput(entries, options.toolOutputChars)
+    if (options.maxChars !== undefined && entries.length > 1) {
+      let chars = 0
+      let keep = entries.length
+      while (keep > 0) {
+        chars += entryChars(entries[keep - 1]!)
+        if (chars > options.maxChars && keep < entries.length) break
+        keep -= 1
+      }
+      if (keep > 0) {
+        entries = entries.slice(keep)
+        start += keep
+      }
+    }
     return {
       ref: thread.ref,
       checkpoint: thread.checkpoint,
-      entries: thread.entries.slice(start, end),
+      entries,
       start,
       total,
       hasEarlier: start > 0,
     }
+  }
+
+  /** One complete block of an assistant entry, for what a trimmed page left out. */
+  async block(path: string, at: BlockAddress): Promise<EntryBlock | null> {
+    const thread = await this.open(path, false)
+    const entry = thread?.entries[at.entry]
+    if (entry?.kind !== "assistant") return null
+    return entry.blocks[at.block] ?? null
   }
 
   /* ------------------------------------------------------------ watching */
@@ -422,11 +509,16 @@ export class SessionCatalog {
     }
     await forEachConcurrent(candidates, 4, async (path) => {
       const provider = this.ownerOf(path)
-      if (!provider || provider.rescanRoot) return
+      if (!provider || rescansFor(provider, path)) return
       const cached = this.byPath.get(path)
-      const info = await stat(path).catch(() => null)
-      if (!cached || !info?.isFile()) return
-      if (cached.bytes === info.size && cached.mtimeMs === info.mtimeMs) return
+      const file = await nativeFileOf(provider, path)
+      if (!cached || !file) return
+      if (
+        cached.bytes === file.bytes &&
+        cached.mtimeMs === file.mtimeMs &&
+        cached.revision === file.revision
+      )
+        return
       await this.refresh(provider, path)
     })
   }
@@ -480,7 +572,7 @@ export class SessionCatalog {
     const provider = this.ownerOf(path)
     if (!provider?.remove) return false
     if (!(await provider.remove(path))) return false
-    if (this.threadCache?.path === path) this.threadCache = null
+    this.threadCache.delete(path)
     this.follows.delete(path)
     if (this.forget(path)) {
       this.scheduleSave()
@@ -500,13 +592,16 @@ export class SessionCatalog {
       clearInterval(this.activeTimer)
       this.activeTimer = null
     }
-    for (const timer of this.pending.values()) clearTimeout(timer)
+    for (const held of this.pending.values()) clearTimeout(held.timer)
     this.pending.clear()
-    this.threadCache = null
+    this.threadCache.clear()
     if (this.saveTimer) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
-      void this.saveCache()
+      // Awaited: a host stopping for a restart exits right after this, and an
+      // unawaited write lost the whole cache, so the next start re-peeked
+      // every file.
+      await this.saveCache()
     }
     try {
       await this.archive?.stop()
@@ -544,26 +639,43 @@ export class SessionCatalog {
     const mapped = provider.watchTarget?.(path)
     if (mapped === null) return
     const target = mapped ?? path
-    if (provider.rescanRoot || this.threadCache?.path === target) {
-      this.threadCache = null
-    }
+    const rescan = rescansFor(provider, target)
+    // A write to a shared database can have moved any of that provider's
+    // threads, and only that provider's: Cursor Desktop writing state.vscdb
+    // once dropped a cached Codex thread with every keystroke.
+    if (rescan) {
+      for (const path of this.threadCache.keys()) {
+        if (this.ownerOf(path) === provider) this.threadCache.delete(path)
+      }
+    } else this.threadCache.delete(target)
     // Shared-database stores have no per-session file to stat: any write
-    // under the root re-runs that provider's discovery, debounced under
-    // one key so a burst costs one rescan. Sidecar writes debounce under
+    // under the root re-runs that provider's discovery, coalesced under
+    // one key so a burst costs one rescan. Sidecar writes coalesce under
     // the native file so summary.json and updates.jsonl cannot race.
-    const key = provider.rescanRoot
+    const key = rescan
       ? `rescan:${provider.harness}:${provider.roots()[0]}`
       : target
-    clearTimeout(this.pending.get(key))
-    const sidecar = target !== path
-    this.pending.set(
-      key,
-      setTimeout(() => {
-        this.pending.delete(key)
-        if (provider.rescanRoot) void this.rescanProvider(provider)
-        else void this.refresh(provider, target, sidecar)
-      }, provider.rescanDebounceMs ?? WATCH_DEBOUNCE_MS)
+    const settle = provider.rescanDebounceMs ?? WATCH_DEBOUNCE_MS
+    const now = Date.now()
+    const held = this.pending.get(key)
+    if (held) clearTimeout(held.timer)
+    const since = held?.since ?? now
+    // Wait for the burst to settle, but a store an agent streams into never
+    // settles: fire by the deadline regardless and let the next write start
+    // another window.
+    const delay = Math.max(
+      0,
+      Math.min(settle, since + settle * WATCH_MAX_SETTLE_WINDOWS - now)
     )
+    const sidecar = target !== path
+    this.pending.set(key, {
+      since,
+      timer: setTimeout(() => {
+        this.pending.delete(key)
+        if (rescan) void this.rescanProvider(provider)
+        else void this.refresh(provider, target, sidecar)
+      }, delay),
+    })
   }
 
   private rescanProvider(provider: SessionProvider): Promise<void> {
@@ -616,8 +728,11 @@ export class SessionCatalog {
       if (!unchanged) {
         const ref = withWorkspace(await provider.peek(file).catch(() => null))
         if (!this.commit(file, ref)) continue
-        if (ref) this.emit({ type: cached?.ref ? "updated" : "added", ref })
-        else if (cached?.ref) this.emit({ type: "removed", path: file.path })
+        if (ref) {
+          if (refMoved(cached?.ref, ref))
+            this.emit({ type: cached?.ref ? "updated" : "added", ref })
+          else this.capture(ref)
+        } else if (cached?.ref) this.emit({ type: "removed", path: file.path })
       }
       if (follow && follow.listeners.size > 0) {
         if (!follow.follower) {
@@ -702,15 +817,14 @@ export class SessionCatalog {
     path: string,
     forceMetadata = false
   ): Promise<void> {
-    const info = await stat(path).catch(() => null)
-    if (!info || !info.isFile()) {
+    const file = await nativeFileOf(provider, path)
+    if (!file) {
       if (this.forget(path)) {
         this.scheduleSave()
         this.emit({ type: "removed", path })
       }
       return
     }
-    const file: NativeFile = { path, bytes: info.size, mtimeMs: info.mtimeMs }
     const cached = this.cachedEntry(path, provider)
     const follow = this.follows.get(path)
     const unchanged =
@@ -776,8 +890,11 @@ export class SessionCatalog {
       : withWorkspace(await provider.peek(file).catch(() => null))
     if (!this.commit(file, ref)) return
     this.scheduleSave()
-    if (ref) this.emit({ type: cached?.ref ? "updated" : "added", ref })
-    else if (cached?.ref) this.emit({ type: "removed", path })
+    if (ref) {
+      if (refMoved(cached?.ref, ref))
+        this.emit({ type: cached?.ref ? "updated" : "added", ref })
+      else this.capture(ref)
+    } else if (cached?.ref) this.emit({ type: "removed", path })
 
     if (!follow || follow.listeners.size === 0) return
     if (!follow.follower)
