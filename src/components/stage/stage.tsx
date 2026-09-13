@@ -324,7 +324,15 @@ function ConversationSurface() {
   const viewing = useThreads((state) => Boolean(state.viewing || state.opening))
   const live = useAcp((state) => activeAcp(state) !== null)
   const liveThreadPath = useAcp((state) => activeAcp(state)?.threadPath)
-  if (viewing && (!live || viewingPath !== liveThreadPath))
+  // A reply from the viewer keeps the viewer — its history plus the echoed
+  // prompt — until the provider has opened the session and reported the
+  // conversation in full. Swapping to the live panel any earlier showed the
+  // new prompt alone until the history arrived a moment later.
+  const starting = useAcp((state) => activeAcp(state)?.kind === "starting")
+  if (
+    viewing &&
+    (!live || viewingPath !== liveThreadPath || (starting && viewingPath))
+  )
     return <ThreadViewer />
   if (live) return <AcpPanel />
   return <Transcript />
