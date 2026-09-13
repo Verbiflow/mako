@@ -2,10 +2,11 @@ import assert from "node:assert/strict"
 
 import {
   appendThreadReferences,
+  findThreadReference,
   prefetchThreadReferences,
   stripThreadReferenceAppendix,
 } from "../../../src/lib/thread-references.ts"
-import { threadToken } from "../../../src/lib/mentions.ts"
+import { threadReferenceId, threadToken } from "../../../src/lib/mentions.ts"
 
 const metadata = {
   order: "newest-turn-first",
@@ -163,6 +164,60 @@ assert.ok(collision.includes("[Referenced conversation 1]"))
 assert.ok(collision.includes("unavailable or no longer exists"))
 assert.equal(collisionCalls.length, 0)
 
+// Cursor writes a `cursor-agent -p --resume` continuation of an ACP session as
+// a second store under chats/ with the same agent id; the catalog keeps both,
+// the copy carrying `identity: "chats:<id>"`. A token minted from the native
+// id alone once matched both rows and resolved to neither, so the sent prompt
+// said the conversation no longer existed while its chip showed a title.
+const forkId = "90a422d6-9c64-4ef2-bea9-807cb93a2abd"
+const forkOriginal = {
+  harness: "cursor",
+  nativeId: forkId,
+  path: `/cursor/acp-sessions/${forkId}/store.db`,
+  title: "Fork original",
+}
+const forkCopy = {
+  harness: "cursor",
+  nativeId: forkId,
+  identity: `chats:${forkId}`,
+  liveResume: false,
+  path: `/cursor/chats/workspace/${forkId}/store.db`,
+  title: "Fork CLI continuation",
+}
+const forkThreads = [forkCopy, forkOriginal]
+assert.equal(findThreadReference(forkThreads, "cursor", forkId), forkOriginal, "a bare native id means the original store")
+assert.equal(findThreadReference(forkThreads, "cursor", `chats:${forkId}`), forkCopy, "the identity names the chats copy")
+assert.equal(findThreadReference(forkThreads, "cursor", forkId.slice(0, 8)), forkOriginal, "a shortened id predates identities and means the original")
+assert.equal(findThreadReference([forkCopy], "cursor", forkId), forkCopy, "the only remaining store answers its native id")
+assert.equal(findThreadReference(forkThreads, "codex", forkId), undefined, "the harness is part of the token")
+assert.equal(
+  findThreadReference([forkOriginal, { ...forkOriginal, path: "/cursor/other/store.db" }], "cursor", forkId),
+  undefined,
+  "two originals sharing one native id stay ambiguous"
+)
+assert.notEqual(
+  threadToken(forkCopy.harness, threadReferenceId(forkCopy)),
+  threadToken(forkOriginal.harness, threadReferenceId(forkOriginal)),
+  "the mention menu must mint distinct tokens for the two stores"
+)
+const forkCalls = installBridge((path) => ({
+  kind: "file",
+  file: `/content-addressed/${path.includes("/chats/") ? "fork-copy" : "fork-original"}/transcript.md`,
+  title: path.includes("/chats/") ? forkCopy.title : forkOriginal.title,
+  harness: "cursor",
+  metadata,
+}))
+const forked = await appendThreadReferences(
+  `Continue ${threadToken("cursor", forkId)} and compare ${threadToken("cursor", threadReferenceId(forkCopy))}.`,
+  forkThreads
+)
+assert.ok(!forked.includes("unavailable or no longer exists"), "both stores of a forked session must resolve")
+assert.ok(forked.includes("[Referenced conversation 1] Fork original (cursor)"))
+assert.ok(forked.includes("[Referenced conversation 2] Fork CLI continuation (cursor)"))
+assert.ok(forked.includes("/content-addressed/fork-original/transcript.md"))
+assert.ok(forked.includes("/content-addressed/fork-copy/transcript.md"))
+assert.deepEqual(forkCalls[0]?.paths, [forkOriginal.path, forkCopy.path])
+
 const staleThread = {
   harness: "devin",
   nativeId: "stale-after-prefetch",
@@ -207,4 +262,4 @@ assert.ok(firstGrowth.includes("growing-1"))
 assert.ok(secondGrowth.includes("growing-2"))
 assert.equal(growingCalls.length, 2, "a grown thread must invalidate its prepared context")
 
-console.log("Thread reference tests clean: replacement, local, remote inline, sidecars, missing, collisions, duplicates, growth, and stale recovery verified.")
+console.log("Thread reference tests clean: replacement, local, remote inline, sidecars, missing, collisions, duplicates, forked stores, growth, and stale recovery verified.")

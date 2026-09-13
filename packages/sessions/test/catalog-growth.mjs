@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
+import { GrokProvider } from "../dist/providers/grok.js"
 
 const later = () => new Promise((resolve) => setTimeout(resolve, 20))
 const home = await mkdtemp(join(tmpdir(), "mako-catalog-growth-"))
@@ -106,8 +107,104 @@ try {
   const [titled] = await claudeCatalog.scan({ emitChanges: true })
   assert.equal(titled.title, "Together AI reply-rate fix", "an appended ai-title reaches the row")
   await claudeCatalog.stop()
+
+  // Grok rewrites summary.json, chat_history.jsonl, and events.jsonl beside
+  // the native transcript. Those writes must not mint extra rows or fight
+  // the first-prompt title for the sidebar name.
+  const grokDir = join(
+    home,
+    ".grok",
+    "sessions",
+    "%2Fwork",
+    "01a093b0-dca7-7ee3-bad6-a92f91b7cece"
+  )
+  await mkdir(grokDir, { recursive: true })
+  const grokUpdates = join(grokDir, "updates.jsonl")
+  const grokSummary = join(grokDir, "summary.json")
+  const grokHistory = join(grokDir, "chat_history.jsonl")
+  const grokEvents = join(grokDir, "events.jsonl")
+  const grokLine = (value) => `${JSON.stringify(value)}\n`
+  await writeFile(
+    grokUpdates,
+    grokLine({
+      timestamp: 1_767_225_600,
+      method: "session/update",
+      params: {
+        sessionId: "01a093b0-dca7-7ee3-bad6-a92f91b7cece",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          content: { type: "text", text: "For Grok sessions the name keeps changing" },
+        },
+      },
+    })
+  )
+  await writeFile(
+    grokHistory,
+    grokLine({ type: "user", content: "<user_query>duplicate legacy prompt</user_query>" })
+  )
+  await writeFile(grokEvents, "{}\n")
+  await writeFile(
+    grokSummary,
+    JSON.stringify({
+      info: { id: "01a093b0-dca7-7ee3-bad6-a92f91b7cece", cwd: "/work" },
+      generated_title: "Grok Session Inquiry",
+      session_summary: "Grok Session Inquiry",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:10:00.000Z",
+      current_model_id: "grok-4.6",
+    })
+  )
+  const grok = new GrokProvider(home)
+  const grokCatalog = new SessionCatalog([grok], { cachePath: join(home, "grok-cache.json") })
+  const grokEventsSeen = []
+  grokCatalog.onEvent((event) => grokEventsSeen.push(event))
+  const grokFirst = await grokCatalog.scan()
+  assert.equal(grokFirst.length, 1, "one Grok session is one row")
+  assert.equal(grokFirst[0].path, grokUpdates)
+  assert.equal(grokFirst[0].title, "Grok Session Inquiry")
+  grokCatalog.startWatching()
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  await writeFile(
+    grokSummary,
+    JSON.stringify({
+      info: { id: "01a093b0-dca7-7ee3-bad6-a92f91b7cece", cwd: "/work" },
+      generated_title: "Grok Sidebar Thread Name",
+      session_summary: "A later running summary",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:20:00.000Z",
+      current_model_id: "grok-4.6",
+    })
+  )
+  await appendFile(
+    grokHistory,
+    grokLine({ type: "assistant", content: [{ text: "legacy echo" }] })
+  )
+  await appendFile(grokEvents, "{}\n")
+  const grokTitled = await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Grok summary title did not reach the one catalog row")),
+      2_000
+    )
+    const check = () => {
+      const [row] = grokCatalog.list()
+      if (row?.title === "Grok Sidebar Thread Name" && grokCatalog.list().length === 1) {
+        clearTimeout(timer)
+        resolve(row)
+      }
+    }
+    grokCatalog.onEvent(check)
+    check()
+  })
+  assert.equal(grokTitled.path, grokUpdates)
+  assert.equal(grokCatalog.list().length, 1, "sidecar writes must not add a second Grok row")
+  assert.equal(
+    grokEventsSeen.some((event) => event.type === "added" && event.ref.path !== grokUpdates),
+    false,
+    "sidecars must not be added as sessions"
+  )
+  await grokCatalog.stop()
   console.log(
-    "Catalog growth: untitled refs are re-read when their file grows, Codex names from the state database and Claude ai-title lines reach existing rows, a resumed Codex file stays one row, and active files missed by the watcher reconcile"
+    "Catalog growth: untitled refs are re-read when their file grows, Codex names from the state database and Claude ai-title lines reach existing rows, a resumed Codex file stays one row, active files missed by the watcher reconcile, and Grok sidecars stay one row"
   )
 } finally {
   await rm(home, { recursive: true, force: true })

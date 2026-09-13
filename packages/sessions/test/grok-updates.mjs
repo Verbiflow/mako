@@ -101,12 +101,59 @@ try {
     model: "summary-model",
     settings: { model: "summary-model", options: { effort: "high" } },
     startedAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:10:00.000Z",
+    updatedAt: new Date(modernFile.mtimeMs).toISOString(),
     bytes: 0,
   })
   const legacyFile = discovered.find((file) => file.path === legacyPath)
   assert.ok(legacyFile)
   assert.equal((await provider.peek(legacyFile))?.title, "legacy prompt")
+
+  const summaryPath = join(modernDir, "summary.json")
+  const eventsPath = join(modernDir, "events.jsonl")
+  await writeFile(eventsPath, "{}\n")
+  assert.equal(
+    await provider.peek({ path: summaryPath, bytes: 1, mtimeMs: 0 }),
+    null,
+    "summary.json is a sidecar, not a session row"
+  )
+  assert.equal(
+    await provider.peek({ path: eventsPath, bytes: 1, mtimeMs: 0 }),
+    null,
+    "events.jsonl is a sidecar, not a session row"
+  )
+  assert.equal(
+    await provider.peek({ path: historyPath, bytes: 1, mtimeMs: 0 }),
+    null,
+    "chat_history.jsonl must not peek while updates.jsonl exists"
+  )
+  assert.equal(provider.watchTarget(summaryPath), updatesPath)
+  assert.equal(provider.watchTarget(eventsPath), updatesPath)
+  assert.equal(provider.watchTarget(historyPath), updatesPath)
+  assert.equal(provider.watchTarget(updatesPath), updatesPath)
+  assert.equal(
+    provider.watchTarget(join(home, ".grok", "sessions", "%2Fwork", "prompt_history.jsonl")),
+    null
+  )
+
+  await writeFile(
+    summaryPath,
+    JSON.stringify({
+      info: { id: "modern-session", cwd: "/work" },
+      generated_title: "Grok Session Inquiry",
+      session_summary: "A later running summary",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:20:00.000Z",
+      current_model_id: "summary-model",
+      reasoning_effort: "high",
+    })
+  )
+  const renamed = await provider.refine(peeked, 0)
+  assert.equal(
+    renamed.title,
+    "Grok Session Inquiry",
+    "generated_title is the session name; session_summary is not"
+  )
+  assert.equal(renamed.path, updatesPath)
 
   const firstBatch =
     notification(

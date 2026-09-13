@@ -40,6 +40,31 @@ const switched = resolveSessionSettings({ models, context: "existing",
 })
 assert.deepEqual(switched.settings, { model: "b" })
 
+// Speed is an account choice, so it follows a model switch when the new model
+// offers the same tier; effort belongs to the model and starts from its default.
+const tiered = [...models, { id: "c", label: "C", options: [
+  { kind: "select", id: "effort", label: "Reasoning", role: "reasoning", current: "low", values: [{ value: "low", label: "Low" }, { value: "high", label: "High" }] },
+  { kind: "select", id: "tier", label: "Speed", role: "speed", current: "default", values: [{ value: "default", label: "Standard", default: true }, { value: "fast", label: "Fast" }] },
+] }, { id: "d", label: "D", options: [
+  { kind: "select", id: "tier", label: "Speed", role: "speed", current: "default", values: [{ value: "default", label: "Standard", default: true }] },
+] }]
+const carried = resolveSessionSettings({ models: tiered, context: "existing",
+  session: { model: "a", options: { effort: "high", tier: "fast" } }, overrides: { model: "c" },
+})
+assert.deepEqual(carried.settings, { model: "c", options: { effort: "low", tier: "fast" } })
+assert.equal(carried.options.tier.source, "session")
+assert.equal(carried.options.effort.source, "model-default")
+const narrowed = resolveSessionSettings({ models: tiered, context: "existing",
+  session: { model: "a", options: { tier: "fast" } }, overrides: { model: "d" },
+})
+assert.deepEqual(narrowed.settings, { model: "d", options: { tier: "default" } }, "a tier the new model lacks falls back to its default, never to unknown")
+assert.equal(narrowed.issues.length, 0)
+const preferred = resolveSessionSettings({ models: tiered, context: "new",
+  preference: { source: "saved", settings: { model: "c" } }, defaults: { model: "a", options: { tier: "fast" } },
+})
+assert.equal(preferred.settings.options.tier, "fast", "the account's configured tier applies to a preferred model too")
+assert.equal(resolveSessionSettings({ models: tiered, context: "new", overrides: { model: "c", options: { tier: "default" } }, defaults: { model: "a", options: { tier: "fast" } } }).settings.options.tier, "default")
+
 const invalid = resolveSessionSettings({ models, context: "new", overrides: { model: "a", options: { effort: "ultra" } } })
 assert.equal(invalid.issues.length, 1)
 assert.throws(() => resolveModelLaunch(models, invalid.settings), /not supported/)

@@ -20,6 +20,19 @@ try {
   assert.deepEqual((await peek(codex, path)).settings, {}, "an old head cannot be presented as a current setting")
   await appendFile(path, line({ type: "turn_context", payload: { model: "new", effort: "high", service_tier: "fast" } }))
   assert.deepEqual((await peek(codex, path)).settings, { model: "new", options: { effort: "high", serviceTier: "priority" } })
+  // Codex 0.147+ writes the tier only in `thread_settings_applied`, before a
+  // `turn_context` that carries the effort; both describe one turn.
+  await appendFile(path,
+    line({ type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { model: "gpt-5.6-sol", reasoning_effort: "high", service_tier: "default" } } }) +
+    line({ type: "turn_context", payload: { model: "gpt-5.6-sol", effort: "high" } }))
+  assert.deepEqual((await peek(codex, path)).settings, { model: "gpt-5.6-sol", options: { effort: "high", serviceTier: "default" } })
+  await appendFile(path,
+    line({ type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { model: "gpt-5.6-sol", reasoning_effort: "xhigh", service_tier: "fast" } } }) +
+    line({ type: "turn_context", payload: { model: "gpt-5.6-sol", effort: "xhigh" } }))
+  assert.deepEqual((await peek(codex, path)).settings, { model: "gpt-5.6-sol", options: { effort: "xhigh", serviceTier: "priority" } }, "the latest applied settings win")
+  await appendFile(path, line({ type: "turn_context", payload: { model: "other", effort: "low" } }))
+  assert.deepEqual((await peek(codex, path)).settings, { model: "other", options: { effort: "low" } }, "a turn on another model does not inherit the previous tier")
+  assert.equal(codex.peekVersion, 1, "cached rows peeked before the tier was read must be peeked again")
   const claude = new ClaudeProvider(home)
   const claudePath = join(home, "claude.jsonl")
   await writeFile(claudePath, line({ type: "user", sessionId: "claude", message: { content: "hello" } }) +
