@@ -54,9 +54,15 @@ import type {
 import { reduceLiveUpdates, mergeLiveUpdates } from "./contracts/live-content.js"
 import type { InterruptionReason } from "./contracts/live-conversations.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
+import { CONNECTION_LOST_STOP } from "./contracts/providers-acp.js"
+import {
+  AUTO_CONTINUE_DELAY_MS,
+  autoContinueCandidate,
+  continueTurnPrompt,
+} from "./contracts/turn-continuation.js"
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
-import { hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "./host-log.js"
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
@@ -637,6 +643,7 @@ export class LiveConversations {
         }
         if (finishedRequest)
           this.checkpoints.settle(resident, finishedRequest.id)
+        this.scheduleAutoContinue(resident)
       }
     } else if (event.type === "acp-agent") {
       const agent = NativeAgentObservationSchema.parse(event.agent)
@@ -758,6 +765,8 @@ export class LiveConversations {
     }
     if (!text.trim() && !attachments.length)
       throw new Error("A prompt cannot be empty")
+    // The user's own message supersedes any continuation Mako was about to send.
+    this.declineAutoContinue(resident)
     if (!resident.driver) {
       this.transfer(id, {
         id: requestId,
@@ -769,6 +778,11 @@ export class LiveConversations {
       return request
     }
     request.inputDigest = inputDigest
+    return this.admit(resident, request)
+  }
+
+  /** Record a new request in the journal and start it when the session is free. */
+  private admit(resident: Resident, request: LiveRequest): LiveRequest {
     request.attachments = this.assets.retainPrompt(request.attachments)
     const previousSnapshot = resident.snapshot
     resident.snapshot = {
@@ -784,6 +798,98 @@ export class LiveConversations {
     }
     this.drain(resident)
     return request
+  }
+
+  /**
+   * A turn that just ended on the provider's dropped connection is picked up
+   * by Mako after `AUTO_CONTINUE_DELAY_MS`, once per turn. The interrupted
+   * request is stamped with the moment so the renderer says "continuing
+   * automatically" instead of offering the button; the timer re-checks
+   * eligibility when it fires, because the user may have sent something,
+   * closed the conversation, or the host may be leaving.
+   */
+  private scheduleAutoContinue(resident: Resident): void {
+    if (resident.autoContinue || !resident.driver || lifecycleBlocked()) return
+    const candidate = autoContinueCandidate(resident.snapshot.requests)
+    if (!candidate?.interruption) return
+    const delay = this.dependencies.autoContinueDelayMs ?? AUTO_CONTINUE_DELAY_MS
+    const at = Date.now() + delay
+    resident.snapshot = {
+      ...resident.snapshot,
+      requests: resident.snapshot.requests.map((request) =>
+        request.id === candidate.id && request.interruption
+          ? { ...request, interruption: { ...request.interruption, autoContinue: { at } } }
+          : request
+      ),
+    }
+    const timer = setTimeout(() => this.fireAutoContinue(resident.snapshot.session.id, candidate.id), delay)
+    timer.unref?.()
+    resident.autoContinue = { requestId: candidate.id, timer }
+  }
+
+  private fireAutoContinue(id: string, requestId: string): void {
+    const resident = this.records.get(id)
+    if (!resident || resident.autoContinue?.requestId !== requestId) return
+    resident.autoContinue = undefined
+    const source = autoContinueCandidate(resident.snapshot.requests)
+    resident.snapshot = {
+      ...resident.snapshot,
+      requests: clearAutoContinue(resident.snapshot.requests, requestId),
+    }
+    if (
+      source?.id !== requestId ||
+      !source.interruption?.autoContinue ||
+      !resident.driver ||
+      resident.rewinding ||
+      resident.closing ||
+      this.transfers.pending(resident) ||
+      resident.snapshot.session.status === "running" ||
+      resident.snapshot.session.status === "closed" ||
+      resident.snapshot.permissions.length > 0
+    ) {
+      this.flush(resident)
+      return
+    }
+    const reason = source.interruption.reason
+    const request = LiveRequestSchema.parse({
+      id: randomUUID(),
+      text: continueTurnPrompt(reason),
+      attachments: [],
+      tuning: source.tuning,
+      status: "queued",
+      continues: { requestId, reason, auto: true },
+    })
+    request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
+    try {
+      assertLifecycleAdmission()
+      this.admit(resident, request)
+      hostLog("live", "continued a dropped turn", {
+        conversation: id,
+        harness: resident.snapshot.session.harness,
+        request: request.id,
+        continues: requestId,
+      })
+    } catch (error) {
+      // The manual offer stands; the stamp is already gone from the request.
+      hostWarn("live", "auto-continue was not accepted", {
+        conversation: id,
+        continues: requestId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      this.flush(resident)
+    }
+  }
+
+  /** Drop a pending continuation and its stamp; a later prompt, close or host exit made it moot. */
+  private declineAutoContinue(resident: Resident): void {
+    const pending = resident.autoContinue
+    if (!pending) return
+    clearTimeout(pending.timer)
+    resident.autoContinue = undefined
+    resident.snapshot = {
+      ...resident.snapshot,
+      requests: clearAutoContinue(resident.snapshot.requests, pending.requestId),
+    }
   }
 
   authorizeAgent(
@@ -1468,6 +1574,13 @@ export class LiveConversations {
     const requestId = this.activeRequest(id)
     if (requestId) { await this.stopRequest(id, requestId); return }
     const resident = this.require(id)
+    // Stop during the wait before Mako continues a dropped turn is the user's
+    // answer: leave the turn where it stopped, and say so.
+    if (resident.autoContinue) {
+      this.declineAutoContinue(resident)
+      this.flush(resident)
+      return
+    }
     if (this.checkpoints.cancelBeforeDispatch(resident)) return
     for (const child of this.control(resident).children)
       if (child.delivery === "pending" || child.delivery === "queued")
@@ -1500,6 +1613,7 @@ export class LiveConversations {
     const idle = resident.snapshot.session.status === "ready"
     const generation = resident.generation
     resident.closing = true
+    this.declineAutoContinue(resident)
     const closed = [...resident.connections].map(([bindingId, connection]) =>
       connection.driver.close(bindingId)
     )
@@ -1607,6 +1721,9 @@ export class LiveConversations {
         connection.driver.close(bindingId)
       if (resident.opening)
         driver?.close(this.control(resident).activeBindingId)
+      // A continuation this host was about to send goes with it; the next
+      // host offers the button instead of promising a send it cannot make.
+      this.declineAutoContinue(resident)
       // A turn still running now is cut short by this host, on purpose. The
       // journal says so, with the moment, so the next host does not read it
       // as a crash and the transcript can offer to continue the turn. An idle
@@ -1963,10 +2080,13 @@ export class LiveConversations {
       permissions: [],
       // A request still dispatching in a journal no host is writing was cut
       // short by a host that never reached `stop()`: it died, or was killed.
-      requests: interruptRequests(
-        previous.requests,
-        "host-crashed",
-        "Mako closed unexpectedly while this turn was running; whether the provider finished it is unknown"
+      // A continuation that host had scheduled died with it.
+      requests: clearAutoContinue(
+        interruptRequests(
+          previous.requests,
+          "host-crashed",
+          "Mako closed unexpectedly while this turn was running; whether the provider finished it is unknown"
+        )
       ),
     }
     journal.commit(snapshot, previous)
@@ -2003,7 +2123,8 @@ function nativeRevision(page: ThreadPage): string {
  */
 function settleRequest(request: LiveRequest, session: LiveSessionState): LiveRequest {
   const stopped = /cancel|interrupt/i.test(session.lastStop ?? "")
-  const status = stopped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
+  const dropped = session.lastStop === CONNECTION_LOST_STOP
+  const status = stopped || dropped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
   const settled: LiveRequest = {
     ...request,
     status,
@@ -2013,9 +2134,23 @@ function settleRequest(request: LiveRequest, session: LiveSessionState): LiveReq
         ? { ...request.nativeRun, forkId: session.nativeForkId }
         : request.nativeRun,
   }
-  if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
+  if (dropped) {
+    // The provider ended the turn on its own dropped connection: the work so
+    // far stands, so the request is continuable rather than one to re-send,
+    // and the kind is still recorded so the panel can name the connection.
+    settled.interruption = { reason: "connection-lost", at: Date.now() }
+    settled.failure = "network"
+  } else if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
   return settled
+}
+
+/** The requests with the scheduled-continuation stamp removed from `requestId`, or from every request. */
+function clearAutoContinue(requests: LiveRequest[], requestId?: string): LiveRequest[] {
+  return requests.map((request) => {
+    if (!request.interruption?.autoContinue || (requestId !== undefined && request.id !== requestId)) return request
+    return { ...request, interruption: { reason: request.interruption.reason, at: request.interruption.at } }
+  })
 }
 
 /** Mark every in-flight request cut short by the host itself, with the reason and the moment. */

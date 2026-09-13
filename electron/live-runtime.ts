@@ -45,6 +45,8 @@ export interface Resident {
   updates: LiveBatch["updates"]
   timer: ReturnType<typeof setTimeout> | null
   displayPrompt?: string
+  /** The scheduled continuation of a turn that ended on a dropped connection, while it is pending. */
+  autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }
 }
 
 export interface Dependencies {
@@ -70,6 +72,8 @@ export interface Dependencies {
    * reports; consulted before a resume so two hosts never open one store.
    */
   memory?: SessionMemory
+  /** Test override for `AUTO_CONTINUE_DELAY_MS`, the wait before Mako continues a dropped turn itself. */
+  autoContinueDelayMs?: number
 }
 
 export interface LiveAccess {

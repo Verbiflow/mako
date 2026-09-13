@@ -6,12 +6,16 @@ export type AcpTurnResult =
   | { kind: "completed"; stopReason: PromptResponse["stopReason"] }
   | { kind: "failed"; error: string }
 
+/** How much of the turn's final text is kept for a provider's reported-failure check. */
+const FINAL_TEXT_LIMIT = 4_096
+
 export class AcpPromptTurn {
   readonly id = randomUUID()
   private pending = 0
   private closed = false
   private canceled = false
   private result: AcpTurnResult | undefined
+  private final = ""
 
   private readonly settled: (result: AcpTurnResult) => void
 
@@ -21,6 +25,25 @@ export class AcpPromptTurn {
 
   get acceptsSteering(): boolean {
     return this.pending > 0 && !this.closed && !this.canceled
+  }
+
+  /**
+   * The text streamed since the turn's last tool call or thought, bounded to
+   * its tail. An agent that writes its own failure into the transcript does
+   * so as the very last chunk, so this is what a provider's `reportedFailure`
+   * reads.
+   */
+  get finalText(): string {
+    return this.final
+  }
+
+  noteText(text: string): void {
+    this.final = (this.final + text).slice(-FINAL_TEXT_LIMIT)
+  }
+
+  /** A tool call or thought means whatever text follows starts a new final segment. */
+  noteActivity(): void {
+    this.final = ""
   }
 
   cancel(): void {

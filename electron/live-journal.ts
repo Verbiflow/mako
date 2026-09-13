@@ -81,9 +81,17 @@ export const LiveRequestSchema = z.object({
     .object({
       reason: z.enum(INTERRUPTION_REASONS),
       at: z.number(),
+      autoContinue: z.object({ at: z.number() }).optional(),
     })
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+  continues: z
+    .object({
+      requestId: z.string(),
+      reason: z.enum(INTERRUPTION_REASONS),
+      auto: z.boolean(),
+    })
+    .optional(),
 })
 const MetadataSchema = z.object({
   nativeAgents: NativeAgentRosterSchema.optional(),

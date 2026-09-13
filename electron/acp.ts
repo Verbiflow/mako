@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } from "./providers/live-driver.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
+import { observeTurnUpdate, turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpInitialSelection, acpModeChange, acpSessionModes } from "./acp-access.js"
 import type { AcpLaunchOptions } from "./providers/acp-source.js"
@@ -51,6 +52,7 @@ import {
 } from "@agentclientprotocol/sdk"
 import { accountEnv } from "./accounts.js"
 import { AcpStartupWatch, stderrDetail } from "./acp-startup.js"
+import { repairSessionOptions } from "./acp-options-repair.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { trackProviderChild } from "./provider-children.js"
 import { errorMessage } from "./live-runtime.js"
@@ -327,6 +329,7 @@ export async function liveStart(
         acpObserveNativeMode(id, params.update.currentModeId)
         return
       }
+      if (live.turn) observeTurnUpdate(live.turn, params)
       forward(live, params, emit, updateState, live.state.settings)
     },
   }
@@ -408,8 +411,24 @@ export async function liveStart(
           ),
     })
     live.sessionId = session.sessionId
-    live.configOptions = session.configOptions
-    live.state.settings = acpObservedSettings(session.configOptions, session.model)
+    // An agent whose backend fetch failed can open a session with an
+    // incomplete option set; it is asked to rebuild the set before the
+    // tuning is applied, so a saved effort or context is never refused as
+    // "cannot change" for what is really a dropped connection.
+    live.configOptions = source?.degradedOptions
+      ? await watch.step("session/options", repairSessionOptions({
+          options: session.configOptions,
+          model: options.tuning?.model,
+          degraded: source.degradedOptions,
+          set: async (request) =>
+            (await connection.setSessionConfigOption({ sessionId: session.sessionId, ...request })).configOptions,
+          onAttempt: (attempt, refusal) =>
+            hostWarn("acp", "session options incomplete", {
+              harness, conversation: id, pid: child.pid, attempt, refusal: refusal ?? "rebuilt set still incomplete",
+            }),
+        }))
+      : session.configOptions
+    live.state.settings = acpObservedSettings(live.configOptions, session.model)
     const applied = await applyTuning(live, options.tuning, true)
     const policy = source?.access
     const modes = acpSessionModes(policy, session.modes)
@@ -583,11 +602,15 @@ export async function livePrompt(
     throw new Error("The session changed while preparing the prompt")
   const turn = new AcpPromptTurn((result) => {
     if (live.turn !== turn || live.state.status === "closed" || live.state.connection === "disconnected") return
-    if (result.kind === "failed")
-      hostWarn("acp", "prompt failed", { harness: live.harness, conversation: id, error: result.error })
-    update(live, result.kind === "completed"
-      ? { status: "ready", lastStop: result.stopReason }
-      : { status: "failed", lastStop: "failed", error: result.error })
+    const verdict = turnVerdict(result, turn.finalText, providerHost.acpSources.get(live.harness)?.reportedFailure)
+    if (verdict.status === "failed")
+      hostWarn("acp", result.kind === "failed" ? "prompt failed" : "prompt ended on a reported error", {
+        harness: live.harness,
+        conversation: id,
+        stop: verdict.lastStop,
+        error: verdict.error,
+      })
+    update(live, verdict)
   })
   live.turn = turn
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
