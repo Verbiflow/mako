@@ -1,3 +1,4 @@
+import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type {
   DelegateInput,
@@ -696,6 +697,11 @@ export function installMockBridge() {
         hasEarlier: start > 0,
       }
     },
+    threadBlock: async (path: string, at: { entry: number; block: number }) => {
+      const thread = await window.mako?.openThread(path)
+      const entry = thread?.entries[at.entry]
+      return entry?.kind === "assistant" ? (entry.blocks[at.block] ?? null) : null
+    },
     threadContexts: mockThreadContexts,
     accounts: async () => ({
       providers: [
@@ -974,6 +980,21 @@ export function installMockBridge() {
       "grok",
       "devin",
     ],
+    continuationPlan: async (path: string) => {
+      const thread = await window.mako?.openThread(path)
+      if (!thread)
+        return { transport: "refused", reason: "Missing mock native thread" }
+      return planContinuation(thread.ref, {
+        live: { available: true, canResume: true },
+        nativeInstalled: true,
+        running: false,
+        external: null,
+      })
+    },
+    rememberThreadMode: async (path: string, modeId: string) => {
+      const thread = await window.mako?.openThread(path)
+      return thread ? { ...thread.ref, accessMode: modeId } : null
+    },
     liveCapabilities: async () =>
       ["claude", "codex", "cursor", "grok", "devin", "opencode"].map(
         (provider) => ({ provider, canResume: true })
@@ -1648,6 +1669,11 @@ export function installMockBridge() {
     openInEditor: async () => {},
     revealPath: async () => {},
     copy: async () => {},
+    notify: async () => ({ delivered: false, reason: "unsupported" }),
+    dismissNotification: async () => {},
+    setBadgeCount: async () => {},
+    notificationPermission: async () => "unsupported",
+    requestNotificationPermission: async () => "unsupported",
     onEvent: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)

@@ -20,6 +20,8 @@ import { surfaces } from "@/extend/surfaces"
 import { tabsStore } from "@/state/tabs"
 import { search } from "@/state/search"
 import { AGENT_TAB_ID, viewer, viewerStore } from "@/state/viewer"
+import { markAllSeen, nextUnseen, openItem } from "@/state/notifications"
+import { toast } from "sonner"
 
 const openPalette = () => {
   window.dispatchEvent(new CustomEvent("mako:palette"))
@@ -74,6 +76,24 @@ const DESK_COMMANDS: DeskCommand[] = [
     section: "View",
     keys: "alt+t",
     run: () => document.querySelector<HTMLElement>("[data-sonner-toaster]")?.focus(),
+  },
+  {
+    id: "attention.next",
+    title: "Open the next thread that needs you",
+    section: "View",
+    keys: "mod+shift+u",
+    hint: "Approvals first, then failures, then answers ready to read",
+    run: () => {
+      const item = nextUnseen()
+      if (item) openItem(item)
+      else toast("Nothing is waiting for you")
+    },
+  },
+  {
+    id: "attention.clear",
+    title: "Mark every notification seen",
+    section: "View",
+    run: markAllSeen,
   },
   {
     id: "view.command-palette",
@@ -302,18 +322,6 @@ const DESK_COMMANDS: DeskCommand[] = [
     title: "Show changed files",
     section: "View",
     run: () => stage.toggle("changes"),
-  },
-  {
-    id: "view.context",
-    title: "Show context: files, skills, tokens",
-    section: "View",
-    run: () => stage.toggle("context"),
-  },
-  {
-    id: "view.history",
-    title: "Show history and rewind points",
-    section: "View",
-    run: () => stage.toggle("history"),
   },
   {
     id: "view.terminal",

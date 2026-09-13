@@ -7,8 +7,6 @@ import {
   MonitorIcon,
   FilesIcon,
   GitCompareIcon,
-  HistoryIcon,
-  LayersIcon,
   TerminalSquareIcon,
 } from "lucide-react"
 import { registerSlot, registerToolView, type ToolCall } from "@/extend/slots"
@@ -17,8 +15,6 @@ import { IdentityBadge } from "@/components/identity/identity-badge"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
 import { FileTree } from "@/components/rail/file-tree"
-import { ContextPanel } from "@/components/inspector/context-panel"
-import { HistoryPanel } from "@/components/inspector/history-panel"
 import { TerminalPanel } from "@/components/inspector/terminal-lazy"
 import {
   BashBody,
@@ -59,32 +55,18 @@ export function installBuiltins(): () => void {
       minWidth: 400,
     }),
     registerSurface({
-      id: "context",
-      label: "Context",
-      icon: LayersIcon,
-      render: ContextPanel,
-      order: 1,
-    }),
-    registerSurface({
-      id: "history",
-      label: "History",
-      icon: HistoryIcon,
-      render: HistoryPanel,
-      order: 2,
-    }),
-    registerSurface({
       id: "files",
       label: "Files",
       icon: FilesIcon,
       render: FileTree,
-      order: 3,
+      order: 1,
     }),
     registerSurface({
       id: "terminal",
       label: "Terminal",
       icon: TerminalSquareIcon,
       render: TerminalPanel,
-      order: 4,
+      order: 2,
       placement: "bottom",
       minHeight: 180,
     }),
@@ -93,10 +75,10 @@ export function installBuiltins(): () => void {
       label: "Control",
       icon: MonitorIcon,
       render: ControlPreviewPanel,
-      order: 5,
+      order: 3,
       minWidth: 360,
     }),
-    registerSurface({ id: "agents", label: "Agents", icon: GitBranchIcon, render: AgentsPanel, order: 6, minWidth: 360 }),
+    registerSurface({ id: "agents", label: "Agents", icon: GitBranchIcon, render: AgentsPanel, order: 4, minWidth: 360 }),
     // Identity, through the same slots a plugin would use.
     registerSlot("identity", "titlebar.trailing", IdentityBadge, -10),
     registerSlot("identity", "rail.footer", IdentityRow, -10),

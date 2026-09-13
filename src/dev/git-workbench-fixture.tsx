@@ -12,6 +12,8 @@ export function GitWorkbenchFixture() {
       <section className="flex min-w-0 flex-1 flex-col border-r border-hairline"><header className="border-b border-hairline p-4 text-title">Project history</header><div data-history-panel className="min-h-0 flex-1 overflow-auto"><GitLog /></div></section>
       <aside className="flex w-[480px] min-w-0 shrink-0 flex-col"><ChangesPanel /></aside>
     </main>
-    <Toaster />
+    {/* The desk mounts its toasts top-right (App.tsx); a bottom-right default
+        would cover the push row this fixture drives. */}
+    <Toaster position="top-right" />
   </WorkspaceFocusContext.Provider></TooltipProvider>
 }

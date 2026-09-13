@@ -236,10 +236,7 @@ async function transcriptAnchor() {
   const offset = () =>
     anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
   const before = offset()
-  const earlier = [...fixture.querySelectorAll("button")].find((candidate) =>
-    candidate.textContent?.includes("Show 30 earlier turns")
-  )!
-  earlier.click()
+  // Reaching the top asks for the earlier turns by itself; no control to press.
   await until(
     () => fixture.querySelector('[data-exchange="exchange-0"]') !== null
   )
@@ -247,6 +244,10 @@ async function transcriptAnchor() {
   check(
     Math.abs(offset() - before) <= 2,
     `prepending thirty real exchanges preserves the reading anchor within 2px (${Math.abs(offset() - before).toFixed(2)}px)`
+  )
+  check(
+    fixture.querySelector('[data-earlier="start"]') !== null,
+    "the beginning of the conversation is marked once nothing earlier remains"
   )
   const paragraph = fixture.querySelector("[data-preserve-height] p")!
   check(
