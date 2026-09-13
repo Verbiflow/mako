@@ -37,8 +37,10 @@ import type {
   LiveCapability,
 } from "../shared.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest } from "../shared.js"
+import type { MessageAnchor } from "./message-anchor.js"
 import type {
   Automation,
+  BlockAddress,
   BootPayload,
   Capabilities,
   ExternalEditor,
@@ -69,6 +71,7 @@ import type {
   SkillSyncTarget,
   LivePermissionResponse,
   PromptAttachment,
+  EntryBlock,
   Thread,
   ThreadContextOptions,
   ThreadFileContext,
@@ -153,6 +156,9 @@ export function createMakoBridge(transport: BridgeTransport) {
         before,
         limit
       ),
+    /** The complete block a viewer page trimmed (`outputLength`). */
+    threadBlock: (path: string, at: BlockAddress) =>
+      invokeTrustedHost<EntryBlock | null>("mako:thread-block", path, at),
     threadContexts,
     followThread: (path: string, fromByte: number) =>
       invokeTrustedHost<void>("mako:thread-follow", path, fromByte),
@@ -161,6 +167,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<string[]>("mako:thread-resumable"),
     continuationPlan: (path: string) =>
       invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
+    rememberThreadMode: (path: string, modeId: string) =>
+      invokeTrustedHost<ThreadRef | null>("mako:thread-remember-mode", path, modeId),
     continueTargets: () =>
       invokeTrustedHost<string[]>("mako:thread-continue-targets"),
     continueThreadWith: (
@@ -173,12 +181,13 @@ export function createMakoBridge(transport: BridgeTransport) {
         | { kind: "emitted"; path: string }
         | { kind: "prepared"; prompt: string; cwd: string }
       >("mako:thread-continue-with", path, harness, instruction, mode),
-    forkThread: (path: string, upto: number, harness: string) =>
+    forkThread: (path: string, upto: number, harness: string, anchor?: MessageAnchor) =>
       invokeTrustedHost<{ prompt: string; cwd: string }>(
         "mako:thread-fork",
         path,
         upto,
-        harness
+        harness,
+        anchor
       ),
     threadRun: (path: string) =>
       invokeTrustedHost<ThreadRunState | null>("mako:thread-run", path),

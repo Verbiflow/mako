@@ -37,6 +37,13 @@ export interface ExternalThreadActivity {
   since: number
   status: "active" | "needs-input" | "open"
   detail?: string
+  /**
+   * `writes` when `active` was inferred from the store being written while
+   * a process or another host holds the session, rather than reported by
+   * the process. A pause in writes is not a finished turn, so a settle back
+   * to `open` from such activity is never announced as an outcome.
+   */
+  evidence?: "writes"
 }
 
 export type HostEventBody =

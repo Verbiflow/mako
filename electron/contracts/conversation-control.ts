@@ -2,6 +2,8 @@ import { SessionSettingsSchema } from "@mako/sessions/settings"
 import { z } from "zod"
 import { LiveActionSchema } from "./live-actions.js"
 import { PromptAttachmentSchema } from "./prompt-attachments.js"
+import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
+import { MessageAnchorSchema } from "./message-anchor.js"
 export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
@@ -24,6 +26,24 @@ export const ProviderBindingSchema = z.object({
   includesBase: z.boolean(),
 })
 export type ProviderBinding = z.infer<typeof ProviderBindingSchema>
+
+/**
+ * Whether a saved binding's native session may be picked up again, with
+ * ownership and content answered separately. A record that `moved` past the
+ * binding's checkpoint is still the same unowned session — the turn Mako
+ * lost when its host died finished writing, or the CLI continued it — and a
+ * reconnect may go on from it; only a provider switch that reuses an old
+ * binding insists on `same`, because it sends context from that point.
+ */
+export type ResumeVerdict =
+  | { kind: "resumable"; record: "same" | "moved" }
+  /** Something else has the session open; `by` names it for the user. */
+  | { kind: "held"; by: string }
+  | { kind: "unavailable"; reason: string }
+
+export function resumable(verdict: ResumeVerdict, record: "same" | "moved" = "moved"): boolean {
+  return verdict.kind === "resumable" && (record === "moved" || verdict.record === "same")
+}
 export const ContextManifestSchema = z.object({
   file: z.string(),
   resources: z.array(z.string()).optional(),
@@ -43,7 +63,12 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     bindingId: z.string().uuid(),
     manifest: ContextManifestSchema,
   }),
-  z.object({ kind: z.literal("failed"), error: z.string() }),
+  z.object({
+    kind: z.literal("failed"),
+    error: z.string(),
+    /** What `error` means; see `provider-failure.ts`. */
+    failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+  }),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
 ])
 export const ContextTransferSchema = z.object({
@@ -129,6 +154,12 @@ export const ForkInputSchema = z.object({
       kind: z.literal("native"),
       index: z.number().int().nonnegative(),
       revision: z.string(),
+      /**
+       * The chosen answer's own identity. When the store moved since
+       * `revision` was read, the host finds the answer by it instead of
+       * refusing; absent, a moved store is refused as before.
+       */
+      anchor: MessageAnchorSchema.optional(),
     }),
   ]),
 })

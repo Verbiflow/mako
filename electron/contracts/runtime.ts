@@ -7,6 +7,8 @@ export const RuntimeCallSchema = z.object({
     z.object({ kind: z.literal("absent") }),
     z.object({ kind: z.literal("value"), value: z.json() }),
   ])).max(32),
+  /** 2 when a client re-issues a call the host dropped; the host records the replay. Absent on a first attempt. */
+  attempt: z.number().int().min(1).max(8).optional(),
 }).strict()
 export type RuntimeCall = z.infer<typeof RuntimeCallSchema>
 export const RUNTIME_PROTOCOL = 1

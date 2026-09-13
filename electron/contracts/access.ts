@@ -9,14 +9,8 @@
  * provider cannot implement is either synthesized by the host (it answers the
  * agent's permission requests) or absent.
  */
-export type AccessTier =
-  | "plan"
-  | "chat"
-  | "ask"
-  | "edits"
-  | "auto"
-  | "full"
-  | "deny"
+export const ACCESS_TIER_NAMES = ["plan", "chat", "ask", "edits", "auto", "full", "deny"] as const
+export type AccessTier = (typeof ACCESS_TIER_NAMES)[number]
 
 /** Who makes the tier true. */
 export type AccessEnforcement =

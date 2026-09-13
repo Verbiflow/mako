@@ -195,6 +195,13 @@ export const hostCallInputs = {
           kind: z.literal("native"),
           index: z.number(),
           revision: z.string(),
+          anchor: z
+            .object({
+              index: z.number(),
+              id: z.string().optional(),
+              at: z.string().optional(),
+            })
+            .optional(),
         }),
       ]),
     }),
@@ -570,6 +577,10 @@ export const hostCallInputs = {
     }),
   ]),
   "mako:thread-archives": z.tuple([]),
+  "mako:thread-block": z.tuple([
+    z.string(),
+    z.object({ entry: z.number(), block: z.number() }),
+  ]),
   "mako:thread-contexts": z.tuple([
     z.array(z.string()),
     z.object({ inline: z.boolean().optional() }).optional(),
@@ -595,13 +606,25 @@ export const hostCallInputs = {
   ]),
   "mako:thread-file": z.tuple([z.string(), z.string()]),
   "mako:thread-follow": z.tuple([z.string(), z.number()]),
-  "mako:thread-fork": z.tuple([z.string(), z.number()]),
+  "mako:thread-fork": z.tuple([
+    z.string(),
+    z.number(),
+    z.string(),
+    z
+      .object({
+        index: z.number(),
+        id: z.string().optional(),
+        at: z.string().optional(),
+      })
+      .optional(),
+  ]),
   "mako:thread-open": z.tuple([z.string()]),
   "mako:thread-page": z.tuple([
     z.string(),
     z.number().optional(),
     z.number().optional(),
   ]),
+  "mako:thread-remember-mode": z.tuple([z.string(), z.string()]),
   "mako:thread-resumable": z.tuple([]),
   "mako:thread-run": z.tuple([z.string()]),
   "mako:thread-stop": z.tuple([

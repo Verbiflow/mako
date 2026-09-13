@@ -9,7 +9,11 @@ import type {
  * Cross-harness threads, straight from @mako/sessions: every coding-agent
  * session on the machine, whichever app wrote it, in one shape.
  */
+import type { BlockAddress } from "@mako/sessions"
+import type { MessageAnchor } from "./message-anchor.js"
+
 export type {
+  BlockAddress,
   EntryBlock,
   Harness,
   Thread,
@@ -80,6 +84,11 @@ export type Block =
       streaming?: boolean
       attachments?: AttachmentContent[]
       details?: ToolDetail[]
+      /**
+       * Set when `text` is only the head of the output: the full length and
+       * where in the native thread the rest can be read (`threadBlock`).
+       */
+      rest?: { length: number; at: BlockAddress }
     }
   | AttachmentContent
 
@@ -102,6 +111,8 @@ export interface ChatMessage {
   isError?: boolean
   /** Set only on the in-flight assistant message. */
   streaming?: boolean
+  /** Where this message lives in a provider's store; what a fork or rewind names. */
+  anchor?: MessageAnchor
 }
 
 /**

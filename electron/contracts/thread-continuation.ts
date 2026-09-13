@@ -1,5 +1,6 @@
 import type { ThreadRef } from "@mako/sessions"
 import type { ExternalThreadActivity } from "./host-events-boot.js"
+import { heldReason } from "./session-hold.js"
 
 /**
  * How the next message reaches a catalogued conversation.
@@ -44,6 +45,11 @@ export function planContinuation(
     }
   if (ref.resumeUnavailable)
     return { transport: "handoff", provider, reason: ref.resumeUnavailable }
+  // Another Mako host has this session live. The installed app and a
+  // development host share one catalog; before the ledger named the holder,
+  // a reply from the second host ran `session/load` on a store the first
+  // still had an agent on.
+  if (ref.heldBy) return { transport: "refused", reason: heldReason(ref.heldBy) }
   if (inputs.external === "open" || ref.locked)
     return {
       transport: "refused",
