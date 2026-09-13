@@ -58,7 +58,7 @@ export type {
 } from "./codex-app-types.js"
 
 const RPC_TIMEOUT_MS = 30_000
-const MAX_STDOUT_BUFFER = 8 * 1024 * 1024
+export const MAX_STDOUT_BUFFER = 8 * 1024 * 1024
 const MAX_TOOL_OUTPUT = 32 * 1024
 const MAX_STREAM_COMPARE = 128 * 1024
 const MAX_TRACKED_ITEMS = 2048
@@ -66,20 +66,21 @@ const MAX_REPLAY_ITEMS = 1000
 
 export function consumeStdout(context: ProtocolContext, chunk: Buffer): void {
   if (context.exited) return
-  context.stdoutBuffer += context.decoder.write(chunk)
-  if (Buffer.byteLength(context.stdoutBuffer, "utf8") > MAX_STDOUT_BUFFER) {
+  // Lines are assembled chunk by chunk without rescanning what has already
+  // arrived: a multi-megabyte thread/resume reply or tool result arrives in
+  // 64 KB pieces, and re-measuring the whole buffer for each one once held
+  // the host's main thread for seconds while Codex streamed.
+  const lines = context.stdoutLines.push(chunk)
+  if (!lines) {
     context.protocol.handleFatal(
       "Codex app-server sent an oversized JSON-RPC message"
     )
     return
   }
-  let newline = context.stdoutBuffer.indexOf("\n")
-  while (newline >= 0) {
-    const line = context.stdoutBuffer.slice(0, newline).replace(/\r$/, "")
-    context.stdoutBuffer = context.stdoutBuffer.slice(newline + 1)
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, "")
     if (line.trim()) processLine(context, line)
     if (context.exited) return
-    newline = context.stdoutBuffer.indexOf("\n")
   }
 }
 

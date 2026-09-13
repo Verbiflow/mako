@@ -10,6 +10,7 @@ import { holdHostLease } from "../dist-electron/host-idle.js"
 import { join } from "node:path"
 import { webHostProxy } from "./web-dev-proxy.mjs"
 import { manualDevUpdates } from "./dev-updates.mjs"
+import { buildPreload } from "../scripts/build-preload.mjs"
 import { createHash } from "node:crypto"
 
 // ORCA: Electron-based hosts leak this. If it stays set, Electron boots as Node
@@ -72,6 +73,8 @@ const compiler = spawn(
   ],
   { stdio: "inherit", cwd: root }
 )
+// The preload is one bundled script (renderers are sandboxed); rebuild it too.
+const stopPreloadBuild = await buildPreload({ watch: true })
 
 const hostEnvironment = {
   ...process.env,
@@ -109,6 +112,7 @@ async function stop(code, signal) {
   if (compiler.exitCode === null && compiler.signalCode === null) {
     compiler.kill("SIGTERM")
   }
+  await stopPreloadBuild()
   await server.close()
   await releaseLease?.()
   await rm(cacheDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })

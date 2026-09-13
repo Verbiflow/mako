@@ -17,8 +17,25 @@ import type { JsonValue } from "./codex-app-json.js"
 
 const run = promisify(execFile)
 
-/** Runtime-only values must never leak into a provider child process. */
-const MAKO_RUNTIME_ENV = ["MAKO_BACKEND_TOKEN", "MAKO_CUA_SOCKET"]
+/**
+ * Runtime-only values must never leak into a provider child process. The
+ * host's own launch variables are included: an agent under the installed
+ * app once ran `npm run dev` and, through the inherited `MAKO_DATA_ROOT`
+ * and `MAKO_WEB_SOCKET`, attached its "profile" client to the installed
+ * app's host instead of starting one.
+ */
+const MAKO_RUNTIME_ENV = [
+  "MAKO_BACKEND_TOKEN",
+  "MAKO_CUA_SOCKET",
+  "MAKO_DATA_ROOT",
+  "MAKO_PROFILE",
+  "MAKO_HOST_ONLY",
+  "MAKO_STANDALONE",
+  "MAKO_WEB_SOCKET",
+  "MAKO_WEB_ONLY",
+  "MAKO_CLIENT_ID",
+  "VITE_DEV_SERVER_URL",
+]
 
 export function accountsRoot(): string {
   return join(homedir(), ".mako", "accounts")

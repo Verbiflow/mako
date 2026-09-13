@@ -18,7 +18,18 @@ import {
   changedLiveBlockStart,
 } from "./contracts/live-content.js"
 import { RunSnapshotsSchema } from "./contracts/workspace-snapshots.js"
-import type { LiveSnapshot } from "./contracts/live-conversations.js"
+import { INTERRUPTION_REASONS, type LiveSnapshot } from "./contracts/live-conversations.js"
+import { PROVIDER_FAILURE_KINDS } from "./contracts/provider-failure.js"
+import { ACCESS_TIER_NAMES } from "./contracts/access.js"
+import type { LiveSessionMode } from "./contracts/providers-acp.js"
+
+export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
+  id: z.string(),
+  name: z.string(),
+  access: z.enum(ACCESS_TIER_NAMES).optional(),
+  enforcement: z.enum(["provider", "host", "launch"]).optional(),
+  description: z.string().optional(),
+})
 
 const question = z.object({
   id: z.string(),
@@ -66,6 +77,13 @@ export const LiveRequestSchema = z.object({
     "interrupted",
   ]),
   error: z.string().optional(),
+  interruption: z
+    .object({
+      reason: z.enum(INTERRUPTION_REASONS),
+      at: z.number(),
+    })
+    .optional(),
+  failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
 })
 const MetadataSchema = z.object({
   nativeAgents: NativeAgentRosterSchema.optional(),
@@ -78,7 +96,10 @@ const MetadataSchema = z.object({
     cwd: z.string(),
     title: z.string().optional(),
     status: z.enum(["starting", "ready", "running", "failed", "closed"]),
-    modes: z.array(z.object({ id: z.string(), name: z.string() })),
+    // The full mode shape: a schema that kept only id and name once stripped
+    // every recovered session's tiers, so after Restart Mako the picker
+    // showed raw provider names with no order and no "Mako approves" detail.
+    modes: z.array(LiveSessionModeSchema),
     currentMode: z.string().nullable(),
     configOptions: z.array(ModelOptionSchema),
     settings: SessionSettingsSchema.optional(),
@@ -125,7 +146,19 @@ const AppendCountSchema = z.object({
   count: z.number().int().nonnegative(),
 })
 
-/** One independent journal per conversation. Only changed blocks and requests are written. */
+/**
+ * One independent journal per conversation. Only changed blocks and requests
+ * are written.
+ *
+ * WAL with `synchronous=NORMAL`: a commit appends to the WAL without an
+ * fsync, and the WAL is synced at each checkpoint. A committed transaction
+ * survives a host crash or kill either way — SQLite's durability against the
+ * application dying does not depend on this pragma — and only a power loss
+ * or kernel panic in the same instant can lose the last few commits, and the
+ * provider's own store still holds those turns. Under `FULL`
+ * every streamed flush fsynced the WAL on the host's main thread, several
+ * times a second per running conversation.
+ */
 export class LiveJournal {
   private readonly db: DatabaseSync
   private readonly appends = new Map<number, number>()
@@ -135,7 +168,7 @@ export class LiveJournal {
     this.db = new DatabaseSync(join(root, `${id}.sqlite`))
     try {
       this.db
-        .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
+        .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS base (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);

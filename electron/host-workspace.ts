@@ -1,6 +1,5 @@
 import { providerHost } from "./providers/index.js"
 import { filePreviewUrl } from "./file-previews.js"
-import { resolveMakoArtifact } from "./artifact-paths.js"
 import {
   copyFile,
   mkdir,
@@ -240,15 +239,8 @@ export class WorkspaceFiles {
    * takes longer to draw than to read. Both are reported rather than silently
    * applied — a truncated file that does not say so is a lie about the code.
    */
-  async read(
-    path: string,
-    referencedFiles: readonly string[] = []
-  ): Promise<FileContents> {
-    const granted = referencedFiles.includes(path) ? await realpath(path) : null
-    const absolute =
-      granted ??
-      (await resolveMakoArtifact(path)) ??
-      (await this.resolvePath(path))
+  async read(path: string): Promise<FileContents> {
+    const absolute = await this.resolvePath(path)
     const info = await stat(absolute)
     if (info.isDirectory()) throw new Error(`${path} is a directory`)
     const extension = extname(path).toLowerCase()
@@ -316,21 +308,21 @@ export class WorkspaceFiles {
     }
   }
 
-  /** Absolute path for a workspace-relative one, for reveal/open. */
+  /**
+   * Absolute path for a workspace-relative or absolute one, for read/open.
+   *
+   * Relative paths resolve against the git root (or the cwd); absolute paths
+   * are taken as given. There is deliberately no containment check: an agent
+   * writes reports to `/tmp`, scripts to `~/bin` and screenshots to the
+   * Desktop, then links them from its answer, and every caller here is the
+   * user's own desk reading the user's own files. Refusing those opens once
+   * meant a linked file the agent had just created could not be viewed.
+   */
   async resolvePath(path: string): Promise<string> {
     const lexicalRoot = resolve((await this.git.root()) ?? this.cwdValue)
     const root = await realpath(lexicalRoot).catch(() => lexicalRoot)
     const lexical = resolve(root, path)
-    const absolute = await realpath(lexical).catch(() => lexical)
-    const fromRoot = relative(root, absolute)
-    if (
-      fromRoot === ".." ||
-      fromRoot.startsWith(`..${sep}`) ||
-      isAbsolute(fromRoot)
-    ) {
-      throw new Error("That path is outside this workspace")
-    }
-    return absolute
+    return realpath(lexical).catch(() => lexical)
   }
 }
 

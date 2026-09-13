@@ -28,6 +28,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
+import type { SessionSettings } from "@mako/sessions/settings"
 import { accountEnv, switchSuggestion } from "./accounts.js"
 import { providerHost } from "./providers/index.js"
 import {
@@ -82,8 +83,23 @@ const preparingRuns = new Map<string, LifecycleWork>()
 const MAX_REMEMBERED_RUNS = 600
 let emit: (event: HostEvent) => void = () => {}
 
-export function bindDrivers(send: (event: HostEvent) => void): void {
+export interface NativeRunHooks {
+  /** A reply to `ref` is about to run with exactly these settings. */
+  prepared?(ref: ThreadRef, settings: SessionSettings): void
+}
+let hooks: NativeRunHooks = {}
+
+export function bindDrivers(send: (event: HostEvent) => void, runHooks: NativeRunHooks = {}): void {
   emit = send
+  hooks = runHooks
+}
+
+/** The settings a prepared command line carries, without the run's own fields. */
+export function preparedSettings(options: NativeRunOptions): SessionSettings {
+  const settings: SessionSettings = {}
+  if (options.model) settings.model = options.model
+  if (options.options && Object.keys(options.options).length) settings.options = options.options
+  return settings
 }
 
 export function threadRun(path: string): ThreadRunState | null {
@@ -158,7 +174,10 @@ export async function resumeNative(
     ref.cwd,
     runner,
     options,
-    (prepared) => runner.resume(ref.nativeId, prompt, prepared),
+    (prepared) => {
+      hooks.prepared?.(ref, preparedSettings(prepared))
+      return runner.resume(ref.nativeId, prompt, prepared)
+    },
     tuning?.captureOutput ?? false
   )
 }

@@ -1,12 +1,16 @@
 import { disconnectNativeAgents } from "./contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
-import { TransferInputSchema } from "./contracts/conversation-control.js"
+import { TransferInputSchema, resumable } from "./contracts/conversation-control.js"
 import type {
   TransferInput,
   ContextTransfer,
+  ResumeVerdict,
 } from "./contracts/conversation-control.js"
+import { heldReason } from "./contracts/session-hold.js"
+import { classifyStartFailure } from "./contracts/provider-failure.js"
 import type { LiveSnapshot } from "./shared.js"
+import { hostLog } from "./host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
 import { errorMessage } from "./live-runtime.js"
@@ -15,6 +19,13 @@ import type {
   Resident,
   ProviderConnection,
 } from "./live-runtime.js"
+
+/** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
+export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {
+  if (verdict?.kind === "held") return heldReason(verdict.by)
+  const reason = verdict?.kind === "unavailable" ? verdict.reason : "The saved binding names no session this provider can reopen."
+  return `The saved native session cannot be resumed. ${reason} No replacement session was started.`
+}
 
 /** Durable switch acceptance and provider preparation, separate from token ingestion. */
 export class LiveTransfers {
@@ -130,12 +141,14 @@ export class LiveTransfers {
     const generation = resident.generation
     let prepared: ProviderConnection | null = null
     let preparedId: string | null = null
+    let held: string | null = null
+    let reconnect = false
     try {
       this.save(resident, { ...transfer, state: { kind: "preparing" } })
       const source = resident.snapshot
       const control = this.host.control(resident)
       const currentBinding = control.bindings.find((binding) => binding.id === control.activeBindingId)
-      const reconnect = !resident.driver && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding.nativeId)
+      reconnect = !resident.driver && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding.nativeId)
       const tuning = transfer.input.tuning ?? (reconnect ? source.session.settings ?? currentBinding?.tuning : undefined)
       const bindings = control.bindings.map((binding) =>
         binding.id === control.activeBindingId && resident.driver
@@ -155,23 +168,32 @@ export class LiveTransfers {
             JSON.stringify(transfer.input.tuning) &&
           resident.connections.get(binding.id)?.session.status === "ready"
       )
+      // A reconnect goes on from the session as it is: a record that moved past
+      // the binding's checkpoint is the turn this host lost when it died, or the
+      // CLI's own continuation, and the native session carries it either way.
+      // Only ownership refuses. A provider switch that reuses an old binding
+      // sends context from that checkpoint, so it still wants the record unmoved.
+      let verdict: ResumeVerdict | undefined
       if (
         !prior &&
         this.host.dependencies.driver(transfer.input.provider)?.canResume
       ) {
         for (const binding of [...bindings].reverse()) {
           if (
-            binding.provider === transfer.input.provider &&
-            (reconnect ? binding.id === control.activeBindingId : JSON.stringify(binding.tuning) === JSON.stringify(transfer.input.tuning)) &&
-            (await this.host.dependencies.canResume?.(binding))
-          ) {
+            binding.provider !== transfer.input.provider ||
+            !(reconnect ? binding.id === control.activeBindingId : JSON.stringify(binding.tuning) === JSON.stringify(transfer.input.tuning))
+          )
+            continue
+          const candidate = await this.host.dependencies.resumeVerdict?.(binding)
+          if (reconnect) verdict = candidate
+          if (candidate && resumable(candidate, reconnect ? "moved" : "same")) {
             prior = binding
             break
           }
         }
       }
-      if (reconnect && !prior)
-        throw new Error("The saved native session cannot be resumed safely. It may still be open elsewhere or have changed. No replacement session was started.")
+      if (reconnect && !prior) throw new Error(reconnectRefusal(verdict))
+      const moved = reconnect && verdict?.kind === "resumable" && verdict.record === "moved"
       const nativeFork =
         !bindings.length &&
         control.ancestry?.nativeFork?.provider === transfer.input.provider &&
@@ -193,6 +215,12 @@ export class LiveTransfers {
       else {
         preparedId = bindingId
         this.host.bindingOwners.set(bindingId, source.session.id)
+        // Two Mako hosts share every provider store; the ledger's hold is
+        // taken before anything spawns so they never open one session twice.
+        if (prior?.nativeId) {
+          this.host.dependencies.memory?.hold(transfer.input.provider, prior.nativeId, source.session.id)
+          held = prior.nativeId
+        }
         const session = await driver.start(source.session.cwd, {
           emit: (event) => this.host.observe(event),
           mcpSnapshot: this.host.dependencies.mcpSnapshot
@@ -320,6 +348,19 @@ export class LiveTransfers {
         throw error
       }
       preparedId = null
+      held = null
+      if (moved) {
+        hostLog("transfer", "reconnected past checkpoint", {
+          conversation: source.session.id,
+          harness: transfer.input.provider,
+          nativeId: prior?.nativeId,
+        })
+        this.host.dependencies.emit({
+          type: "notice",
+          level: "info",
+          message: "This session's record moved while Mako was away: the interrupted turn finished, or the session was continued elsewhere. The saved transcript may not show that part; the session itself continues from where the provider left it.",
+        })
+      }
       // Bound idle provider processes. Evicted bindings remain in provenance and
       // receive a complete context package if selected again.
       resident.connections.delete(bindingId)
@@ -335,11 +376,16 @@ export class LiveTransfers {
         prepared?.driver.close(preparedId)
         this.host.bindingOwners.delete(preparedId)
       }
+      if (held) this.host.dependencies.memory?.release(transfer.input.provider, held, resident.snapshot.session.id)
       if (resident.generation === generation) {
         try {
           this.save(resident, {
             ...transfer,
-            state: { kind: "failed", error: errorMessage({ error }) },
+            state: {
+              kind: "failed",
+              error: errorMessage({ error }),
+              failure: classifyStartFailure(errorMessage({ error }), reconnect),
+            },
           })
         } catch (failure) {
           this.host.storageFailed(resident, { error: failure })

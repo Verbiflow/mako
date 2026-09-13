@@ -1,9 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron"
-import {
-  createMakoBridge,
-  type HostEvent,
-  type TerminalEvent,
-} from "./shared.js"
+// The bridge alone, not `shared.js`: that barrel's contract schemas are
+// values, and bundling them would put all of zod into every renderer's preload.
+import { createMakoBridge } from "./contracts/renderer-bridge.js"
+import type { HostEvent, TerminalEvent } from "./shared.js"
 
 const clientId = process.argv.find((argument) => argument.startsWith("--mako-client="))?.slice("--mako-client=".length)
 const api = createMakoBridge({

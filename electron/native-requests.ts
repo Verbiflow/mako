@@ -47,8 +47,11 @@ export class NativeRequests {
     this.dependencies = dependencies
     mkdirSync(root, { recursive: true })
     this.db = new DatabaseSync(join(root, "requests.sqlite"))
+    // NORMAL, as the live journal: durable across a host crash, and a lost
+    // last commit after a power failure can only roll a request back to a
+    // state the restart already treats as uncertain, never replay it.
     this.db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, payload TEXT NOT NULL)"
+      "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, payload TEXT NOT NULL)"
     )
     for (const request of this.list())
       if (request.status === "dispatching" || request.status === "queued")

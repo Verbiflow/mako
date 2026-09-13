@@ -3,7 +3,7 @@ import { handleQuit } from "./background-lifecycle.js"
 import { RUNTIME_PROTOCOL } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo } from "./runtime-connection.js"
-import { lstat, mkdir, unlink } from "node:fs/promises"
+import { lstat, mkdir, stat, unlink } from "node:fs/promises"
 import { rmSync } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { resolveExecutable } from "./executable.js"
@@ -13,20 +13,27 @@ import { ControlPreviews } from "./control-previews.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import type { DesktopNotification } from "./contracts/notifications.js"
 import { RelayConversations } from "./relay-conversations.js"
-import { nativeCheckpoint, canResumeBinding } from "./native-continuation.js"
+import { nativeCheckpoint, resumeVerdict } from "./native-continuation.js"
 import { createContinuationPlanner } from "./continuation.js"
 import { NativeRequests } from "./native-requests.js"
-import type { LiveCapability, NativeRequestInput } from "./shared.js"
+import type {
+  BlockAddress,
+  LiveCapability,
+  NativeRequestInput,
+} from "./shared.js"
 import { startConversationMcp } from "./conversation-mcp.js"
 import { BrowserService } from "./browser-service.js"
 import { localBrowsers } from "./browser-discovery.js"
 import { DeskBrowser } from "./desk-browser.js"
 import { deskPageForWindow } from "./desk-browser-window.js"
 import { deskUrlPolicy } from "./desk-browser-policy.js"
+import { DESK_BACKGROUND, deskUrl, privilegedSchemes } from "./desk-scheme.js"
+import { compileCacheStatus } from "./compile-cache.js"
+import { serveDesk } from "./desk-protocol.js"
+import { adoptDeskOrigin } from "./renderer-storage.js"
 import { prepareBrowserExtension } from "./browser-extension-setup.js"
 import { startControlService } from "./control-service.js"
-import type { DelegateInput, ForkInput, TransferInput } from "./shared.js"
-import { attachmentFiles } from "@mako/sessions"
+import type { DelegateInput, ForkInput, MessageAnchor, TransferInput } from "./shared.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { WorkspaceGit } from "./host-git.js"
 import { resolveFilePreview } from "./file-previews.js"
@@ -35,6 +42,7 @@ import { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { RewindInput } from "./contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "./contracts/live-actions.js"
 import { LiveConversations } from "./live-conversations.js"
+import { SessionMemory, sessionMemoryPath } from "./session-memory.js"
 import { ThreadArchives } from "./thread-archives.js"
 import { ThreadLifecycle } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
@@ -55,7 +63,7 @@ import {
 } from "electron"
 import { watch } from "node:fs"
 import { homedir, hostname } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { AgentHost } from "./host.js"
 import {
@@ -103,16 +111,21 @@ import { WorkspaceClients } from "./workspace-clients.js"
 import { hostClient, withHostClient } from "./host-client.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
 import { workspacePreviewPath } from "./workspace-preview.js"
+import { revealAction } from "./reveal-policy.js"
 import {
   daemonStatus,
   emitThreadAs,
   followThread,
   threadsReady,
   threadActivitySnapshot,
+  installSessionMemory,
   installThreads,
   listThreads,
+  rememberThreadMode,
   openThread,
   pageThread,
+  threadBlock,
+  viewThreadPage,
   readThreadFile,
   stopThreads,
   transcriptArtifactFor,
@@ -204,19 +217,16 @@ import type {
   ThreadContextOptions,
 } from "./shared.js"
 
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: "mako-file",
-    privileges: {
-      secure: true,
-      standard: true,
-      supportFetchAPI: true,
-      stream: true,
-    },
-  },
-])
+protocol.registerSchemesAsPrivileged(privilegedSchemes())
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+/** The renderer bundle, served on `mako-app://desk/` when not on Vite. */
+const rendererBundle = join(__dirname, "../dist")
+/**
+ * One classic script for every renderer. Renderers run sandboxed, so the
+ * preload cannot import; `scripts/build-preload.mjs` bundles it.
+ */
+const PRELOAD = join(__dirname, "preload.cjs")
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
 /**
  * One data directory per instance. The single-instance lock lives in
@@ -236,6 +246,35 @@ else if (instanceProfile)
   app.setPath("userData", `${app.getPath("userData")}-${instanceProfile}`)
 installHostLog(join(app.getPath("userData"), "logs", "host.log"))
 const providerChildren = installProviderChildren(app.getPath("userData"))
+/** How another host's refusal names this one. */
+function sessionMemoryLabel(): string {
+  if (instanceProfile) return `Mako's ${instanceProfile} host`
+  if (resolve(app.getPath("userData")) !== resolve(defaultUserData))
+    return `another Mako host (${basename(app.getPath("userData"))})`
+  return app.isPackaged ? "the installed Mako app" : "Mako's default host"
+}
+/**
+ * Per-user, shared by every host on this Mac: what each native session last
+ * ran as and which host has it live. Without it a thread started in the
+ * installed app read "Model not recorded" in a development host and both
+ * could open one store.
+ */
+const sessionMemory = openSessionMemory()
+function openSessionMemory(): SessionMemory | null {
+  try {
+    const memory = new SessionMemory(sessionMemoryPath(), {
+      pid: process.pid,
+      startedAt: Math.round(performance.timeOrigin),
+      label: sessionMemoryLabel(),
+    })
+    memory.startHeartbeat()
+    return memory
+  } catch (error) {
+    hostWarn("memory", "ledger unavailable", { error: error instanceof Error ? error.message : String(error) })
+    return null
+  }
+}
+installSessionMemory(sessionMemory)
 hostLog("host", "starting", {
   pid: process.pid,
   version: app.getVersion(),
@@ -244,6 +283,7 @@ hostLog("host", "starting", {
   electron: process.versions.electron ?? "",
   node: process.versions.node ?? "",
   dataRoot: app.getPath("userData"),
+  compileCache: compileCacheStatus(),
 })
 if (!app.requestSingleInstanceLock()) {
   console.error(
@@ -296,12 +336,13 @@ const deskBrowser = new DeskBrowser({
       width: 1600,
       height: 1000,
       show: false,
+      backgroundColor: DESK_BACKGROUND,
       enableLargerThanScreen: true,
       webPreferences: {
-        preload: join(__dirname, "preload.js"),
+        preload: PRELOAD,
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
         // Agents read this window through the protocol; it must keep painting.
         backgroundThrottling: false,
       },
@@ -587,13 +628,13 @@ async function createWindow() {
     // beside it. At y:18 it sat five pixels low and the whole row read as
     // broken.
     trafficLightPosition: { x: 14, y: 13 },
-    backgroundColor: "#140f0d",
+    backgroundColor: DESK_BACKGROUND,
     show: false,
     webPreferences: {
-      preload: join(__dirname, "preload.js"),
+      preload: PRELOAD,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       // Agent processes live in the host; a hidden renderer can sleep safely.
       backgroundThrottling: true,
     },
@@ -683,7 +724,7 @@ async function createWindow() {
       process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"
     )
   } else {
-    await window.loadFile(join(__dirname, "../dist/index.html"))
+    await window.loadURL(deskUrl())
   }
 }
 
@@ -707,16 +748,12 @@ async function loadDesk(
     )
     url.searchParams.set("preview", previewId)
     await target.loadURL(url.href)
-  } else
-    await target.loadFile(join(__dirname, "../dist/index.html"), {
-      query: { preview: previewId },
-    })
+  } else await target.loadURL(deskUrl({ preview: previewId }))
 }
 const isDeskUrl = deskUrlPolicy({
   devServerUrl: isDev
     ? (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173")
     : null,
-  indexFile: isDev ? null : join(__dirname, "../dist/index.html"),
 })
 
 async function openPreviewWindow(): Promise<void> {
@@ -726,12 +763,13 @@ async function openPreviewWindow(): Promise<void> {
     height: 860,
     minWidth: 640,
     minHeight: 540,
+    backgroundColor: DESK_BACKGROUND,
     show: false,
     webPreferences: {
-      preload: join(__dirname, "preload.js"),
+      preload: PRELOAD,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       backgroundThrottling: true,
     },
   })
@@ -748,10 +786,7 @@ async function openPreviewWindow(): Promise<void> {
       )
       url.searchParams.set("preview", id)
       await preview.loadURL(url.href)
-    } else
-      await preview.loadFile(join(__dirname, "../dist/index.html"), {
-        query: { preview: id },
-      })
+    } else await preview.loadURL(deskUrl({ preview: id }))
     if (!app.commandLine.hasSwitch("background")) {
       await app.dock?.show()
       preview.show()
@@ -804,9 +839,15 @@ function bindIpc() {
   )
   handle("mako:reveal", (_e, path: string) =>
     withHost(async (h) => {
-      // Paths from the UI are workspace-relative; open with the user's default
-      // editor rather than only revealing the file in Finder.
+      // Documents open in their default app; anything the default handler
+      // would run (bundles, executables, `.command`) is only shown in Finder.
+      // The path may come from anywhere, including an agent's answer.
       const absolute = await h.resolvePath(path)
+      const info = await stat(absolute)
+      if (revealAction(absolute, info) === "reveal") {
+        shell.showItemInFolder(absolute)
+        return
+      }
       const failure = await shell.openPath(absolute)
       if (failure) shell.showItemInFolder(absolute)
     })
@@ -848,7 +889,10 @@ function bindIpc() {
   handle(
     "mako:thread-page",
     (_e, path: string, before?: number, limit?: number) =>
-      pageThread(path, before, limit)
+      viewThreadPage(path, before, limit)
+  )
+  handle("mako:thread-block", (_e, path: string, at: BlockAddress) =>
+    threadBlock(path, at)
   )
   handle(
     "mako:thread-contexts",
@@ -895,6 +939,9 @@ function bindIpc() {
   })
   handle("mako:thread-continuation-plan", (_event, path: string) =>
     continuation.plan(path)
+  )
+  handle("mako:thread-remember-mode", (_event, path: string, modeId: string) =>
+    rememberThreadMode(path, modeId)
   )
   /**
    * Continue a conversation on a *different* harness: render the handoff and
@@ -1263,35 +1310,10 @@ function bindIpc() {
   handle("mako:read-live-file", (_event, id: string, path: string) => {
     const snapshot = liveConversations.snapshot(id)
     if (!snapshot) throw new Error("That conversation is unavailable")
-    const manifests = [
-      ...(snapshot.control?.transfers.flatMap((transfer) =>
-        transfer.state.kind === "accepted" ? [transfer.state.manifest] : []
-      ) ?? []),
-      ...(snapshot.control?.merges.map((merge) => merge.manifest) ?? []),
-      ...snapshot.requests.flatMap((request) => request.context ?? []),
-    ]
-    const files = [
-      ...manifests.flatMap((manifest) => [
-        manifest.file,
-        ...(manifest.resources ?? []),
-      ]),
-      ...attachmentFiles(snapshot.base?.entries ?? []),
-      ...snapshot.blocks.flatMap((block) => {
-        const attachments =
-          block.type === "attachment"
-            ? [block.attachment]
-            : block.type === "tool" || block.type === "user"
-              ? (block.attachments ?? [])
-              : []
-        return attachments.flatMap((attachment) =>
-          attachment.source.kind === "file" ? [attachment.source.path] : []
-        )
-      }),
-    ]
     return new WorkspaceFiles(
       snapshot.session.cwd,
       new WorkspaceGit(snapshot.session.cwd)
-    ).read(path, files)
+    ).read(path)
   })
   handle("mako:live-snapshot", (_event, id: string) =>
     liveConversations.snapshot(id)
@@ -1366,13 +1388,15 @@ function bindIpc() {
    * native session on the chosen harness — both lines stay open, and the
    * fork can wear a different agent than the original.
    */
-  handle("mako:thread-fork", async (_e, path: string, upto: number) => {
+  // The harness is the renderer's choice of where the fork runs; the bundle
+  // itself is provider-neutral, so it is accepted here and not read.
+  handle("mako:thread-fork", async (_e, path: string, upto: number, _harness: string, anchor?: MessageAnchor) => {
     const [thread, artifact] = await Promise.all([
       openThread(path),
       transcriptArtifactFor(
         path,
         "Start a new branch after the final answer in this bundle.",
-        upto
+        anchor ?? { index: upto }
       ),
     ])
     if (!thread || !artifact)
@@ -1535,6 +1559,12 @@ app.whenReady().then(async () => {
   await ensureBackendConnectionEnvironment()
   trace("backend configured")
   protocol.handle("mako-file", readFilePreview)
+  if (!isDev) {
+    serveDesk(rendererBundle)
+    const moved = await adoptDeskOrigin({ userData: app.getPath("userData"), dist: rendererBundle })
+    if (moved.kind === "failed") hostWarn("renderer", "storage move failed", { error: moved.error })
+    else if (moved.kind === "moved") hostLog("renderer", "storage moved", { origin: "mako-app://desk", entries: moved.entries })
+  }
   terminalClient = new TerminalDaemonClient(
     join(__dirname, "terminal-daemon.js"),
     join(app.getPath("userData"), "terminal"),
@@ -1551,6 +1581,7 @@ app.whenReady().then(async () => {
   powerMonitor.on("resume", emitTerminalWake)
   powerMonitor.on("unlock-screen", emitTerminalWake)
   liveConversations = new LiveConversations({
+    memory: sessionMemory ?? undefined,
     mcpSnapshot: async (cwd) => {
       await ensureMakoLocalControl().catch(() => null)
       return discoverMcpRegistry(cwd, app.getAppPath())
@@ -1571,11 +1602,11 @@ app.whenReady().then(async () => {
         (ref) =>
           ref.harness === session.harness && ref.nativeId === session.nativeId
       )?.path,
-    canResume: (binding) => {
+    resumeVerdict: (binding) => {
       const driver = providerHost.liveDrivers.get(binding.provider)
-      return driver?.canResumeBinding
-        ? driver.canResumeBinding(binding)
-        : canResumeBinding(
+      return driver?.resumeVerdict
+        ? driver.resumeVerdict(binding)
+        : resumeVerdict(
             binding,
             providerHost.processProbes.get(binding.provider)
           )
@@ -1724,7 +1755,12 @@ app.whenReady().then(async () => {
   trace("updates ready")
   installThreads(emit)
   trace("catalog starting")
-  bindDrivers(emit)
+  bindDrivers(emit, {
+    // A native reply runs with exactly these settings; the ledger keeps them
+    // for a store that records none, the way a live session's report is kept.
+    prepared: (ref, settings) =>
+      sessionMemory?.remember(ref.harness, ref.nativeId, { settings }),
+  })
   trace("drivers ready")
   bindAutomations(emit, async (cwd, prompt) => {
     const resumable = new Set(resumableHarnesses())
@@ -1794,6 +1830,7 @@ app.on("before-quit", (event) =>
       nativeRequests?.stop()
       conversationMcp?.close()
       liveConversations?.stop()
+      sessionMemory?.close()
       threadArchives?.close()
       void workspaceClients.dispose()
       // After the ordinary shutdown, tell the dev launcher to bring us back.

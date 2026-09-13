@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { stat } from "node:fs/promises"
-import type { ProviderBinding } from "./contracts/conversation-control.js"
+import { resumable, type ProviderBinding, type ResumeVerdict } from "./contracts/conversation-control.js"
 import type { ProviderProcessProbe } from "./providers/process-probe.js"
 
 /** Streaming fingerprints cover the entire native record without retaining it in memory. */
@@ -26,22 +26,41 @@ export async function nativeCheckpoint(
   }
 }
 
-export async function canResumeBinding(
+/**
+ * The generic answer for a provider without its own resume policy: the
+ * provider's process probe says who has the session, the record's hash says
+ * whether it moved since the binding's checkpoint.
+ */
+export async function resumeVerdict(
   binding: ProviderBinding,
   probe: ProviderProcessProbe | undefined
-): Promise<boolean> {
-  if (!binding.nativeId || !binding.path || !binding.checkpoint) return false
-  if (!probe) return false
+): Promise<ResumeVerdict> {
+  if (!binding.nativeId || !binding.path || !binding.checkpoint)
+    return { kind: "unavailable", reason: "The saved binding has no native record to resume from." }
+  if (!probe)
+    return { kind: "unavailable", reason: "Whether another process has this session open cannot be checked for this provider." }
   const activity = await probe
     .probe(AbortSignal.timeout(probe.timeoutMs ?? 6_000))
     .catch(() => ({ kind: "unavailable" as const }))
+  if (activity.kind !== "available")
+    return { kind: "unavailable", reason: "Whether another process has this session open could not be checked." }
   if (
-    activity.kind !== "available" ||
     activity.sessions.some(
       (session) =>
         session.nativeId === binding.nativeId || session.path === binding.path
     )
   )
-    return false
-  return (await nativeCheckpoint(binding.path)) === binding.checkpoint
+    return { kind: "held", by: `another ${binding.provider} process` }
+  const current = await nativeCheckpoint(binding.path)
+  if (current === undefined)
+    return { kind: "unavailable", reason: "The native record is missing or changed while it was being read." }
+  return { kind: "resumable", record: current === binding.checkpoint ? "same" : "moved" }
+}
+
+/** The strict form: unowned and unchanged since the binding's checkpoint. */
+export async function canResumeBinding(
+  binding: ProviderBinding,
+  probe: ProviderProcessProbe | undefined
+): Promise<boolean> {
+  return resumable(await resumeVerdict(binding, probe), "same")
 }

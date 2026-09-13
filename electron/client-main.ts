@@ -9,7 +9,11 @@ import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { ensureRuntime, runtimeDataRoot } from "./runtime-service.js"
 import { invokeRuntime, runtimeFile, subscribeRuntime } from "./runtime-connection.js"
 import { invokeWithRecovery, type RecoveryLink } from "./runtime-retry.js"
+import { HOST_OUTAGE_MESSAGE } from "./contracts/host-connection.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
+import { DESK_BACKGROUND, deskUrl, privilegedSchemes } from "./desk-scheme.js"
+import { serveDesk } from "./desk-protocol.js"
+import { adoptDeskOrigin } from "./renderer-storage.js"
 
 const directory = dirname(fileURLToPath(import.meta.url))
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
@@ -18,11 +22,12 @@ const flavor = process.env.MAKO_CLIENT_ID ?? (isDev ? `dev-${createHash("sha256"
 if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(flavor)) throw new Error("Invalid Mako client identity")
 const uiRoot = `${dataRoot}-ui-${flavor}`
 app.setPath("userData", uiRoot)
-protocol.registerSchemesAsPrivileged([{ scheme: "mako-file", privileges: { secure: true, standard: true, supportFetchAPI: true, stream: true } }])
+protocol.registerSchemesAsPrivileged(privilegedSchemes())
+const rendererBundle = join(directory, "../dist")
 
 const launch = { dataRoot, executable: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), env: process.env }
 const clients = new Map<number, { id: string; connected: boolean; link: RecoveryLink; dispose(): void }>()
-const DISCONNECTED_MESSAGE = "Reconnecting to the shared Mako host. Unconfirmed messages will not be resent automatically."
+const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
 let shuttingDown = false
 let pendingCommand: "app.quit" | "app.updates" | null = null
@@ -66,9 +71,22 @@ async function openWindow(preview = false) {
   const id = randomUUID()
   const window = new BrowserWindow({
     title: isDev ? "Mako Dev" : "Mako", width: 1440, height: 960, minWidth: 640, minHeight: 540,
+    // Painted before the renderer is: a resize or the first frame never flashes white.
+    backgroundColor: DESK_BACKGROUND,
     show: false, titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 },
-    webPreferences: { preload: join(directory, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: false, additionalArguments: [`--mako-client=${id}`] },
+    webPreferences: { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`] },
   })
+  // Shown on the first paint rather than on load: `loadURL` settles on
+  // `did-finish-load`, which can precede the first frame, and `--background`
+  // keeps test windows hidden until something activates them explicitly.
+  let shown = false
+  const reveal = () => {
+    if (shown || window.isDestroyed() || app.commandLine.hasSwitch("background")) return
+    shown = true
+    window.show()
+    window.maximize()
+  }
+  window.once("ready-to-show", reveal)
   let subscription: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let seen = false
@@ -140,8 +158,8 @@ async function openWindow(preview = false) {
     const url = new URL(process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173")
     for (const [key, value] of query) url.searchParams.set(key, value)
     await window.loadURL(url.href)
-  } else await window.loadFile(join(directory, "../dist/index.html"), { query: Object.fromEntries(query) })
-  if (!app.commandLine.hasSwitch("background")) { window.show(); window.maximize() }
+  } else await window.loadURL(deskUrl(Object.fromEntries(query)))
+  reveal()
   return window
 }
 
@@ -166,6 +184,11 @@ async function start() {
   await app.whenReady()
   powerMonitor.on("shutdown", () => { shuttingDown = true })
   protocol.handle("mako-file", (request) => runtimeFile(runtime.socket, request))
+  if (!isDev) {
+    serveDesk(rendererBundle)
+    const moved = await adoptDeskOrigin({ userData: uiRoot, dist: rendererBundle })
+    if (moved.kind === "failed") console.warn(`[mako-client] renderer storage move failed: ${moved.error}`)
+  }
   for (const [channel, schema] of Object.entries(hostCallInputs)) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
       const args = schema.parse(raw)
@@ -205,7 +228,7 @@ async function start() {
         return result.canceled ? null : result.filePaths[0]
       }
       if (!runtime.info.methods.includes(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
-      const result = await invokeWithRecovery(channel, () => invokeRuntime(runtime.socket, client.id, channel, args), client.link)
+      const result = await invokeWithRecovery(channel, (attempt) => invokeRuntime(runtime.socket, client.id, channel, args, attempt), client.link)
       if (channel === "mako:boot") {
         if (pendingCommand) { event.sender.send("mako:event", { type: "app-command", command: pendingCommand }); pendingCommand = null }
         return { ...z.record(z.string(), z.json()).parse(result), sourceRoot: isDev ? app.getAppPath() : undefined }

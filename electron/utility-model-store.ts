@@ -38,18 +38,34 @@ const credentialSchema = z.object({
   apiKey: apiKeySchema.optional(),
 })
 
+export interface UtilityModelStoreOptions {
+  /**
+   * Work the directory needs before it is read, such as moving a profile's
+   * files into the shared store. Every read and write waits for it; a failure
+   * surfaces on the first call rather than being swallowed at construction.
+   */
+  ready?: Promise<unknown>
+}
+
 export class UtilityModelStore {
   private readonly writing = new Set<UtilityProvider>()
 
   private readonly directory: string
   private readonly encryption: UtilityKeyEncryption
+  private readonly ready: Promise<unknown>
 
-  constructor(directory: string, encryption: UtilityKeyEncryption) {
+  constructor(
+    directory: string,
+    encryption: UtilityKeyEncryption,
+    options: UtilityModelStoreOptions = {}
+  ) {
     this.directory = directory
     this.encryption = encryption
+    this.ready = options.ready ?? Promise.resolve()
   }
 
   async settings(): Promise<UtilityModelSettings> {
+    await this.ready
     const connections: UtilityConnection[] = []
     const issues: UtilityModelSettings["issues"] = []
     for (const { id } of utilityProviders) {
@@ -75,6 +91,7 @@ export class UtilityModelStore {
   }
 
   async load(provider: UtilityProvider) {
+    await this.ready
     const path = this.path(provider)
     try {
       const info = await stat(path)
@@ -113,6 +130,7 @@ export class UtilityModelStore {
   }
 
   async connect(input: UtilityConnectionInput): Promise<UtilityConnection> {
+    await this.ready
     const connection = parseConnection(input)
     if (!this.encryption.available())
       throw new Error(
@@ -148,6 +166,7 @@ export class UtilityModelStore {
   }
 
   async disconnect(provider: UtilityProvider): Promise<void> {
+    await this.ready
     this.lock(provider)
     try {
       await rm(this.path(provider), { force: true })

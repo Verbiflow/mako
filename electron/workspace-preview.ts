@@ -6,7 +6,9 @@ export function workspacePreviewPath(requestUrl: string): string | null {
     return null
   }
   if (url.protocol !== "mako-file:" || url.host !== "workspace") return null
-  const encoded = url.pathname.slice(1).split("/")
+  // `mako-file://workspace//Users/…` is an absolute path; one slash is relative.
+  const absolute = url.pathname.startsWith("//")
+  const encoded = url.pathname.slice(absolute ? 2 : 1).split("/")
   const parts: string[] = []
   try {
     for (const value of encoded) {
@@ -26,5 +28,5 @@ export function workspacePreviewPath(requestUrl: string): string | null {
   } catch {
     return null
   }
-  return parts.join("/")
+  return (absolute ? "/" : "") + parts.join("/")
 }

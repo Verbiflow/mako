@@ -9,6 +9,7 @@ import { z } from "zod"
 import type { HostEvent, TerminalEvent } from "./shared.js"
 import { RuntimeCallSchema, type RuntimeInfo } from "./contracts/runtime.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
+import { hostLog } from "./host-log.js"
 
 /** Sent to every call still waiting when the host closes, so no client is left to infer a reset. */
 const FAREWELL = JSON.stringify({ ok: false, error: HOST_RECONNECTING_MESSAGE, code: HOST_RESTARTING_CODE })
@@ -119,7 +120,10 @@ export async function startWebHost(
     response.once("finish", () => pending.delete(response))
     response.once("close", () => pending.delete(response))
     void readRequest(request)
-      .then(async ({ channel, args }) => {
+      .then(async ({ channel, args, attempt }) => {
+        // A replayed mutation is answered by its id; the line is the receipt
+        // that a dropped call was settled rather than repeated.
+        if (attempt !== undefined && attempt > 1) hostLog("rpc", "replayed call", { channel, client: clientId, attempt })
         const encoded = await invoke(
           channel,
           args.map((arg) => (arg.kind === "absent" ? undefined : arg.value)),

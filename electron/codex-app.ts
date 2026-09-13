@@ -12,7 +12,6 @@ import type { ConversationTools, ProviderStartOptions } from "./providers/live-d
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
-import { StringDecoder } from "node:string_decoder"
 import { app } from "electron"
 import { accountEnv } from "./accounts.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
@@ -29,8 +28,10 @@ import {
 import { codexAccessModes, codexAccessTier, codexTurnAccess } from "./providers/codex/access.js"
 import type { AccessTier } from "./contracts/access.js"
 import { boundedText, type JsonObject } from "./codex-app-json.js"
+import { LineAssembler } from "@mako/sessions"
 import {
   consumeStdout,
+  MAX_STDOUT_BUFFER,
   replayHistory,
   rpcRequest,
   sendRpc,
@@ -73,9 +74,8 @@ type Live = {
   pending: Map<string, PendingRpc>
   serverRequests: Map<string, PendingServerRequest>
   items: Map<string, ItemTracker>
-  stdoutBuffer: string
+  stdoutLines: LineAssembler
   stderrBuffer: string
-  decoder: StringDecoder
   agents: CodexAgents
   protocol: ProtocolCallbacks
   startupTimer: ReturnType<typeof setTimeout> | null
@@ -150,9 +150,8 @@ export async function codexAppStart(
     pending: new Map(),
     serverRequests: new Map(),
     items: new Map(),
-    stdoutBuffer: "",
+    stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
-    decoder: new StringDecoder("utf8"),
     agents: new CodexAgents(),
     protocol: {
       handleFatal: (message) => protocolFatal(live, message),
@@ -469,8 +468,7 @@ function disposeLive(live: Live, error: Error): void {
   live.pending.clear()
   live.serverRequests.clear()
   live.items.clear()
-  live.stdoutBuffer = ""
-  live.decoder.end()
+  live.stdoutLines = new LineAssembler(MAX_STDOUT_BUFFER)
 }
 
 function clearStartupTimer(live: Live): void {

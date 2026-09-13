@@ -1,6 +1,6 @@
 import { request } from "node:http"
-import { StringDecoder } from "node:string_decoder"
 import { setTimeout as delay } from "node:timers/promises"
+import { LineAssembler } from "@mako/sessions"
 import { RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, type RuntimeCall } from "./contracts/runtime.js"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import type { z } from "zod"
@@ -137,8 +137,12 @@ export async function runtimeInfo(socket: string): Promise<RuntimeInfo | null> {
   throw new RuntimeDisconnectedError(false)
 }
 
-export async function invokeRuntime(socket: string, client: string, channel: string, args: unknown[]) {
-  const encoded = JSON.stringify({ channel, args: args.map((value) => value === undefined ? { kind: "absent" } : { kind: "value", value }) })
+export async function invokeRuntime(socket: string, client: string, channel: string, args: unknown[], attempt = 1) {
+  const encoded = JSON.stringify({
+    channel,
+    args: args.map((value) => value === undefined ? { kind: "absent" } : { kind: "value", value }),
+    attempt: attempt > 1 ? attempt : undefined,
+  })
   const body = RuntimeCallSchema.parse(JSON.parse(encoded))
   let reply: z.output<typeof RuntimeReplySchema>
   try {
@@ -159,17 +163,12 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
   let ended = false
   const end = () => { if (!ended && !closed) { ended = true; disconnected() } }
   const req = request({ socketPath: socket, path: "/events", method: "POST", headers: { "x-mako-window": client } }, (response) => {
-    const decoder = new StringDecoder("utf8")
-    let pending = ""
+    const lines = new LineAssembler(32 * 1024 * 1024)
     if (response.statusCode !== 200) { response.destroy(); end(); return }
     response.on("data", (chunk: Buffer) => {
-      pending += decoder.write(chunk)
-      if (pending.length > 32 * 1024 * 1024) { response.destroy(); end(); return }
-      for (;;) {
-        const newline = pending.indexOf("\n")
-        if (newline < 0) break
-        const line = pending.slice(0, newline)
-        pending = pending.slice(newline + 1)
+      const complete = lines.push(chunk)
+      if (!complete) { response.destroy(); end(); return }
+      for (const line of complete) {
         if (!line.trim()) continue
         try { receive(RuntimePacketSchema.parse(JSON.parse(line))) }
         catch { response.destroy(); end(); return }

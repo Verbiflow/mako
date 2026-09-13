@@ -8,6 +8,7 @@ import {
   prepareMacosTerminalLogin,
   wrapMacosTerminalLogin,
 } from "./macos-terminal-login.js"
+import { childProcessEnv } from "./accounts-common.js"
 import { killTerminalProcessGroups } from "./terminal-process-groups.js"
 import type { TerminalSession } from "./shared.js"
 import {
@@ -248,8 +249,10 @@ async function createSession(
   }
   const now = Date.now()
   const id = randomUUID()
+  // A shell in Mako's terminal is the user's, not the host's: it must not
+  // inherit the data root and socket the host was launched with.
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...childProcessEnv(process.env),
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
   }

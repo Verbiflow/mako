@@ -217,9 +217,12 @@ export class LiveChildren {
         ? "needs-permission"
         : request?.status === "completed"
           ? "completed"
-          : request?.status === "interrupted"
+          : // A Stop is the user's cancel; a turn Mako's own exit cut short
+            // did not do its task, and the parent must be free to delegate again.
+            request?.status === "interrupted" && (request.interruption?.reason ?? "stopped") === "stopped"
             ? "canceled"
             : request?.status === "failed" ||
+                request?.status === "interrupted" ||
                 request?.status === "uncertain" ||
                 resident.snapshot.session.connection === "disconnected"
               ? "failed"

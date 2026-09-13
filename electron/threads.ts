@@ -1,4 +1,4 @@
-import { attachmentFiles, threadIdentity } from "@mako/sessions"
+import { threadIdentity } from "@mako/sessions"
 /**
  * The machine's sessions, whoever wrote them.
  *
@@ -18,9 +18,11 @@ import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import { MessageChannel, Worker } from "node:worker_threads"
 import { app } from "electron"
 import {
   connectDaemon,
+  connectDaemonPort,
   daemonMemoryUnsafe,
   defaultCatalog,
   renderTranscript,
@@ -30,16 +32,23 @@ import {
   type DaemonClient,
   type DaemonEvent,
   type DaemonStats,
+  type BlockAddress,
+  type EntryBlock,
   type SessionCatalog,
   type Thread,
   type ThreadEntry,
   type ThreadPage,
+  type ThreadPageOptions,
   type ThreadRef,
 } from "@mako/sessions"
+import type { CatalogWorkerData, CatalogWorkerMessage } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
+import { hostLog, hostWarn } from "./host-log.js"
 import { WorkspaceGit } from "./host-git.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { annotate as annotateLineage, loadLineage } from "./lineage.js"
+import type { SessionMemory } from "./session-memory.js"
+import { resolveAnchor, type MessageAnchor } from "./contracts/message-anchor.js"
 import { tmpdir } from "node:os"
 
 const TEMPORARY_ROOTS = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]
@@ -63,12 +72,44 @@ function withWorkspacePresence(ref: ThreadRef): ThreadRef {
   return held.missing ? { ...ref, workspaceMissing: true } : ref
 }
 
+let sessionMemory: SessionMemory | null = null
+
+/** The per-user ledger every served ref is read through. */
+export function installSessionMemory(memory: SessionMemory | null): void {
+  sessionMemory = memory
+}
+
 function annotate(ref: ThreadRef): ThreadRef {
-  return withWorkspacePresence(annotateLineage(ref))
+  const known = sessionMemory ? sessionMemory.annotate(ref) : ref
+  return withWorkspacePresence(annotateLineage(known))
+}
+
+/**
+ * The access mode the next session of a catalogued thread should start in.
+ * A choice made while viewing a thread that is not live belongs to the
+ * thread, not only to the provider, and to every host that serves it; the
+ * refreshed ref is announced so the composer reads it back at once.
+ */
+export function rememberThreadMode(path: string, modeId: string): ThreadRef | null {
+  const ref = daemon
+    ? mirror.get(path)
+    : catalog?.list().find((candidate) => candidate.path === path)
+  if (!ref) return null
+  sessionMemory?.remember(ref.harness, ref.nativeId, { modeId })
+  const refreshed = annotate(ref)
+  emit({ type: "thread-ref", ref: refreshed })
+  return refreshed
 }
 import { ProviderActivityEngine } from "./provider-activity-engine.js"
 import { providerHost } from "./providers/index.js"
 import type { ProviderActivitySession } from "./providers/process-probe.js"
+import {
+  type ActivityIndex,
+  WRITE_ACTIVE_MS,
+  deriveActivity,
+  indexActivityRefs,
+  sameActivity,
+} from "./thread-activity.js"
 import {
   daemonLoginEnabled,
   daemonLoginOwner,
@@ -90,13 +131,16 @@ const LIST_CAP = 600
 
 let catalog: SessionCatalog | null = null
 let daemon: DaemonClient | null = null
+/** Who serves `daemon`: the user's detached daemon or this host's own worker thread. */
+let daemonKind: "process" | "worker" | null = null
+let catalogWorker: Worker | null = null
 let daemonMonitor: ReturnType<typeof setInterval> | null = null
 let activityEngine: ProviderActivityEngine | null = null
 const providerActivity = new Map<string, ProviderActivitySession[]>()
 let emittedActivity = new Map<string, ExternalThreadActivity>()
 /** Daemon mode's synchronous view: filled once, patched by events. */
 const mirror = new Map<string, ThreadRef>()
-let activityIndex: { refs: ThreadRef[]; byPath: Map<string, ThreadRef>; byIdentity: Map<string, ThreadRef> } | null = null
+let activityIndex: ActivityIndex | null = null
 
 function invalidateActivityRef(ref: ThreadRef): void {
   const old = activityIndex?.byPath.get(ref.path)
@@ -126,70 +170,67 @@ function stopDaemonMonitor(): void {
   daemonMonitor = null
 }
 
-function sameActivity(
-  left: ExternalThreadActivity | undefined,
-  right: ExternalThreadActivity | undefined
-): boolean {
-  return (
-    left?.provider === right?.provider &&
-    left?.status === right?.status &&
-    left?.detail === right?.detail
-  )
+/** When each catalogued store last visibly moved (bytes or activity time). */
+const storeWrites = new Map<string, number>()
+let writeSettleTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Each store's last seen size and activity time, so a title refinement is not a write. */
+const storeMarks = new Map<string, string>()
+
+function noteStoreWrite(ref: ThreadRef, previous: ThreadRef | undefined): void {
+  const mark = `${ref.bytes ?? ""}:${ref.updatedAt ?? ""}`
+  const before = previous ? `${previous.bytes ?? ""}:${previous.updatedAt ?? ""}` : storeMarks.get(ref.path)
+  storeMarks.set(ref.path, mark)
+  if (before === undefined) {
+    // First sight (a host that just started, a store just discovered): the
+    // provider's own activity stamp says whether it was written moments ago,
+    // so a turn already streaming is not "open" until its next write.
+    const stamped = ref.updatedAt ? Date.parse(ref.updatedAt) : Number.NaN
+    if (Number.isFinite(stamped) && Date.now() - stamped < WRITE_ACTIVE_MS) storeWrites.set(ref.path, stamped)
+    return
+  }
+  if (before !== mark) storeWrites.set(ref.path, Date.now())
 }
 
-function refForNativeId(
-  provider: string,
-  nativeId: string,
-  refs: ThreadRef[],
-  exact: Map<string, ThreadRef>
-): ThreadRef | undefined {
-  const direct = exact.get(`${provider}:${nativeId}`)
-  if (direct) return direct
-  const candidates = refs.filter(
-    (ref) =>
-      ref.harness === provider &&
-      (ref.nativeId.startsWith(nativeId) || nativeId.startsWith(ref.nativeId))
-  )
-  return candidates.length === 1 ? candidates[0] : undefined
+function forgetStore(path: string): void {
+  storeMarks.delete(path)
+  storeWrites.delete(path)
+}
+
+/** Re-reconcile once the earliest write-derived activity can have settled. */
+function scheduleWriteSettle(earliestWriteAt: number): void {
+  if (writeSettleTimer) return
+  const delay = Math.max(50, earliestWriteAt + WRITE_ACTIVE_MS - Date.now() + 50)
+  writeSettleTimer = setTimeout(() => {
+    writeSettleTimer = null
+    reconcileProviderActivity()
+  }, delay)
+}
+
+/** Drops writes too old to matter and says when the earliest live one was. */
+function pruneWrites(now: number): number | null {
+  let earliest: number | null = null
+  for (const [path, at] of storeWrites) {
+    if (now - at >= WRITE_ACTIVE_MS) storeWrites.delete(path)
+    else if (earliest === null || at < earliest) earliest = at
+  }
+  return earliest
 }
 
 function reconcileProviderActivity(): void {
-  if (!activityIndex) {
-    const refs = (daemon ? [...mirror.values()] : (catalog?.list() ?? [])).map((ref) => ({ path: ref.path, harness: ref.harness, nativeId: ref.nativeId, identity: ref.identity }))
-    // Keyed by the provider's identity, so a store that shares a native id
-    // with another (a Cursor chats fork) does not shadow it here either.
-    activityIndex = { refs, byPath: new Map(refs.map((ref) => [ref.path, ref])), byIdentity: new Map(refs.map((ref) => [threadIdentity(ref), ref])) }
-  }
-  const { refs, byPath, byIdentity } = activityIndex
-  const next = new Map<string, ExternalThreadActivity>()
-  for (const [provider, sessions] of providerActivity) {
-    for (const session of sessions) {
-      const ref =
-        (session.path ? byPath.get(session.path) : undefined) ??
-        (session.nativeId
-          ? refForNativeId(provider, session.nativeId, refs, byIdentity)
-          : undefined)
-      if (!ref) continue
-      const previous = emittedActivity.get(ref.path)
-      const unchanged =
-        previous?.provider === provider &&
-        previous.status === session.status &&
-        previous.detail === session.detail
-      const activity: ExternalThreadActivity = {
-        provider,
-        since: unchanged ? previous.since : Date.now(),
-        status: session.status,
-        detail: session.detail,
-      }
-      const held = next.get(ref.path)
-      if (
-        !held ||
-        activity.status === "needs-input" ||
-        (held.status === "open" && activity.status === "active")
-      )
-        next.set(ref.path, activity)
-    }
-  }
+  if (!activityIndex)
+    activityIndex = indexActivityRefs(daemon ? mirror.values() : (catalog?.list() ?? []))
+  const now = Date.now()
+  const earliestWrite = pruneWrites(now)
+  const next = deriveActivity({
+    index: activityIndex,
+    probes: providerActivity,
+    writes: storeWrites,
+    heldElsewhere: (ref) => Boolean(sessionMemory?.heldBy(ref.harness, ref.nativeId)),
+    previous: emittedActivity,
+    now,
+  })
+  if (earliestWrite !== null) scheduleWriteSettle(earliestWrite)
   for (const path of new Set([...emittedActivity.keys(), ...next.keys()])) {
     const previous = emittedActivity.get(path)
     const activity = next.get(path)
@@ -214,6 +255,10 @@ function stopProcessMonitor(): void {
   activityEngine = null
   providerActivity.clear()
   emittedActivity = new Map()
+  storeWrites.clear()
+  storeMarks.clear()
+  if (writeSettleTimer) clearTimeout(writeSettleTimer)
+  writeSettleTimer = null
 }
 
 /**
@@ -262,12 +307,14 @@ export function installThreads(send: (event: HostEvent) => void): void {
 function applyDaemonEvent(event: DaemonEvent, announce: boolean): void {
   if (event.event === "added" || event.event === "updated") {
     invalidateActivityRef(event.ref)
+    noteStoreWrite(event.ref, mirror.get(event.ref.path))
     mirror.set(event.ref.path, event.ref)
     if (announce) emit({ type: "thread-ref", ref: annotate(event.ref) })
     reconcileProviderActivity()
   } else if (event.event === "removed") {
     activityIndex = null
     mirror.delete(event.path)
+    forgetStore(event.path)
     if (announce) emit({ type: "thread-removed", path: event.path })
     reconcileProviderActivity()
   } else if (event.event === "entries" && announce) {
@@ -314,7 +361,6 @@ function monitorDaemon(client: DaemonClient): void {
 
 async function connectViaDaemon(): Promise<boolean> {
   let client: DaemonClient | null = null
-  let stopEvents: (() => void) | null = null
   try {
     client = await connectDaemon()
     if (daemonIsForeign(client.stats, daemonScript())) {
@@ -352,46 +398,175 @@ async function connectViaDaemon(): Promise<boolean> {
       client.close()
       return false
     }
-
-    const pending: DaemonEvent[] = []
-    let hydrated = false
-    stopEvents = client.onEvent((event) => {
-      if (!hydrated) {
-        pending.push(event)
-        return
-      }
-      applyDaemonEvent(event, true)
+    const adopted = await adoptClient(client, "process")
+    if (!adopted) return false
+    monitorDaemon(client)
+    client.onClose(() => {
+      // The daemon died underneath us; restart it before falling back locally.
+      if (daemon !== client) return
+      stopDaemonMonitor()
+      daemon = null
+      daemonKind = null
+      if (!stopping) void recoverDaemon()
     })
+    return true
+  } catch {
+    client?.close()
+    if (daemon === client) {
+      daemon = null
+      daemonKind = null
+    }
+    return false
+  }
+}
+
+/**
+ * Take a connected catalog server as the source of truth: mirror its list,
+ * then patch the mirror from its events. Events that arrive while the list
+ * is in flight are replayed silently afterwards so nothing is missed or
+ * announced twice.
+ */
+async function adoptClient(
+  client: DaemonClient,
+  kind: "process" | "worker"
+): Promise<boolean> {
+  const pending: DaemonEvent[] = []
+  let hydrated = false
+  const stopEvents = client.onEvent((event) => {
+    if (!hydrated) {
+      pending.push(event)
+      return
+    }
+    applyDaemonEvent(event, true)
+  })
+  try {
     const refs = await client.list()
     mirror.clear()
     activityIndex = null
-    for (const ref of refs) mirror.set(ref.path, ref)
+    for (const ref of refs) {
+      noteStoreWrite(ref, undefined)
+      mirror.set(ref.path, ref)
+    }
     for (const event of pending) applyDaemonEvent(event, false)
     if (stopping) {
       stopEvents()
       client.close()
       return false
     }
-
     daemon = client
-    monitorDaemon(client)
+    daemonKind = kind
     hydrated = true
     push()
     reconcileProviderActivity()
-    client.onClose(() => {
-      // The daemon died underneath us; restart it before falling back locally.
-      if (daemon !== client) return
-      stopDaemonMonitor()
-      daemon = null
-      if (!stopping) void recoverDaemon()
-    })
     return true
   } catch {
-    stopEvents?.()
-    client?.close()
-    if (daemon === client) daemon = null
+    stopEvents()
+    client.close()
     return false
   }
+}
+
+/**
+ * Run the catalog on a worker thread of this host and adopt it like a
+ * daemon. The renderer's RPCs keep answering while a store is being read;
+ * the worker's heap is bounded on its own, and if it dies the catalog is
+ * started once more before this host falls back to reading in-process.
+ * The two threads speak over a `MessageChannel`, whose port delivers each
+ * frame whole; a Unix socket handed the host a 7 MB thread as some nine
+ * hundred 8 KiB reads, and each read woke the Chromium-integrated loop.
+ */
+async function runCatalogWorker(): Promise<boolean> {
+  if (catalog || daemon) return true
+  const channel = new MessageChannel()
+  const data: CatalogWorkerData = {
+    port: channel.port2,
+    cachePath: join(app.getPath("userData"), "threads-catalog.json"),
+    // Same archive the daemon uses — whichever process runs the catalog,
+    // the durable copy lands in one place.
+    archivePath: join(homedir(), ".mako", "archive"),
+  }
+  const compiled = new URL("./catalog-worker.js", import.meta.url)
+  const worker = new Worker(compiled, {
+    workerData: data,
+    transferList: [channel.port2],
+    resourceLimits: { maxOldGenerationSizeMb: 768 },
+  })
+  catalogWorker = worker
+  const listening = await new Promise<CatalogWorkerMessage>((resolve) => {
+    const settle = (message: CatalogWorkerMessage) => {
+      worker.off("message", settle)
+      worker.off("error", failed)
+      worker.off("exit", exited)
+      resolve(message)
+    }
+    const failed = (error: Error) => settle({ type: "failed", message: error.message })
+    const exited = (code: number) =>
+      settle({ type: "failed", message: `The catalog worker exited with code ${code}` })
+    worker.on("message", settle)
+    worker.once("error", failed)
+    worker.once("exit", exited)
+  })
+  if (listening.type === "failed") {
+    hostWarn("threads", "catalog worker failed to start", { error: listening.message })
+    await stopCatalogWorker(worker)
+    return false
+  }
+  hostLog("threads", "catalog worker listening", {
+    sessions: listening.sessions,
+    scanMs: listening.scanMs,
+  })
+  let client: DaemonClient
+  try {
+    client = await connectDaemonPort(channel.port1, 10_000)
+  } catch (error) {
+    hostWarn("threads", "catalog worker did not answer", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    await stopCatalogWorker(worker)
+    return false
+  }
+  if (!(await adoptClient(client, "worker"))) {
+    await stopCatalogWorker(worker)
+    return false
+  }
+  const lost = (reason: string) => {
+    if (daemon !== client && catalogWorker !== worker) return
+    if (daemon === client) {
+      daemon = null
+      daemonKind = null
+    }
+    client.close()
+    void stopCatalogWorker(worker)
+    if (stopping) return
+    hostWarn("threads", "catalog worker lost", { reason })
+    void recoverCatalogWorker()
+  }
+  worker.once("error", (error) => lost(error.message))
+  worker.once("exit", (code) => lost(`exit ${code}`))
+  client.onClose(() => lost("port closed"))
+  return true
+}
+
+let catalogWorkerRestarts = 0
+
+/** One restart, then the in-process catalog: a worker that keeps dying is not a strategy. */
+function recoverCatalogWorker(): Promise<void> {
+  recoveringDaemon ??= (async () => {
+    if (catalogWorkerRestarts < 1) {
+      catalogWorkerRestarts += 1
+      if (await runCatalogWorker()) return
+    }
+    await runInProcessCatalog()
+  })().finally(() => {
+    recoveringDaemon = null
+  })
+  return recoveringDaemon
+}
+
+async function stopCatalogWorker(worker: Worker | null = catalogWorker): Promise<void> {
+  if (!worker) return
+  if (catalogWorker === worker) catalogWorker = null
+  await worker.terminate().catch(() => {})
 }
 
 function recoverDaemon(): Promise<void> {
@@ -441,8 +616,19 @@ async function startDaemon(): Promise<boolean> {
   return true
 }
 
+/**
+ * Watch from this host: on a worker thread, or in-process when the worker
+ * cannot start. Either way the renderer sees one catalog.
+ */
 async function runLocalCatalog(): Promise<void> {
-  if (catalog) return
+  if (catalog || daemon) return
+  if (await runCatalogWorker()) return
+  await runInProcessCatalog()
+}
+
+async function runInProcessCatalog(): Promise<void> {
+  if (catalog || daemon) return
+  hostWarn("threads", "catalog running on the host thread")
   catalog = defaultCatalog({
     cachePath: join(app.getPath("userData"), "threads-catalog.json"),
     // Same archive the daemon uses — whichever process runs the catalog,
@@ -450,13 +636,16 @@ async function runLocalCatalog(): Promise<void> {
     archivePath: join(homedir(), ".mako", "archive"),
   })
   await catalog.scan()
+  for (const ref of catalog.list()) noteStoreWrite(ref, undefined)
   push()
   reconcileProviderActivity()
   catalog.startWatching()
   catalog.onEvent((event) => {
     if (event.type === "removed") {
+      forgetStore(event.path)
       emit({ type: "thread-removed", path: event.path })
     } else {
+      noteStoreWrite(event.ref, undefined)
       emit({ type: "thread-ref", ref: annotate(event.ref) })
     }
     reconcileProviderActivity()
@@ -477,7 +666,9 @@ export function threadActivitySnapshot(): Record<
 }
 
 export async function daemonStatus(): Promise<DaemonStats | null> {
-  const current = daemon
+  // The worker is this host watching for itself, not the daemon that keeps
+  // syncing while Mako is closed; Settings reports only the latter.
+  const current = daemonKind === "process" ? daemon : null
   return current ? current.refresh().catch(() => current.stats) : null
 }
 
@@ -489,6 +680,8 @@ export function stopThreads(): void {
   catalog = null
   daemon?.close()
   daemon = null
+  daemonKind = null
+  void stopCatalogWorker()
   mirror.clear()
   activityIndex = null
   transcriptArtifacts.clear()
@@ -509,34 +702,11 @@ export function listThreads(
   return refs.slice(0, LIST_CAP).map(annotate)
 }
 
-// Cache only the small grant list, never media bytes or complete conversations.
-const threadFileGrants = new Map<
-  string,
-  { revision: string; files: Promise<string[]> }
->()
-
-async function referencedThreadFiles(
-  threadPath: string,
-  ref: ThreadRef | undefined
-): Promise<string[]> {
-  const revision = JSON.stringify([ref?.revision, ref?.bytes, ref?.updatedAt])
-  const cached = threadFileGrants.get(threadPath)
-  if (cached?.revision === revision) return cached.files
-  const files = openThread(threadPath).then((thread) =>
-    attachmentFiles(thread?.entries ?? [])
-  )
-  threadFileGrants.set(threadPath, { revision, files })
-  if (threadFileGrants.size > 32)
-    threadFileGrants.delete(threadFileGrants.keys().next().value!)
-  try {
-    return await files
-  } catch (error) {
-    if (threadFileGrants.get(threadPath)?.files === files)
-      threadFileGrants.delete(threadPath)
-    throw error
-  }
-}
-
+/**
+ * Read a file for a catalogued thread's viewer. Relative paths resolve
+ * against the thread's workspace; absolute ones open as they are, so a file
+ * the agent wrote outside the project and linked from its answer opens too.
+ */
 export async function readThreadFile(
   threadPath: string,
   filePath: string
@@ -544,32 +714,58 @@ export async function readThreadFile(
   const ref = daemon
     ? mirror.get(threadPath)
     : catalog?.list().find((candidate) => candidate.path === threadPath)
-  const cwd = ref?.workspace ?? ref?.cwd
-  const workspace = new WorkspaceFiles(cwd ?? "/", new WorkspaceGit(cwd ?? "/"))
-  // A normal workspace preview needs no transcript hydration, even on its first read.
-  if (
-    cwd &&
-    (await workspace.resolvePath(filePath).then(
-      () => true,
-      () => false
-    ))
-  )
-    return workspace.read(filePath)
-  const files = await referencedThreadFiles(threadPath, ref)
-  if (!files.includes(filePath))
-    throw new Error("This file is not an attachment of this conversation")
-  return workspace.read(filePath, files)
+  const cwd = ref?.workspace ?? ref?.cwd ?? "/"
+  return new WorkspaceFiles(cwd, new WorkspaceGit(cwd)).read(filePath)
 }
 
 export async function pageThread(
   path: string,
   before?: number,
-  limit?: number
+  limit?: number,
+  options?: ThreadPageOptions
 ): Promise<ThreadPage | null> {
   const page = daemon
-    ? await daemon.page(path, before, limit)
-    : await (catalog?.page(path, before, limit) ?? null)
+    ? await daemon.page(path, before, limit, options)
+    : await (catalog?.page(path, before, limit, options) ?? null)
   return page ? { ...page, ref: annotate(page.ref) } : null
+}
+
+/**
+ * How much of a tool's output a viewer page carries. Tool rows are
+ * collapsed until opened, and the largest sessions are almost entirely
+ * tool output — 7.0 of a 7.1 MB Codex thread was shell output — so a page
+ * carries what the collapsed row needs and the row fetches the whole block
+ * (`threadBlock`) when it opens; the head paints until it lands.
+ */
+export const VIEWER_TOOL_OUTPUT_CHARS = 1_024
+
+/**
+ * How much content one viewer page holds. A hundred entries of a
+ * tool-heavy Codex session still weighed 2.6 MB with outputs trimmed (943
+ * tool calls); the viewer pages earlier history on scroll, so the first
+ * page is the tail that fits and no larger.
+ */
+export const VIEWER_PAGE_CHARS = 384 * 1024
+
+/** A page for the viewer: tool outputs cut to their head, bounded in size. */
+export function viewThreadPage(
+  path: string,
+  before?: number,
+  limit?: number
+): Promise<ThreadPage | null> {
+  return pageThread(path, before, limit, {
+    toolOutputChars: VIEWER_TOOL_OUTPUT_CHARS,
+    maxChars: VIEWER_PAGE_CHARS,
+  })
+}
+
+export async function threadBlock(
+  path: string,
+  at: BlockAddress
+): Promise<EntryBlock | null> {
+  return daemon
+    ? daemon.block(path, at)
+    : ((await catalog?.block(path, at)) ?? null)
 }
 
 export async function openThread(path: string): Promise<Thread | null> {
@@ -582,6 +778,10 @@ export async function openThread(path: string): Promise<Thread | null> {
 async function openThreadViaDaemon(path: string): Promise<Thread | null> {
   const client = daemon
   if (!client) return openThreadDirect(path)
+  // The worker is this host's own reader: racing it with a read on the host
+  // thread would put the slow store back on the thread the worker exists
+  // to protect.
+  if (daemonKind === "worker") return client.open(path)
   let timer: ReturnType<typeof setTimeout> | undefined
   const fallback = new Promise<Thread | null>((resolve) => {
     timer = setTimeout(
@@ -713,13 +913,22 @@ function rememberTranscriptArtifact(
   }
 }
 
+/**
+ * Render a thread, or the part of it up to one answer, as a transcript
+ * bundle. `upto` names the answer by the provider's own message identity
+ * (`MessageAnchor`), so a store that moved since the transcript was read
+ * still forks at that answer rather than at whatever now sits at its old
+ * index; an anchor carrying only an index is that position, accepted while an
+ * answer still sits there.
+ */
 export async function transcriptArtifactFor(
   path: string,
   instruction?: string,
-  upto?: number
+  upto?: MessageAnchor
 ): Promise<TranscriptArtifact | null> {
   const known = listThreads().find((ref) => ref.path === path)
-  const cacheKey = `${path}:${upto ?? "all"}`
+  const point = upto === undefined ? "all" : upto.id ?? upto.at ?? String(upto.index)
+  const cacheKey = `${path}:${point}`
   const version = `${known?.bytes ?? "?"}:${known?.updatedAt ?? "?"}:${instruction ?? ""}`
   const cached = transcriptArtifacts.get(cacheKey)
   if (cached?.version === version && existsSync(cached.artifact.file))
@@ -727,9 +936,15 @@ export async function transcriptArtifactFor(
 
   const opened = await openThread(path)
   if (!opened) return null
+  let index: number | undefined
+  if (upto) {
+    index = resolveAnchor(opened.entries, 0, upto, "assistant")
+    if (index === undefined)
+      throw new Error("The chosen answer is no longer in this conversation's history. Reload the thread and choose again.")
+  }
   const thread =
-    upto !== undefined && upto < opened.entries.length
-      ? { ref: opened.ref, entries: opened.entries.slice(0, upto + 1) }
+    index !== undefined && index < opened.entries.length
+      ? { ref: opened.ref, entries: opened.entries.slice(0, index + 1) }
       : opened
   const bundle = renderTranscriptBundle(
     thread,

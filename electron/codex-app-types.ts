@@ -1,8 +1,7 @@
 import type { CodexAgentItem } from "./providers/codex/agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { AttachmentContent } from "@mako/sessions"
+import type { AttachmentContent, LineAssembler } from "@mako/sessions"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import type { StringDecoder } from "node:string_decoder"
 import type { JsonObject, JsonRpcId, JsonValue } from "./codex-app-json.js"
 import type { LiveSessionState, LiveUpdate } from "./shared.js"
 import type { TurnStartParams } from "./providers/codex/generated/v2/TurnStartParams.js"
@@ -169,8 +168,7 @@ export interface ProtocolContext {
   nextRequestId: number
   pending: Map<string, PendingRpc>
   items: Map<string, ItemTracker>
-  stdoutBuffer: string
-  decoder: StringDecoder
+  stdoutLines: LineAssembler
   exited: boolean
   protocol: ProtocolCallbacks
 }

@@ -1,8 +1,10 @@
 import { constants } from "node:fs"
 import { physicalFiles } from "./physical-files.js"
 import {
+  lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   writeFile,
@@ -87,6 +89,7 @@ export class LocalUpdates {
   }
 
   async load(): Promise<void> {
+    await this.pruneBuilds()
     try {
       this.source = z
         .string()
@@ -128,6 +131,37 @@ export class LocalUpdates {
 
   snapshot() {
     return { source: this.source, local: this.state }
+  }
+
+  /**
+   * Remove the build directories earlier hosts left under `updates/`.
+   *
+   * A finished build keeps its `output/` — some 850 MB of packaged app —
+   * until this host builds again, so it can be installed. Installing copies
+   * it into `/Applications` first (`prepareLocalInstall`), and the prepared
+   * state lives only in this process, so once a host has restarted every
+   * `build-*` here is dead weight: four of them held 3.4 GB. The current
+   * host's own job is never on disk yet when this runs, and a directory
+   * that is not one of ours, or is a symlink, stays.
+   */
+  private async pruneBuilds(): Promise<string[]> {
+    const removed: string[] = []
+    const names: string[] = await readdir(this.root).catch(() => [])
+    const files = await physicalFiles()
+    for (const name of names) {
+      if (!/^build-[A-Za-z0-9]+$/.test(name)) continue
+      const path = join(this.root, name)
+      if (path === this.preparedRoot) continue
+      const info = await lstat(path).catch(() => null)
+      if (!info || !info.isDirectory() || info.isSymbolicLink()) continue
+      try {
+        await files.rm(path, { recursive: true, force: true })
+        removed.push(path)
+      } catch {
+        // A directory another process still holds is tried again next start.
+      }
+    }
+    return removed
   }
   get building(): boolean {
     return this.job !== null

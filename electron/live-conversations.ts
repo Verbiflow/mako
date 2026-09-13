@@ -26,6 +26,7 @@ import type {
   FailureBoundary,
 } from "./live-runtime.js"
 import { ForkInputSchema } from "./contracts/conversation-control.js"
+import { resolveAnchor } from "./contracts/message-anchor.js"
 import type {
   DelegateInput,
   ForkInput,
@@ -33,7 +34,10 @@ import type {
   ConversationControl,
 } from "./contracts/conversation-control.js"
 import { liveEntries } from "./live-context.js"
+import { randomUUID } from "node:crypto"
+import { statSync } from "node:fs"
 import { join } from "node:path"
+import type { SessionFacts } from "./session-memory.js"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import type { ThreadPage } from "@mako/sessions"
 import { z } from "zod"
@@ -48,8 +52,11 @@ import type {
   LiveSummary,
 } from "./shared.js"
 import { reduceLiveUpdates, mergeLiveUpdates } from "./contracts/live-content.js"
+import type { InterruptionReason } from "./contracts/live-conversations.js"
+import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
+import { hostWarn } from "./host-log.js"
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
@@ -66,6 +73,12 @@ export class LiveConversations {
   private readonly recovered = new Map<string, LiveSummary>()
   private readonly assets: LiveAssets
   private readonly dependencies: Dependencies
+  /**
+   * One generation per host life. Every batch and snapshot carries it so a
+   * renderer can tell a revision numbered by this host from one numbered by
+   * the host before it, and re-snapshot instead of merging across the seam.
+   */
+  readonly epoch = randomUUID()
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies
     this.assets = new LiveAssets(join(dependencies.root, "assets"))
@@ -97,7 +110,8 @@ export class LiveConversations {
         const journal = new LiveJournal(dependencies.root, id)
         try {
           const summary = journal.summary()
-          if (summary)
+          if (summary) {
+            this.backfillMemory(id, summary.session)
             this.recovered.set(id, {
               ...summary,
               session: {
@@ -113,6 +127,7 @@ export class LiveConversations {
                   "The previous provider connection ended. Its saved output is available.",
               },
             })
+          }
         } finally {
           journal.close()
         }
@@ -123,6 +138,34 @@ export class LiveConversations {
           message: `Saved conversation ${id} could not be opened. Its journal has been preserved for recovery. ${errorMessage({ error })}`,
         })
       }
+    }
+  }
+
+  /**
+   * A journal written before the ledger existed is this host's only record of
+   * what its sessions ran under; another host serving the same store had
+   * nothing. Each host offers its journals to the ledger once at start,
+   * stamped with the journal's write time so a newer observation stays.
+   */
+  private backfillMemory(id: string, session: LiveSessionState): void {
+    const memory = this.dependencies.memory
+    if (!memory || !session.nativeId) return
+    if (!session.settings && session.currentMode === null) return
+    try {
+      const facts: SessionFacts = {}
+      if (session.settings) facts.settings = session.settings
+      if (session.currentMode !== null) facts.modeId = session.currentMode
+      // Recent writes sit in the WAL while the main file's mtime stays put.
+      const file = join(this.dependencies.root, `${id}.sqlite`)
+      const wal = statSync(`${file}-wal`, { throwIfNoEntry: false })
+      const at = Math.max(statSync(file).mtimeMs, wal?.mtimeMs ?? 0)
+      memory.backfill(session.harness, session.nativeId, facts, at)
+    } catch (error) {
+      hostWarn("memory", "journal backfill failed", {
+        conversation: id,
+        harness: session.harness,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
@@ -160,13 +203,14 @@ export class LiveConversations {
 
   summaries(): LiveSummary[] {
     return [
-      ...this.recovered.values(),
+      ...[...this.recovered.values()].map((summary) => ({ ...summary, epoch: this.epoch })),
       ...[...this.records.values()].map(({ snapshot }) => ({
         nativePaths: snapshot.control?.bindings.flatMap((binding) =>
           binding.path ? [binding.path] : []
         ),
         session: snapshot.session,
         revision: snapshot.revision,
+        epoch: this.epoch,
         threadPath: snapshot.threadPath,
         createdAt: snapshot.createdAt,
       })),
@@ -177,7 +221,12 @@ export class LiveConversations {
     const resident = this.load(id)
     if (!resident) return null
     this.flush(resident)
-    return resident.snapshot
+    return this.stamp(resident.snapshot)
+  }
+
+  /** The snapshot as this host numbers it; the renderer merges batches only onto the same epoch. */
+  private stamp(snapshot: LiveSnapshot): LiveSnapshot {
+    return snapshot.epoch === this.epoch ? snapshot : { ...snapshot, epoch: this.epoch }
   }
 
   capture(id: string, path: string): Promise<LiveSnapshot> {
@@ -315,6 +364,17 @@ export class LiveConversations {
     const driver = this.dependencies.driver(provider)
     if (!driver?.available(this.dependencies.appPath))
       throw new Error(`${provider} has no available interactive transport`)
+    // Reopening a store another Mako host has live would put two agents on
+    // one session; the ledger refuses it here, before anything is spawned.
+    if (options.resume)
+      this.dependencies.memory?.hold(provider, options.resume, options.conversationId)
+    // The tier a reopened session last ran under travels into the launch: a
+    // launch-enforced tier (OpenCode's Ask, every Grok tier) is read from the
+    // process environment and can never be applied to a running session.
+    const rememberedMode = options.resume && !options.modeId
+      ? this.dependencies.memory?.recall(provider, options.resume)?.modeId
+      : undefined
+    const modeId = options.modeId ?? rememberedMode
     const base = options.threadPath
       ? await captureNativeHistory(
           options.threadPath,
@@ -402,6 +462,7 @@ export class LiveConversations {
     void driver
       .start(cwd, {
         ...options,
+        modeId,
         emit: (event) => this.observe(event),
         mcpSnapshot: this.dependencies.mcpSnapshot
           ? () => this.dependencies.mcpSnapshot!(cwd)
@@ -422,12 +483,17 @@ export class LiveConversations {
         }
         resident.connections.set(id, { driver, session })
         this.updateBinding(resident, session)
-        if (options.modeId && options.modeId !== session.currentMode) {
-          if (!session.modes.some((mode) => mode.id === options.modeId))
+        // A host- or launch-enforced tier is already current when the session
+        // reports; a provider's own mode (Cursor's plan) is applied here. An
+        // explicit choice must apply or fail; the ledger's memory applies only
+        // when the session still offers it.
+        const offered = session.modes.some((mode) => mode.id === modeId)
+        if (modeId && modeId !== session.currentMode && (offered || options.modeId)) {
+          if (!offered)
             throw new Error("The saved agent mode is no longer available. Choose a mode before sending.")
-          await driver.setMode(id, options.modeId)
+          await driver.setMode(id, modeId)
           if (resident.generation !== generation) return
-          resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, currentMode: options.modeId } }
+          resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, currentMode: modeId } }
         }
         resident.opening = false
         this.flush(resident)
@@ -450,13 +516,27 @@ export class LiveConversations {
           },
           requests: resident.snapshot.requests.map((request) =>
             request.status === "queued"
-              ? { ...request, status: "failed", error: errorMessage({ error }) }
+              ? {
+                  ...request,
+                  status: "failed",
+                  error: errorMessage({ error }),
+                  failure: classifyStartFailure(errorMessage({ error }), options.resume !== undefined),
+                }
               : request
           ),
         }
         this.flush(resident)
+        if (options.resume) this.releaseHold(provider, options.resume, id)
       })
     return snapshot.session
+  }
+
+  private releaseHold(provider: string, nativeId: string, conversationId: string): void {
+    try {
+      this.dependencies.memory?.release(provider, nativeId, conversationId)
+    } catch (error) {
+      hostWarn("memory", "release failed", { harness: provider, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   observe(event: LiveDriverEvent): void {
@@ -551,22 +631,7 @@ export class LiveConversations {
           permissions: [],
           requests: resident.snapshot.requests.map((request) =>
             request.status === "dispatching"
-              ? {
-                  ...request,
-                  status: /cancel|interrupt/i.test(event.session.lastStop ?? "")
-                    ? "interrupted"
-                    : event.session.status === "ready"
-                      ? "completed"
-                      : "failed",
-                  error: event.session.error,
-                  nativeRun:
-                    request.nativeRun && event.session.nativeForkId
-                      ? {
-                          ...request.nativeRun,
-                          forkId: event.session.nativeForkId,
-                        }
-                      : request.nativeRun,
-                }
+              ? settleRequest(request, event.session)
               : request
           ),
         }
@@ -908,11 +973,25 @@ export class LiveConversations {
       ]
     } else {
       const base = source.base
-      if (!base || nativeRevision(base) !== command.point.revision)
+      if (!base)
         throw new Error(
           "The source history changed. Reload it before choosing a fork point."
         )
-      const index = command.point.index - base.start
+      let index = command.point.index - base.start
+      if (nativeRevision(base) !== command.point.revision) {
+        // The store moved since the transcript was read. The answer is still
+        // the same message; find it by its own identity rather than refusing.
+        const found = command.point.anchor
+          ? resolveAnchor(base.entries, base.start, command.point.anchor, "assistant")
+          : undefined
+        if (found === undefined)
+          throw new Error(
+            command.point.anchor
+              ? "The source history changed and the chosen answer is no longer in it. Reload the thread and choose again."
+              : "The source history changed. Reload it before choosing a fork point."
+          )
+        index = found - base.start
+      }
       if (
         index < 0 ||
         index >= base.entries.length ||
@@ -1448,6 +1527,10 @@ export class LiveConversations {
       ),
     }
     this.flush(resident)
+    // A session closed while still opening never reported its native id, so
+    // the hold taken before its start is let go through the binding.
+    for (const binding of this.control(resident).bindings)
+      if (binding.nativeId) this.releaseHold(binding.provider, binding.nativeId, id)
     try {
       await Promise.all(closed)
       if (
@@ -1524,10 +1607,67 @@ export class LiveConversations {
         connection.driver.close(bindingId)
       if (resident.opening)
         driver?.close(this.control(resident).activeBindingId)
+      // A turn still running now is cut short by this host, on purpose. The
+      // journal says so, with the moment, so the next host does not read it
+      // as a crash and the transcript can offer to continue the turn. An idle
+      // conversation is left as it is, so stopping writes nothing for it.
+      if (resident.snapshot.requests.some((request) => request.status === "dispatching"))
+        resident.snapshot = {
+          ...resident.snapshot,
+          requests: interruptRequests(
+            resident.snapshot.requests,
+            "host-quit",
+            "Mako closed while this turn was running"
+          ),
+        }
+      // A child's verdict settles into its parent's journal, so every flush
+      // runs before any journal closes.
       this.flush(resident)
-      resident.journal.close()
     }
+    for (const resident of this.records.values()) resident.journal.close()
     this.records.clear()
+    this.dependencies.memory?.releaseAll()
+  }
+
+  /**
+   * Keep the per-user ledger in step with what a connected session reports:
+   * its native identity is held while it is connected, and its settings and
+   * access mode are recorded whenever they change, so another host — or this
+   * one after a restart without its journal — reads the same facts.
+   */
+  private syncMemory(previous: LiveSessionState, next: LiveSessionState): void {
+    const memory = this.dependencies.memory
+    if (!memory) return
+    try {
+      const heldId = previous.connection === "connected" ? previous.nativeId : undefined
+      const wasHeld = heldId !== undefined
+      if (heldId !== undefined && heldId !== next.nativeId)
+        memory.release(previous.harness, heldId, next.id)
+      if (!next.nativeId) return
+      if (next.connection !== "connected") {
+        memory.release(next.harness, next.nativeId, next.id)
+        return
+      }
+      if (!wasHeld || previous.nativeId !== next.nativeId)
+        memory.hold(next.harness, next.nativeId, next.id)
+      const fresh = !wasHeld || previous.nativeId !== next.nativeId
+      const settingsChanged =
+        JSON.stringify(previous.settings ?? null) !== JSON.stringify(next.settings ?? null)
+      const modeChanged = previous.currentMode !== next.currentMode
+      // A session without modes reports null; that is nothing to remember,
+      // not a request to forget the tier its last session ran under.
+      if (fresh || settingsChanged || modeChanged)
+        memory.remember(next.harness, next.nativeId, {
+          settings: fresh || settingsChanged ? next.settings : undefined,
+          modeId: (fresh || modeChanged) && next.currentMode !== null ? next.currentMode : undefined,
+        })
+    } catch (error) {
+      hostWarn("memory", "ledger update failed", {
+        conversation: next.id,
+        harness: next.harness,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   private drain(resident: Resident): void {
@@ -1698,11 +1838,13 @@ export class LiveConversations {
     resident.pendingCharacters = 0
     resident.snapshot = snapshot
     resident.journalSnapshot = snapshot
+    this.syncMemory(previous.session, snapshot.session)
     this.dependencies.emit({
       type: "live-batch",
       batch: {
         id: snapshot.session.id,
         revision: snapshot.revision,
+        epoch: this.epoch,
         updates,
         nativeAgents:
           previous.nativeAgents !== snapshot.nativeAgents
@@ -1819,14 +1961,12 @@ export class LiveConversations {
             : undefined,
       },
       permissions: [],
-      requests: previous.requests.map((request) =>
-        request.status === "dispatching"
-          ? {
-              ...request,
-              status: "uncertain",
-              error: "The host restarted before completion was confirmed",
-            }
-          : request
+      // A request still dispatching in a journal no host is writing was cut
+      // short by a host that never reached `stop()`: it died, or was killed.
+      requests: interruptRequests(
+        previous.requests,
+        "host-crashed",
+        "Mako closed unexpectedly while this turn was running; whether the provider finished it is unknown"
       ),
     }
     journal.commit(snapshot, previous)
@@ -1853,4 +1993,46 @@ export class LiveConversations {
 
 function nativeRevision(page: ThreadPage): string {
   return JSON.stringify([page.ref.revision, page.ref.bytes, page.ref.updatedAt])
+}
+
+/**
+ * The dispatching request's verdict when its session leaves `running`. A
+ * Stop is recorded as the user's interruption; a failure carries the kind the
+ * provider's text classifies as, so the renderer can say whether sending
+ * again is worth anything without reading the text itself.
+ */
+function settleRequest(request: LiveRequest, session: LiveSessionState): LiveRequest {
+  const stopped = /cancel|interrupt/i.test(session.lastStop ?? "")
+  const status = stopped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
+  const settled: LiveRequest = {
+    ...request,
+    status,
+    error: session.error,
+    nativeRun:
+      request.nativeRun && session.nativeForkId
+        ? { ...request.nativeRun, forkId: session.nativeForkId }
+        : request.nativeRun,
+  }
+  if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
+  if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
+  return settled
+}
+
+/** Mark every in-flight request cut short by the host itself, with the reason and the moment. */
+function interruptRequests(
+  requests: LiveRequest[],
+  reason: Extract<InterruptionReason, "host-quit" | "host-crashed">,
+  error: string
+): LiveRequest[] {
+  const at = Date.now()
+  return requests.map((request) =>
+    request.status === "dispatching"
+      ? {
+          ...request,
+          status: reason === "host-quit" ? "interrupted" : "uncertain",
+          error,
+          interruption: { reason, at },
+        }
+      : request
+  )
 }

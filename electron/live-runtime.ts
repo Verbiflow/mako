@@ -12,6 +12,7 @@ import type {
 import type { ThreadPage } from "@mako/sessions"
 import type {
   ProviderBinding,
+  ResumeVerdict,
   ContextTransfer,
   ConversationControl,
 } from "./contracts/conversation-control.js"
@@ -20,6 +21,7 @@ import type {
   ConversationTools,
 } from "./providers/live-driver.js"
 import type { LiveJournal } from "./live-journal.js"
+import type { SessionMemory } from "./session-memory.js"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
@@ -57,10 +59,17 @@ export interface Dependencies {
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
   nativePath?(session: LiveSessionState): string | undefined
-  canResume?(binding: ProviderBinding): Promise<boolean>
+  /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
+  resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   driver(provider: string): ProviderLiveDriver | undefined
   history(path: string, before?: number): Promise<ThreadPage | null>
   emit(event: HostEvent): void
+  /**
+   * The per-user ledger of settings, access mode and live holds per native
+   * session. Written from every flush that changes what a connected session
+   * reports; consulted before a resume so two hosts never open one store.
+   */
+  memory?: SessionMemory
 }
 
 export interface LiveAccess {

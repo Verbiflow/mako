@@ -1,62 +1,15 @@
-import type { hostCallInputs } from "./contracts/host-call-inputs.js"
+import { HOST_CALL_REPLAY_WAIT_MS, hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "./contracts/host-call-policy.js"
 import { RuntimeDisconnectedError } from "./runtime-connection.js"
 
-type HostChannel = keyof typeof hostCallInputs
-
 /**
- * Calls the window may repeat once the shared host is back.
- *
- * Every entry reads state and nothing else, so running it twice is the same as
- * running it once. A mutation never appears here: when the host drops under a
- * stage, commit, prompt or push, the caller is told the outcome is unknown and
- * decides for itself.
+ * Calls the window may repeat once the shared host is back: reads, which
+ * change nothing, and mutations the host settles by a caller-minted id, which
+ * it answers with the first acceptance. Anything else is told its outcome is
+ * unknown. The table itself lives in `contracts/host-call-policy.ts` so the
+ * dev web bridge reads the same one.
  */
-const recoverable = [
-  "mako:git-status",
-  "mako:git-diff",
-  "mako:git-diff-all",
-  "mako:git-log",
-  "mako:git-commit-files",
-  "mako:git-commit-file-diff",
-  "mako:git-commit-diff-all",
-  "mako:github-status",
-  "mako:pull-request",
-  "mako:pull-requests",
-  "mako:pull-branches",
-  "mako:lifecycle-state",
-  "mako:installation-state",
-  "mako:update-state",
-  "mako:threads",
-  "mako:thread-page",
-  "mako:thread-archives",
-  "mako:thread-resumable",
-  "mako:thread-continue-targets",
-  "mako:list-files",
-  "mako:read-file",
-  "mako:capabilities",
-  "mako:live-capabilities",
-  "mako:harness-availability",
-  "mako:accounts",
-  "mako:list-models",
-  "mako:list-plugins",
-  "mako:usage",
-  "mako:crashes",
-  "mako:crashes-dir",
-  "mako:host-log-path",
-  "mako:daemon-status",
-  "mako:daemon-login",
-  "mako:utility-model-settings",
-  "mako:integrations",
-  "mako:automations",
-  "mako:external-editors",
-  "mako:default-commit-prompt",
-  "mako:native-requests",
-  "mako:terminal-list",
-  "mako:browser-control-status",
-  "mako:computer-permissions",
-  "mako:computer-driver",
-] satisfies HostChannel[]
-export const recoverableHostCalls: ReadonlySet<string> = new Set<string>(recoverable)
+export const recoverableHostCalls: ReadonlySet<string> = readOnlyHostCalls
+export { hostCallReplay, replayableHostCalls }
 
 export interface RecoveryLink {
   /** Called once per dropped call, before any retry, so the window can show the reconnect banner. */
@@ -68,20 +21,21 @@ export interface RecoveryLink {
 /**
  * Run one host call; if the host drops under it and the call is safe to repeat,
  * wait for the reconnect and run it once more against whatever host answers.
+ * The second run is marked as attempt 2 so the host can record the replay.
  */
 export async function invokeWithRecovery<T>(
   channel: string,
-  run: () => Promise<T>,
+  run: (attempt: number) => Promise<T>,
   link: RecoveryLink,
-  timeoutMs = 20_000
+  timeoutMs = HOST_CALL_REPLAY_WAIT_MS
 ): Promise<T> {
   try {
-    return await run()
+    return await run(1)
   } catch (error) {
     if (!(error instanceof RuntimeDisconnectedError)) throw error
     link.lost()
-    if (!recoverableHostCalls.has(channel)) throw error
+    if (hostCallReplay(channel) === "never") throw error
     if (!(await link.whenConnected(timeoutMs))) throw error
-    return run()
+    return run(2)
   }
 }
