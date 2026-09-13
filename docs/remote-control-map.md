@@ -79,6 +79,9 @@ or moved out of scope, and the resolutions are recorded in
   the enforcement floor; the gateway becomes a question-capable path above it.
 - **D4b Permissions, model, and settings are changeable from Slack** →
   [T5](#t5-settings-from-slack). Resolved in round 1.
+- **D4c Anyone in the Slack conversation may answer a question card** →
+  [T4](#t4-question-cards). Resolved 2026-09-12: a DM is its owner, a channel
+  thread is the channel; the answer is attributed by name in the desk.
 
 ## Open
 
@@ -147,6 +150,20 @@ whether "the Slack thread you are in" is the whole answer or only most of it.
   keyed by Slack thread.
 - Orca's mobile findings on session selection and stale state.
 
+**Found so far (2026-09-12).**
+- Slack's Agent messaging experience (`agent_view`, June 2026; the app already
+  calls `agents.sessions.setStatus`) shows every conversation in the Mako DM
+  as a thread in a timeline above the composer. A new top-level message is a
+  new thread; a reply continues one. `assistant.threads.setTitle` names the
+  thread (header and reply bar); `agent_session_title_changed` reports a
+  rename; the processing state carries a native Stop. `app_context_changed`
+  and `app_context` on `message.im` say what the user was looking at when
+  they typed. Suggested prompts sit at the top of the Messages tab.
+- Today's mapping is keyed by `(team, channel, threadTs)`, so a DM thread and
+  a channel thread already behave the same way.
+- The user's stated worry is not "which thread" but "do I have to choose
+  model, reasoning, and permissions every time I start one".
+
 **Candidate answers.**
 1. Slack thread is the only focus. A new Slack thread is a new Mako thread; a
    reply always goes to that thread's mapping. Refocus = open another thread.
@@ -155,6 +172,20 @@ whether "the Slack thread you are in" is the whole answer or only most of it.
 2. Slack thread plus an explicit `threads` picker to rebind a thread's mapping
    to an existing desk thread (exists today as a Block Kit picker).
 3. A per-user "current thread" in DMs, changed by a picker, shown in App Home.
+4. A model between the user and the threads that decides where a message goes
+   and offers choices when unsure.
+
+**Recommendation.** 1 plus 2, no 4. Slack's timeline is the thread list, and
+its titles are ours to set from the desk's own titles. Settings are never
+asked for: a new thread inherits the project's last-used tuning from the desk
+(`composerHarness`, thread tuning) and the first reply states it in one line
+with a Change button that opens the modal (D3a). Project is the only real
+fork; pick the last-used project, or a project named in the message by
+fuzzy match, and say which in that first line. Refocus onto a desk thread is a
+`threads` picker (exists) and, later, a desk action "Open in Slack" that posts
+the thread and its title into the DM. A routing model adds a call before every
+first message, a misfire rate, and a decision the user cannot see; the only
+narrow job it could earn later is parsing a plain-language settings request.
 
 **Resolution.** —
 
@@ -173,12 +204,15 @@ messages; how often a first message is a command versus a task; whether a
 confirmation card ("Start `codex` in `pi-ui`? [Start] [Project] [Setup]") is
 acceptable friction on a phone.
 
-**Recommendation carried from round 1.** Two-phase: rules-first until focused
-(`project|model|stop|status|move` handled, anything else gets one
-confirmation card whose Setup opens the modal); after focus, plain text is a
-prompt with no classification; while working, plain text queues and `!` or a
-Steer button interrupts. The user was undecided between a model middleman and
-direct communication and asked to think it through more.
+**Recommendation carried from round 1, revised 2026-09-12.** No confirmation
+card and no classifier on the first message. A new thread starts at once in
+the inherited project and tuning (see T1) and the first reply says so with a
+Change button; a wrong guess costs one tap and a Stop, not a round trip
+before anything happens. Rules handle the few verbs. After focus, plain text
+is a prompt with no classification; while working, plain text queues and `!`
+or a Steer button interrupts. The user was undecided between a model
+middleman and direct communication; T1's finding (Slack's own timeline is the
+thread list) removes the model's main job.
 
 **Resolution.** —
 
@@ -219,12 +253,26 @@ duplicate answer, and what does the desk record?
 - `hostAccessDecision` in `electron/contracts/access.ts` and the "never a
   question" rule.
 
-**Constraints from round 1.** Explicit option buttons, no default; only the
-mapped Slack thread (channel + thread + linked user) may answer its own
-`requestId`; first tap wins, later taps get "already answered"; timeout is
-deny, never allow; the card shows `cwd` and the command or diff preview; the
-desk shows an audit line for an answer that came from the gateway; changing
-focus mid-question cancels it with a stopped marker.
+**Constraints from round 1.** Explicit option buttons, no default; first tap
+wins, later taps get "already answered"; the card shows `cwd` and the command
+or diff preview; the desk shows an audit line for an answer that came from the
+gateway; changing focus mid-question cancels it with a stopped marker.
+
+**Decided 2026-09-12 (D4c).** Anyone in the Slack conversation may answer. A
+DM is only its owner; a channel thread is everyone in that channel, because
+the person who @mentioned Mako there chose that audience. The run still
+executes on the starter's Mac under the starter's provider account, so the
+channel is the trust boundary and the audit line names who tapped
+(`Approved from Slack by @sam`).
+
+**Open: timeout.** Round 1 said "timeout is deny". The user is unsure.
+Recommendation now: no automatic decision at all. The desk itself holds a
+permission ask indefinitely and the provider's run waits; Slack should mirror
+that. The card stays live, a nudge is posted after 10 minutes and again at an
+hour (mentioning the starter), and Stop cancels the run with a stopped marker.
+Auto-deny would kill a long run you would have approved on waking; auto-allow
+is unsafe. The only timeouts that apply are the provider's own, if it has
+one, and those are reported as the provider's decision.
 
 **Resolution.** —
 

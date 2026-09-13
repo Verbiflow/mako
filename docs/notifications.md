@@ -47,7 +47,7 @@ the window is in front, and whether this is a replay.
 | Thread on screen | Window in front | Result                                   |
 | ---------------- | --------------- | ---------------------------------------- |
 | yes              | yes             | Seen at once. One cue. Nothing else.     |
-| no               | yes             | An in-app toast with Open; a cue.        |
+| no               | yes             | An in-app card you click to go there; a cue. |
 | any              | no              | A desktop banner. Silent unless sounds are on. |
 
 Three rules sit on top of the table:
