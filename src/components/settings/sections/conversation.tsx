@@ -12,6 +12,9 @@ export const section = {
     "diff",
     "changes",
     "turns",
+    "steer",
+    "queue",
+    "enter",
   ],
   Component: ConversationSection,
 } as const satisfies SettingsSection

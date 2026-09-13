@@ -5,6 +5,6 @@ export const section = {
   id: "appearance",
   title: "Appearance",
   group: "Desk",
-  keywords: ["theme", "dark", "light", "auto", "system", "color", "sound", "audio", "volume"],
+  keywords: ["theme", "dark", "light", "auto", "system", "color"],
   Component: AppearanceSection,
 } as const satisfies SettingsSection
