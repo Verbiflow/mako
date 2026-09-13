@@ -40,7 +40,47 @@ import {
   type ThreadRef,
 } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
-import type { NativeFile, SessionProvider } from "./types.js"
+import type {
+  NativeFile,
+  SessionFollower,
+  SessionProvider,
+  SessionUpdate,
+} from "./types.js"
+
+/** Where a user turn begins: its index in the root's hash list and in the entries. */
+interface ExchangeStart {
+  hash: number
+  entry: number
+}
+
+/** One translated store, keyed by the root blob that produced it. */
+interface StoreFold {
+  rootId: string
+  hashes: string[]
+  entries: ThreadEntry[]
+  exchanges: ExchangeStart[]
+}
+
+/** A fold plus the entry index from which a listener must replace. */
+interface FoldStep {
+  fold: StoreFold
+  replaceFrom: number
+}
+
+/** Entries translated from a slice of the hash list. */
+interface FoldedHashes {
+  entries: ThreadEntry[]
+  exchanges: ExchangeStart[]
+  /** The sink dropped history: indices no longer line up with the hash list. */
+  dropped: boolean
+}
+
+/**
+ * Past this many entries the sink starts dropping history and entry indices
+ * no longer line up with the hash list, so an incremental fold gives way to
+ * a whole one (the sink's own budget is 6000).
+ */
+const FOLD_INCREMENTAL_LIMIT = 6000
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonObject | JsonValue[]
@@ -325,13 +365,24 @@ async function nativeFiles(paths: string[]): Promise<NativeFile[]> {
 export class CursorProvider implements SessionProvider {
   harness = "cursor" as const
   displayName = "Cursor"
-  rescanRoot = true
+  /**
+   * Only the desktop chats share one database and need discovery re-run on
+   * a write. An ACP or CLI store is one file per session: a write there
+   * refreshes that session alone, never the other hundred.
+   */
+  rescanRoot = (path: string): boolean => this.isDesktopPath(path)
   rescanDebounceMs = 250
   private readonly desktop: CursorDesktopStore
   private chatRoot: string
   private acpRoot: string
   /** 1: chats stores carry their own identity and no live resume. */
   peekVersion = 1
+  /**
+   * The last full fold of a per-session store, kept so a follower opened on
+   * it can continue from that transcript and so `read` of an unchanged root
+   * costs one query instead of one per message.
+   */
+  private lastFold: (StoreFold & { path: string }) | null = null
 
   constructor(home = homedir()) {
     this.desktop = new CursorDesktopStore(home)
@@ -341,6 +392,48 @@ export class CursorProvider implements SessionProvider {
 
   roots(): string[] {
     return [this.chatRoot, this.acpRoot, this.desktop.root]
+  }
+
+  /**
+   * A write inside a session directory — the database, its WAL, or
+   * `meta.json` — refreshes that session's store. Desktop writes pass
+   * through to the rescan rule.
+   */
+  watchTarget(path: string): string | null {
+    if (this.isDesktopPath(path)) return path
+    // Cursor's extensions write under globalStorage constantly; only the
+    // chat database itself is a reason to rescan.
+    if (path.startsWith(`${this.desktop.root}${sep}`)) return null
+    return this.storeOf(path)
+  }
+
+  async stat(path: string): Promise<NativeFile | null> {
+    if (this.isDesktopPath(path)) return null
+    const [file] = await nativeFiles([path])
+    return file ?? null
+  }
+
+  /** A desktop chat row, or a write to the desktop database or its WAL. */
+  private isDesktopPath(path: string): boolean {
+    return (
+      this.desktop.owns(path) ||
+      (dirname(path) === this.desktop.root &&
+        basename(path).startsWith("state.vscdb"))
+    )
+  }
+
+  /** The `store.db` of the session directory a path lies in, or null outside one. */
+  private storeOf(path: string): string | null {
+    const roots = [this.acpRoot, this.chatRoot]
+    for (const root of roots) {
+      if (!path.startsWith(`${root}${sep}`)) continue
+      const relative = path.slice(root.length + 1).split(sep)
+      // acp-sessions/<id>/… or chats/<workspace>/<id>/…
+      const depth = root === this.acpRoot ? 1 : 2
+      if (relative.length <= depth) return null
+      return join(root, ...relative.slice(0, depth), "store.db")
+    }
+    return null
   }
 
   async discover(): Promise<NativeFile[]> {
@@ -444,8 +537,11 @@ export class CursorProvider implements SessionProvider {
         if (root) {
           ref.cwd ??= root.cwd
           if (!ref.title) {
+            const statement = database.prepare(
+              "SELECT data FROM blobs WHERE id = ?"
+            )
             for (const hash of root.hashes) {
-              const message = this.readMessage(database, hash)
+              const message = this.readMessage(statement, hash)
               if (message?.role === "user") {
                 const spoken = spokenText(message.content)
                 if (spoken) ref.title = titleFrom(spoken)
@@ -461,8 +557,65 @@ export class CursorProvider implements SessionProvider {
     }
   }
 
-  createFollower(path: string) {
-    return this.desktop.owns(path) ? this.desktop.createFollower(path) : null
+  /**
+   * Live sync for a per-session store. The root blob names every message
+   * hash in order and a streaming turn rewrites only its tail, so an update
+   * re-reads from the start of the exchange that changed, never the whole
+   * conversation, and an unchanged root costs one `meta` query.
+   */
+  createFollower(path: string, fromByte: number): SessionFollower | null {
+    if (this.desktop.owns(path)) return this.desktop.createFollower(path)
+    if (!this.storeOf(path)) return null
+    // Unseeded on purpose: nothing proves the listener holds the entries of
+    // the last fold, so the first change after opening delivers the whole
+    // transcript once with `reset`, and every change after it delivers only
+    // the exchange that moved.
+    let fold: StoreFold | null = null
+    let offset = fromByte
+    let rebased = false
+    const unchanged = (): SessionUpdate => ({
+      entries: [],
+      nextByte: offset,
+      replace: false,
+    })
+    return {
+      get offset() {
+        return offset
+      },
+      next: async (): Promise<SessionUpdate> => {
+        const [file] = await nativeFiles([path])
+        if (!file) return unchanged()
+        const database = await openDatabase(path)
+        if (!database) return unchanged()
+        try {
+          const rootId = this.readMeta(database)?.latestRootBlobId
+          offset = file.bytes
+          if (!rootId) return unchanged()
+          if (fold && fold.rootId === rootId) return unchanged()
+          const root = this.readRoot(database, rootId)
+          if (!root) return unchanged()
+          const next = fold
+            ? this.foldFrom(database, fold, root.hashes, rootId)
+            : this.foldStore(database, root.hashes, rootId)
+          const from = fold ? next.replaceFrom : 0
+          fold = next.fold
+          this.lastFold = { ...next.fold, path }
+          const update: SessionUpdate = {
+            entries: next.fold.entries.slice(from),
+            nextByte: offset,
+            replace: true,
+            replaceFrom: from,
+          }
+          if (!rebased) {
+            update.reset = true
+            rebased = true
+          }
+          return update
+        } finally {
+          database.close()
+        }
+      },
+    }
   }
 
   async read(path: string): Promise<Thread | null> {
@@ -475,99 +628,221 @@ export class CursorProvider implements SessionProvider {
     if (!database) return null
     try {
       const meta = this.readMeta(database)
-      const root = meta ? this.readRoot(database, meta.latestRootBlobId) : null
-      if (!root) return { ref, entries: [] }
-
-      const sink = new EntrySink()
-      type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
-      let assistant: AssistantEntry | null = null
-      const toolsById = new Map<string, ToolBlock>()
-
-      for (const hash of root.hashes) {
-        const message = this.readMessage(database, hash)
-        if (!message) continue
-        switch (message.role) {
-          case "user": {
-            const spoken = spokenText(message.content)
-            if (!spoken && !message.attachments.length) continue
-            assistant = null
-            sink.push({
-              kind: "user",
-              id: hash,
-              text: spoken ?? "",
-              attachments: message.attachments,
-            })
-            continue
-          }
-          case "tool":
-            for (const part of message.content) {
-              if (part.type !== "tool-result") continue
-              const block = toolsById.get(part.toolCallId)
-              if (block) {
-                block.output = clip(formatToolResult(part.result))
-                const attachments = [
-                  ...part.attachments,
-                  ...cursorAttachments(
-                    isJsonObject(part.result)
-                      ? part.result["content"]
-                      : part.result
-                  ),
-                ]
-                if (attachments.length) block.attachments = attachments
-                if (message.isError) block.error = true
-                toolsById.delete(part.toolCallId)
-              }
-            }
-            continue
-          case "assistant":
-            if (!assistant) {
-              assistant = {
-                kind: "assistant",
-                id: hash,
-                model: message.model,
-                blocks: [],
-              }
-              sink.push(assistant)
-            } else if (!assistant.model && message.model) {
-              assistant.model = message.model
-            }
-            for (const part of message.content) {
-              switch (part.type) {
-                case "text":
-                  if (part.text)
-                    assistant.blocks.push({ type: "text", text: part.text })
-                  break
-                case "reasoning":
-                  if (part.text)
-                    assistant.blocks.push({ type: "thinking", text: part.text })
-                  break
-                case "attachment":
-                  assistant.blocks.push(part.value)
-                  break
-                case "tool-call": {
-                  const block: ToolBlock = {
-                    type: "tool",
-                    id: part.toolCallId,
-                    name: part.toolName,
-                    input: clip(formatJson(part.args)),
-                  }
-                  if (part.toolCallId) toolsById.set(part.toolCallId, block)
-                  assistant.blocks.push(block)
-                  break
-                }
-                case "other":
-                  break
-              }
-            }
-            continue
-          case "other":
-            continue
-        }
-      }
-      return { ref, entries: sink.done() }
+      const rootId = meta?.latestRootBlobId
+      const held = this.lastFold
+      if (held && held.path === path && rootId && held.rootId === rootId)
+        return { ref, entries: held.entries }
+      const root = rootId ? this.readRoot(database, rootId) : null
+      if (!root || !rootId) return { ref, entries: [] }
+      const { fold } = this.foldStore(database, root.hashes, rootId)
+      this.lastFold = { ...fold, path }
+      return { ref, entries: fold.entries }
     } finally {
       database.close()
     }
+  }
+
+  /** Translate the whole hash list into entries. */
+  private foldStore(
+    database: DatabaseSync,
+    hashes: string[],
+    rootId: string
+  ): FoldStep {
+    const folded = this.foldHashes(database, hashes, 0)
+    return {
+      fold: {
+        rootId,
+        hashes,
+        entries: folded.entries,
+        // Dropped history shifts every index; no exchange is a safe restart.
+        exchanges: folded.dropped ? [] : folded.exchanges,
+      },
+      replaceFrom: 0,
+    }
+  }
+
+  /**
+   * Translate only what moved since `previous`: the exchange holding the
+   * first differing hash and everything after it. Entries before that
+   * exchange are reused untouched, so `replaceFrom` is the index the
+   * listener keeps up to. Falls back to a whole fold when the transcript
+   * would exceed the sink's history budget, where indices stop lining up.
+   */
+  private foldFrom(
+    database: DatabaseSync,
+    previous: StoreFold,
+    hashes: string[],
+    rootId: string
+  ): FoldStep {
+    let shared = 0
+    while (
+      shared < previous.hashes.length &&
+      shared < hashes.length &&
+      previous.hashes[shared] === hashes[shared]
+    )
+      shared++
+    if (shared === previous.hashes.length && previous.exchanges.length) {
+      // Pure append. When the first new message opens an exchange of its
+      // own, nothing before it can merge with it and the previous entries
+      // stand; a tool result or assistant chunk first belongs to the last
+      // exchange and takes the path below.
+      const appended = this.foldHashes(database, hashes, shared)
+      const total = previous.entries.length + appended.entries.length
+      if (
+        appended.exchanges[0]?.hash === shared &&
+        !appended.dropped &&
+        total <= FOLD_INCREMENTAL_LIMIT
+      )
+        return {
+          fold: {
+            rootId,
+            hashes,
+            entries: [...previous.entries, ...appended.entries],
+            exchanges: [
+              ...previous.exchanges,
+              ...appended.exchanges.map((item) => ({
+                hash: item.hash,
+                entry: previous.entries.length + item.entry,
+              })),
+            ],
+          },
+          replaceFrom: previous.entries.length,
+        }
+    }
+    let exchange = { hash: 0, entry: 0 }
+    for (const candidate of previous.exchanges) {
+      if (candidate.hash > shared) break
+      exchange = candidate
+    }
+    const tail = this.foldHashes(database, hashes, exchange.hash)
+    const total = exchange.entry + tail.entries.length
+    if (tail.dropped || total > FOLD_INCREMENTAL_LIMIT)
+      return this.foldStore(database, hashes, rootId)
+    const kept = previous.exchanges.filter((item) => item.hash < exchange.hash)
+    return {
+      fold: {
+        rootId,
+        hashes,
+        entries: [...previous.entries.slice(0, exchange.entry), ...tail.entries],
+        exchanges: [
+          ...kept,
+          ...tail.exchanges.map((item) => ({
+            hash: item.hash,
+            entry: exchange.entry + item.entry,
+          })),
+        ],
+      },
+      replaceFrom: exchange.entry,
+    }
+  }
+
+  /**
+   * Fold `hashes[start..]` into entries with one prepared statement. Each
+   * exchange starts at a user message; tool results pair with calls inside
+   * the same exchange, so a fold that starts at an exchange boundary sees
+   * exactly what a whole fold would.
+   */
+  private foldHashes(
+    database: DatabaseSync,
+    hashes: string[],
+    start: number
+  ): FoldedHashes {
+    const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
+    const sink = new EntrySink()
+    const exchanges: ExchangeStart[] = []
+    type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
+    let assistant: AssistantEntry | null = null
+    const toolsById = new Map<string, ToolBlock>()
+
+    for (let index = start; index < hashes.length; index++) {
+      const hash = hashes[index]
+      if (hash === undefined) continue
+      const message = this.readMessage(statement, hash)
+      if (!message) continue
+      switch (message.role) {
+        case "user": {
+          const spoken = spokenText(message.content)
+          if (!spoken && !message.attachments.length) continue
+          assistant = null
+          exchanges.push({ hash: index, entry: sink.entries.length })
+          sink.push({
+            kind: "user",
+            id: hash,
+            text: spoken ?? "",
+            attachments: message.attachments,
+          })
+          continue
+        }
+        case "tool":
+          for (const part of message.content) {
+            if (part.type !== "tool-result") continue
+            const block = toolsById.get(part.toolCallId)
+            if (block) {
+              block.output = clip(formatToolResult(part.result))
+              const attachments = [
+                ...part.attachments,
+                ...cursorAttachments(
+                  isJsonObject(part.result)
+                    ? part.result["content"]
+                    : part.result
+                ),
+              ]
+              if (attachments.length) block.attachments = attachments
+              if (message.isError) block.error = true
+              toolsById.delete(part.toolCallId)
+            }
+          }
+          continue
+        case "assistant":
+          if (!assistant) {
+            assistant = {
+              kind: "assistant",
+              id: hash,
+              model: message.model,
+              blocks: [],
+            }
+            sink.push(assistant)
+          } else if (!assistant.model && message.model) {
+            assistant.model = message.model
+          }
+          for (const part of message.content) {
+            switch (part.type) {
+              case "text":
+                if (part.text)
+                  assistant.blocks.push({ type: "text", text: part.text })
+                break
+              case "reasoning":
+                if (part.text)
+                  assistant.blocks.push({ type: "thinking", text: part.text })
+                break
+              case "attachment":
+                assistant.blocks.push(part.value)
+                break
+              case "tool-call": {
+                const block: ToolBlock = {
+                  type: "tool",
+                  id: part.toolCallId,
+                  name: part.toolName,
+                  input: clip(formatJson(part.args)),
+                }
+                if (part.toolCallId) toolsById.set(part.toolCallId, block)
+                assistant.blocks.push(block)
+                break
+              }
+              case "other":
+                break
+            }
+          }
+          continue
+        case "other":
+          continue
+      }
+    }
+    const entries = sink.done()
+    // The sink prepends one event when it dropped history; indices past it
+    // no longer match the hash list, so the caller re-folds from the start.
+    const dropped = entries.length > 0 && entries.length !== sink.entries.length
+    return { entries, exchanges, dropped }
   }
 
   /* ------------------------------------------------------------ sqlite */
@@ -657,14 +932,11 @@ export class CursorProvider implements SessionProvider {
   }
 
   private readMessage(
-    database: DatabaseSync,
+    statement: StatementSync,
     hash: string
   ): CursorMessage | null {
     try {
-      const result = database
-        .prepare("SELECT data FROM blobs WHERE id = ?")
-        .get(hash)
-      const row = parseBlobDataRow(result)
+      const row = parseBlobDataRow(statement.get(hash))
       return row
         ? parseCursorMessage(Buffer.from(row.data).toString("utf8"))
         : null

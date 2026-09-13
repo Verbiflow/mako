@@ -85,6 +85,32 @@ async function openDatabase(path: string): Promise<DatabaseSync | null> {
   }
 }
 
+/**
+ * One aggregate over the header table stands in for the whole listing:
+ * a header added, removed, updated or checkpointed changes it.
+ */
+function discoverFingerprint(db: DatabaseSync): string | null {
+  try {
+    const row = db
+      .prepare(
+        "SELECT COUNT(*) AS count, MAX(lastUpdatedAt) AS updated, MAX(checkpointAt) AS checkpoint FROM composerHeaders WHERE COALESCE(isSubagent,0) = 0"
+      )
+      .get()
+    const parsed = z
+      .object({
+        count: z.number(),
+        updated: z.number().nullable(),
+        checkpoint: z.number().nullable(),
+      })
+      .safeParse(row)
+    return parsed.success
+      ? `${parsed.data.count}:${parsed.data.updated ?? 0}:${parsed.data.checkpoint ?? 0}`
+      : null
+  } catch {
+    return null
+  }
+}
+
 function timestamp(value: number | undefined): string | undefined {
   return value && Number.isFinite(value) && value > 0 && value < 8.64e15
     ? new Date(value).toISOString()
@@ -96,6 +122,8 @@ export class CursorDesktopStore {
   readonly root: string
   private readonly databasePath: string
   private readonly readRevisions = new Map<string, string>()
+  private lastDiscover: { fingerprint: string; files: NativeFile[] } | null =
+    null
   private lastRead: {
     path: string
     revision: string | undefined
@@ -126,8 +154,18 @@ export class CursorDesktopStore {
     const db = await openDatabase(this.databasePath)
     if (!db) return []
     try {
+      // A write anywhere in the database re-runs discovery; when no header
+      // moved, the previous list is the answer and the aggregate is the
+      // whole cost.
+      const fingerprint = discoverFingerprint(db)
+      if (
+        fingerprint &&
+        this.lastDiscover &&
+        this.lastDiscover.fingerprint === fingerprint
+      )
+        return this.lastDiscover.files
       // Headers are small, separately indexed records. Never hydrate composerData in a catalog scan.
-      return db
+      const files = db
         .prepare(
           "SELECT composerId, lastUpdatedAt, checkpointAt FROM composerHeaders WHERE COALESCE(isSubagent,0) = 0 ORDER BY lastUpdatedAt DESC LIMIT 20000"
         )
@@ -151,6 +189,8 @@ export class CursorDesktopStore {
             },
           ]
         })
+      if (fingerprint) this.lastDiscover = { fingerprint, files }
+      return files
     } catch {
       return []
     } finally {

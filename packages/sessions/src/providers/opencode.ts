@@ -90,7 +90,8 @@ async function openDatabase(path: string): Promise<DatabaseSync | null> {
 export class OpenCodeProvider implements SessionProvider {
   harness = "opencode" as const
   displayName = "OpenCode"
-  rescanRoot = true
+  /** One database, many sessions: a write means re-discover, not re-stat. */
+  rescanRoot = (): boolean => true
   rescanDebounceMs = 250
 
   private root: string
@@ -102,6 +103,17 @@ export class OpenCodeProvider implements SessionProvider {
 
   roots(): string[] {
     return [this.root]
+  }
+
+  /**
+   * The root also holds logs, shell transcripts, snapshots and tool output
+   * that a running agent writes continuously; only the databases hold
+   * sessions.
+   */
+  watchTarget(path: string): string | null {
+    return this.databasePaths().some((database) => path.startsWith(database))
+      ? path
+      : null
   }
 
   async discover(): Promise<NativeFile[]> {

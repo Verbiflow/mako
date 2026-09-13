@@ -38,12 +38,27 @@ export interface SessionProvider {
   displayName: string
 
   /**
-   * True for stores where many sessions share one database file: a change
-   * under the root cannot be stat-ed per session, so the catalog re-runs
-   * discovery for this provider instead of refreshing one path.
+   * Whether a write at this path means re-running discovery for the whole
+   * provider instead of refreshing one file. True for stores where many
+   * sessions share one database: the change cannot be stat-ed per session.
+   * A provider can scope it to part of its roots: Cursor's desktop chats
+   * share one `state.vscdb`, while its ACP stores are one file per session
+   * and refresh individually. Unset means every path refreshes on its own.
    */
-  rescanRoot?: boolean
+  rescanRoot?(path: string): boolean
+  /**
+   * How long a write is allowed to settle before the catalog refreshes.
+   * Writes keep arriving while an agent streams, so this is a throttle with a
+   * settle window, never a debounce that starves until the stream pauses.
+   */
   rescanDebounceMs?: number
+
+  /**
+   * The stat facts for one native file when they are not the file's own stat:
+   * a SQLite store's mtime is the newest of the database, its WAL, and its
+   * sidecar. Unset means the catalog stats the path directly.
+   */
+  stat?(path: string): Promise<NativeFile | null>
 
   /**
    * A write under the root may not be the session file itself — Grok keeps

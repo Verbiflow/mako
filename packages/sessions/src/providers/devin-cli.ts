@@ -23,7 +23,7 @@ import { createHash } from "node:crypto"
 import { readFile, readdir, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
@@ -132,7 +132,7 @@ export class DevinCliProvider implements SessionProvider {
   harness = "devin" as const
   displayName = "Devin"
   /** One store, many sessions: a db write means re-discover, not re-stat. */
-  rescanRoot = true
+  rescanRoot = (): boolean => true
   rescanDebounceMs = 500
 
   private dir: string
@@ -145,6 +145,17 @@ export class DevinCliProvider implements SessionProvider {
 
   roots(): string[] {
     return [this.dir]
+  }
+
+  /**
+   * Sessions live in the database and their locks; the logs, plugin state
+   * and summaries beside them change without a session moving.
+   */
+  watchTarget(path: string): string | null {
+    return path.startsWith(this.dbPath()) ||
+      path.startsWith(`${this.lockPath()}${sep}`)
+      ? path
+      : null
   }
 
   private dbPath(): string {

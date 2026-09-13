@@ -406,13 +406,14 @@ export class ClaudeProvider implements SessionProvider {
       const line = parseClaudeLine(raw)
       if (line) fillClaudeRef(ref, line)
       lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
-      if (line?.type === "assistant" && !line.isSidechain && line.message?.model) {
-        ref.model = line.message.model
+      const model = line ? sessionModel(line) : undefined
+      if (line && model) {
+        ref.model = model
         const options: NonNullable<SessionSettings["options"]> = {}
         if (line.effort) options.effort = line.effort
-        if (line.message.usage?.speed === "standard") options.fast = false
-        if (line.message.usage?.speed === "fast") options.fast = true
-        ref.settings = { model: line.message.model, options }
+        if (line.message?.usage?.speed === "standard") options.fast = false
+        if (line.message?.usage?.speed === "fast") options.fast = true
+        ref.settings = { model, options }
       }
     })
     // The tail is where the newest messages are; a file whose tail holds no
@@ -447,8 +448,8 @@ export class ClaudeProvider implements SessionProvider {
       if (line.title?.trim() && (line.type === "ai-title" || line.type === "summary")) {
         next.title = titleFrom(line.title) ?? next.title
       }
-      if (line.type === "assistant" && line.message?.model !== undefined)
-        next.model = line.message.model
+      const model = sessionModel(line)
+      if (model) next.model = model
     })
     if (lastMessageAt !== undefined && lastMessageAt > (next.updatedAt ?? ""))
       next.updatedAt = lastMessageAt
@@ -663,6 +664,18 @@ function newerMessageTimestamp(
   return held === undefined || line.timestamp > held ? line.timestamp : held
 }
 
+/**
+ * The model a main-chain assistant message ran on. Claude Code writes
+ * `<synthetic>` on messages it composed itself (an API error notice, "no
+ * response requested"); that is not a model the session can continue with
+ * and must never become the row's reading.
+ */
+function sessionModel(line: ClaudeLine): string | undefined {
+  if (line.type !== "assistant" || line.isSidechain) return undefined
+  const model = line.message?.model
+  return model && !model.startsWith("<") ? model : undefined
+}
+
 function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (line.isSidechain) return
   if (!ref.nativeId && line.sessionId !== undefined)
@@ -670,13 +683,9 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (!ref.cwd && line.cwd !== undefined) ref.cwd = line.cwd
   if (!ref.startedAt && line.timestamp !== undefined)
     ref.startedAt = line.timestamp
-  if (
-    !ref.model &&
-    line.type === "assistant" &&
-    !line.isSidechain &&
-    line.message?.model !== undefined
-  ) {
-    ref.model = line.message.model
+  if (!ref.model) {
+    const model = sessionModel(line)
+    if (model) ref.model = model
   }
   // Claude Code names the session itself (`ai-title`, once `summary`) and
   // rewrites that name as the conversation moves on, so the latest one wins.
