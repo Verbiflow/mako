@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react"
 import { ThinkingOrb, type OrbState, type OrbSize } from "thinking-orbs"
+import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { CheckIcon, CircleAlertIcon, PauseIcon, SearchIcon, PencilIcon, TerminalIcon, BrainIcon, TextCursorInputIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { AgentActivityKind } from "@/state/agent-activity"
@@ -33,11 +33,6 @@ export function ActivityMark({ className, state = "working", size }: { className
 }
 
 function ThinkingActivity({ state, kind, size, className }: { state: OrbState; kind: ActivityState; size: OrbSize; className?: string }) {
-  const [theme, setTheme] = useState<"light" | "dark">(() => globalThis.document?.documentElement.classList.contains("light") ? "light" : "dark")
-  useEffect(() => {
-    const observer = new MutationObserver(() => setTheme(document.documentElement.classList.contains("light") ? "light" : "dark"))
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
-    return () => observer.disconnect()
-  }, [])
+  const theme = useOrbTheme()
   return <ThinkingOrb state={state} size={size} theme={theme} data-size={size} data-state={kind} aria-hidden className={cn("activity-orb shrink-0", className)} />
 }
