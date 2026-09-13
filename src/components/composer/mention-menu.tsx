@@ -15,6 +15,7 @@ import { fuzzy } from "@/lib/fuzzy"
 import {
   capabilityToken,
   fileKind,
+  threadReferenceId,
   threadToken,
   type CapabilitySigil,
 } from "@/lib/mentions"
@@ -102,7 +103,7 @@ export function MentionMenu({
     if (capabilities) return []
     const candidates = [
       ...threads.map((thread) => ({
-        value: threadToken(thread.harness, thread.nativeId),
+        value: threadToken(thread.harness, threadReferenceId(thread)),
         title: thread.title ?? "Untitled conversation",
         hint: [harnessTitle(thread.harness), thread.cwd ? workspaceName(thread.cwd) : null]
           .filter(Boolean)

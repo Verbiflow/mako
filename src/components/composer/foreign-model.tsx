@@ -58,7 +58,10 @@ export function ForeignModelPicker({ view }: { view: ComposerSettingsView }) {
             "hover:bg-fill-hover aria-expanded:bg-fill-selected"
           )}
         >
-          <HarnessIcon harness={harness} className="size-3.5" />
+          {/* Once the harness chip is down to its glyph, repeating it here says nothing. */}
+          <span data-collapse="2" className="flex shrink-0">
+            <HarnessIcon harness={harness} className="size-3.5" />
+          </span>
           <span className="truncate">{label}</span>
           <ChevronDownIcon className="size-3 shrink-0 text-faint/70" />
         </button>

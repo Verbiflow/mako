@@ -46,12 +46,17 @@ export function useComposerSettings(provider?: string) {
       active: conversation?.kind === "live",
     }
   }, shallowEqual)
+  // The conversation's own path first: one native id can name two stores
+  // (a Cursor chats fork), and only the bound one holds this session.
   const nativeRef = useThreads((state) =>
     live.nativeId
-      ? state.threads.find(
+      ? (state.threads.find((entry) => entry.path === live.path) ??
+        state.threads.find(
           (entry) =>
-            entry.harness === harness && entry.nativeId === live.nativeId
-        )
+            entry.harness === harness &&
+            entry.nativeId === live.nativeId &&
+            entry.identity === undefined
+        ))
       : undefined
   )
   const target = resolveSettingsTarget({ harness, ref, live, workspace })

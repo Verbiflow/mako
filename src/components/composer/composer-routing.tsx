@@ -1,4 +1,4 @@
-import { LiveComposerControls } from "./live-controls"
+import { LiveComposerControls, NextSessionModePicker } from "./live-controls"
 import { useComposerSettings } from "./use-composer-settings"
 import { AgentPicker } from "@/components/composer/agent-picker"
 import { ForeignEffortPicker } from "@/components/composer/foreign-effort"
@@ -44,7 +44,9 @@ export function ComposerRouting() {
           canCompact={canCompact}
           compactEnabled={liveReady && queued.length === 0}
         />
-      ) : null}
+      ) : (
+        <NextSessionModePicker />
+      )}
       {moving ? (
         <span className="animate-enter flex h-7 items-center gap-1 rounded-md bg-fill-selected px-2 text-label font-medium text-foreground">
           continues here on send

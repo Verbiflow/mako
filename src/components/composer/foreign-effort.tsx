@@ -13,7 +13,11 @@ import type {
   SettingValue,
 } from "@mako/sessions/settings"
 import type { ComposerSettingsView } from "./use-composer-settings"
-import { settingSourceLabel, settingValueLabel } from "./settings-source"
+import {
+  optionLabel,
+  settingSourceLabel,
+  settingValueLabel,
+} from "./settings-source"
 import { cn } from "@/lib/utils"
 
 export function ForeignEffortPicker({ view }: { view: ComposerSettingsView }) {
@@ -36,13 +40,6 @@ export function ForeignEffortPicker({ view }: { view: ComposerSettingsView }) {
       ) : null}
     </>
   )
-}
-
-function optionLabel(option: ModelOption, current: ResolvedSetting): string {
-  if (current.kind === "unknown")
-    return `${option.role === "speed" ? "Speed" : option.label} unavailable`
-  const value = settingValueLabel(option, current.value)
-  return option.role === "reasoning" ? `${value} reasoning` : value
 }
 
 function OptionsPicker({

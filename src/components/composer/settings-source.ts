@@ -30,6 +30,24 @@ export function settingValueLabel(
   )
 }
 
+/** The value's own words already say "reasoning" for Grok ("High Effort"). */
+const REASONING_WORDS = /\b(reasoning|effort|thinking)\b/i
+
+/** The composer's one-line reading of an option: its value with its noun. */
+export function optionLabel(
+  option: ModelOption,
+  current: ResolvedSetting
+): string {
+  // Unknown means the provider has not said, not that the control is gone:
+  // the picker still offers every value.
+  if (current.kind === "unknown")
+    return `${option.role === "speed" ? "Speed" : option.label} not reported`
+  const value = settingValueLabel(option, current.value)
+  return option.role === "reasoning" && !REASONING_WORDS.test(value)
+    ? `${value} reasoning`
+    : value
+}
+
 export function settingSourceLabel(setting: ResolvedSetting): string {
   return setting.kind === "known"
     ? labels[setting.source]

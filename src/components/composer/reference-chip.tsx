@@ -1,6 +1,7 @@
 import { capabilityToken, fileKind, threadToken } from "@/lib/mentions"
 import { isMakoServerName } from "@/lib/composer-capabilities"
 import { fileName } from "@/lib/format"
+import { findThreadReference } from "@/lib/thread-references"
 import { desktop } from "@/state/desktop"
 import { useThreads } from "@/state/threads"
 import { MakoMark } from "@/components/ui/mako-mark"
@@ -79,21 +80,21 @@ export function FileChip({
 
 export function ThreadChip({
   harness,
-  nativeId,
+  id,
 }: {
   harness: string
-  nativeId: string
+  /** The token's id: the provider's identity, or a native id from an older draft. */
+  id: string
 }) {
+  // The send resolves the same way, so the chip never names a conversation
+  // the prompt would then report as unavailable.
   const thread = useThreads((state) =>
-    state.threads.find(
-      (entry) =>
-        entry.harness === harness && entry.nativeId.startsWith(nativeId)
-    )
+    findThreadReference(state.threads, harness, id)
   )
   return (
     <span
       title={thread?.title ?? `${harness} conversation`}
-      data-copy-reference={threadToken(harness, nativeId)}
+      data-copy-reference={threadToken(harness, id)}
       className={cn(
         "inline-flex max-w-[18rem] items-baseline gap-1 rounded bg-raised px-1 align-baseline",
         "text-[0.92em] leading-[1.35] text-foreground ring-1 ring-hairline ring-inset",

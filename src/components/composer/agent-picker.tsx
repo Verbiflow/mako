@@ -36,8 +36,11 @@ export function AgentPicker() {
           )}
         >
           <HarnessIcon harness={selected} className="size-3.5" />
-          <span className="truncate">{harnessLabel(selected)}</span>
-          <ChevronDownIcon className="size-3 shrink-0 text-faint/70" />
+          {/* Second to go when the routing row is short of room: the glyph alone names the harness. */}
+          <span data-collapse="2" className="truncate">
+            {harnessLabel(selected)}
+          </span>
+          <ChevronDownIcon data-collapse="2" className="size-3 shrink-0 text-faint/70" />
         </button>
       </PopoverTrigger>
       <PopoverContent

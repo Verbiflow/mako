@@ -19,6 +19,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type RefObject,
 } from "react"
 import {
   removeAttachmentReference,
@@ -29,9 +30,12 @@ import { Banner } from "@/components/composer/banner"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ComposerRouting } from "@/components/composer/composer-routing"
 import { steeringTitle } from "@/components/composer/steering"
+import { useCompactRow } from "@/components/composer/use-compact-row"
+
+/** Access to its glyph, then the harness to its glyph; see the routing row. */
+const ROUTING_COMPACT_LEVELS = 2
 import { usePrefs } from "@/state/prefs"
 import { ComposerAdditions } from "@/components/composer/composer-additions"
-import { ContextDial } from "@/components/composer/context-dial"
 import { harnessTitle } from "@/components/composer/harness-title"
 import { MentionMenu } from "@/components/composer/mention-menu"
 import { ReferenceOverlay } from "@/components/composer/reference-overlay"
@@ -43,7 +47,12 @@ import {
   type Attachment,
   type AttachmentInput,
 } from "@/lib/attachments"
-import { composerActionKind, composerTurnRunning } from "@/lib/composer-action"
+import {
+  composerActionKind,
+  composerEnterAction,
+  composerRunningPlaceholder,
+  composerTurnRunning,
+} from "@/lib/composer-action"
 import { textOf } from "@/lib/format"
 import { mentionAt, replaceMention, type ActiveMention } from "@/lib/mentions"
 import {
@@ -92,6 +101,29 @@ declare global {
     "mako:compose": ComposerDraftEvent
     "mako:insert": ComposerTextEvent
   }
+}
+
+/**
+ * Focus the composer on the next frame and place the caret — unless another
+ * element has taken focus in the meantime, in which case leave it there.
+ * A blind deferred focus once pulled focus back from the + menu the user had
+ * opened in that same frame, and a non-modal popover reads that as focus
+ * leaving, so it closed before its item could be clicked. Focus that moved
+ * to nothing (the body, because the focused element unmounted) still counts
+ * as ours to take.
+ */
+function focusComposerSoon(
+  node: RefObject<HTMLTextAreaElement | null>,
+  caret: number
+): void {
+  const before = document.activeElement
+  requestAnimationFrame(() => {
+    const textarea = node.current
+    const now = document.activeElement
+    if (!textarea || (now && now !== before && now !== document.body)) return
+    textarea.focus()
+    textarea.setSelectionRange(caret, caret)
+  })
 }
 
 function toAcpPromptAttachment(item: Attachment): PromptAttachment {
@@ -149,6 +181,8 @@ export function Composer() {
   const [expanded, setExpanded] = useState(false)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
+  const routingRow = useRef<HTMLDivElement>(null)
+  useCompactRow(routingRow, ROUTING_COMPACT_LEVELS)
   const filePicker = useRef<HTMLInputElement>(null)
   const activeAttachmentDraft = useRef(draftKey)
   const preparingSends = useRef(new Set<string>())
@@ -278,23 +312,23 @@ export function Composer() {
       if (detail.attachments) reattach(detail.attachments)
       updateRef.current(body)
       replaceDraftPlans(activeAttachmentDraft.current, plans)
-      requestAnimationFrame(() => {
-        const node = textarea.current
-        node?.focus()
-        node?.setSelectionRange(body.length, body.length)
-      })
+      // The menu follows the token under the caret, whoever moved it. Text
+      // set from outside never passes through the textarea's own key and
+      // click handlers, so a menu opened for the old text stayed open over
+      // the new one until the next keystroke.
+      setMention(mentionAt(body, body.length))
+      focusComposerSoon(textarea, body.length)
     }
     const insert = (event: ComposerTextEvent) => {
       const { detail } = event
       const node = textarea.current
       const current = draftRef.current
       const at = node?.selectionStart ?? current.length
+      const caret = at + detail.length
       const next = `${current.slice(0, at)}${detail}${current.slice(at)}`
       updateRef.current(next)
-      requestAnimationFrame(() => {
-        node?.focus()
-        node?.setSelectionRange(at + detail.length, at + detail.length)
-      })
+      setMention(mentionAt(next, caret))
+      focusComposerSoon(textarea, caret)
     }
     window.addEventListener("mako:focus-composer", focus)
     window.addEventListener("mako:compose", setText)
@@ -488,11 +522,7 @@ export function Composer() {
         prefetchThreadReferences(value, threadsStore.get().threads)
       }
       setMention(null)
-      requestAnimationFrame(() => {
-        const node = textarea.current
-        node?.focus()
-        node?.setSelectionRange(next.caret, next.caret)
-      })
+      focusComposerSoon(textarea, next.caret)
     },
     [draft, mention, update]
   )
@@ -637,10 +667,14 @@ export function Composer() {
     viewingRunning,
   })
   const hasContent = Boolean(draft.trim()) || attachments.items.length > 0
+  const enterAction = composerEnterAction({
+    canSteer: liveOwnsComposer && canSteer,
+    steerOnEnter,
+  })
   const primaryAction = composerActionKind({
     running: turnRunning && hostConnected && !opening,
     hasContent,
-    steer: liveOwnsComposer && canSteer && steerOnEnter,
+    steer: enterAction === "steer",
   })
   const viewingResumeUnavailable = useThreads(
     (state) => state.viewing?.ref.resumeUnavailable
@@ -655,7 +689,7 @@ export function Composer() {
       ? liveStarting
         ? `Queue a message for ${harnessTitle(liveHarness)}`
         : liveRunning
-          ? `Queue a message for ${harnessTitle(liveHarness)}`
+          ? composerRunningPlaceholder(harnessTitle(liveHarness), enterAction, canSteer)
           : `Reply — ${harnessTitle(liveHarness)} answers live`
       : routedHarness
         ? newHarness !== routedHarness
@@ -813,8 +847,15 @@ export function Composer() {
               onKeyUp={syncMention}
               onClick={syncMention}
               onBlur={() => {
-                // Let a click inside the menu land before it unmounts.
-                setTimeout(() => setMention(null), 120)
+                // Let a click inside the menu land before it unmounts. Focus
+                // that comes straight back keeps the menu: the + menu takes
+                // focus, inserts a sigil and returns it within this window,
+                // and a timer that cleared blindly closed the menu it had
+                // just opened.
+                setTimeout(() => {
+                  if (document.activeElement !== textarea.current)
+                    setMention(null)
+                }, 120)
               }}
               onKeyDown={onKeyDown}
               onCopy={clipboard.onCopy}
@@ -841,16 +882,27 @@ export function Composer() {
               disabled={!draftReady}
               attachFiles={attach}
               onAttach={() => filePicker.current?.click()}
-              onReference={(sigil) => {
+              onReference={(sigil) =>
                 window.dispatchEvent(new CustomEvent("mako:insert", { detail: sigil }))
-                requestAnimationFrame(syncMention)
-              }}
+              }
             />
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden">
+            {/*
+             * The row gives way in a fixed order as the pane narrows, found
+             * by measuring rather than by a width breakpoint: access drops
+             * to its glyph first (level 1), then the harness (level 2). The
+             * model and its reasoning are what people read here, so they
+             * are never shortened; whatever still does not fit scrolls
+             * behind a faded edge instead of being cut off with no sign
+             * that anything is missing.
+             */}
+            <div
+              ref={routingRow}
+              className="composer-routing flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
+            >
               <ComposerRouting />
             </div>
 
-            <div className="ml-auto flex shrink-0 items-center gap-1">
+            <div className="ml-2 flex shrink-0 items-center gap-1">
               <Slot
                 name="composer.trailing"
                 meta={meta}
@@ -860,22 +912,13 @@ export function Composer() {
               {draft.length > 0 || expanded ? <IconAction label={expanded ? "Collapse draft" : "Expand draft"} size="xs" side="top" onClick={() => { setExpanded((value) => !value); textarea.current?.focus({ preventScroll: true }) }}>
                 {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
               </IconAction> : null}
-              <ContextDial />
-              {liveOwnsComposer && liveRunning && canSteer ? (
-                <button
-                  type="button"
-                  className="pressable rounded px-2 py-1 text-label text-muted-foreground hover:bg-fill-hover disabled:opacity-40"
-                  disabled={!hasContent || !hostConnected || Boolean(opening)}
-                  onClick={() => void submit(steerOnEnter ? undefined : "steer")}
-                  title={
-                    steerOnEnter
-                      ? "Send after this turn finishes (Cmd+Enter)"
-                      : `${steerTitle} (Cmd+Enter)`
-                  }
-                >
-                  {steerOnEnter ? "Queue" : "Steer"}
-                </button>
-              ) : null}
+              {/*
+               * What Enter does is said once, by the placeholder, and shown
+               * by the button's icon; Cmd+Enter does the other thing. The
+               * preference itself is a row in Settings > Conversation. A
+               * toggle here once sat 4px from the primary action at three
+               * times its width and made the pair read as one lump.
+               */}
               <ComposerActionButton
                 action={primaryAction}
                 ready={hasContent && !opening && hostConnected}
