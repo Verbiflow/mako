@@ -309,7 +309,9 @@ function TerminalViewport({ session }: { session: TerminalSession }) {
     terminal.loadAddon(
       new WebLinksAddon(
         (_event, uri) => void openTerminalLink(sessionCwd, uri),
-        { urlRegex: /\b(?:https?:\/\/|file:\/\/\/)[^\s"'<>]+/g }
+        // The addon adds `g` itself (`new RegExp(source, flags + "g")`); a
+        // global regex here made every link hover throw "Invalid flags 'gg'".
+        { urlRegex: /\b(?:https?:\/\/|file:\/\/\/)[^\s"'<>]+/ }
       )
     )
     terminal.registerLinkProvider(

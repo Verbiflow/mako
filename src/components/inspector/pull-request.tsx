@@ -24,6 +24,7 @@ import {
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 
 const PULL_REQUEST_PROMPT = `Write a pull request title and body from this diff.
 
@@ -254,7 +255,7 @@ function ComposePull({
       setBody((current) => current || rest.join("\n").trim())
     } catch (error) {
       toast.error("Pull request draft was not generated", {
-          duration: Infinity,
+        duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
         action: { label: "Retry", onClick: () => void composePull() },
       })
@@ -277,7 +278,7 @@ function ComposePull({
       onDone()
     } catch (error) {
       toast.error("Pull request was not created", {
-          duration: Infinity,
+        duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
         action: { label: "Retry", onClick: () => void createPullRequest() },
       })
@@ -381,7 +382,7 @@ function PullSummary({ pull, loading }: { pull: Pull; loading: boolean }) {
       toast.success(next?.state === "merged" ? `Merged #${next.number}` : "Pull request merged")
     } catch (error) {
       toast.error("Pull request was not merged", {
-          duration: Infinity,
+        duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
         action: {
           label: "Retry",

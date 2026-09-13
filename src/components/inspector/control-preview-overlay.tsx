@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react"
-import { GlobeIcon, MonitorIcon, SquareIcon, XIcon } from "lucide-react"
+import { GlobeIcon, MonitorIcon, XIcon } from "lucide-react"
 import {
   controlPreviewStream,
-  stopControlTask,
   useControlPreview,
   watchControlPreview,
 } from "@/state/control-preview"
@@ -49,7 +48,7 @@ function TaskPreview({ id }: { id: string }) {
         <button
           type="button"
           onClick={() => setCollapsed(false)}
-          className="pressable pointer-events-auto ml-auto flex h-7 items-center gap-1.5 rounded-full border border-border bg-popover px-2.5 text-label text-muted-foreground"
+          className="glass-panel pressable pointer-events-auto ml-auto flex h-7 items-center gap-1.5 rounded-full px-2.5 text-label text-muted-foreground"
         >
           <MonitorIcon className="size-3" />
           Show preview
@@ -57,26 +56,15 @@ function TaskPreview({ id }: { id: string }) {
       ) : (
         visible &&
         activity && (
-          <PreviewCard
-            id={id}
-            onClose={() => setCollapsed(true)}
-            active={Boolean(activity)}
-          />
+          <PreviewCard id={id} onClose={() => setCollapsed(true)} />
         )
       )}
     </div>
   )
 }
 
-function PreviewCard({
-  id,
-  onClose,
-  active,
-}: {
-  id: string
-  onClose: () => void
-  active: boolean
-}) {
+/** Stopping the run is the composer's job; this card only shows what the agent sees. */
+function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
   const preview = useControlPreview((state) => state.previews[id])
   useEffect(() => watchControlPreview(id), [id])
   const error = useControlPreview((state) => state.errors[id])
@@ -87,9 +75,10 @@ function PreviewCard({
   return (
     <section
       aria-label="Live control preview"
-      className="overlay-panel pointer-events-auto overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground"
+      className="glass-panel pointer-events-auto overflow-hidden rounded-xl text-popover-foreground"
     >
-      <div className="group relative flex aspect-video items-center justify-center overflow-hidden bg-background">
+      {/* The image sets its own height; no letterbox band around it. */}
+      <div className="group relative flex min-h-16 items-center justify-center overflow-hidden">
         {nativeWindow ? (
           <NativePreview
             key={`${id}:${nativeWindow.pid}:${nativeWindow.windowId}`}
@@ -105,7 +94,7 @@ function PreviewCard({
             <img
               src={`data:${frame.image.mimeType};base64,${frame.image.data}`}
               alt="Live view of the tab this task is using"
-              className="h-full w-full object-contain"
+              className="block max-h-64 w-full object-contain"
               decoding="async"
             />
           )
@@ -114,43 +103,32 @@ function PreviewCard({
           type="button"
           aria-label="Hide preview"
           onClick={onClose}
-          className="pressable absolute top-2 right-2 flex size-6 items-center justify-center rounded-full border border-hairline bg-popover/90 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          className="glass-control pressable absolute top-2 right-2 flex size-6 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
         >
           <XIcon className="size-3.5" />
         </button>
-      </div>
-      <div className="flex h-8 items-center gap-2 border-t border-hairline px-2.5 text-label">
-        {activity?.kind === "browser" ? (
-          <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <MonitorIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          {activity?.kind === "browser" ? "Browser" : "Computer"}
-          {activity ? ` · ${activity.operation.replaceAll("_", " ")}` : ""}
-        </span>
-        {activity?.status === "running" && (
-          <span
-            className="size-1.5 shrink-0 rounded-full bg-ember"
-            aria-label="Working"
-          />
-        )}
-        {active && (
-          <button
-            type="button"
-            aria-label="Stop task"
-            onClick={() => void stopControlTask(id)}
-            className="pressable flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-fill-hover hover:text-foreground"
-            title="Stop task"
-          >
-            <SquareIcon className="size-2.5 fill-current" />
-          </button>
-        )}
+        <div className="glass-caption absolute inset-x-0 bottom-0 flex h-10 items-end gap-2 px-2.5 pb-2 text-label">
+          {activity?.kind === "browser" ? (
+            <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <MonitorIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="min-w-0 flex-1 truncate leading-none text-foreground">
+            {activity?.kind === "browser" ? "Browser" : "Computer"}
+            {activity ? ` · ${activity.operation.replaceAll("_", " ")}` : ""}
+          </span>
+          {activity?.status === "running" && (
+            <span
+              className="mb-px size-1.5 shrink-0 rounded-full bg-ember"
+              aria-label="Working"
+            />
+          )}
+        </div>
       </div>
       {error && (
         <p
           role="status"
-          className="px-2.5 pb-2 text-label text-muted-foreground"
+          className="px-2.5 py-2 text-label text-muted-foreground"
         >
           {error}
         </p>
@@ -194,11 +172,11 @@ function NativePreview({ id, poster }: { id: string; poster?: string }) {
       <img
         src={poster}
         alt="Latest view of this task's application window"
-        className="h-full w-full object-contain"
+        className="block max-h-64 w-full object-contain"
         decoding="async"
       />
     ) : (
-      <span role="status" className="text-label text-muted-foreground">
+      <span role="status" className="py-6 text-label text-muted-foreground">
         Waiting for a screenshot
       </span>
     )
@@ -210,7 +188,7 @@ function NativePreview({ id, poster }: { id: string; poster?: string }) {
       playsInline
       poster={poster}
       aria-label="Live application window"
-      className="h-full w-full object-contain"
+      className="block max-h-64 w-full object-contain"
     />
   )
 }

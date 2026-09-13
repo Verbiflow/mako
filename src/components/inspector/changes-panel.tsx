@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { MultiFileDiff, Virtualizer } from "@pierre/diffs/react"
 import { Action, Blank, IconAction } from "@/components/ui/kit"
 import { useWorkspaceTransition } from "@/state/workspace-transition"
@@ -238,7 +239,7 @@ function WorkspaceChanges() {
       else await gitActions.unstage(paths)
     } catch (error) {
       toast.error(stage ? "Files were not staged" : "Files were not unstaged", {
-        duration: Infinity,
+        duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
         action: { label: "Refresh changes", onClick: () => void actions.refreshGit() },
       })
@@ -259,8 +260,14 @@ function WorkspaceChanges() {
   }, [])
 
   const stagePaths = useCallback(async (paths: string[], stage: boolean) => {
-    if (paths.length === 0) return
-    const targets = new Set(paths)
+    // Only paths whose state changes. A folder or "everything" selection
+    // includes rows already where the user wants them, and one of those can
+    // be a staged deletion, which exists in neither the index nor the
+    // worktree; the engine refuses a selection it cannot find and the whole
+    // write fails. Ask only for the rows that move.
+    const current = new Map(files.map((file) => [file.path, requestedStages.current.get(file.path) ?? file.staged]))
+    const targets = new Set(paths.filter((path) => current.get(path) !== stage))
+    if (targets.size === 0) return
     for (const file of files) {
       if (!stage && targets.has(file.path) && file.status === "renamed" && file.oldName) targets.add(file.oldName)
     }
@@ -298,8 +305,11 @@ function WorkspaceChanges() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline px-2.5 text-label text-faint">
-        <span role="status" className="min-w-0 flex-1 truncate">
-          {staging ? "Updating staging..." : `${files.length} files changed${staged > 0 ? ` · ${staged} staged` : ""}`}
+        {/* The counts already project pending checkbox intent, so a stage
+            write in flight only marks the reading busy; swapping the whole
+            sentence for "Updating..." and back made every click blink. */}
+        <span role="status" aria-busy={staging || undefined} className="min-w-0 flex-1 truncate tabular">
+          {`${files.length} files changed${staged > 0 ? ` · ${staged} staged` : ""}`}
         </span>
         {files.every((file) => file.insertions !== null && file.deletions !== null) ? <>
           <span className="tabular text-added">+{files.reduce((sum, file) => sum + (file.insertions ?? 0), 0)}</span>
@@ -441,7 +451,7 @@ function WorkspaceChanges() {
 
       <CommitsSection onPickFile={pickCommitFile} onPickCommit={pickCommit} />
       <ReviewBar workspace={workspace} />
-      <CommitBox staged={staged} total={files.length} staging={staging} />
+      <CommitBox staged={staged} total={files.length} />
       <PullRequestCard />
     </div>
   )
