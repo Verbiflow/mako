@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { join, sep } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import type { ProviderBinding } from "../../contracts/conversation-control.js"
+import { resumable, type ProviderBinding, type ResumeVerdict } from "../../contracts/conversation-control.js"
 import { probeOpenFiles } from "../open-files-probe.js"
 
 /**
@@ -87,18 +87,28 @@ export function cursorResumePolicy(home = homedir()) {
       db?.close()
     }
   }
-  const canResumeBinding = async (binding: ProviderBinding): Promise<boolean> => {
-    if (!binding.nativeId || !binding.path || identity(binding.path) !== binding.nativeId) return false
+  const resumeVerdict = async (binding: ProviderBinding): Promise<ResumeVerdict> => {
+    if (!binding.nativeId || !binding.path || identity(binding.path) !== binding.nativeId)
+      return { kind: "unavailable", reason: "The saved binding does not name a Cursor ACP session store." }
     // Another cursor-agent with the store open is the owner; a second loader
-    // would write the same SQLite file from two processes.
+    // would write the same SQLite file from two processes. `cursor-agent` is
+    // a shell wrapper that execs Node, so lsof lists its files under `node`;
+    // matching the wrapper's name alone never saw an open store.
     const open = await probeOpenFiles({
-      processNames: ["cursor-agent"],
+      processNames: ["node", "cursor-agent", "Cursor"],
       signal: AbortSignal.timeout(6_000),
       accept: (path) => path === binding.path,
     }).catch(() => ({ kind: "unavailable" as const }))
-    if (open.kind !== "available" || open.paths.length > 0) return false
+    if (open.kind !== "available")
+      return { kind: "unavailable", reason: "Whether another cursor-agent has this session open could not be checked." }
+    if (open.paths.length > 0) return { kind: "held", by: "another cursor-agent process" }
     const current = await checkpoint(binding.path)
-    return current !== undefined && (binding.checkpoint === undefined || current === binding.checkpoint)
+    if (current === undefined)
+      return { kind: "unavailable", reason: "The session store is missing or unreadable." }
+    return { kind: "resumable", record: binding.checkpoint === undefined || current === binding.checkpoint ? "same" : "moved" }
   }
-  return { checkpoint, canResumeBinding }
+  /** The strict form: unowned and unchanged since the binding's checkpoint. */
+  const canResumeBinding = async (binding: ProviderBinding): Promise<boolean> =>
+    resumable(await resumeVerdict(binding), "same")
+  return { checkpoint, resumeVerdict, canResumeBinding }
 }

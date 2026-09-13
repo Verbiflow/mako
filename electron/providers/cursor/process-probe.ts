@@ -39,8 +39,12 @@ export const cursorProcessProbe: ProviderProcessProbe = {
       join(home, ".cursor", "acp-sessions"),
     ]
     const prefixes = roots.map((root) => `${root.replace(/[\\/]$/, "")}/`)
+    // `cursor-agent` is a shell wrapper that execs Node, so lsof reports
+    // the process as `node`; matching only the wrapper's name once found no
+    // store at all (verified 2026-09-12). Every Node process is scanned and
+    // the store paths do the filtering.
     const result = await probeOpenFiles({
-      processNames: ["cursor-agent", "Cursor"],
+      processNames: ["node", "cursor-agent", "Cursor"],
       signal,
       accept: (path) =>
         path.endsWith("/store.db") &&

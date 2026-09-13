@@ -32,7 +32,7 @@ export interface AcpLaunch {
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "canResumeBinding"> {
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict"> {
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
   /**

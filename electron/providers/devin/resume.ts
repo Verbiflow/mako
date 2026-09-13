@@ -4,7 +4,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import type { ProviderBinding } from "../../contracts/conversation-control.js"
+import { resumable, type ProviderBinding, type ResumeVerdict } from "../../contracts/conversation-control.js"
 
 const rowSchema = z.object({ main_chain_id: z.number().nullable(), model: z.string().nullable(), working_directory: z.string() })
 
@@ -28,33 +28,46 @@ export function devinResumePolicy(directory = join(homedir(), ".local", "share",
       db?.close()
     }
   }
-  const canResumeBinding = async (binding: ProviderBinding): Promise<boolean> => {
-    if (!binding.nativeId || !binding.path || identity(binding.path) !== binding.nativeId) return false
+  /** Devin's own lock: a live pid holds the session, a dead one's lock is stale, an unreadable one is not trusted. */
+  const lockVerdict = async (nativeId: string): Promise<ResumeVerdict | null> => {
+    const unreadable: ResumeVerdict = { kind: "unavailable", reason: "Devin's session lock could not be read." }
     try {
-      const file = await open(join(directory, "session_locks", `${binding.nativeId}.lock`), "r")
+      const file = await open(join(directory, "session_locks", `${nativeId}.lock`), "r")
       let pid: number
       try {
         const bytes = Buffer.alloc(65)
         const read = await file.read(bytes, 0, bytes.length, 0)
-        if (read.bytesRead === bytes.length) return false
+        if (read.bytesRead === bytes.length) return unreadable
         const value = bytes.subarray(0, read.bytesRead).toString("utf8").trim()
-        if (!/^\d+$/.test(value)) return false
+        if (!/^\d+$/.test(value)) return unreadable
         pid = Number(value)
-        if (!Number.isSafeInteger(pid) || pid <= 0) return false
+        if (!Number.isSafeInteger(pid) || pid <= 0) return unreadable
       } finally {
         await file.close()
       }
       try {
         process.kill(pid, 0)
-        return false
+        return { kind: "held", by: `a Devin process (pid ${pid})` }
       } catch (error) {
-        if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") return false
+        if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") return unreadable
       }
     } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return false
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return unreadable
     }
-    const current = await checkpoint(binding.path)
-    return current !== undefined && (binding.checkpoint === undefined || current === binding.checkpoint)
+    return null
   }
-  return { checkpoint, canResumeBinding }
+  const resumeVerdict = async (binding: ProviderBinding): Promise<ResumeVerdict> => {
+    if (!binding.nativeId || !binding.path || identity(binding.path) !== binding.nativeId)
+      return { kind: "unavailable", reason: "The saved binding does not name a Devin session." }
+    const locked = await lockVerdict(binding.nativeId)
+    if (locked) return locked
+    const current = await checkpoint(binding.path)
+    if (current === undefined)
+      return { kind: "unavailable", reason: "The Devin session is missing from its database." }
+    return { kind: "resumable", record: binding.checkpoint === undefined || current === binding.checkpoint ? "same" : "moved" }
+  }
+  /** The strict form: unowned and unchanged since the binding's checkpoint. */
+  const canResumeBinding = async (binding: ProviderBinding): Promise<boolean> =>
+    resumable(await resumeVerdict(binding), "same")
+  return { checkpoint, resumeVerdict, canResumeBinding }
 }

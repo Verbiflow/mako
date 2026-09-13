@@ -1,5 +1,5 @@
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { ProviderBinding } from "../contracts/conversation-control.js"
+import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
 import type {
   LivePermissionResponse,
   PromptAttachment,
@@ -38,7 +38,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   forkPoint?: "run" | "checkpoint"
   canResume: boolean
   checkpoint?(path: string): Promise<string | undefined>
-  canResumeBinding?(binding: ProviderBinding): Promise<boolean>
+  /** Ownership and record state of a saved binding; absent, the host's generic probe-and-hash check answers. */
+  resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   available(appPath: string): boolean
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
   prompt(

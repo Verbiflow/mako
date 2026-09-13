@@ -4,7 +4,13 @@ import { COMMIT_PROMPT, type AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
 import { CommitGeneration } from "../commit-generation.js"
 import { UtilityModelStore } from "../utility-model-store.js"
+import {
+  legacyUtilityModelDirectory,
+  migrateUtilityModels,
+  utilityModelDirectory,
+} from "../utility-model-location.js"
 import { UtilityModelCatalog } from "../utility-model-catalog.js"
+import { hostLog, hostWarn } from "../host-log.js"
 import type {
   CommitGenerationInput,
   GitPushInput,
@@ -70,8 +76,33 @@ export function installGitIpc(context: GitIpcContext): void {
   registerIpc("mako:git-commit-diff-all", (_event, hash: string) =>
     withHost((host) => host.gitCommitDiffAll(hash))
   )
+  const dataRoot = app.getPath("userData")
+  const directory = utilityModelDirectory({ dataRoot, env: process.env })
+  const migration = migrateUtilityModels(
+    legacyUtilityModelDirectory(dataRoot),
+    directory
+  ).then(
+    (moved) => {
+      if (moved.moved.length || moved.replaced.length || moved.dropped.length)
+        hostLog("utility-models", "moved profile connections to the user store", {
+          to: directory,
+          moved: moved.moved.join(","),
+          replaced: moved.replaced.join(","),
+          dropped: moved.dropped.join(","),
+        })
+    },
+    // A copy that would not move stays where it was, in host.log, and out of
+    // the way: the user can still connect here, and nothing was deleted.
+    (error: NodeJS.ErrnoException) => {
+      hostWarn("utility-models", "profile connections were not moved", {
+        from: legacyUtilityModelDirectory(dataRoot),
+        to: directory,
+        error: error.message,
+      })
+    }
+  )
   const models = new UtilityModelStore(
-    join(app.getPath("userData"), "utility-models"),
+    directory,
     {
       available: () =>
         safeStorage.isEncryptionAvailable() &&
@@ -79,7 +110,8 @@ export function installGitIpc(context: GitIpcContext): void {
           safeStorage.getSelectedStorageBackend() !== "basic_text"),
       encrypt: (value) => safeStorage.encryptString(value),
       decrypt: (value) => safeStorage.decryptString(value),
-    }
+    },
+    { ready: migration }
   )
   const generation = new CommitGeneration(models)
   const catalog = new UtilityModelCatalog(models)

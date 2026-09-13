@@ -8,7 +8,7 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
     provider: source.provider,
     canResume: source.canResume,
     checkpoint: source.checkpoint,
-    canResumeBinding: source.canResumeBinding,
+    resumeVerdict: source.resumeVerdict,
     available: (appPath) => source.available(appPath),
     start: async (cwd, options) =>
       (await import("../acp.js")).liveStart(source.provider, cwd, options),
