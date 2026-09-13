@@ -9,6 +9,7 @@ import {
 import { section as agents } from "@/components/settings/sections/agents"
 import { section as usage } from "@/components/settings/sections/usage"
 import { section as appearance } from "@/components/settings/sections/appearance"
+import { section as notifications } from "@/components/settings/sections/notifications"
 import { section as conversation } from "@/components/settings/sections/conversation"
 import { section as editor } from "@/components/settings/sections/editor"
 import { section as keyboard } from "@/components/settings/sections/keyboard"
@@ -26,6 +27,7 @@ const SECTIONS: readonly SettingsSection[] = [
   agents,
   usage,
   appearance,
+  notifications,
   conversation,
   editor,
   keyboard,

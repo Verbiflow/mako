@@ -5,7 +5,7 @@ import { ExternalLinkIcon } from "lucide-react"
 import { FaGithub } from "react-icons/fa"
 import appIcon from "/icons/app-icon.png?url"
 
-const REPOSITORY = "https://github.com/kashyab12/mako"
+const REPOSITORY = "https://github.com/Verbiflow/mako"
 
 export function AboutSection() {
   const version = useUpdates((state) => state.version)

@@ -17,6 +17,7 @@ import { formatBytes, formatRelative } from "@/lib/format"
 import { usageWindowLabel } from "@/lib/usage-window"
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 
 /**
  * The harnesses this machine can host, and the accounts that need keys.
@@ -149,7 +150,7 @@ function HarnessAccounts() {
       setCaptureName("")
     } catch (error) {
       toast.error("Account was not captured", {
-        duration: Infinity,
+        duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
         action: { label: "Try again", onClick: () => void capture() },
       })

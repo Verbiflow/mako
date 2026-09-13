@@ -4,9 +4,20 @@ import { togglePref, usePrefs } from "@/state/prefs"
 export function ConversationSection() {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
   const autoDiff = usePrefs((prefs) => prefs.autoOpenDiff)
+  const steerOnEnter = usePrefs((prefs) => prefs.steerOnEnter)
 
   return (
     <ListCard>
+      <SettingRow
+        title="Enter steers a running turn"
+        description="Off makes Enter queue behind the turn; Cmd+Enter always does the other. Agents that cannot take a message mid-turn queue either way"
+      >
+        <Toggle
+          label="Enter steers a running turn"
+          on={steerOnEnter}
+          onChange={() => togglePref("steerOnEnter")}
+        />
+      </SettingRow>
       <SettingRow
         title="Show reasoning"
         description="Collapsed by default; this hides it entirely"
