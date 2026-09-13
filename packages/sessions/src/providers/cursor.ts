@@ -28,7 +28,7 @@ import { attachmentFromUrl, type AttachmentContent } from "../content.js"
 
 import { readdir, readFile, stat, rm } from "node:fs/promises"
 import { homedir } from "node:os"
-import { dirname, join, basename } from "node:path"
+import { dirname, join, basename, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import {
   clip,
@@ -330,6 +330,8 @@ export class CursorProvider implements SessionProvider {
   private readonly desktop: CursorDesktopStore
   private chatRoot: string
   private acpRoot: string
+  /** 1: chats stores carry their own identity and no live resume. */
+  peekVersion = 1
 
   constructor(home = homedir()) {
     this.desktop = new CursorDesktopStore(home)
@@ -354,6 +356,10 @@ export class CursorProvider implements SessionProvider {
     for (const session of acpSessions)
       paths.push(join(this.acpRoot, session, "store.db"))
     return [...(await nativeFiles(paths)), ...(await this.desktop.discover())]
+  }
+
+  private ownsChat(path: string): boolean {
+    return path.startsWith(`${this.chatRoot}${sep}`)
   }
 
   /** Remove an ACP session directory. Cursor Desktop's own chats are not ours to delete. */
@@ -382,9 +388,11 @@ export class CursorProvider implements SessionProvider {
         meta.name && meta.name !== "New Agent"
           ? titleFrom(meta.name)
           : undefined
+      const nativeId =
+        meta.agentId ?? dirname(file.path).split("/").pop() ?? ""
       const ref: ThreadRef = {
         harness: this.harness,
-        nativeId: meta.agentId ?? dirname(file.path).split("/").pop() ?? "",
+        nativeId,
         path: file.path,
         title: named,
         model: meta.model,
@@ -397,6 +405,15 @@ export class CursorProvider implements SessionProvider {
         updatedAt: new Date(file.mtimeMs).toISOString(),
         bytes: file.bytes,
         revision: file.revision,
+      }
+      // `cursor-agent -p --resume <id>` on an ACP session writes its new turns
+      // to a second store under chats/ with the same agent id (verified
+      // 2026-09-12). The two stores hold different turns, and only the
+      // acp-sessions store answers `session/load`; a chats store is its own
+      // row and continues through the CLI.
+      if (this.ownsChat(file.path)) {
+        ref.identity = `chats:${nativeId}`
+        ref.liveResume = false
       }
       // meta.json is the cheap source of cwd and honest activity times.
       const sidecar = await readFile(

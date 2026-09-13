@@ -46,6 +46,32 @@ export interface SessionProvider {
   rescanDebounceMs?: number
 
   /**
+   * A write under the root may not be the session file itself — Grok keeps
+   * `summary.json` beside `updates.jsonl`. Return the native file the catalog
+   * should refresh, or null to ignore the event. Unset means the watched path
+   * is the session file.
+   */
+  watchTarget?(path: string): string | null
+
+  /**
+   * True when `updatedAt` comes from what the provider reads — the newest
+   * message's own timestamp — never from the file's mtime. Claude Code appends
+   * `last-prompt` and `cost-state` records when a resident CLI exits, so
+   * every host restart once bumped every idle session to "now". The catalog
+   * then keeps the previous stamp when such a file grows and lets `refine`
+   * move it forward only when the appended bytes carry a message.
+   */
+  activityFromContent?: boolean
+
+  /**
+   * Bump when this provider's `peek` starts reading something new from a
+   * store (a fork marker, a subagent flag). The catalog re-peeks this
+   * provider's cached rows once instead of trusting an entry written under
+   * the old rule, and no other provider's cache is touched.
+   */
+  peekVersion?: number
+
+  /**
    * Directories the harness writes sessions under. Used for discovery and
    * for watching; a root that does not exist simply contributes nothing.
    */

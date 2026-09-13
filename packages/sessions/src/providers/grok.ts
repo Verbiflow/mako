@@ -10,10 +10,23 @@ import type { AttachmentContent, ToolDetail } from "../content.js"
  * for identity, title, timestamps, current model, and reasoning effort. Older
  * sessions have only `chat_history.jsonl`; discovery falls back to that file,
  * but never returns both logs for one session.
+ *
+ * A session directory also holds sidecars Grok rewrites constantly
+ * (`summary.json`, `chat_history.jsonl` beside updates, `events.jsonl`).
+ * Those are not session files. Peeking them as rows makes the catalog
+ * oscillate between two titles for one native id.
+ *
+ * `session/new` writes the directory before any prompt. That placeholder is
+ * not a catalog thread; the row appears when a user turn or generated title
+ * lands. Subagent children also live in the normal sessions tree — skip them
+ * via `session_kind` or the parent's `subagents/<id>/meta.json`, the same
+ * way Codex skips `thread_source=subagent` and Cursor skips `subagentInfo`.
+ * Forks only carry `parent_session_id` and stay visible.
  */
 
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
+import { existsSync } from "node:fs"
 import { readdir, readFile, stat, rm } from "node:fs/promises"
 import {
   clip,
@@ -36,6 +49,8 @@ import type { NativeFile, SessionProvider } from "./types.js"
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
 const UPDATE_METHODS = new Set(["session/update", "_x.ai/session/update"])
+const TRANSCRIPT_UPDATES = "updates.jsonl"
+const TRANSCRIPT_LEGACY = "chat_history.jsonl"
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonObject | JsonValue[]
@@ -49,9 +64,10 @@ interface GrokSummary {
   cwd?: string
   title?: string
   createdAt?: string
-  updatedAt?: string
   model?: string
   effort?: string
+  sessionKind?: string
+  parentSessionId?: string
 }
 
 interface GrokUpdateBase {
@@ -252,14 +268,44 @@ function parseSummary(raw: string): GrokSummary | null {
     id,
     cwd: stringValue(info?.["cwd"]),
     title:
-      stringValue(root["session_summary"]) ||
-      stringValue(root["generated_title"]),
+      stringValue(root["generated_title"]) ||
+      stringValue(root["session_summary"]),
     createdAt: stringValue(root["created_at"]),
-    updatedAt:
-      stringValue(root["updated_at"]) || stringValue(root["last_active_at"]),
     model: stringValue(root["current_model_id"]),
     effort: stringValue(root["reasoning_effort"]),
+    sessionKind:
+      stringValue(root["session_kind"]) || stringValue(root["sessionKind"]),
+    parentSessionId:
+      stringValue(root["parent_session_id"]) ||
+      stringValue(root["parentSessionId"]),
   }
+}
+
+/** Grok's ACP reserved namespace and the summary.json field share this name. */
+function isSubagentKind(kind: string | undefined): boolean {
+  if (!kind) return false
+  const value = kind.trim().toLowerCase()
+  if (value === "subagent") return true
+  const last = value.split(/[/:]/).at(-1)
+  return last === "subagent"
+}
+
+/**
+ * Child agents are stored as ordinary session directories. The parent keeps
+ * `subagents/<child-id>/meta.json`; forks only have `parent_session_id`.
+ */
+function isSubagentSession(
+  summary: GrokSummary,
+  transcriptPath: string
+): boolean {
+  if (isSubagentKind(summary.sessionKind)) return true
+  const parentId = summary.parentSessionId
+  if (!parentId || parentId === summary.id) return false
+  const parentDir = join(dirname(dirname(transcriptPath)), parentId)
+  return (
+    existsSync(join(parentDir, "subagents", summary.id, "meta.json")) ||
+    existsSync(join(parentDir, "subagents", `${summary.id}.json`))
+  )
 }
 
 function parseUsage(value: JsonValue | undefined): TurnUsage | undefined {
@@ -468,23 +514,31 @@ export class GrokProvider implements SessionProvider {
         await Promise.all(
           sessions.map(async (session) => {
             const sessionPath = join(workspacePath, session)
-            const updatesPath = join(sessionPath, "updates.jsonl")
+            const updatesPath = join(sessionPath, TRANSCRIPT_UPDATES)
             const updatesInfo = await stat(updatesPath).catch(() => null)
+            const summaryInfo = await stat(
+              join(sessionPath, "summary.json")
+            ).catch(() => null)
+            const revision = summaryInfo
+              ? String(summaryInfo.mtimeMs)
+              : undefined
             if (updatesInfo) {
               files.push({
                 path: updatesPath,
                 bytes: updatesInfo.size,
                 mtimeMs: updatesInfo.mtimeMs,
+                revision,
               })
               return
             }
-            const legacyPath = join(sessionPath, "chat_history.jsonl")
+            const legacyPath = join(sessionPath, TRANSCRIPT_LEGACY)
             const legacyInfo = await stat(legacyPath).catch(() => null)
             if (legacyInfo) {
               files.push({
                 path: legacyPath,
                 bytes: legacyInfo.size,
                 mtimeMs: legacyInfo.mtimeMs,
+                revision,
               })
             }
           })
@@ -502,7 +556,31 @@ export class GrokProvider implements SessionProvider {
     return true
   }
 
+  /**
+   * Sidecar writes belong to the native transcript, never to a second row.
+   * `summary.json` next to `updates.jsonl` is a title store, not a session.
+   */
+  watchTarget(path: string): string | null {
+    const name = basename(path)
+    if (name === TRANSCRIPT_UPDATES) return path
+    if (name === TRANSCRIPT_LEGACY) {
+      const updates = join(dirname(path), TRANSCRIPT_UPDATES)
+      return existsSync(updates) ? updates : path
+    }
+    const sessionDir = this.sessionDirectory(path)
+    if (!sessionDir) return null
+    return this.transcriptPath(sessionDir)
+  }
+
   async peek(file: NativeFile): Promise<ThreadRef | null> {
+    const name = basename(file.path)
+    if (name !== TRANSCRIPT_UPDATES && name !== TRANSCRIPT_LEGACY) return null
+    if (name === TRANSCRIPT_LEGACY) {
+      const updates = await stat(
+        join(dirname(file.path), TRANSCRIPT_UPDATES)
+      ).catch(() => null)
+      if (updates) return null
+    }
     const raw = await readFile(
       join(dirname(file.path), "summary.json"),
       "utf8"
@@ -510,7 +588,9 @@ export class GrokProvider implements SessionProvider {
     if (!raw) return null
     const summary = parseSummary(raw)
     if (!summary) return null
+    if (isSubagentSession(summary, file.path)) return null
     let title = titleFrom(summary.title)
+    let sawUser = false
     if (!title) {
       const into = createTranslator(file.path)()
       let spent = 0
@@ -521,10 +601,15 @@ export class GrokProvider implements SessionProvider {
       })
       for (const entry of into.done()) {
         if (entry.kind !== "user") continue
+        sawUser = true
         title = titleFrom(entry.text)
         if (title) break
       }
     }
+    // A directory written at session/new, with only hooks or a skills
+    // reminder, is not a conversation yet. The row appears when the first
+    // user turn or generated title lands.
+    if (!title && !sawUser) return null
     return {
       harness: this.harness,
       nativeId: summary.id,
@@ -537,8 +622,37 @@ export class GrokProvider implements SessionProvider {
         options: summary.effort ? { effort: summary.effort } : {},
       },
       startedAt: summary.createdAt,
-      updatedAt: summary.updatedAt ?? new Date(file.mtimeMs).toISOString(),
+      // The transcript moves only when the conversation does. summary.json's
+      // `updated_at` is rewritten every minute by an open TUI and by title
+      // generation, which once kept a day-old thread at the top of the rail.
+      updatedAt: new Date(file.mtimeMs).toISOString(),
       bytes: file.bytes,
+    }
+  }
+
+  /**
+   * Grok names the thread in `summary.json` while the transcript keeps
+   * growing. Re-read that sidecar without walking the jsonl again.
+   */
+  async refine(ref: ThreadRef, _fromByte: number): Promise<ThreadRef> {
+    const raw = await readFile(
+      join(dirname(ref.path), "summary.json"),
+      "utf8"
+    ).catch(() => null)
+    if (!raw) return ref
+    const summary = parseSummary(raw)
+    if (!summary) return ref
+    return {
+      ...ref,
+      cwd: summary.cwd ?? ref.cwd,
+      title: titleFrom(summary.title) ?? ref.title,
+      model: summary.model ?? ref.model,
+      settings: {
+        model: summary.model ?? ref.settings?.model,
+        options: summary.effort
+          ? { effort: summary.effort }
+          : (ref.settings?.options ?? {}),
+      },
     }
   }
 
@@ -568,10 +682,29 @@ export class GrokProvider implements SessionProvider {
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
   }
+
+  private sessionDirectory(path: string): string | null {
+    const prefix = `${this.root}/`
+    if (path === this.root || !path.startsWith(prefix)) return null
+    const parts = path.slice(prefix.length).split("/")
+    if (
+      parts.length < 3 ||
+      parts.some((part) => part === "" || part === "." || part === "..")
+    )
+      return null
+    return join(this.root, parts[0]!, parts[1]!)
+  }
+
+  private transcriptPath(sessionDir: string): string | null {
+    const updates = join(sessionDir, TRANSCRIPT_UPDATES)
+    if (existsSync(updates)) return updates
+    const history = join(sessionDir, TRANSCRIPT_LEGACY)
+    return existsSync(history) ? history : null
+  }
 }
 
 function createTranslator(path: string): () => GrokTranslator {
-  return basename(path) === "updates.jsonl"
+  return basename(path) === TRANSCRIPT_UPDATES
     ? updatesTranslator
     : legacyTranslator
 }

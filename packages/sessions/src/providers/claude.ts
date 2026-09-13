@@ -288,6 +288,13 @@ function plainText(content: ClaudeContent | undefined): string {
 export class ClaudeProvider implements SessionProvider {
   harness = "claude" as const
   displayName = "Claude Code"
+  /**
+   * Claude Code touches a session file for reasons that are not a
+   * conversation: a `last-prompt` bookkeeping line when the CLI exits, a
+   * `cost-state` line, an `ai-title` rewrite. The file's mtime is therefore
+   * not when the thread was last used; its newest message is.
+   */
+  activityFromContent = true
   private root: string
   private home: string
   private extraRoots: { at: number; value: string[] } | null = null
@@ -394,9 +401,11 @@ export class ClaudeProvider implements SessionProvider {
       if (ref.nativeId && ref.model) break
     }
     ref.settings = {}
+    let lastMessageAt: string | undefined
     await readLines(file.path, Math.max(0, file.bytes - 2 * 1024 * 1024), (raw) => {
       const line = parseClaudeLine(raw)
       if (line) fillClaudeRef(ref, line)
+      lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
       if (line?.type === "assistant" && !line.isSidechain && line.message?.model) {
         ref.model = line.message.model
         const options: NonNullable<SessionSettings["options"]> = {}
@@ -406,6 +415,9 @@ export class ClaudeProvider implements SessionProvider {
         ref.settings = { model: line.message.model, options }
       }
     })
+    // The tail is where the newest messages are; a file whose tail holds no
+    // message at all keeps the file's own time rather than claiming none.
+    if (lastMessageAt !== undefined) ref.updatedAt = lastMessageAt
     // A session file with no session id yet is a placeholder, not a session.
     return ref.nativeId ? ref : null
   }
@@ -421,19 +433,25 @@ export class ClaudeProvider implements SessionProvider {
   /**
    * Claude Code appends its own `ai-title` (once `summary`) line after the
    * conversation has moved on. Only the appended bytes can carry a new one,
-   * and a later settings line there moves the row's model with it.
+   * and a later settings line there moves the row's model with it. The row's
+   * time moves only when those bytes hold a message; an exit-time
+   * `last-prompt` or `cost-state` record leaves it where it was.
    */
   async refine(ref: ThreadRef, fromByte: number): Promise<ThreadRef> {
     const next: ThreadRef = { ...ref }
+    let lastMessageAt: string | undefined
     await readLines(ref.path, fromByte, (raw) => {
       const line = parseClaudeLine(raw)
       if (!line || line.isSidechain) return
+      lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
       if (line.title?.trim() && (line.type === "ai-title" || line.type === "summary")) {
         next.title = titleFrom(line.title) ?? next.title
       }
       if (line.type === "assistant" && line.message?.model !== undefined)
         next.model = line.message.model
     })
+    if (lastMessageAt !== undefined && lastMessageAt > (next.updatedAt ?? ""))
+      next.updatedAt = lastMessageAt
     return next
   }
 
@@ -624,6 +642,26 @@ function attachmentParts(
 
 /** Refs whose title Claude Code wrote; a prompt never replaces one of these. */
 const storedTitles = new WeakSet<ThreadRef>()
+
+/**
+ * The timestamp of a conversation message, or the one already held if this
+ * line is not one. Only `user` and `assistant` lines on the main chain count:
+ * bookkeeping records (`last-prompt`, `cost-state`, `ai-title`, snapshots)
+ * carry no timestamp and say nothing about when the thread was used.
+ */
+function newerMessageTimestamp(
+  held: string | undefined,
+  line: ClaudeLine | null
+): string | undefined {
+  if (
+    !line ||
+    line.isSidechain ||
+    (line.type !== "user" && line.type !== "assistant") ||
+    line.timestamp === undefined
+  )
+    return held
+  return held === undefined || line.timestamp > held ? line.timestamp : held
+}
 
 function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (line.isSidechain) return

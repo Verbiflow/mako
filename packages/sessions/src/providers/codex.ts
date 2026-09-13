@@ -18,9 +18,12 @@ import { attachmentFromUrl, type AttachmentContent } from "../content.js"
  *   * `turn_context`   — per-turn model and effort
  *   * `response_item`  — the transcript proper, as OpenAI Responses items:
  *                        message / reasoning / function_call / function_call_output
- *   * `event_msg`      — streaming milestones; `user_message` and
- *                        `token_count` are used here, the rest are echoes of
- *                        response items and are skipped to avoid doubling
+ *   * `event_msg`      — streaming milestones; `user_message`,
+ *                        `token_count` and `thread_settings_applied` (the
+ *                        turn's model, effort and service tier — the only
+ *                        record that carries the tier) are used here, the
+ *                        rest are echoes of response items and are skipped
+ *                        to avoid doubling
  *
  * User turns are read from `response_item` messages rather than `user_message`
  * events, because resumed sessions replay history only as response items —
@@ -356,6 +359,25 @@ function parseResponseItem(
   }
 }
 
+/**
+ * Each turn writes its settings twice: `thread_settings_applied` carries the
+ * service tier, `turn_context` the effort. Both describe one turn, so they
+ * fold together; a record naming another model starts over.
+ */
+function latestSettings(
+  previous: SessionSettings | undefined,
+  next: SessionSettings
+): SessionSettings {
+  if (!previous || (previous.model && next.model && previous.model !== next.model))
+    return next
+  const options = { ...previous.options, ...next.options }
+  const settings: SessionSettings = {}
+  const model = next.model ?? previous.model
+  if (model) settings.model = model
+  if (Object.keys(options).length) settings.options = options
+  return settings
+}
+
 function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
   const root = parseLine(raw)
   if (!root) return null
@@ -387,6 +409,23 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
     case "event_msg":
       if (!payload) return { kind: "ignored", at }
       switch (stringValue(payload["type"])) {
+        case "thread_settings_applied": {
+          // The thread's effective settings, written before each turn's
+          // `turn_context`. Codex 0.147+ records the service tier only here.
+          const applied = objectValue(payload["thread_settings"])
+          const options: NonNullable<SessionSettings["options"]> = {}
+          const effort = stringValue(applied?.["reasoning_effort"])
+          const serviceTier = stringValue(applied?.["service_tier"])
+          if (effort) options.effort = effort
+          if (serviceTier) options.serviceTier = codexServiceTier(serviceTier)
+          const model = stringValue(applied?.["model"])
+          return {
+            kind: "turn_context",
+            at,
+            model,
+            settings: { model, options },
+          }
+        }
         case "user_message":
           return {
             kind: "user_message_event",
@@ -435,6 +474,8 @@ function sqliteNumber(value: SQLOutputValue | undefined): number | undefined {
 
 export class CodexProvider implements SessionProvider {
   harness = "codex" as const
+  /** 1: the service tier is read from `thread_settings_applied`. */
+  peekVersion = 1
   displayName = "Codex"
   private root: string
   private metadataPath: string
@@ -610,7 +651,7 @@ export class CodexProvider implements SessionProvider {
       (raw) => {
         const event = parseCodexRolloutLine(raw)
         if (event?.kind === "turn_context") {
-          ref.settings = event.settings
+          ref.settings = latestSettings(ref.settings, event.settings)
           if (event.model) ref.model = event.model
         }
       }
