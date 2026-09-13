@@ -1,7 +1,7 @@
 import { useCopy } from "@/components/ui/use-copy"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { toolActivity } from "@/state/agent-activity"
-import { memo, useState, type ComponentType } from "react"
+import { memo, useEffect, useState, type ComponentType } from "react"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
   formatToolArguments,
@@ -16,6 +16,7 @@ import { useTranscriptSource } from "./source-context"
 import { ToolDetails } from "./tool-details"
 import { TranscriptAttachment } from "./attachment"
 import { viewer } from "@/state/viewer"
+import { loadThreadBlock } from "@/state/thread-viewing"
 import {
   ChevronRightIcon,
   CircleAlertIcon,
@@ -40,6 +41,13 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const summary = view?.summary?.(call) ?? primaryArgument(call.arguments)
   const openPath = view?.openPath?.(call)
   const Body = view?.body
+  // A page carries the head of each tool output; the rest is read when the
+  // row opens, and the head stays on screen until it lands.
+  const rest = open ? call.rest : undefined
+  const threadPath = source.threadPath
+  useEffect(() => {
+    if (rest && threadPath) void loadThreadBlock(threadPath, rest.at)
+  }, [rest, threadPath])
 
   return (
     <div
@@ -105,6 +113,12 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
                 />
               ))}
             </div>
+          ) : null}
+          {rest ? (
+            <p className="shimmer px-2.5 pb-2 text-label">
+              Reading the rest of this output ·{" "}
+              {rest.length.toLocaleString()} characters
+            </p>
           ) : null}
         </div>
       ) : null}

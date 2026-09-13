@@ -250,7 +250,7 @@ function CitationLink({ href, children }: ComponentProps<"a">) {
     return <FileChip path={reference.path} interactive />
   if (reference?.kind === "thread")
     return (
-      <ThreadChip harness={reference.harness} nativeId={reference.nativeId} />
+      <ThreadChip harness={reference.harness} id={reference.id} />
     )
   if (reference?.kind === "skill") return <SkillChip name={reference.name} />
   if (reference?.kind === "mcp") return <McpChip name={reference.name} />

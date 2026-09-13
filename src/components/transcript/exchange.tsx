@@ -34,6 +34,10 @@ import {
 } from "@/lib/exchanges"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
+import { continueTurn } from "@/state/acp-queue"
+import type { TurnStop } from "@/state/prompt-delivery"
+import { useTranscriptSource } from "./source-context"
+import type { InterruptionReason } from "@/lib/types"
 import { HARNESS_LABEL } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
@@ -50,6 +54,7 @@ import {
   CopyIcon,
   GitForkIcon,
   PencilIcon,
+  PlayIcon,
   RotateCcwIcon,
   TriangleAlertIcon,
 } from "lucide-react"
@@ -70,7 +75,8 @@ export const Exchange = memo(function Exchange({
 }: {
   exchange: ExchangeData
   streaming?: boolean
-  interrupted?: boolean
+  /** True when the turn stopped early; a `TurnStop` also says why and whether it can be continued. */
+  interrupted?: boolean | TurnStop
   failed?: boolean
 }) {
   const sections = useMemo(
@@ -115,9 +121,7 @@ export const Exchange = memo(function Exchange({
                 messages={section.messages}
                 startedAt={index === 0 ? exchange.prompt?.timestamp : undefined}
                 live={Boolean(streaming && index === sections.length - 1)}
-                interrupted={Boolean(
-                  interrupted && index === sections.length - 1
-                )}
+                interrupted={Boolean(interrupted) && index === sections.length - 1}
                 failed={Boolean(failed && index === sections.length - 1)}
               />
             )
@@ -267,7 +271,7 @@ function Prompt({ message }: { message: ChatMessage }) {
           <>
             <button
               type="button"
-              title="Rewind to here and re-ask — later turns stay reachable in History"
+              title="Rewind to here and re-ask — later turns stay on their own branch"
               onClick={() => void editHere()}
               className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
             >
@@ -593,7 +597,7 @@ function SystemNote({ message }: { message: ChatMessage }) {
 /* one footer per answer                                               */
 /* ------------------------------------------------------------------ */
 
-function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; streaming?: boolean; interrupted?: boolean }) {
+function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; streaming?: boolean; interrupted?: boolean | TurnStop }) {
   const text = responseText(exchange)
   const { copied, copy } = useCopy(text)
   const last = exchange.response.at(-1)
@@ -601,7 +605,7 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
 
   return (
     <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
-      {interrupted && !streaming ? <span data-turn-stopped>Stopped</span> : null}
+      {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
       {last?.timestamp ? (
         <span className="tabular">{formatTime(last.timestamp)}</span>
       ) : null}
@@ -629,6 +633,46 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
       {!streaming && !interrupted ? <ForkButton exchange={exchange} /> : null}
       {last ? <Slot name="transcript.turn.trailing" message={last} /> : null}
     </div>
+  )
+}
+
+const STOP_LABEL = {
+  stopped: "Stopped",
+  "host-quit": "Interrupted when Mako quit",
+  "host-crashed": "Interrupted when Mako closed unexpectedly",
+} satisfies Record<InterruptionReason, string>
+
+/**
+ * Why the turn ended early. A bare `true` is a Stop with no recorded reason
+ * (a foreign transcript's own marker). When Mako itself cut the newest turn
+ * short, the footer owns up to it and offers to pick the turn up; the offer
+ * sends through the same path as a typed message, so it queues, steers or
+ * reopens the session exactly as one would.
+ */
+function Stopped({ stop }: { stop: true | TurnStop }) {
+  const { liveId } = useTranscriptSource()
+  const [sending, setSending] = useState(false)
+  const detail = stop === true ? undefined : stop
+  const reason = detail?.reason ?? "stopped"
+  return (
+    <>
+      <span data-turn-stopped={reason}>{STOP_LABEL[reason]}</span>
+      {detail?.continuable && liveId ? (
+        <button
+          type="button"
+          disabled={sending}
+          onClick={() => {
+            setSending(true)
+            void continueTurn(liveId).finally(() => setSending(false))
+          }}
+          className="pressable flex items-center gap-1 rounded px-1 text-foreground hover:bg-fill-hover disabled:opacity-50"
+          title="Ask the agent to go on from where this turn stopped"
+        >
+          <PlayIcon className="size-3" />
+          <span>{sending ? "Continuing…" : "Continue turn"}</span>
+        </button>
+      ) : null}
+    </>
   )
 }
 
@@ -670,8 +714,10 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
         <RewindButton requestId={liveRequestId} />
       </>
     )
-  const at = last ? /^foreign-entry-(\d+)$/.exec(last.id) : null
-  const entryIndex = at ? Number(at[1]) : null
+  // A catalogued thread's answer carries its provider anchor; the fork names
+  // that, not a position, so a store that moves under the reader still forks
+  // at this answer.
+  const anchor = last?.anchor
   if (!viewing && nativeEntry) {
     return (
       <button
@@ -685,7 +731,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       </button>
     )
   }
-  if (!viewing || entryIndex === null || Number.isNaN(entryIndex)) return null
+  if (!viewing || !anchor) return null
   const options = targets
 
   return (
@@ -715,7 +761,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
             type="button"
             onClick={() => {
               setOpen(false)
-              void threads.forkAt(viewing, entryIndex, target)
+              void threads.forkAt(viewing, anchor, target)
             }}
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui text-foreground/90 transition-colors duration-100 hover:bg-fill-hover"
           >
