@@ -76,12 +76,14 @@ const rules: Rule[] = [
   {
     kind: "provider-unavailable",
     match:
-      /\b50[0234]\b|internal server error|service unavailable|bad gateway|gateway timeout|upstream|server error|temporarily unavailable|api error|provider (?:returned|error)/i,
+      /\b50[0234]\b|internal server error|service unavailable|bad gateway|gateway timeout|upstream|server error|temporarily unavailable|api error|provider (?:returned|error)|\[(?:unavailable|internal)\]/i,
   },
   {
+    // The bracketed codes are Connect RPC's, as cursor-agent prints them:
+    // `[canceled] http/2 stream closed with error code CANCEL (0x8)`.
     kind: "network",
     match:
-      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|network (?:error|failure|request)|socket hang up|connection (?:reset|refused|closed|lost|error)|timed? ?out|terminated|stream (?:ended|closed) unexpectedly|other side closed/i,
+      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|network (?:error|failure|request)|socket hang up|connection (?:reset|refused|closed|lost|error|stalled|failed)|timed? ?out|terminated|stream (?:ended|closed)|other side closed|http\/2|\[(?:canceled|cancelled|deadline_exceeded)\]/i,
   },
   {
     kind: "resume-failed",

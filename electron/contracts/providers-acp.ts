@@ -79,9 +79,22 @@ export interface LiveSessionState {
   currentMode: string | null
   configOptions: import("@mako/sessions/settings").ModelOption[]
   settings?: SessionSettings
+  /**
+   * How the last turn ended: the agent's own stop reason (`end_turn`,
+   * `cancelled`, …), `failed`, or `CONNECTION_LOST_STOP` when the agent
+   * ended the turn on a dropped backend connection it reported itself.
+   */
   lastStop?: string
   error?: string
 }
+
+/**
+ * The `lastStop` of a turn the agent ended because its own connection to
+ * its backend dropped. The session is `failed` with the agent's error text;
+ * the request that ran it is recorded as interrupted and continuable rather
+ * than as a message to send again, because the turn's work is kept.
+ */
+export const CONNECTION_LOST_STOP = "connection-lost"
 
 /** One streamed piece of an interactive turn, reduced for rendering. */
 export type { LiveUpdate } from "./live-content.js"

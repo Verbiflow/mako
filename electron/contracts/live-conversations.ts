@@ -31,8 +31,9 @@ export interface LiveStartOptions {
 
 /**
  * Why a turn stopped before the provider finished it. `stopped` is the user's
- * own Stop; the other two are Mako's doing and are what the transcript owns
- * up to, with an offer to continue the turn.
+ * own Stop; the others are nobody's choice — Mako's exit or the provider's
+ * own connection — and are what the transcript owns up to, with an offer to
+ * continue the turn.
  */
 export const INTERRUPTION_REASONS = [
   /** The user pressed Stop. */
@@ -41,12 +42,37 @@ export const INTERRUPTION_REASONS = [
   "host-quit",
   /** The host died without closing; the next host found the turn still dispatching in the journal. */
   "host-crashed",
+  /**
+   * The provider's own connection to its backend dropped mid-turn and the
+   * provider ended the turn on it (cursor-agent writes the error into the
+   * transcript and reports `end_turn`). The work done so far is kept.
+   */
+  "connection-lost",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
 export interface Interruption {
   reason: InterruptionReason
   at: number
+  /**
+   * Mako will pick this turn up itself: the continuation is scheduled for
+   * `at` (epoch ms). Present only while it is pending — cleared when the
+   * continuation is submitted or when something else (a prompt of the user's,
+   * a close, a host exit) makes it moot. A dropped connection is the one
+   * reason that earns this; the turn's work stands on the provider's side.
+   */
+  autoContinue?: { at: number }
+}
+
+/**
+ * What a request that carries on an earlier, cut-short turn records about
+ * it. `auto` is Mako's own continuation, sent without the user; the
+ * transcript shows it as Mako's line rather than as the user's words.
+ */
+export interface TurnContinuation {
+  requestId: string
+  reason: InterruptionReason
+  auto: boolean
 }
 
 export interface LiveRequest {
@@ -75,6 +101,8 @@ export interface LiveRequest {
    * only when the kind is retriable.
    */
   failure?: ProviderFailureKind
+  /** Set when this request continues an interrupted turn; see `TurnContinuation`. */
+  continues?: TurnContinuation
   displayText?: string
   context?: ContextManifest[]
 }
