@@ -4,11 +4,13 @@ export interface CacheEntry {
   bytes: number
   mtimeMs: number
   revision?: string
+  /** The provider's `peekVersion` when this entry was written; a newer rule re-peeks the file. */
+  peek?: number
   ref: ThreadRef | null
 }
 
 /** Bump when a peek rule change would leave stale rows in a warm cache. */
-export const CATALOG_CACHE_VERSION = 9
+export const CATALOG_CACHE_VERSION = 13
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonRecord | JsonValue[]
@@ -45,9 +47,12 @@ function parseCacheEntry(value: JsonValue | undefined): CacheEntry | null {
   const mtimeMs = readNumber(value, "mtimeMs")
   if (bytes === undefined || mtimeMs === undefined) return null
   const revision = readString(value, "revision")
-  if (value.ref === null) return { bytes, mtimeMs, revision, ref: null }
+  const peek = readNumber(value, "peek")
+  const entry: CacheEntry = { bytes, mtimeMs, revision, ref: null }
+  if (peek !== undefined) entry.peek = peek
+  if (value.ref === null) return entry
   const ref = parseCachedThreadRef(value.ref)
-  return ref ? { bytes, mtimeMs, revision, ref } : null
+  return ref ? { ...entry, ref } : null
 }
 
 function parseCachedThreadRef(value: JsonValue | undefined): ThreadRef | null {
@@ -81,6 +86,10 @@ function parseCachedThreadRef(value: JsonValue | undefined): ThreadRef | null {
   if (archived !== undefined) ref.archived = archived
   const resumeUnavailable = readString(value, "resumeUnavailable")
   if (resumeUnavailable !== undefined) ref.resumeUnavailable = resumeUnavailable
+  const identity = readString(value, "identity")
+  if (identity !== undefined) ref.identity = identity
+  const liveResume = readBoolean(value, "liveResume")
+  if (liveResume !== undefined) ref.liveResume = liveResume
   return ref
 }
 

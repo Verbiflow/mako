@@ -103,8 +103,27 @@ export interface ThreadRef {
   archived?: boolean
   /** Native history is readable, but its owning control transport cannot resume it. */
   resumeUnavailable?: string
+  /**
+   * Dedupe key when one native id names more than one distinct store. Cursor
+   * writes a `cursor-agent -p --resume` continuation of an ACP session as a
+   * second store under `chats/` with the same agent id; the two hold
+   * different turns, so collapsing them by native id hid the original.
+   * Defaults to `nativeId`.
+   */
+  identity?: string
+  /**
+   * False when the provider's live transport cannot load this store and only
+   * a native run can continue it: Cursor's `session/load` answers "Session
+   * not found" for a `chats/` store. Unset means the transport decides.
+   */
+  liveResume?: boolean
   /** The session ran in a temporary directory that no longer exists. */
   workspaceMissing?: boolean
+}
+
+/** The key two refs share when they present the same conversation. */
+export function threadIdentity(ref: Pick<ThreadRef, "harness" | "nativeId" | "identity">): string {
+  return `${ref.harness}:${ref.identity ?? ref.nativeId}`
 }
 
 /** A full conversation: the identity plus every entry, in order. */

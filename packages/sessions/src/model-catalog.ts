@@ -323,14 +323,23 @@ export function normalizeCodexModels(
       if (!tiers.some((entry) => entry.value === "default")) {
         tiers.unshift({ value: "default", label: "Standard" })
       }
+      // Codex names a model's default tier only when it is an elevated one;
+      // `null` is the standard tier, the same reading `config/read` gets for
+      // an absent `service_tier`. Without it every model except the
+      // configured one showed "Speed unavailable".
+      const preferred = codexServiceTier(row.defaultServiceTier ?? "default")
+      const current = tiers.some((entry) => entry.value === preferred)
+        ? preferred
+        : "default"
+      for (const tier of tiers) {
+        if (tier.value === current) tier.default = true
+      }
       options.push({
         kind: "select",
         id: "serviceTier",
         label: "Speed",
         role: "speed",
-        current: row.defaultServiceTier
-          ? codexServiceTier(row.defaultServiceTier)
-          : undefined,
+        current,
         booleanValues: tiers.some((entry) => entry.value === "priority")
           ? { on: "priority", off: "default" }
           : tiers.some((entry) => entry.value === "fast")

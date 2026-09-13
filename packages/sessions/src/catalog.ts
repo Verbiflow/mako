@@ -8,10 +8,11 @@
  *     reads. The peek cache persists across runs, so a cold start with a
  *     warm cache does no reading at all.
  *   * **Watch** puts one recursive watcher on each harness root and re-peeks
- *     exactly the file that changed, debounced per path. Opening a Codex
- *     session in a terminal, another app, anywhere — shows up here within a
- *     debounce interval, because the file is the source of truth and the
- *     file is what is watched.
+ *     the native session file that changed, debounced per path. A sidecar
+ *     write (Grok's `summary.json`) maps back to that file so one session
+ *     cannot occupy two rows. Opening a Codex session in a terminal, another
+ *     app, anywhere — shows up here within a debounce interval, because the
+ *     file is the source of truth and the file is what is watched.
  *   * **Follow** tails one open thread by byte offset: a streaming agent
  *     costs one positional read of only the appended bytes per flush.
  */
@@ -24,7 +25,13 @@ import {
   CATALOG_CACHE_VERSION,
   type CacheEntry,
 } from "./catalog-cache.js"
-import type { Thread, ThreadEntry, ThreadPage, ThreadRef } from "./format.js"
+import {
+  threadIdentity,
+  type Thread,
+  type ThreadEntry,
+  type ThreadPage,
+  type ThreadRef,
+} from "./format.js"
 import type {
   NativeFile,
   SessionFollower,
@@ -49,6 +56,7 @@ interface FollowState {
 
 interface RefreshState {
   requested: boolean
+  forceMetadata?: boolean
   promise: Promise<void>
 }
 
@@ -178,13 +186,31 @@ export class SessionCatalog {
     )
       return false
     this.orderedRefs = null
-    this.byPath.set(file.path, {
+    const entry: CacheEntry = {
       bytes: file.bytes,
       mtimeMs: file.mtimeMs,
       revision: file.revision,
       ref,
-    })
+    }
+    const peek = this.ownerOf(file.path)?.peekVersion
+    if (peek !== undefined) entry.peek = peek
+    this.byPath.set(file.path, entry)
     return true
+  }
+
+  /**
+   * The cached entry for a path, unless the provider's peek rule moved since
+   * it was written: that entry is stale in what it says about the row, not
+   * in its bytes, so it is dropped and the file is peeked again.
+   */
+  private cachedEntry(path: string, provider: SessionProvider): CacheEntry | undefined {
+    const cached = this.byPath.get(path)
+    if (!cached) return undefined
+    if ((cached.peek ?? 0) !== (provider.peekVersion ?? 0)) {
+      this.byPath.delete(path)
+      return undefined
+    }
+    return cached
   }
 
   /* ------------------------------------------------------------ scanning */
@@ -205,7 +231,7 @@ export class SessionCatalog {
         const files = await provider.discover().catch((): NativeFile[] => [])
         await forEachConcurrent(files, 4, async (file) => {
           seen.add(file.path)
-          const cached = this.byPath.get(file.path)
+          const cached = this.cachedEntry(file.path, provider)
           if (
             cached &&
             cached.bytes === file.bytes &&
@@ -257,10 +283,11 @@ export class SessionCatalog {
     }
     // One session, one row — whatever the path. Symlinked roots and the
     // archive can each present the same conversation twice; identity is the
-    // harness's own session id. Live beats archived; newest beats older.
+    // harness's own session id unless the provider says one id names two
+    // stores. Live beats archived; newest beats older.
     const byIdentity = new Map<string, ThreadRef>()
     for (const ref of refs) {
-      const key = `${ref.harness}:${ref.nativeId}`
+      const key = threadIdentity(ref)
       const held = byIdentity.get(key)
       if (
         !held ||
@@ -514,22 +541,27 @@ export class SessionCatalog {
   private noticed(path: string): void {
     const provider = this.ownerOf(path)
     if (!provider) return
-    if (provider.rescanRoot || this.threadCache?.path === path) {
+    const mapped = provider.watchTarget?.(path)
+    if (mapped === null) return
+    const target = mapped ?? path
+    if (provider.rescanRoot || this.threadCache?.path === target) {
       this.threadCache = null
     }
     // Shared-database stores have no per-session file to stat: any write
     // under the root re-runs that provider's discovery, debounced under
-    // one key so a burst costs one rescan.
+    // one key so a burst costs one rescan. Sidecar writes debounce under
+    // the native file so summary.json and updates.jsonl cannot race.
     const key = provider.rescanRoot
       ? `rescan:${provider.harness}:${provider.roots()[0]}`
-      : path
+      : target
     clearTimeout(this.pending.get(key))
+    const sidecar = target !== path
     this.pending.set(
       key,
       setTimeout(() => {
         this.pending.delete(key)
         if (provider.rescanRoot) void this.rescanProvider(provider)
-        else void this.refresh(provider, path)
+        else void this.refresh(provider, target, sidecar)
       }, provider.rescanDebounceMs ?? WATCH_DEBOUNCE_MS)
     )
   }
@@ -570,7 +602,7 @@ export class SessionCatalog {
     const seen = new Set<string>()
     for (const file of files) {
       seen.add(file.path)
-      const cached = this.byPath.get(file.path)
+      const cached = this.cachedEntry(file.path, provider)
       const follow = this.follows.get(file.path)
       const followed = (follow?.listeners.size ?? 0) > 0
       const unchanged = Boolean(
@@ -633,18 +665,29 @@ export class SessionCatalog {
     this.scheduleSave()
   }
 
-  private refresh(provider: SessionProvider, path: string): Promise<void> {
+  private refresh(
+    provider: SessionProvider,
+    path: string,
+    forceMetadata = false
+  ): Promise<void> {
     const active = this.refreshes.get(path)
     if (active) {
       active.requested = true
+      if (forceMetadata) active.forceMetadata = true
       return active.promise
     }
-    const state: RefreshState = { requested: false, promise: Promise.resolve() }
+    const state: RefreshState = {
+      requested: false,
+      forceMetadata,
+      promise: Promise.resolve(),
+    }
     state.promise = (async () => {
       try {
         do {
           state.requested = false
-          await this.refreshOnce(provider, path)
+          const refreshMetadata = Boolean(state.forceMetadata)
+          state.forceMetadata = false
+          await this.refreshOnce(provider, path, refreshMetadata)
         } while (state.requested)
       } finally {
         if (this.refreshes.get(path) === state) this.refreshes.delete(path)
@@ -656,7 +699,8 @@ export class SessionCatalog {
 
   private async refreshOnce(
     provider: SessionProvider,
-    path: string
+    path: string,
+    forceMetadata = false
   ): Promise<void> {
     const info = await stat(path).catch(() => null)
     if (!info || !info.isFile()) {
@@ -667,7 +711,7 @@ export class SessionCatalog {
       return
     }
     const file: NativeFile = { path, bytes: info.size, mtimeMs: info.mtimeMs }
-    const cached = this.byPath.get(path)
+    const cached = this.cachedEntry(path, provider)
     const follow = this.follows.get(path)
     const unchanged =
       cached &&
@@ -676,9 +720,31 @@ export class SessionCatalog {
       cached.revision === file.revision
     if (
       unchanged &&
+      !forceMetadata &&
       (!follow?.follower || follow.follower.offset >= file.bytes)
     )
       return
+    if (unchanged && forceMetadata) {
+      if (!cached) return
+      const previous = cached.ref
+      const ref = previous
+        ? await refined(provider, previous, cached.bytes)
+        : withWorkspace(await provider.peek(file).catch(() => null))
+      if (!this.commit(file, ref)) return
+      this.scheduleSave()
+      if (ref) {
+        const same =
+          previous &&
+          previous.title === ref.title &&
+          previous.model === ref.model &&
+          previous.cwd === ref.cwd &&
+          previous.updatedAt === ref.updatedAt
+        if (!same) this.emit({ type: previous ? "updated" : "added", ref })
+      } else if (previous) {
+        this.emit({ type: "removed", path })
+      }
+      return
+    }
 
     // An appended file keeps its identity, so the cached ref is reused with
     // fresh size and time. That shortcut is only safe once the peek found
@@ -692,14 +758,19 @@ export class SessionCatalog {
       cached && previous && previous.title !== undefined && previous.model !== undefined
         ? { ref: previous, fromByte: cached.bytes }
         : null
+    // A grown file is newer by mtime, but a provider that reads activity
+    // from content keeps its stamp until `refine` finds a message in the
+    // appended bytes: Claude Code's exit-time bookkeeping is growth too.
     const ref = reusable
       ? await refined(
           provider,
-          {
-            ...reusable.ref,
-            bytes: file.bytes,
-            updatedAt: new Date(file.mtimeMs).toISOString(),
-          },
+          provider.activityFromContent
+            ? { ...reusable.ref, bytes: file.bytes }
+            : {
+                ...reusable.ref,
+                bytes: file.bytes,
+                updatedAt: new Date(file.mtimeMs).toISOString(),
+              },
           reusable.fromByte
         )
       : withWorkspace(await provider.peek(file).catch(() => null))

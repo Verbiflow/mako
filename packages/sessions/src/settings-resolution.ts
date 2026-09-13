@@ -3,11 +3,13 @@ import {
   optionAccepts,
   optionDefault,
   settingsWithVariant,
+  type ModelOption,
   type ResolvedSessionSettings,
   type ResolvedSetting,
   type SessionModel,
   type SessionSettings,
   type SettingSource,
+  type SettingValue,
   type SettingsPreference,
 } from "./settings.js"
 
@@ -80,18 +82,25 @@ export function resolveSessionSettings(
       (layer) => layer.settings.options?.[id] !== undefined
     )
     const explicit = selected?.settings.options?.[id]
+    // Speed is a choice about the account's throughput, not about one
+    // model, so it survives a model switch whenever the new model offers
+    // the same tier. Effort does not carry: each model has its own ladder.
+    const carried =
+      explicit === undefined && option?.role === "speed" && !option.disabledReason
+        ? carriedSpeed(option, id, expanded, applicable)
+        : undefined
     const fallback =
       option &&
       selectionChanged &&
       !(input.phase === "turn" && option.change === "launch")
         ? optionDefault(option)
         : undefined
-    const value = explicit ?? fallback
+    const value = explicit ?? carried?.value ?? fallback
     if (value === undefined) {
       result.options[id] = { kind: "unknown" }
       continue
     }
-    const source = selected?.source ?? "model-default"
+    const source = selected?.source ?? carried?.source ?? "model-default"
     if (model && !option && source !== "session" && source !== "provider") {
       result.issues.push({
         option: id,
@@ -127,6 +136,21 @@ export function resolveSessionSettings(
     result.settings.options[id] = value
   }
   return result
+}
+
+function carriedSpeed(
+  option: ModelOption,
+  id: string,
+  layers: readonly Layer[],
+  applicable: readonly Layer[]
+): { value: SettingValue; source: SettingSource } | undefined {
+  for (const layer of layers) {
+    if (applicable.includes(layer)) continue
+    const value = layer.settings.options?.[id]
+    if (value !== undefined && optionAccepts(option, value))
+      return { value, source: layer.source }
+  }
+  return undefined
 }
 
 /** Resolve encoded model variants without silently substituting another choice. */

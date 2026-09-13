@@ -9,6 +9,7 @@
 
 export {
   titleFrom,
+  threadIdentity,
   userTextFrom,
   clip,
   type EntryBlock,
