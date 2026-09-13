@@ -179,10 +179,20 @@
   --ember-soft: color-mix(in oklab, var(--ember) 14%, transparent);
 
   /*
+   * The unread mark is a small sphere in the text colour: a specular point
+   * above the body and a shaded rim below it. Same hue as the text, so it
+   * stays the brightest thing on a row without becoming a fourth hue.
+   */
+  --mark-highlight: oklch(0.995 0.006 70);
+  --mark-shade: oklch(0.62 0.014 55);
+
+  /*
    * Elevation: every level bakes a 0.5px hairline ring in, and dark mode
    * adds a 0.5px top rim light — a surface catching light from above.
    */
   --rim-light: oklch(0.93 0.004 50 / 6%);
+  /* The brighter specular edge frosted glass shows where it meets light. */
+  --glass-rim: oklch(0.93 0.004 50 / 16%);
   --elevation-card:
     0 1px 2px oklch(0.05 0.002 40 / 35%), 0 0 0 0.5px var(--hairline),
     0 -0.5px 0 0 var(--rim-light);
@@ -244,8 +254,13 @@
   --ember: oklch(0.59 0.135 41);
   --ember-soft: color-mix(in oklab, var(--ember) 12%, transparent);
 
+  /* A dark sphere in daylight: the highlight is a grey sheen, the rim near black. */
+  --mark-highlight: oklch(0.5 0.004 45);
+  --mark-shade: oklch(0.08 0.002 40);
+
   /* No rim light in daylight; the ring darkens instead. */
   --rim-light: transparent;
+  --glass-rim: oklch(1 0 0 / 80%);
   --elevation-card:
     0 1px 2px oklch(0 0 0 / 6%), 0 0 0 0.5px oklch(0.2 0.01 40 / 12%);
   --elevation-floating:
@@ -509,6 +524,44 @@ diffs-container {
     box-shadow: var(--elevation-overlay);
   }
 
+  /*
+   * Glass. A preview floating over the transcript is a pane of frosted
+   * glass rather than a framed card: the scene behind shows through
+   * blurred, one specular rim catches light along the top edge, and the
+   * caption is a strip of the same material laid over the image instead
+   * of a bar beneath it. No border — the elevation ring is the edge.
+   */
+  .glass-panel {
+    background: color-mix(in oklab, var(--popover) 76%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    backdrop-filter: blur(24px) saturate(1.4);
+    box-shadow:
+      var(--elevation-overlay),
+      inset 0 0 0 0.5px var(--hairline),
+      inset 0 1px 0 0 var(--glass-rim);
+  }
+
+  /* Progressive blur: dense at the bottom edge, dissolving upward into the image. */
+  .glass-caption {
+    background: linear-gradient(
+      to top,
+      color-mix(in oklab, var(--popover) 78%, transparent) 40%,
+      color-mix(in oklab, var(--popover) 30%, transparent)
+    );
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    backdrop-filter: blur(14px) saturate(1.3);
+    mask-image: linear-gradient(to top, black 62%, transparent);
+  }
+
+  .glass-control {
+    background: color-mix(in oklab, var(--popover) 70%, transparent);
+    -webkit-backdrop-filter: blur(12px) saturate(1.3);
+    backdrop-filter: blur(12px) saturate(1.3);
+    box-shadow:
+      inset 0 0 0 0.5px var(--hairline),
+      inset 0 0.5px 0 0 var(--glass-rim);
+  }
+
   .application-dialog {
     width: min(460px, calc(100vw - 32px));
     max-height: calc(100svh - 32px);
@@ -650,6 +703,43 @@ diffs-container {
 .activity-meter > i:nth-child(2) { height: 100%; }
 .activity-meter > i:nth-child(3) { height: 40%; }
 .activity-orb { contain: layout paint; }
+
+/*
+ * The unread mark: an answer finished while you were elsewhere.
+ *
+ * A 7px sphere in the text colour — a specular point high and left, the body
+ * in --foreground, the rim shaded — ringed by a hairline of the same colour
+ * so it sits on the row's fill instead of in it. One static gradient and a
+ * spread-only ring: no blur, no paint on the hot path. It animates only when
+ * the answer is seconds old (`data-new`); a row scrolling back into view
+ * paints it still.
+ */
+.review-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 32% 28%,
+    var(--mark-highlight) 0%,
+    var(--foreground) 36%,
+    var(--mark-shade) 100%
+  );
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+@keyframes review-dot-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.review-dot[data-new] {
+  animation: review-dot-arrive 220ms var(--ease-out) both;
+}
 
 .composer-send:not(:disabled) {
   border: 1px solid color-mix(in srgb, var(--foreground) 70%, var(--surface));
@@ -1190,6 +1280,26 @@ diffs-container {
   .composer-input { field-sizing: content; }
 }
 
+/* The routing row gives way in order when short of room (`use-compact-row.ts`
+   stamps the level it needed): level 1 hides the access label, level 2 the
+   harness label as well. The model and its reasoning are never shortened. */
+.composer-routing:is([data-compact="1"], [data-compact="2"]) [data-collapse="1"],
+.composer-routing[data-compact="2"] [data-collapse="2"] {
+  display: none;
+}
+
+/* The row hides its scrollbar; the edge that still hides a control fades
+   so the cut is visible. */
+.composer-routing[data-overflow="end"] {
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+}
+.composer-routing[data-overflow="start"] {
+  mask-image: linear-gradient(to right, transparent, black 28px);
+}
+.composer-routing[data-overflow="both"] {
+  mask-image: linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent);
+}
+
 [data-sonner-toaster] [data-sonner-toast] {
   font-family: var(--font-sans);
   transition-duration: 180ms;
@@ -1198,6 +1308,18 @@ diffs-container {
 [data-sonner-toaster] [data-sonner-toast][data-removed="true"] {
   transition-duration: 120ms;
   transition-timing-function: var(--ease-swift);
+}
+/* A custom toast (the attention card) carries its chrome on sonner's own row,
+   so a collapsed stack still shows the edge of the card behind, and that
+   card's content hides the way sonner hides its own styled toasts. */
+[data-sonner-toast][data-styled="false"] {
+  width: var(--width);
+  background: var(--popover);
+  border-radius: 10px;
+  box-shadow: var(--elevation-overlay);
+}
+[data-sonner-toast][data-styled="false"][data-expanded="false"][data-front="false"] > * {
+  opacity: 0;
 }
 
 .changing-label {
