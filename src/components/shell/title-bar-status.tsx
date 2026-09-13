@@ -4,6 +4,7 @@ import { actions, useSession } from "@/state/session"
 import { stage } from "@/state/stage"
 import { workspaceName } from "@/lib/format"
 import { HotIndicator } from "@/components/shell/hot-indicator"
+import { AttentionPill } from "@/components/shell/attention-pill"
 import { updates, useUpdates } from "@/state/updates"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import {
@@ -25,6 +26,7 @@ export function TitleBarStatus() {
   return (
     <div className="mr-1 flex min-w-0 items-center gap-2 text-label text-faint">
       <ConnectionPill />
+      <AttentionPill />
       <ProjectContext />
       <HotIndicator />
       <UpdatePill />
