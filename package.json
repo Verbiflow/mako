@@ -18,6 +18,7 @@
     "test:shared-runtime": "npm run build && node scripts/test-shared-runtime.mjs",
     "test:thread-lifecycle": "tsx scripts/test-thread-lifecycle.ts && tsx scripts/test-runtime-transport.ts && tsx scripts/test-runtime-recovery.ts",
     "test:workspace-ui": "node scripts/test-workspace-ui.mjs",
+    "test:rail-ui": "node scripts/test-rail-ui.mjs",
     "desktop": "npm run build:electron && node electron/start.mjs",
     "backend:build": "npm run build --workspace @mako/backend",
     "backend:deploy": "npm run deploy --workspace @mako/backend",
@@ -38,7 +39,7 @@
     "test:kiri-engine": "tsx scripts/test-kiri-engine.ts",
     "test:commit-generation": "tsx scripts/test-commit-generation.ts && tsx scripts/test-commit-models.ts && tsx scripts/test-utility-token-count.ts && tsx scripts/test-commit-connections.ts && tsx scripts/test-utility-model-catalog.ts",
     "test:accounts": "tsx scripts/test-account-usage.ts && tsx scripts/test-account-routing.ts && tsx scripts/test-account-keychain.ts",
-    "test:acp-registry": "tsx scripts/test-acp-registry.ts && tsx scripts/test-access-modes.ts && tsx scripts/test-acp-stream.ts && tsx scripts/test-acp-startup.ts && tsx scripts/test-host-log.ts && tsx scripts/test-provider-children.ts && tsx scripts/test-acp-prompt-turn.ts && tsx scripts/test-devin-permissions.ts && tsx scripts/test-devin-session-mcp.ts && tsx scripts/test-devin-resume.ts",
+    "test:acp-registry": "tsx scripts/test-acp-registry.ts && tsx scripts/test-access-modes.ts && tsx scripts/test-acp-stream.ts && tsx scripts/test-acp-prompt-turn.ts && tsx scripts/test-devin-permissions.ts && tsx scripts/test-devin-session-mcp.ts && tsx scripts/test-devin-resume.ts && tsx scripts/test-cursor-resume.ts && tsx scripts/test-cursor-model-ids.ts",
     "test:automations": "tsx scripts/test-automations.ts",
     "test:codex-protocol": "tsx scripts/test-codex-protocol.ts",
     "test:host": "tsx scripts/test-host-domains.ts && tsx scripts/test-workspace-clients.ts && tsx scripts/test-git-staging.ts && tsx scripts/test-git-preview.ts && tsx scripts/test-git-push.ts",
@@ -47,10 +48,10 @@
     "test:performance": "tsx scripts/test-performance.ts && tsx --tsconfig tsconfig.app.json scripts/test-incremental-projection.ts && tsx --tsconfig tsconfig.app.json scripts/test-journal-deltas.ts && tsx --tsconfig tsconfig.app.json scripts/test-live-retention.ts && tsx --tsconfig tsconfig.app.json scripts/test-parsed-markdown.tsx && tsx --tsconfig tsconfig.app.json scripts/audit-provider-payloads.ts",
     "verify:mac-release": "tsx scripts/verify-macos-release.ts",
     "test:plugins": "tsx scripts/test-plugins.ts",
-    "test:providers": "tsx scripts/test-providers.ts && tsx scripts/test-codex-activity.ts && tsx scripts/test-opencode-activity.ts && tsx scripts/test-opencode-plugin.ts",
+    "test:providers": "tsx scripts/test-providers.ts && tsx scripts/test-transport-agreement.ts && tsx scripts/test-codex-activity.ts && tsx scripts/test-opencode-activity.ts && tsx scripts/test-opencode-plugin.ts",
     "test:provider-launch-options": "tsx --tsconfig tsconfig.app.json scripts/test-provider-launch-options.ts && tsx scripts/test-acp-authentication.ts && tsx scripts/test-devin-environment.ts",
     "test:skills": "tsx scripts/test-skills.ts",
-    "test:stage": "tsx scripts/test-stage-layout.ts && tsx scripts/test-thread-opening.ts && tsx scripts/test-composer-settings.ts && tsx scripts/test-composer-capabilities.ts && tsx scripts/test-session-identity.ts && tsx scripts/test-ui-preferences.ts",
+    "test:stage": "tsx scripts/test-stage-layout.ts && tsx scripts/test-thread-opening.ts && tsx scripts/test-composer-settings.ts && tsx scripts/test-composer-capabilities.ts && tsx scripts/test-session-identity.ts && tsx scripts/test-ui-preferences.ts && tsx packages/sessions/test/thread-references.mjs",
     "test:renderer-assets": "node scripts/test-renderer-assets.mjs && node --max-old-space-size=256 scripts/test-packaged-import-guards.mjs",
     "test:tuning": "npm run -s build --workspace @mako/sessions && tsx scripts/test-profile-transport.ts && tsx scripts/test-devin-settings.ts && tsx scripts/test-opencode-settings.ts && tsx scripts/test-tuning-import.ts && tsx scripts/test-session-settings.ts && tsx scripts/test-profile-refresh.ts && tsx scripts/check-harness-models.ts && node --import tsx docs/audits/2026-09-07/harness-defaults/reproduce.mjs",
     "test:usage": "tsx scripts/test-usage.ts",
@@ -73,7 +74,7 @@
     "release": "npm run package:mac",
     "test:live": "tsx scripts/test-live-conversations.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
     "verify:sessions": "npm run typecheck && npm test --workspace @mako/sessions && npm run test:live && npm run test:codex-protocol && npm run test:providers && npm run test:host && npm run test:stage && npm run test:performance && npm run lint && npm run build",
-    "test:conversation-control": "tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-child-workspace.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-relay-conversations.ts && tsx scripts/test-relay-workspace.ts",
+    "test:conversation-control": "tsx scripts/test-continuation-plan.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-child-workspace.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-relay-conversations.ts",
     "test:provider-e2e": "npm run build:electron && node scripts/test-provider-e2e.mjs",
     "clean:fixture-sessions": "tsx scripts/clean-fixture-sessions.ts",
     "test:desk-browser-electron": "npm run build:electron && node scripts/test-desk-browser-electron.mjs",
@@ -108,7 +109,7 @@
     "@anthropic-ai/claude-agent-sdk": "0.3.263",
     "@chenglou/pretext": "0.0.9",
     "@fontsource-variable/geist": "^5.3.0",
-    "@kiri/client": "file:vendor/kiri-client-0.2.5.tgz",
+    "@kiri/client": "file:vendor/kiri-client-0.2.6.tgz",
     "@lydell/node-pty": "1.1.0",
     "@mako/relay": "^0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
@@ -293,5 +294,13 @@
   ],
   "overrides": {
     "minimatch": "10.2.6"
-  }
+  },
+  "makoDistribution": "local",
+  "makoBuild": {
+    "id": "79ae5395c4e82eca",
+    "builtAt": "2026-09-11T20:56:36.694Z",
+    "revision": "0e33f870c7d302ca81faa194d2095242162cb82f",
+    "dirty": false
+  },
+  "makoLocalSigningIdentity": "41CCD4F5F2796876B03EA453C5D2C70A0018DBF8"
 }

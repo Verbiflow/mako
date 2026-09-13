@@ -92,6 +92,16 @@ update the reused ref. While watching, followed and recently updated files are
 stat-ed every 15 seconds so a missed watcher event cannot leave a row at its
 first kilobytes. `test/catalog-growth.mjs` covers these.
 
+A row's `updatedAt` is when the conversation last moved, which is not
+always when the file did. Claude Code appends `last-prompt` and
+`cost-state` records when a resident CLI exits, so every host restart and
+every install once bumped each idle Claude session to "now"; an open Grok
+TUI rewrites `summary.json` every minute. Claude stamps rows from the newest
+message's timestamp and declares `activityFromContent`, which keeps the
+catalog from re-stamping a grown file until `refine` finds a message in the
+appended bytes; Grok stamps from the transcript's mtime and ignores the
+sidecar's stamps. `test/activity-stamps.mjs` covers both.
+
 ## The built-in runtime's session tree is not a tree
 
 It is a parent-linked chain: every entry is a child of the previous one, so
@@ -330,7 +340,7 @@ test. Existing debt is never a reason to add new debt.
 
 ## Git
 
-Kiri is the normal Git backend, not an opt-in. `kiri-engine.ts` owns the process-lifetime sidecar and leased repository handles; `host-git.ts` and `git-preview.ts` adapt its typed data to Mako's existing host contract. `kiri-commit.ts` binds Mako's model connections and retains reviewed drafts per client/workspace. Do not restore a second Git or analysis implementation as a fallback. Engine/client mismatches are explicit errors checked against the protocol version and canonical schema digest.
+Kiri is the normal Git backend, not an opt-in. `kiri-engine.ts` owns the process-lifetime sidecar and leased repository handles; `host-git.ts` and `git-preview.ts` adapt its typed data to Mako's existing host contract. `kiri-commit.ts` binds Mako's model connections, retains reviewed drafts per client/workspace, and exposes typed commit-plan generation and application for exact staged or working-tree path selections. Every engine model call goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. Structured failures name the offending field in the error and in `host.log` under `commit-model`, never the model's text. Do not restore a second Git or analysis implementation as a fallback. Engine/client mismatches are explicit errors checked against the protocol version and canonical schema digest.
 
 `npm run prepare:kiri` builds the sidecar from the sibling Kiri checkout (or `KIRI_SOURCE_DIR`) when available and installs it under `vendor/kiri/<platform>-<arch>/`. `build:electron` runs this step. The macOS packaging configuration includes the engine under Resources and lists it for signing; development resolves the prepared vendor binary automatically. `MAKO_KIRI_BINARY` is a test/development executable override, not a feature flag. `@kiri/client` comes from a pinned, generated SDK tarball in `vendor/`. Update the SDK and engine together. Vendor an engine built from a committed Kiri revision, most simply a detached worktree passed as `KIRI_SOURCE_DIR`, and pack a new `@kiri/client` whenever the engine's schema hash moves; `prepare:kiri` refuses the mismatch, and `vendor/kiri/<platform>-<arch>/manifest.json` must record the vendored engine's own checksum. `npm run test:kiri-engine` exercises the sidecar through Mako's AI SDK against a local model endpoint in a disposable repository.
 
@@ -466,6 +476,40 @@ ring. Chat activity uses one compact 20px mark and no redundant Responding row
 while answer text streams. Thought-process details remain available without a
 second animated status.
 
+## Notifications
+
+Three outcomes and no more: an answer is `ready`, the agent must `ask` you
+(a question is an ask with `questions`, not a fourth kind), or the run
+`failed`. Starting, tool calls, and attach/detach never notify. The attention
+centre (`src/state/notifications.ts`, React-free; `docs/notifications.md`
+has the full design and the remote-channel plan) decides per outcome from
+four facts: kind, thread on screen, window in front, replay. Watching the
+thread means seen with one cue; another thread in front means a persistent
+toast; window not in front means a desktop banner. Outcomes are transitions
+keyed by a marker (permission id, turn), never states; hydration and
+reconnect replays are recorded for the badge but never announced; a thread
+that starts working again retires its unseen items; four or more banners in
+600 ms become one summary. The app icon and the titlebar pill ("2 threads
+need you") count distinct threads, never events. Banners and the badge are
+answered by the client that owns the window (`electron/client-main.ts`, the
+standalone host, or `src/dev/web-notifications.ts`), never by the shared
+host; one banner per thread is retained until it reports, and a click sends
+`notification-activated`. Preview windows record but never announce.
+External `needs-input` activity asks the same way; working-then-open is a
+finished turn; a vanished process is not an answer.
+
+Verified on macOS 26: the checkout's ad-hoc `Electron.app` cannot notify
+(`failed`, `UNErrorDomain error 1`, no prompt), so the notifier answers
+`unsigned` before touching the platform and only the packaged app banners.
+Electron has no authorization API; the packaged app carries
+`mako-notification-status` (Swift, `native/notification-status-macos`,
+built by `scripts/build-notification-status.mjs` with the bundle id embedded
+as `__info_plist`) beside its executable in `Contents/MacOS`, which is the
+only place `UNUserNotificationCenter` answers from; it is listed for signing.
+`notify` resolves on `show`, `failed`, or a 1.5 s grace, never before.
+`scripts/test-notifications.ts` covers the policy, bursts, retirement,
+replays, live and external transitions, the readout, and the platform side.
+
 ## Working on the UI
 
 `npm run dev` (or `npm run web`) attaches a local web UI to the `dev` profile's
@@ -566,7 +610,10 @@ for retained probe sessions;
 ACP session and deletes that verification session. Neither sends an agent prompt.
 `npm run test:dev-updates` checks deferred update delivery. After building Electron,
 `node scripts/test-provider-e2e.mjs <provider> --steer --continuation` checks real
-mid-turn delivery, idle replies, queueing, native identity, and retained context.
+mid-turn delivery, idle replies, queueing, native identity, and retained context;
+`--restart` stops the host mid-conversation and reopens the same native session
+through the provider's own resume (Cursor's `session/load`, Codex's thread
+resume) with no portable history, on the first named provider that can.
 The installed OpenCode v2 ACP server rejects concurrent prompts. Its free
 `opencode/muse-spark-1.3-contributor-free` model passes normal replies and queueing;
 verify it with `--continuation`, not by advertising unsupported steering.
@@ -589,8 +636,12 @@ hidden until explicitly activated.
 `npm run test:desktop-continuity` exercises actual Mako with an installed Devin
 process through Quit/reopen, a retained question, and a second native window.
 
-Permission modes are saved only after provider acknowledgement, separately for
-each provider. New sessions apply that mode before their first prompt. Execution
+A live session's permission switch is saved only after provider acknowledgement,
+separately for each provider. Before a session exists, every live driver declares
+the ladder a new session will offer (`modes` on `LiveCapability`; ACP sources record
+their verified `nativeModes`), the composer offers it for the selected provider, and
+the saved choice travels with the first prompt. The host validates it against the
+session's own list at start. Execution
 preferences sync between windows; draft text and preview layout remain separate.
 
 ## Access tiers and steering
@@ -619,6 +670,50 @@ allowed at launch so a later switch is accepted. Codex sends approval policy,
 sandbox, and reviewer with every `turn/start`; a change applies to the next
 turn. `test-access-modes.ts` covers the placements and decisions.
 
+How a catalogued thread is continued is the host's decision, not the
+renderer's. `electron/contracts/thread-continuation.ts` turns one ref plus
+what only the host knows — the live driver, the installed CLI, a run that
+owns the path, another process in the store — into a `ContinuationPlan`:
+`live` with the id to load, `native`, `handoff` with a reason, or `refused`
+with a reason. The renderer asks `continuationPlan(path)` and follows it;
+`live-start` with a resume id and `native-submit` each assert the host's own
+plan first (`electron/continuation.ts`), so stale renderer state fails with
+the reason instead of running on another transport. Before this the renderer
+chose from provider flags served once at startup, and a wrong `canResume`
+sent every Cursor reply to `cursor-agent -p --resume` without a word.
+`test-continuation-plan.ts` covers the rules and both refusals. Verified
+2026-09-12 with `test-provider-e2e.mjs <provider> --restart` on Cursor and
+Grok: both reopen a stopped session through `session/load` in place.
+
+One selection means the same thing on both of a provider's transports. A
+native runner declares the option ids its command line `carries`, settles
+the rest in `prepare` (dropped ids are reported to the user, never silently
+left behind; `withCatalogDefaults` supplies the provider's defaults a
+command line has no session to fall back on), and reads a built command back
+with `describe`; a command's `env` carries what a CLI reads from its
+environment rather than its arguments (Claude's agent teams). `scripts/test-transport-agreement.ts` feeds every model and
+option value of each provider's catalog through the runner and compares the
+read-back with the settings the ACP transport applies; a mangled flag or a
+composed id that the CLI would reject fails there.
+
+Cursor resumes over ACP. Verified 2026-09-12 (cursor-agent 2026.09.10):
+`session/load` reopens a `~/.cursor/acp-sessions/<id>/store.db` in place,
+replays its history, and keeps its context; it answers "Session not found"
+for a `chats/` store, so those rows carry `liveResume: false` and continue
+through the CLI. `cursor-agent -p --resume <id>` on an ACP session writes its
+new turns to a second store under `chats/` with the same agent id; the two
+hold different turns, so the catalog keys the chats copy by its own
+`identity` instead of collapsing it onto the original; `threadIdentity()` is
+the one dedupe key, the activity index and presence use it too, and a
+provider's `peekVersion` re-peeks its own cached rows when a peek rule
+changes. The headless CLI takes
+one flat id from `cursor-agent --list-models` (`claude-opus-4-8-thinking-high`,
+`gpt-5.3-codex` for medium, `cursor-grok-4.6-high-fast`, `auto`) and rejects
+the bracket form its help documents; `cursor/model-ids.ts` picks the listed id
+in the runner's `prepare` step and refuses a selection the account's list
+cannot express. `test-cursor-resume.ts`, `test-cursor-model-ids.ts` and
+`packages/sessions/test/cursor-fork.mjs` cover these.
+
 Steering is a capability with a kind, not a command. `step` folds the message
 into the running turn at the agent's next step (Claude, Codex, Devin);
 `interrupt` cancels the current step and continues with the message (Cursor).
@@ -632,12 +727,24 @@ through async request context. Provider conversations remain shared. A preview
 must never change another window's cwd, file target, or active workspace tab.
 The rail's Projects view keeps active sessions under their project; Recent is a
 bounded chronological list. Never gate provider names or the rail on model discovery.
-Rail order holds still while agents work: `stableThreadRanks` in
+Position in the rail never carries status. `stableThreadRanks` in
 `src/lib/thread-folders.ts` gives a busy thread its rank when it starts, keeps
 it while the thread is working, observed, or externally active, and settles it
 once when it finishes, so a file that changes on every token moves nothing.
-Every folder shows the same number of lead rows; selecting a project never
-resizes one. `test-stage-layout.ts` covers the ranks and the stable order.
+`stableFolderRanks` holds every folder's place from the moment it is first
+seen; only `noteFolderUse` (a prompt sent or a thread started, called from
+every send path) lifts one, never an agent's reply or a finished turn. Status
+is the row's mark and the folder's chip, and a folder with a working,
+waiting, or unread thread stays visible past the folder page limit instead of
+climbing. The Status view (`src/lib/thread-board.ts`) is the one place
+threads regroup by state, in a fixed section order; Archived is reached from
+the filter glyph. While the pointer is inside the rail the order caught at
+entry holds, so a click cannot land on a row that moved, and rows that do
+move glide there through `use-row-flip.ts` (transform only; nothing on first
+fill, view changes, offscreen, or under reduced motion). Every folder shows
+the same number of lead rows; selecting a project never resizes one.
+`test-stage-layout.ts` covers the ranks, held folders, and the board;
+`node scripts/test-rail-ui.mjs` drives the production rail.
 A row's controls (pin, stop, actions, detach) live in a pill that appears over
 the row's meta on hover or focus; an invisible control must never reserve
 width, because at the rail's default width that halves the title. Titles keep

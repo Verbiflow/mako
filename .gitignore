@@ -47,5 +47,6 @@ build/*.iconset
 # Local agent scratch
 .claude/
 build/make-icns
+build/mako-notification-status
 release/
 .env*
