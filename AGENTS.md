@@ -1005,8 +1005,74 @@ prompt through the ordinary send path; a user's Stop offers nothing. A
 delegated child cut short by a host exit settles as `failed` in its parent,
 never `canceled`, so the parent may delegate again; `stop()` flushes every
 resident before it closes any journal because a child's verdict lands in
-its parent's. `test-live-conversations.ts` covers the three reasons,
+its parent's. `test-live-conversations.ts` covers the reasons,
 `test-live-controls.tsx` the footer and the recovery rows.
+
+The fourth reason, `connection-lost`, is a turn the agent ended on its own
+dropped backend connection. `cursor-agent acp` runs its agent loop without
+the transport retries its TUI and SDK paths use, so the first
+`[canceled] http/2 stream closed with error code CANCEL (0x8)` from Cursor's
+backend (common a quarter-hour into a tool-heavy turn) is written into the
+transcript as `Error: RetriableError: …` and the turn still answers
+`end_turn`; before this Mako recorded that as a completed answer and the
+error was prose in the transcript. A provider that does this knows its own
+wire syntax, so `ProviderAcpSource.reportedFailure(finalText)` lifts the
+error out of the turn's final text (`AcpPromptTurn.finalText`: the text since
+the last tool call or thought, bounded to 4 KiB) and `acp-turn-verdict.ts`
+settles the session `failed` with `lastStop: CONNECTION_LOST_STOP` when the
+kind is `network`. `LiveConversations` records that request as `interrupted`
+with reason `connection-lost` and `failure: "network"` rather than `failed`,
+because the turn's work is in place and the right offer is Continue turn, not
+Send again; the footer reads "The connection to Cursor dropped" and the
+Continue prompt says the connection dropped. Only Cursor implements the hook
+(`providers/cursor/reported-failure.ts`); `test-cursor-reported-failure.ts`
+replays the real block sequence, a tool call between error-shaped chunks,
+and a cancelled turn that must not be read as a failure.
+
+The same dropped connection can hit before the first prompt. cursor-agent
+builds a session's config options from the model list it fetches from its
+backend; when that fetch fails it swallows the error into an empty list and
+still answers `session/new` (15.8 s, once) with `mode`, a `model` select
+holding the current model and no choices, and none of the parameter options
+(`context`, `reasoning`, `fast`, `thinking`) it derives from the model's
+definition. Applying the saved `context` to that set was refused as "This
+provider cannot change context in the running session": a network failure
+read back as a settings error, and the start died before the prompt was
+sent. `ProviderAcpSource.degradedOptions(options, model)` lets a provider
+recognise its own incomplete set and name the change that rebuilds it
+(Cursor: set `model`, which makes the agent fetch again;
+`providers/cursor/session-options.ts`); `acp-options-repair.ts` runs it as
+the `session/options` startup step, `OPTIONS_REPAIR_ATTEMPTS` (2) asks
+`OPTIONS_REPAIR_PAUSE_MS` (1.5 s) apart, before `applyTuning`. A complete set
+sends nothing. When the set stays incomplete the start fails with the
+provider's reason, worded so it classifies `network` and offers Send again.
+`test-cursor-session-options.ts` replays the complete, degraded and
+variants-picker shapes recorded from cursor-agent 2026.09.10.
+
+A dropped turn is continued by the host itself, once. The turn's work is on
+the provider's side, so when the settled request is the newest one and
+nothing is queued behind it, `LiveConversations` stamps its interruption
+with `autoContinue: { at }` and, `AUTO_CONTINUE_DELAY_MS` (2 s) later, admits
+a request carrying `continueTurnPrompt("connection-lost")` under the
+interrupted turn's own `tuning`, marked `continues: { requestId, reason,
+auto: true }` (`electron/contracts/turn-continuation.ts` holds the prompt,
+the delay and `autoContinueCandidate`). One attempt per turn: a continuation
+that drops again is never a candidate, nor is a turn something already
+continues, so the second drop leaves the manual offer. The timer re-checks
+eligibility when it fires; the user's own prompt, Stop, `close`, a pending
+transfer, a rewind, an open permission and a host that is leaving all
+decline it and clear the stamp, and a journal reopened by the next host
+loses the stamp with the host that made the promise. The renderer reads the
+stamp: the footer says "continuing automatically" with the live mark and
+offers no button, presence and the rail keep the row working, and no
+`failed` outcome is announced or marked for a drop Mako is about to pick up.
+Mako's continuation renders as Mako's line where the prompt would be ("Mako
+continued the turn after the connection to Cursor dropped"), never as the
+user's bubble; a continuation the user pressed the button for is their
+prompt and stays one. `test-live-conversations.ts` (`autoContinuedTurn`),
+`test-prompt-delivery.tsx`, `test-live-controls.tsx` and
+`test-notifications.ts` cover the send, the bound, the declines, the journal
+and the quiet.
 
 A failed turn carries a `failure` kind decided once on the host
 (`electron/contracts/provider-failure.ts`, no imports, shared with the

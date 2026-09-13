@@ -39,7 +39,7 @@
     "test:kiri-engine": "tsx scripts/test-kiri-engine.ts",
     "test:commit-generation": "tsx scripts/test-commit-generation.ts && tsx scripts/test-commit-models.ts && tsx scripts/test-utility-token-count.ts && tsx scripts/test-commit-connections.ts && tsx scripts/test-utility-model-location.ts && tsx scripts/test-utility-model-catalog.ts",
     "test:accounts": "tsx scripts/test-account-usage.ts && tsx scripts/test-account-routing.ts && tsx scripts/test-account-keychain.ts",
-    "test:acp-registry": "tsx scripts/test-acp-registry.ts && tsx scripts/test-access-modes.ts && tsx scripts/test-acp-stream.ts && tsx scripts/test-acp-prompt-turn.ts && tsx scripts/test-devin-permissions.ts && tsx scripts/test-devin-session-mcp.ts && tsx scripts/test-devin-resume.ts && tsx scripts/test-cursor-resume.ts && tsx scripts/test-cursor-model-ids.ts",
+    "test:acp-registry": "tsx scripts/test-acp-registry.ts && tsx scripts/test-access-modes.ts && tsx scripts/test-acp-stream.ts && tsx scripts/test-acp-prompt-turn.ts && tsx scripts/test-cursor-reported-failure.ts && tsx scripts/test-cursor-session-options.ts && tsx scripts/test-devin-permissions.ts && tsx scripts/test-devin-session-mcp.ts && tsx scripts/test-devin-resume.ts && tsx scripts/test-cursor-resume.ts && tsx scripts/test-cursor-model-ids.ts",
     "test:automations": "tsx scripts/test-automations.ts",
     "test:codex-protocol": "tsx scripts/test-codex-protocol.ts",
     "test:host": "tsx scripts/test-host-domains.ts && tsx scripts/test-workspace-clients.ts && tsx scripts/test-git-staging.ts && tsx scripts/test-git-preview.ts && tsx scripts/test-git-push.ts",
