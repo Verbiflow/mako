@@ -17,6 +17,7 @@ import {
 } from "@/state/notifications"
 import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/threads"
 import { describeProviderFailure } from "../../electron/contracts/provider-failure"
+import { autoContinuePending } from "@/state/prompt-delivery"
 
 export function updateLive(
   id: string,
@@ -64,7 +65,9 @@ export function lastReplyText(blocks: readonly AcpBlock[]): string {
  * (which for a rejected transcript is a JSON error body).
  */
 function failureDetail(conversation: LiveAcpConversation): string | undefined {
-  const kind = conversation.requests?.findLast((request) => request.status === "failed")?.failure
+  // A dropped connection settles its request as interrupted, not failed, and
+  // still carries the kind that names the connection.
+  const kind = conversation.requests?.findLast((request) => request.failure !== undefined)?.failure
   return kind && kind !== "unknown"
     ? describeProviderFailure(kind, harnessLabel(conversation.harness)).title
     : undefined
@@ -118,7 +121,10 @@ function noteLiveOutcome(
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
     return
   }
-  if (session.status === "failed" && previousStatus !== "failed")
+  // A drop Mako is about to continue itself is not an outcome yet: the thread
+  // is running again in seconds, and a banner for it would be noise. If the
+  // continuation drops too, that second failure announces itself.
+  if (session.status === "failed" && previousStatus !== "failed" && !autoContinuePending(conversation.requests))
     noteOutcome({
       kind: "failed",
       subject,
@@ -156,7 +162,9 @@ export function syncThreadStatus(
   if (!threadPath) return
   setThreadRunning(
     threadPath,
-    session.status === "running" || session.status === "starting"
+    session.status === "running" ||
+      session.status === "starting" ||
+      autoContinuePending(conversation.requests)
   )
   if (session.status === "closed") {
     setThreadAttention(threadPath, null)
@@ -170,7 +178,7 @@ export function syncThreadStatus(
     })
     return
   }
-  if (session.status === "running") {
+  if (session.status === "running" || autoContinuePending(conversation.requests)) {
     setThreadAttention(threadPath, null)
     return
   }

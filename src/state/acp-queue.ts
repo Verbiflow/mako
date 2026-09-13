@@ -1,4 +1,5 @@
-import { CONTINUE_TURN_PROMPT, type PendingPrompt } from "@/state/prompt-delivery"
+import { continueTurnPrompt, type PendingPrompt } from "@/state/prompt-delivery"
+import type { InterruptionReason } from "@/lib/types"
 import type { QueuedPromptEdit } from "../../electron/contracts/live-queue"
 import { threadsStore } from "@/state/thread-store"
 import { applyLiveSnapshot } from "@/state/live-recovery"
@@ -95,12 +96,13 @@ export async function sendTo(
 }
 
 /**
- * Pick up the turn Mako cut short. The provider kept the session; a short
- * prompt asks it to go on, through the same send as any other message, so
- * the request queues, steers or resumes exactly as one typed would.
+ * Pick up a turn that was cut short — by Mako's exit or by the provider's
+ * own dropped connection. The provider kept the session; a short prompt asks
+ * it to go on, through the same send as any other message, so the request
+ * queues, steers or resumes exactly as one typed would.
  */
-export function continueTurn(id: string): Promise<boolean> {
-  return sendTo(id, CONTINUE_TURN_PROMPT)
+export function continueTurn(id: string, reason: InterruptionReason = "host-quit"): Promise<boolean> {
+  return sendTo(id, continueTurnPrompt(reason))
 }
 
 /**

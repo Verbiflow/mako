@@ -1,4 +1,5 @@
 import type { AcpState } from "@/state/acp-state"
+import { autoContinuePending } from "@/state/prompt-delivery"
 
 export interface AcpPresence {
   key: string
@@ -38,12 +39,16 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
         title: conversation.title,
         threadPath: conversation.threadPath,
         nativePaths: conversation.nativePaths,
+        // A dropped connection Mako is about to continue itself is a working
+        // row, not a failed one: the send is seconds away.
         status:
           conversation.permission && conversation.session.status !== "failed"
             ? "needs-permission"
-            : conversation.session.status === "failed" && conversation.failureSeen
-              ? "ready"
-              : conversation.session.status,
+            : conversation.session.status === "failed" && autoContinuePending(conversation.requests)
+              ? "running"
+              : conversation.session.status === "failed" && conversation.failureSeen
+                ? "ready"
+                : conversation.session.status,
       }
       return [presence]
     })

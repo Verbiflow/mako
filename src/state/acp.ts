@@ -1,4 +1,5 @@
 import { stagePrompt } from "@/state/acp-pending"
+import { autoContinuePending } from "@/state/prompt-delivery"
 import { projectAcp } from "@/state/live-projection"
 import {
   chooseProviderMode,
@@ -212,11 +213,12 @@ export const acp = {
         updatedAt: Date.now(),
       }))
       if (!next) continue
-      setThreadRunning(ref.path, next.session.status === "running")
+      const continuing = autoContinuePending(next.requests)
+      setThreadRunning(ref.path, next.session.status === "running" || continuing)
       if (next.session.status === "failed")
         setThreadAttention(
           ref.path,
-          activeIs(next.key) || next.failureSeen
+          activeIs(next.key) || next.failureSeen || continuing
             ? null
             : { kind: "failed", at: Date.now(), detail: next.session.error }
         )

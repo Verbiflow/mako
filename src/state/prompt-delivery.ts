@@ -3,21 +3,28 @@ import type {
   LiveRequest,
   LiveSessionState,
   PromptAttachment,
+  TurnContinuation,
 } from "@/lib/types"
 import type { AcpBlock } from "@/lib/acp-blocks"
+import { continueTurnPrompt } from "../../electron/contracts/turn-continuation"
+
+export { continueTurnPrompt }
 
 /** How a turn on screen was cut short, and whether the transcript offers to pick it up. */
 export interface TurnStop {
   reason: InterruptionReason
   /** True for the newest turn when Mako, not the user, cut it short and nothing is running now. */
   continuable: boolean
+  /** Mako has scheduled its own continuation of this turn; the footer says so instead of offering the button. */
+  automatic: boolean
 }
 
 /**
  * The requests whose turn stopped before the provider finished, keyed by
  * request id. A user's Stop is plain `stopped`; a host exit carries its
  * recorded reason. Only the newest such turn can be continued, and only
- * while the session is idle, so two Continue offers never show at once.
+ * while the session is idle, so two Continue offers never show at once. A
+ * turn Mako is about to continue itself offers nothing meanwhile.
  */
 export function turnStops(requests: readonly LiveRequest[], running: boolean): Map<string, TurnStop> {
   const stops = new Map<string, TurnStop>()
@@ -30,17 +37,57 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
           ? request.interruption?.reason
           : undefined
     if (!reason) continue
+    const automatic = request.interruption?.autoContinue !== undefined
     stops.set(request.id, {
       reason,
-      continuable: !running && reason !== "stopped" && request === newest,
+      continuable: !running && !automatic && reason !== "stopped" && request === newest,
+      automatic,
     })
   }
   return stops
 }
 
-/** What the composer sends to pick up a turn Mako cut short. */
-export const CONTINUE_TURN_PROMPT =
-  "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there."
+/**
+ * The requests that carry on an earlier turn, keyed by their own request id,
+ * so the transcript can show Mako's continuation as Mako's line and not as
+ * words the user typed.
+ */
+export function turnContinuations(requests: readonly LiveRequest[]): Map<string, TurnContinuation> {
+  const continuations = new Map<string, TurnContinuation>()
+  for (const request of requests) if (request.continues) continuations.set(request.id, request.continues)
+  return continuations
+}
+
+/**
+ * True while the host has promised to continue the newest turn itself. The
+ * session reads `failed` in that window, but the thread is not: it is about
+ * to run again, so nothing announces the drop and the rail keeps the row
+ * working.
+ */
+export function autoContinuePending(requests: readonly LiveRequest[] | undefined): boolean {
+  return requests?.some((request) => request.interruption?.autoContinue !== undefined) ?? false
+}
+
+/** The footer's words for a turn Mako is about to pick up itself. */
+export const AUTO_CONTINUE_NOTE = "continuing automatically"
+
+/**
+ * The footer's word for why a turn ended early. `provider` is the display
+ * name of the harness that ran it; a dropped connection is that provider's
+ * connection, and the label says so.
+ */
+export function turnStopLabel(reason: InterruptionReason, provider: string): string {
+  switch (reason) {
+    case "stopped":
+      return "Stopped"
+    case "host-quit":
+      return "Interrupted when Mako quit"
+    case "host-crashed":
+      return "Interrupted when Mako closed unexpectedly"
+    case "connection-lost":
+      return `The connection to ${provider} dropped`
+  }
+}
 
 export interface PendingPrompt {
   id: string
