@@ -13,7 +13,7 @@ import { prefsStore, setPref, togglePinned, usePrefs } from "@/state/prefs"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
 import { acpForThread, activeAcp, useAcp } from "@/state/acp"
-import { threadStatus, threads, useThreads } from "@/state/threads"
+import { sameThreadStatus, threadStatus, threads, useThreads } from "@/state/threads"
 
 /**
  * The mark a session wears while it is attached — running in a background
@@ -49,10 +49,7 @@ const Attached = memo(function Attached({ path }: { path: string }) {
           className="animate-live size-1.5 shrink-0 rounded-full bg-ember"
         />
       ) : tab.unread && !tab.active ? (
-        <span
-          aria-label="Finished while you were away"
-          className="size-1.5 shrink-0 rounded-full bg-foreground/45"
-        />
+        <span aria-label="Finished while you were away" className="review-dot" />
       ) : null}
     </>
   )
@@ -99,7 +96,7 @@ export const ThreadRow = memo(function ThreadRow({
   const [editing, setEditing] = useState<string | null>(null)
   // A thread whose CLI is being driven from here right now wears a pulse —
   // the same promise a tab's dot makes: something is working behind this row.
-  const status = useThreads((state) => threadStatus(ref, state))
+  const status = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
   const archived = useThreadArchives((state) => archivedThread(ref, state.keys))
   const target = nativeThreadTarget(ref)
   const working = status.kind === "working"
@@ -143,8 +140,10 @@ export const ThreadRow = memo(function ThreadRow({
       onAuxClick={(event) => {
         if (event.button === 1) open()
       }}
-      title={[
-        ref.title ?? "Untitled session",
+      // The row's full text, shown by the rail's own tip (`rail-tip.tsx`),
+      // never a native `title`: on macOS those arrive late or not at all.
+      data-tip={[
+        override ?? ref.title ?? "Untitled session",
         ref.archived
           ? "Archived: the native store lost this; Mako kept it. Reply to bring it back to life."
           : undefined,
@@ -154,11 +153,13 @@ export const ThreadRow = memo(function ThreadRow({
         ].join(" → "),
         ref.model,
         ref.cwd,
+        "Double-click the title to rename",
       ]
         .filter(Boolean)
         .join("\n")}
       data-active={lit || undefined}
       data-thread-row
+      data-flip-key={ref.path}
       data-conversation-id={target.kind === "live" ? target.id : undefined}
       data-thread-indent={indent || undefined}
       className={cn(
@@ -213,7 +214,6 @@ export const ThreadRow = memo(function ThreadRow({
             event.stopPropagation()
             setEditing(override ?? ref.title ?? "")
           }}
-          title="Double-click to rename"
           className={cn(
             "min-w-0 flex-[1_1_60%] truncate text-ui",
             lit ? "font-medium text-foreground" : "text-foreground/85"
@@ -239,9 +239,13 @@ export const ThreadRow = memo(function ThreadRow({
       ) : null}
       <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
       {/* Hover pill: the row's controls, laid over the meta on hover or focus so
-          a row never reserves width for buttons nobody can see. */}
+          a row never reserves width for buttons nobody can see. It also stays
+          while a menu inside it is open: the menu is portaled, so focus leaves
+          the row, and a hidden trigger has no box to anchor the menu to.
+          Over the controls the row's tip stands down for their own labels. */}
       <span
-        className="absolute top-1/2 right-7 hidden -translate-y-1/2 items-center gap-0.5 rounded-md bg-raised p-0.5 group-hover:flex group-focus-within:flex group-focus-visible:flex"
+        data-tip-quiet
+        className="absolute top-1/2 right-7 hidden -translate-y-1/2 items-center gap-0.5 rounded-md bg-raised p-0.5 group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
         onClick={(event) => event.stopPropagation()}
       >
         <button

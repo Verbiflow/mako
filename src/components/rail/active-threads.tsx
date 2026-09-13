@@ -46,6 +46,7 @@ export function LiveAgentRow({
       onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); acp.activate(presence.key) } }}
       aria-label={`${title}, ${label}`}
       data-thread-row
+      data-flip-key={presence.key}
       data-conversation-id={presence.key}
       data-thread-indent={indent || undefined}
       onClick={() => acp.activate(presence.key)}
@@ -67,7 +68,7 @@ export function LiveAgentRow({
         <ActivityMark state={state} size={20} />
       </span>
       <span
-        className="absolute top-1/2 right-7 hidden -translate-y-1/2 items-center gap-0.5 rounded-md bg-raised p-0.5 group-hover:flex group-focus-within:flex group-focus-visible:flex"
+        className="absolute top-1/2 right-7 hidden -translate-y-1/2 items-center gap-0.5 rounded-md bg-raised p-0.5 group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
         onClick={(event) => event.stopPropagation()}
       >
         <ThreadActions target={{ kind: "live", id: presence.key }} title={title} archived={archived} running={presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission"} controlled />

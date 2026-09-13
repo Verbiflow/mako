@@ -11,21 +11,38 @@ import { HARNESS_LABEL, harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import {
   groupThreadFolders,
+  orderThreadFolders,
   showsInRecent,
+  stableFolderRanks,
   stableThreadRanks,
   threadBelongsToWorkspace,
   threadFolderKey,
   visibleThreadFolders,
+  type FolderRanks,
+  type RailRanks,
   type ThreadFolder,
   type ThreadFolderActivity,
 } from "@/lib/thread-folders"
+import {
+  boardBucketOf,
+  groupThreadBoard,
+  liveBoardBucket,
+  type BoardBucket,
+  type BoardItem,
+  type BoardSection as BoardSectionData,
+} from "@/lib/thread-board"
+import { useRowFlip } from "@/components/rail/use-row-flip"
+import { RailTip } from "@/components/rail/rail-tip"
 import { railRanksStore } from "@/state/rail-ranks"
 import {
   threadStatus,
   threadStatusPriority,
   threadsStore,
   useThreads,
+  type ThreadStatus,
 } from "@/state/threads"
+import type { ThreadRef } from "@/lib/types"
+import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { actions, useSession } from "@/state/session"
 import { useAcp } from "@/state/acp"
 import {
@@ -58,16 +75,20 @@ import {
 
 /**
  * The threads rail: every agent's conversations, arranged the way work is —
- * by folder, most alive first.
+ * by folder, the ones you work in first.
  *
- * Folders follow recency, each holding the same handful of rows and a quiet
- * "More" for the rest; folders gone cold collapse to a single line. Order and
- * heights hold still while agents work: a busy thread keeps its rank until it
- * finishes, and selecting a project never grows or shrinks a folder. No chips, no
- * toggles, no permanent search box — search and the harness filter live
- * behind two small glyphs in the header and take space only while in use.
- * A row is one line: the harness's mark, the title, and how long ago. The
- * marks carry the multi-harness story; everything else stays out of the way.
+ * Position never carries status. A folder takes its place when first seen
+ * and moves only when you work there — a prompt sent, a thread started —
+ * never when an agent answers; a busy thread keeps its rank until it
+ * finishes; while the pointer is inside the rail nothing changes place at
+ * all. What a thread needs from you is its mark and its folder's chip, and
+ * the Status view is the one place threads regroup by state, on purpose.
+ * Rows that do move glide there. Each folder holds the same handful of rows
+ * and a quiet "More" for the rest; folders gone cold collapse to a single
+ * line. No chips, no toggles, no permanent search box — search and the
+ * harness filter live behind two small glyphs in the header and take space
+ * only while in use. A row is one line: the harness's mark, the title, and
+ * how long ago.
  */
 
 /**
@@ -78,6 +99,8 @@ const FOLDER_LEAD_ROWS = 4
 /** Each press of "More" reveals this many further rows. */
 const PAGE_ROWS = 5
 const PINNED_ROWS = 8
+/** Rows the board's Done section shows before "More"; the sections above it show everything. */
+const BOARD_LEAD_ROWS = 8
 const FOLDER_ROWS = 6
 /** Folders quiet longer than this start out collapsed. */
 const COLD_MS = 7 * 24 * 3600_000
@@ -125,7 +148,12 @@ export function AgentThreads() {
   const scope = usePrefs((prefs) => prefs.railScope)
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const grouping = usePrefs((prefs) => prefs.railGrouping)
+  const folderUse = usePrefs((prefs) => prefs.folderUse)
   const railWidth = usePrefs((prefs) => prefs.railWidth)
+  const scroller = useRef<HTMLDivElement>(null)
+  // The order caught when the pointer entered the rail; held until it leaves,
+  // so nothing can change place under a click.
+  const [hold, setHold] = useState<{ ranks: RailRanks; folderRanks: FolderRanks } | null>(null)
   const { cwd, ready: workspaceReady } = useWorkspaceFocus()
   const branch = useSession((state) => state.git?.branch)
   const focusedBranch = workspaceReady ? branch : undefined
@@ -181,7 +209,7 @@ export function AgentThreads() {
   const unboundLiveAgents = useMemo(() => {
     const nativePaths = new Set(all.map((ref) => ref.path))
     const nativeIdentities = new Set(
-      all.map((ref) => `${ref.harness}:${ref.nativeId}`)
+      all.map((ref) => `${ref.harness}:${ref.identity ?? ref.nativeId}`)
     )
     return liveAgents.filter(
       (presence) =>
@@ -212,7 +240,7 @@ export function AgentThreads() {
     )
   }, [all, cwd, deferred, filter, scope, archiveKeys, grouping, attention, working, externalActivity])
 
-  const { priorities, threadActivity } = useMemo(() => {
+  const { priorities, threadActivity, statuses } = useMemo(() => {
     const state = {
       ...threadsStore.get(),
       attention,
@@ -222,8 +250,10 @@ export function AgentThreads() {
     }
     const nextPriorities: Record<string, number> = {}
     const nextActivity: Record<string, ThreadFolderActivity> = {}
+    const nextStatuses: Record<string, ThreadStatus> = {}
     for (const ref of matched) {
       const status = threadStatus(ref, state)
+      nextStatuses[ref.path] = status
       nextPriorities[ref.path] = threadStatusPriority(status)
       nextActivity[ref.path] = {
         running: status.kind === "working",
@@ -234,7 +264,7 @@ export function AgentThreads() {
         observed: status.kind === "observed",
       }
     }
-    return { priorities: nextPriorities, threadActivity: nextActivity }
+    return { priorities: nextPriorities, threadActivity: nextActivity, statuses: nextStatuses }
   }, [attention, externalActivity, matched, observed, working])
 
   // Ranks from the last render decide this one, so a thread that is busy
@@ -243,9 +273,7 @@ export function AgentThreads() {
     () => stableThreadRanks(matched, threadActivity, railRanksStore.get().ranks),
     [matched, threadActivity]
   )
-  useEffect(() => {
-    railRanksStore.set({ ranks })
-  }, [ranks])
+  const shownRanks = hold?.ranks ?? ranks
 
   const held = useMemo(() => {
     const set = new Set(pinned)
@@ -254,7 +282,7 @@ export function AgentThreads() {
     return list
   }, [matched, pinned])
 
-  const folders = useMemo(
+  const grouped = useMemo(
     () =>
       groupThreadFolders({
         refs: matched,
@@ -264,17 +292,53 @@ export function AgentThreads() {
         pinnedFolders: pinnedProjects,
         priorities,
         activity: threadActivity,
-        ranks,
+        ranks: shownRanks,
         sortBy,
       }),
-    [cwd, matched, unboundLiveAgents, pinned, pinnedProjects, priorities, ranks, sortBy, threadActivity]
+    [cwd, matched, unboundLiveAgents, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity]
+  )
+  // A folder takes its place when first seen and keeps it until you work
+  // there. Agent output never moves one.
+  const folderRanks = useMemo(
+    () => stableFolderRanks(grouped, folderUse, railRanksStore.get().folderRanks),
+    [grouped, folderUse]
+  )
+  useEffect(() => {
+    railRanksStore.set({ ranks, folderRanks })
+  }, [ranks, folderRanks])
+  const folders = useMemo(
+    () => orderThreadFolders(grouped, hold?.folderRanks ?? folderRanks, sortBy),
+    [grouped, hold, folderRanks, sortBy]
   )
   const recent = useMemo(() => [
-    ...matched.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: ranks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
+    ...matched.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: shownRanks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
     ...unboundLiveAgents.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.createdAt).toISOString(), presence })),
-  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [matched, ranks, threadActivity, unboundLiveAgents])
+  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [matched, shownRanks, threadActivity, unboundLiveAgents])
+  const board = useMemo((): BoardSectionData<BoardRow>[] => {
+    if (grouping !== "status") return []
+    const items: BoardItem<BoardRow>[] = [
+      ...matched.map((ref) => {
+        const status = statuses[ref.path] ?? { kind: "idle" as const }
+        const placed = boardBucketOf(status)
+        return {
+          key: ref.path,
+          bucket: placed.bucket,
+          at: placed.at ?? shownRanks[ref.path]?.at ?? ref.updatedAt ?? "",
+          item: { kind: "native" as const, ref },
+        }
+      }),
+      ...unboundLiveAgents.map((presence) => ({
+        key: presence.key,
+        bucket: liveBoardBucket(presence.status),
+        at: new Date(presence.createdAt).toISOString(),
+        item: { kind: "live" as const, presence },
+      })),
+    ]
+    return groupThreadBoard(items)
+  }, [grouping, matched, statuses, shownRanks, unboundLiveAgents])
 
   const searchActive = Boolean(deferred.trim())
+  useRowFlip(scroller, `${grouping}:${searchActive}`)
   const quietPinned = held
   const shownPinned = showAllPinned
     ? quietPinned
@@ -344,12 +408,15 @@ export function AgentThreads() {
           className="scroll-fade-top [--fade-from:var(--shell)]"
         />
         <div
+          ref={scroller}
           onScroll={(event) =>
             topFade.current?.toggleAttribute(
               "data-scrolled",
               event.currentTarget.scrollTop > 0.5
             )
           }
+          onPointerEnter={() => setHold((current) => current ?? { ranks, folderRanks })}
+          onPointerLeave={() => setHold(null)}
           className="scroll-fade-scroller min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3"
         >
           {!loaded && matched.length === 0 && unboundLiveAgents.length === 0 ? (
@@ -383,6 +450,25 @@ export function AgentThreads() {
                 ]}
               />
             )
+          ) : grouping === "status" && !searchActive ? (
+            <div className="pt-1">
+              <DraftThreads />
+              {board.every((section) => section.key === "working" || section.key === "done") ? (
+                <p data-flip-key="board:calm" className="flex h-7 items-center px-1.5 text-label text-faint/70">
+                  Nothing needs you right now
+                </p>
+              ) : null}
+              {board.map((section) => (
+                <BoardSection
+                  key={section.key}
+                  section={section}
+                  pages={pages[`board:${section.key}`] ?? 0}
+                  onPages={(next) =>
+                    setPages((prev) => ({ ...prev, [`board:${section.key}`]: next }))
+                  }
+                />
+              ))}
+            </div>
           ) : searchActive || grouping !== "project" ? (
             <div className="pt-1">
               {grouping !== "archived" ? <DraftThreads /> : null}
@@ -482,6 +568,7 @@ export function AgentThreads() {
             </>
           )}
         </div>
+        <RailTip scroller={scroller} />
       </div>
     </div>
   )
@@ -544,8 +631,13 @@ function RailHeader({
   return (
     <div className="flex h-9 shrink-0 items-center px-2 pt-1.5">
       <div className="flex items-center gap-0.5" role="group" aria-label="Thread view">
-        {([ ["project", "Projects"], ["recent", "Recent"], ["archived", "Archived"] ] as const).map(([value, label]) => (
-          <button key={value} type="button" aria-pressed={grouping === value} onClick={() => setPref("railGrouping", value)} className={cn("pressable h-6 rounded px-1.5 text-label transition-colors hover:bg-fill-hover", grouping === value ? "bg-fill-selected font-medium text-foreground" : "text-faint")}>{label}</button>
+        {/* Archived is reached from the filter glyph; while it is showing, the
+            one pressed pill names it and returns to Projects. */}
+        {(grouping === "archived"
+          ? ([["archived", "Archived"]] as const)
+          : ([["project", "Projects"], ["recent", "Recent"], ["status", "Status"]] as const)
+        ).map(([value, label]) => (
+          <button key={value} type="button" aria-pressed={grouping === value} onClick={() => setPref("railGrouping", value === "archived" ? "project" : value)} className={cn("pressable h-6 rounded px-1.5 text-label transition-colors hover:bg-fill-hover", grouping === value ? "bg-fill-selected font-medium text-foreground" : "text-faint")}>{label}</button>
         ))}
       </div>
       <span className="flex-1" />
@@ -587,7 +679,9 @@ function HarnessFilter({
   const [open, setOpen] = useState(false)
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const scope = usePrefs((prefs) => prefs.railScope)
-  const on = filter.length > 0 || scope === "workspace" || sortBy !== "recent"
+  const grouping = usePrefs((prefs) => prefs.railGrouping)
+  const archived = grouping === "archived"
+  const on = filter.length > 0 || scope === "workspace" || sortBy !== "recent" || archived
 
   const section = "px-2 pt-2 pb-1 text-label font-medium text-faint/80"
   const row = (active: boolean) =>
@@ -691,6 +785,29 @@ function HarnessFilter({
           </button>
         ))}
 
+        <p className={section}>Show</p>
+        {(
+          [
+            [false, "Current threads"],
+            [true, "Archived threads"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => {
+              if (value !== archived) setPref("railGrouping", value ? "archived" : "project")
+              if (value) setOpen(false)
+            }}
+            className={row(archived === value)}
+          >
+            <span className="flex-1">{label}</span>
+            {archived === value ? (
+              <CheckIcon className="size-3 text-foreground" />
+            ) : null}
+          </button>
+        ))}
+
         {on ? (
           <button
             type="button"
@@ -698,6 +815,7 @@ function HarnessFilter({
               setPref("agentHarnessFilter", [])
               setPref("railSortBy", "recent")
               setPref("railScope", "all")
+              if (archived) setPref("railGrouping", "project")
               setOpen(false)
             }}
             className="mt-1 flex w-full items-center justify-center rounded-md border-t border-hairline px-2 py-1.5 text-label text-faint hover:text-foreground"
@@ -755,7 +873,7 @@ function FolderSection({
 
   return (
     <section className="pb-1">
-      <div className="group/folder flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
+      <div data-flip-key={`folder:${folder.key}`} className="group/folder flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
         <button
           type="button"
           title={folder.cwd ?? folder.name}
@@ -866,6 +984,77 @@ function FolderSection({
           ) : null}
         </div>
       </div>
+    </section>
+  )
+}
+
+type BoardRow =
+  | { kind: "native"; ref: ThreadRef }
+  | { kind: "live"; presence: AcpPresence }
+
+const BOARD_MARK = {
+  "needs-input": "waiting",
+  failed: "failed",
+  review: "complete",
+  working: "working",
+  done: null,
+} satisfies Record<BoardBucket, ActivityState | null>
+
+/**
+ * One section of the status board: a heading that wears the state's own
+ * mark, then the rows in it, newest change first. Every section above Done
+ * shows all of its rows — they are bounded by real activity — and Done pages
+ * like a folder does.
+ */
+function BoardSection({
+  section,
+  pages,
+  onPages,
+}: {
+  section: BoardSectionData<BoardRow>
+  pages: number
+  onPages: (next: number) => void
+}) {
+  const mark = BOARD_MARK[section.key]
+  const limit = section.key === "done" ? BOARD_LEAD_ROWS + pages * PAGE_ROWS : Infinity
+  const visible = section.rows.slice(0, limit)
+  const hidden = section.rows.length - visible.length
+  return (
+    <section className="pb-2">
+      <p
+        data-flip-key={`section:${section.key}`}
+        data-board-section={section.key}
+        className="flex h-7 items-center gap-1.5 px-1.5 text-label font-medium text-faint"
+      >
+        {mark ? <ActivityMark state={mark} size={20} className="text-faint" /> : null}
+        <span className="flex-1 truncate">{section.label}</span>
+        <span className="tabular text-faint/60">{section.rows.length}</span>
+      </p>
+      {visible.map((row) =>
+        row.item.kind === "native" ? (
+          <ThreadRow key={row.key} threadRef={row.item.ref} showFolder />
+        ) : (
+          <LiveAgentRow key={row.key} presence={row.item.presence} />
+        )
+      )}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          onClick={() => onPages(pages + 1)}
+          className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+        >
+          More
+          <span className="tabular ml-1 text-label text-faint/60">{hidden}</span>
+        </button>
+      ) : pages > 0 ? (
+        <button
+          type="button"
+          onClick={() => onPages(0)}
+          className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+        >
+          Less
+        </button>
+      ) : null}
     </section>
   )
 }

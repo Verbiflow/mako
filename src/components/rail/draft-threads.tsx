@@ -52,7 +52,7 @@ export function DraftThreads() {
           key={draft.key}
           type="button"
           onClick={() => void (tab ? actions.switchTab(tab.id) : actions.newConversationIn(project))}
-          title={draft.text}
+          data-tip={draft.text}
           className="group flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left transition-colors duration-100 hover:bg-fill-hover"
         >
           <PencilLineIcon className="size-3 shrink-0 text-faint" />
