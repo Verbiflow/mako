@@ -1,6 +1,10 @@
 import { stagePrompt } from "@/state/acp-pending"
 import { projectAcp } from "@/state/live-projection"
-import { prefsStore, setPref } from "@/state/prefs"
+import {
+  chooseProviderMode,
+  providerAccessModes,
+  threadAccessMode,
+} from "@/state/provider-access"
 import {
   currentSettingsTarget,
   threadSettingsTarget,
@@ -45,7 +49,6 @@ import {
   type StartingAcpConversation,
 } from "@/state/acp-state"
 import {
-  canResumeInteractively,
   markThreadReviewed,
   setThreadAttention,
   setThreadRunning,
@@ -147,6 +150,15 @@ export const acp = {
     if (conversation.kind === "live" && !conversation.hydrated)
       void hydrateLive(key)
     threadsStore.set({ composerHarness: conversation.harness })
+    // Opening the conversation acknowledges its failure, the way opening a
+    // thread acknowledges an unread answer; the rail row and its folder's
+    // chip go back to showing time.
+    if (
+      conversation.kind === "live" &&
+      conversation.session.status === "failed" &&
+      !conversation.failureSeen
+    )
+      updateLive(key, (current) => ({ ...current, failureSeen: true }))
     const path = conversation.threadPath
     if (path) markThreadReviewed(path)
     if (threadsStore.get().viewing?.ref.path === path) return true
@@ -202,11 +214,12 @@ export const acp = {
       if (!next) continue
       setThreadRunning(ref.path, next.session.status === "running")
       if (next.session.status === "failed")
-        setThreadAttention(ref.path, {
-          kind: "failed",
-          at: Date.now(),
-          detail: next.session.error,
-        })
+        setThreadAttention(
+          ref.path,
+          activeIs(next.key) || next.failureSeen
+            ? null
+            : { kind: "failed", at: Date.now(), detail: next.session.error }
+        )
       else if (
         next.session.status === "ready" &&
         next.session.lastStop &&
@@ -225,7 +238,15 @@ export const acp = {
     if (!hasBridge()) return false
     const existing = acpForThread(acpStore.get(), ref)
     if (existing) return acp.activate(existing.key)
-    const canResume = canResumeInteractively(ref.harness)
+    // The host says whether this store reopens live; anything else opens as a
+    // handoff on the composer's provider, the way it always has.
+    let canResume: boolean
+    try {
+      canResume = (await getMako().continuationPlan(ref.path)).transport === "live"
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
     const harness = canResume ? ref.harness : threadsStore.get().composerHarness
     const starting = beginStart({
       settingsTarget: canResume
@@ -292,15 +313,16 @@ export const acp = {
       blocks: [{ type: "user", text: prompt }],
       hiddenUserPrompt: null,
     })
-    const sent = await launch(
-      starting,
-      {
-        title: ref.title,
-        resume: ref.nativeId,
-      },
-      prompt,
-      attachments
+    // The tier the thread last ran under travels with the reply; the host
+    // applies its own memory of it too, so a stale ref cannot lose it.
+    const modeId = threadAccessMode(
+      ref,
+      providerAccessModes(threadsStore.get(), ref.harness),
+      ref.harness
     )
+    const options: AcpStartOptions = { title: ref.title, resume: ref.nativeId }
+    if (modeId) options.modeId = modeId
+    const sent = await launch(starting, options, prompt, attachments)
     if (!sent) setThreadRunning(ref.path, false)
     return sent
   },
@@ -531,10 +553,7 @@ export const acp = {
     if (!current || !hasBridge()) return
     try {
       await getMako().liveSetMode(current.key, modeId)
-      setPref("providerModes", {
-        ...prefsStore.get().providerModes,
-        [current.harness]: modeId,
-      })
+      chooseProviderMode(current.harness, modeId)
     } catch (error) {
       toast.error(String(error))
     }

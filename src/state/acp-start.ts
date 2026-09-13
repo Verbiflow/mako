@@ -1,5 +1,5 @@
 import { stagePrompt } from "@/state/acp-pending"
-import { prefsStore } from "@/state/prefs"
+import { noteFolderUse, prefsStore } from "@/state/prefs"
 import { projectAcp } from "@/state/live-projection"
 import {
   currentSettingsTarget,
@@ -50,6 +50,7 @@ interface BeginStartInput {
 
 export function beginStart(input: BeginStartInput): StartingAcpConversation {
   const now = Date.now()
+  noteFolderUse(input.cwd)
   const key = crypto.randomUUID()
   const conversation: StartingAcpConversation = {
     kind: "starting",

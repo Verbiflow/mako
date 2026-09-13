@@ -29,6 +29,8 @@ interface AcpConversationBase {
   requests?: LiveSnapshot["requests"]
   base?: LiveSnapshot["base"]
   revision?: number
+  /** The host generation that numbered `revision`; a batch from another epoch is never merged onto this state. */
+  epoch?: string
   hydrated?: boolean
   projection?: LiveProjection
   blocks: AcpBlock[]
@@ -49,6 +51,21 @@ export interface LiveAcpConversation extends AcpConversationBase {
   permission: LivePermissionRequest | null
   sending: boolean
   canceling: boolean
+  /**
+   * The current failure has been opened. A session that failed before it had
+   * a store has no thread path to carry attention, so its rail row reads the
+   * session's status directly; this is how that row stands down once seen.
+   * Cleared whenever the status leaves `failed`, so the next failure is new.
+   */
+  failureSeen?: boolean
+}
+
+/** What `failureSeen` becomes when a conversation takes a new session state. */
+export function carriedFailureSeen(
+  previous: { failureSeen?: boolean } | undefined,
+  session: Pick<LiveSessionState, "status">
+): boolean | undefined {
+  return session.status === "failed" ? previous?.failureSeen : undefined
 }
 
 export type AcpConversation = StartingAcpConversation | LiveAcpConversation

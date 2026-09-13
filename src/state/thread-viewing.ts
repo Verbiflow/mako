@@ -1,5 +1,11 @@
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { Thread, ThreadEntry, ThreadPage, ThreadRef } from "@/lib/types"
+import type {
+  BlockAddress,
+  Thread,
+  ThreadEntry,
+  ThreadPage,
+  ThreadRef,
+} from "@/lib/types"
 import type {
   ThreadsState,
   ViewedThread,
@@ -34,6 +40,9 @@ export function leaveViewerForLive(harness: string) {
 const threadCache = new Map<string, ViewedThread>()
 const THREAD_CACHE_MAX = 4
 const THREAD_CACHE_BYTES = 24 * 1024 * 1024
+
+/** The most host pages one request for earlier history reads before it shows what it has. */
+const EARLIER_PAGES_PER_LOAD = 4
 
 const entryBytes = new WeakMap<ViewedThreadEntry, number>()
 function estimatedThreadBytes(thread: ViewedThread): number {
@@ -134,6 +143,54 @@ export function applyThreadEntries(
   }
   threadsStore.set({ viewing: next })
   rememberThread(next)
+}
+
+/** Full blocks in flight, so a row opened twice asks once. */
+const blockLoads = new Map<string, Promise<void>>()
+
+/**
+ * Fetch the rest of a tool output a viewer page trimmed and put the whole
+ * block back into the viewed entry. Pages carry the head of each tool
+ * output because a row is collapsed until opened; the swap re-projects only
+ * the exchange that holds the entry.
+ */
+export function loadThreadBlock(path: string, at: BlockAddress): Promise<void> {
+  const key = `${path}\u0000${at.entry}\u0000${at.block}`
+  const inFlight = blockLoads.get(key)
+  if (inFlight) return inFlight
+  if (!hasBridge()) return Promise.resolve()
+  const load = getMako()
+    .threadBlock(path, at)
+    .then((block) => {
+      if (!block) return
+      const { viewing } = threadsStore.get()
+      if (!viewing || viewing.ref.path !== path) return
+      const local = at.entry - viewing.pageStart
+      const entry = viewing.entries[local]
+      if (entry?.kind !== "assistant" || !entry.blocks[at.block]) return
+      const blocks = entry.blocks.slice()
+      blocks[at.block] = block
+      const entries = viewing.entries.slice()
+      entries[local] = { ...entry, blocks }
+      const next: ViewedThread = {
+        ...viewing,
+        entries,
+        streamRevision: (viewing.streamRevision ?? 0) + 1,
+        streamReplaceFrom: local,
+      }
+      threadsStore.set({ viewing: next })
+      rememberThread(next)
+    })
+    .catch((error) => {
+      toast.error(
+        `Could not read the rest of this tool output. ${error instanceof Error ? error.message : String(error)}`
+      )
+    })
+    .finally(() => {
+      blockLoads.delete(key)
+    })
+  blockLoads.set(key, load)
+  return load
 }
 
 export const threadViewingActions = {
@@ -271,6 +328,12 @@ export const threadViewingActions = {
     }
   },
 
+  /**
+   * Prepend earlier history. The host pages by entry, and a tool-heavy turn
+   * can fill a whole page with calls and results, so one load keeps paging
+   * until it has brought at least one earlier prompt into view — bounded, so
+   * a session that is nothing but tool output still arrives in pieces.
+   */
   async loadEarlier() {
     const viewing = threadsStore.get().viewing
     if (
@@ -282,10 +345,24 @@ export const threadViewingActions = {
       return
     threadsStore.set({ viewing: { ...viewing, loadingEarlier: true } })
     try {
-      const page = await getMako().pageThread(
-        viewing.ref.path,
-        viewing.pageStart
-      )
+      const earlier: ThreadEntry[] = []
+      let page: ThreadPage | null = null
+      let before = viewing.pageStart
+      for (let pages = 0; pages < EARLIER_PAGES_PER_LOAD; pages += 1) {
+        const fetched: ThreadPage | null = await getMako().pageThread(
+          viewing.ref.path,
+          before
+        )
+        if (!fetched) break
+        page = fetched
+        earlier.unshift(...fetched.entries)
+        before = fetched.start
+        if (
+          !fetched.hasEarlier ||
+          fetched.entries.some((entry) => entry.kind === "user")
+        )
+          break
+      }
       const current = threadsStore.get().viewing
       if (!current || current.ref.path !== viewing.ref.path) return
       if (!page) {
@@ -295,7 +372,7 @@ export const threadViewingActions = {
       const next: ViewedThread = {
         ...current,
         ref: page.ref,
-        entries: [...page.entries, ...current.entries],
+        entries: [...earlier, ...current.entries],
         pageStart: page.start,
         totalEntries: page.total,
         hasEarlier: page.hasEarlier,

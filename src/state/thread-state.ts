@@ -59,7 +59,6 @@ export interface ThreadsState {
   targets: string[]
   /** Harnesses that can be driven interactively (ACP). */
   acpable: string[]
-  interactiveResume: string[]
   liveCapabilities: LiveCapability[]
   /** The native run for the viewed thread, if one was started. */
   run: ThreadRunState | null

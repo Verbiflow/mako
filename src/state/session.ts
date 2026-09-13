@@ -1,3 +1,4 @@
+import { noteFolderUse } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
@@ -8,6 +9,7 @@ import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import { admitProfile, providers } from "@/state/providers"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive } from "@/state/live-recovery"
+import { replayUnconfirmedPrompts } from "@/state/acp-queue"
 import { createHook, createStore, shallowEqual } from "@/state/store"
 import type {
   Capabilities,
@@ -33,8 +35,11 @@ import {
   refresh,
   removeTab,
   tabsStore,
+  titleFor,
   writeCache,
+  type TabCache,
 } from "@/state/tabs"
+import { workspaceName } from "@/lib/format"
 import { viewer, viewerStore } from "@/state/viewer"
 import { stage } from "@/state/stage"
 import { applyUpdate, updates } from "@/state/updates"
@@ -56,7 +61,9 @@ import {
   threadsStore,
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
+import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mcpStore } from "@/state/mcp"
 
 export type Phase = "booting" | "ready" | "detached"
@@ -123,7 +130,56 @@ export function currentTurnRunning(): boolean {
  * not a render.
  */
 let connectionEpoch = 0
+/** A built-in tab's notification identity. */
+function tabSubject(id: string, cache: TabCache) {
+  const tab = tabsStore.get().tabs.find((entry) => entry.id === id)
+  return {
+    id: subjectId({ kind: "tab", id }),
+    target: { kind: "tab" as const, id },
+    title: tab?.title ?? titleFor(cache.meta, cache.messages),
+    agent: cache.meta?.model?.name ?? "Agent",
+    workspace: cache.meta?.cwd ? workspaceName(cache.meta.cwd) : undefined,
+  }
+}
+
+function tabWorking(meta: SessionMeta | undefined): boolean {
+  return Boolean(meta?.isStreaming || meta?.isCompacting)
+}
+
+function lastReplyOf(messages: ChatMessage[]): string {
+  const parts: string[] = []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.role === "user") break
+    if (message.role !== "assistant") continue
+    for (const block of message.blocks)
+      if (block.type === "text") parts.push(block.text)
+  }
+  return parts.toReversed().join("\n\n")
+}
+
+/** A tab's turn ended (or began): the attention centre hears about it once. */
+function noteTabTurn(id: string, before: SessionMeta | undefined, cache: TabCache) {
+  const after = cache.meta
+  if (!before || !after) return
+  if (tabWorking(after) && !tabWorking(before)) {
+    retireSubject(subjectId({ kind: "tab", id }))
+    return
+  }
+  if (!tabWorking(before) || tabWorking(after)) return
+  noteOutcome({
+    kind: "ready",
+    subject: tabSubject(id, cache),
+    marker: `turn:${after.messageCount}:${after.leafId ?? ""}`,
+    detail: lastReplyOf(cache.messages),
+  })
+}
+
 function apply(event: HostEvent) {
+  if (event.type === "notification-activated") {
+    openSubjectId(event.subject)
+    return
+  }
   if (event.type === "thread-archives") {
     applyThreadArchives(event.snapshot)
     return
@@ -159,7 +215,17 @@ function apply(event: HostEvent) {
     absorb(event.tabId, event)
     return
   }
+  const metaBefore = store.get().meta
   applyToActive(event)
+  if (event.type === "meta" || event.type === "session") {
+    const state = store.get()
+    noteTabTurn(active, metaBefore, {
+      meta: state.meta,
+      messages: state.messages,
+      stream: state.stream,
+      tree: state.tree,
+    })
+  }
   if (
     event.tabId &&
     (event.type === "meta" ||
@@ -213,9 +279,10 @@ function absorb(id: string, event: HostEvent) {
   const next = cacheOf(id)
   refresh(id, next)
   // Finished while you were elsewhere: that is worth a dot on the tab.
-  const wasWorking = Boolean(previous?.isStreaming || previous?.isCompacting)
-  const nowWorking = Boolean(next.meta?.isStreaming || next.meta?.isCompacting)
+  const wasWorking = tabWorking(previous)
+  const nowWorking = tabWorking(next.meta)
   if (wasWorking && !nowWorking) patchTab(id, { unread: true })
+  noteTabTurn(id, previous, next)
 }
 
 /** Re-read the open file when the agent's last turn touched it. */
@@ -323,7 +390,7 @@ function applyToActive(event: HostEvent) {
         })
       } else if (event.run.status === "failed") {
         toast.error(`${event.run.name} failed`, {
-          duration: Infinity,
+          duration: ACTION_TOAST_MS,
           description: event.run.error,
           action: {
             label: "Run again",
@@ -346,7 +413,7 @@ function applyToActive(event: HostEvent) {
 
 function report(message: string) {
   toast.error(message, {
-    duration: Infinity,
+    duration: ACTION_TOAST_MS,
     action: {
       label: "Troubleshoot",
       onClick: () =>
@@ -446,6 +513,9 @@ export const actions = {
       const conversation = acpStore.get().activeKey
       if (conversation) await hydrateLive(conversation)
       if (epoch !== connectionEpoch) return
+      // A send the outage swallowed goes out now, under the id the host
+      // settles it by; one it had already accepted comes back as that receipt.
+      void replayUnconfirmedPrompts()
       if (store.get().meta?.cwd === cwd) {
         hydrate(boot.tabs, boot.activeTabId)
         const active = boot.tabs.find((tab) => tab.id === boot.activeTabId)
@@ -660,6 +730,7 @@ export const actions = {
   ): Promise<boolean> {
     try {
       await getMako().prompt(text, mode, images)
+      noteFolderUse(store.get().meta?.cwd)
       return true
     } catch (error) {
       report(error instanceof Error ? error.message : String(error))
@@ -710,6 +781,7 @@ export const actions = {
       )
       return false
     }
+    noteFolderUse(folder)
     viewer.close()
     stage.close()
     requestAnimationFrame(() =>
@@ -877,7 +949,7 @@ export const actions = {
       toast.dismiss("clipboard-success")
       toast.error("Could not copy", {
         id: "clipboard-error",
-        duration: Infinity,
+        duration: ACTION_TOAST_MS,
         action: { label: "Retry", onClick: () => void actions.copy(text, { notify, attachments }) },
       })
       return false

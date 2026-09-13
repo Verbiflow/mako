@@ -2,14 +2,19 @@ import { settingsForSend, threadSettingsTarget, currentSettingsTarget } from "@/
 import { applyLiveSnapshot } from "@/state/live-recovery"
 import { acpForThread, acpStore } from "@/state/acp-state"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { NativeRequest, PromptAttachment, ThreadRef } from "@/lib/types"
-import { prefsStore } from "@/state/prefs"
+import type {
+  ContinuationPlan,
+  MessageAnchor,
+  NativeRequest,
+  PromptAttachment,
+  ThreadRef,
+} from "@/lib/types"
+import { noteFolderUse, prefsStore } from "@/state/prefs"
 import {
   appendOptimisticReply,
   removeOptimisticReply,
 } from "@/state/thread-queue"
 import { threadStatus } from "@/state/thread-status"
-import { canResumeInteractively } from "@/state/thread-tuning"
 import { leaveViewerForLive, viewedThread } from "@/state/thread-viewing"
 import { threadsStore } from "@/state/thread-store"
 import { toast } from "sonner"
@@ -69,27 +74,40 @@ export const threadContinuationActions = {
     if (!hasBridge()) return false
     if (acpForThread(acpStore.get(), ref))
       return (await import("@/state/acp")).acp.resumeAndSend(ref, prompt, attachments)
-    if (ref.resumeUnavailable) return threadContinuationActions.moveAndSend(ref, ref.harness, prompt, attachments)
-    const status = threadStatus(ref)
-    if (status.kind === "external-open" || status.kind === "external-active") {
-      toast.error("This session is open in another app. Close it there before replying, or explicitly fork it to continue separately.")
-      return false
-    }
-    if (status.kind === "observed") {
+    // A file that moved moments ago may still be mid-turn under a process the
+    // host cannot see; that is a renderer heuristic, not a transport choice.
+    if (threadStatus(ref).kind === "observed") {
       toast("Live activity detected", {
         description:
           "Wait for this turn to settle, or choose another agent to continue in a new thread.",
       })
       return false
     }
-    // Paint the message NOW. Provider startup, session translation, and the
-    // native tail all happen after the send is already visible.
+    noteFolderUse(ref.cwd)
+    // Paint the message NOW. The plan, provider startup, session translation,
+    // and the native tail all happen after the send is already visible.
     const echoed = appendOptimisticReply(ref, prompt)
-    if (
-      canResumeInteractively(ref.harness) &&
-      !threadsStore.get().working[ref.path] &&
-      threadsStore.get().acpable.includes(ref.harness)
-    ) {
+    // The host decides the transport from what only it knows; a refusal
+    // carries its reason, and a handoff names the provider it lands on.
+    let plan: ContinuationPlan
+    try {
+      plan = await getMako().continuationPlan(ref.path)
+    } catch (error) {
+      if (echoed) removeOptimisticReply(ref, prompt)
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
+    if (plan.transport === "refused") {
+      if (echoed) removeOptimisticReply(ref, prompt)
+      toast.error(plan.reason)
+      return false
+    }
+    if (plan.transport === "handoff") {
+      // moveAndSend paints its own echo on the conversation it opens.
+      if (echoed) removeOptimisticReply(ref, prompt)
+      return threadContinuationActions.moveAndSend(ref, plan.provider, prompt, attachments)
+    }
+    if (plan.transport === "live") {
       const resumed = await (
         await import("@/state/acp")
       ).acp.resumeAndSend(ref, prompt, attachments)
@@ -192,10 +210,15 @@ export const threadContinuationActions = {
     }
   },
 
-  /** Fork after one completed answer, using the transcript bundle as context. */
+  /**
+   * Fork after one completed answer, using the transcript bundle as context.
+   * The answer is named by its anchor: the revision the transcript was read
+   * at resolves the index at once when the store is unchanged, and the
+   * provider's own message id or timestamp finds the answer when it moved.
+   */
   async forkAt(
     ref: ThreadRef,
-    upto: number,
+    anchor: MessageAnchor,
     harness: string
   ): Promise<boolean> {
     if (!hasBridge()) return false
@@ -210,8 +233,9 @@ export const threadContinuationActions = {
           provider: harness,
           point: {
             kind: "native",
-            index: upto,
+            index: anchor.index,
             revision: JSON.stringify([ref.revision, ref.bytes, ref.updatedAt]),
+            anchor,
           },
         })
         const { acp } = await import("@/state/acp")
@@ -229,7 +253,7 @@ export const threadContinuationActions = {
         ref.harness,
         harness,
         ref.title,
-        () => getMako().forkThread(ref.path, upto, harness)
+        () => getMako().forkThread(ref.path, anchor.index, harness, anchor)
       )
       threadsStore.set({ composerHarness: harness })
       const supportsLive = threadsStore.get().acpable.includes(harness)

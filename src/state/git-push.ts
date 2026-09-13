@@ -3,6 +3,7 @@ import { createHook, createStore } from "@/state/store"
 import { actions, store } from "@/state/session"
 import type { GitPushInput } from "@/lib/types"
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 
 type PushState =
   | { kind: "idle" }
@@ -34,7 +35,7 @@ export function pushCurrentBranch(): Promise<void> {
   const snapshot = store.get().git
   if (!snapshot?.root || !snapshot.branch || !snapshot.head) {
     toast.error("Choose a branch with commits before pushing", {
-      duration: Infinity,
+      duration: ACTION_TOAST_MS,
       action: {
         label: "Refresh changes",
         onClick: () => void actions.refreshGit(),
@@ -79,8 +80,7 @@ async function performPush(target: GitPushInput, key: string) {
     update(key, { kind: "failed", branch: target.branch, message })
     toast.error(`Could not push ${target.branch}`, {
       id: `git-push:${key}`,
-      position: "top-right",
-      duration: Infinity,
+      duration: ACTION_TOAST_MS,
       description: message,
       action: { label: "Retry push", onClick: () => void pushBranch(target) },
     })

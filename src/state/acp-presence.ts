@@ -41,7 +41,9 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
         status:
           conversation.permission && conversation.session.status !== "failed"
             ? "needs-permission"
-            : conversation.session.status,
+            : conversation.session.status === "failed" && conversation.failureSeen
+              ? "ready"
+              : conversation.session.status,
       }
       return [presence]
     })

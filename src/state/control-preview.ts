@@ -141,19 +141,6 @@ export function receiveControlActivity(activity: ControlActivity) {
     }
   })
 }
-export async function stopControlTask(id: string): Promise<void> {
-  try {
-    await getMako().liveCancel(id)
-  } catch {
-    controlPreviewStore.set((state) => ({
-      errors: {
-        ...state.errors,
-        [id]: "The task could not be stopped. Try Stop again.",
-      },
-    }))
-  }
-}
-
 /** Electron captures only the already-authorized native window. No AX query or input is involved. */
 export async function controlPreviewStream(
   id: string

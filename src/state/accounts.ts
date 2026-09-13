@@ -1,6 +1,7 @@
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { providers } from "@/state/providers"
 
 /**
@@ -80,7 +81,7 @@ export const accounts = {
         // failure must not blank two surfaces. Re-arm the staleness guard.
         accountsStore.set({ loadedAt: undefined })
         toast.error("Accounts could not be loaded", {
-          duration: Infinity,
+          duration: ACTION_TOAST_MS,
           description: error instanceof Error ? error.message : String(error),
           action: { label: "Retry", onClick: () => accounts.load(true) },
         })
@@ -97,7 +98,7 @@ export const accounts = {
       await providers.refreshAccount(harness)
     } catch (error) {
       toast.error("Account was not switched", {
-        duration: Infinity,
+        duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
         action: {
           label: "Retry",
@@ -124,7 +125,7 @@ export const accounts = {
       await providers.refreshAccount(harness)
     } catch (error) {
       toast.error("Account was not removed", {
-        duration: Infinity,
+        duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
         action: {
           label: "Retry",

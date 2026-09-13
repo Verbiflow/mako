@@ -11,7 +11,6 @@ export const threadsStore = createStore<ThreadsState>({
   resumable: [],
   targets: [],
   acpable: [],
-  interactiveResume: [],
   liveCapabilities: [],
   run: null,
   working: {},

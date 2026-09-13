@@ -2,7 +2,7 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, replaceAcpConversation } from "@/state/acp-state"
+import { acpStore, carriedFailureSeen, replaceAcpConversation } from "@/state/acp-state"
 import { syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "../../electron/contracts/live-content"
@@ -12,10 +12,20 @@ import { toast } from "sonner"
 const fetching = new Map<string, Promise<void>>()
 const pending = new Map<string, LiveBatch[]>()
 
+/**
+ * Whether `incoming` continues the numbering `held` was built on. Revisions
+ * compare only within one host epoch; across epochs the newer snapshot wins
+ * outright, because the host that wrote it may have rewritten what it reopened
+ * at the same revision.
+ */
+function sameEpoch(held: { epoch?: string } | undefined, incoming: { epoch?: string }): boolean {
+  return held?.epoch === undefined || incoming.epoch === undefined || held.epoch === incoming.epoch
+}
+
 export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
   const id = snapshot.session.id
   const existing = acpStore.get().conversations[id]
-  if (existing?.hydrated && (existing.revision ?? 0) > snapshot.revision) return
+  if (existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision) return
   const pendingPrompts = existing?.pendingPrompts?.filter(
     (prompt) => !snapshot.requests.some((request) => request.id === prompt.id)
   )
@@ -40,6 +50,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
     base: snapshot.base,
     blocks: snapshot.blocks,
     revision: snapshot.revision,
+    epoch: snapshot.epoch ?? existing?.epoch,
     hydrated: true,
     projection: projectLive(snapshot, existing?.projection, pendingPrompts),
     permission: snapshot.permissions[0] ?? null,
@@ -49,6 +60,10 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
     hiddenUserPrompt: null,
     sending: false,
     canceling: false,
+    failureSeen: carriedFailureSeen(
+      existing?.kind === "live" ? existing : undefined,
+      snapshot.session
+    ),
   })
   const restored = acpStore.get().conversations[id]
   if (restored?.kind === "live") acknowledgeComposerSettings(restored)
@@ -56,7 +71,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
     syncThreadStatus(
       restored,
       existing?.kind === "live" ? existing.session.status : "starting",
-      existing?.threadPath
+      existing?.threadPath,
+      "hydrate"
     )
   const buffered = pending.get(id) ?? []
   pending.delete(id)
@@ -99,7 +115,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     acpStore.get().activeKey !== batch.id &&
     !fetching.has(batch.id)
   ) {
-    if (batch.revision <= (current.revision ?? 0)) return
+    if (sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
     const session = batch.session ?? current.session
     const next = {
       ...current,
@@ -124,6 +140,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
           : (batch.threadPath ?? undefined),
       revision: batch.revision,
       updatedAt: Date.now(),
+      failureSeen: carriedFailureSeen(current, session),
     }
     replaceAcpConversation(batch.id, next)
     notifyCompletion(current.requests, batch.requests)
@@ -134,6 +151,10 @@ export function applyLiveBatch(batch: LiveBatch): void {
   if (
     !current?.hydrated ||
     current.kind !== "live" ||
+    // A gap in the numbering, or numbering from another host: the blocks on
+    // screen are not what this batch was reduced against, so it is buffered
+    // and a fresh snapshot is taken rather than merged onto the wrong state.
+    !sameEpoch(current, batch) ||
     batch.revision > (current.revision ?? 0) + 1
   ) {
     // A bounded buffer is only an optimization. The host snapshot remains authoritative.
@@ -167,6 +188,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     blocks,
     session,
     revision: batch.revision,
+    epoch: batch.epoch ?? current.epoch,
     base,
     threadPath:
       batch.threadPath === undefined
@@ -198,6 +220,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
             )
           : undefined,
     updatedAt: Date.now(),
+    failureSeen: carriedFailureSeen(current, session),
   })
   notifyCompletion(current.requests, batch.requests)
   const next = acpStore.get().conversations[batch.id]
@@ -239,7 +262,20 @@ export function hydrateLiveSummaries(
         hydrated: false,
         nativePaths: summary.nativePaths,
         permission: null,
+        failureSeen: carriedFailureSeen(previous, summary.session),
       })
+      // A turn that ended while this renderer was away is still an outcome:
+      // the summary is the only word it gets, so the transition is read here
+      // as a replay — recorded for the mark and the badge, never announced.
+      // Only a turn's end is read this way; a permission the summary cannot
+      // carry must not be taken for one that was answered.
+      const restored = acpStore.get().conversations[summary.session.id]
+      if (
+        restored?.kind === "live" &&
+        previous.session.status === "running" &&
+        summary.session.status !== "running"
+      )
+        syncThreadStatus(restored, previous.session.status, previous.threadPath, "hydrate")
       continue
     }
     replaceAcpConversation(summary.session.id, {
@@ -264,7 +300,8 @@ export function hydrateLiveSummaries(
       canceling: false,
     })
     const restored = acpStore.get().conversations[summary.session.id]
-    if (restored?.kind === "live") syncThreadStatus(restored, "starting")
+    if (restored?.kind === "live")
+      syncThreadStatus(restored, "starting", undefined, "hydrate")
   }
   const active = acpStore.get().activeKey
   if (active && summaries.some((summary) => summary.session.id === active))

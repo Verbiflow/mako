@@ -1,5 +1,6 @@
 import { SessionSettingsSchema, SettingsPreferenceSchema, type SessionSettings, type SettingsPreference } from "@mako/sessions/settings"
 import { createHook, createStore } from "@/state/store"
+import { threadFolderKey } from "@/lib/thread-folders"
 
 /**
  * Durable UI preferences. Written through a microtask-batched save so that
@@ -46,7 +47,12 @@ export interface Prefs {
   railMode: RailMode
   railScope: RailScope
   railSortBy: RailSortBy
-  railGrouping: "project" | "recent" | "archived"
+  railGrouping: "project" | "recent" | "status" | "archived"
+  /**
+   * When you last worked in each folder (a prompt sent, a thread started),
+   * by folder key. The only thing that lifts a folder in the rail.
+   */
+  folderUse: PreferenceStringMap
   providerModes: PreferenceStringMap
   /**
    * Enter during a running turn steers it when the provider can; Cmd/Ctrl+Enter
@@ -86,6 +92,14 @@ export interface Prefs {
   commitPrompt?: string
   commitModel?: string
   externalEditor?: string
+  /** Desktop banners while Mako is in the background. */
+  notifyDesktop: boolean
+  /** Which outcomes interrupt: an answer ready, an agent needing you, a failed run. */
+  notifyReady: boolean
+  notifyAsk: boolean
+  notifyFailed: boolean
+  /** Threads with something unseen, counted on the app icon. */
+  badgeCount: boolean
 }
 
 const KEY = "mako.prefs.v1"
@@ -110,6 +124,7 @@ const defaults: Prefs = {
   railScope: "all",
   railSortBy: "recent",
   railGrouping: "project",
+  folderUse: {},
   providerModes: {},
   steerOnEnter: true,
   collapsedGroups: [],
@@ -127,6 +142,11 @@ const defaults: Prefs = {
   titleOverrides: {},
   terminalTitles: {},
   conversionMode: "transcript",
+  notifyDesktop: true,
+  notifyReady: true,
+  notifyAsk: true,
+  notifyFailed: true,
+  badgeCount: true,
 }
 
 interface JsonObject {
@@ -324,7 +344,8 @@ function parsePrefs(value: JsonValue): Prefs | null {
       defaults.agentHarnessFilter
     ),
     composerHarness: readComposerHarness(value.composerHarness),
-    railGrouping: readChoice(value.railGrouping, ["project", "recent", "archived"], defaults.railGrouping),
+    railGrouping: readChoice(value.railGrouping, ["project", "recent", "status", "archived"], defaults.railGrouping),
+    folderUse: readStringRecord(value.folderUse),
     providerModes: readStringRecord(value.providerModes),
     steerOnEnter: readBoolean(value.steerOnEnter, defaults.steerOnEnter),
     providerSettings: readProviderSettings(value.providerSettings, value.composerTuning),
@@ -345,6 +366,11 @@ function parsePrefs(value: JsonValue): Prefs | null {
     commitPrompt: readOptionalString(value.commitPrompt),
     commitModel: readOptionalString(value.commitModel),
     externalEditor: readOptionalString(value.externalEditor),
+    notifyDesktop: readBoolean(value.notifyDesktop, defaults.notifyDesktop),
+    notifyReady: readBoolean(value.notifyReady, defaults.notifyReady),
+    notifyAsk: readBoolean(value.notifyAsk, defaults.notifyAsk),
+    notifyFailed: readBoolean(value.notifyFailed, defaults.notifyFailed),
+    badgeCount: readBoolean(value.badgeCount, defaults.badgeCount),
   }
 
   // The rail redesigned around showing every folder; a "workspace" scope
@@ -441,6 +467,28 @@ export function togglePinnedProject(path: string) {
       ? current.filter((entry) => entry !== path)
       : [path, ...current]
   )
+}
+
+/** How many folders' last use is remembered; older ones fall back to their threads' times. */
+const FOLDER_USE_LIMIT = 64
+
+/**
+ * You worked in `cwd`: a prompt went out or a thread started there. This is
+ * the one event that moves a folder in the rail's Projects view, so agent
+ * output never reshuffles the list under you.
+ */
+export function noteFolderUse(
+  cwd: string | undefined,
+  at = new Date().toISOString()
+) {
+  const key = threadFolderKey({ cwd })
+  if (!key) return
+  const current = prefsStore.get().folderUse
+  if ((current[key] ?? "") >= at) return
+  const kept = Object.entries({ ...current, [key]: at })
+    .sort((left, right) => right[1].localeCompare(left[1]))
+    .slice(0, FOLDER_USE_LIMIT)
+  setPref("folderUse", Object.fromEntries(kept))
 }
 
 export function togglePref(key: BooleanPref) {

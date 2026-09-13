@@ -42,15 +42,48 @@ const requests = new Map<string, Promise<void>>()
 const loadedAt = new Map<string, number>()
 const generations = new Map<string, number>()
 const scopes = new Map<string, { provider: string; cwd: string }>()
+const retries = new Map<string, { timer: ReturnType<typeof setTimeout>; delay: number }>()
+/** Backoff for asking again after a failed discovery; tests shorten it. */
+export const discoveryRetry = { firstMs: 10_000, maxMs: 120_000 }
+
+/**
+ * A failed discovery asks again on its own. The composer once waited for the
+ * next window focus to recover from a timed-out `list_available_models`, and a
+ * picker reading "Model unavailable" for that long looks like a broken account.
+ */
+function scheduleRetry(key: string, provider: string, cwd: string): void {
+  const previous = retries.get(key)
+  const delay = previous
+    ? Math.min(previous.delay * 2, discoveryRetry.maxMs)
+    : discoveryRetry.firstMs
+  if (previous) clearTimeout(previous.timer)
+  const timer = setTimeout(() => {
+    if (retries.get(key)?.timer !== timer) return
+    retries.set(key, { timer, delay })
+    void providers.load(provider, true, cwd).catch(() => {})
+  }, delay)
+  retries.set(key, { timer, delay })
+}
+
+function clearRetry(key: string): void {
+  const pending = retries.get(key)
+  if (pending) clearTimeout(pending.timer)
+  retries.delete(key)
+}
 
 /** One provider's discovery landed, from a request or a host event. */
 export function admitProfile(profile: HarnessProfile, cwd: string): void {
   admit(profile, cwd)
+  if (profile.available && !profile.configurationError && !profile.pending)
+    clearRetry(providerProfileKey(profile.id, cwd))
 }
 
 function admit(profile: HarnessProfile, cwd: string): void {
   const key = providerProfileKey(profile.id, cwd)
   const previous = providerStore.get().contexts[key]
+  // A borrowed catalog answers while discovery runs; it never replaces the
+  // workspace's own report if that has already landed.
+  if (profile.pending && previous && !previous.pending) return
   const failed = !profile.available || Boolean(profile.configurationError)
   const observed =
     previous?.available && failed
@@ -84,6 +117,7 @@ export const providers = {
       delete contextErrors[key]
       loadedAt.delete(key)
       requests.delete(key)
+      clearRetry(key)
     }
     const profiles = { ...providerStore.get().profiles }
     const previous = profiles[provider]
@@ -140,11 +174,15 @@ export const providers = {
       .then((profile) => {
         if ((generations.get(provider) ?? 0) !== generation) return
         admit(profile, cwd)
-        if (profile.available && !profile.configurationError)
+        if (profile.pending) return
+        if (profile.available && !profile.configurationError) {
           loadedAt.set(key, Date.now())
+          clearRetry(key)
+        } else scheduleRetry(key, provider, cwd)
       })
       .catch((error) => {
         if ((generations.get(provider) ?? 0) !== generation) return
+        scheduleRetry(key, provider, cwd)
         providerStore.set({
           contextErrors: {
             ...providerStore.get().contextErrors,
