@@ -17,7 +17,10 @@ Study material, never imported or edited.
 Prior art worth knowing: ORCA's sidebar flattens groups into a `header | item`
 row list with a user-selectable group-by, which is what `rail-rows.ts` follows.
 Codex's "backtrack" (Esc-Esc) navigates your past prompts to fork from one,
-which is what the turn navigator and the History panel are for.
+which is what the turn navigator and each prompt's Edit and Fork controls are
+for. There is no separate History or Context sidebar: rewind and fork live on
+the transcript's exchanges, and token or spend readings appear only where a
+provider reports exact numbers (Settings > Usage), never as a per-thread panel.
 
 ## Layers
 
@@ -51,6 +54,20 @@ Exact external activity is also provider-owned. A process probe returns a typed
 store path; an error is never interpreted as zero active sessions. The activity
 engine polls each provider independently, prevents overlap, bounds stale data,
 and emits narrow activity events instead of resending or re-sorting the catalog.
+
+A probe sees a process, not a turn: Cursor's `cursor-agent` and another Mako
+host hold their stores open whether or not anything is running, so a reopened
+client once showed a streaming session as merely "open" and lost its working
+mark. `electron/thread-activity.ts` derives what the probe cannot say: a store
+whose bytes or activity stamp moved within `WRITE_ACTIVE_MS` (45 s, long
+enough to outlast a tool call that writes nothing) while a probe reports it
+`open` or another host's hold names it is `active` with `evidence: "writes"`.
+The renderer never treats that evidence settling as a finished answer; only a
+process's own word on a turn notifies. `cursor-agent` is a shell wrapper, so
+its open files are listed under `node`. Store writes are seeded from
+`updatedAt` at boot so the first paint after a restart is right.
+`scripts/test-thread-activity.ts` covers the promotion, settle, and identity
+rules.
 
 ## The hot path
 
@@ -92,6 +109,22 @@ update the reused ref. While watching, followed and recently updated files are
 stat-ed every 15 seconds so a missed watcher event cannot leave a row at its
 first kilobytes. `test/catalog-growth.mjs` covers these.
 
+A write refreshes one file unless the provider's `rescanRoot(path)` says the
+path belongs to a shared database (Devin's `sessions.db`, OpenCode's, Cursor's
+desktop `state.vscdb`); Cursor's ACP and CLI stores are one SQLite file per
+session and refresh alone, with `watchTarget` folding `-wal`, `-shm` and
+`meta.json` writes onto their `store.db` and `stat` reporting a revision that
+covers all three. Logs, shell transcripts and extension storage beside a store
+are ignored, never a reason to rescan. Refreshes are throttled with a settle
+window (`rescanDebounceMs`, at most four windows of latency under a
+continuous stream), a refresh that changes nothing a rail can show emits no
+event, and the archive captures a live session when it settles for three
+seconds or once a minute while it streams. Cursor's follower reads the root
+blob's hash list and re-folds only from the exchange that moved; this once
+re-read the whole provider — every store stat-ed, the desktop header table
+queried, the followed store folded entirely — on each write of each running
+`cursor-agent`, 24 ms after the write, on the host's main thread.
+
 A row's `updatedAt` is when the conversation last moved, which is not
 always when the file did. Claude Code appends `last-prompt` and
 `cost-state` records when a resident CLI exits, so every host restart and
@@ -100,7 +133,9 @@ TUI rewrites `summary.json` every minute. Claude stamps rows from the newest
 message's timestamp and declares `activityFromContent`, which keeps the
 catalog from re-stamping a grown file until `refine` finds a message in the
 appended bytes; Grok stamps from the transcript's mtime and ignores the
-sidecar's stamps. `test/activity-stamps.mjs` covers both.
+sidecar's stamps. `test/activity-stamps.mjs` covers both. Claude Code stamps
+messages it composed itself ("API error", "no response requested") with the
+model `<synthetic>`; that is never a row's model (`test/claude-title.mjs`).
 
 ## The built-in runtime's session tree is not a tree
 
@@ -133,7 +168,7 @@ registerToolView("bash", { summary, body, icon })             // transcript rows
 registerSurface({ id, label, icon, render, minWidth })        // stage companions
 ```
 
-The stage's surfaces — Changes, Context, History, Files, Terminal —
+The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
 anything a plugin would add. One reading surface opens as the right sidebar at
 a fixed, draggable width; the independent Terminal dock can remain open below it
@@ -256,6 +291,41 @@ agents, not an isolation boundary, which is why the URL policy is exact. `test-d
 covers the bridge with in-memory pages and `test:desk-browser-electron` drives a
 real hidden window.
 
+## How a renderer loads
+
+The packaged desk is `mako-app://desk/index.html`, never a `file:` URL
+(`desk-scheme.ts`, `desk-protocol.ts`). Chromium keeps no V8 code cache for
+`file:` scripts, so every window compiled the whole bundle on every launch;
+the scheme is registered `standard` with `codeCache`, and one launch fills
+`Code Cache/js`. The handler serves only files under `dist/` through
+Electron's file loader, and the desk-browser policy admits only the exact
+document path. The scheme is also the storage origin: `renderer-storage.ts`
+moves the `file://` origin's localStorage (drafts, preferences, review notes)
+across once per profile through the blank `storage-bridge.html`, records a
+marker only on success, and deletes nothing. In development the desk stays on
+Vite's origin.
+
+Every renderer runs with `sandbox: true`. A sandboxed preload is loaded by
+Chromium, not Node, so it cannot `import`: `scripts/build-preload.mjs` bundles
+`electron/preload.ts` into `dist-electron/preload.cjs` (`build:electron` runs
+it; the dev launcher watches it). The preload imports
+`contracts/renderer-bridge.ts` directly, not the `shared.ts` barrel, because
+the contract schemas are values and the barrel would put all of zod into every
+renderer. `test-preload.mjs` loads the bundle sandboxed.
+
+The host's own modules are compiled once per build: `compile-cache.ts`
+enables Node's module compile cache under `<data root>/compile-cache` before
+`entry.ts` imports anything (about 20 ms of a 220 ms import phase;
+`MAKO_COMPILE_CACHE=0` disables it for a measurement). Client windows are
+created with the shell colour as `backgroundColor` and shown on
+`ready-to-show`, so neither the first frame nor a maximize flashes white.
+
+`dependencies` in `package.json` is what the host imports at runtime and
+nothing else: electron-builder ships that tree in `app.asar`, and the
+renderer's libraries (bundled by Vite), the CSS toolchain and the test tooling
+belong in `devDependencies`. React, `react-dom` and `esbuild` stay runtime
+dependencies because Cursor canvas previews bundle a canvas in the host.
+
 ## Remote control plane
 
 `@mako/relay` is the pure provider-neutral protocol and headless worker core.
@@ -347,7 +417,20 @@ Kiri is the normal Git backend, not an opt-in. `kiri-engine.ts` owns the process
 `ChangesPanel` stages, commits, and pushes. Commit drafting uses the host-only
 AI SDK connections in `utility-models.ts`, configured in Settings > Commit
 messages, never a coding-agent session. API keys are encrypted through Electron
-safeStorage in the isolated profile; no key is returned in a settings snapshot.
+safeStorage; no key is returned in a settings snapshot. Connections are per
+user, not per profile: they live in `~/.mako/utility-models` beside the other
+per-user state, so the installed app, `npm run dev`, and every review or
+sandbox profile read the same files (`utility-model-location.ts`; the keychain
+key `safeStorage` wraps them with was always shared). A host started with an
+explicit `MAKO_DATA_ROOT` keeps them inside that root so a fixture never reads
+or disconnects the user's real connections. A profile's older
+`<data root>/utility-models` copies move into the user store on its first
+start, newest copy per provider winning whichever host starts first.
+`test-utility-model-location.ts` covers the location and the move.
+On macOS with a local certificate, every new build is a new keychain partition
+(`cdhash:`, since only Apple-issued certificates carry a Team ID), so the first
+keychain access after an install asks once for Always Allow; that is macOS,
+not a lost connection.
 Changing a custom endpoint requires re-entering its key. Non-sensitive text diffs,
 including lockfiles and generated files, are captured completely. Working-tree
 captures use private Git objects and a private index without modifying the real
@@ -376,7 +459,8 @@ rather than overwriting a message. `npm run test:commit-generation` exercises re
 Git repositories, AI SDK calls, context recovery, cancellation, and encrypted storage.
 `node scripts/test-commit-ui.mjs <isolated-dev-url>` runs the real-host connection
 and drafting flow with trusted UI input and a local model endpoint. It requires
-an isolated host profile with no existing model connections and prints screenshots.
+a host started with a temporary `MAKO_DATA_ROOT` (a `MAKO_PROFILE` host shares
+the user's connections) and no existing model connections, and prints screenshots.
 It also checks commit-footer geometry and the computed Shadow DOM colors of sidebar
 diffs, center diffs, and source files across light, dark, and system-theme changes.
 Pierre's `diffs-container` inherits Mako's color scheme and token bindings from
@@ -474,7 +558,16 @@ in the command palette, not as an extra composer icon. Context usage is shown
 only with an exact, usable reading; unsupported providers do not get an empty
 ring. Chat activity uses one compact 20px mark and no redundant Responding row
 while answer text streams. Thought-process details remain available without a
-second animated status.
+second animated status. The composer carries no Queue/Steer control, not in
+the footer and not in the conversation menu: the placeholder and the send
+button's icon say what Enter does, Cmd+Enter does the other, and the
+preference is a row in Settings > Conversation. The
+routing row gives way in a fixed order as the pane narrows (the centre can be
+450px), found by measuring rather than a width breakpoint
+(`use-compact-row.ts`): the access chip drops to its glyph first, the harness
+chip second, and what still overflows scrolls behind a faded edge instead of
+being cut off silently. The model and its reasoning are what people read
+there and are never shortened.
 
 ## Notifications
 
@@ -484,8 +577,13 @@ Three outcomes and no more: an answer is `ready`, the agent must `ask` you
 centre (`src/state/notifications.ts`, React-free; `docs/notifications.md`
 has the full design and the remote-channel plan) decides per outcome from
 four facts: kind, thread on screen, window in front, replay. Watching the
-thread means seen with one cue; another thread in front means a persistent
-toast; window not in front means a desktop banner. Outcomes are transitions
+thread means seen with one cue; another thread in front means an in-app card
+(`src/components/notifications/notification-toast.tsx`, the attention pill's
+own row as a `toast.custom`, clickable anywhere, gone after `ACTION_TOAST_MS`;
+the pill and badge keep the fact); window not in front means a desktop
+banner. Toasts sit top-right below the 38px titlebar drag region, receipts
+leave in three seconds, and no toast is ever permanent
+(`scripts/check-actionable-toasts.mjs`). Outcomes are transitions
 keyed by a marker (permission id, turn), never states; hydration and
 reconnect replays are recorded for the badge but never announced; a thread
 that starts working again retires its unseen items; four or more banners in
@@ -555,9 +653,32 @@ cursor-agent processes from three earlier hosts were once found a day later.
 When the host closes for a restart, install or quit it answers every pending
 call with `host-restarting` (`electron/contracts/host-connection.ts`) instead of
 resetting the connection. The client turns that, and a dropped socket, into
-`RuntimeDisconnectedError`; `electron/runtime-retry.ts` repeats read-only
-channels once the event stream reattaches and never repeats a mutation. The
-renderer treats that error as the reconnect banner, not a toast.
+`RuntimeDisconnectedError`; `electron/runtime-retry.ts` repeats a call once
+the event stream reattaches according to one table,
+`electron/contracts/host-call-policy.ts`: `read` channels change nothing;
+`replay` channels are mutations the host settles by a caller-minted id (a
+request, conversation, transfer, action or fork id) or whose repeat reaches
+the same end state (cancel, close, set a mode), so the host answers a repeat
+with the first acceptance and never starts the work twice; everything else
+is `never` (a commit, a push, shell input) and only the user decides. A
+replay travels as `attempt: 2` in `RuntimeCallSchema` and the host logs it
+under `rpc`. Add a channel to `replay` only after reading its handler: it
+must return the first acceptance for a repeated id and refuse a repeated id
+whose content differs. A send the outage swallowed is kept staged as
+`unconfirmed` and re-issued from `reconnect()` under the same id
+(`replayUnconfirmedPrompts`), so "Delivery unconfirmed" is reserved for a
+host that died with the turn, never for a dropped socket. The renderer
+treats the disconnect as the reconnect banner (`HOST_OUTAGE_MESSAGE`), not a
+toast. `test-runtime-recovery.ts` covers the table and the second attempt.
+
+Every `live-batch` and `LiveSummary` carries the host's `epoch`, minted per
+`LiveConversations` instance. Revisions climb within one epoch and a
+restarted host continues from the journal, but a recovering host rewrites
+what it reopens at the same revision and two hosts never share a counter, so
+`live-recovery.ts` merges a batch onto held state only within the epoch;
+across epochs it buffers and takes a snapshot, and a snapshot from another
+epoch replaces the state outright. An unstamped batch (an older host) still
+applies by revision. `test-prompt-delivery.tsx` covers both.
 
 A health probe has three answers, not two. `probeRuntime` returns `absent`
 (nothing listens; a host may start), `ready`, or `closing`: a host that still
@@ -685,6 +806,52 @@ sent every Cursor reply to `cursor-agent -p --resume` without a word.
 2026-09-12 with `test-provider-e2e.mjs <provider> --restart` on Cursor and
 Grok: both reopen a stopped session through `session/load` in place.
 
+What a session ran under is remembered per user, not per host.
+`electron/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
+provider plus native session id, with the settings and access mode the live
+session last reported and a hold naming the host that has it open. It exists
+because the installed app and the `dev` profile share every provider store
+but each kept those facts only in its own journal, so a thread that ran in
+one host read "Model not recorded" with no access picker in the other, and
+Cursor's `store.db` records neither a model nor a tier to fall back on
+(Codex, Claude, Grok and OpenCode record their model and options, Devin the
+model alone; no provider records Mako's tier). `LiveConversations` writes the
+ledger from its flush hook for every driver, a native reply writes the
+settings it prepared, and the catalog's `annotate` overlays `settings`,
+`accessMode` and `heldBy` onto each `ThreadRef`. `rememberedSettings` lets
+the store win when it names a model, fills what it left out, and prefers the
+ledger only when its observation is newer than the store's write. A hold is
+a lease: taken before a resume spawns anything, kept alive every 30 s,
+released on close and on `stop`, stale after three minutes or when its pid is
+gone, and another host's hold refuses the continuation plan by name and shows
+as `external-open` in the rail. The journal's `modes` keep `access` and
+`enforcement`, so Restart Mako no longer strips the tiers from the picker.
+Choosing a tier while viewing a thread that is not live is the thread's
+choice (`chooseThreadMode`, `mako:thread-remember-mode`), and the host applies
+its own memory of the tier when a reply arrives without one. A host started
+after the ledger existed offers its own journals to it once (`backfill`,
+stamped with the journal's write time, never over a newer observation), so
+sessions from before the ledger are not "Model not recorded" forever.
+
+A saved binding's fate is a `ResumeVerdict`
+(`electron/contracts/conversation-control.ts`), not a boolean: `resumable`
+with the record `same` or `moved`, `held` by a named owner, or `unavailable`
+with a reason. Ownership and content are separate questions because they
+were once one, and a host that died mid-turn could never reconnect: the
+agent wrote its last blocks on exit, the store's head moved past the
+binding's checkpoint, and "cannot be resumed safely" was the answer forever.
+A reconnect accepts `moved`, holds the ledger before spawning, and says the
+transcript may be missing that part; only a provider switch reusing an old
+binding insists on `same`, because it sends context from that point. Cursor
+answers `held` from `lsof` under `node` (`cursor-agent` is a wrapper), Devin
+from its own lock file, and the generic policy from the provider's process
+probe; a refusal quotes the verdict's own reason.
+`scripts/test-session-memory.ts` covers the merge rule, holds across two
+hosts, the overlay, the refused plan, the journal round trip, a live
+conversation round trip, a reconnect past a moved record and the backfill;
+`test-cursor-resume.ts`, `test-devin-resume.ts` and
+`test-native-continuation.ts` cover each policy's verdicts.
+
 One selection means the same thing on both of a provider's transports. A
 native runner declares the option ids its command line `carries`, settles
 the rest in `prepare` (dropped ids are reported to the user, never silently
@@ -736,7 +903,31 @@ seen; only `noteFolderUse` (a prompt sent or a thread started, called from
 every send path) lifts one, never an agent's reply or a finished turn. Status
 is the row's mark and the folder's chip, and a folder with a working,
 waiting, or unread thread stays visible past the folder page limit instead of
-climbing. The Status view (`src/lib/thread-board.ts`) is the one place
+climbing. An unread answer is a 7px sphere in the text colour
+(`.review-dot`: one static radial gradient between `--mark-highlight`,
+`--foreground` and `--mark-shade`, a spread-only hairline ring, no blur), the
+brightest mark a row carries, with no weight change to the title; it is not
+a hue, because ember, caution and negative already share that column. It
+animates in only when the answer is newer than the row's own paint, so a row
+scrolling back into view is still. A row's attention is an outcome you
+acknowledge by opening the thread, and that covers a failure exactly as it
+covers an unread answer: `threadStatus` reads `failed` from the attention
+record `syncThreadStatus` writes once on the transition (never from the live
+session's own status, which stays `failed` until the next prompt), a failure
+on the conversation you are watching is already seen, `markThreadReviewed`
+clears both kinds, and a session that failed before it had a store stands
+down through `failureSeen` on its presence. Ready batches clear an answered
+ask or a recovered failure but never an unread answer; a finished session
+keeps sending them (a reported mode, an acknowledged setting), and the mark
+once lasted one batch. A turn that ends while a renderer is disconnected is
+read from the reconnect summary as a replay. Archiving is a dismissal too:
+`acknowledgeThread` (`thread-lifecycle.ts`) resolves the target to its paths
+and live key, clears the row's mark and marks its notification subjects
+seen, so the pill and badge stop counting a thread you have put away. Before
+this, a session that failed once wore the red mark and its folder's "1
+failed" chip for as long as it existed, whatever you clicked or archived,
+and the pill kept the count after an archive. `test-stage-layout.ts` and
+`test-rail-ui.mjs` cover both marks. The Status view (`src/lib/thread-board.ts`) is the one place
 threads regroup by state, in a fixed section order; Archived is reached from
 the filter glyph. While the pointer is inside the rail the order caught at
 entry holds, so a click cannot land on a row that moved, and rows that do
@@ -751,7 +942,15 @@ width, because at the rail's default width that halves the title. Titles keep
 most of a row and folder chips shrink first; folder names keep room and the
 branch label shrinks first. The Agents filter lists only providers the desk
 names. A thread in a temporary directory is labelled `tmp`, never the random
-directory name.
+directory name. A row's full text on hover is the rail's own tip
+(`rail-tip.tsx`: one delegated listener reading `data-tip`, one portaled
+element, a 400 ms wait and instant handoff between rows), never a native
+`title`: since Electron 38 a `title` on macOS shows late, once, or not at all
+(electron/electron#49843, open at Electron 43), and the rail's nested rename
+hint changed the text under the pointer so the wait restarted mid-row.
+`data-tip-quiet` on the controls pill keeps the tip away from their labels.
+`test-rail-ui.mjs` checks the wait, the handoff, and that no row carries
+`title`.
 
 Native session ownership is provider plus native session ID, not a catalog path.
 Account roots can expose one Claude session through multiple paths. Capture and
@@ -792,7 +991,53 @@ filter, never native history deletion. Active archived threads remain visible un
 they finish; Restore and explicit queue Resume remain available.
 
 An interrupted request already represented in the transcript needs only a stopped
-marker on its exchange. Recovery details retain failed, uncertain, and otherwise
+marker on its exchange, and the marker says who stopped it. A request's
+`interruption` (`electron/contracts/live-conversations.ts`) carries a reason
+and the moment: `stopped` is the user's Stop; `host-quit` is written by
+`LiveConversations.stop()` for every turn still dispatching when the host
+closes for a quit, restart or install; `host-crashed` is what the next host
+writes when it finds a turn still dispatching in a journal no host is
+writing, and that request is `uncertain` because the provider may have
+finished it. The exchange footer reads "Interrupted when Mako quit" or
+"closed unexpectedly", and on the newest such turn while the session is idle
+offers Continue turn (`turnStops`, `continueTurn`), which sends one plain
+prompt through the ordinary send path; a user's Stop offers nothing. A
+delegated child cut short by a host exit settles as `failed` in its parent,
+never `canceled`, so the parent may delegate again; `stop()` flushes every
+resident before it closes any journal because a child's verdict lands in
+its parent's. `test-live-conversations.ts` covers the three reasons,
+`test-live-controls.tsx` the footer and the recovery rows.
+
+A failed turn carries a `failure` kind decided once on the host
+(`electron/contracts/provider-failure.ts`, no imports, shared with the
+renderer): `transcript-rejected` (the model API refused the session's saved
+history, OpenCode's null `encrypted_content` reasoning replay), `context-exhausted`,
+`auth`, `rate-limited`, `provider-unavailable`, `network`, `resume-failed`,
+`rejected-input`, `unknown`. Rule order matters: specific faults precede the
+HTTP families they could also trip. The renderer never pattern-matches error
+text; it describes the kind with the provider's name, keeps the provider's
+own text readable beneath, and offers Send again only when the kind is
+retriable, so a rejected transcript says to start a new thread instead of
+inviting a round trip that cannot work. A failed transfer carries the same
+kind, and a start that fails for no classifiable reason while reopening a
+session is `resume-failed`. The banner for a failed thread uses the same
+description. `test-provider-failure.ts` covers the texts, priority,
+retriability and start failures.
+
+Every `ChatMessage` projected from a native store carries a `MessageAnchor`
+(`electron/contracts/message-anchor.ts`): the entry's index plus the
+provider's own id and timestamp when the store records them. Fork and
+transcript bundling name the answer by its anchor, and `resolveAnchor` finds
+it in a page by id, else by timestamp and kind (nearest the remembered index
+when two share a second), else by position while the same kind still sits
+there; a store that moved since the transcript was read therefore forks at
+the chosen answer, and only an answer that is gone is refused, by name. A
+native fork point without an anchor still refuses a moved store as before.
+`reconcile.ts` compares anchors too, so a message keeps its identity when a
+page loads earlier entries in front of it. `test-message-anchor.ts` covers
+the resolution rules and the host fork against a moved store.
+
+Recovery details retain failed, uncertain, and otherwise
 unrepresented input without repeating it in a permanent panel. An auxiliary ACP
 steering cancellation cannot override a successful turn; explicit Stop remains distinct.
 The main activity indicator uses the tuned 64px thinking-orbs states. Running
@@ -855,7 +1100,17 @@ three background jobs so launch validation retains capacity. A failed launch
 catalogue must reject an explicit model selection with its actual discovery
 error; never forward an unresolved family ID and its options to ACP. Failed
 provider startup disconnects its resident and ignores late transport events.
-`test-send-discovery.ts` and `test-live-conversations.ts` cover these refusals.
+A display discovery that fails after the account has listed its models once
+(`cursor/list_available_models` timed out under load) answers with the last
+discovered profile and a `configurationError` naming the failure, never
+`available: false`; the failure is held `FAILED_DISCOVERY_TTL_MS` (5 s), not the
+30 s display TTL, is never persisted, and the renderer asks again on a
+10 s–2 min backoff (`discoveryRetry` in `src/state/providers.ts`) instead of
+waiting for a window focus. A finished thread whose store records no model
+(Cursor's never does) resolves to the provider's default with source
+`provider`, because that is what a continuation runs under until the session
+reports. `test-send-discovery.ts`, `test-profile-refresh.ts` and
+`test-composer-settings.ts` cover these.
 A starting conversation has no session settings; the composer resolves it
 through the target the send used, so the model control never reads
 "unavailable" while a provider starts. Only a failed profile is unavailable;
@@ -948,8 +1203,12 @@ decoder's DOM-free entry in Vite: its browser export needs `document` and fails
 inside a worker. The browser audit must assert worker use, not accept a silent
 fallback as an offload success.
 
-Journal text appends remain in the same FULL-synchronous SQLite transaction as
-metadata; publish only after commit. Compact bounded append chains and preserve
+Journal text appends remain in the same SQLite transaction as metadata;
+publish only after commit. The journal and the requests store run WAL with
+`synchronous=NORMAL`: a committed transaction survives a host crash either
+way, only a power loss in the same instant can lose the last commits, and
+`FULL` fsynced the WAL on the host's main thread at every streamed flush.
+Snapshots and the archive stores keep `FULL`. Compact bounded append chains and preserve
 authoritative replacements, truncation and split UTF-16 characters. Dirty-range
 metadata uses weak references so it cannot retain every prior block array.
 Closed leaf journals have an 8-entry/64 MiB estimated warm-cache budget; active,
@@ -1022,6 +1281,37 @@ and respawns it from its own executable, so an update never keeps serving from
 the bundle it replaced. Terminal scrollback is persisted first; live shells
 are reported interrupted.
 
+When the sync daemon is not enabled, the host still never reads a store on
+its main thread: `electron/catalog-worker.ts` runs the catalog on a
+`worker_threads` Worker that serves the daemon's own frame protocol
+(`serveCatalogOnPort`) over a `MessageChannel` port transferred in with the
+worker data, and `threads.ts` adopts it exactly as it adopts the daemon
+(`adoptClient`, `connectDaemonPort`). The protocol is transport-neutral
+(`DaemonLink`): the detached daemon speaks it over its Unix socket, the
+worker over the port. The port matters: a Unix socket delivered a 7 MB
+thread to Electron's Chromium-integrated loop as some nine hundred 8 KiB
+reads and the host spent 200 ms draining it, while the port posts the frame
+whole. Every NDJSON reader (`LineAssembler` in `daemon-wire.ts`: the daemon,
+the Codex app-server, the runtime event stream, the web bridge) assembles a
+line from chunks without rescanning what it already holds; the old
+`buffer += chunk` loops were quadratic in the line's size. The worker's
+heap is bounded by `resourceLimits` rather than the daemon's RSS guard
+(which would read the host's RSS), a lost worker is restarted once before
+the host falls back to reading in-process, `daemonStatus` reports only the
+detached daemon, and an `open` through the worker is never raced against a
+read on the host thread. Before this a 38 MB Cursor store or a locked
+SQLite database stalled every RPC while it was read.
+
+`SessionCatalog.open` keeps the last four translated threads warm, and a
+write invalidates only what it can have changed: a per-file store drops its
+own path, a shared database (`rescanRoot`) drops that provider's threads and
+no other's. Before this the cache was one entry that any rescan cleared, so
+Cursor Desktop writing `state.vscdb` on every keystroke made every open of
+the Codex thread on screen re-read a 3.7 GB tail (135 ms, on every reopen and
+every preview). `packages/sessions/test/streaming-correctness.mjs` covers the
+scoping and the bound; `test/daemon.mjs` covers the port transport, including
+a port transferred into a real worker.
+
 launchd is consulted through `launchctl print`, never through the exit code
 of `bootstrap` or `bootout`: a bootstrap that loads the job has returned an
 I/O error, and deleting the plist on that verdict once left a job running for
@@ -1036,4 +1326,8 @@ directory on exit, and a new host removes driver sockets whose owner is dead.
 Retained previous applications are pruned after a verified, launched install:
 only the newest backup survives, and only staging directories holding nothing
 but a backup and its installer script are removed, under the install lock.
-`test-host-idle.ts` and `test-local-update-install.ts` cover these.
+`updates/build-*` directories are removed when `LocalUpdates` loads: the
+prepared build is copied into `/Applications` before the host quits and its
+state lives only in that host, so every one an earlier host left is dead
+weight (four held 3.4 GB). `test-host-idle.ts`, `test-local-update-install.ts`
+and `test-local-build-source.ts` cover these.

@@ -51,8 +51,7 @@ window that replaces them.
 - Opens files in tabs beside the chat, with split panes and a terminal dock
   whose shells survive window closes and app restarts.
 - Lists the selected agent's skills and MCP servers when you type `/` or `$`.
-- Shows context and token usage per session when the provider reports real
-  numbers, and a Usage page with spend by day, source, and model.
+- Keeps a Usage page with spend by day, source, and model.
 - Runs saved prompts as automations from a committable file in the project,
   triggered by hand, file changes, commits, Slack, mail, calendar events, or a
   webhook. Every automation arrives switched off on a new machine.
@@ -62,7 +61,7 @@ window that replaces them.
 <table>
   <tr>
     <td width="62%"><img src="docs/images/mako-skills.png" alt="Typing a slash in the composer lists the skills and MCP servers the selected agent will have" /></td>
-    <td width="38%"><img src="docs/images/mako-context.png" alt="The Context panel showing agent, model, token counts, and the files in play" /></td>
+    <td width="38%"><img src="docs/images/mako-changes.png" alt="The Changes panel beside a thread: the working tree grouped by folder, staging checkboxes, and the commit box" /></td>
   </tr>
 </table>
 
