@@ -379,15 +379,57 @@ assert.equal(stoppedMarkup.split("Keep this original question").length - 1, 1)
 const stoppedExchange = {id:"stopped",prompt:{id:"stopped",role:"user" as const,requestId:"stopped",blocks:[{type:"text" as const,text:"Keep this original question"}]},response:[],system:[]}
 const quitMarkup = renderToStaticMarkup(
   <TranscriptSourceContext value={{ liveId: conversation.key }}>
-    <Exchange interrupted={{ reason: "host-quit", continuable: true }} exchange={stoppedExchange} />
+    <Exchange interrupted={{ reason: "host-quit", continuable: true, automatic: false }} exchange={stoppedExchange} />
   </TranscriptSourceContext>
 )
 assert.match(quitMarkup, /data-turn-stopped="host-quit"/)
 assert.match(quitMarkup, /Interrupted when Mako quit/)
 assert.match(quitMarkup, /<button[^>]*>[^]*?Continue turn/)
-const crashedMarkup = renderToStaticMarkup(<Exchange interrupted={{ reason: "host-crashed", continuable: false }} exchange={stoppedExchange} />)
+const crashedMarkup = renderToStaticMarkup(<Exchange interrupted={{ reason: "host-crashed", continuable: false, automatic: false }} exchange={stoppedExchange} />)
 assert.match(crashedMarkup, /Interrupted when Mako closed unexpectedly/)
 assert.doesNotMatch(crashedMarkup, /Continue turn/, "an older interrupted turn is described, not offered")
+// A turn the provider ended on its own dropped connection names that
+// provider's connection and offers to go on, since the work so far stands.
+const droppedMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <Exchange interrupted={{ reason: "connection-lost", continuable: true, automatic: false }} exchange={stoppedExchange} />
+  </TranscriptSourceContext>
+)
+assert.match(droppedMarkup, /data-turn-stopped="connection-lost"/)
+assert.match(droppedMarkup, /The connection to Claude Code dropped/)
+assert.match(droppedMarkup, /<button[^>]*>[^]*?Continue turn/)
+// While the host has scheduled its own continuation there is nothing to
+// press: the footer says the turn is continuing and carries the live mark.
+const continuingMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <Exchange interrupted={{ reason: "connection-lost", continuable: false, automatic: true }} exchange={stoppedExchange} />
+  </TranscriptSourceContext>
+)
+assert.match(continuingMarkup, /The connection to Claude Code dropped/)
+assert.match(continuingMarkup, /data-turn-continuing[^>]*>[^]*?continuing automatically/)
+assert.doesNotMatch(continuingMarkup, /Continue turn/, "a scheduled continuation is not also offered")
+// Mako's own continuation is drawn as Mako's line where the prompt would be,
+// not as the user's bubble; the words it sent are not shown as theirs.
+const continuedMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <Exchange
+      continues={{ requestId: "stopped", reason: "connection-lost", auto: true }}
+      exchange={{ ...stoppedExchange, id: "continued", prompt: { ...stoppedExchange.prompt, id: "continued", requestId: "continued", timestamp: 1_700_000_000_000, blocks: [{ type: "text" as const, text: "Continue where you left off." }] } }}
+    />
+  </TranscriptSourceContext>
+)
+assert.match(continuedMarkup, /data-turn-continued="connection-lost"/)
+assert.match(continuedMarkup, /Mako continued the turn after the connection to Claude Code dropped/)
+assert.doesNotMatch(continuedMarkup, /Continue where you left off/, "the continuation prompt is not shown as the user's words")
+assert.doesNotMatch(continuedMarkup, /Copy question/)
+// A continuation the user sent by pressing the button is their prompt and stays one.
+const manualMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <Exchange continues={{ requestId: "stopped", reason: "connection-lost", auto: false }} exchange={stoppedExchange} />
+  </TranscriptSourceContext>
+)
+assert.match(manualMarkup, /Keep this original question/)
+assert.doesNotMatch(manualMarkup, /data-turn-continued/)
 conversation.requests.push({id:"unsent",text:"Do not lose a pre-dispatch stop",attachments:[],status:"interrupted"})
 conversation.requests.push({id:"failed",text:"Failed input remains recoverable",attachments:[],status:"failed"})
 publish()

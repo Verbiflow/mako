@@ -4,7 +4,8 @@ import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { promptDelivery, recoverableRequests, turnStops } from "../src/state/prompt-delivery"
+import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
+import { autoContinueCandidate } from "../electron/contracts/turn-continuation"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
 
@@ -152,15 +153,55 @@ const legacy: LiveRequest = { ...request, id: "77777777-7777-4777-8777-777777777
 const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-888888888888", status: "uncertain" }
 {
   const stops = turnStops([stopped, quit, crashed], false)
-  assert.deepEqual(stops.get(stopped.id), { reason: "stopped", continuable: false })
-  assert.deepEqual(stops.get(quit.id), { reason: "host-quit", continuable: false }, "only the newest turn is continued")
-  assert.deepEqual(stops.get(crashed.id), { reason: "host-crashed", continuable: true })
+  assert.deepEqual(stops.get(stopped.id), { reason: "stopped", continuable: false, automatic: false })
+  assert.deepEqual(stops.get(quit.id), { reason: "host-quit", continuable: false, automatic: false }, "only the newest turn is continued")
+  assert.deepEqual(stops.get(crashed.id), { reason: "host-crashed", continuable: true, automatic: false })
   assert.equal(turnStops([stopped, quit, crashed], true).get(crashed.id)?.continuable, false, "nothing is offered while a turn runs")
-  assert.deepEqual(turnStops([quit], false).get(quit.id), { reason: "host-quit", continuable: true })
-  assert.deepEqual(turnStops([stopped], false).get(stopped.id), { reason: "stopped", continuable: false }, "a user's Stop is not offered")
-  assert.deepEqual(turnStops([legacy], false).get(legacy.id), { reason: "stopped", continuable: false }, "an older journal's interrupted request is a plain Stop")
+  assert.deepEqual(turnStops([quit], false).get(quit.id), { reason: "host-quit", continuable: true, automatic: false })
+  assert.deepEqual(turnStops([stopped], false).get(stopped.id), { reason: "stopped", continuable: false, automatic: false }, "a user's Stop is not offered")
+  assert.deepEqual(turnStops([legacy], false).get(legacy.id), { reason: "stopped", continuable: false, automatic: false }, "an older journal's interrupted request is a plain Stop")
   assert.equal(turnStops([unconfirmed], false).has(unconfirmed.id), false, "an unconfirmed delivery is not a stopped turn")
   assert.equal(turnStops([crashed, { ...request, status: "canceled" }], false).get(crashed.id)?.continuable, true, "a canceled request after it does not hide the offer")
+  // A provider that ended the turn on its own dropped connection: continuable,
+  // named for the provider, and its Continue prompt says what dropped.
+  const dropped: LiveRequest = {
+    ...request,
+    id: "99999999-9999-4999-8999-999999999999",
+    status: "interrupted",
+    interruption: { reason: "connection-lost", at: 4 },
+    failure: "network",
+    error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+  }
+  assert.deepEqual(turnStops([quit, dropped], false).get(dropped.id), { reason: "connection-lost", continuable: true, automatic: false })
+  assert.equal(turnStopLabel("connection-lost", "Cursor"), "The connection to Cursor dropped")
+  assert.equal(turnStopLabel("host-quit", "Cursor"), "Interrupted when Mako quit")
+  assert.match(continueTurnPrompt("connection-lost"), /connection dropped/)
+  assert.match(continueTurnPrompt("host-quit"), /Mako closed/)
+  assert.ok(!recoverableRequests({ requests: [dropped], blocks: [{ type: "user" as const, requestId: dropped.id, text: "", attachments: [] }] }).length, "a dropped turn on screen is the footer's, not the panel's")
+  // While the host has scheduled its own continuation, the footer offers
+  // nothing and the thread is still a working one; once Mako's continuation
+  // is in the list, it is known as Mako's and the dropped turn is not newest.
+  const scheduled: LiveRequest = { ...dropped, interruption: { reason: "connection-lost", at: 4, autoContinue: { at: 6_000 } } }
+  assert.deepEqual(turnStops([quit, scheduled], false).get(scheduled.id), { reason: "connection-lost", continuable: false, automatic: true })
+  assert.equal(autoContinuePending([quit, scheduled]), true)
+  assert.equal(autoContinuePending([quit, dropped]), false)
+  assert.equal(autoContinuePending(undefined), false)
+  const continuation: LiveRequest = {
+    ...request,
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    status: "dispatching",
+    text: continueTurnPrompt("connection-lost"),
+    continues: { requestId: dropped.id, reason: "connection-lost", auto: true },
+  }
+  assert.deepEqual([...turnContinuations([quit, dropped, continuation])], [[continuation.id, continuation.continues]])
+  assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
+  assert.equal(autoContinueCandidate([dropped]), dropped, "the newest dropped turn is Mako's to continue")
+  assert.equal(autoContinueCandidate([dropped, continuation]), undefined, "a turn already continued is not continued again")
+  const droppedAgain: LiveRequest = { ...continuation, status: "interrupted", interruption: { reason: "connection-lost", at: 8 } }
+  assert.equal(autoContinueCandidate([dropped, droppedAgain]), undefined, "one attempt per turn: a continuation that drops is the user's")
+  assert.equal(autoContinueCandidate([dropped, { ...request, status: "canceled" }]), dropped, "a canceled request after it does not change the candidate")
+  assert.equal(autoContinueCandidate([dropped, { ...request, status: "queued" }]), undefined, "a queued prompt behind it is the user's next word")
+  assert.equal(autoContinueCandidate([quit]), undefined, "only a dropped connection earns an automatic continuation")
 }
 // The recovery panel lists a stopped turn only when the transcript does not show it.
 {

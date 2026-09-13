@@ -31,6 +31,12 @@ const cases: [string, string][] = [
   ["fetch failed", "network"],
   ["read ECONNRESET", "network"],
   ["socket hang up", "network"],
+  // cursor-agent's own error text, lifted out of its transcript.
+  ["RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)", "network"],
+  ["RetriableError: [deadline_exceeded] the operation timed out", "network"],
+  ["RetriableError: Connection stalled", "network"],
+  ["RetriableError: [unavailable] Error", "provider-unavailable"],
+  ["[unauthenticated] Backend rejected authentication. Verify this is a User API Key for the same endpoint/environment", "auth"],
   ["Session not found", "resume-failed"],
   ["The saved native session cannot be resumed. The session store is missing or unreadable. No replacement session was started.", "resume-failed"],
   [heldReason("Mako (dev)"), "resume-failed"],

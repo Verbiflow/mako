@@ -468,6 +468,38 @@ assert.equal(
   assert.equal(fake.log.desktop.at(-1)?.subtitle, "Claude Code failed · pi-ui")
   assert.equal(fake.log.desktop.at(-1)?.body, "Provider exited")
 
+  // A dropped connection the host is about to continue itself is not an
+  // outcome: no banner, no failed mark, and the row keeps working.
+  const banners = fake.log.desktop.length
+  const continuing = liveConversation({
+    key: "live-3",
+    threadPath: "/sessions/live-3.jsonl",
+    revision: 14,
+    session: {
+      ...liveConversation().session,
+      id: "live-3",
+      status: "failed",
+      lastStop: "connection-lost",
+      error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+    },
+    requests: [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        text: "first",
+        attachments: [],
+        status: "interrupted",
+        failure: "network",
+        interruption: { reason: "connection-lost", at: 5, autoContinue: { at: 7 } },
+      },
+    ],
+  })
+  syncThreadStatus(continuing, "running")
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.length, banners, "no banner for a drop Mako continues itself")
+  assert.equal(notificationsStore.get().items.some((item) => item.subject.id === "live:live-3"), false)
+  assert.equal(threadsStore.get().attention["/sessions/live-3.jsonl"], undefined, "no failed mark either")
+  assert.equal(threadsStore.get().working["/sessions/live-3.jsonl"]?.kind, "working", "the row stays a working one")
+
   flushNotificationBursts()
   uninstall()
 }

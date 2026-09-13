@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import { reduceLiveUpdates } from "../electron/contracts/live-content.js"
+import { CONNECTION_LOST_STOP } from "../electron/contracts/providers-acp.js"
 import type { LiveSessionState, HostEvent } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { projectLive } from "../src/state/live-projection.js"
@@ -23,7 +24,7 @@ function deferred<Value>() {
   return { promise, resolve, reject }
 }
 
-function fixture() {
+function fixture(options: { autoContinueDelayMs?: number } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mako-live-test-"))
   const id = randomUUID()
   const state: LiveSessionState = {
@@ -68,6 +69,7 @@ function fixture() {
     driver: () => driver,
     history: async () => null,
     emit: (event: HostEvent) => events.push(event),
+    autoContinueDelayMs: options.autoContinueDelayMs,
   }
   const owner = new LiveConversations(dependencies)
   return {
@@ -501,6 +503,37 @@ async function settledVerdicts() {
     assert.equal(requests[1]?.status, "failed")
     assert.equal(requests[1]?.failure, "transcript-rejected")
     assert.equal(requests[1]?.interruption, undefined)
+
+    // A turn the provider ended on its own dropped connection: the work
+    // stands, so the request is interrupted and continuable, and still says
+    // which connection dropped.
+    const third = randomUUID()
+    f.owner.submit(f.id, third, "third")
+    await tick()
+    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({
+      type: "acp-session",
+      session: {
+        ...f.state,
+        status: "failed",
+        lastStop: CONNECTION_LOST_STOP,
+        error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+      },
+    })
+    f.prompts[2]?.resolve()
+    await tick()
+    requests = f.owner.snapshot(f.id)!.requests
+    assert.equal(requests[2]?.status, "interrupted")
+    assert.equal(requests[2]?.interruption?.reason, "connection-lost")
+    assert.equal(requests[2]?.failure, "network")
+    assert.match(requests[2]?.error ?? "", /http\/2 stream closed/)
+    assert.ok(requests[2]?.interruption?.autoContinue, "Mako schedules its own continuation of a dropped turn")
+    const reopened = new LiveJournal(f.root, f.id)
+    try {
+      assert.equal(reopened.read()?.requests[2]?.interruption?.reason, "connection-lost", "the reason survives the journal")
+    } finally {
+      reopened.close()
+    }
   } finally {
     f.cleanup()
   }
@@ -523,8 +556,138 @@ async function refusedStartup() {
   } finally { f.cleanup() }
 }
 
+/**
+ * Mako continues a turn that ended on the provider's dropped connection by
+ * itself, once: the interrupted request is stamped while the send is pending,
+ * the continuation carries the source's settings and names the turn it picks
+ * up, a second drop is left to the user, and the user's own prompt, Stop, or
+ * the host leaving in the window cancels the send.
+ */
+async function autoContinuedTurn() {
+  const dropped: Partial<LiveSessionState> = {
+    status: "failed",
+    lastStop: CONNECTION_LOST_STOP,
+    error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+  }
+  const tuning = { model: "model-a", options: { effort: "high" } }
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+  const dropTurn = async (f: ReturnType<typeof fixture>, index: number) => {
+    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "acp-session", session: { ...f.state, ...dropped } })
+    f.prompts[index]?.resolve()
+    await tick()
+  }
+
+  // The continuation is sent, once.
+  let f = fixture({ autoContinueDelayMs: 20 })
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    const first = randomUUID()
+    f.owner.submit(f.id, first, "first", [], tuning)
+    await tick()
+    await dropTurn(f, 0)
+    let requests = f.owner.snapshot(f.id)!.requests
+    assert.equal(requests.length, 1)
+    assert.ok(requests[0]?.interruption?.autoContinue, "stamped while the send is pending")
+    assert.ok((requests[0]?.interruption?.autoContinue?.at ?? 0) > Date.now(), "the stamp says when")
+    await sleep(60)
+    requests = f.owner.snapshot(f.id)!.requests
+    assert.equal(requests.length, 2, "Mako sent the continuation")
+    assert.equal(requests[0]?.interruption?.autoContinue, undefined, "the stamp is gone once it is sent")
+    const continuation = requests[1]!
+    assert.deepEqual(continuation.continues, { requestId: first, reason: "connection-lost", auto: true })
+    assert.equal(continuation.status, "dispatching")
+    assert.deepEqual(continuation.tuning, tuning, "the continuation runs under the interrupted turn's settings")
+    assert.match(continuation.text, /connection dropped/)
+    assert.equal(f.sent.at(-1), continuation.text)
+    const reopened = new LiveJournal(f.root, f.id)
+    try {
+      assert.deepEqual(reopened.read()?.requests[1]?.continues, continuation.continues, "the continuation survives the journal")
+    } finally {
+      reopened.close()
+    }
+    // The continuation drops too: one attempt per turn, so this one is the user's.
+    await dropTurn(f, 1)
+    requests = f.owner.snapshot(f.id)!.requests
+    assert.equal(requests[1]?.interruption?.reason, "connection-lost")
+    assert.equal(requests[1]?.interruption?.autoContinue, undefined, "a continuation that drops is not continued again")
+    await sleep(60)
+    assert.equal(f.owner.snapshot(f.id)!.requests.length, 2, "nothing more was sent")
+  } finally {
+    f.cleanup()
+  }
+
+  // The user's own prompt in the window supersedes the continuation.
+  f = fixture({ autoContinueDelayMs: 20 })
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.submit(f.id, randomUUID(), "first")
+    await tick()
+    await dropTurn(f, 0)
+    assert.ok(f.owner.snapshot(f.id)!.requests[0]?.interruption?.autoContinue)
+    f.owner.submit(f.id, randomUUID(), "the user's own follow-up")
+    await tick()
+    await sleep(60)
+    const requests = f.owner.snapshot(f.id)!.requests
+    assert.equal(requests.length, 2)
+    assert.equal(requests[0]?.interruption?.autoContinue, undefined, "the user's prompt clears the stamp")
+    assert.equal(requests[1]?.continues, undefined)
+    assert.equal(f.sent.at(-1), "the user's own follow-up")
+  } finally {
+    f.cleanup()
+  }
+
+  // Stop in the window is the user's answer: the turn stays where it stopped.
+  f = fixture({ autoContinueDelayMs: 20 })
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.submit(f.id, randomUUID(), "first")
+    await tick()
+    await dropTurn(f, 0)
+    await f.owner.cancel(f.id)
+    assert.equal(f.owner.snapshot(f.id)!.requests[0]?.interruption?.autoContinue, undefined)
+    await sleep(60)
+    assert.equal(f.owner.snapshot(f.id)!.requests.length, 1, "Stop declined the continuation")
+    assert.deepEqual(f.sent, ["first"])
+  } finally {
+    f.cleanup()
+  }
+
+  // The host leaving in the window takes the promise with it: the journal
+  // the next host reads carries the manual offer, not a pending send.
+  f = fixture({ autoContinueDelayMs: 20 })
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.submit(f.id, randomUUID(), "first")
+    await tick()
+    await dropTurn(f, 0)
+    f.owner.stop()
+    await sleep(60)
+    const reopened = new LiveJournal(f.root, f.id)
+    try {
+      const persisted = reopened.read()?.requests ?? []
+      assert.equal(persisted.length, 1, "the stopped host sent nothing")
+      assert.equal(persisted[0]?.interruption?.reason, "connection-lost")
+      assert.equal(persisted[0]?.interruption?.autoContinue, undefined)
+    } finally {
+      reopened.close()
+    }
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+}
+
 await refusedStartup()
 await settledVerdicts()
+await autoContinuedTurn()
 await coalescedToolBursts()
 await failureIsolationAndAssets()
 
