@@ -45,7 +45,7 @@ const REGIONS: Region[] = [
   {
     name: "Surfaces",
     commandId: "view.toggle-companion",
-    what: "Changes, context, history, files, and preview open beside the chat with ⌘2 through ⌘6. The terminal opens independently below with ⌘J.",
+    what: "Changes, files, the control preview, and agents open beside the chat from the palette; this key hides the sidebar or brings back the last one. The terminal opens independently below with ⌘J.",
   },
   {
     name: "Sessions",
