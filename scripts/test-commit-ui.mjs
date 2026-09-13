@@ -19,7 +19,7 @@ if (process.versions.electron) {
   const url = process.argv[2]
   assert.ok(
     url,
-    "Pass an isolated real-host dev URL. This check requires no existing model connections."
+    "Pass the dev URL of a host started with a temporary MAKO_DATA_ROOT. A MAKO_PROFILE host shares the user's model connections; this check requires none."
   )
   assert.ok(["127.0.0.1", "localhost"].includes(new URL(url).hostname))
   const root = await mkdtemp(join(tmpdir(), "mako-commit-ui-"))
@@ -222,7 +222,7 @@ async function check() {
         "import('/src/state/model-runtime.ts').then(async ({utilityModels}) => (await utilityModels.settings()).connections.length)"
       ),
       0,
-      "Use an isolated host profile with no connected models"
+      "Use a host started with a temporary MAKO_DATA_ROOT and no connected models"
     )
     await evaluate(
       `import('/src/state/session.ts').then(({actions}) => actions.openWorkspace(${JSON.stringify(repository)}))`

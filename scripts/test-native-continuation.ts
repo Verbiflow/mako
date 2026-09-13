@@ -5,6 +5,7 @@ import { join } from "node:path"
 import {
   nativeCheckpoint,
   canResumeBinding,
+  resumeVerdict,
 } from "../electron/native-continuation.ts"
 import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
@@ -47,24 +48,29 @@ try {
     false
   )
   for (const session of [{ nativeId: binding.nativeId }, { path }]) {
-    assert.equal(
-      await canResumeBinding(binding, {
-        ...idle,
-        probe: async () => ({
-          kind: "available",
-          sessions: [{ ...session, status: "active" }],
-        }),
+    const busy: ProviderProcessProbe = {
+      ...idle,
+      probe: async () => ({
+        kind: "available",
+        sessions: [{ ...session, status: "active" }],
       }),
-      false
-    )
+    }
+    assert.equal(await canResumeBinding(binding, busy), false)
+    assert.deepEqual(await resumeVerdict(binding, busy), { kind: "held", by: "another fixture process" })
   }
   await writeFile(path, "modified history\n")
-  assert.equal(await canResumeBinding(binding, idle), false)
+  assert.equal(await canResumeBinding(binding, idle), false, "a switch does not reuse a binding whose record moved")
+  assert.deepEqual(
+    await resumeVerdict(binding, idle),
+    { kind: "resumable", record: "moved" },
+    "a record that moved is still the same unowned session for a reconnect"
+  )
+  assert.equal((await resumeVerdict(binding, undefined)).kind, "unavailable", "no probe means ownership cannot be answered")
   await rm(path)
-  assert.equal(await canResumeBinding(binding, idle), false)
+  assert.equal((await resumeVerdict(binding, idle)).kind, "unavailable")
   assert.equal(await nativeCheckpoint(root), undefined)
   console.log(
-    "Native continuation: unchanged file accepted; changed, missing, active, unavailable and failed probes denied"
+    "Native continuation: unchanged file accepted; moved record reconnects but is not reused; missing, active, unavailable and failed probes denied"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

@@ -4,7 +4,10 @@ import {
   type ThreadPage,
   type ThreadRef,
 } from "../electron/shared.ts"
-import { threadViewingActions } from "../src/state/thread-viewing.ts"
+import {
+  loadThreadBlock,
+  threadViewingActions,
+} from "../src/state/thread-viewing.ts"
 import { threadsStore } from "../src/state/thread-store.ts"
 import { draftText, rememberDraft } from "../src/state/drafts.ts"
 
@@ -13,8 +16,14 @@ const pending = new Map<
   ReturnType<typeof Promise.withResolvers<ThreadPage | null>>
 >()
 const follows: string[] = []
+const blockAsks: unknown[] = []
 const bridge = createMakoBridge({
   invoke: async (channel, ...args) => {
+    if (channel === "mako:thread-block") {
+      blockAsks.push(args)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      return { type: "tool", name: "exec", input: "cat big", output: "whole" }
+    }
     if (channel === "mako:thread-page") {
       const key = String(args[0])
       const request = Promise.withResolvers<ThreadPage | null>()
@@ -102,6 +111,52 @@ assert.equal(
 )
 threadViewingActions.closeViewer()
 assert.equal(threadsStore.get().opening, null)
+
+// A page carries the head of a long tool output. Opening the row asks for
+// the block once, by its address in the thread, and the whole block replaces
+// the head in place; the projection restarts at that entry only.
+const paged: ThreadRef = { harness: "codex", nativeId: "big", path: "/big" }
+const head = {
+  type: "tool" as const,
+  name: "exec",
+  input: "cat big",
+  output: "head",
+  outputLength: 41_394,
+}
+pending.delete(paged.path)
+const pagedRead = threadViewingActions.view(paged)
+await waitFor(paged.path)
+pending.get(paged.path)?.resolve({
+  ref: paged,
+  entries: [
+    { kind: "user", text: "read it" },
+    { kind: "assistant", blocks: [{ type: "text", text: "Reading." }, head] },
+  ],
+  start: 40,
+  total: 42,
+  hasEarlier: true,
+})
+await pagedRead
+const shown = threadsStore.get().viewing
+assert.equal(shown?.pageStart, 40)
+await Promise.all([
+  loadThreadBlock(paged.path, { entry: 41, block: 1 }),
+  loadThreadBlock(paged.path, { entry: 41, block: 1 }),
+])
+assert.deepEqual(blockAsks, [[paged.path, { entry: 41, block: 1 }]], "one ask per block")
+const swapped = threadsStore.get().viewing
+assert.ok(swapped && swapped.entries[1]?.kind === "assistant")
+assert.deepEqual(swapped.entries[1].blocks[1], {
+  type: "tool",
+  name: "exec",
+  input: "cat big",
+  output: "whole",
+})
+assert.equal(swapped.entries[1].blocks[0], shown?.entries[1]?.kind === "assistant" ? shown.entries[1].blocks[0] : undefined, "other blocks keep identity")
+assert.equal(swapped.entries[0], shown?.entries[0], "other entries keep identity")
+assert.equal(swapped.streamReplaceFrom, 1, "the projection restarts at the entry that changed")
+assert.equal(swapped.streamRevision, (shown?.streamRevision ?? 0) + 1)
+threadViewingActions.closeViewer()
 console.log(
-  "Thread opening: exact draft/provider ownership, out-of-order results, readable failure state and explicit close verified"
+  "Thread opening: exact draft/provider ownership, out-of-order results, readable failure state, explicit close and in-place block loading verified"
 )

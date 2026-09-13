@@ -117,6 +117,26 @@ try {
   await first.stage([paths[1]])
   await first.unstageAll()
   assert.equal((await command("diff", "--cached", "--name-only")).stdout, "")
+  // A staged deletion is in neither the index nor the worktree. Selecting it
+  // again, alone or inside a folder-wide selection, is a no-op rather than a
+  // missing file, so a bulk stage that happens to include one goes through.
+  await command("rm", "-q", paths[0])
+  await first.stage([paths[0]])
+  await first.stage([paths[0], paths[2]])
+  assert.equal(
+    (await command("diff", "--cached", "--name-status")).stdout.trim(),
+    `D\t${paths[0]}\nA\t${paths[2]}`,
+    "Re-staging a staged deletion must not fail the selection around it"
+  )
+  await first.unstage([paths[0]])
+  assert.equal(
+    (await command("ls-files", "--", paths[0])).stdout.trim(),
+    paths[0],
+    "Unstaging a deletion restores the index entry"
+  )
+  await command("checkout", "--", paths[0])
+  await first.unstageAll()
+  assert.equal((await command("diff", "--cached", "--name-only")).stdout, "")
   await writeFile(join(root, "*"), "The literal star file\n")
   await writeFile(join(root, ".env"), "PRIVATE_VALUE=never-in-model-input\n")
   await first.stage(["*", ".env"])

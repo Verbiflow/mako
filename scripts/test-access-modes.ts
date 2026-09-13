@@ -8,6 +8,8 @@ import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { openCodeAcpSource } from "../electron/providers/opencode/acp.ts"
 import { codexAccessModes, codexAccessTier, codexTurnAccess } from "../electron/providers/codex/access.ts"
 import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
+import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
+import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 
 const allowReject = [
   { optionId: "allow-once", kind: "allow_once" },
@@ -149,3 +151,15 @@ assert.ok(ClaudeModeSchema.safeParse("bypassPermissions").success)
 console.log(
   "Access modes: host decisions, Cursor host tiers, Devin native tiers, Grok launch tiers without steering, OpenCode rulesets, Codex per-turn policy, and Claude bypass verified"
 )
+
+// Before launch, every driver declares the same ladder its live session will show,
+// so the composer can take the choice with the first prompt.
+assert.deepEqual(acpLiveDriver(cursorAcpSource).modes, cursorModes, "Cursor's ladder is known before launch")
+assert.deepEqual(acpLiveDriver(devinAcpSource).modes, devinModes, "Devin's ladder is known before launch")
+assert.deepEqual(acpLiveDriver(grokAcpSource).modes, grokModes, "Grok's ladder is known before launch")
+assert.deepEqual(acpLiveDriver(openCodeAcpSource).modes, openCodeModes, "OpenCode's ladder is known before launch")
+assert.deepEqual(codexLiveDriver.modes, codexAccessModes())
+assert.ok(claudeLiveDriver.modes?.length, "Claude declares its modes before launch")
+for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
+for (const driver of [acpLiveDriver(cursorAcpSource), acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), acpLiveDriver(openCodeAcpSource), codexLiveDriver, claudeLiveDriver])
+  assert.ok(driver.modes?.every((mode) => !mode.access || mode.enforcement), `${driver.provider}: no tier without an enforcer`)

@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import { hostCallInputs } from "../electron/contracts/host-call-inputs.ts"
 import { RuntimeDisconnectedError } from "../electron/runtime-connection.ts"
 import { invokeWithRecovery, recoverableHostCalls, type RecoveryLink } from "../electron/runtime-retry.ts"
+import { hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "../electron/contracts/host-call-policy.ts"
+import { RuntimeCallSchema } from "../electron/contracts/runtime.ts"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, isHostReconnectingError } from "../electron/contracts/host-connection.ts"
 import { daemonIsForeign } from "../electron/daemon-vintage.ts"
 import { PROTOCOL_VERSION } from "@mako/sessions"
@@ -16,10 +18,41 @@ async function rejection<T>(promise: Promise<T>): Promise<Error> {
   throw new Error("Expected a rejection")
 }
 
-// Every recoverable channel is a real handler, and no mutation slipped in.
+// Every recoverable channel is a real handler. Reads repeat freely; the
+// mutations that repeat are exactly those the host settles by a caller-minted
+// id or whose repeat reaches the same end state; anything else is never
+// repeated blindly.
 for (const channel of recoverableHostCalls) assert.ok(channel in hostCallInputs, `${channel} is not a host channel`)
-for (const mutation of ["mako:git-stage", "mako:git-commit", "mako:git-push", "mako:prompt", "mako:live-prompt", "mako:set-cwd", "mako:lifecycle-command", "mako:install-update", "mako:thread-run", "mako:terminal-write"])
+for (const channel of replayableHostCalls) assert.ok(channel in hostCallInputs, `${channel} is not a host channel`)
+for (const mutation of ["mako:git-stage", "mako:git-commit", "mako:git-push", "mako:prompt", "mako:set-cwd", "mako:lifecycle-command", "mako:install-update", "mako:thread-run", "mako:terminal-write"]) {
   assert.ok(!recoverableHostCalls.has(mutation), `${mutation} must never be repeated blindly`)
+  assert.equal(hostCallReplay(mutation), "never")
+}
+for (const settled of ["mako:live-prompt", "mako:live-start", "mako:live-transfer", "mako:live-fork", "mako:native-submit", "mako:live-cancel", "mako:thread-remember-mode"])
+  assert.equal(hostCallReplay(settled), "replay", `${settled} is settled by its id`)
+assert.equal(hostCallReplay("mako:git-status"), "read")
+assert.ok(readOnlyHostCalls.has("mako:git-status"))
+assert.ok(!readOnlyHostCalls.has("mako:live-prompt"))
+
+// An id-settled mutation that drops mid-call is re-issued as attempt 2 once
+// the host is back; the host answers the repeated id with its first acceptance.
+{
+  const { value, calls } = link(10)
+  const attempts: number[] = []
+  const result = await invokeWithRecovery("mako:live-prompt", async (attempt) => {
+    attempts.push(attempt)
+    if (attempt === 1) throw new RuntimeDisconnectedError(true)
+    return { accepted: true }
+  }, value, 500)
+  assert.deepEqual(result, { accepted: true })
+  assert.deepEqual(attempts, [1, 2])
+  assert.deepEqual(calls, ["lost", "wait:500"])
+}
+// The wire carries the attempt only on a repeat, and bounds it.
+assert.equal(RuntimeCallSchema.parse({ channel: "mako:live-prompt", args: [] }).attempt, undefined)
+assert.equal(RuntimeCallSchema.parse({ channel: "mako:live-prompt", args: [], attempt: 2 }).attempt, 2)
+assert.throws(() => RuntimeCallSchema.parse({ channel: "mako:live-prompt", args: [], attempt: 0 }))
+assert.throws(() => RuntimeCallSchema.parse({ channel: "mako:live-prompt", args: [], attempt: 9 }))
 
 function link(reconnectAfterMs: number | null) {
   const calls: string[] = []
@@ -93,4 +126,4 @@ assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION, script: "/Users/someon
 assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION - 1, script }, script), true)
 assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION + 1, script }, script), true)
 
-console.log("Runtime recovery: read-only calls repeat after reconnect, mutations never do, refused and dropped calls are told apart, and foreign daemons are recognised")
+console.log("Runtime recovery: reads and id-settled mutations repeat after reconnect as attempt 2, other mutations never do, refused and dropped calls are told apart, and foreign daemons are recognised")

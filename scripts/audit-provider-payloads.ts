@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
+import { LineAssembler } from "@mako/sessions"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
-import { StringDecoder } from "node:string_decoder"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -12,6 +12,7 @@ import type {
 import { ClaudeProjection } from "../electron/providers/claude/sdk-projection.js"
 import {
   consumeStdout,
+  MAX_STDOUT_BUFFER,
   type ProtocolContext,
 } from "../electron/codex-app-protocol.js"
 import {
@@ -102,8 +103,7 @@ const context: ProtocolContext = {
   nextRequestId: 0,
   pending: new Map(),
   items: new Map(),
-  stdoutBuffer: "",
-  decoder: new StringDecoder("utf8"),
+  stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
   exited: false,
   protocol: {
     observeAgents() {},

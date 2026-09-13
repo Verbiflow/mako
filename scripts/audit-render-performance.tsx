@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
 import { AgentThreads } from "../src/components/rail/agent-threads"
-import { ContextPanel } from "../src/components/inspector/context-panel"
 import { Composer } from "../src/components/composer/composer"
 import { Prose } from "../src/components/transcript/markdown"
 import { WorkspaceFocusContext } from "../src/components/stage/workspace-focus-context"
@@ -23,11 +22,7 @@ import "../src/index.css"
 const fixture = installMockBridge()
 let turns = 10
 let epoch = 0
-let updateView: (
-  mode: "thread" | "markdown",
-  side: boolean,
-  text: string
-) => void = () => {}
+let updateView: (mode: "thread" | "markdown", text: string) => void = () => {}
 const commits = new Map<string, number[]>()
 const onRender: ProfilerOnRenderCallback = (id, _phase, duration) => {
   const values = commits.get(id) ?? []
@@ -66,7 +61,7 @@ function reset() {
   globalThis.performanceAuditParses = []
 }
 
-async function setup(count: number, side = false) {
+async function setup(count: number) {
   turns = count
   epoch++
   const snapshot = auditSnapshot(turns, "claude", 512, 256)
@@ -82,7 +77,7 @@ async function setup(count: number, side = false) {
     })
     store.set({ messages: [], stream: null })
     applyLiveSnapshot(snapshot)
-    updateView("thread", side, "")
+    updateView("thread", "")
   })
   await document.fonts.ready
   await frames()
@@ -90,7 +85,7 @@ async function setup(count: number, side = false) {
   return metrics()
 }
 
-async function stream(count = 40, side = false, inactive = false) {
+async function stream(count = 40, inactive = false) {
   if (inactive) {
     const other = auditSnapshot(1, "claude", 128, 0)
     other.session = { ...other.session, id: auditId(999999), status: "ready" }
@@ -124,7 +119,6 @@ async function stream(count = 40, side = false, inactive = false) {
   running = false
   return {
     turns,
-    side,
     inactive,
     apply: auditStats(apply),
     frameGaps: auditStats(gaps),
@@ -138,13 +132,13 @@ async function markdown(chars: number) {
     "This paragraph keeps **emphasis**, [a link](https://example.test), and readable rhythm.\n\n"
       .repeat(Math.ceil(chars / 86))
       .slice(0, chars)
-  flushSync(() => updateView("markdown", false, text))
+  flushSync(() => updateView("markdown", text))
   await pause(120)
   await frames()
   reset()
   for (let frame = 0; frame < 30; frame++) {
     text += " next word"
-    flushSync(() => updateView("markdown", false, text))
+    flushSync(() => updateView("markdown", text))
     await pause(10)
   }
   await pause(120)
@@ -190,7 +184,7 @@ async function setupEarlier() {
     },
   }
   flushSync(() => applyLiveSnapshot(snapshot))
-  fixture.setLiveSnapshot({
+  const complete: typeof snapshot = {
     ...snapshot,
     revision: 3,
     base: {
@@ -210,13 +204,27 @@ async function setupEarlier() {
       total: 2,
       hasEarlier: false,
     },
+  }
+  fixture.setLiveSnapshot(complete)
+  // The transcript asks for earlier history on its own as the reader nears
+  // the top; hold the answer so the reading position can be measured while
+  // the request is in flight, then release it from the driver.
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
   })
+  window.mako!.liveEarlier = async () => {
+    await held
+    return complete
+  }
+  api.releaseEarlier = release
   await frames()
   return metrics()
 }
 
 interface AuditApi {
   setupEarlier: typeof setupEarlier
+  releaseEarlier: () => void
   setup: typeof setup
   stream: typeof stream
   markdown: typeof markdown
@@ -226,6 +234,7 @@ interface AuditApi {
 }
 const api: AuditApi = {
   setupEarlier,
+  releaseEarlier: () => {},
   setup,
   stream,
   markdown,
@@ -242,10 +251,9 @@ window.performanceAudit = api
 function AuditView() {
   const [view, setView] = useState<{
     mode: "thread" | "markdown"
-    side: boolean
     text: string
-  }>({ mode: "thread", side: false, text: "" })
-  updateView = (mode, side, text) => setView({ mode, side, text })
+  }>({ mode: "thread", text: "" })
+  updateView = (mode, text) => setView({ mode, text })
   return (
     <TooltipProvider>
       <WorkspaceFocusContext
@@ -272,13 +280,6 @@ function AuditView() {
                   <Composer />
                 </Profiler>
               </main>
-              {view.side ? (
-                <aside className="w-80 shrink-0 border-l border-hairline">
-                  <Profiler id="context" onRender={onRender}>
-                    <ContextPanel />
-                  </Profiler>
-                </aside>
-              ) : null}
             </>
           ) : (
             <main className="h-screen w-full overflow-auto p-6">

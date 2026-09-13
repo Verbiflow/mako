@@ -1,7 +1,7 @@
 import { reduceLiveUpdates } from "../electron/contracts/live-content.ts"
 import assert from "node:assert/strict"
+import { LineAssembler } from "@mako/sessions"
 import { spawn } from "node:child_process"
-import { StringDecoder } from "node:string_decoder"
 import {
   handleServerRequest,
   resolvePermission,
@@ -21,6 +21,7 @@ import {
 } from "../electron/codex-app-parse.ts"
 import {
   consumeStdout,
+  MAX_STDOUT_BUFFER,
   type ProtocolContext,
 } from "../electron/codex-app-protocol.ts"
 import type {
@@ -183,8 +184,7 @@ const context: ProtocolContext = {
   nextRequestId: 0,
   pending: new Map(),
   items: new Map(),
-  stdoutBuffer: "",
-  decoder: new StringDecoder("utf8"),
+  stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
   exited: false,
   protocol: {
     observeAgents: () => {},

@@ -236,17 +236,11 @@ async function auditWindow() {
         "Audit stopped at its 2 GiB working-set limit"
       )
     }
-    stage = "context-open"
-    await evaluate("window.performanceAudit.setup(1000,true)")
-    cases.push({
-      kind: "context-open-stream",
-      ...(await evaluate("window.performanceAudit.stream(30,true)")),
-    })
     stage = "inactive-stream"
     await evaluate("window.performanceAudit.setup(5000)")
     cases.push({
       kind: "inactive-stream",
-      ...(await evaluate("window.performanceAudit.stream(30,false,true)")),
+      ...(await evaluate("window.performanceAudit.stream(30,true)")),
     })
     stage = "jump-oldest"
     await evaluate("window.performanceAudit.setup(300)")
@@ -330,14 +324,16 @@ async function auditWindow() {
       deltaX: 0,
       deltaY: -2000,
     })
+    // Nearing the top asks for earlier history by itself; the fixture holds
+    // the answer until released so the position is measured mid-request.
     await until(
-      "document.querySelector('[data-load-earlier]')?.getBoundingClientRect().top >= 0"
+      "document.querySelector('[data-earlier=\"loading\"]')?.getBoundingClientRect().top >= 0"
     )
     const beforePrepend = await evaluate(
       `document.querySelector(${JSON.stringify(anchorSelector)}).getBoundingClientRect().top`
     )
-    await click("[data-load-earlier]")
-    await until("!document.querySelector('[data-load-earlier]')")
+    await evaluate("window.performanceAudit.releaseEarlier()")
+    await until("Boolean(document.querySelector('[data-earlier=\"start\"]'))")
     await evaluate(
       "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))))"
     )

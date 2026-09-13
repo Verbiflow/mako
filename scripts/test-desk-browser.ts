@@ -3,6 +3,7 @@ import { z } from "zod"
 import { BrowserService } from "../electron/browser-service.js"
 import { DeskBrowser, type DeskPage } from "../electron/desk-browser.js"
 import { deskUrlPolicy } from "../electron/desk-browser-policy.js"
+import { deskFile } from "../electron/desk-scheme.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
@@ -87,35 +88,46 @@ function fakePage(previewId: string, log: string[]) {
 }
 
 // URL policy: the exact desk document only, never a look-alike path.
-const packaged = deskUrlPolicy({
-  devServerUrl: null,
-  indexFile:
-    "/Applications/Mako.app/Contents/Resources/app.asar/dist/index.html",
-})
+const packaged = deskUrlPolicy({ devServerUrl: null })
 assert.equal(packaged("about:blank"), true)
 assert.equal(packaged("about:srcdoc"), false)
+assert.equal(packaged("mako-app://desk/index.html?preview=x"), true)
+assert.equal(packaged("mako-app://desk/index.html"), true)
+assert.equal(packaged("mako-app://desk/storage-bridge.html"), false)
+assert.equal(packaged("mako-app://desk/assets/index.html"), false)
+assert.equal(packaged("mako-app://other/index.html"), false)
+assert.equal(packaged("mako-file://asset/index.html"), false)
 assert.equal(
   packaged(
-    "file:///Applications/Mako.app/Contents/Resources/app.asar/dist/index.html?preview=x"
+    "file:///Applications/Mako.app/Contents/Resources/app.asar/dist/index.html"
   ),
-  true
-)
-assert.equal(packaged("file:///tmp/x/dist/index.html"), false)
-assert.equal(
-  packaged(
-    "file:///Applications/Mako.app/Contents/Resources/app.asar/dist/../dist/index.html"
-  ),
-  true
+  false
 )
 assert.equal(packaged("http://127.0.0.1:5173/"), false)
 assert.equal(packaged("not a url"), false)
-const dev = deskUrlPolicy({
-  devServerUrl: "http://127.0.0.1:5173",
-  indexFile: null,
-})
+const dev = deskUrlPolicy({ devServerUrl: "http://127.0.0.1:5173" })
 assert.equal(dev("http://127.0.0.1:5173/?preview=a"), true)
 assert.equal(dev("http://127.0.0.1:5174/"), false)
+assert.equal(dev("mako-app://desk/index.html"), false)
 assert.equal(dev("file:///anything/dist/index.html"), false)
+
+// The scheme serves the bundle and nothing beside it.
+const root = "/Applications/Mako.app/Contents/Resources/app.asar/dist"
+assert.equal(deskFile(root, "mako-app://desk/index.html?preview=x"), `${root}/index.html`)
+assert.equal(deskFile(root, "mako-app://desk/"), `${root}/index.html`)
+assert.equal(deskFile(root, "mako-app://desk/assets/app-1.js"), `${root}/assets/app-1.js`)
+assert.equal(deskFile(root, "mako-app://desk/assets/a%20b.js"), `${root}/assets/a b.js`)
+// The URL parser folds `..` before the handler sees it; what remains is
+// still inside the bundle, and the decoded path is checked again after that.
+assert.equal(deskFile(root, "mako-app://desk/../package.json"), `${root}/package.json`)
+assert.equal(deskFile(root, "mako-app://desk/assets/%2e%2e/%2e%2e/package.json"), `${root}/package.json`)
+assert.equal(deskFile(root, "mako-app://desk/assets/..%2F..%2Fpackage.json"), null)
+assert.equal(deskFile(root, "mako-app://desk/..%2Fpackage.json"), null)
+assert.equal(deskFile(root, "mako-app://desk/%00"), null)
+assert.equal(deskFile(root, "mako-app://desk/%zz"), null)
+assert.equal(deskFile(root, "mako-app://other/index.html"), null)
+assert.equal(deskFile(root, "mako-file://asset/x"), null)
+assert.equal(deskFile(root, "not a url"), null)
 
 const log: string[] = []
 const created: string[] = []

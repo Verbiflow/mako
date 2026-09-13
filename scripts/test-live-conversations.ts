@@ -238,11 +238,28 @@ async function durabilityAndBatching() {
       session: { ...f.state, status: "running" },
     })
     f.owner.submit(f.id, randomUUID(), "waiting")
+    // A host that dies mid-turn never reaches stop(): the next host finds the
+    // request still dispatching in the journal and cannot say whether the
+    // provider finished it. That is recorded as a crash, not as a Stop.
+    const afterCrash = new LiveConversations(f.dependencies)
+    try {
+      const found = afterCrash.snapshot(f.id)!
+      assert.equal(found.requests[0]?.status, "uncertain")
+      assert.equal(found.requests[0]?.interruption?.reason, "host-crashed")
+      assert.ok(found.requests[0]?.interruption?.at)
+      assert.equal(found.requests[1]?.status, "queued")
+    } finally {
+      afterCrash.stop()
+    }
     f.owner.stop()
     const recovered = new LiveConversations(f.dependencies)
     try {
       const saved = recovered.snapshot(f.id)!
-      assert.equal(saved.requests[0]?.status, "uncertain")
+      // The owning host closed on purpose with the turn running: the turn was
+      // interrupted by Mako, and the journal says so with the reason.
+      assert.equal(saved.requests[0]?.status, "interrupted")
+      assert.equal(saved.requests[0]?.interruption?.reason, "host-quit")
+      assert.match(saved.requests[0]?.error ?? "", /Mako closed/)
       assert.equal(saved.requests[1]?.status, "queued")
       assert.equal(saved.requests[1]?.text, "waiting")
       assert.equal(
@@ -439,6 +456,56 @@ async function coalescedToolBursts() {
   }
 }
 
+/**
+ * A turn's verdict travels with its request: a Stop is recorded as the user's
+ * interruption, and a failure carries the kind the provider's text classifies
+ * as, decided once on the host.
+ */
+async function settledVerdicts() {
+  const f = fixture()
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    const first = randomUUID()
+    f.owner.submit(f.id, first, "first")
+    await tick()
+    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({
+      type: "acp-session",
+      session: { ...f.state, status: "ready", lastStop: "cancelled" },
+    })
+    f.prompts[0]?.resolve()
+    await tick()
+    let requests = f.owner.snapshot(f.id)!.requests
+    assert.equal(requests[0]?.status, "interrupted")
+    assert.equal(requests[0]?.interruption?.reason, "stopped")
+    assert.equal(requests[0]?.failure, undefined)
+
+    const second = randomUUID()
+    f.owner.submit(f.id, second, "second")
+    await tick()
+    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({
+      type: "acp-session",
+      session: {
+        ...f.state,
+        status: "failed",
+        error:
+          'Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)',
+      },
+    })
+    f.prompts[1]?.resolve()
+    await tick()
+    requests = f.owner.snapshot(f.id)!.requests
+    assert.equal(requests[1]?.status, "failed")
+    assert.equal(requests[1]?.failure, "transcript-rejected")
+    assert.equal(requests[1]?.interruption, undefined)
+  } finally {
+    f.cleanup()
+  }
+}
+
 async function refusedStartup() {
   const f = fixture()
   try {
@@ -457,6 +524,7 @@ async function refusedStartup() {
 }
 
 await refusedStartup()
+await settledVerdicts()
 await coalescedToolBursts()
 await failureIsolationAndAssets()
 

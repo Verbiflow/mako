@@ -31,7 +31,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { LiveActionStatus } from "../src/components/viewer/live-action-status"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
-import { AccessModeList, LiveComposerControls, SteeringPreference } from "../src/components/composer/live-controls"
+import { AccessModeList, LiveComposerControls } from "../src/components/composer/live-controls"
 import { threadsStore } from "../src/state/threads"
 import { TransferStatus } from "../src/components/viewer/transfer-status"
 import { ConversationRelations } from "../src/components/viewer/conversation-relations"
@@ -106,9 +106,8 @@ conversation.session = {
 publish()
 const triggerMarkup = renderToStaticMarkup(<LiveComposerControls canCompact={false} compactEnabled={false} />)
 assert.match(triggerMarkup, /aria-label="Access: Full access"/)
-const steeringMarkup = renderToStaticMarkup(<SteeringPreference />)
-assert.match(steeringMarkup, /Enter steers the running turn/)
-assert.match(steeringMarkup, /reads your message at its next step/)
+// The steer/queue preference is a Settings row, not a checkbox in the composer's menu.
+assert.doesNotMatch(triggerMarkup, /steers/)
 const controlsMarkup = renderToStaticMarkup(
   <AccessModeList modes={conversation.session.modes} current="access:full" harness="claude" onSelect={() => {}} />
 )
@@ -119,8 +118,6 @@ assert.match(controlsMarkup, /claude: Agent/)
 assert.match(controlsMarkup, /Mako approves the agent&#x27;s requests/)
 assert.match(controlsMarkup, /Set when the session starts/)
 assert.match(controlsMarkup, /Provider-only switch/)
-threadsStore.set({ liveCapabilities: [{ provider: "claude", canResume: true, canSteer: false, canCompact: true }] })
-assert.equal(renderToStaticMarkup(<SteeringPreference />), "", "no steering preference where the provider cannot steer")
 conversation.session = { ...conversation.session, currentMode: null, modes: [] }
 control.actions = [
   {
@@ -373,8 +370,24 @@ publish()
 assert.equal(renderToStaticMarkup(<RetainedRequests />), "")
 assert.equal(recoverableRequests(conversation).length, 0)
 const stoppedMarkup = renderToStaticMarkup(<Exchange interrupted exchange={{id:"stopped",prompt:{id:"stopped",role:"user",requestId:"stopped",blocks:[{type:"text",text:"Keep this original question"}]},response:[],system:[]}} />)
-assert.match(stoppedMarkup, /data-turn-stopped/)
+assert.match(stoppedMarkup, /data-turn-stopped="stopped"/)
+assert.match(stoppedMarkup, />Stopped</)
+assert.doesNotMatch(stoppedMarkup, /Continue turn/, "a user's Stop offers nothing")
 assert.equal(stoppedMarkup.split("Keep this original question").length - 1, 1)
+// A turn Mako itself cut short says so and, on the newest turn with the
+// session idle, offers to pick it up; the offer needs a live conversation to send to.
+const stoppedExchange = {id:"stopped",prompt:{id:"stopped",role:"user" as const,requestId:"stopped",blocks:[{type:"text" as const,text:"Keep this original question"}]},response:[],system:[]}
+const quitMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <Exchange interrupted={{ reason: "host-quit", continuable: true }} exchange={stoppedExchange} />
+  </TranscriptSourceContext>
+)
+assert.match(quitMarkup, /data-turn-stopped="host-quit"/)
+assert.match(quitMarkup, /Interrupted when Mako quit/)
+assert.match(quitMarkup, /<button[^>]*>[^]*?Continue turn/)
+const crashedMarkup = renderToStaticMarkup(<Exchange interrupted={{ reason: "host-crashed", continuable: false }} exchange={stoppedExchange} />)
+assert.match(crashedMarkup, /Interrupted when Mako closed unexpectedly/)
+assert.doesNotMatch(crashedMarkup, /Continue turn/, "an older interrupted turn is described, not offered")
 conversation.requests.push({id:"unsent",text:"Do not lose a pre-dispatch stop",attachments:[],status:"interrupted"})
 conversation.requests.push({id:"failed",text:"Failed input remains recoverable",attachments:[],status:"failed"})
 publish()
@@ -382,6 +395,21 @@ const recoveries = renderToStaticMarkup(<RetainedRequests />)
 assert.match(recoveries, /Do not lose a pre-dispatch stop/)
 assert.match(recoveries, /Failed input remains recoverable/)
 assert.doesNotMatch(recoveries, /<details[^>]+open|Keep this original question|Message interrupted/)
+assert.match(recoveries, /Send again/, "an unclassified failure still offers Send again")
+// A classified failure is described for the provider and offers Send again
+// only when a repeat can work.
+conversation.requests.push({id:"rejected",text:"Once more",attachments:[],status:"failed",failure:"transcript-rejected",error:"reasoning encrypted_content was not issued to this caller"})
+conversation.requests.push({id:"quit-unsent",text:"Cut short before it ran",attachments:[],status:"interrupted",interruption:{reason:"host-quit",at:1}})
+publish()
+const classified = renderToStaticMarkup(<RetainedRequests />)
+assert.match(classified, /data-failure="transcript-rejected"/)
+assert.match(classified, /Claude Code&#x27;s session history was rejected by its model provider/)
+assert.match(classified, /Start a new Claude Code thread/)
+assert.match(classified, /encrypted_content was not issued/, "the provider's own text stays readable")
+assert.match(classified, /Interrupted when Mako quit\. Review saved message/)
+assert.equal((classified.match(/Send again/g) ?? []).length, 1, "only the retriable failure offers Send again")
+conversation.requests.splice(-2, 2)
+publish()
 for (const size of ["label", "ui", "title", "prose", "welcome"]) assert.equal(cn(`text-${size}`, "text-foreground"), `text-${size} text-foreground`)
 assert.equal(cn("text-ui", "text-prose", "text-transparent"), "text-prose text-transparent")
 const activityBase = {waiting:false,connecting:false,preparing:false}

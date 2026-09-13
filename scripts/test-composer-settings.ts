@@ -85,17 +85,28 @@ assert.equal(duringStart, starting.settingsTarget)
 assert.equal(label(duringStart), "Opus 5")
 
 // Without that target the same conversation resolves as an existing session
-// with no settings, which is the "Model unavailable" flicker this guards.
+// with no settings: the provider's default, not the saved choice the send was
+// built from, which is the flicker this guards.
 const asExisting = resolveSettingsTarget({
   harness: "claude",
   live: { id: starting.key, harness: "claude", cwd },
   workspace: cwd,
 })
 assert.equal(asExisting.kind, "live")
+const unrecorded = resolveComposerSettingsInput({
+  target: asExisting,
+  profile,
+  session: {},
+}).resolved.model
+assert.deepEqual(unrecorded, { kind: "known", value: "opus", source: "provider" })
 assert.equal(
-  resolveComposerSettingsInput({ target: asExisting, profile, session: {} })
-    .resolved.model.kind,
-  "unknown"
+  resolveComposerSettingsInput({
+    target: asExisting,
+    profile: { ...profile, settings: undefined },
+    session: {},
+  }).resolved.model.kind,
+  "unknown",
+  "a profile without defaults leaves an unrecorded model unknown"
 )
 
 // A stored target from another provider is never borrowed.
@@ -248,4 +259,16 @@ console.log("composer settings: starting conversations keep their send target")
   assert.deepEqual(switched.resolved.issues, [])
   assert.deepEqual(switched.resolved.settings, { model: "grok-4.6", options: { effort: "xhigh" } })
   assert.equal(switched.resolved.options.fast?.kind, "unknown", "an option without a default is chosen by the user, never invented")
+
+  const { optionLabel } = await import("../src/components/composer/settings-source.ts")
+  const speed = switched.options.find((option) => option.id === "fast")!
+  const effort = switched.options.find((option) => option.id === "effort")!
+  assert.equal(optionLabel(speed, { kind: "unknown" }), "Speed not reported", "the control is offered; the provider has simply not said")
+  assert.equal(optionLabel(effort, { kind: "known", value: "xhigh", source: "override" }), "Extra High reasoning")
+  assert.equal(
+    optionLabel({ ...effort, values: [{ value: "high", label: "High Effort" }] }, { kind: "known", value: "high", source: "session" }),
+    "High Effort",
+    "a value that already names its noun is not given a second one"
+  )
+  assert.equal(optionLabel(speed, { kind: "known", value: "true", source: "session" }), "Fast")
 }

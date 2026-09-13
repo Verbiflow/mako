@@ -21,6 +21,7 @@ import type { HostEvent } from "../electron/shared.ts"
 import { searchWorkspace } from "../electron/host-search.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
 import { workspacePreviewPath } from "../electron/workspace-preview.ts"
+import { revealAction } from "../electron/reveal-policy.ts"
 
 const execFileAsync = promisify(execFile)
 assert.deepEqual(DAEMON_NODE_ARGS, ["--expose-gc", "--max-old-space-size=128"])
@@ -68,6 +69,29 @@ assert.equal(
   null
 )
 assert.equal(workspacePreviewPath("mako-file://other/docs/file.md"), null)
+assert.equal(
+  workspacePreviewPath("mako-file://workspace//Users/me/report/chart.png"),
+  "/Users/me/report/chart.png"
+)
+assert.equal(workspacePreviewPath("mako-file://workspace///etc/hosts"), null)
+
+// Reveal opens documents but only shows in Finder anything the default
+// handler would run: bundles, executables, and launchable document types.
+{
+  const file = (mode: number, directory = false) => ({
+    mode,
+    isDirectory: () => directory,
+  })
+  assert.equal(revealAction("/tmp/report.md", file(0o644)), "open")
+  assert.equal(revealAction("/tmp/chart.png", file(0o644)), "open")
+  assert.equal(revealAction("/tmp/script.sh", file(0o644)), "open")
+  assert.equal(revealAction("/tmp/script.sh", file(0o755)), "reveal")
+  assert.equal(revealAction("/tmp/run.command", file(0o644)), "reveal")
+  assert.equal(revealAction("/tmp/Setup.PKG", file(0o644)), "reveal")
+  assert.equal(revealAction("/tmp/link.webloc", file(0o644)), "reveal")
+  assert.equal(revealAction("/Applications/Foo.app", file(0o755, true)), "reveal")
+  assert.equal(revealAction("/tmp/folder", file(0o755, true)), "reveal")
+}
 
 try {
   await initializeRepo(firstRepo)
@@ -150,15 +174,26 @@ try {
     join(await realpath(firstRepo), "preview.png")
   )
   assert.equal(resolveFilePreview(image.previewUrl! + "tampered"), null)
+  // An agent writes reports and scripts outside the project and links them
+  // from its answer; the viewer opens them by relative, absolute, or symlinked
+  // path alike.
   await writeFile(join(directory, "outside.txt"), "outside\n")
-  await assert.rejects(
-    workspaceFiles.read("../outside.txt"),
-    /outside this workspace/
+  assert.equal(
+    (await workspaceFiles.read("../outside.txt")).contents,
+    "outside\n"
+  )
+  assert.equal(
+    (await workspaceFiles.read(join(directory, "outside.txt"))).contents,
+    "outside\n"
   )
   await symlink(join(directory, "outside.txt"), join(firstRepo, "outside-link"))
-  await assert.rejects(
-    workspaceFiles.read("outside-link"),
-    /outside this workspace/
+  assert.equal(
+    (await workspaceFiles.read("outside-link")).contents,
+    "outside\n"
+  )
+  assert.equal(
+    await workspaceFiles.resolvePath("outside-link"),
+    await realpath(join(directory, "outside.txt"))
   )
 
   const searched = await searchWorkspace(

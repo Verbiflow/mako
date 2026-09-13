@@ -1,16 +1,21 @@
-import { readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import ts from "typescript"
 
-const write = process.argv.includes("--write")
+/**
+ * A toast that offers an action (Retry, Refresh changes) must stay long
+ * enough to read and act on, so it carries `ACTION_TOAST_MS` explicitly rather
+ * than the Toaster's three-second receipt default. It must also leave: a
+ * toast with `duration: Infinity` once sat in the corner for a whole session,
+ * and the failure it reported lives on in the transcript or the panel anyway.
+ */
 const paths = readdirSync("src", { recursive: true, withFileTypes: true })
   .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
   .map((entry) => join(entry.parentPath, entry.name))
 let violations = 0
 for (const path of paths) {
-  let text = readFileSync(path, "utf8")
+  const text = readFileSync(path, "utf8")
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
-  const edits = []
   const visit = (node) => {
     if (ts.isCallExpression(node)) {
       const target = ts.isPropertyAccessExpression(node.expression)
@@ -31,33 +36,23 @@ for (const path of paths) {
                 ts.isStringLiteral(property.name)) &&
               property.name.text === name
           )
-        if (named("action")) {
-          const duration = named("duration")
-          if (
-            !duration ||
-            duration.initializer.getText(source) !== "Infinity"
-          ) {
-            violations++
-            if (write && !duration) edits.push(options.getStart(source) + 1)
-            else
-              console.error(
-                `${path}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: actionable toasts must remain until dismissed (duration: Infinity)`
-              )
-          }
+        const duration = named("duration")
+        const durationText = duration?.initializer.getText(source)
+        const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
+        if (durationText === "Infinity") {
+          violations++
+          console.error(`${path}:${line}: no toast stays forever; use ACTION_TOAST_MS`)
+        } else if (named("action") && durationText !== "ACTION_TOAST_MS") {
+          violations++
+          console.error(
+            `${path}:${line}: actionable toasts must carry duration: ACTION_TOAST_MS`
+          )
         }
       }
     }
     ts.forEachChild(node, visit)
   }
   visit(source)
-  for (const position of edits.toSorted((a, b) => b - a))
-    text = `${text.slice(0, position)}\n          duration: Infinity,${text.slice(position)}`
-  if (edits.length) writeFileSync(path, text)
 }
-if (violations && !write) process.exitCode = 1
-else
-  console.log(
-    write
-      ? `Updated ${violations} actionable toasts`
-      : "Actionable toasts remain available until dismissed"
-  )
+if (violations) process.exitCode = 1
+else console.log("Actionable toasts stay long enough to act on, and none stays forever")

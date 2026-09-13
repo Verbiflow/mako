@@ -4,7 +4,7 @@ import assert from "node:assert/strict"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import { applyAcpSettings } from "../electron/acp-config.ts"
 import { codexWireSettings } from "../electron/providers/codex/settings.ts"
-import { cursorNativeRunner } from "../electron/providers/cursor/native-runner.ts"
+import { createCursorNativeRunner, cursorNativeRunner } from "../electron/providers/cursor/native-runner.ts"
 
 const model: SessionConfigOption = {
   id: "model",
@@ -188,15 +188,21 @@ assert.deepEqual(
   { model: undefined, effort: "high", serviceTier: "default" }
 )
 assert.equal(codexWireSettings().serviceTier, undefined)
-assert.equal(
-  cursorNativeRunner
-    .resume("id", "continue", {
-      model: "opus[effort=high,fast=true]",
-      options: { effort: "low", fast: false },
-    })
-    .args.at(-1),
-  "opus[effort=low,fast=false]"
-)
+{
+  // The command line carries one flat id from Cursor's own list; the saved
+  // bracket form still reads, and the composer's options override it.
+  const listed = ["claude-opus-4-8-low", "claude-opus-4-8-low-fast", "claude-opus-4-8-high-fast"]
+  const runner = createCursorNativeRunner(async () => listed)
+  const prepared = await runner.prepare!(
+    { model: "claude-opus-4-8[effort=high,fast=true]", options: { effort: "low", fast: false, context: "1m" } },
+    {}
+  )
+  assert.equal(prepared.options.model, "claude-opus-4-8-low")
+  assert.deepEqual(prepared.options.options, {})
+  assert.deepEqual(prepared.dropped, ["context"], "a setting the id cannot carry is named, not lost")
+  assert.equal(runner.resume("id", "continue", prepared.options).args.at(-1), "claude-opus-4-8-low")
+  assert.deepEqual(cursorNativeRunner.resume("id", "continue", {}).args, ["-p", "continue", "--resume", "id", "--force"])
+}
 console.log(
   "Session settings transports: sequential ACP acknowledgement and rejection, Codex reset, Cursor parameters passed"
 )
@@ -216,9 +222,9 @@ const speed = dualCatalog.models[0]!.options.find(
   (option) => option.id === "serviceTier"
 )
 assert.equal(speed?.kind, "select")
-if (speed?.kind === "select")
+if (speed?.kind === "select") {
   assert.deepEqual(speed.values, [
-    { value: "default", label: "Standard" },
+    { value: "default", label: "Standard", default: true },
     {
       value: "priority",
       label: "Fast",
@@ -226,6 +232,31 @@ if (speed?.kind === "select")
       aliases: ["fast"],
     },
   ])
+  assert.equal(
+    speed.current,
+    "default",
+    "Codex reports a null default tier for the standard tier; it is a proven default, not an unknown one"
+  )
+}
+const elevatedCatalog = normalizeCodexModels({
+  data: [
+    {
+      model: "elevated",
+      defaultServiceTier: "fast",
+      serviceTiers: [{ id: "priority", name: "Fast" }],
+      additionalSpeedTiers: ["fast"],
+    },
+  ],
+})
+const elevated = elevatedCatalog.models[0]!.options.find(
+  (option) => option.id === "serviceTier"
+)
+assert.equal(elevated?.current, "priority")
+if (elevated?.kind === "select")
+  assert.deepEqual(
+    elevated.values.map((value) => [value.value, value.default ?? false]),
+    [["default", false], ["priority", true]]
+  )
 assert.equal(
   codexWireSettings({ options: { serviceTier: "fast" } }).serviceTier,
   "priority"

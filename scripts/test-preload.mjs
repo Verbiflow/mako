@@ -33,9 +33,9 @@ async function runElectron() {
   const window = new BrowserWindow({
     show: false,
     webPreferences: {
-      preload: join(repo, "dist-electron/preload.js"),
+      preload: join(repo, "dist-electron/preload.cjs"),
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       nodeIntegration: false,
     },
   })
@@ -79,7 +79,7 @@ async function runElectron() {
       "Host event received"
     )
     console.log(
-      "Electron preload: shared bridge loads, optional arguments survive IPC, and host events reach the isolated renderer"
+      "Electron preload: the bundled bridge loads in a sandboxed renderer, optional arguments survive IPC, and host events reach the isolated renderer"
     )
     app.exit(0)
   } catch (error) {

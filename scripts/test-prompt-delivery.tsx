@@ -4,7 +4,7 @@ import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { promptDelivery } from "../src/state/prompt-delivery"
+import { promptDelivery, recoverableRequests, turnStops } from "../src/state/prompt-delivery"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
 
@@ -116,8 +116,63 @@ assert.equal(
   1,
   "Fresh conversations show their prompt synchronously"
 )
+// Epochs: a batch numbered by another host generation is not merged onto
+// state built by this one, whatever its revision says; a snapshot from the
+// new epoch replaces the state outright and later batches follow it.
+acpStore.set({ activeKey: id })
+applyLiveSnapshot({ ...snapshot, revision: 3, epoch: "host-a", requests: [{ ...request, status: "dispatching" }] })
+assert.equal(current().epoch, "host-a")
+applyLiveBatch({
+  id,
+  revision: 4,
+  epoch: "host-b",
+  updates: [{ kind: "text", text: "from another host" }],
+})
+assert.equal(current().revision, 3, "a batch from another epoch is ignored, not merged")
+assert.equal(current().epoch, "host-a")
+applyLiveSnapshot({
+  ...snapshot,
+  revision: 1,
+  epoch: "host-b",
+  requests: [{ ...request, status: "uncertain", interruption: { reason: "host-crashed", at: 5 } }],
+})
+assert.equal(current().epoch, "host-b", "a snapshot from a new epoch replaces the state even at a lower revision")
+assert.equal(current().revision, 1)
+applyLiveBatch({ id, revision: 2, epoch: "host-b", updates: [{ kind: "text", text: "continues" }] })
+assert.equal(current().revision, 2, "the new epoch's own batches apply")
+applyLiveBatch({ id, revision: 3, updates: [{ kind: "text", text: "unstamped" }] })
+assert.equal(current().revision, 3, "an unstamped batch (an older host) still applies by revision")
+
+// Turn stops: the newest turn Mako cut short offers to be continued while the
+// session is idle; a user's Stop and older turns do not.
+const stopped: LiveRequest = { ...request, id: "44444444-4444-4444-8444-444444444444", status: "interrupted", interruption: { reason: "stopped", at: 1 } }
+const quit: LiveRequest = { ...request, id: "55555555-5555-4555-8555-555555555555", status: "interrupted", interruption: { reason: "host-quit", at: 2 } }
+const crashed: LiveRequest = { ...request, id: "66666666-6666-4666-8666-666666666666", status: "uncertain", interruption: { reason: "host-crashed", at: 3 } }
+const legacy: LiveRequest = { ...request, id: "77777777-7777-4777-8777-777777777777", status: "interrupted" }
+const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-888888888888", status: "uncertain" }
+{
+  const stops = turnStops([stopped, quit, crashed], false)
+  assert.deepEqual(stops.get(stopped.id), { reason: "stopped", continuable: false })
+  assert.deepEqual(stops.get(quit.id), { reason: "host-quit", continuable: false }, "only the newest turn is continued")
+  assert.deepEqual(stops.get(crashed.id), { reason: "host-crashed", continuable: true })
+  assert.equal(turnStops([stopped, quit, crashed], true).get(crashed.id)?.continuable, false, "nothing is offered while a turn runs")
+  assert.deepEqual(turnStops([quit], false).get(quit.id), { reason: "host-quit", continuable: true })
+  assert.deepEqual(turnStops([stopped], false).get(stopped.id), { reason: "stopped", continuable: false }, "a user's Stop is not offered")
+  assert.deepEqual(turnStops([legacy], false).get(legacy.id), { reason: "stopped", continuable: false }, "an older journal's interrupted request is a plain Stop")
+  assert.equal(turnStops([unconfirmed], false).has(unconfirmed.id), false, "an unconfirmed delivery is not a stopped turn")
+  assert.equal(turnStops([crashed, { ...request, status: "canceled" }], false).get(crashed.id)?.continuable, true, "a canceled request after it does not hide the offer")
+}
+// The recovery panel lists a stopped turn only when the transcript does not show it.
+{
+  const visible = { requests: [crashed, quit, unconfirmed, legacy], blocks: [{ type: "user" as const, requestId: crashed.id, text: "", attachments: [] }] }
+  const listed = recoverableRequests(visible).map((item) => item.id)
+  assert.ok(!listed.includes(crashed.id), "a crash-interrupted turn on screen is the footer's, not the panel's")
+  assert.ok(listed.includes(quit.id) && listed.includes(legacy.id), "stopped turns with no turn on screen stay reviewable")
+  assert.ok(listed.includes(unconfirmed.id), "an unconfirmed delivery is always reviewable")
+}
+
 console.log(
-  "Prompt delivery: immediate idle prompt, stable startup/ack identity, real follow-ups in one queue, and scoped rejection passed"
+  "Prompt delivery: immediate idle prompt, stable startup/ack identity, real follow-ups in one queue, scoped rejection, epoch-guarded batches and turn stops passed"
 )
 
 // Exercise the production send path with settings discovery deliberately unresolved.

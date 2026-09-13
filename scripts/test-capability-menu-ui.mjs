@@ -165,6 +165,18 @@ async function check() {
     assert.equal(await evaluate("document.querySelector('[data-mention-menu]')"), null, "a path is not a command")
     await clearInput()
 
+    // The + menu's "Use a skill" takes focus and hands it back inside the
+    // composer's blur window; the menu it opens must outlive that timer.
+    await click("[aria-label='Add to message']")
+    await until("Boolean(document.querySelector('[data-add=\"skill\"]'))")
+    await click("[data-add='skill']")
+    await until(`Boolean(${menu("$")})`)
+    await new Promise((resolveTick) => setTimeout(resolveTick, 400))
+    assert.ok(await evaluate(`Boolean(${menu("$")})`), "the skill menu opened from + survives the composer's blur timer")
+    assert.equal(await inputValue(), "$", "the + menu inserted the sigil")
+    await key("Escape", "Escape", 27)
+    await clearInput()
+
     await writeFile(join(root, "rows.json"), JSON.stringify(report, null, 2))
     for (const [key, listed] of Object.entries(report)) console.log(`${key}: ${listed.map((row) => `${row.group === "Skills" ? "skill" : "mcp"}:${row.title}${row.builtIn ? "*" : ""}`).join(", ")}`)
     console.log("PASS: capability menu lists provider-relevant skills and MCP servers, filters, picks, and steps aside")

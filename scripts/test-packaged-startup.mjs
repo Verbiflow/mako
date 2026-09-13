@@ -158,7 +158,7 @@ async function launch() {
     try {
       return (
         await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-      ).find((page) => page.type === "page" && page.url.startsWith("file:"))
+      ).find((page) => page.type === "page" && page.url.startsWith("mako-app:"))
     } catch {
       return null
     }

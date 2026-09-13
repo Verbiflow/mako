@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { APICallError } from "ai"
 import { MockLanguageModelV4 } from "ai/test"
+import { z } from "zod"
 import { completeUtilityText, utilityLanguageModel, UtilityModelError } from "../electron/utility-models.ts"
 
 const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } }
@@ -18,6 +19,19 @@ for (const text of ["", "partial"]) {
   const invalid = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: "text", text }], finishReason: { unified: text ? "length" : "stop", raw: text ? "length" : "stop" }, usage, warnings: [] }) })
   await assert.rejects(completeUtilityText(invalid, "instructions", "prompt", signal), (error: Error) => error instanceof UtilityModelError && error.kind === "output")
 }
+// Structured calls: the provider is asked for JSON natively, fences are stripped, and the
+// validated object is returned. Gemini wraps plain-text JSON replies in ```json fences.
+const schema = z.fromJSONSchema({ type: "object", properties: { summary: { type: "string", maxLength: 40 } }, required: ["summary"], additionalProperties: false })
+const fenced = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: "text", text: "```json\n{\"summary\": \"fenced\"}\n```" }], finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [] }) })
+assert.equal(await completeUtilityText(fenced, "instructions", "prompt", signal, 1_024, schema), JSON.stringify({ summary: "fenced" }))
+assert.equal(fenced.doGenerateCalls[0]?.responseFormat?.type, "json")
+const tooLong = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: "text", text: JSON.stringify({ summary: "x".repeat(41) }) }], finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [] }) })
+await assert.rejects(completeUtilityText(tooLong, "instructions", "prompt", signal, 1_024, schema), (error: Error) => error instanceof UtilityModelError && error.kind === "output" && /\(summary: /.test(error.message) && !error.message.includes("xxxx"))
+const notJson = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: "text", text: "Sure! Here is the summary." }], finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [] }) })
+await assert.rejects(completeUtilityText(notJson, "instructions", "prompt", signal, 1_024, schema), (error: Error) => error instanceof UtilityModelError && error.kind === "output" && error.message.includes("not valid JSON"))
+const truncated = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: "text", text: "{\"summary\": \"cut" }], finishReason: { unified: "length", raw: "length" }, usage, warnings: [] }) })
+await assert.rejects(completeUtilityText(truncated, "instructions", "prompt", signal, 1_024, schema), (error: Error) => error instanceof UtilityModelError && error.kind === "output" && error.message.includes("output limit"))
+
 const timeout = new AbortController()
 const timer = setTimeout(() => timeout.abort(new DOMException("Timed out", "TimeoutError")), 10)
 const waiting = new MockLanguageModelV4({ doGenerate: (options) => new Promise((_resolve, reject) => { options.abortSignal?.throwIfAborted(); options.abortSignal?.addEventListener("abort", () => reject(options.abortSignal?.reason), { once: true }) }) })

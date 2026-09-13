@@ -3,7 +3,7 @@ import { spawn } from "node:child_process"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 if (process.versions.electron) {
   void checkElectron()
@@ -33,7 +33,12 @@ async function buildAndCheck() {
       join(directory, "package.json"),
       JSON.stringify({ name: "mako-renderer-assets", main: fileURLToPath(import.meta.url) })
     )
-    const environment = { ...process.env, MAKO_ASSET_TEST_ROOT: directory, MAKO_ASSET_TEST_URL: url }
+    const environment = {
+      ...process.env,
+      MAKO_ASSET_TEST_ROOT: directory,
+      MAKO_ASSET_TEST_URL: url,
+      MAKO_ASSET_TEST_REPO: resolve("."),
+    }
     delete environment.ELECTRON_RUN_AS_NODE
     const child = spawn(resolve("node_modules/.bin/electron"), [directory], {
       stdio: "inherit",
@@ -49,21 +54,31 @@ async function buildAndCheck() {
   }
 }
 
+// The dev server's origin and the packaged app's own scheme, each with the
+// sandbox the desk runs under; `file:` is no longer a way the desk loads.
 async function checkElectron() {
-  const { app, BrowserWindow } = await import("electron")
+  const { app, BrowserWindow, protocol: electronProtocol } = await import("electron")
+  const { DESK_ORIGIN, privilegedSchemes } = await import(
+    pathToFileURL(resolve(process.env.MAKO_ASSET_TEST_REPO, "dist-electron/desk-scheme.js")).href
+  )
+  const { deskFileHandler } = await import(
+    pathToFileURL(resolve(process.env.MAKO_ASSET_TEST_REPO, "dist-electron/desk-protocol.js")).href
+  )
   const directory = process.env.MAKO_ASSET_TEST_ROOT
   app.setPath("userData", join(directory, "profile"))
+  electronProtocol.registerSchemesAsPrivileged(privilegedSchemes())
   await app.whenReady()
+  electronProtocol.handle("mako-app", deskFileHandler(join(directory, "dist")))
   const window = new BrowserWindow({
     show: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   try {
-    for (const protocol of ["http", "file"]) {
+    for (const protocol of ["http", "mako-app"]) {
       if (protocol === "http")
         await window.loadURL(`${process.env.MAKO_ASSET_TEST_URL}scripts/renderer-assets.html`)
       else
-        await window.loadFile(join(directory, "dist/scripts/renderer-assets.html"))
+        await window.loadURL(`${DESK_ORIGIN}/scripts/renderer-assets.html`)
       const result = await window.webContents.executeJavaScript(`(async () => {
         const deadline = Date.now() + 5000;
         while (document.images.length < 3 && Date.now() < deadline)

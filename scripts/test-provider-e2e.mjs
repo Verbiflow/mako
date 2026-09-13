@@ -60,7 +60,7 @@ async function runElectron() {
   const { startConversationMcp } =
     await import("../dist-electron/conversation-mcp.js")
   const { defaultCatalog } = await import("@mako/sessions")
-  const { nativeCheckpoint, canResumeBinding } =
+  const { nativeCheckpoint, canResumeBinding, resumeVerdict } =
     await import("../dist-electron/native-continuation.js")
   const catalog = defaultCatalog()
   const { BrowserService } = await import("../dist-electron/browser-service.js")
@@ -97,8 +97,8 @@ async function runElectron() {
     },
     history: (path, before) => catalog.page(path, before),
     checkpoint: nativeCheckpoint,
-    canResume: (binding) =>
-      canResumeBinding(
+    resumeVerdict: (binding) =>
+      resumeVerdict(
         binding,
         providerHost.processProbes.get(binding.provider)
       ),
@@ -715,11 +715,20 @@ async function runElectron() {
       owner.close(childId)
     }
     if (process.argv.includes("--restart")) {
+      // The restart runs on the first requested provider whose driver can
+      // reopen a session (Cursor's session/load, Codex's thread resume);
+      // Codex remains the default when none is named.
+      const restartProvider =
+        process.argv
+          .slice(2)
+          .filter((arg) => !arg.startsWith("--"))
+          .find((candidate) => providerHost.liveDrivers.get(candidate)?.canResume) ??
+        "codex"
       const cwd = join(root, "restart-fixture")
       await mkdir(cwd)
       const id = randomUUID()
       const proof = randomUUID()
-      await owner.start("codex", cwd, {
+      await owner.start(restartProvider, cwd, {
         conversationId: id,
         title: "Mako restart fixture",
       })
@@ -738,7 +747,7 @@ async function runElectron() {
       const refs = await catalog.scan()
       const ref = refs.find(
         (ref) =>
-          ref.harness === "codex" && ref.nativeId === source.session.nativeId
+          ref.harness === restartProvider && ref.nativeId === source.session.nativeId
       )
       if (!ref) throw new Error("Exact native session ID was not discoverable")
       await owner.bind(id, ref.path)
@@ -754,7 +763,7 @@ async function runElectron() {
       stopCodexApps()
       mcp.close()
       const deadline = Date.now() + 30_000
-      while (!(await dependencies.canResume(binding))) {
+      while (!(await canResumeBinding(binding, providerHost.processProbes.get(binding.provider)))) {
         if (Date.now() > deadline)
           throw new Error("Native session did not become safe to resume")
         await new Promise((resolve) => setTimeout(resolve, 250))
@@ -794,7 +803,7 @@ async function runElectron() {
         throw new Error("Restart silently used full portable context")
       results.push({
         flow: "native-restart",
-        provider: "codex",
+        provider: restartProvider,
         status: "passed",
         nativeId: completed.session.nativeId,
         proof,

@@ -47,6 +47,7 @@ const inputs = [
   "mako-icons/_masters/desktop-dark.png",
   "build/Mako.icns",
   "build/entitlements.mac.plist",
+  "build/mako-notification-status",
   "vendor/kiri",
 ]
 async function digest(path) {
@@ -76,6 +77,9 @@ async function manifest(root) {
   return result
 }
 try {
+  // The notification authorization helper ships beside the executable; see
+  // electron/notification-authorization.ts for why it must live there.
+  execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require"], { cwd: project, stdio: "inherit" })
   const before = await manifest(project)
   for (const path of inputs) {
     await mkdir(dirname(join(stage, path)), { recursive: true })
@@ -135,9 +139,14 @@ try {
         })),
       ],
       extraResources: [...(buildConfig.extraResources ?? []), { from: join(stage, "vendor/kiri"), to: "kiri" }],
+      extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }],
       mac: {
         ...buildConfig.mac,
-        binaries: [...(buildConfig.mac?.binaries ?? []), "Contents/Resources/kiri/darwin-arm64/kiri-engine"],
+        binaries: [
+          ...(buildConfig.mac?.binaries ?? []),
+          "Contents/Resources/kiri/darwin-arm64/kiri-engine",
+          "Contents/MacOS/mako-notification-status",
+        ],
         icon: join(stage, "build/Mako.icns"),
         entitlements: join(stage, "build/entitlements.mac.plist"),
         entitlementsInherit: join(stage, "build/entitlements.mac.plist"),

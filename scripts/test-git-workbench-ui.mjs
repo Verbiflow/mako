@@ -143,7 +143,7 @@ async function check() {
     )
     assert.equal(
       await evaluate(
-        "[...document.querySelectorAll('button')].filter(b => b.textContent.trim() === 'Push to main').length"
+        "document.querySelectorAll('button[aria-label=\"Push to main\"]').length"
       ),
       1
     )
@@ -241,7 +241,7 @@ async function check() {
       "document.querySelector('[data-commit-box]').textContent.includes('Committing')"
     )
     await until(
-      "document.querySelector('[data-commit-box]').textContent.includes('Working tree clean')"
+      "document.querySelector('[aria-label=\"Commit message\"]')?.placeholder === 'Nothing to commit' && document.querySelector('[aria-label=\"Commit message\"]').disabled"
     )
     assert.equal(await fixture("return m.calls.commits"), 1)
     await capture("committed.png")

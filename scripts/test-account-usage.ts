@@ -106,10 +106,20 @@ const childEnv = await accountEnv("opencode", {
   PATH: "/fixture/bin",
   MAKO_BACKEND_TOKEN: "backend-secret",
   MAKO_CUA_SOCKET: "/fixture/cua.sock",
+  MAKO_DATA_ROOT: "/fixture/Application Support/mako",
+  MAKO_WEB_SOCKET: "/fixture/mako-host/host.sock",
+  MAKO_HOST_ONLY: "1",
+  MAKO_WEB_ONLY: "1",
+  MAKO_PROFILE: "dev",
 })
 assert.equal(childEnv.PATH, "/fixture/bin")
 assert.equal(childEnv.MAKO_BACKEND_TOKEN, undefined)
 assert.equal(childEnv.MAKO_CUA_SOCKET, undefined)
+// The host's own launch variables stay with the host: an agent that runs
+// `npm run dev` from a provider process must start or attach to the dev
+// profile, not the host that spawned it.
+for (const key of ["MAKO_DATA_ROOT", "MAKO_WEB_SOCKET", "MAKO_HOST_ONLY", "MAKO_WEB_ONLY", "MAKO_PROFILE"])
+  assert.equal(childEnv[key], undefined, `${key} leaked into a provider process`)
 
 // Providers without an account capability retain the default account and
 // inherit ordinary process values while Mako runtime secrets stay isolated.

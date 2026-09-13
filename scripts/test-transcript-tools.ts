@@ -26,6 +26,37 @@ assert.equal(
 assert.deepEqual(nativeCall.attachments, [image])
 assert.equal(nativeCall.result, "")
 
+// A viewer page carries the head of a long tool output; the call remembers
+// how long the whole is and where the rest lives, addressed in the thread
+// (page start plus local index), so an opened row can ask for it.
+const paged = threadToMessages(
+  [
+    {
+      kind: "assistant",
+      blocks: [
+        { type: "text", text: "Looking." },
+        { type: "tool", name: "exec", input: "ls", output: "short" },
+        {
+          type: "tool",
+          name: "exec",
+          input: "cat big",
+          output: "head",
+          outputLength: 41_394,
+        },
+      ],
+    },
+  ],
+  37
+)
+const pagedCalls = pairTools(paged[0]!.blocks)
+assert.equal(pagedCalls[0]!.rest, undefined, "a complete output has no rest")
+assert.deepEqual(pagedCalls[1]!.rest, {
+  length: 41_394,
+  at: { entry: 37, block: 2 },
+})
+assert.equal(pagedCalls[1]!.result, "head")
+assert.equal(pagedCalls[1]!.pending, false, "a trimmed result is a result")
+
 const live = acpBlocksToMessages(
   [
     {

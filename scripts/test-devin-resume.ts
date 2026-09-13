@@ -26,10 +26,10 @@ try {
   assert.equal(await policy.checkpoint(path), checkpoint, "Another session cannot invalidate this session's checkpoint")
   assert.equal(await policy.canResumeBinding({...binding,nativeId:"two"}), false)
   await writeFile(join(root, "session_locks", "one.lock"), String(process.pid))
-  assert.equal(await policy.canResumeBinding(binding), false, "A live native owner cannot be resumed concurrently")
+  assert.deepEqual(await policy.resumeVerdict(binding), { kind: "held", by: `a Devin process (pid ${process.pid})` }, "A live native owner cannot be resumed concurrently")
   assert.equal(await policy.canResumeBinding({...binding,checkpoint:undefined}), false, "Legacy recovery must still refuse an existing owner")
   await writeFile(join(root, "session_locks", "one.lock"), "not-a-pid")
-  assert.equal(await policy.canResumeBinding(binding), false)
+  assert.equal((await policy.resumeVerdict(binding)).kind, "unavailable")
   await writeFile(join(root, "session_locks", "one.lock"), "99999999")
   const kill = mock.method(process, "kill", (pid: number, signal?: number | string) => {
     assert.equal(pid, 99999999)
@@ -39,7 +39,8 @@ try {
   try {
     assert.equal(await policy.canResumeBinding(binding), true)
     db.prepare("UPDATE sessions SET main_chain_id = 13 WHERE id = ?").run("one")
-    assert.equal(await policy.canResumeBinding(binding), false, "Native history changes require a new checkpoint")
+    assert.equal(await policy.canResumeBinding(binding), false, "Native history changes require a new checkpoint before a binding is reused for a switch")
+    assert.deepEqual(await policy.resumeVerdict(binding), { kind: "resumable", record: "moved" }, "but the unlocked session itself still reconnects")
   } finally {
     kill.mock.restore()
   }

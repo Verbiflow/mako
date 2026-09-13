@@ -410,21 +410,13 @@ assert.deepEqual(
 
 const cursor = providerHost.nativeRunners.get("cursor")!
 assert.deepEqual(
-  cursor.fresh("start", {
-    model: "sonnet",
-    options: { effort: "high", fast: true },
-  }),
+  cursor.fresh("start", { model: "claude-sonnet-5-high-fast" }),
   {
     command: "cursor-agent",
-    args: [
-      "-p",
-      "start",
-      "--force",
-      "--model",
-      "sonnet[effort=high,fast=true]",
-    ],
+    args: ["-p", "start", "--force", "--model", "claude-sonnet-5-high-fast"],
   }
 )
+assert.ok(cursor.prepare, "Cursor settles its model against the CLI's list before launch")
 
 const grok = providerHost.nativeRunners.get("grok")!
 assert.deepEqual(grok.resume("session", "continue", { options: { effort: "high" } }), {

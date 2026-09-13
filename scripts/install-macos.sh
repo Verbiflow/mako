@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-repository="kashyab12/mako"
+repository="Verbiflow/mako"
 base_url="${MAKO_RELEASE_BASE_URL:-https://github.com/$repository/releases/latest/download}"
 install_dir="${MAKO_INSTALL_DIR:-/Applications}"
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/mako-install.XXXXXX")"
