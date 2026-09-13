@@ -1,6 +1,7 @@
 import { viewer } from "@/state/viewer"
 import { useAcp, activeLiveAcp, acp } from "@/state/acp"
 import { harnessLabel } from "@/components/rail/harness-meta"
+import { describeProviderFailure } from "../../../electron/contracts/provider-failure"
 
 /** Only transfer changes wake this row; token updates retain control identity. */
 export function TransferStatus({ history = false }: { history?: boolean }) {
@@ -13,6 +14,12 @@ export function TransferStatus({ history = false }: { history?: boolean }) {
   if (!history && transfer.state.kind === "accepted") return null
   const provider = harnessLabel(transfer.input.provider)
   const state = transfer.state
+  // The host's verdict on the error: a session the model provider rejected,
+  // or one Mako could not reopen, is not fixed by switching again.
+  const failure =
+    state.kind === "failed" && state.failure
+      ? describeProviderFailure(state.failure, provider)
+      : null
   return (
     <details
       className="shrink-0 border-t border-hairline px-3.5 py-2 text-label text-muted-foreground"
@@ -66,22 +73,25 @@ export function TransferStatus({ history = false }: { history?: boolean }) {
         </div>
       ) : state.kind === "failed" || state.kind === "uncertain" ? (
         <div className="mt-2 space-y-2">
-          <p>{state.error}</p>
+          {failure ? <p className="text-foreground/80">{failure.guidance}</p> : null}
+          <p className={failure ? "text-faint" : undefined}>{state.error}</p>
           <p className="whitespace-pre-wrap">{transfer.input.text}</p>
-          <button
-            type="button"
-            className="pressable rounded border border-hairline px-2 py-1 hover:bg-fill-hover"
-            onClick={() =>
-              void acp.handoff(
-                transfer.input.provider,
-                transfer.input.text,
-                transfer.input.attachments,
-                transfer.input.tuning
-              )
-            }
-          >
-            Retry switch
-          </button>
+          {failure?.retriable ?? true ? (
+            <button
+              type="button"
+              className="pressable rounded border border-hairline px-2 py-1 hover:bg-fill-hover"
+              onClick={() =>
+                void acp.handoff(
+                  transfer.input.provider,
+                  transfer.input.text,
+                  transfer.input.attachments,
+                  transfer.input.tuning
+                )
+              }
+            >
+              Retry switch
+            </button>
+          ) : null}
         </div>
       ) : (
         <p className="mt-2">

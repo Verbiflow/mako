@@ -130,7 +130,10 @@ function resolveMarkdownMedia(contents: string, path: string): string {
         else parts.push(part)
       }
       const encoded = parts.map((part) => encodeURIComponent(part)).join("/")
-      return `${before}mako-file://workspace/${encoded}${after}`
+      // A file opened by absolute path keeps its images beside it: the extra
+      // slash marks the resolved path as absolute rather than workspace-relative.
+      const prefix = path.startsWith("/") ? "/" : ""
+      return `${before}mako-file://workspace/${prefix}${encoded}${after}`
     }
   )
 }

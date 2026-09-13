@@ -1,4 +1,4 @@
-import { promptDelivery, recoverableRequests } from "@/state/prompt-delivery"
+import { promptDelivery, recoverableRequests, turnStops } from "@/state/prompt-delivery"
 import { agentActivity } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { useCopy } from "@/components/ui/use-copy"
@@ -10,7 +10,11 @@ import { sendTo } from "@/state/acp-queue"
 import { useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
-import type { LivePermissionRequest, LiveRequest } from "@/lib/types"
+import { useThreads } from "@/state/threads"
+import { toast } from "sonner"
+import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/lib/types"
+import { describeProviderFailure } from "../../../electron/contracts/provider-failure"
+import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { liveToolName } from "@/lib/tools"
 import { ToolGlyph } from "@/components/transcript/tool-views"
@@ -39,19 +43,23 @@ const EMPTY_QUEUE: never[] = []
 export function AcpPanel() {
   const session = useAcp((state) => activeLiveAcp(state)?.session ?? null)
   const starting = useAcp((state) => activeAcp(state)?.kind === "starting")
+  // The reader was already looking at this conversation's history when it
+  // went live: the same turns stay where they are, so the panel does not
+  // arrive as a new surface.
+  const continued = useContinuedInPlace()
 
   if (starting) {
     return (
-      <div className="animate-enter flex min-h-0 flex-1 flex-col bg-surface">
-        <Blocks starting />
+      <div className={cn(!continued && "animate-enter", "flex min-h-0 flex-1 flex-col bg-surface")}>
+        <Blocks starting continued={continued} />
       </div>
     )
   }
   if (!session) return null
 
   return (
-    <div data-live-conversation={session.id} className="animate-enter flex min-h-0 flex-1 flex-col bg-surface">
-      <Blocks />
+    <div data-live-conversation={session.id} className={cn(!continued && "animate-enter", "flex min-h-0 flex-1 flex-col bg-surface")}>
+      <Blocks continued={continued} />
       <TransferStatus />
       <LiveActionStatus />
       <RetainedRequests />
@@ -60,12 +68,37 @@ export function AcpPanel() {
   )
 }
 
-function Blocks({ starting = false }: { starting?: boolean }) {
+function useContinuedInPlace(): boolean {
+  const threadPath = useAcp((state) => activeAcp(state)?.threadPath)
+  return useThreads((state) => threadPath !== undefined && state.viewing?.ref.path === threadPath)
+}
+
+function Blocks({ starting = false, continued = false }: { starting?: boolean; continued?: boolean }) {
   const session = useAcp((state) => activeLiveAcp(state)?.session ?? null)
   const projection = useAcp((state) => activeAcp(state)?.projection)
   const history = useAcp((state) => activeAcp(state)?.base)
+  // Stable from the first keystroke of a start through promotion and any
+  // later binding: the transcript keeps its scroll position and its turns.
+  const identity = useAcp((state) => activeAcp(state)?.draftKey ?? "none")
   const requests = useAcp((state) => activeAcp(state)?.requests ?? EMPTY_QUEUE)
-  const interruptedRequests = useMemo(() => new Map(requests.map((request) => [request.id, request.status === "interrupted"])), [requests])
+  const sessionId = session?.id
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const loadEarlier = useMemo(
+    () =>
+      sessionId === undefined
+        ? undefined
+        : async () => {
+            setLoadingEarlier(true)
+            try {
+              await loadEarlierLive(sessionId)
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : String(error))
+            } finally {
+              setLoadingEarlier(false)
+            }
+          },
+    [sessionId]
+  )
   const preparing = useAcp((state) => {
     const current = activeLiveAcp(state)
     return Boolean(
@@ -79,15 +112,18 @@ function Blocks({ starting = false }: { starting?: boolean }) {
     preparing ||
     session?.status === "starting" ||
     session?.status === "running"
+  const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
   const lastExchangeId = exchanges.at(-1)?.id
 
   return (
     <ConversationTimeline
-      source={{ liveId: session?.id }}
-      identity={`${history?.ref.path ?? "new"}:${session?.id ?? "starting"}`}
+      source={{ liveId: sessionId }}
+      identity={identity}
+      entrance={!continued}
       hasEarlier={history?.hasEarlier}
-      onLoadEarlier={session ? () => loadEarlierLive(session.id) : undefined}
+      loadingEarlier={loadingEarlier}
+      onLoadEarlier={loadEarlier}
       exchanges={exchanges}
       streamingId={running ? lastExchangeId : undefined}
       interruptedRequests={interruptedRequests}
@@ -352,12 +388,34 @@ export function RetainedRequests() {
   )
 }
 
+const INTERRUPTED_LABEL = {
+  stopped: "Stopped message",
+  "host-quit": "Interrupted when Mako quit",
+  "host-crashed": "Interrupted when Mako closed unexpectedly",
+} satisfies Record<InterruptionReason, string>
+
 function RequestRecovery({ request }: { request: LiveRequest }) {
   const text = request.displayText ?? request.text
   const { copy, copied } = useCopy(text)
   const conversationId = useAcp((state) => activeLiveAcp(state)?.key ?? null)
+  const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
   const [resent, setResent] = useState<"sending" | "sent" | null>(null)
-  const label = request.status === "uncertain" ? "Delivery unconfirmed" : request.status === "interrupted" ? "Stopped message" : "Message failed"
+  // The host classified the provider's text once; the panel says what the
+  // kind means for this provider and offers Send again only when it can work.
+  const failure =
+    request.status === "failed" && request.failure
+      ? describeProviderFailure(request.failure, harness ? harnessLabel(harness) : undefined)
+      : null
+  const label = failure
+    ? failure.title
+    : request.interruption
+      ? INTERRUPTED_LABEL[request.interruption.reason]
+      : request.status === "uncertain"
+        ? "Delivery unconfirmed"
+        : request.status === "interrupted"
+          ? "Stopped message"
+          : "Message failed"
+  const retriable = request.status === "failed" && (failure?.retriable ?? true)
   // A failed request is re-sent as a new request carrying the same text and
   // attachments; the failed record stays, so nothing is replayed silently.
   const resend = async () => {
@@ -367,12 +425,13 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
     setResent(accepted ? "sent" : null)
   }
   return (
-    <details className="py-2" data-request-recovery={request.id}>
+    <details className="py-2" data-request-recovery={request.id} data-failure={request.failure}>
       <summary className="pressable cursor-pointer">{label}. Review saved message</summary>
-      {request.error ? <p className="mt-2">{request.error}</p> : null}
+      {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
+      {request.error ? <p className={cn("mt-2", failure && "text-faint")}>{request.error}</p> : null}
       <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
       <div className="mt-2 flex items-center gap-3">
-        {request.status === "failed" && conversationId ? (
+        {retriable && conversationId ? (
           <button type="button" onClick={() => void resend()} disabled={resent !== null} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
             {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : "Send again"}
           </button>

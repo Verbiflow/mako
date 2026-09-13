@@ -5,13 +5,14 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { Action, IconAction } from "@/components/ui/kit"
 import {
+  sameThreadStatus,
   setComposerHarness,
   threadStatus,
   threads,
   useThreads,
   type ThreadStatus,
 } from "@/state/threads"
-import type { Exchange as ExchangeData } from "@/lib/exchanges"
+import { LEAD_EXCHANGE_ID, type Exchange as ExchangeData } from "@/lib/exchanges"
 import type { ThreadRef } from "@/lib/types"
 import type { ViewedThread } from "@/state/thread-state"
 import { pendingThreadInput, threadToMessages } from "@/lib/foreign-thread"
@@ -24,6 +25,10 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react"
+
+function sameOptionalStatus(left: ThreadStatus | null, right: ThreadStatus | null): boolean {
+  return left === right || (left !== null && right !== null && sameThreadStatus(left, right))
+}
 
 /**
  * A conversation from another harness, opened as a conversation.
@@ -131,13 +136,13 @@ function createExchangeBuilder() {
           next = [
             message.role === "system"
               ? {
-                  id: `lead-${message.id}`,
+                  id: LEAD_EXCHANGE_ID,
                   response: [],
                   system: [message],
                   timestamp: message.timestamp,
                 }
               : {
-                  id: `lead-${message.id}`,
+                  id: LEAD_EXCHANGE_ID,
                   response: [message],
                   system: [],
                   timestamp: message.timestamp,
@@ -269,8 +274,9 @@ function ThreadLoadingShell({
 function SessionBar() {
   const thread = useThreads((state) => state.viewing)
   const syncing = useThreads((state) => state.opening?.kind === "loading")
-  const sessionStatus = useThreads((state) =>
-    thread ? threadStatus(thread.ref, state) : null
+  const sessionStatus = useThreads(
+    (state) => (thread ? threadStatus(thread.ref, state) : null),
+    sameOptionalStatus
   )
   if (!thread || !sessionStatus) return null
   const openElsewhere =
@@ -283,7 +289,9 @@ function SessionBar() {
     : statusLabel(
         sessionStatus,
         thread.ref.archived === true,
-        provider,
+        // Open elsewhere names where: the provider's own app, or the other
+        // Mako host that has the session live.
+        sessionStatus.kind === "external-open" ? harnessLabel(sessionStatus.app) : provider,
         thread.ref.resumeUnavailable
       )
   return (
@@ -360,7 +368,7 @@ function statusLabel(
     case "external-open":
       return `Open in ${provider}`
     case "external-active":
-      return `Live in ${provider}`
+      return `Live in ${status.app ?? provider}`
     case "idle":
       return archived
         ? "Archived history"
@@ -409,8 +417,11 @@ function SessionStatusIcon({
 function Conversation() {
   const thread = useThreads((state) => state.viewing)
   const run = useThreads((state) => state.run)
-  const status = useThreads((state) =>
-    state.viewing ? threadStatus(state.viewing.ref, state) : null
+  // Another thread's catalog event must not repaint this transcript: the
+  // status is compared by its fields, not by the object each call allocates.
+  const status = useThreads(
+    (state) => (state.viewing ? threadStatus(state.viewing.ref, state) : null),
+    sameOptionalStatus
   )
   const [buildExchanges] = useState(() => createExchangeBuilder())
   const exchanges = useMemo(
