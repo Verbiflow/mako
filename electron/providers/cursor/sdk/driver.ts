@@ -386,6 +386,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // rather than waiting for it, the same as `cursor-agent acp` did.
     steering: "interrupt",
     modes: CURSOR_SDK_MODES,
+    defaultMode: CURSOR_SDK_DEFAULT_MODE,
     available: () => true,
     async start(cwd, options) {
       if (!options.emit) throw new Error("A live event receiver is required")

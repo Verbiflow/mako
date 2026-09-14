@@ -12,6 +12,7 @@ export const devinAcpSource: ProviderAcpSource = {
   steering: "concurrent-prompt",
   access: {
     native: { edits: "accept-edits", auto: "smart", chat: "ask", plan: "plan", full: "bypass" },
+    default: "edits",
   },
   nativeModes: [
     { id: "accept-edits", name: "Code" },
