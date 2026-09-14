@@ -120,6 +120,7 @@ export async function replacePreparedApplication(
 export const MAKO_DAEMON_TITLES: ReadonlySet<string> = new Set([
   "mako-terminal-daemon",
   "mako-syncd",
+  "mako-cursor-sdk",
 ])
 
 function processLines(output: string): Array<{ pid: number; command: string }> {

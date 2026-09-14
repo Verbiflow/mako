@@ -1,4 +1,4 @@
-import { acpSessionModes } from "../acp-access.js"
+import { acpDefaultMode, acpSessionModes } from "../acp-access.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 
@@ -21,6 +21,7 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       source.access,
       source.nativeModes ? { availableModes: [...source.nativeModes] } : null
     ),
+    defaultMode: acpDefaultMode(source.access),
     permission: async (...args) => {
       ;(await import("../acp.js")).acpRespondPermission(...args)
     },

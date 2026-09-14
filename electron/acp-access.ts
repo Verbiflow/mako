@@ -1,4 +1,4 @@
-import type { SessionModeState } from "@agentclientprotocol/sdk"
+import type { SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk"
 import {
   ACCESS_TIERS,
   accessModeId,
@@ -22,6 +22,47 @@ export interface AcpAccessPolicy {
   host?: readonly AccessTier[]
   launch?: readonly AccessTier[]
   base?: string
+  /**
+   * The tier a session runs under when the user has not chosen one. A
+   * launch-listed default is passed to the process so the level the desk
+   * reports is the level enforced; a native default is what the provider
+   * itself opens in.
+   */
+  default?: AccessTier
+}
+
+/** The mode id a fresh session starts in, for the pre-launch ladder. */
+export function acpDefaultMode(policy: AcpAccessPolicy | undefined): string | undefined {
+  const tier = policy?.default
+  return tier ? (policy?.native?.[tier] ?? accessModeId(tier)) : undefined
+}
+
+/**
+ * Providers that moved their mode vocabulary to a config option (OpenCode
+ * 1.18 reports `mode` there and sends no `session.modes`) still say what a
+ * session runs under — read it back so the ladder and the current mode stay
+ * true on those agents.
+ */
+export function acpNativeModes(
+  options: readonly SessionConfigOption[]
+): SessionModeState | null {
+  const option = options.find(
+    (candidate) =>
+      candidate.type === "select" &&
+      (candidate.category === "mode" || candidate.id === "mode")
+  )
+  if (!option || option.type !== "select") return null
+  const entries = Array.isArray(option.options) ? option.options : []
+  const availableModes = entries
+    .flatMap((entry) => ("options" in entry ? entry.options : [entry]))
+    .map((entry) => ({
+      id: entry.value,
+      name: entry.name,
+      ...(entry.description ? { description: entry.description } : {}),
+    }))
+  if (!availableModes.length || typeof option.currentValue !== "string")
+    return null
+  return { availableModes, currentModeId: option.currentValue }
 }
 
 export interface AcpAccessSelection {

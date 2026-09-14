@@ -3,7 +3,7 @@ import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } fr
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
-import { acpInitialSelection, acpModeChange, acpSessionModes } from "./acp-access.js"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "./acp-access.js"
 import type { AcpLaunchOptions } from "./providers/acp-source.js"
 import { accessTierOfModeId, hostAccessDecision, type AccessTier } from "./contracts/access.js"
 /**
@@ -185,8 +185,17 @@ export async function liveStart(
   options: ProviderStartOptions
 ): Promise<LiveSessionState> {
   const source = providerHost.acpSources.get(harness)
+  const policy = source?.access
   const requestedAccess = options.modeId ? accessTierOfModeId(options.modeId) : null
-  const launchAccess = requestedAccess && source?.access?.launch?.includes(requestedAccess) ? requestedAccess : null
+  // A chosen launch tier wins; a stale one falls back to the provider's
+  // declared default so the process always launches at the level the desk
+  // will report, never at a leftover configuration the user cannot see.
+  const launchTier =
+    requestedAccess && policy?.launch?.includes(requestedAccess)
+      ? requestedAccess
+      : policy?.default
+  const launchAccess =
+    launchTier && policy?.launch?.includes(launchTier) ? launchTier : null
   const launchOptions: AcpLaunchOptions = {
     appPath: app.getAppPath(),
     execPath: process.execPath,
@@ -427,10 +436,16 @@ export async function liveStart(
     live.configOptions = session.configOptions
     live.state.settings = acpObservedSettings(live.configOptions, session.model)
     const applied = await applyTuning(live, options.tuning, true)
-    const policy = source?.access
-    const modes = acpSessionModes(policy, session.modes)
-    const selection = acpInitialSelection(policy, modes, session.modes, options.modeId)
-    live.nativeMode = session.modes?.currentModeId ?? null
+    // Providers that moved their mode vocabulary to a config option send no
+    // session.modes; the option is the same fact in another field.
+    const sessionModes = session.modes ?? acpNativeModes(live.configOptions)
+    const modes = acpSessionModes(policy, sessionModes)
+    const effectiveModeId =
+      options.modeId && modes.some((mode) => mode.id === options.modeId)
+        ? options.modeId
+        : acpDefaultMode(policy)
+    const selection = acpInitialSelection(policy, modes, sessionModes, effectiveModeId)
+    live.nativeMode = sessionModes?.currentModeId ?? null
     live.hostAccess = selection.hostTier
     // A host-enforced tier runs on the provider's base mode; a session that
     // opened elsewhere (a resumed plan-mode session, say) is moved there first.

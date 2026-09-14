@@ -25,8 +25,8 @@ import {
   type PendingServerRequest,
   type PermissionCallbacks,
 } from "./codex-app-permissions.js"
-import { codexAccessModes, codexAccessTier, codexTurnAccess } from "./providers/codex/access.js"
-import type { AccessTier } from "./contracts/access.js"
+import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "./providers/codex/access.js"
+import { accessModeId, type AccessTier } from "./contracts/access.js"
 import { boundedText, type JsonObject } from "./codex-app-json.js"
 import { LineAssembler } from "@mako/sessions"
 import {
@@ -130,7 +130,10 @@ export async function codexAppStart(
     threadId: null,
     promptSequence: 0,
     currentTurnId: null,
-    access: null,
+    // A chosen or remembered tier names a turn/start policy pair; it applies
+    // from the first turn. An invalid id fails the start, matching the
+    // ledger's "must apply or fail" rule.
+    access: options.modeId ? codexAccessTier(options.modeId) : null,
     state: {
       id,
       harness: "codex",
@@ -212,6 +215,10 @@ export async function codexAppStart(
       connection: "connected",
       cwd: live.cwd,
       error: undefined,
+      // A choice is already in force; otherwise the approval/sandbox pair the
+      // thread reports is the level the session opened with.
+      currentMode:
+        options.modeId ?? accessModeId(codexObservedTier(response)),
     })
     return live.state
   } catch (error) {

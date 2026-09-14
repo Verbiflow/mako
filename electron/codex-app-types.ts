@@ -5,6 +5,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import type { JsonObject, JsonRpcId, JsonValue } from "./codex-app-json.js"
 import type { LiveSessionState, LiveUpdate } from "./shared.js"
 import type { TurnStartParams } from "./providers/codex/generated/v2/TurnStartParams.js"
+import type { AskForApproval } from "./providers/codex/generated/v2/AskForApproval.js"
+import type { ApprovalsReviewer } from "./providers/codex/generated/v2/ApprovalsReviewer.js"
+import type { SandboxPolicy } from "./providers/codex/generated/v2/SandboxPolicy.js"
 import type { TurnSteerParams } from "./providers/codex/generated/v2/TurnSteerParams.js"
 import type { ThreadCompactStartParams } from "./providers/codex/generated/v2/ThreadCompactStartParams.js"
 import type { TurnInterruptParams } from "./providers/codex/generated/v2/TurnInterruptParams.js"
@@ -77,6 +80,10 @@ export type ThreadResponse = {
   model?: string
   serviceTier?: string | null
   reasoningEffort?: string | null
+  /** The thread's effective policy — absent on app-servers that predate the field. */
+  approvalPolicy?: AskForApproval
+  approvalsReviewer?: ApprovalsReviewer
+  sandbox?: SandboxPolicy
 }
 
 export type RpcParams = {

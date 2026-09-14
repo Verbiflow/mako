@@ -62,6 +62,7 @@ import {
   shell,
   type BrowserWindowConstructorOptions,
 } from "electron"
+import { spawn } from "node:child_process"
 import { watch } from "node:fs"
 import { homedir, hostname } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
@@ -519,7 +520,30 @@ function watchProfileHostIdle(hostDirectory: string): void {
 }
 
 async function reopenWindow(): Promise<void> {
-  if (webOnly && !rendererWindows.size) return
+  if (webOnly && !rendererWindows.size) {
+    // A persistent host is the checked-in application, so the Dock, Finder,
+    // and `open` deliver reopen to it instead of launching a process. The
+    // default profile answers by starting a desktop client; a sandbox or
+    // test host owns another data root and stays headless.
+    if (
+      persistentHost &&
+      resolve(app.getPath("userData")) === resolve(defaultUserData)
+    ) {
+      const env = { ...process.env }
+      delete env.MAKO_HOST_ONLY
+      delete env.MAKO_STANDALONE
+      delete env.MAKO_WEB_ONLY
+      delete env.MAKO_WEB_SOCKET
+      delete env.MAKO_DATA_ROOT
+      delete env.MAKO_PROFILE
+      spawn(process.execPath, app.isPackaged ? [] : [app.getAppPath()], {
+        detached: true,
+        stdio: "ignore",
+        env,
+      }).unref()
+    }
+    return
+  }
   await app.dock?.show()
   for (const renderer of rendererWindows) renderer.show()
   if (window && !window.isDestroyed()) window.focus()
@@ -1227,6 +1251,7 @@ function bindIpc() {
         if (driver.steer && driver.steering)
           capability.steering = driver.steering
         if (driver.modes?.length) capability.modes = [...driver.modes]
+        if (driver.defaultMode) capability.defaultMode = driver.defaultMode
         return capability
       })
   )

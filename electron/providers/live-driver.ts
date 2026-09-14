@@ -34,6 +34,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   steering?: LiveSteering
   /** The modes a fresh session will offer, declared without starting one. */
   modes?: readonly LiveSessionMode[]
+  /** The mode a fresh session runs under when nothing was chosen — the level the chip reports before launch. */
+  defaultMode?: string
   compact?(id: string): Promise<void>
   forkPoint?: "run" | "checkpoint"
   canResume: boolean
