@@ -9,6 +9,7 @@ import {
   chooseProviderMode,
   chooseThreadMode,
   providerAccessModes,
+  providerDefaultMode,
   savedProviderMode,
   threadAccessMode,
 } from "@/state/provider-access"
@@ -188,9 +189,10 @@ function ModePicker() {
 
 /**
  * The same ladder before a session exists: what the selected provider offers
- * a new session, with the saved choice current. The pick is kept per provider
- * and travels with the first prompt, so the level a send will run under is
- * never hidden until the agent is already working.
+ * a new session, with the level a send will run under current. The pick is
+ * kept per provider and travels with the first prompt; when nothing was
+ * picked the provider's own default stands, so the level is never hidden
+ * until the agent is already working.
  */
 export function NextSessionModePicker() {
   const harness = useThreads((state) => state.composerHarness)
@@ -202,12 +204,15 @@ export function NextSessionModePicker() {
   const saved = usePrefs((prefs) =>
     savedProviderMode(prefs.providerModes, modes, harness)
   )
+  const defaulted = useThreads((state) =>
+    providerDefaultMode(state, modes, harness)
+  )
   if (!modes.length) return null
   const thread = viewing?.harness === harness ? viewing : undefined
   return (
     <AccessPicker
       modes={modes}
-      current={remembered ?? saved}
+      current={remembered ?? saved ?? defaulted}
       harness={harness}
       heading={thread ? "Access when this thread continues" : "Access for the next session"}
       onSelect={(value) =>

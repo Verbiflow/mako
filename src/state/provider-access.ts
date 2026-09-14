@@ -32,6 +32,21 @@ export function savedProviderMode(
 }
 
 /**
+ * The mode a fresh session runs under when nothing was chosen, as the host
+ * declared it — the level the picker reports before a session exists.
+ */
+export function providerDefaultMode(
+  state: Pick<ThreadsState, "liveCapabilities">,
+  modes: readonly LiveSessionMode[],
+  harness: string
+): string | null {
+  const id = state.liveCapabilities.find(
+    (item) => item.provider === harness
+  )?.defaultMode
+  return id && modes.some((mode) => mode.id === id) ? id : null
+}
+
+/**
  * The mode a catalogued thread last ran under, as the host remembered it,
  * when the composer targets that thread's own provider and the provider still
  * offers the mode. It outranks the provider-wide choice because it is the
