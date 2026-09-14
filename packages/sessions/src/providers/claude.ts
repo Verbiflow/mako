@@ -297,11 +297,20 @@ export class ClaudeProvider implements SessionProvider {
   activityFromContent = true
   private root: string
   private home: string
+  private configDir: string | undefined
   private extraRoots: { at: number; value: string[] } | null = null
 
-  constructor(home = homedir()) {
-    this.home = home
-    this.root = join(home, ".claude", "projects")
+  /**
+   * `configDir` is the `CLAUDE_CONFIG_DIR` this provider honours. The
+   * process's own is read only for the default home: a provider built on
+   * another home is an isolated world (a fixture, a mirror), and a shell
+   * inside Claude Code or a router sets the variable for its own store,
+   * whose sessions would otherwise be listed among the fixture's.
+   */
+  constructor(home?: string, configDir = home === undefined ? process.env["CLAUDE_CONFIG_DIR"] : undefined) {
+    this.home = home ?? homedir()
+    this.root = join(this.home, ".claude", "projects")
+    this.configDir = configDir
   }
 
   /**
@@ -338,8 +347,7 @@ export class ClaudeProvider implements SessionProvider {
       seen.add(real)
       extras.push(real)
     }
-    const env = process.env["CLAUDE_CONFIG_DIR"]
-    if (env) push(join(env, "projects"))
+    if (this.configDir) push(join(this.configDir, "projects"))
     try {
       const declared = parseDeclaredRoots(
         readFileSync(join(this.home, ".mako", "roots.json"), "utf8")

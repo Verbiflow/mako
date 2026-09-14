@@ -28,6 +28,20 @@ import { attachmentFromUrl, type AttachmentContent } from "../content.js"
 
 import { readdir, readFile, stat, rm } from "node:fs/promises"
 import { homedir } from "node:os"
+import {
+  newestCursorSdkAgentId,
+  cursorSdkAgentIdForDirectory,
+  readCursorSdkAgent,
+  removeCursorSdkAgent,
+  type CursorSdkAgentMatch,
+  type CursorSdkAgentRecord,
+} from "./cursor-sdk-index.js"
+import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
+import {
+  cursorSdkIndexPath,
+  cursorSdkStateRoot,
+  cursorSdkStorePath,
+} from "./cursor-sdk-paths.js"
 import { dirname, join, basename, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import {
@@ -40,6 +54,7 @@ import {
   type ThreadRef,
 } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
+import { todoDetails } from "../tool-plan.js"
 import type {
   NativeFile,
   SessionFollower,
@@ -375,8 +390,17 @@ export class CursorProvider implements SessionProvider {
   private readonly desktop: CursorDesktopStore
   private chatRoot: string
   private acpRoot: string
-  /** 1: chats stores carry their own identity and no live resume. */
-  peekVersion = 1
+  /**
+   * Mako's own Cursor SDK agents: `<state root>/index.db` names them and
+   * `<state root>/agents/agent-<sha256(id)>/store.db` holds each transcript.
+   */
+  private sdkStateRoot: string
+  private sdkRoot: string
+  /**
+   * 2: every `cursor-agent` store resumes live (the SDK imports it), and an
+   * SDK agent Mako imported carries the legacy row's identity.
+   */
+  peekVersion = 2
   /**
    * The last full fold of a per-session store, kept so a follower opened on
    * it can continue from that transcript and so `read` of an unchanged root
@@ -384,14 +408,16 @@ export class CursorProvider implements SessionProvider {
    */
   private lastFold: (StoreFold & { path: string }) | null = null
 
-  constructor(home = homedir()) {
+  constructor(home = homedir(), env: NodeJS.ProcessEnv = process.env) {
     this.desktop = new CursorDesktopStore(home)
     this.chatRoot = join(home, ".cursor", "chats")
     this.acpRoot = join(home, ".cursor", "acp-sessions")
+    this.sdkStateRoot = cursorSdkStateRoot(env, home)
+    this.sdkRoot = join(this.sdkStateRoot, "agents")
   }
 
   roots(): string[] {
-    return [this.chatRoot, this.acpRoot, this.desktop.root]
+    return [this.chatRoot, this.acpRoot, this.sdkStateRoot, this.desktop.root]
   }
 
   /**
@@ -404,13 +430,87 @@ export class CursorProvider implements SessionProvider {
     // Cursor's extensions write under globalStorage constantly; only the
     // chat database itself is a reason to rescan.
     if (path.startsWith(`${this.desktop.root}${sep}`)) return null
+    // The SDK records a checkpoint by writing the root blob into the agent's
+    // store and then moving the pointer in index.db. The store write is
+    // noticed on its own; the index write names the agent it moved for, and
+    // that store is what a follower must read again.
+    if (this.isSdkIndexPath(path)) {
+      const agentId = newestCursorSdkAgentId(cursorSdkIndexPath(this.sdkStateRoot))
+      return agentId ? cursorSdkStorePath(this.sdkStateRoot, agentId) : null
+    }
     return this.storeOf(path)
   }
 
   async stat(path: string): Promise<NativeFile | null> {
     if (this.isDesktopPath(path)) return null
-    const [file] = await nativeFiles([path])
+    const [file] = await this.nativeStores([path])
     return file ?? null
+  }
+
+  /** `index.db`, its WAL or its shm under the SDK state root. */
+  private isSdkIndexPath(path: string): boolean {
+    return (
+      dirname(path) === this.sdkStateRoot &&
+      basename(path).startsWith("index.db")
+    )
+  }
+
+  private isSdkStore(path: string): boolean {
+    return path.startsWith(`${this.sdkRoot}${sep}`)
+  }
+
+  /**
+   * Stores with their revision. An SDK store's root pointer lives in
+   * index.db, so that file's stat is part of every SDK store's revision:
+   * a pointer that moved after the last blob write still reads as a change.
+   */
+  private async nativeStores(paths: string[]): Promise<NativeFile[]> {
+    const files = await nativeFiles(paths)
+    if (!files.some((file) => this.isSdkStore(file.path))) return files
+    const index = cursorSdkIndexPath(this.sdkStateRoot)
+    const stamps = await Promise.all(
+      [index, `${index}-wal`].map((candidate) =>
+        stat(candidate).catch(() => null)
+      )
+    )
+    const revision = stamps
+      .map((info) => (info ? `${info.size}:${info.mtimeMs}` : "missing"))
+      .join("|")
+    const mtimeMs = Math.max(...stamps.map((info) => info?.mtimeMs ?? 0))
+    return files.map((file) =>
+      this.isSdkStore(file.path)
+        ? {
+            ...file,
+            mtimeMs: Math.max(file.mtimeMs, mtimeMs),
+            revision: `${file.revision}|index:${revision}`,
+          }
+        : file
+    )
+  }
+
+  /**
+   * The blob id of the root to fold. Cursor's own stores name it in `meta`;
+   * an SDK store's `meta.latestRootBlobId` stays empty and the pointer is
+   * the agent's latest checkpoint in index.db.
+   */
+  private rootIdOf(path: string, meta: CursorMeta | null): string | undefined {
+    if (!meta) return undefined
+    if (!this.isSdkStore(path)) return meta.latestRootBlobId
+    return this.sdkAgentOf(path, meta)?.rootId
+  }
+
+  /**
+   * The index row of the agent an SDK store belongs to. The directory names
+   * the agent, not the store's meta row: a store Mako imported from a
+   * `cursor-agent` session keeps that session's meta, and when the same
+   * session had been imported twice (an `acp-sessions` store and its
+   * `chats/` fork share one agent id) the second lives under a fresh id.
+   */
+  private sdkAgentOf(path: string, meta: CursorMeta | null): CursorSdkAgentRecord | null {
+    const index = cursorSdkIndexPath(this.sdkStateRoot)
+    const agentId =
+      cursorSdkAgentIdForDirectory(index, basename(dirname(path))) ?? meta?.agentId
+    return agentId ? readCursorSdkAgent(index, agentId) : null
   }
 
   /** A desktop chat row, or a write to the desktop database or its WAL. */
@@ -424,12 +524,12 @@ export class CursorProvider implements SessionProvider {
 
   /** The `store.db` of the session directory a path lies in, or null outside one. */
   private storeOf(path: string): string | null {
-    const roots = [this.acpRoot, this.chatRoot]
+    const roots = [this.acpRoot, this.sdkRoot, this.chatRoot]
     for (const root of roots) {
       if (!path.startsWith(`${root}${sep}`)) continue
       const relative = path.slice(root.length + 1).split(sep)
-      // acp-sessions/<id>/… or chats/<workspace>/<id>/…
-      const depth = root === this.acpRoot ? 1 : 2
+      // acp-sessions/<id>/…, agents/agent-<hash>/… or chats/<workspace>/<id>/…
+      const depth = root === this.chatRoot ? 2 : 1
       if (relative.length <= depth) return null
       return join(root, ...relative.slice(0, depth), "store.db")
     }
@@ -448,17 +548,43 @@ export class CursorProvider implements SessionProvider {
     const acpSessions = await readdir(this.acpRoot).catch((): string[] => [])
     for (const session of acpSessions)
       paths.push(join(this.acpRoot, session, "store.db"))
-    return [...(await nativeFiles(paths)), ...(await this.desktop.discover())]
+    const agents = await readdir(this.sdkRoot).catch((): string[] => [])
+    for (const agent of agents)
+      if (agent.startsWith("agent-")) paths.push(join(this.sdkRoot, agent, "store.db"))
+    return [
+      ...(await this.nativeStores(paths)),
+      ...(await this.desktop.discover()),
+    ]
   }
 
   private ownsChat(path: string): boolean {
     return path.startsWith(`${this.chatRoot}${sep}`)
   }
 
-  /** Remove an ACP session directory. Cursor Desktop's own chats are not ours to delete. */
+  /**
+   * Remove an ACP session or SDK agent directory. Cursor Desktop's own chats
+   * are not ours to delete. An SDK agent is also forgotten in `index.db`, or
+   * the SDK would still list it and the index's newest row could name a
+   * store that no longer exists.
+   */
   async remove(path: string): Promise<boolean> {
     const directory = dirname(path)
-    if (dirname(directory) !== this.acpRoot || basename(path) !== "store.db") return false
+    const parent = dirname(directory)
+    if ((parent !== this.acpRoot && parent !== this.sdkRoot) || basename(path) !== "store.db") return false
+    if (parent === this.sdkRoot) {
+      const database = await openDatabase(path)
+      let agentId: string | undefined
+      if (database) {
+        try {
+          agentId = this.readMeta(database)?.agentId
+        } finally {
+          database.close()
+        }
+      }
+      const match: CursorSdkAgentMatch = { directoryName: basename(directory) }
+      if (agentId) match.agentId = agentId
+      removeCursorSdkAgent(cursorSdkIndexPath(this.sdkStateRoot), match)
+    }
     await rm(directory, { recursive: true, force: true })
     return true
   }
@@ -481,8 +607,9 @@ export class CursorProvider implements SessionProvider {
         meta.name && meta.name !== "New Agent"
           ? titleFrom(meta.name)
           : undefined
+      const agent = this.isSdkStore(file.path) ? this.sdkAgentOf(file.path, meta) : null
       const nativeId =
-        meta.agentId ?? dirname(file.path).split("/").pop() ?? ""
+        agent?.agentId ?? meta.agentId ?? dirname(file.path).split("/").pop() ?? ""
       const ref: ThreadRef = {
         harness: this.harness,
         nativeId,
@@ -499,21 +626,35 @@ export class CursorProvider implements SessionProvider {
         bytes: file.bytes,
         revision: file.revision,
       }
-      // `cursor-agent -p --resume <id>` on an ACP session writes its new turns
-      // to a second store under chats/ with the same agent id (verified
-      // 2026-09-12). The two stores hold different turns, and only the
-      // acp-sessions store answers `session/load`; a chats store is its own
-      // row and continues through the CLI.
-      if (this.ownsChat(file.path)) {
-        ref.identity = `chats:${nativeId}`
-        ref.liveResume = false
-      }
+      // `cursor-agent -p --resume <id>` on an ACP session once wrote its new
+      // turns to a second store under chats/ with the same agent id
+      // (verified 2026-09-12). The two hold different turns, so the chats
+      // copy is its own row. Either continues through the SDK, which imports
+      // the store it is asked to reopen.
+      if (this.ownsChat(file.path)) ref.identity = `chats:${nativeId}`
+      // An agent Mako imported is the continuation of a legacy row: it takes
+      // that row's identity so the catalog shows one thread, and being the
+      // newer of the two it is the one shown.
+      if (agent?.imported) ref.identity = agent.imported.identity
       // meta.json is the cheap source of cwd and honest activity times.
       const sidecar = await readFile(
         join(dirname(file.path), "meta.json"),
         "utf8"
       ).catch(() => null)
-      if (sidecar) {
+      if (agent) {
+        // The SDK's index is the record of an agent: where it ran, what the
+        // newest turn ran under, and when the SDK last touched it. The
+        // store's own meta carries none of these.
+        if (agent.cwd) ref.cwd = agent.cwd
+        if (!ref.title && agent.name && agent.name !== "New Agent")
+          ref.title = titleFrom(agent.name)
+        if (agent.model) {
+          ref.settings = cursorSdkReportedSettings(agent.model, [])
+          ref.model = agent.model.id
+        }
+        if (agent.updatedAt) ref.updatedAt = agent.updatedAt
+        if (agent.createdAt) ref.startedAt = agent.createdAt
+      } else if (sidecar) {
         const parsed = parseSidecar(sidecar)
         if (parsed?.cwd) ref.cwd = parsed.cwd
         if (!ref.title && parsed?.title) ref.title = titleFrom(parsed.title)
@@ -533,7 +674,7 @@ export class CursorProvider implements SessionProvider {
         if (activity) ref.updatedAt = activity
       }
       if (!ref.cwd || !ref.title) {
-        const root = this.readRoot(database, meta.latestRootBlobId)
+        const root = this.readRoot(database, this.rootIdOf(file.path, meta))
         if (root) {
           ref.cwd ??= root.cwd
           if (!ref.title) {
@@ -583,12 +724,12 @@ export class CursorProvider implements SessionProvider {
         return offset
       },
       next: async (): Promise<SessionUpdate> => {
-        const [file] = await nativeFiles([path])
+        const [file] = await this.nativeStores([path])
         if (!file) return unchanged()
         const database = await openDatabase(path)
         if (!database) return unchanged()
         try {
-          const rootId = this.readMeta(database)?.latestRootBlobId
+          const rootId = this.rootIdOf(path, this.readMeta(database))
           offset = file.bytes
           if (!rootId) return unchanged()
           if (fold && fold.rootId === rootId) return unchanged()
@@ -620,15 +761,14 @@ export class CursorProvider implements SessionProvider {
 
   async read(path: string): Promise<Thread | null> {
     if (this.desktop.owns(path)) return this.desktop.read(path)
-    const [file] = await nativeFiles([path])
+    const [file] = await this.nativeStores([path])
     if (!file) return null
     const ref = await this.peek(file)
     if (!ref) return null
     const database = await openDatabase(path)
     if (!database) return null
     try {
-      const meta = this.readMeta(database)
-      const rootId = meta?.latestRootBlobId
+      const rootId = this.rootIdOf(path, this.readMeta(database))
       const held = this.lastFold
       if (held && held.path === path && rootId && held.rootId === rootId)
         return { ref, entries: held.entries }
@@ -819,11 +959,16 @@ export class CursorProvider implements SessionProvider {
                 assistant.blocks.push(part.value)
                 break
               case "tool-call": {
+                const input = formatJson(part.args)
                 const block: ToolBlock = {
                   type: "tool",
                   id: part.toolCallId,
                   name: part.toolName,
-                  input: clip(formatJson(part.args)),
+                  input: clip(input),
+                }
+                if (part.toolName === "TodoWrite") {
+                  const details = todoDetails(input)
+                  if (details) block.details = details
                 }
                 if (part.toolCallId) toolsById.set(part.toolCallId, block)
                 assistant.blocks.push(block)
