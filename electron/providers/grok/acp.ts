@@ -9,7 +9,9 @@ import type { AccessTier } from "../../contracts/access.js"
  * after it), so Grok advertises no steering. In every permission mode except
  * always-approve the ACP server denies tool calls instead of sending
  * session/request_permission, so the host cannot approve on the user's
- * behalf; the tier is fixed by the launch flag.
+ * behalf; the tier is fixed by the launch flag. Grok reports no session
+ * modes over ACP, so the default is pinned explicitly: without it an
+ * unchosen session ran Grok's own default while the desk reported nothing.
  */
 function grokPermissionMode(tier: AccessTier): string | undefined {
   switch (tier) {
@@ -30,7 +32,7 @@ export const grokAcpSource: ProviderAcpSource = {
   provider: "grok",
   canResume: true,
   launchOptionIds: ["effort"],
-  access: { launch: ["plan", "deny", "auto", "full"] },
+  access: { launch: ["plan", "deny", "auto", "full"], default: "deny" },
   available: () => resolveExecutable("grok") !== null,
   async launch(options) {
     const permissionMode = options.access ? grokPermissionMode(options.access) : undefined

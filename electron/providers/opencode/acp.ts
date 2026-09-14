@@ -41,6 +41,9 @@ export const openCodeAcpSource: ProviderAcpSource = {
     launch: ["ask", "edits", "full"],
     host: ["edits", "full"],
     base: "build",
+    // OpenCode opens in "build" and reports it through the mode config option;
+    // the ask overlay matches what build asks about by default.
+    default: "ask",
   },
   nativeModes: [
     { id: "build", name: "build" },
