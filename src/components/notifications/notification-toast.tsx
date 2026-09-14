@@ -1,15 +1,16 @@
 import { XIcon } from "lucide-react"
 import { toast } from "sonner"
-import { AttentionRow } from "@/components/shell/attention-pill"
+import { AttentionRow } from "@/components/notifications/attention-row"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import type { NotificationItem } from "@/state/notifications"
 
 /**
  * The in-app announcement for a thread that needs you, as a card you click
  * anywhere to go there. Sonner's own toast makes only its action button
- * clickable, so the card is a custom toast: the same row the attention pill
- * lists, with a dismiss control where the time would sit. It stays as long
- * as any actionable toast; the pill and badge keep the fact after it leaves.
+ * clickable, so the card is a custom toast: one attention row with a dismiss
+ * control where the time would sit. It stays as long as any actionable
+ * toast; the rail's mark and the app icon's badge keep the fact after it
+ * leaves.
  */
 export function showNotificationToast(item: NotificationItem): void {
   toast.custom(
