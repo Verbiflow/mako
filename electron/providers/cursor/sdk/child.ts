@@ -43,8 +43,8 @@ import {
 import {
   CURSOR_SDK_WIRE_VERSION,
   JsonValueSchema,
-  SdkMessageSchema,
   SdkRequestSchema,
+  sdkMessageForWire,
   type JsonValue,
   type SdkChildLine,
   type SdkImportSource,
@@ -256,12 +256,12 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
 }
 
 function forwardMessage(turn: string, message: SDKMessage): void {
-  const parsed = SdkMessageSchema.safeParse(message)
-  if (!parsed.success) {
-    log("warn", `dropped an SDK message of type ${message.type} the wire does not describe`)
+  const wire = sdkMessageForWire(message)
+  if ("refused" in wire) {
+    log("warn", `dropped an SDK message of type ${message.type} the wire does not describe (${wire.refused})`)
     return
   }
-  write({ event: "message", turn, message: parsed.data })
+  write({ event: "message", turn, message: wire.message })
 }
 
 async function pump(turn: string, run: Run): Promise<void> {

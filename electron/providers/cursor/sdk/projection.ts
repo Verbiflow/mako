@@ -339,6 +339,21 @@ function toolOutput(name: string, result: JsonValue | undefined): string | undef
           return text(value.diffString) === undefined ? undefined : clip(text(value.diffString) ?? "")
         case "semSearch":
           return text(value.results) === undefined ? undefined : clip(text(value.results) ?? "")
+        case "grep": {
+          const lines = grepLines(value.workspaceResults)
+          return lines === undefined ? clip(JSON.stringify(value, null, 2)) : clip(lines)
+        }
+        case "glob": {
+          if (!Array.isArray(value.files)) return clip(JSON.stringify(value, null, 2))
+          const files = value.files.flatMap((file) => {
+            const path = text(file)
+            return path === undefined ? [] : [path]
+          })
+          const truncated = value.clientTruncated === true || value.ripgrepTruncated === true
+          const total = numberOf(value.totalFiles)
+          const note = truncated ? [`… ${total ?? "more"} files in all`] : []
+          return clip([...files, ...note].join("\n") || "No files matched")
+        }
         case "mcp": {
           // An MCP result arrives as `content: [{ text: { text } }]`; the
           // texts are the answer, the wrapping is not.
@@ -351,6 +366,50 @@ function toolOutput(name: string, result: JsonValue | undefined): string | undef
     }
   }
   return clip(stringOf(result) ?? JSON.stringify(result, null, 2))
+}
+
+/**
+ * A grep result as `rg` would print it. The SDK returns one entry per
+ * workspace root, each `content` (matches with a file, a line number and the
+ * line), `files` (paths only) or `count` (per-file counts); a `content` hit
+ * can arrive without its line (SDK 1.0.31 reports `line: undefined` for a
+ * files-only search), so it is written as its file alone.
+ */
+function grepLines(results: JsonValue | undefined): string | undefined {
+  if (!isObject(results)) return undefined
+  const lines: string[] = []
+  for (const workspace of Object.values(results)) {
+    if (!isObject(workspace) || !isObject(workspace.output)) continue
+    const output = workspace.output
+    if (Array.isArray(output.matches)) {
+      for (const match of output.matches) {
+        if (!isObject(match)) continue
+        const file = text(match.file)
+        if (!file) continue
+        const line = stringOf(match.line)
+        const number = numberOf(match.lineNumber)
+        lines.push(
+          line === undefined ? file : `${file}:${number === undefined ? "" : `${number}:`} ${line}`
+        )
+      }
+      const total = numberOf(output.totalMatches)
+      if (total !== undefined && total > output.matches.length)
+        lines.push(`… ${total} matches in all`)
+    } else if (Array.isArray(output.files)) {
+      for (const file of output.files) {
+        const path = text(file)
+        if (path !== undefined) lines.push(path)
+      }
+    } else if (Array.isArray(output.counts)) {
+      for (const entry of output.counts) {
+        if (!isObject(entry)) continue
+        const file = text(entry.file)
+        const count = numberOf(entry.count)
+        if (file && count !== undefined) lines.push(`${file}: ${count}`)
+      }
+    }
+  }
+  return lines.length > 0 ? lines.join("\n") : "No matches"
 }
 
 function mcpTexts(content: JsonValue | undefined): string | undefined {

@@ -153,6 +153,27 @@ export const SdkMessageSchema = z.discriminatedUnion("type", [
 ])
 export type SdkMessage = z.infer<typeof SdkMessageSchema>
 
+/**
+ * Validates an SDK message as the wire will carry it: after a JSON round
+ * trip. The SDK's own objects hold `undefined` fields (a `grep` hit reports
+ * `line: undefined`; verified with SDK 1.0.31), which `z.json()` refuses and
+ * serialization drops, so checking the live object refused the completed
+ * message and left the tool row running for good.
+ */
+export interface SdkStreamedMessage {
+  /** The SDK's own object from `run.stream()`, known here only by its tag; `SdkMessageSchema` is its contract. */
+  readonly type: string
+}
+
+export function sdkMessageForWire(
+  message: SdkStreamedMessage
+): { message: SdkMessage } | { refused: string } {
+  const parsed = SdkMessageSchema.safeParse(JSON.parse(JSON.stringify(message)))
+  if (parsed.success) return { message: parsed.data }
+  const issue = parsed.error.issues[0]
+  return { refused: issue ? `${issue.path.join(".") || "message"}: ${issue.message}` : "invalid" }
+}
+
 /** The streamed deltas the transcript renders as they arrive; the rest of the SDK's update union is summarised by `SdkMessage`. */
 export const SdkDeltaSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text-delta"), text: z.string() }),
