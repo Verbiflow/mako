@@ -72,6 +72,10 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
   const activity = preview?.activity
   const nativeWindow = preview?.window
   if (!frame && !nativeWindow) return null
+  const surface = activity?.kind === "browser" ? "Browser" : "Computer"
+  const label = activity
+    ? `${surface} · ${activity.operation.replaceAll("_", " ")}${activity.status === "running" ? " · working" : ""}`
+    : surface
   return (
     <section
       aria-label="Live control preview"
@@ -99,6 +103,27 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
             />
           )
         )}
+        {/* Just the picture and two small glass marks over it. The kind of
+            surface (browser or computer) is a glyph, the working state is
+            the ember dot beside it, and the operation's name is the mark's
+            tooltip and accessible name. A caption band that spelled out
+            "Computer · get desktop state" under every frame was a status bar
+            stuck to a thumbnail. */}
+        <div
+          role="status"
+          aria-label={label}
+          title={label}
+          className="glass-control absolute top-2 left-2 flex h-6 items-center gap-1.5 rounded-full px-2 text-muted-foreground"
+        >
+          {activity?.kind === "browser" ? (
+            <GlobeIcon className="size-3.5 shrink-0" />
+          ) : (
+            <MonitorIcon className="size-3.5 shrink-0" />
+          )}
+          {activity?.status === "running" && (
+            <span className="size-1.5 shrink-0 rounded-full bg-ember" />
+          )}
+        </div>
         <button
           type="button"
           aria-label="Hide preview"
@@ -107,32 +132,16 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
         >
           <XIcon className="size-3.5" />
         </button>
-        <div className="glass-caption absolute inset-x-0 bottom-0 flex h-10 items-end gap-2 px-2.5 pb-2 text-label">
-          {activity?.kind === "browser" ? (
-            <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <MonitorIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="min-w-0 flex-1 truncate leading-none text-foreground">
-            {activity?.kind === "browser" ? "Browser" : "Computer"}
-            {activity ? ` · ${activity.operation.replaceAll("_", " ")}` : ""}
-          </span>
-          {activity?.status === "running" && (
-            <span
-              className="mb-px size-1.5 shrink-0 rounded-full bg-ember"
-              aria-label="Working"
-            />
-          )}
-        </div>
+        {error && (
+          <p
+            role="status"
+            className="glass-control absolute inset-x-2 bottom-2 truncate rounded-md px-2 py-1 text-label text-muted-foreground"
+            title={error}
+          >
+            {error}
+          </p>
+        )}
       </div>
-      {error && (
-        <p
-          role="status"
-          className="px-2.5 py-2 text-label text-muted-foreground"
-        >
-          {error}
-        </p>
-      )}
     </section>
   )
 }

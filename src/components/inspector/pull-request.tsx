@@ -9,7 +9,7 @@ import {
 import { desktop } from "@/state/desktop"
 import { git } from "@/state/git"
 import { github, useGitHub } from "@/state/github"
-import { prefsStore } from "@/state/prefs"
+import { currentCommitModel } from "@/state/commit-model"
 import { useSession } from "@/state/session"
 import { cn } from "@/lib/utils"
 import type { CheckSummary, GitHubStatus, PullRequest as Pull } from "@/lib/types"
@@ -244,11 +244,12 @@ function ComposePull({
     try {
       // The utility model reads the same bounded diff as the commit drafter,
       // but uses a PR-specific structure with a summary and test plan.
+      const { model } = await currentCommitModel()
       const result = await git.generateMessage({
         requestId: crypto.randomUUID(),
         cwd,
         prompt: PULL_REQUEST_PROMPT,
-        model: prefsStore.get().commitModel,
+        model,
       })
       const [first, ...rest] = result.message.split("\n")
       setTitle((current) => current || (first ?? "").trim())

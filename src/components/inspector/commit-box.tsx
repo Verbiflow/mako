@@ -4,14 +4,25 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
 } from "react"
-import { Action, Keys, Segmented } from "@/components/ui/kit"
+import { Action, IconAction, Keys, Segmented } from "@/components/ui/kit"
+import { cn } from "@/lib/utils"
 import { formatChord } from "@/extend/commands"
 import { git } from "@/state/git"
 import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
-import { CheckIcon, GitBranchIcon, Settings2Icon, SparklesIcon, UploadIcon } from "lucide-react"
+import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
+import { ArrowUpIcon, CheckIcon, Settings2Icon, XIcon } from "lucide-react"
+import { ThinkingOrb } from "thinking-orbs"
+import { useOrbTheme } from "@/components/ui/use-orb-theme"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import type { CommitAnalysisMode } from "@/lib/types"
 import { useGitPush } from "@/state/git-push"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -26,9 +37,9 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
  *
  * The box mirrors the composer: the field, then one toolbar row that never
  * wraps — generation controls on the left, the primary action on the right.
- * What the commit will contain is said once, on the Commit button, with the
- * count ticking in place; the placeholder repeats it only while the field is
- * empty. Nothing here disables while a stage write is in flight: the engine
+ * The button is Commit, or Commit all when nothing is staged; the count is
+ * the Changes header's and the empty field's placeholder's to say. Nothing
+ * here disables while a stage write is in flight: the engine
  * queues every index write and the commit itself per repository, so a commit
  * clicked mid-staging runs after the write and includes it.
  */
@@ -43,8 +54,10 @@ export function CommitBox({
   const draftState = useCommitDraft(cwd)
   const message = draftState.text
   const drafting = draftState.requestId !== null
-  const model = usePrefs((prefs) => prefs.commitModel)
-  const hasModel = Boolean(model && model !== "current" && model !== "auto")
+  const pref = usePrefs((prefs) => prefs.commitModel)
+  const { model, status: connection } = useResolvedCommitModel(pref)
+  const hasModel = Boolean(model)
+  const disconnected = connection.kind === "disconnected"
   const [busy, setBusy] = useState(false)
   const committing = useRef(false)
   const field = useRef<HTMLTextAreaElement>(null)
@@ -52,10 +65,7 @@ export function CommitBox({
     (prefs) => prefs.keybindings["workspace.generate-commit"] ?? "mod+shift+g"
   )
 
-  const ahead = useSession((state) => state.git?.ahead ?? 0)
   const branch = useSession((state) => state.git?.branch)
-  const upstream = useSession((state) => state.git?.upstream)
-  const head = useSession((state) => state.git?.head)
   const pushState = useGitPush(cwd, branch ?? "")
 
   useLayoutEffect(() => {
@@ -65,10 +75,19 @@ export function CommitBox({
     node.style.height = `${Math.min(node.scrollHeight, 160)}px`
   }, [message])
 
+  // The connections are read when the box appears, when the window comes
+  // back (Settings may have changed them) and whenever the preference moves.
+  useEffect(() => {
+    void refreshCommitModel()
+    const focus = () => void refreshCommitModel()
+    window.addEventListener("focus", focus)
+    return () => window.removeEventListener("focus", focus)
+  }, [pref])
+
   const draft = useCallback(
     async function draftCommitMessage() {
       if (drafting || busy || !cwd || !total) return
-      if (!hasModel) {
+      if (!hasModel || disconnected) {
         window.dispatchEvent(
           new CustomEvent("mako:settings", { detail: "commits" })
         )
@@ -76,7 +95,7 @@ export function CommitBox({
       }
       await commitDrafts.generate(cwd)
     },
-    [drafting, busy, cwd, total, hasModel]
+    [drafting, busy, cwd, total, hasModel, disconnected]
   )
 
   const commit = useCallback(
@@ -102,8 +121,13 @@ export function CommitBox({
     [busy, message, drafting, cwd, draftState.revision]
   )
 
-  // What the commit will contain, in one place: the placeholder while the
-  // field is empty, the Commit button always.
+  // The button says only what changes the commit's meaning. With something
+  // staged it is Git's ordinary Commit: the staged list above is the scope.
+  // With nothing staged Mako commits the whole working tree, as Zed does, and
+  // that one case gets the word for it. The count itself lives in the
+  // Changes header and, while the field is empty, in the placeholder; the
+  // button once repeated it a third time ("Commit 2 files") and was the
+  // longest thing in a 300px row.
   const count = staged > 0 ? staged : total
   const noun = count === 1 ? "file" : "files"
   const placeholder =
@@ -114,11 +138,9 @@ export function CommitBox({
         : `Message for all ${count} ${noun}`
   const commitLabel = busy
     ? "Committing..."
-    : total === 0
-      ? "Commit"
-      : staged > 0
-        ? `Commit ${count} ${noun}`
-        : `Commit all ${count} ${noun}`
+    : total > 0 && staged === 0
+      ? "Commit all"
+      : "Commit"
 
   // ⌘↩ commits while the message field has focus.
   useEffect(() => {
@@ -134,63 +156,11 @@ export function CommitBox({
     return () => window.removeEventListener("keydown", onKey)
   }, [commit])
 
+  const openModelSettings = () =>
+    window.dispatchEvent(new CustomEvent("mako:settings", { detail: "commits" }))
+
   return (
     <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} className="shrink-0 border-t border-hairline p-3">
-      {draftState.error ? (
-        <div role="alert" className="mb-2 px-1 text-label text-negative">
-          <p>{draftState.error}</p>
-          <Action size="xs" onClick={() => void draft()}>
-            Retry
-          </Action>
-          <Action
-            size="xs"
-            onClick={() =>
-              window.dispatchEvent(
-                new CustomEvent("mako:settings", { detail: "commits" })
-              )
-            }
-          >
-            Model settings
-          </Action>
-        </div>
-      ) : null}
-      {draftState.suggestion ? (
-        <div className="mb-2 rounded-md border border-hairline p-2">
-          <p className="mb-2 text-label text-faint">
-            Your message was kept. Review the generated draft before replacing
-            it.
-          </p>
-          <pre className="max-h-36 overflow-auto font-sans text-ui whitespace-pre-wrap">
-            {draftState.suggestion.message}
-          </pre>
-          <div className="mt-2 flex gap-2">
-            <Action
-              size="xs"
-              tone="outline"
-              onClick={() => commitDrafts.accept(cwd)}
-            >
-              Use generated draft
-            </Action>
-            <Action size="xs" onClick={() => commitDrafts.dismiss(cwd)}>
-              Keep mine
-            </Action>
-          </div>
-        </div>
-      ) : null}
-      {(draftState.suggestion ?? draftState.result)?.warnings.length ? (
-        <details className="mb-2 px-1 text-label text-caution">
-          <summary className="pressable cursor-pointer">
-            Sensitive file contents excluded
-          </summary>
-          <ul className="mt-1 max-h-24 overflow-y-auto">
-            {(draftState.suggestion ?? draftState.result)?.warnings.map(
-              (warning) => (
-                <li key={warning}>{warning}</li>
-              )
-            )}
-          </ul>
-        </details>
-      ) : null}
       <div className="commit-editor relative overflow-hidden rounded-lg bg-raised ring-1 ring-hairline focus-within:ring-border">
         <textarea
           aria-label="Commit message"
@@ -204,6 +174,56 @@ export function CommitBox({
           className="block max-h-40 min-h-16 w-full resize-none bg-transparent px-3 pt-3 pb-1 text-ui leading-5 placeholder:text-faint focus:outline-none disabled:opacity-50"
         />
 
+        {/* What the last draft left behind lives inside the card, between the
+            field and its toolbar, as one notice at a time: the draft it wrote
+            beside text you had typed, the files it left out, or why it
+            failed. These used to stack above the card as three unrelated
+            blocks — a red exception, a bordered box, a details element —
+            and read as debris. */}
+        {draftState.suggestion ? (
+          <Notice label="Draft ready, your text was kept">
+            <pre className="max-h-24 overflow-auto font-sans text-ui leading-5 whitespace-pre-wrap text-foreground">
+              {draftState.suggestion.message}
+            </pre>
+            <div className="mt-2 flex gap-1">
+              <Action size="xs" tone="outline" onClick={() => commitDrafts.accept(cwd)}>
+                Use draft
+              </Action>
+              <Action size="xs" onClick={() => commitDrafts.dismiss(cwd)}>
+                Keep mine
+              </Action>
+            </div>
+          </Notice>
+        ) : draftState.error && !disconnected ? (
+          // A failure whose cause is a lost connection is not a notice: the
+          // toolbar has already turned Generate into Reconnect model.
+          <Notice
+            role="alert"
+            tone="negative"
+            label="The draft was not written"
+            onDismiss={() => commitDrafts.clearError(cwd)}
+            action={
+              <Action size="xs" onClick={() => void draft()}>
+                Retry
+              </Action>
+            }
+          >
+            <p className="text-label leading-snug text-muted-foreground">{draftState.error}</p>
+          </Notice>
+        ) : draftState.result?.warnings.length ? (
+          <Notice
+            tone="caution"
+            label={`${draftState.result.warnings.length} sensitive ${draftState.result.warnings.length === 1 ? "file" : "files"} left out of the draft`}
+          >
+            <ul className="max-h-20 overflow-y-auto text-label leading-snug text-muted-foreground">
+              {draftState.result.warnings.map((warning) => (
+                <li key={warning} className="truncate" title={warning}>
+                  {warning}
+                </li>
+              ))}
+            </ul>
+          </Notice>
+        ) : null}
         {/* One row, never wrapping. The model chip is the only thing that
             shrinks; Generate's word and the shortcut hint go before the
             primary action does. */}
@@ -211,13 +231,24 @@ export function CommitBox({
           <div className="flex min-w-0 flex-1 items-center gap-1">
             {drafting ? (
               <>
+                <span role="status" className="flex h-6 items-center gap-1.5 px-1.5 text-ui font-medium text-muted-foreground">
+                  <DraftMark active />
+                  <span className="truncate @max-[22rem]/commit:hidden">Drafting...</span>
+                </span>
                 <Action size="xs" onClick={() => void commitDrafts.cancel(cwd)}>
                   Cancel
                 </Action>
-                <span role="status" className="truncate text-label text-faint">
-                  Drafting...
-                </span>
               </>
+            ) : hasModel && disconnected ? (
+              <Action
+                size="xs"
+                aria-label="Reconnect commit model"
+                title={`${model}: ${connection.reason}`}
+                onClick={openModelSettings}
+              >
+                <DraftMark />
+                Reconnect model
+              </Action>
             ) : hasModel ? (
               <>
                 <Action
@@ -227,47 +258,24 @@ export function CommitBox({
                   disabled={total === 0 || busy}
                   onClick={() => void draft()}
                 >
-                  <SparklesIcon />
+                  <DraftMark />
                   <span className="@max-[22rem]/commit:hidden">Generate</span>
                 </Action>
-                <div
-                  className="shrink-0"
-                  title={draftState.mode === "fast" ? "Complete evidence coverage with low reasoning effort and direct synthesis." : "Complete evidence coverage with higher reasoning effort and optional source checks."}
-                >
-                  <Segmented
-                    label="Commit analysis mode"
-                    value={draftState.mode}
-                    options={[{ value: "fast", label: "Fast" }, { value: "deep", label: "Deep" }]}
-                    disabled={drafting || busy}
-                    onChange={(mode) => commitDrafts.setMode(cwd, mode)}
-                  />
-                </div>
-                <Action
-                  aria-label={`Drafting model: ${model}. Open model settings`}
-                  title={model}
-                  size="xs"
-                  className="min-w-20 shrink"
-                  onClick={() =>
-                    window.dispatchEvent(
-                      new CustomEvent("mako:settings", { detail: "commits" })
-                    )
-                  }
-                >
-                  <Settings2Icon />
-                  <span className="truncate">{model?.split("/").slice(1).join("/") ?? "Model settings"}</span>
-                </Action>
+                <GenerationSettings
+                  model={model ?? ""}
+                  mode={draftState.mode}
+                  disabled={busy}
+                  onMode={(mode) => commitDrafts.setMode(cwd, mode)}
+                  onChangeModel={openModelSettings}
+                />
               </>
             ) : (
               <Action
                 size="xs"
                 aria-label="Connect commit model"
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("mako:settings", { detail: "commits" })
-                  )
-                }
+                onClick={openModelSettings}
               >
-                <SparklesIcon />
+                <DraftMark />
                 Connect model
               </Action>
             )}
@@ -287,27 +295,158 @@ export function CommitBox({
           </Action>
         </div>
       </div>
-      {head && branch ? <PushControl cwd={cwd} branch={branch} ahead={ahead} upstream={upstream} disabled={busy} /> : null}
     </div>
   )
 }
 
 /**
- * Pushing publishes work outside the machine, so it stays a deliberate,
- * separately-labelled action and never rides along with a commit.
+ * One row of the card set apart by a hairline: a label in the notice's
+ * colour, an optional action and dismiss on the right, and whatever the
+ * notice has to show beneath. Hue is meaning here — negative for a failure,
+ * caution for files left out — and only on the label; the detail beneath is
+ * muted text, so a long host message never becomes a red paragraph.
  */
-function PushControl({ cwd, branch, ahead, upstream, disabled }: { cwd: string; branch: string; ahead: number; upstream?: string; disabled: boolean }) {
+function Notice({
+  label,
+  tone = "neutral",
+  action,
+  onDismiss,
+  role,
+  children,
+}: {
+  label: string
+  tone?: "neutral" | "negative" | "caution"
+  action?: ReactNode
+  onDismiss?: () => void
+  role?: "alert" | "status"
+  children?: ReactNode
+}) {
+  const color = { neutral: "text-foreground", negative: "text-negative", caution: "text-caution" }[tone]
+  return (
+    <div role={role} data-commit-notice={tone} className="border-t border-hairline px-3 pt-2 pb-2.5">
+      <div className="flex h-6 items-center gap-2">
+        <span className={cn("min-w-0 flex-1 truncate text-label font-medium", color)}>{label}</span>
+        {action}
+        {onDismiss ? (
+          <IconAction size="xs" label="Dismiss" onClick={onDismiss} className="-mr-1.5">
+            <XIcon />
+          </IconAction>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/**
+ * Generate wears Mako's own thinking orb, the mark the rail and the
+ * transcript already use for an agent at work. `shaping` rests as a dotted
+ * ring — the one orb state whose first frame reads as a glyph at this size
+ * — and morphs only while a draft is being written, so the icon is also the
+ * progress. The 20px preset is the library's smallest tuned design; it is
+ * not scaled. The library stops itself offscreen, when the document hides,
+ * and under reduced motion.
+ */
+function DraftMark({ active = false }: { active?: boolean }) {
+  const theme = useOrbTheme()
+  return (
+    <span aria-hidden className="flex size-4 shrink-0 items-center justify-center">
+      <ThinkingOrb state="shaping" size={20} theme={theme} paused={!active} className="activity-orb" />
+    </span>
+  )
+}
+
+const MODE_TEXT = {
+  fast: "Reads the whole diff in one pass with low reasoning effort.",
+  deep: "Reads the whole diff with higher reasoning effort and looks at the source files where the diff alone is unclear.",
+} satisfies Record<CommitAnalysisMode, string>
+
+/**
+ * The model chip opens how a draft is generated: which model, and how hard
+ * it thinks. Fast/Deep sat in the toolbar row before, where it was a third
+ * control competing with Generate and the Commit button for a 300px row.
+ */
+function GenerationSettings({
+  model,
+  mode,
+  disabled,
+  onMode,
+  onChangeModel,
+}: {
+  model: string
+  mode: CommitAnalysisMode
+  disabled: boolean
+  onMode: (mode: CommitAnalysisMode) => void
+  onChangeModel: () => void
+}) {
+  const shortName = model.split("/").slice(1).join("/") || model
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Action
+          aria-label={`Drafting model: ${model}. Generation settings`}
+          title={model}
+          size="xs"
+          className="min-w-20 shrink"
+        >
+          <Settings2Icon />
+          <span className="truncate">{shortName}</span>
+        </Action>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" sideOffset={8} className="w-64 gap-3 p-3" aria-label="Commit generation settings">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-label text-faint">Drafting model</p>
+            <p className="truncate text-ui font-medium" title={model}>{shortName}</p>
+          </div>
+          <Action size="xs" tone="outline" onClick={onChangeModel}>
+            Change
+          </Action>
+        </div>
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-label text-faint">Analysis</span>
+            <Segmented
+              label="Commit analysis mode"
+              value={mode}
+              options={[{ value: "fast", label: "Fast" }, { value: "deep", label: "Deep" }]}
+              disabled={disabled}
+              onChange={onMode}
+            />
+          </div>
+          <p className="mt-1.5 text-label leading-snug text-muted-foreground">{MODE_TEXT[mode]}</p>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/**
+ * Pushing publishes work outside the machine, so it stays a deliberate,
+ * separately-labelled action and never rides along with a commit. It sits
+ * on the Commits header, beside the history it publishes, and only while it
+ * has something to say: commits waiting, a branch with no upstream, a push
+ * in flight, its receipt, or its failure. A branch that is up to date shows
+ * nothing — a permanently lit "Up to date" was a status bar in disguise.
+ */
+export function PushControl({ cwd, branch, ahead, upstream }: { cwd: string; branch: string; ahead: number; upstream?: string }) {
   const state = useGitPush(cwd, branch)
+  if (state.kind === "idle" && upstream && ahead === 0) return null
   const pending = state.kind === "pushing"
-  const pushed = state.kind === "pushed" && ahead === 0
-  const complete = pushed || (state.kind === "idle" && Boolean(upstream) && ahead === 0)
-  return <div className="mt-1.5 flex h-7 items-center gap-2 pl-2 pr-1" data-push-control>
-    <GitBranchIcon className="size-3.5 shrink-0 text-faint" />
-    <span className="min-w-0 flex-1 truncate text-label text-faint tabular" title={upstream ?? branch}>{branch}{ahead > 0 ? ` · ${ahead} ${ahead === 1 ? "commit" : "commits"} ready` : ""}</span>
-    <Action tone={pending ? "outline" : "ghost"} size="xs" className="disabled:opacity-100" data-push-state={state.kind} aria-label={`Push to ${branch}`} aria-busy={pending} disabled={disabled || pending || complete} title={state.kind === "failed" ? state.message : upstream ? `Push to ${upstream}` : `Publish ${branch} to origin`} onClick={() => void git.push()}>
-      {complete ? <CheckIcon /> : <UploadIcon />}
-      {/* The branch is the row's subject already, so the button does not repeat it. */}
-      <span role="status" className="git-action-label" key={state.kind}>{pending ? "Pushing..." : pushed ? "Pushed" : complete ? "Up to date" : state.kind === "failed" ? "Retry push" : "Push"}</span>
+  const pushed = state.kind === "pushed"
+  const label = pending
+    ? "Pushing..."
+    : pushed
+      ? "Pushed"
+      : state.kind === "failed"
+        ? "Retry push"
+        : upstream
+          ? `Push ${ahead} ${ahead === 1 ? "commit" : "commits"}`
+          : "Publish branch"
+  return <span data-push-control className="flex shrink-0 items-center">
+    <Action tone={pending ? "outline" : "ghost"} size="xs" className="tabular disabled:opacity-100" data-push-state={state.kind} aria-label={`Push to ${branch}`} aria-busy={pending} disabled={pending || pushed} title={state.kind === "failed" ? state.message : upstream ? `Push to ${upstream}` : `Publish ${branch} to origin`} onClick={() => void git.push()}>
+      {pushed ? <CheckIcon /> : <ArrowUpIcon />}
+      <span role="status" className="git-action-label" key={state.kind}>{label}</span>
     </Action>
-  </div>
+  </span>
 }

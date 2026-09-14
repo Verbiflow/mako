@@ -4,7 +4,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { MultiFileDiff, Virtualizer } from "@pierre/diffs/react"
 import { Action, Blank, IconAction } from "@/components/ui/kit"
 import { useWorkspaceTransition } from "@/state/workspace-transition"
-import { CommitBox } from "@/components/inspector/commit-box"
+import { CommitBox, PushControl } from "@/components/inspector/commit-box"
 import { Annotation, GutterAdd, ReviewBar } from "@/components/inspector/review"
 import { review, useReview } from "@/state/review"
 import { PullRequestCard } from "@/components/inspector/pull-request"
@@ -311,10 +311,12 @@ function WorkspaceChanges() {
         <span role="status" aria-busy={staging || undefined} className="min-w-0 flex-1 truncate tabular">
           {`${files.length} files changed${staged > 0 ? ` · ${staged} staged` : ""}`}
         </span>
+        {/* Line totals are deferred for large changesets; an unknown total
+            shows nothing rather than a label explaining its absence. */}
         {files.every((file) => file.insertions !== null && file.deletions !== null) ? <>
           <span className="tabular text-added">+{files.reduce((sum, file) => sum + (file.insertions ?? 0), 0)}</span>
           <span className="tabular text-removed">−{files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)}</span>
-        </> : <span className="text-label text-faint" title="Line totals are read on demand for large changesets">Totals on demand</span>}
+        </> : null}
         <div className="ml-auto flex items-center gap-0.5">
           <IconAction
             label="Review current changes in the center"
@@ -476,19 +478,30 @@ function CommitsSection({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasRepo = useSession((state) => Boolean(state.git?.root))
+  const cwd = useSession((state) => state.git?.cwd ?? "")
+  const branch = useSession((state) => state.git?.branch)
+  const head = useSession((state) => state.git?.head)
+  const ahead = useSession((state) => state.git?.ahead ?? 0)
+  const upstream = useSession((state) => state.git?.upstream)
   if (!hasRepo) return null
   return (
     <div className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline", open && "max-h-[38%]")}>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-7 shrink-0 items-center gap-1.5 px-2.5 text-label text-faint transition-colors hover:text-muted-foreground"
-      >
-        <ChevronRightIcon
-          className={cn("size-3 transition-transform duration-200 ease-out", open && "rotate-90")}
-        />
-        Commits
-      </button>
+      {/* The branch names the history, so it titles this row; Push publishes
+          that history, so it sits here and only while there is something
+          to publish or report. */}
+      <div className="flex h-7 shrink-0 items-center pr-1.5">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex h-7 min-w-0 flex-1 items-center gap-1.5 px-2.5 text-label text-faint transition-colors hover:text-muted-foreground"
+        >
+          <ChevronRightIcon
+            className={cn("size-3 shrink-0 transition-transform duration-200 ease-out", open && "rotate-90")}
+          />
+          <span className="truncate">{branch ? `Commits on ${branch}` : "Commits"}</span>
+        </button>
+        {head && branch ? <PushControl cwd={cwd} branch={branch} ahead={ahead} upstream={upstream} /> : null}
+      </div>
       {open ? (
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <GitLog onPickFile={onPickFile} onPickCommit={onPickCommit} />
