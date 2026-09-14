@@ -77,7 +77,7 @@ export function installGitIpc(context: GitIpcContext): void {
     withHost((host) => host.gitCommitDiffAll(hash))
   )
   const dataRoot = app.getPath("userData")
-  const directory = utilityModelDirectory({ dataRoot, env: process.env })
+  const directory = utilityModelDirectory({ dataRoot, appData: app.getPath("appData") })
   const migration = migrateUtilityModels(
     legacyUtilityModelDirectory(dataRoot),
     directory

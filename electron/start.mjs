@@ -29,10 +29,18 @@ const hot = process.argv.includes("--hot")
 // means every "Restart Mako" here drops the calls of the desk you actually use,
 // and every install there closes this one. `--shared` opts back in on purpose.
 const shared = process.argv.includes("--shared")
-const profile = process.env.MAKO_PROFILE || (process.argv.includes("--sandbox") ? `sandbox-${createHash("sha256").update(root).digest("hex").slice(0, 8)}` : shared ? undefined : "dev")
+// Provider processes inside the installed app inherit these. If they leak into
+// this launcher, `npm run dev` attaches to that app instead of the `dev` profile.
+const env = { ...process.env }
+delete env.ELECTRON_RUN_AS_NODE
+if (!shared && env.MAKO_HOST_ONLY === "1") {
+  for (const key of ["MAKO_DATA_ROOT", "MAKO_HOST_ONLY", "MAKO_STANDALONE", "MAKO_WEB_SOCKET", "MAKO_WEB_ONLY", "MAKO_CLIENT_ID", "VITE_DEV_SERVER_URL"])
+    delete env[key]
+}
+const profile = env.MAKO_PROFILE || (process.argv.includes("--sandbox") ? `sandbox-${createHash("sha256").update(root).digest("hex").slice(0, 8)}` : shared ? undefined : "dev")
 const appData = process.platform === "darwin" ? join(homedir(), "Library", "Application Support") : process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming") : process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
-const dataRoot = runtimeDataRoot(appData, { ...process.env, MAKO_PROFILE: profile })
-const runtime = await ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...process.env, MAKO_PROFILE: profile } })
+const dataRoot = runtimeDataRoot(appData, { ...env, MAKO_PROFILE: profile })
+const runtime = await ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...env, MAKO_PROFILE: profile } })
 const socket = runtime.socket
 // A profile host stops itself once nothing has used it for a while. This
 // launcher is a user, even between page loads, so it holds a lease keyed by
@@ -77,7 +85,7 @@ const compiler = spawn(
 const stopPreloadBuild = await buildPreload({ watch: true })
 
 const hostEnvironment = {
-  ...process.env,
+  ...env,
   VITE_DEV_SERVER_URL: url,
   MAKO_PROFILE: profile,
   MAKO_DATA_ROOT: dataRoot,

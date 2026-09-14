@@ -27,6 +27,19 @@ export const STORAGE_BRIDGE_DOCUMENT = `${DESK_ORIGIN}/storage-bridge.html`
 export const DESK_BACKGROUND = "#140f0d"
 
 /**
+ * Where macOS puts the traffic lights in a `hiddenInset` desk window.
+ *
+ * Centred in the 38px title strip rather than eyeballed: the button group is
+ * 12px tall, so `(38 - 12) / 2` puts it on the same line as the panel toggle
+ * and the new-session button beside it, and `x` leaves the group clear of the
+ * title bar's `pl-[86px]` inset. Every window that hides its title bar reads
+ * it from here — the host's own window and the desktop client's each had
+ * their own numbers, and the client's sat three pixels low, which is enough
+ * to make the whole row look broken.
+ */
+export const DESK_TRAFFIC_LIGHTS = { x: 14, y: 13 } as const
+
+/**
  * Every scheme Mako's renderers reach, for `protocol.registerSchemesAsPrivileged`.
  * Electron accepts that call once per process, before `app` is ready, so the
  * host and the client each register this whole list.

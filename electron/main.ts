@@ -27,7 +27,7 @@ import { localBrowsers } from "./browser-discovery.js"
 import { DeskBrowser } from "./desk-browser.js"
 import { deskPageForWindow } from "./desk-browser-window.js"
 import { deskUrlPolicy } from "./desk-browser-policy.js"
-import { DESK_BACKGROUND, deskUrl, privilegedSchemes } from "./desk-scheme.js"
+import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
 import { compileCacheStatus } from "./compile-cache.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
@@ -38,6 +38,7 @@ import { WorkspaceFiles } from "./host-workspace.js"
 import { WorkspaceGit } from "./host-git.js"
 import { resolveFilePreview } from "./file-previews.js"
 import { providerHost } from "./providers/index.js"
+import { describeConnection } from "./providers/connection-capability.js"
 import { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { RewindInput } from "./contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "./contracts/live-actions.js"
@@ -161,6 +162,7 @@ import {
   type AccountHarness,
   type AccountProvider,
 } from "./accounts.js"
+import type { ProviderConnectionAction } from "./contracts/provider-connection.js"
 import { daemonLoginEnabled, setDaemonLogin } from "./daemon-login.js"
 import { buildTag } from "./build-identity.js"
 import {
@@ -623,11 +625,7 @@ async function createWindow() {
     minWidth: 900,
     minHeight: 620,
     titleBarStyle: "hiddenInset",
-    // Centred in the 38px title strip, not eyeballed: the button group is 12px
-    // tall, so (38 - 12) / 2 puts it on the same line as the panel toggles
-    // beside it. At y:18 it sat five pixels low and the whole row read as
-    // broken.
-    trafficLightPosition: { x: 14, y: 13 },
+    trafficLightPosition: { ...DESK_TRAFFIC_LIGHTS },
     backgroundColor: DESK_BACKGROUND,
     show: false,
     webPreferences: {
@@ -998,6 +996,29 @@ function bindIpc() {
       return { kind: "prepared" as const, prompt, cwd: thread.ref.cwd ?? "" }
     }
   )
+  /* Provider transports with their own sign-in (Cursor's SDK). */
+  const listConnections = (refresh = false) =>
+    Promise.all(
+      providerHost.connections.list().map((capability) => describeConnection(capability, refresh))
+    )
+  handle("mako:provider-connections", (_e, refresh?: boolean) => listConnections(refresh === true))
+  handle(
+    "mako:provider-connection-action",
+    async (_e, provider: string, action: ProviderConnectionAction) => {
+      const capability = providerHost.connections.get(provider)
+      if (!capability) throw new Error(`${provider} has no connection to manage`)
+      if (action.kind !== "refresh") await capability.act(action)
+      return describeConnection(capability, action.kind === "refresh")
+    }
+  )
+  for (const capability of providerHost.connections.list()) {
+    capability.onChange?.(() => {
+      // The transport a new thread opens through changed, and with it the
+      // models on offer: discovery runs again and every window hears both.
+      void harnessProfile(capability.provider, true).catch(() => undefined)
+      void listConnections().then((connections) => emit({ type: "provider-connections", connections }))
+    })
+  }
   /* Harness accounts: several logins per CLI, Orca-style isolated homes. */
   handle("mako:accounts", () => accountCatalog())
   handle("mako:account-capture", (_e, harness: AccountHarness, name: string) =>

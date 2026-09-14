@@ -11,7 +11,7 @@ import { invokeRuntime, runtimeFile, subscribeRuntime } from "./runtime-connecti
 import { invokeWithRecovery, type RecoveryLink } from "./runtime-retry.js"
 import { HOST_OUTAGE_MESSAGE } from "./contracts/host-connection.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
-import { DESK_BACKGROUND, deskUrl, privilegedSchemes } from "./desk-scheme.js"
+import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 
@@ -73,7 +73,7 @@ async function openWindow(preview = false) {
     title: isDev ? "Mako Dev" : "Mako", width: 1440, height: 960, minWidth: 640, minHeight: 540,
     // Painted before the renderer is: a resize or the first frame never flashes white.
     backgroundColor: DESK_BACKGROUND,
-    show: false, titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 },
+    show: false, titleBarStyle: "hiddenInset", trafficLightPosition: { ...DESK_TRAFFIC_LIGHTS },
     webPreferences: { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`] },
   })
   // Shown on the first paint rather than on load: `loadURL` settles on

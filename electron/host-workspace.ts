@@ -239,8 +239,8 @@ export class WorkspaceFiles {
    * takes longer to draw than to read. Both are reported rather than silently
    * applied — a truncated file that does not say so is a lie about the code.
    */
-  async read(path: string): Promise<FileContents> {
-    const absolute = await this.resolvePath(path)
+  async read(requested: string): Promise<FileContents> {
+    const { absolute, path } = await this.locate(requested)
     const info = await stat(absolute)
     if (info.isDirectory()) throw new Error(`${path} is a directory`)
     const extension = extname(path).toLowerCase()
@@ -306,6 +306,58 @@ export class WorkspaceFiles {
     } finally {
       await handle.close()
     }
+  }
+
+  /**
+   * The file a request names.
+   *
+   * The path is tried against the workspace root first. When that misses, a
+   * relative request is treated as a *name* and matched by suffix against the
+   * tracked file list, because that is what it usually is: an answer writes
+   * `use-row-flip.ts` in prose, the transcript turns any inline code that
+   * looks like a filename into a link (`inlineFileTarget`), and the file is
+   * three directories down. Resolving the name against the root produced
+   * `ENOENT … '/Users/you/project/use-row-flip.ts'` — a path the reader never
+   * typed, about a file that does exist.
+   *
+   * One match is the answer. Several or none is a sentence naming what was
+   * looked for, never a stat error. Absolute requests are taken literally:
+   * `/tmp/report.md` means that file or nothing.
+   */
+  private async locate(
+    requested: string
+  ): Promise<{ absolute: string; path: string }> {
+    const absolute = await this.resolvePath(requested)
+    const found = await stat(absolute).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") return false
+        throw error
+      }
+    )
+    if (found) return { absolute, path: requested }
+    if (isAbsolute(requested)) throw new Error(`No file at ${requested}`)
+    const matches = await this.matchByName(requested)
+    const only = matches[0]
+    if (only && matches.length === 1)
+      return { absolute: await this.resolvePath(only), path: only }
+    if (matches.length === 0)
+      throw new Error(`No file named ${requested} in this project`)
+    const shown = matches.slice(0, 4).join(", ")
+    throw new Error(
+      `${matches.length} files are named ${requested} — ${shown}${matches.length > 4 ? ", and more" : ""}. Open it by its full path.`
+    )
+  }
+
+  /** Tracked files whose path is, or ends with, the requested name. */
+  private async matchByName(requested: string): Promise<string[]> {
+    const wanted = requested.replaceAll("\\", "/").replace(/^\.\//, "")
+    if (!wanted || wanted.startsWith("../")) return []
+    const files = await this.list().catch(() => [])
+    const suffix = `/${wanted}`
+    return files
+      .map((file) => file.path)
+      .filter((path) => path === wanted || path.endsWith(suffix))
   }
 
   /**

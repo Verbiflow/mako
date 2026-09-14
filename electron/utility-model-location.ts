@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readdir, rename, rm, rmdir, stat, utimes, writeFile, readFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { basename, join, resolve, sep } from "node:path"
 import { utilityProviderSchema } from "./utility-models.js"
 
 /**
@@ -10,16 +10,28 @@ import { utilityProviderSchema } from "./utility-models.js"
  * machine, so keeping the ciphertext under each profile's data root only meant
  * connecting Gemini once in the installed app, again in `npm run dev`, and
  * again in every review profile. They live beside the other per-user state in
- * `~/.mako`; a host started with an explicit `MAKO_DATA_ROOT` is an isolated
- * fixture and keeps them inside that root so a test never reads, writes, or
- * disconnects the user's real connections.
+ * `~/.mako`.
+ *
+ * A fixture host keeps them inside its own root so a test never reads,
+ * writes, or disconnects the user's real connections. What marks a fixture is
+ * where its root is, not how it was started: the desktop launcher hands every
+ * host — the installed app's, `npm run dev`'s, each profile's — its directory
+ * as `MAKO_DATA_ROOT`, so the variable alone means nothing (the relay gate in
+ * `main.ts` reads it the same way). A profile lives under the platform's
+ * application-data directory; a temporary root anywhere else is isolated.
+ * When this keyed on the variable no real host ever reached the user store
+ * and the one-time move was a no-op from a directory onto itself.
  */
 export function utilityModelDirectory(input: {
   dataRoot: string
-  env: NodeJS.ProcessEnv
+  /** `app.getPath("appData")`: where profile roots live. */
+  appData: string
   home?: string
 }): string {
-  if (input.env.MAKO_DATA_ROOT) return join(input.dataRoot, "utility-models")
+  const root = resolve(input.dataRoot)
+  const appData = resolve(input.appData)
+  const isProfile = root === appData || root.startsWith(appData + sep)
+  if (!isProfile) return join(root, "utility-models")
   return join(input.home ?? homedir(), ".mako", "utility-models")
 }
 

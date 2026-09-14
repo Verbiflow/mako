@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } from "./providers/live-driver.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
-import { observeTurnUpdate, turnVerdict } from "./acp-turn-verdict.js"
+import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpInitialSelection, acpModeChange, acpSessionModes } from "./acp-access.js"
 import type { AcpLaunchOptions } from "./providers/acp-source.js"
@@ -15,7 +15,8 @@ import { accessTierOfModeId, hostAccessDecision, type AccessTier } from "./contr
  * runs as a subprocess speaking JSON-RPC over stdio, streams every thought
  * and tool call as it happens, and *asks* before doing anything its mode
  * does not already allow — which is exactly the part headless running gives
- * up. Claude Code ships an official adapter; Cursor speaks it natively.
+ * up. Claude Code ships an official adapter; Grok, Devin and OpenCode speak
+ * it natively.
  *
  * This host keeps the protocol entirely on this side of the IPC boundary.
  * The renderer sees three things: a session (status, modes), a stream of
@@ -52,7 +53,6 @@ import {
 } from "@agentclientprotocol/sdk"
 import { accountEnv } from "./accounts.js"
 import { AcpStartupWatch, stderrDetail } from "./acp-startup.js"
-import { repairSessionOptions } from "./acp-options-repair.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { trackProviderChild } from "./provider-children.js"
 import { errorMessage } from "./live-runtime.js"
@@ -68,6 +68,7 @@ import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { acpMcpServers } from "./mcp-runtime.js"
 import type { McpTransport } from "./shared.js"
 import type {
+  LiveInputQuestion,
   LivePermissionRequest,
   LivePermissionResponse,
   PromptAttachment,
@@ -137,11 +138,26 @@ async function requestElicitation(
     Object.keys(params.requestedSchema.properties ?? {}).length
   )
     return { action: "cancel" }
+  const response = await askUser(live, params.message, questions)
+  if (response.kind !== "answers") return { action: "decline" }
+  const content = elicitationContent(questions, response.answers)
+  return content ? { action: "accept", content } : { action: "decline" }
+}
+
+/**
+ * Put questions to the user on the conversation's question card and wait.
+ * A closed session answers every open question with a dismissal.
+ */
+async function askUser(
+  live: Live,
+  title: string,
+  questions: LiveInputQuestion[]
+): Promise<LivePermissionResponse> {
   const requestId = `${live.id}-input-${live.pendingPermissions.size}-${Date.now()}`
   const request: LivePermissionRequest = {
     id: requestId,
     sessionId: live.id,
-    title: params.message,
+    title,
     options: [],
     questions,
   }
@@ -150,9 +166,7 @@ async function requestElicitation(
     emit({ type: "acp-permission", request })
   })
   live.pendingPermissions.delete(requestId)
-  if (response.kind !== "answers") return { action: "decline" }
-  const content = elicitationContent(questions, response.answers)
-  return content ? { action: "accept", content } : { action: "decline" }
+  return response
 }
 
 export function acpState(id: string): LiveSessionState | null {
@@ -329,7 +343,6 @@ export async function liveStart(
         acpObserveNativeMode(id, params.update.currentModeId)
         return
       }
-      if (live.turn) observeTurnUpdate(live.turn, params)
       forward(live, params, emit, updateState, live.state.settings)
     },
   }
@@ -411,23 +424,7 @@ export async function liveStart(
           ),
     })
     live.sessionId = session.sessionId
-    // An agent whose backend fetch failed can open a session with an
-    // incomplete option set; it is asked to rebuild the set before the
-    // tuning is applied, so a saved effort or context is never refused as
-    // "cannot change" for what is really a dropped connection.
-    live.configOptions = source?.degradedOptions
-      ? await watch.step("session/options", repairSessionOptions({
-          options: session.configOptions,
-          model: options.tuning?.model,
-          degraded: source.degradedOptions,
-          set: async (request) =>
-            (await connection.setSessionConfigOption({ sessionId: session.sessionId, ...request })).configOptions,
-          onAttempt: (attempt, refusal) =>
-            hostWarn("acp", "session options incomplete", {
-              harness, conversation: id, pid: child.pid, attempt, refusal: refusal ?? "rebuilt set still incomplete",
-            }),
-        }))
-      : session.configOptions
+    live.configOptions = session.configOptions
     live.state.settings = acpObservedSettings(live.configOptions, session.model)
     const applied = await applyTuning(live, options.tuning, true)
     const policy = source?.access
@@ -602,9 +599,9 @@ export async function livePrompt(
     throw new Error("The session changed while preparing the prompt")
   const turn = new AcpPromptTurn((result) => {
     if (live.turn !== turn || live.state.status === "closed" || live.state.connection === "disconnected") return
-    const verdict = turnVerdict(result, turn.finalText, providerHost.acpSources.get(live.harness)?.reportedFailure)
+    const verdict = turnVerdict(result)
     if (verdict.status === "failed")
-      hostWarn("acp", result.kind === "failed" ? "prompt failed" : "prompt ended on a reported error", {
+      hostWarn("acp", "prompt failed", {
         harness: live.harness,
         conversation: id,
         stop: verdict.lastStop,

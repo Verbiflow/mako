@@ -1,25 +1,18 @@
 import { createHash } from "node:crypto"
-import { homedir } from "node:os"
-import { join, sep } from "node:path"
+import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { cursorSdkAgentIdForDirectory, cursorSdkIndexPath, readCursorSdkAgent } from "@mako/sessions"
 import { z } from "zod"
-import { resumable, type ProviderBinding, type ResumeVerdict } from "../../contracts/conversation-control.js"
-import { probeOpenFiles } from "../open-files-probe.js"
 
 /**
- * When a Cursor ACP session may be picked up again with `session/load`.
+ * Checkpoints for Cursor's stores: what the conversation's head was when a
+ * binding was saved, so a resume can say whether it moved since.
  *
- * Verified 2026-09-12 against cursor-agent 2026.09.10: `session/load` reopens
- * a session whose store lives under `~/.cursor/acp-sessions/<id>/store.db`,
- * replays its history, keeps writing to that same store, and answers
- * "Session not found" for a store under `chats/`. So only an acp-sessions
- * store is resumable here; a chats store is the CLI's own and continues
- * through `cursor-agent --resume`.
- *
- * The checkpoint is the store's own head, not a hash of the file: the store
- * is SQLite in WAL mode, so new turns sit in `store.db-wal` while `store.db`
- * itself is unchanged, and hashing a 45 MB file per turn is a cost with no
- * information in it. The root blob id moves with every turn.
+ * Every writer of this store format — `cursor-agent acp`, `cursor-agent -p`,
+ * the SDK — moves a root blob with each turn, and the digest is that root
+ * plus the blob count, never a hash of the file: the store is SQLite in WAL
+ * mode, so new turns sit in `store.db-wal` while `store.db` is unchanged,
+ * and hashing a 45 MB file per turn is a cost with no information in it.
  */
 const MetaSchema = z.object({
   agentId: z.string().optional(),
@@ -40,75 +33,57 @@ const MetaRowSchema = z.object({
 
 const CountSchema = z.object({ n: z.number() })
 
-interface CursorStoreHead {
-  latestRootBlobId: string
-  blobs: number | null
+function blobCount(db: DatabaseSync): number | null {
+  const blobs = CountSchema.safeParse(db.prepare("SELECT count(*) AS n FROM blobs").get())
+  return blobs.success ? blobs.data.n : null
 }
 
-function readStoreHead(db: DatabaseSync): CursorStoreHead | undefined {
-  const row = MetaRowSchema.safeParse(db.prepare("SELECT value FROM meta WHERE key = '0'").get())
-  if (!row.success) return undefined
-  let parsed: z.infer<typeof MetaSchema>
+function digest(parts: readonly (string | number | null)[]): string {
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex")
+}
+
+/**
+ * A `cursor-agent` store's head: `cursor-agent` keeps its `latestRootBlobId`
+ * in the store's own meta row.
+ */
+export function cursorLegacyCheckpoint(path: string, id: string): string | undefined {
+  let db: DatabaseSync | undefined
   try {
+    db = new DatabaseSync(path, { readOnly: true })
+    const row = MetaRowSchema.safeParse(db.prepare("SELECT value FROM meta WHERE key = '0'").get())
+    if (!row.success) return undefined
     const meta = MetaSchema.safeParse(JSON.parse(row.data.value))
-    if (!meta.success) return undefined
-    parsed = meta.data
+    if (!meta.success || !meta.data.latestRootBlobId) return undefined
+    return digest([id, meta.data.latestRootBlobId, blobCount(db)])
   } catch {
     return undefined
+  } finally {
+    db?.close()
   }
-  if (!parsed.latestRootBlobId) return undefined
-  const blobs = CountSchema.safeParse(db.prepare("SELECT count(*) AS n FROM blobs").get())
-  return { latestRootBlobId: parsed.latestRootBlobId, blobs: blobs.success ? blobs.data.n : null }
 }
 
-export function cursorResumePolicy(home = homedir()) {
-  const root = join(home, ".cursor", "acp-sessions")
-  const identity = (path: string): string | undefined => {
-    if (!path.startsWith(`${root}${sep}`)) return undefined
-    const rest = path.slice(root.length + 1).split(sep)
-    return rest.length === 2 && rest[1] === "store.db" && /^[\w-]+$/.test(rest[0] ?? "")
-      ? rest[0]
-      : undefined
+/**
+ * The same digest for an SDK agent, named by its `agent-<hash>` directory.
+ * The SDK writes the store in the same format but leaves the meta row's
+ * `latestRootBlobId` empty: the head it moves with each turn is
+ * `latest_checkpoint_ref_json` in the state root's `index.db`, so the root
+ * comes from there and only the blob count from the store. The directory
+ * rather than the meta row names the agent because an imported store keeps
+ * the `cursor-agent` session's meta, and the SDK agent may sit under another id.
+ */
+export function cursorSdkCheckpoint(stateRoot: string, directoryName: string): string | undefined {
+  const index = cursorSdkIndexPath(stateRoot)
+  const agentId = cursorSdkAgentIdForDirectory(index, directoryName)
+  if (!agentId) return undefined
+  const record = readCursorSdkAgent(index, agentId)
+  if (!record?.rootId) return undefined
+  let db: DatabaseSync | undefined
+  try {
+    db = new DatabaseSync(join(stateRoot, "agents", directoryName, "store.db"), { readOnly: true })
+    return digest([agentId, record.rootId, blobCount(db)])
+  } catch {
+    return undefined
+  } finally {
+    db?.close()
   }
-  const checkpoint = async (path: string): Promise<string | undefined> => {
-    const id = identity(path)
-    if (!id) return undefined
-    let db: DatabaseSync | undefined
-    try {
-      db = new DatabaseSync(path, { readOnly: true })
-      const head = readStoreHead(db)
-      if (!head) return undefined
-      return createHash("sha256")
-        .update(JSON.stringify([id, head.latestRootBlobId, head.blobs]))
-        .digest("hex")
-    } catch {
-      return undefined
-    } finally {
-      db?.close()
-    }
-  }
-  const resumeVerdict = async (binding: ProviderBinding): Promise<ResumeVerdict> => {
-    if (!binding.nativeId || !binding.path || identity(binding.path) !== binding.nativeId)
-      return { kind: "unavailable", reason: "The saved binding does not name a Cursor ACP session store." }
-    // Another cursor-agent with the store open is the owner; a second loader
-    // would write the same SQLite file from two processes. `cursor-agent` is
-    // a shell wrapper that execs Node, so lsof lists its files under `node`;
-    // matching the wrapper's name alone never saw an open store.
-    const open = await probeOpenFiles({
-      processNames: ["node", "cursor-agent", "Cursor"],
-      signal: AbortSignal.timeout(6_000),
-      accept: (path) => path === binding.path,
-    }).catch(() => ({ kind: "unavailable" as const }))
-    if (open.kind !== "available")
-      return { kind: "unavailable", reason: "Whether another cursor-agent has this session open could not be checked." }
-    if (open.paths.length > 0) return { kind: "held", by: "another cursor-agent process" }
-    const current = await checkpoint(binding.path)
-    if (current === undefined)
-      return { kind: "unavailable", reason: "The session store is missing or unreadable." }
-    return { kind: "resumable", record: binding.checkpoint === undefined || current === binding.checkpoint ? "same" : "moved" }
-  }
-  /** The strict form: unowned and unchanged since the binding's checkpoint. */
-  const canResumeBinding = async (binding: ProviderBinding): Promise<boolean> =>
-    resumable(await resumeVerdict(binding), "same")
-  return { checkpoint, resumeVerdict, canResumeBinding }
 }

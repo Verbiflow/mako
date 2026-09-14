@@ -1,90 +1,51 @@
-import { homedir } from "node:os"
-import { join } from "node:path"
-import {
-  normalizeCursorModels,
-  type CursorConfig,
-} from "@mako/sessions/model-catalog"
-import { z } from "zod"
+import { normalizeCursorSdkModels } from "@mako/sessions"
+import type { SdkModelListItem } from "./sdk/wire.js"
 import {
   availableProviderProfile,
   type ProviderProfileLoader,
 } from "../profile-loader.js"
-import { readJson, rpcRequest } from "../profile-transport.js"
 
-const ChoiceSchema = z.object({
-  value: z.string().optional(),
-  name: z.string().optional(),
-  description: z.string().nullish(),
-})
-const ChoicesSchema = z.array(
-  z.union([
-    z.object({
-      group: z.string().optional(),
-      name: z.string().optional(),
-      options: z.array(ChoiceSchema),
-    }),
-    ChoiceSchema,
-  ])
-)
-const ModelsSchema = z.object({
-  models: z.array(
-    z.object({
-      value: z.string(),
-      name: z.string().optional(),
-      configOptions: z
-        .array(
-          z.object({
-            id: z.string(),
-            name: z.string().optional(),
-            category: z.string().nullish(),
-            type: z.string().optional(),
-            currentValue: z.union([z.string(), z.boolean()]).optional(),
-            options: z
-              .union([ChoicesSchema, z.record(z.string(), ChoicesSchema)])
-              .optional(),
-          })
-        )
-        .optional(),
-    })
-  ),
-})
+export interface CursorProfileOptions {
+  /** The SDK's model list for the account the host is signed in as. */
+  sdkModels(env: NodeJS.ProcessEnv, cwd?: string): Promise<SdkModelListItem[]>
+  /** Names the account, so a sign-in change invalidates the catalog. */
+  accountKey(): string
+}
 
-export const cursorProfileLoader: ProviderProfileLoader = {
-  provider: "cursor",
-  label: "Cursor",
-  transport: "acp",
-  capabilities: [
-    "start",
-    "resume-acp",
-    "stream",
-    "interrupt",
-    "steer",
-    "permissions",
-    "images",
-    "commands",
-    "mcp",
-    "models",
-  ],
-  cacheKey: () => "",
-  async load(env, cwd) {
-    const result = await rpcRequest(
-      "cursor-agent",
-      ["acp"],
-      "cursor/list_available_models",
-      env,
-      true,
-      {},
-      cwd
-    )
-    const configured = await readJson<CursorConfig>(
-      join(homedir(), ".cursor", "cli-config.json")
-    )
-    return availableProviderProfile(
-      cursorProfileLoader,
-      normalizeCursorModels(
-        ModelsSchema.parse(result),
-        configured?.model?.modelId
-      )
-    )
-  },
+const CAPABILITIES = [
+  "start",
+  "resume-acp",
+  "stream",
+  "interrupt",
+  "steer",
+  "permissions",
+  "images",
+  "mcp",
+  "models",
+]
+
+/**
+ * Cursor's model catalog: what the SDK offers this account, under the SDK's
+ * own ids, with reasoning and speed as parameters. The cache key names the
+ * account, so signing in as someone else discards the previous list instead
+ * of serving it for a thread that will run under the new key.
+ */
+export function createCursorProfileLoader(options: CursorProfileOptions): ProviderProfileLoader {
+  const loader: ProviderProfileLoader = {
+    provider: "cursor",
+    label: "Cursor",
+    transport: "sdk",
+    capabilities: CAPABILITIES,
+    cacheKey: () => options.accountKey(),
+    async load(env, cwd) {
+      const catalog = normalizeCursorSdkModels(await options.sdkModels(env, cwd))
+      return availableProviderProfile(loader, catalog)
+    },
+  }
+  return loader
+}
+
+/** The loader as fixtures see it: the SDK's list is whatever the test supplies. */
+export function cursorProfileLoaderWith(models: SdkModelListItem[]): ProviderProfileLoader {
+  return createCursorProfileLoader({ sdkModels: async () => models, accountKey: () => "fixture" })
 }
