@@ -38,6 +38,7 @@ import type {
 } from "../shared.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest } from "../shared.js"
 import type { MessageAnchor } from "./message-anchor.js"
+import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type {
   Automation,
   BlockAddress,
@@ -109,8 +110,41 @@ export interface BridgeTransport {
 }
 
 /** The same wire methods are used by Electron preload and the local web desk. */
+/**
+ * Electron's wrapper around anything a host handler throws:
+ * `Error invoking remote method 'mako:read-live-file': Error: ENOENT …`.
+ */
+const HOST_INVOKE_PREFIX =
+  /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/
+
 export function createMakoBridge(transport: BridgeTransport) {
-  const invokeTrustedHost = transport.invoke
+  /**
+   * A host error reaches the UI as the host's own sentence.
+   *
+   * The viewer, the toasts and the recovery notices print `error.message`,
+   * and over Electron IPC that message arrives behind an internal channel
+   * name — a reader who clicked a file in an answer was shown
+   * `Error invoking remote method 'mako:read-live-file': Error: ENOENT …`
+   * where a sentence about their file belonged. The local web transport
+   * already throws the host's message alone, so unwrapping here is also what
+   * makes the two clients say the same thing.
+   *
+   * The error object itself is never replaced: `runtime-retry.ts` and the web
+   * transport decide what to do by `instanceof`, so only the message is
+   * rewritten, and only when the prefix is actually there.
+   */
+  const invokeTrustedHost = async <Result>(
+    channel: string,
+    ...args: unknown[]
+  ): Promise<Result> => {
+    try {
+      return await transport.invoke<Result>(channel, ...args)
+    } catch (error) {
+      if (error instanceof Error && HOST_INVOKE_PREFIX.test(error.message))
+        error.message = error.message.replace(HOST_INVOKE_PREFIX, "")
+      throw error
+    }
+  }
 
   function threadContexts(
     paths: string[]
@@ -295,6 +329,12 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:live-mode", id, modeId),
     liveCancel: (id: string) => invokeTrustedHost<void>("mako:live-cancel", id),
     liveClose: (id: string) => invokeTrustedHost<void>("mako:live-close", id),
+
+    /* Provider transports with their own sign-in. */
+    providerConnections: (refresh?: boolean) =>
+      invokeTrustedHost<ProviderConnection[]>("mako:provider-connections", refresh),
+    providerConnectionAction: (provider: string, action: ProviderConnectionAction) =>
+      invokeTrustedHost<ProviderConnection>("mako:provider-connection-action", provider, action),
 
     /* Harness accounts: several logins per CLI. */
     accounts: () => invokeTrustedHost<AccountCatalog>("mako:accounts"),

@@ -46,6 +46,7 @@ const reads = [
   "mako:live-state",
   "mako:harness-availability",
   "mako:accounts",
+  "mako:provider-connections",
   "mako:list-models",
   "mako:list-plugins",
   "mako:usage",

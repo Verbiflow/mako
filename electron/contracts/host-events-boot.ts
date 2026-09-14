@@ -22,6 +22,7 @@ import type {
   TreeNode,
 } from "./conversation-session.js"
 import type { GitStatus } from "./git-workspace-search.js"
+import type { ProviderConnection } from "./provider-connection.js"
 import type { Capabilities } from "./mcp-skills-integrations.js"
 import type { HarnessProfile } from "./providers-acp.js"
 
@@ -64,6 +65,8 @@ export type HostEventBody =
   | { type: "capabilities"; capabilities: Capabilities }
   /** One provider's discovery finished; window-wide, keyed by the workspace it ran in. */
   | { type: "harness-profile"; profile: HarnessProfile; cwd?: string }
+  /** A provider transport's sign-in changed; window-wide. */
+  | { type: "provider-connections"; connections: ProviderConnection[] }
   | { type: "notice"; level: "info" | "success" | "error"; message: string }
   /** The file open in the viewer changed on disk (any writer). */
   | { type: "file-changed"; path: string }

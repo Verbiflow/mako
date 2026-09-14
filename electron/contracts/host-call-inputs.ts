@@ -415,6 +415,16 @@ export const hostCallInputs = {
     z.union([z.literal("steer"), z.literal("followUp")]).optional(),
     z.array(z.object({ mimeType: z.string(), data: z.string() })).optional(),
   ]),
+  "mako:provider-connection-action": z.tuple([
+    z.string(),
+    z.union([
+      z.object({ kind: z.literal("refresh") }),
+      z.object({ kind: z.literal("sign-in-browser") }),
+      z.object({ kind: z.literal("sign-in-key"), apiKey: z.string() }),
+      z.object({ kind: z.literal("sign-out") }),
+    ]),
+  ]),
+  "mako:provider-connections": z.tuple([z.boolean().optional()]),
   "mako:pull-branches": z.tuple([]),
   "mako:pull-request": z.tuple([]),
   "mako:pull-requests": z.tuple([z.number().optional()]),

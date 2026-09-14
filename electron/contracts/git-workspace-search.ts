@@ -175,7 +175,12 @@ export interface ExternalEditor {
 
 /** One workspace file, opened for reading. */
 export interface FileContents {
-  /** Workspace-relative, as it was asked for. */
+  /**
+   * The file that was read, workspace-relative or absolute. Usually what was
+   * asked for; when a request named a file without its directory
+   * (`use-row-flip.ts`) it is the one tracked file that name resolves to, so
+   * a reader, a refresh and an external editor all name the same thing.
+   */
   path: string
   contents: string
   media?: "image" | "pdf" | "audio" | "video" | "spreadsheet"
