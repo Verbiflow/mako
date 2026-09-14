@@ -16,12 +16,6 @@ export function AgentPicker() {
   const [open, setOpen] = useState(false)
   const selected = useThreads((state) => state.composerHarness)
 
-  useEffect(() => {
-    const show = () => setOpen(true)
-    window.addEventListener("mako:pick-agent", show)
-    return () => window.removeEventListener("mako:pick-agent", show)
-  }, [])
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>

@@ -231,9 +231,34 @@ function AccessPicker({
   onSelect: (modeId: string) => void
 }) {
   const [open, setOpen] = useState(false)
-  const selected = modes.find((mode) => mode.id === current)
+  const selected =
+    modes.find((mode) => mode.id === current) ??
+    (modes.length === 1 ? modes[0] : undefined)
   const label = selected ? modeLabel(selected) : "Access"
   const full = selected?.access === "full"
+  if (modes.length === 1 && selected) {
+    // A one-mode provider offers nothing to choose: the chip states the one
+    // level there is rather than opening a ladder of a single rung.
+    const title = [modeDetail(selected, harness), selected.access ? accessTierInfo(selected.access).summary : null]
+      .filter(Boolean)
+      .join(" · ")
+    return (
+      <span
+        aria-label={`Access: ${label}`}
+        title={title || label}
+        className="flex h-7 max-w-40 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint"
+      >
+        {full ? (
+          <TriangleAlertIcon className="size-3 shrink-0 text-caution" />
+        ) : (
+          <ShieldIcon className="size-3 shrink-0" />
+        )}
+        <span data-collapse="1" className="truncate">
+          {label}
+        </span>
+      </span>
+    )
+  }
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
