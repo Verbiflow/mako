@@ -145,7 +145,17 @@ export const Prose = memo(function Prose({
   )
 })
 
-/** Latest value, but no more often than one frame per `STREAM_FRAME_MS`. */
+/**
+ * Latest value, but no more often than one frame per `STREAM_FRAME_MS`.
+ *
+ * A pending frame outlives text changes on purpose (cancelling it on each
+ * token would turn the throttle into a debounce that never fires under a
+ * steady stream), so only unmount clears it — and clearing must empty the
+ * ref too. It once did not: StrictMode's simulated remount ran that cleanup
+ * and re-ran the scheduling effect, which saw a "pending" timer that had been
+ * cleared and never scheduled another, so the first token of every streamed
+ * answer stayed on screen until the turn ended ("I", then the tool rows).
+ */
 function useThrottled(text: string, active: boolean): string {
   const [shown, setShown] = useState(text)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -160,7 +170,7 @@ function useThrottled(text: string, active: boolean): string {
 
   useEffect(() => {
     pending.current = text
-    if (!active || timer.current) return
+    if (!active || timer.current !== null) return
     timer.current = setTimeout(() => {
       timer.current = null
       setShown(pending.current)
@@ -169,7 +179,9 @@ function useThrottled(text: string, active: boolean): string {
 
   useEffect(() => {
     return () => {
-      if (timer.current) clearTimeout(timer.current)
+      if (timer.current === null) return
+      clearTimeout(timer.current)
+      timer.current = null
     }
   }, [])
 
