@@ -1,20 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <defs>
     <linearGradient id="ground" x1="0" y1="0" x2="0" y2="32" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#2b3134" />
-      <stop offset="1" stop-color="#14181b" />
+      <stop stop-color="#f6f6f4" />
+      <stop offset="1" stop-color="#bcbcb9" />
     </linearGradient>
-    <radialGradient id="light" cx="16" cy="3" r="22" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#6a7276" stop-opacity=".5" />
-      <stop offset="1" stop-color="#6a7276" stop-opacity="0" />
+    <radialGradient id="sheen" cx="16" cy="3" r="22" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity="0.55" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
     </radialGradient>
     <linearGradient id="fin" x1="9" y1="5" x2="25" y2="27" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ff9661" />
-      <stop offset=".5" stop-color="#e07851" />
-      <stop offset="1" stop-color="#a8472a" />
+      <stop stop-color="#4b5154" />
+      <stop offset=".5" stop-color="#2b3134" />
+      <stop offset="1" stop-color="#14181b" />
     </linearGradient>
   </defs>
   <rect width="32" height="32" rx="7" fill="url(#ground)" />
-  <rect width="32" height="32" rx="7" fill="url(#light)" />
+  <rect width="32" height="32" rx="7" fill="url(#sheen)" />
   <path fill="url(#fin)" d="M4.97 5.01C14.94 6.3 20.86 13.77 27.77 26.99L4.97 26.99C8.16 22.52 10.88 13.84 4.97 5.01Z" />
 </svg>
