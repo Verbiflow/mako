@@ -1,6 +1,7 @@
 import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
 import { AppshotButton } from "@/components/composer/appshot-button"
+import { ProviderConnectionNotice } from "@/components/composer/connection-notice"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
 import {
   GitBranchIcon,
@@ -11,7 +12,6 @@ import {
 } from "lucide-react"
 import { registerSlot, registerToolView, type ToolCall } from "@/extend/slots"
 import { registerSurface } from "@/extend/surfaces"
-import { IdentityBadge } from "@/components/identity/identity-badge"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
 import { FileTree } from "@/components/rail/file-tree"
@@ -79,11 +79,13 @@ export function installBuiltins(): () => void {
       minWidth: 360,
     }),
     registerSurface({ id: "agents", label: "Agents", icon: GitBranchIcon, render: AgentsPanel, order: 4, minWidth: 360 }),
-    // Identity, through the same slots a plugin would use.
-    registerSlot("identity", "titlebar.trailing", IdentityBadge, -10),
+    // Identity, through the same slots a plugin would use. It lives in the
+    // rail's footer and only there: the titlebar carried the same avatar six
+    // inches away from it, and one account needs one place to be.
     registerSlot("identity", "rail.footer", IdentityRow, -10),
     registerSlot("control-preview", "transcript.overlay", ControlPreviewOverlay),
     registerSlot("appshot", "composer.controls", AppshotButton, -10),
+    registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
 
     ...["bash", "Bash", "shell", "Shell", "exec_command"].map((name) =>
       registerToolView(name, {
@@ -153,7 +155,7 @@ export function installBuiltins(): () => void {
         body: SkillBody,
       })
     ),
-    ...["TaskCreate", "TaskUpdate", "TodoWrite", "CreatePlan"].map((name) =>
+    ...["TaskCreate", "TaskUpdate", "TodoWrite", "updateTodos", "CreatePlan"].map((name) =>
       registerToolView(name, {
         summary: (call: ToolCall) =>
           argAt(call.arguments, "subject") ??

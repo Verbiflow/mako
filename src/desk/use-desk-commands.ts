@@ -11,6 +11,7 @@ import { installBuiltins } from "@/desk/builtins"
 import { actions, currentTurnRunning, store } from "@/state/session"
 import { git } from "@/state/git"
 import { commitDrafts } from "@/state/commit-drafts"
+import { currentCommitModel } from "@/state/commit-model"
 import { prefsStore, setPref, togglePref } from "@/state/prefs"
 import { updates, updatesStore } from "@/state/updates"
 import { application, applicationStore } from "@/state/application"
@@ -182,10 +183,10 @@ const DESK_COMMANDS: DeskCommand[] = [
     section: "Workspace",
     keys: "mod+shift+g",
     hint: "From the diff, using your connected drafting model",
-    run: () => {
+    run: async () => {
       stage.open("changes")
-      const model = prefsStore.get().commitModel
-      if (!model || model === "current" || model === "auto") {
+      const { model, status } = await currentCommitModel()
+      if (!model || status.kind === "disconnected") {
         window.dispatchEvent(new CustomEvent("mako:settings", { detail: "commits" }))
         return
       }
