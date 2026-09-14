@@ -21,6 +21,12 @@ export interface LiveCapability {
    * A running session's own advertised list still governs that session.
    */
   modes?: LiveSessionMode[]
+  /**
+   * The mode a fresh session runs under when the user has not chosen one.
+   * The desk reports it as the current level so no provider ever opens a
+   * session whose access is unaccounted for.
+   */
+  defaultMode?: string
 }
 
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
