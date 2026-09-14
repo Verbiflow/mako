@@ -217,6 +217,7 @@ export function createClaudeSdkDriver(
     forkPoint: "checkpoint",
     steering: "step",
     modes: CLAUDE_MODES,
+    defaultMode: "default",
     available: () => dependencies.available(),
     async start(cwd, options) {
       if (!options.emit) throw new Error("A live event receiver is required")
