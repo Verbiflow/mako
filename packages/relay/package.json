@@ -8,11 +8,13 @@
   "exports": {
     ".": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsgo -b",
     "test": "npm run -s build && node test/relay.mjs",
-    "typecheck": "tsc -b --force"
+    "typecheck": "tsgo -b --force"
   },
   "dependencies": {
     "zod": "4.4.3"

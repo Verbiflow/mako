@@ -12,7 +12,7 @@
     "start": "next start",
     "test": "tsx test/run.ts",
     "test:live": "node --env-file=.env.local --import tsx test/live.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.2",

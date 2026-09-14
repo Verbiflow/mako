@@ -19,7 +19,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsgo -b",
     "test": "npm run -s build && node test/settings.mjs && node test/claude-title.mjs && node test/activity-stamps.mjs && node test/settings-native.mjs && node test/storage-integrity.mjs && node test/content-fidelity.mjs && node test/cursor-tool-images.mjs && node test/cursor-desktop.mjs && node test/cursor-subagent.mjs && node test/cursor-fork.mjs && node test/transcript.mjs && node test/streaming-correctness.mjs && node test/grok-updates.mjs && node test/grok-catalog.mjs && node test/devin-cli.mjs && node test/opencode.mjs && node test/codex-large.mjs && node test/catalog-growth.mjs && node test/catalog-remove.mjs && node test/daemon.mjs && node test/resume-matrix.mjs",
     "test:matrix": "npm run -s build && node test/resume-matrix.mjs"
   },
