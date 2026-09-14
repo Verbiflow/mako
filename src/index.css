@@ -541,18 +541,6 @@ diffs-container {
       inset 0 1px 0 0 var(--glass-rim);
   }
 
-  /* Progressive blur: dense at the bottom edge, dissolving upward into the image. */
-  .glass-caption {
-    background: linear-gradient(
-      to top,
-      color-mix(in oklab, var(--popover) 78%, transparent) 40%,
-      color-mix(in oklab, var(--popover) 30%, transparent)
-    );
-    -webkit-backdrop-filter: blur(14px) saturate(1.3);
-    backdrop-filter: blur(14px) saturate(1.3);
-    mask-image: linear-gradient(to top, black 62%, transparent);
-  }
-
   .glass-control {
     background: color-mix(in oklab, var(--popover) 70%, transparent);
     -webkit-backdrop-filter: blur(12px) saturate(1.3);
