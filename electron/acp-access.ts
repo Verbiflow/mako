@@ -1,4 +1,4 @@
-import type { SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk"
+import type { SessionConfigOption, SessionMode, SessionModeState } from "@agentclientprotocol/sdk"
 import {
   ACCESS_TIERS,
   accessModeId,
@@ -55,13 +55,12 @@ export function acpNativeModes(
   const entries = Array.isArray(option.options) ? option.options : []
   const availableModes = entries
     .flatMap((entry) => ("options" in entry ? entry.options : [entry]))
-    .map((entry) => ({
-      id: entry.value,
-      name: entry.name,
-      ...(entry.description ? { description: entry.description } : {}),
-    }))
-  if (!availableModes.length || typeof option.currentValue !== "string")
-    return null
+    .map((entry) => {
+      const mode: SessionMode = { id: entry.value, name: entry.name }
+      if (entry.description) mode.description = entry.description
+      return mode
+    })
+  if (!availableModes.length || !option.currentValue) return null
   return { availableModes, currentModeId: option.currentValue }
 }
 
