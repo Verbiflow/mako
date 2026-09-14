@@ -73,9 +73,11 @@ says what broke. They still badge and still banner when you are away.
 - **The app icon** counts distinct threads with something unseen. Not
   events, not running agents. It clears as you open threads, and Settings
   can turn it off.
-- **The titlebar pill** says "2 threads need you" or "3 answers ready" and
-  opens a list, most urgent first (asks, failures, answers), that jumps to
-  the thread. It is absent when nothing waits.
+- **The rail** marks each thread: an unread answer is the brightest mark a
+  row carries, an ask and a failure wear their own, and the Status view
+  groups threads by what they need. The titlebar carried a pill with the
+  same count over its own list; the chrome does not need to repeat what the
+  list beside it already shows, so the pill is gone.
 - **Cmd+Shift+U** opens the next thread that needs you. "Mark every
   notification seen" is in the palette.
 - **Settings > Notifications** holds the desktop toggle (enabling asks the
