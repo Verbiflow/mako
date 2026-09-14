@@ -7,7 +7,6 @@ import {
   notificationFallbackBody,
   notificationHeadline,
   summaryNotification,
-  type AttentionCounts,
   type NotificationKind,
 } from "@/lib/notification-text"
 import { workspaceName } from "@/lib/format"
@@ -119,17 +118,6 @@ export function unseenSubjects(items: readonly NotificationItem[]): string[] {
   for (const item of items)
     if (!item.seen && !subjects.includes(item.subject.id)) subjects.push(item.subject.id)
   return subjects
-}
-
-export function unseenCounts(items: readonly NotificationItem[]): AttentionCounts {
-  const counts: AttentionCounts = { ask: 0, failed: 0, ready: 0 }
-  const seen = new Set<string>()
-  for (const item of items) {
-    if (item.seen || seen.has(item.subject.id)) continue
-    seen.add(item.subject.id)
-    counts[item.kind] += 1
-  }
-  return counts
 }
 
 /** Newest unseen item per thread, most urgent first: asks, failures, answers. */

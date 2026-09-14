@@ -8,6 +8,7 @@ import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import { admitProfile, providers } from "@/state/providers"
+import { providerConnectionsStore } from "@/state/provider-connections"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts } from "@/state/acp-queue"
 import { createHook, createStore, shallowEqual } from "@/state/store"
@@ -207,6 +208,11 @@ function apply(event: HostEvent) {
   }
   if (event.type === "harness-profile") {
     admitProfile(event.profile, event.cwd ?? "")
+    return
+  }
+  if (event.type === "provider-connections") {
+    providerConnectionsStore.set({ connections: event.connections, loadedAt: Date.now() })
+    void threads.refreshCapabilities()
     return
   }
   const active = tabsStore.get().activeId

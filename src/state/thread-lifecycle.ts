@@ -84,7 +84,7 @@ export const threadLifecycle = {
       applyThreadArchives(await getMako().archiveThread({ id: crypto.randomUUID(), target, archived }))
       // Putting a thread away is at least as much an acknowledgement as
       // opening it: its unread answer or failure stops counting in the
-      // titlebar pill and the badge, and the row's mark stands down so a
+      // app icon's badge, and the row's mark stands down so a
       // restore does not bring back news you have already dismissed.
       if (archived) acknowledgeThread(target)
       toast(archived ? "Thread archived. Running work is not stopped." : "Thread restored")

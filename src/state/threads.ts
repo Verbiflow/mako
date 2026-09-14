@@ -208,6 +208,23 @@ const threadCatalogActions = {
     window.addEventListener("focus", () => void threadCatalogActions.load())
   },
 
+  /**
+   * What each live driver offers a new session — its access ladder, its
+   * steering kind, whether it resumes. A provider whose transport just
+   * changed (Cursor signing its SDK in or out) offers a different ladder, so
+   * the host's `provider-connections` push re-asks for exactly this.
+   */
+  async refreshCapabilities() {
+    if (!hasBridge()) return
+    const capabilities = await getMako()
+      .liveCapabilities()
+      .catch((): LiveCapability[] => [])
+    threadsStore.set({
+      liveCapabilities: capabilities,
+      acpable: capabilities.map((item) => item.provider),
+    })
+  },
+
   async load() {
     if (!hasBridge()) return
     const [raw, resumable, targets, capabilities]: [

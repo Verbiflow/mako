@@ -253,6 +253,14 @@ export const viewer = {
       if (!requestIsCurrent(document.id, mine)) return
       const patch: Partial<ViewerDocument> = {file, loading: false}
       if (!document.file && file.artifactPreview && line === undefined) patch.renderMode = "preview"
+      // A request that named a file without its directory is answered by the
+      // file the host found. Take its path, or the tab's header, its refresh,
+      // its `@` mention and Open in your editor would all keep naming
+      // something that is not on disk.
+      if (file.path !== document.path) {
+        patch.path = file.path
+        patch.title = file.path.split("/").at(-1) ?? file.path
+      }
       updateDocument(document.id, patch)
     } catch (error) {
       if (!requestIsCurrent(document.id, mine)) return
