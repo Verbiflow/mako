@@ -91,6 +91,15 @@ Three rules hold this together, and each has a specific failure it prevents:
   navigators above 100 prompts additionally window measured rows. Preserve
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
+- **Streamed prose is throttled, not debounced.** `useThrottled` in
+  `markdown.tsx` repaints a streaming answer at most once per
+  `STREAM_FRAME_MS`, and a pending frame survives further tokens (cancelling
+  it per token would never fire under a steady stream). Only unmount clears
+  the timer, and clearing must empty the ref: StrictMode's simulated remount
+  once ran that cleanup, re-ran the scheduling effect against a ref that
+  still looked pending, and every answer sat on its first character until the
+  turn ended ("I", then the tool rows). `test-workspace-ui.mjs` streams a
+  reply and requires the prose to catch up while the turn is still running.
 
 The rail bounds mounted rows through folder pagination and an explicit search
 result cap; it never renders the full catalog. Components that genuinely use
@@ -111,10 +120,11 @@ first kilobytes. `test/catalog-growth.mjs` covers these.
 
 A write refreshes one file unless the provider's `rescanRoot(path)` says the
 path belongs to a shared database (Devin's `sessions.db`, OpenCode's, Cursor's
-desktop `state.vscdb`); Cursor's ACP and CLI stores are one SQLite file per
-session and refresh alone, with `watchTarget` folding `-wal`, `-shm` and
-`meta.json` writes onto their `store.db` and `stat` reporting a revision that
-covers all three. Logs, shell transcripts and extension storage beside a store
+desktop `state.vscdb`); Cursor's SDK and `cursor-agent` stores are one SQLite
+file per session and refresh alone, with `watchTarget` folding `-wal`, `-shm`
+and `meta.json` writes onto their `store.db`, an SDK `index.db` write onto
+the store of the agent it moved for, and `stat` reporting a revision that
+covers all of them. Logs, shell transcripts and extension storage beside a store
 are ignored, never a reason to rescan. Refreshes are throttled with a settle
 window (`rescanDebounceMs`, at most four windows of latency under a
 continuous stream), a refresh that changes nothing a rail can show emits no
@@ -136,6 +146,12 @@ appended bytes; Grok stamps from the transcript's mtime and ignores the
 sidecar's stamps. `test/activity-stamps.mjs` covers both. Claude Code stamps
 messages it composed itself ("API error", "no response requested") with the
 model `<synthetic>`; that is never a row's model (`test/claude-title.mjs`).
+`ClaudeProvider` honours `CLAUDE_CONFIG_DIR` only for the default home: a
+provider built on another home is an isolated world and reads nothing from
+the process environment. A shell inside Claude Code or a router sets the
+variable for its own store, and `catalog-growth.mjs` once listed the
+developer's real sessions among its fixtures and failed on one of their
+titles (`test/catalog-growth.mjs` covers both readings).
 
 ## The built-in runtime's session tree is not a tree
 
@@ -201,6 +217,25 @@ agent did to answer it. Two things depend on that grouping and both were wrong
 before it existed: **copy belongs to the whole answer**, not to each fragment
 of a long reply, and the turn navigator needs something meaningful to jump
 between. The prompt gets its own surface so it is unmistakably the user's.
+
+An answer's file names are links. `inlineFileTarget` (`src/lib/file-citations.ts`)
+turns inline code into one when the whole span reads as a path with a known
+extension, alongside the providers' own citation forms. Most of those names
+carry no directory, because prose says `use-row-flip.ts`, so
+`WorkspaceFiles.locate` resolves a relative request against the workspace root
+first and then by *suffix* against the tracked file list: one match is the
+answer and `FileContents.path` reports it, so the tab, its refresh, its `@`
+mention and Open in your editor all name the file that was read. Several or
+none is a sentence naming what was looked for; an absolute request is taken
+literally. Before this, clicking `test-notifications.ts` in an answer read
+nothing and showed
+`Error invoking remote method 'mako:read-live-file': Error: ENOENT … stat
+'/Users/you/project/test-notifications.ts'` — a path nobody typed, about a
+file that was one directory away. Electron's IPC wrapper is stripped in
+`createMakoBridge` so no host error reaches a reader wearing a channel name,
+and so the desktop and local-web transports say the same thing; the error
+object is never replaced, because `runtime-retry.ts` decides by `instanceof`.
+`scripts/test-file-open.ts` covers both halves.
 
 ## Never lose a paragraph
 
@@ -421,12 +456,25 @@ safeStorage; no key is returned in a settings snapshot. Connections are per
 user, not per profile: they live in `~/.mako/utility-models` beside the other
 per-user state, so the installed app, `npm run dev`, and every review or
 sandbox profile read the same files (`utility-model-location.ts`; the keychain
-key `safeStorage` wraps them with was always shared). A host started with an
-explicit `MAKO_DATA_ROOT` keeps them inside that root so a fixture never reads
-or disconnects the user's real connections. A profile's older
-`<data root>/utility-models` copies move into the user store on its first
-start, newest copy per provider winning whichever host starts first.
-`test-utility-model-location.ts` covers the location and the move.
+key `safeStorage` wraps them with was always shared). A host whose data root
+lies outside the platform's application-data directory (a temporary fixture
+root) keeps them inside that root so a test never reads or disconnects the
+user's real connections. The rule is the root's location, never whether
+`MAKO_DATA_ROOT` is set: the launcher hands every host, the installed app's
+included, its directory in that variable, and while the store keyed on the
+variable no real host ever reached `~/.mako` and the one-time move was a
+no-op onto itself. A profile's older `<data root>/utility-models` copies
+move into the user store on its first start, newest copy per provider
+winning whichever host starts first. `test-utility-model-location.ts` covers
+the location and the move. The commit box resolves its drafting model from
+the connections, not the `commitModel` preference alone
+(`src/state/commit-model.ts`): the preference is one renderer's storage
+while connections are per user, so a window that never chose reads the first
+usable connection, a preference naming a model no connection covers turns
+Generate into Reconnect model, and only a preference that names a connected
+model is honoured as a choice. The button is Commit, or Commit all when
+nothing is staged; the count is the Changes header's to show.
+`test-commit-model-status.ts` covers the resolution.
 On macOS with a local certificate, every new build is a new keychain partition
 (`cdhash:`, since only Apple-issued certificates carry a Team ID), so the first
 keychain access after an install asks once for Always Allow; that is macOS,
@@ -478,7 +526,11 @@ notice. Files above the 32 MiB interactive source budget stay available for stag
 and external-editor review. None of these display limits alter staged content or
 commit generation. Project transitions clear Git views immediately and history
 requests are scoped by project/HEAD. Push feedback is branch/project-owned in
-`git-push.ts`; the commit bar is its only primary Push control.
+`git-push.ts`; the Commits header (`Commits on <branch>`) carries the only Push
+control, and only while there is something to say — commits waiting, a branch
+without an upstream, a push in flight, its receipt or its failure. An
+up-to-date branch shows no button: the old "Up to date" row under the commit
+box was a status bar in disguise.
 `npm run test:git-ui` checks 13,000 rows, staging, project loading, Push feedback,
 and reduced motion using production components and a delayed fixture transport.
 `test:host` includes real temporary-repository preview checks and publishing to a
@@ -532,13 +584,32 @@ deliberate action and never rides along with a commit.
   250ms and nothing animates from `scale(0)`. Anything triggered by keyboard
   many times a day (the palette) does not animate at all.
 - Pressable surfaces carry the `pressable` class.
+- The browser icons in `public/icons` are generated by
+  `npm run icons:browser`, never exported from the icon kit. A dock tile can
+  carry the fin at 46% of its canvas; a 16px favicon downscaled from that
+  artwork is a dark square with a smudge in it, which is what shipped until
+  the set was redrawn. `scripts/build-favicons.mjs` holds the fin as two
+  cubics traced from the desktop master and fills the tile with it. The
+  development set, which a Vite plugin serves on `serve`, is the kit's light
+  treatment — aluminium ground, graphite fin — so `npm run web` and the
+  installed app are never the same six pixels in a tab strip. No hue enters
+  the mark: the kit has a light and a dark treatment and that is the
+  difference.
 
 ## Product surface
 
 Provider sessions, the built-in runtime's session tree, and the current git
-diff. No worktree manager. There is no status bar: the always-on facts live
-in the titlebar's right cluster, and the context/cost readings sit beside
-the composer, next to the send they price. The rail is the vertical thread
+diff. No worktree manager. There is no status bar, and the titlebar is not
+one either: its right cluster carries only what has something to say — a
+lost host, a downloaded update — and the context/cost readings sit beside
+the composer, next to the send they price.
+The project, the branch and the changed-file count are not chrome; they are
+the Changes surface, which shows the same count with the files under it, and
+a second permanently-lit readout in the title strip was clutter that repeated
+the workspace name centred two inches away. Identity is the rail's footer and
+only there, and Settings is a row in the menu it opens. No glyph in the strip
+duplicates a doorway that already exists: the palette is Cmd+K and search is
+the one control there with no other way in. The rail is the vertical thread
 list; horizontal tabs inside the central workbench hold the agent session,
 files, and diffs for that thread, never more sessions.
 
@@ -578,17 +649,21 @@ centre (`src/state/notifications.ts`, React-free; `docs/notifications.md`
 has the full design and the remote-channel plan) decides per outcome from
 four facts: kind, thread on screen, window in front, replay. Watching the
 thread means seen with one cue; another thread in front means an in-app card
-(`src/components/notifications/notification-toast.tsx`, the attention pill's
-own row as a `toast.custom`, clickable anywhere, gone after `ACTION_TOAST_MS`;
-the pill and badge keep the fact); window not in front means a desktop
+(`src/components/notifications/notification-toast.tsx`, one attention row as
+a `toast.custom`, clickable anywhere, gone after `ACTION_TOAST_MS`; the rail's
+mark and the badge keep the fact); window not in front means a desktop
 banner. Toasts sit top-right below the 38px titlebar drag region, receipts
 leave in three seconds, and no toast is ever permanent
 (`scripts/check-actionable-toasts.mjs`). Outcomes are transitions
 keyed by a marker (permission id, turn), never states; hydration and
 reconnect replays are recorded for the badge but never announced; a thread
 that starts working again retires its unseen items; four or more banners in
-600 ms become one summary. The app icon and the titlebar pill ("2 threads
-need you") count distinct threads, never events. Banners and the badge are
+600 ms become one summary. The app icon's badge counts distinct threads,
+never events, and it is the only standing count: the titlebar carried a pill
+reading "3 threads need you" over a list, which mirrored into the chrome what
+the rail's own marks and the Status view already say. The list is the Status
+view, the announcement is the toast, and Cmd+Shift+U opens the next thread
+that needs you. Banners and the badge are
 answered by the client that owns the window (`electron/client-main.ts`, the
 standalone host, or `src/dev/web-notifications.ts`), never by the shared
 host; one banner per thread is retained until it reports, and a click sends
@@ -733,8 +808,8 @@ ACP session and deletes that verification session. Neither sends an agent prompt
 `node scripts/test-provider-e2e.mjs <provider> --steer --continuation` checks real
 mid-turn delivery, idle replies, queueing, native identity, and retained context;
 `--restart` stops the host mid-conversation and reopens the same native session
-through the provider's own resume (Cursor's `session/load`, Codex's thread
-resume) with no portable history, on the first named provider that can.
+through the provider's own resume (Cursor's SDK `Agent.resume`, Grok's
+`session/load`, Codex's thread resume) with no portable history, on the first named provider that can.
 The installed OpenCode v2 ACP server rejects concurrent prompts. Its free
 `opencode/muse-spark-1.3-contributor-free` model passes normal replies and queueing;
 verify it with `--continuation`, not by advertising unsupported steering.
@@ -780,16 +855,16 @@ the form `access:<tier>` is host-defined; anything else is the provider's own.
 Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
 (`native`, `host`, `launch`, `base`); `electron/acp-access.ts` builds the mode
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11
-against the installed CLIs: Cursor advertises agent/plan/ask, asks for every
-command, and ignores `--force`/`--yolo` under `acp`, so Accept edits and Full
-access are host-enforced on top of `agent`. Devin advertises all five tiers
+against the installed CLIs: Devin advertises all five tiers
 natively. Grok reads `--permission-mode` at launch and, in every mode except
 always-approve, denies tool calls over ACP instead of asking, so its tiers are
 launch-only. OpenCode reads `OPENCODE_PERMISSION` at launch; its remaining asks
 can be host-answered. Claude maps its own modes, with `bypassPermissions`
 allowed at launch so a later switch is accepted. Codex sends approval policy,
 sandbox, and reviewer with every `turn/start`; a change applies to the next
-turn. `test-access-modes.ts` covers the placements and decisions.
+turn. Cursor is not an ACP provider: its ladder is the SDK's own and is
+enforced by the SDK (below). `test-access-modes.ts` covers the placements
+and decisions.
 
 How a catalogued thread is continued is the host's decision, not the
 renderer's. `electron/contracts/thread-continuation.ts` turns one ref plus
@@ -803,8 +878,10 @@ the reason instead of running on another transport. Before this the renderer
 chose from provider flags served once at startup, and a wrong `canResume`
 sent every Cursor reply to `cursor-agent -p --resume` without a word.
 `test-continuation-plan.ts` covers the rules and both refusals. Verified
-2026-09-12 with `test-provider-e2e.mjs <provider> --restart` on Cursor and
-Grok: both reopen a stopped session through `session/load` in place.
+2026-09-12 with `test-provider-e2e.mjs <provider> --restart` on Grok: it
+reopens a stopped session through `session/load` in place. Cursor reopens
+through the SDK's own resume (below); `test-cursor-resume.ts` covers its
+verdicts.
 
 What a session ran under is remembered per user, not per host.
 `electron/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
@@ -813,9 +890,10 @@ session last reported and a hold naming the host that has it open. It exists
 because the installed app and the `dev` profile share every provider store
 but each kept those facts only in its own journal, so a thread that ran in
 one host read "Model not recorded" with no access picker in the other, and
-Cursor's `store.db` records neither a model nor a tier to fall back on
-(Codex, Claude, Grok and OpenCode record their model and options, Devin the
-model alone; no provider records Mako's tier). `LiveConversations` writes the
+a `cursor-agent` `store.db` records neither a model nor a tier to fall back
+on (Codex, Claude, Grok and OpenCode record their model and options, Devin
+the model alone, Cursor's SDK `index.db` the model; no provider records
+Mako's tier). `LiveConversations` writes the
 ledger from its flush hook for every driver, a native reply writes the
 settings it prepared, and the catalog's `annotate` overlays `settings`,
 `accessMode` and `heldBy` onto each `ThreadRef`. `rememberedSettings` lets
@@ -842,10 +920,12 @@ agent wrote its last blocks on exit, the store's head moved past the
 binding's checkpoint, and "cannot be resumed safely" was the answer forever.
 A reconnect accepts `moved`, holds the ledger before spawning, and says the
 transcript may be missing that part; only a provider switch reusing an old
-binding insists on `same`, because it sends context from that point. Cursor
-answers `held` from `lsof` under `node` (`cursor-agent` is a wrapper), Devin
-from its own lock file, and the generic policy from the provider's process
-probe; a refusal quotes the verdict's own reason.
+binding insists on `same`, because it sends context from that point. Devin
+answers `held` from its own lock file and the generic policy from the
+provider's process probe; Cursor never does, because an SDK agent is Mako's
+own (another host's hold is the ledger's refusal) and a `cursor-agent` store
+is only ever read, so a CLI that still has it open loses nothing when the
+SDK continues from a copy. A refusal quotes the verdict's own reason.
 `scripts/test-session-memory.ts` covers the merge rule, holds across two
 hosts, the overlay, the refused plan, the journal round trip, a live
 conversation round trip, a reconnect past a moved record and the backfill;
@@ -863,23 +943,129 @@ option value of each provider's catalog through the runner and compares the
 read-back with the settings the ACP transport applies; a mangled flag or a
 composed id that the CLI would reject fails there.
 
-Cursor resumes over ACP. Verified 2026-09-12 (cursor-agent 2026.09.10):
-`session/load` reopens a `~/.cursor/acp-sessions/<id>/store.db` in place,
-replays its history, and keeps its context; it answers "Session not found"
-for a `chats/` store, so those rows carry `liveResume: false` and continue
-through the CLI. `cursor-agent -p --resume <id>` on an ACP session writes its
-new turns to a second store under `chats/` with the same agent id; the two
-hold different turns, so the catalog keys the chats copy by its own
-`identity` instead of collapsing it onto the original; `threadIdentity()` is
-the one dedupe key, the activity index and presence use it too, and a
-provider's `peekVersion` re-peeks its own cached rows when a peek rule
-changes. The headless CLI takes
-one flat id from `cursor-agent --list-models` (`claude-opus-4-8-thinking-high`,
-`gpt-5.3-codex` for medium, `cursor-grok-4.6-high-fast`, `auto`) and rejects
-the bracket form its help documents; `cursor/model-ids.ts` picks the listed id
-in the runner's `prepare` step and refuses a selection the account's list
-cannot express. `test-cursor-resume.ts`, `test-cursor-model-ids.ts` and
-`packages/sessions/test/cursor-fork.mjs` cover these.
+Cursor runs through `@cursor/sdk` (`electron/providers/cursor/sdk/`) and
+nothing else. `cursor-agent acp` was the transport before: it ended a turn
+on the first reset frame of its backend stream (`RetriableError: http/2
+stream closed … CANCEL`), asked before every command, and answered "Session
+not found" for the CLI's own `chats/` stores, so those rows continued
+through `cursor-agent -p --resume`, which forked each new turn into a second
+store. The SDK retries its stream itself, enforces the access ladder itself,
+and imports any `cursor-agent` store it is asked to continue; there is no
+ACP source, native runner or CLI model list for Cursor, and a new Cursor
+thread never waits on sign-in state to choose a transport.
+
+The SDK runs in a child (`child.ts`, spawned from the host's own executable
+with `ELECTRON_RUN_AS_NODE`) over an NDJSON wire (`wire.ts`) so a backend
+stall or an SDK crash cannot take the host with it; `CursorSdkClient` bounds
+every request except `login`. Its store is `SqliteLocalAgentStore` under
+Mako's state root (`~/.mako/cursor-sdk`, per user like the session-memory
+ledger, because every launched host receives `MAKO_DATA_ROOT` and a root
+keyed on it would hide each host's agents from the others; a fixture sets
+`MAKO_CURSOR_SDK_ROOT`): one `agents/agent-<sha256(agentId)>/store.db` plus a
+shared `index.db` holding each agent's cwd, model, title and root blob.
+`CursorProvider` reads both (`cursor-sdk-index.ts`) and folds `index.db`'s
+mtime into each store's revision because that is where a finished run lands;
+an `index.db` write is watched as the store of the agent it moved for. The
+store's own meta row leaves `latestRootBlobId` empty, so an SDK agent's
+resume checkpoint (`cursorSdkCheckpoint`) takes its root from `index.db` and
+only the blob count from the store; read as an ACP store it judged every
+agent "unreadable" after a host restart. Removing an SDK thread also deletes
+the agent's index rows.
+
+A `cursor-agent` store goes on in place through the SDK (`import.ts`).
+Verified 2026-09-13 (SDK 1.0.31): `acp`, `-p` and the SDK write the same blob
+store — content-addressed encrypted blobs whose `meta` row names the agent,
+the newest root and the blob key — and differ only in where the head is
+kept, so a legacy store copied under the SDK's layout with `VACUUM INTO`
+(reads through the CLI's WAL, opens the source read-only) and registered in
+`index.db` with its root and key resumes with its whole history. The copy is
+made once, the legacy store is never written, the import records the
+legacy path and identity in the agent's metadata, and the catalog folds the
+two rows onto one `threadIdentity`. The store's own id is kept when it is
+free or already names this import; when the ACP store and its `chats/` fork
+share one id the fork gets a fresh one and later opens find it through the
+import record (`resolveImportAgentId`). Every Cursor CLI row therefore
+resumes live; `liveResume: false` is gone. `cursorStoreOrigin` tells an
+`acp-sessions`, `chats` or SDK path apart, `cursorLegacyCheckpoint` reads the
+CLI's meta row, and a resume verdict is `resumable` (`same` or `moved`) or
+`unavailable`, never `held`. `test-cursor-resume.ts` and
+`packages/sessions/test/cursor-fork.mjs` cover the checkpoints, the import
+and the collapse; `test-provider-e2e.mjs cursor --restart` (verified
+2026-09-13) stops the host mid-conversation and reopens the SDK agent with
+its history, judging the binding by the driver's own checkpoint and
+verdict exactly as the host does, because a file hash of `store.db` taken
+at bind time never matches again once the SDK has written to the store.
+
+Who the SDK runs as is `CursorSdkAuth` (`auth.ts`), one object per host.
+Keys are tried in order: `CURSOR_API_KEY` in the host's environment, the key
+Mako holds (`credentials.ts`: browser-minted or pasted, encrypted with
+`safeStorage` under the state root, never in a snapshot or log), the key
+`cursor-agent login` left in the keychain (`cli-keychain.ts`, read once), and
+last the SDK's own `~/.cursor/sdk/auth.json`, which the SDK reads itself.
+A child's environment is resolved without the network; the verified state
+comes from a short-lived child answering `me`, so a key is judged by Cursor,
+not by its shape, cached ten minutes and re-asked after thirty seconds when
+it failed. A pasted key is verified before it is saved and the row names the
+key Cursor reports; a browser sign-in is the SDK's own `login`, unbounded
+and cancellable, stored with its expiry. A live session that Cursor rejects
+(`AuthenticationError`, `unauthorized`) calls `reportRejected`, which flips
+the state to signed-out with the offending source named
+(`rejectionText`), and every listener hears it: `provider-connections` goes
+out to every window, the composer shows the sign-in notice above the draft
+(`connection-notice.tsx`), Settings > Agents > Connections shows the row
+(`provider-connections.tsx`: status, source, account, expiry, inline key
+field with immediate failure text, refresh, sign out only for a key Mako
+owns) and discovery and `liveCapabilities` run again, because the model
+list follows the account. A thread sent while signed out asks in the thread
+itself (`ensureSignedIn`: one `Sign in in the browser` choice) and continues
+once the mint lands. `scripts/test-cursor-auth.ts` covers the order, the
+store, pasted and browser sign-in, rejections and the connection snapshot.
+
+Text and thinking reach the child twice, as `onDelta` chunks and again as
+`assistant`/`thinking` messages echoing the same chunk; `projection.ts` feeds
+both into one accumulator per block and appends only what the other source
+has not already delivered, so either stream alone is a whole reply and
+neither doubles it (verified against SDK 1.0.31; a resumed run once arrived
+with its first chunk only as a message). `updateTodos` streams its arguments
+while the call is written, so each growth repaints the plan, an MCP
+result's `content[].text.text` entries are the row's output, and `grep` and
+`glob` results are written as `rg` would print them. The child validates a
+message as the wire carries it, after a JSON round trip (`sdkMessageForWire`):
+the SDK's live objects hold `undefined` fields (a `grep` hit without its
+`line`), which `z.json()` refuses and serialization drops, and checking the
+live object once dropped every completed grep and left its row running for
+good; a drop is logged with the failing path. Cursor has one
+mode, `full-access` ("Agent", the full tier), and the child always opens
+the SDK's `agent` mode with the full toolset (`modes.ts`); the composer's
+access chip shows it, there is no ladder. The SDK has no permission
+prompt — a tool exists for the model or it does not. This was
+tested, not read (SDK 1.0.31, 2026-09-13): a `beforeShellExecution` hook
+answering `"ask"` ran the command as `"allow"` would, `"deny"` refused it,
+and under the SDK's `autoReview` classifier the model's own attempt to run
+`git push --force` "with approval" was refused with "Local SDK runs cannot
+request interactive approval for this shell command"; the classifier also
+refused `curl … | sh` while letting `curl` and an `rm -rf` inside the
+workspace run. So no asking tier is offered, and neither is `autoReview`:
+it refuses instead of asking, the reason reaches the model only, and nobody
+at the desk can overrule it, so a blocked call is a turn lost to a decision
+the user never saw. Cursor's planning mode and a read-only tool allowlist
+would work and are deliberately not offered either: Cursor in Mako is Agent
+and nothing else. The id is not `agent` (Cursor's old ACP mode of that id)
+and an id the ladder does not know falls back to the one mode. A call a
+hook refuses emits one `running` event and no terminal one, so `finishTurn`
+closes every row a turn left open (`projection.finish`) with the reason the
+SDK cannot report: rejected before it ran, stopped, or the turn's error. The child
+passes `settingSources: ["project", "user"]`; without it the SDK loads no
+on-disk config at all — no `.cursor/hooks.json` (the one policy hook the
+SDK honours), none of Cursor's own `mcp.json` servers (which the reach
+predicate never projects because a provider is expected to load its own),
+no project rules. `Run.steer` cuts the current step short (a `sleep 6` shell
+step completed after 1.7 s when the steer landed) and the model continues
+with the message, so the driver advertises `interrupt`. `@cursor/sdk-*` is
+`asarUnpack`ed for its `cursorsandbox`, `rg` and tree-sitter binaries.
+`scripts/test-cursor-sdk.ts` covers the projection, modes and wire; a live
+check is `node` against `dist-electron/providers/cursor/sdk/client.js` in a
+fixture-prefixed directory.
 
 Steering is a capability with a kind, not a command. `step` folds the message
 into the running turn at the agent's next step (Claude, Codex, Devin);
@@ -1009,45 +1195,24 @@ its parent's. `test-live-conversations.ts` covers the reasons,
 `test-live-controls.tsx` the footer and the recovery rows.
 
 The fourth reason, `connection-lost`, is a turn the agent ended on its own
-dropped backend connection. `cursor-agent acp` runs its agent loop without
-the transport retries its TUI and SDK paths use, so the first
-`[canceled] http/2 stream closed with error code CANCEL (0x8)` from Cursor's
-backend (common a quarter-hour into a tool-heavy turn) is written into the
-transcript as `Error: RetriableError: …` and the turn still answers
-`end_turn`; before this Mako recorded that as a completed answer and the
-error was prose in the transcript. A provider that does this knows its own
-wire syntax, so `ProviderAcpSource.reportedFailure(finalText)` lifts the
-error out of the turn's final text (`AcpPromptTurn.finalText`: the text since
-the last tool call or thought, bounded to 4 KiB) and `acp-turn-verdict.ts`
-settles the session `failed` with `lastStop: CONNECTION_LOST_STOP` when the
-kind is `network`. `LiveConversations` records that request as `interrupted`
-with reason `connection-lost` and `failure: "network"` rather than `failed`,
-because the turn's work is in place and the right offer is Continue turn, not
-Send again; the footer reads "The connection to Cursor dropped" and the
-Continue prompt says the connection dropped. Only Cursor implements the hook
-(`providers/cursor/reported-failure.ts`); `test-cursor-reported-failure.ts`
-replays the real block sequence, a tool call between error-shaped chunks,
-and a cancelled turn that must not be read as a failure.
-
-The same dropped connection can hit before the first prompt. cursor-agent
-builds a session's config options from the model list it fetches from its
-backend; when that fetch fails it swallows the error into an empty list and
-still answers `session/new` (15.8 s, once) with `mode`, a `model` select
-holding the current model and no choices, and none of the parameter options
-(`context`, `reasoning`, `fast`, `thinking`) it derives from the model's
-definition. Applying the saved `context` to that set was refused as "This
-provider cannot change context in the running session": a network failure
-read back as a settings error, and the start died before the prompt was
-sent. `ProviderAcpSource.degradedOptions(options, model)` lets a provider
-recognise its own incomplete set and name the change that rebuilds it
-(Cursor: set `model`, which makes the agent fetch again;
-`providers/cursor/session-options.ts`); `acp-options-repair.ts` runs it as
-the `session/options` startup step, `OPTIONS_REPAIR_ATTEMPTS` (2) asks
-`OPTIONS_REPAIR_PAUSE_MS` (1.5 s) apart, before `applyTuning`. A complete set
-sends nothing. When the set stays incomplete the start fails with the
-provider's reason, worded so it classifies `network` and offers Send again.
-`test-cursor-session-options.ts` replays the complete, degraded and
-variants-picker shapes recorded from cursor-agent 2026.09.10.
+dropped backend connection. It was found on `cursor-agent acp`, which ran
+its agent loop without the transport retries its TUI and SDK paths use, so
+the first `[canceled] http/2 stream closed with error code CANCEL (0x8)`
+from Cursor's backend (common a quarter-hour into a tool-heavy turn) was
+written into the transcript as `Error: RetriableError: …` and the turn
+still answered `end_turn`; Mako recorded that as a completed answer. Now
+the SDK driver settles the session `failed` with `lastStop:
+CONNECTION_LOST_STOP` when its run ends on an error the SDK codes as a
+dropped connection or words as one (`connectionLost`), and `LiveConversations` records
+that request as `interrupted` with reason `connection-lost` and
+`failure: "network"` rather than `failed`, because the turn's work is in
+place and the right offer is Continue turn, not Send again; the footer
+reads "The connection to Cursor dropped" and the Continue prompt says the
+connection dropped. The ACP path has no provider-specific reading of a
+turn's final text any more: the hooks that lifted Cursor's error prose out
+of the transcript and re-asked `cursor-agent` for the option set its failed
+backend fetch had left empty went with the transport, and an ACP turn's
+verdict is its stop reason or its prompt error (`acp-turn-verdict.ts`).
 
 A dropped turn is continued by the host itself, once. The turn's work is on
 the provider's side, so when the settled request is the newest one and
@@ -1167,15 +1332,15 @@ catalogue must reject an explicit model selection with its actual discovery
 error; never forward an unresolved family ID and its options to ACP. Failed
 provider startup disconnects its resident and ignores late transport events.
 A display discovery that fails after the account has listed its models once
-(`cursor/list_available_models` timed out under load) answers with the last
+(Cursor's model listing once timed out under load) answers with the last
 discovered profile and a `configurationError` naming the failure, never
 `available: false`; the failure is held `FAILED_DISCOVERY_TTL_MS` (5 s), not the
 30 s display TTL, is never persisted, and the renderer asks again on a
 10 s–2 min backoff (`discoveryRetry` in `src/state/providers.ts`) instead of
 waiting for a window focus. A finished thread whose store records no model
-(Cursor's never does) resolves to the provider's default with source
-`provider`, because that is what a continuation runs under until the session
-reports. `test-send-discovery.ts`, `test-profile-refresh.ts` and
+(a `cursor-agent` store never does; the SDK's `index.db` does) resolves to
+the provider's default with source `provider`, because that is what a
+continuation runs under until the session reports. `test-send-discovery.ts`, `test-profile-refresh.ts` and
 `test-composer-settings.ts` cover these.
 A starting conversation has no session settings; the composer resolves it
 through the target the send used, so the model control never reads
