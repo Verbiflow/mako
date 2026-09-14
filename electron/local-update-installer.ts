@@ -28,6 +28,23 @@ async function appStat(path: string) {
   })
 }
 
+const LSREGISTER =
+  "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+/**
+ * Every staged, retained or failed bundle is a real `dev.mako.app`
+ * application, and LaunchServices registers whatever it finds under
+ * /Applications or whatever was ever opened. A record left pointing at a
+ * moved or deleted copy makes `open -a` and the Dock resolve to it instead
+ * of the installed app, which macOS then reports as "not open anymore".
+ * Best-effort: a bundle that was never scanned has nothing to drop.
+ */
+export async function unregisterBundle(app: string): Promise<void> {
+  await execute(LSREGISTER, ["-u", app], { timeout: 30_000 }).catch(
+    () => undefined
+  )
+}
+
 export async function replacePreparedApplication(
   input: PreparedApplication
 ): Promise<string | null> {
@@ -65,11 +82,14 @@ export async function replacePreparedApplication(
     try {
       await rename(candidate, input.target)
       await input.verify(input.target)
+      if (current) await unregisterBundle(backup)
     } catch (error) {
       try {
         if (await appStat(input.target)) {
           const failed = await mkdtemp(join(input.staging, "failed-"))
-          await rename(input.target, join(failed, "Mako.app"))
+          const rejected = join(failed, "Mako.app")
+          await rename(input.target, rejected)
+          await unregisterBundle(rejected)
         }
         if (current) await rename(backup, input.target)
       } catch (rollbackError) {
@@ -183,6 +203,7 @@ export async function pruneRetainedApplications(
       if (uid !== undefined && info.uid !== uid) continue
       const contents = await readdir(staging).catch(() => null)
       if (!contents || contents.some((entry) => !RETAINED_CONTENTS.has(entry))) continue
+      await unregisterBundle(join(staging, "Previous Mako.app"))
       await rm(staging, { recursive: true, force: true })
       removed.push(staging)
     }
@@ -386,12 +407,16 @@ async function runInstaller(): Promise<void> {
           hostAlive = false
         else throw error
       }
-      if (!hostAlive && !(await runningBundleProcesses(target)).length) break
+      const pids = await runningBundleProcesses(target)
+      if (!hostAlive && !pids.length) break
       if (Date.now() >= deadline)
-        throw new Error("Mako processes are still running")
+        throw new Error(
+          `Mako processes are still running${pids.length ? ` (pid ${pids.join(", ")})` : hostAlive ? ` (host pid ${hostPid})` : ""}. Quit Mako and close its MCP clients before installing.`
+        )
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
   } catch (error) {
+    await unregisterBundle(join(staging, "Mako.app"))
     if (authorized) {
       await writeFile(
         receipt,

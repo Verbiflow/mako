@@ -1,12 +1,22 @@
 import { fork, type ChildProcess } from "node:child_process"
-import { lstat, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises"
 import { physicalFiles } from "./physical-files.js"
 import { constants } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { verifyLocalCandidate } from "./local-updates.js"
 import { resolveExecutable } from "./executable.js"
-import { desktopLaunchEnvironment } from "./local-update-installer.js"
+import {
+  desktopLaunchEnvironment,
+  unregisterBundle,
+} from "./local-update-installer.js"
 
 export async function prepareLocalInstall(
   candidate: { app: string; identity: string },
@@ -41,31 +51,43 @@ export async function prepareLocalInstall(
       detached: true,
     }
   )
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill()
-      reject(
-        new Error("The installer did not become ready. Mako is still running.")
-      )
-    }, 70_000)
-    child.once("message", (message) => {
-      clearTimeout(timer)
-      if (message === "ready") resolve()
-      else reject(new Error("The installer returned an invalid response."))
+  // A staging directory nothing resumed would sit in /Applications forever:
+  // ~850 MB of dead bundle that LaunchServices can still register against the
+  // installed app's bundle id.
+  const abandon = async () => {
+    await unregisterBundle(app)
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined)
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill()
+        reject(
+          new Error("The installer did not become ready. Mako is still running.")
+        )
+      }, 70_000)
+      child.once("message", (message) => {
+        clearTimeout(timer)
+        if (message === "ready") resolve()
+        else reject(new Error("The installer returned an invalid response."))
+      })
+      child.once("error", (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+      child.once("exit", () => {
+        clearTimeout(timer)
+        reject(new Error("The installer exited before it was ready."))
+      })
     })
-    child.once("error", (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.once("exit", () => {
-      clearTimeout(timer)
-      reject(new Error("The installer exited before it was ready."))
-    })
-  })
-  return installerControls(child)
+  } catch (error) {
+    await abandon()
+    throw error
+  }
+  return installerControls(child, abandon)
 }
 
-export function installerControls(child: ChildProcess) {
+export function installerControls(child: ChildProcess, abandon?: () => Promise<void>) {
   let dispatched = false
   return {
     install() {
@@ -77,7 +99,10 @@ export function installerControls(child: ChildProcess) {
       child.unref()
     },
     cancel() {
-      if (!dispatched) child.kill()
+      if (!dispatched) {
+        child.kill()
+        void abandon?.()
+      }
     },
   }
 }
