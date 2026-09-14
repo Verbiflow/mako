@@ -136,6 +136,34 @@ threadsStore.set({
 const nextSessionMarkup = renderToStaticMarkup(<NextSessionModePicker />)
 assert.match(nextSessionMarkup, /aria-label="Access: Full access"/)
 assert.doesNotMatch(nextSessionMarkup, /<button/)
+// A provider with a declared default reports that level before any choice:
+// an unchosen session runs under it, so the chip names it.
+threadsStore.set({
+  liveCapabilities: [{
+    provider: "grok",
+    canResume: true,
+    modes: [
+      { id: "access:plan", name: "Plan", access: "plan", enforcement: "launch" },
+      { id: "access:deny", name: "Deny unapproved", access: "deny", enforcement: "launch" },
+      { id: "access:auto", name: "Auto review", access: "auto", enforcement: "launch" },
+      { id: "access:full", name: "Full access", access: "full", enforcement: "launch" },
+    ],
+    defaultMode: "access:deny",
+  }],
+  composerHarness: "grok",
+})
+const defaultedMarkup = renderToStaticMarkup(<NextSessionModePicker />)
+assert.match(defaultedMarkup, /aria-label="Access: Deny unapproved"/)
+// The thread's own remembered level still outranks the provider default.
+threadsStore.set({
+  viewing: {
+    ref: { harness: "grok", nativeId: "ses", path: "/tmp/ses.jsonl", accessMode: "access:full" },
+    entries: [],
+  },
+})
+const rememberedMarkup = renderToStaticMarkup(<NextSessionModePicker />)
+assert.match(rememberedMarkup, /aria-label="Access: Full access"/)
+threadsStore.set({ viewing: null })
 conversation.session = { ...conversation.session, currentMode: null, modes: [] }
 control.actions = [
   {

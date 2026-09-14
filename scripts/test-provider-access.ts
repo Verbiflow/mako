@@ -12,7 +12,7 @@ Object.assign(globalThis, {
   },
 })
 
-const { chooseProviderMode, providerAccessModes, savedProviderMode } =
+const { chooseProviderMode, providerAccessModes, providerDefaultMode, savedProviderMode } =
   await import("../src/state/provider-access.ts")
 const { prefsStore } = await import("../src/state/prefs.ts")
 type LiveSessionMode = import("../src/lib/types.ts").LiveSessionMode
@@ -24,7 +24,7 @@ const modes: LiveSessionMode[] = [
 ]
 const state = {
   liveCapabilities: [
-    { provider: "cursor", canResume: false, modes },
+    { provider: "cursor", canResume: false, modes, defaultMode: "agent" },
     { provider: "grok", canResume: true },
   ],
 }
@@ -42,6 +42,12 @@ assert.equal(
 assert.equal(savedProviderMode({ cursor: "access:full" }, modes, "cursor"), "access:full")
 assert.equal(savedProviderMode({ cursor: "yolo" }, modes, "cursor"), null)
 assert.equal(savedProviderMode({}, modes, "cursor"), null)
+
+// The declared default counts only while the provider still offers it, and a
+// provider without one has none.
+assert.equal(providerDefaultMode(state, modes, "cursor"), "agent")
+assert.equal(providerDefaultMode(state, modes, "grok"), null)
+assert.equal(providerDefaultMode(state, [], "cursor"), null)
 
 // Choosing saves per provider and leaves the others alone.
 chooseProviderMode("cursor", "plan")
