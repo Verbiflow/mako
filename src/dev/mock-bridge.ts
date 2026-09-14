@@ -398,7 +398,10 @@ export function installMockBridge() {
           description: "Local models or your own endpoint",
         },
       ],
-      connections: [],
+      // The mock drafts a message, so the model it drafts with is connected.
+      connections: [
+        { provider: "google", model: "gemini-3.8-flash", contextTokens: 1_048_576 },
+      ],
       issues: [],
       secureStorage: true,
     }),
@@ -703,6 +706,10 @@ export function installMockBridge() {
       return entry?.kind === "assistant" ? (entry.blocks[at.block] ?? null) : null
     },
     threadContexts: mockThreadContexts,
+    providerConnections: async () => [],
+    providerConnectionAction: async () => {
+      throw new Error("Fixture providers keep no sign-in")
+    },
     accounts: async () => ({
       providers: [
         {
