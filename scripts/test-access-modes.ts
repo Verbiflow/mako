@@ -2,7 +2,10 @@ import assert from "node:assert/strict"
 import { acpInitialSelection, acpModeChange, acpSessionModes } from "../electron/acp-access.ts"
 import { accessModeId, hostAccessDecision } from "../electron/contracts/access.ts"
 import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
-import { cursorAcpSource } from "../electron/providers/cursor/acp.ts"
+import { CURSOR_SDK_MODES } from "../electron/providers/cursor/sdk/modes.ts"
+import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
+import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { openCodeAcpSource } from "../electron/providers/opencode/acp.ts"
@@ -31,35 +34,37 @@ assert.equal(hostAccessDecision("full", { toolKind: "other", options: [{ optionI
 assert.equal(hostAccessDecision("full", { toolKind: "other", options: allowReject, questions: true }), null)
 assert.equal(hostAccessDecision("full", { toolKind: "other", options: [] }), null)
 
-// Cursor: agent/plan/ask are placed on the ladder; Accept edits and Full access are host-enforced on top of agent.
-const cursorNative = {
-  currentModeId: "agent",
-  availableModes: [
-    { id: "agent", name: "Agent", description: "Full agent capabilities with tool access" },
-    { id: "plan", name: "Plan", description: "Read-only" },
-    { id: "ask", name: "Ask", description: "Q&A" },
-  ],
-}
-const cursorModes = acpSessionModes(cursorAcpSource.access, cursorNative)
+// Cursor runs through its SDK, which has no permission prompt: the ladder is
+// one provider-enforced mode, Agent on the full tier, and no tier that would
+// need a host to answer an ask the SDK never sends or a classifier's refusal
+// nobody at the desk can overrule.
+const cursorDriver = createCursorSdkDriver({
+  auth: new CursorSdkAuth({
+    env: async () => ({}),
+    openUrl: async () => undefined,
+    credentials: new CursorCredentialStore("/nonexistent/credential.bin", {
+      available: async () => false,
+      encrypt: async () => Buffer.alloc(0),
+      decrypt: async () => "",
+    }),
+    cliKey: async () => null,
+  }),
+  stateRoot: () => "/nonexistent",
+})
+const cursorModes = cursorDriver.modes ?? []
 assert.deepEqual(
   cursorModes.map((mode) => [mode.id, mode.access, mode.enforcement]),
-  [
-    ["agent", "ask", "provider"],
-    ["plan", "plan", "provider"],
-    ["ask", "chat", "provider"],
-    [accessModeId("edits"), "edits", "host"],
-    [accessModeId("full"), "full", "host"],
-  ]
+  [["full-access", "full", "provider"]],
+  "Cursor is Agent on the full tier and nothing else"
 )
-assert.deepEqual(acpInitialSelection(cursorAcpSource.access, cursorModes, cursorNative, undefined), { currentMode: "agent", hostTier: null })
-const cursorFull = acpModeChange(cursorAcpSource.access, cursorModes, accessModeId("full"), null, "plan", "cursor")
-assert.deepEqual(cursorFull, { kind: "host", modeId: accessModeId("full"), hostTier: "full", baseMode: "agent" })
-const cursorFullOnAgent = acpModeChange(cursorAcpSource.access, cursorModes, accessModeId("full"), null, "agent", "cursor")
-assert.equal(cursorFullOnAgent.kind === "host" && cursorFullOnAgent.baseMode, null, "already on the base mode")
-assert.deepEqual(acpModeChange(cursorAcpSource.access, cursorModes, "plan", null, "agent", "cursor"), { kind: "native", modeId: "plan", hostTier: null })
-assert.throws(() => acpModeChange(cursorAcpSource.access, cursorModes, accessModeId("auto"), null, "agent", "cursor"), /does not offer/)
-assert.equal(acpLiveDriver(cursorAcpSource).steering, "interrupt")
-assert.ok(acpLiveDriver(cursorAcpSource).steer)
+assert.deepEqual(cursorModes, CURSOR_SDK_MODES)
+assert.ok(!cursorModes.some((mode) => mode.id === "agent"), "Cursor ACP's asking mode id is not on the SDK ladder")
+assert.ok(
+  !cursorModes.some((mode) => mode.access === "auto"),
+  "the SDK's Auto review refuses calls nobody at the desk can approve, so it is not a tier"
+)
+assert.equal(cursorDriver.steering, "interrupt")
+assert.ok(cursorDriver.steer)
 
 // Devin: every tier is native, nothing is synthesized.
 const devinNative = {
@@ -149,17 +154,16 @@ assert.throws(() => codexAccessTier("agent"), /does not offer/)
 assert.ok(ClaudeModeSchema.safeParse("bypassPermissions").success)
 
 console.log(
-  "Access modes: host decisions, Cursor host tiers, Devin native tiers, Grok launch tiers without steering, OpenCode rulesets, Codex per-turn policy, and Claude bypass verified"
+  "Access modes: host decisions, Cursor SDK tiers, Devin native tiers, Grok launch tiers without steering, OpenCode rulesets, Codex per-turn policy, and Claude bypass verified"
 )
 
 // Before launch, every driver declares the same ladder its live session will show,
 // so the composer can take the choice with the first prompt.
-assert.deepEqual(acpLiveDriver(cursorAcpSource).modes, cursorModes, "Cursor's ladder is known before launch")
 assert.deepEqual(acpLiveDriver(devinAcpSource).modes, devinModes, "Devin's ladder is known before launch")
 assert.deepEqual(acpLiveDriver(grokAcpSource).modes, grokModes, "Grok's ladder is known before launch")
 assert.deepEqual(acpLiveDriver(openCodeAcpSource).modes, openCodeModes, "OpenCode's ladder is known before launch")
 assert.deepEqual(codexLiveDriver.modes, codexAccessModes())
 assert.ok(claudeLiveDriver.modes?.length, "Claude declares its modes before launch")
 for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
-for (const driver of [acpLiveDriver(cursorAcpSource), acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), acpLiveDriver(openCodeAcpSource), codexLiveDriver, claudeLiveDriver])
+for (const driver of [cursorDriver, acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), acpLiveDriver(openCodeAcpSource), codexLiveDriver, claudeLiveDriver])
   assert.ok(driver.modes?.every((mode) => !mode.access || mode.enforcement), `${driver.provider}: no tier without an enforcer`)

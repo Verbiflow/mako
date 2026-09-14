@@ -293,6 +293,29 @@ async function checkWindow() {
   await until(`document.querySelector('[aria-label="Resize terminal dock"]') === null`)
   await evaluate(`(async () => { const {prefsStore} = await import('/src/state/prefs.ts'); const {applyLiveSnapshot} = await import('/src/state/live-recovery.ts'); const {acp} = await import('/src/state/acp.ts'); prefsStore.set({railGrouping:'project'}); const id = '99999999-9999-4999-8999-999999999999'; applyLiveSnapshot({session:{id,harness:'devin',cwd:'/fixture/only-live-project',title:'Regression live thread',status:'running',connection:'connected',modes:[],currentMode:null,configOptions:[]},revision:1,createdAt:Date.now(),blocks:[],requests:[],permissions:[],base:null}); acp.activate(id); })()`)
   await until(`document.querySelector('.thread-jump-scope [title="/fixture/only-live-project"]')?.closest('section')?.textContent.includes('Regression live thread')`)
+  // A reply streams its first token alone, then the rest and a tool call.
+  // The prose is rate-limited while the turn runs, so what is on screen must
+  // catch up with the full text before the turn ends; StrictMode once left the
+  // first token on screen until the answer finished ("I", then the tools).
+  const streamed = "I'll look at what favicon the web UI currently serves and what icon the desktop app uses."
+  const batch = (revision, updates, session) => `import('/src/state/live-recovery.ts').then(({applyLiveBatch}) => applyLiveBatch({id:'99999999-9999-4999-8999-999999999999', revision:${revision}, updates:${JSON.stringify(updates)}${session ? `, session:${JSON.stringify(session)}` : ""}}))`
+  await evaluate(batch(2, [{ kind: "user", text: "Fix the favicon", requestId: "request-favicon" }, { kind: "text", id: "turn:text:0", text: streamed.slice(0, 1) }]))
+  await until(`[...document.querySelectorAll('[data-exchange="acp-request-request-favicon"] .mako-prose')].at(-1)?.dataset.renderedChars === '1'`)
+  await evaluate(batch(3, [{ kind: "text", id: "turn:text:0", text: streamed.slice(1) }, { kind: "tool", id: "read-favicon", title: "Read favicon.svg", toolKind: "read", status: "running", input: '{"path":"/fixture/favicon.svg"}' }]))
+  {
+    const deadline = Date.now() + 3000
+    const shown = () => evaluate(`[...document.querySelectorAll('[data-exchange="acp-request-request-favicon"] .mako-prose')].at(-1)?.dataset.renderedChars`)
+    while ((await shown()) !== String(streamed.length)) {
+      if (Date.now() > deadline) {
+        await capture("streamed-prose-stalled.png")
+        assert.fail(`Streamed prose stayed at ${await shown()} of ${streamed.length} characters while the turn ran`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+  assert.equal(await evaluate(`[...document.querySelectorAll('[data-exchange="acp-request-request-favicon"] .mako-prose')].at(-1).textContent`), streamed)
+  assert.equal(await evaluate(`document.querySelector('[data-exchange="acp-request-request-favicon"]').textContent.includes('Read')`), true)
+  console.log("PASS: streamed prose catches up with the full text while a turn is still running")
   assert.equal(await evaluate(`document.body.textContent.includes('Running now')`), false)
   await until(`document.querySelector('.thread-jump-scope [data-folder-activity="working"] canvas[data-size="20"]') !== null`)
   assert.equal(await evaluate(`document.querySelector('.thread-jump-scope [data-folder-activity="working"]').textContent`), '1 running')

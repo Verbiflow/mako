@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import {
-  attentionLabel,
   excerpt,
   plainText,
   summaryNotification,
@@ -19,7 +18,6 @@ import {
   reconcileVisible,
   retireSubject,
   subjectId,
-  unseenCounts,
   unseenItems,
   unseenSubjects,
   type NotificationEnvironment,
@@ -56,10 +54,6 @@ const long = `${"word ".repeat(60)}end`
 const cut = excerpt(long)
 assert.ok(cut.length <= 201 && cut.endsWith("…") && !cut.includes("  "))
 assert.equal(excerpt(""), "")
-assert.equal(attentionLabel({ ask: 1, failed: 0, ready: 3 }), "1 thread needs you")
-assert.equal(attentionLabel({ ask: 1, failed: 1, ready: 0 }), "2 threads need you")
-assert.equal(attentionLabel({ ask: 0, failed: 0, ready: 1 }), "1 answer ready")
-assert.equal(attentionLabel({ ask: 0, failed: 0, ready: 4 }), "4 answers ready")
 assert.deepEqual(
   summaryNotification([
     { kind: "ready", title: "a" },
@@ -262,7 +256,7 @@ function reset() {
   assert.equal(fake.log.toasts.length, 1)
   assert.equal(fake.log.cues, 2)
   assert.deepEqual(fake.log.badges, [0, 1])
-  assert.equal(attentionLabel(unseenCounts(notificationsStore.get().items)), "1 answer ready")
+  assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/b"], "one thread is unseen")
 
   // Away from the window: a banner, after the burst settles.
   fake.setFocused(false)
@@ -277,7 +271,7 @@ function reset() {
     subtitle: "Claude Code needs you · pi-ui",
     body: "Run npm test?",
   })
-  assert.equal(attentionLabel(unseenCounts(notificationsStore.get().items)), "1 thread needs you")
+  assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/c", "thread:/b"], "the ask joins the unseen answer")
   assert.deepEqual(fake.log.badges, [0, 1, 2])
   assert.equal(nextUnseen()?.subject.id, "thread:/c", "asks come first")
 

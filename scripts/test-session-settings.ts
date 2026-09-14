@@ -4,7 +4,6 @@ import assert from "node:assert/strict"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import { applyAcpSettings } from "../electron/acp-config.ts"
 import { codexWireSettings } from "../electron/providers/codex/settings.ts"
-import { createCursorNativeRunner, cursorNativeRunner } from "../electron/providers/cursor/native-runner.ts"
 
 const model: SessionConfigOption = {
   id: "model",
@@ -188,23 +187,8 @@ assert.deepEqual(
   { model: undefined, effort: "high", serviceTier: "default" }
 )
 assert.equal(codexWireSettings().serviceTier, undefined)
-{
-  // The command line carries one flat id from Cursor's own list; the saved
-  // bracket form still reads, and the composer's options override it.
-  const listed = ["claude-opus-4-8-low", "claude-opus-4-8-low-fast", "claude-opus-4-8-high-fast"]
-  const runner = createCursorNativeRunner(async () => listed)
-  const prepared = await runner.prepare!(
-    { model: "claude-opus-4-8[effort=high,fast=true]", options: { effort: "low", fast: false, context: "1m" } },
-    {}
-  )
-  assert.equal(prepared.options.model, "claude-opus-4-8-low")
-  assert.deepEqual(prepared.options.options, {})
-  assert.deepEqual(prepared.dropped, ["context"], "a setting the id cannot carry is named, not lost")
-  assert.equal(runner.resume("id", "continue", prepared.options).args.at(-1), "claude-opus-4-8-low")
-  assert.deepEqual(cursorNativeRunner.resume("id", "continue", {}).args, ["-p", "continue", "--resume", "id", "--force"])
-}
 console.log(
-  "Session settings transports: sequential ACP acknowledgement and rejection, Codex reset, Cursor parameters passed"
+  "Session settings transports: sequential ACP acknowledgement and rejection, Codex reset"
 )
 
 const dualCatalog = normalizeCodexModels({
@@ -277,9 +261,6 @@ forward(
   { model: "a", options: { effort: "low" } }
 )
 assert.deepEqual(observedChanges, [{ model: "a", options: { effort: "high" } }])
-
-const { cursorAcpSource } = await import("../electron/providers/cursor/acp.ts")
-assert.deepEqual(cursorAcpSource.clientCapabilities, {_meta:{parameterizedModelPicker:true}})
 
 const { ClaudeSettingsResponseSchema } = await import("../electron/providers/claude/settings.ts")
 const settingsResponse = (effective: Record<string, string | boolean>) => ({type:"control_response",response:{subtype:"success",response:{applied:{effort:"high",model:"fable"},effective,sources:[{secret:"fixture-secret"}]}}})

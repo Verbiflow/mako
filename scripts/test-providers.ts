@@ -316,9 +316,17 @@ try {
 const providers = providerHost.profiles.list().map((loader) => loader.provider)
 assert.ok(providers.length > 0)
 assert.equal(new Set(providers).size, providers.length)
+// Cursor has one transport, the SDK: no headless CLI runner and no ACP
+// source, and it is the one provider with a sign-in of its own.
 assert.deepEqual(
   providerHost.nativeRunners.list().map((runner) => runner.provider),
-  providers
+  providers.filter((provider) => provider !== "cursor")
+)
+assert.equal(providerHost.liveDrivers.get("cursor")?.canResume, true)
+assert.equal(providerHost.liveDrivers.get("cursor")?.steering, "interrupt")
+assert.deepEqual(
+  providerHost.connections.list().map((connection) => connection.provider),
+  ["cursor"]
 )
 assert.deepEqual(
   providerHost.mcpSources.list().map((source) => source.provider),
@@ -330,7 +338,7 @@ assert.deepEqual(
 )
 assert.deepEqual(
   providerHost.acpSources.list().map((source) => source.provider),
-  ["cursor", "grok", "devin", "opencode"]
+  ["grok", "devin", "opencode"]
 )
 assert.deepEqual(
   providerHost.sessionEmitters.list().map((emitter) => emitter.provider),
@@ -408,16 +416,6 @@ assert.deepEqual(
   }
 )
 
-const cursor = providerHost.nativeRunners.get("cursor")!
-assert.deepEqual(
-  cursor.fresh("start", { model: "claude-sonnet-5-high-fast" }),
-  {
-    command: "cursor-agent",
-    args: ["-p", "start", "--force", "--model", "claude-sonnet-5-high-fast"],
-  }
-)
-assert.ok(cursor.prepare, "Cursor settles its model against the CLI's list before launch")
-
 const grok = providerHost.nativeRunners.get("grok")!
 assert.deepEqual(grok.resume("session", "continue", { options: { effort: "high" } }), {
   command: "grok",
@@ -449,15 +447,6 @@ const openCodeFresh = openCode.fresh("start", { model: "openai/gpt" })
 assert.equal(openCodeFresh.args[0], "run")
 assert.equal(openCodeFresh.args.at(-1), "start")
 assert.ok(openCodeFresh.args.includes("openai/gpt"))
-
-const cursorAcp = await providerHost.acpSources.get("cursor")!.launch({
-  appPath: process.cwd(),
-  execPath: process.execPath,
-})
-assert.deepEqual(
-  cursorAcp && { command: cursorAcp.command, args: cursorAcp.args },
-  { command: "cursor-agent", args: ["acp"] }
-)
 
 const grokAcp = await providerHost.acpSources.get("grok")!.launch({
   appPath: process.cwd(),

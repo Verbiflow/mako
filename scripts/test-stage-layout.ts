@@ -208,7 +208,6 @@ assert.match(
   /motion && visible && !document\.hidden && !media\.matches/
 )
 assert.match(threadViewerSource, /Loading messages…/)
-assert.match(threadViewerSource, /Syncing messages…/)
 assert.doesNotMatch(threadViewerSource, /Opening \{opening/)
 assert.match(threadViewingSource, /Showing saved messages/)
 assert.equal(composerActionKind({ running: false, hasContent: false }), "send")

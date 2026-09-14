@@ -31,7 +31,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { LiveActionStatus } from "../src/components/viewer/live-action-status"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
-import { AccessModeList, LiveComposerControls } from "../src/components/composer/live-controls"
+import { AccessModeList, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
 import { threadsStore } from "../src/state/threads"
 import { TransferStatus } from "../src/components/viewer/transfer-status"
 import { ConversationRelations } from "../src/components/viewer/conversation-relations"
@@ -118,6 +118,24 @@ assert.match(controlsMarkup, /claude: Agent/)
 assert.match(controlsMarkup, /Mako approves the agent&#x27;s requests/)
 assert.match(controlsMarkup, /Set when the session starts/)
 assert.match(controlsMarkup, /Provider-only switch/)
+// A one-mode provider (Cursor) offers nothing to choose: the chip names the
+// one level there is with nothing saved or remembered, and opens no ladder.
+conversation.session = {
+  ...conversation.session,
+  currentMode: null,
+  modes: [{ id: "full-access", name: "Agent", access: "full", enforcement: "provider" }],
+}
+publish()
+const singleModeMarkup = renderToStaticMarkup(<LiveComposerControls canCompact={false} compactEnabled={false} />)
+assert.match(singleModeMarkup, /aria-label="Access: Full access"/)
+assert.doesNotMatch(singleModeMarkup, /<button[^>]*aria-label="Access:/)
+threadsStore.set({
+  liveCapabilities: [{ provider: "cursor", canResume: false, modes: conversation.session.modes }],
+  composerHarness: "cursor",
+})
+const nextSessionMarkup = renderToStaticMarkup(<NextSessionModePicker />)
+assert.match(nextSessionMarkup, /aria-label="Access: Full access"/)
+assert.doesNotMatch(nextSessionMarkup, /<button/)
 conversation.session = { ...conversation.session, currentMode: null, modes: [] }
 control.actions = [
   {

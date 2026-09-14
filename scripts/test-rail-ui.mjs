@@ -9,8 +9,9 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
 /**
  * The rail against the production components and the fixture catalogue:
  * position never carries status, a folder moves only when you work there,
- * the pointer holds the order, rows that move glide, the status board
- * regroups by state in a fixed order, and Archived lives behind the filter.
+ * the pointer holds the order, rows that move glide and scrolling moves
+ * none of them, the status board regroups by state in a fixed order, and
+ * Archived lives behind the filter.
  * Screenshots of every view, dark and light, stay in the printed directory.
  */
 
@@ -92,6 +93,8 @@ async function checkWindow() {
   const folderOrder = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-flip-key^="folder:"]')].map(node => node.dataset.flipKey)`)
   const rowsIn = (folderKey) => evaluate(`[...document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(folderKey)}]').closest('section').querySelectorAll('[data-thread-row]')].map(node => node.dataset.flipKey)`)
   const flipping = (key) => evaluate(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(key)}]')?.getAnimations().some(animation => animation.id === 'rail-flip') ?? false`)
+  const anyFlipping = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].flatMap(node => node.getAnimations()).filter(animation => animation.id === 'rail-flip').length`)
+  const wheel = (deltaY) => evaluate(`(() => { const s = document.querySelector('.scroll-fade-scroller'); s.scrollTop += ${deltaY}; return s.scrollTop })()`)
 
   await window.loadURL(`${base}?mock`)
   await until(`document.querySelector('[aria-label="Thread view"]') !== null`)
@@ -165,6 +168,39 @@ async function checkWindow() {
   await frames()
   assert.deepEqual(await folderOrder(), before, "the newest file in the last folder does not lift it")
   console.log("PASS: files changing never move folders; rows glide")
+
+  // 2b. Scrolling is not a move. Every row's position on screen changes when
+  // the rail scrolls while its position in the list does not, and the flip
+  // read the first as the second: scroll the rail, then move the pointer into
+  // it — the one commit that always follows — and the whole visible column
+  // slid back through the scroll distance. That is the rail "jumping around".
+  await move(900, 500)
+  // Short enough that the fixture catalogue overflows it; a rail that fits
+  // cannot demonstrate a scroll.
+  const fullSize = window.getContentSize()
+  window.setContentSize(fullSize[0], 360)
+  await until(`document.querySelector('.scroll-fade-scroller').scrollHeight > document.querySelector('.scroll-fade-scroller').clientHeight`, "the rail overflows a short window")
+  const settle = () => evaluate(`Promise.all([...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].flatMap(node => node.getAnimations()).map(a => a.finished.catch(() => {}))).then(() => true)`)
+  await settle()
+  await frames()
+  const scrolled = await wheel(160)
+  assert.ok(scrolled > 0, "the shortened rail scrolls")
+  await frames()
+  const scrolledOrder = await folderOrder()
+  const railPoint = await evaluate(`(() => { const r = document.querySelector('.scroll-fade-scroller').getBoundingClientRect(); return {x: Math.round(r.x + 30), y: Math.round(r.y + r.height / 2)} })()`)
+  await move(railPoint.x, railPoint.y)
+  await frames()
+  assert.equal(await anyFlipping(), 0, "scrolling the rail must not make its rows glide")
+  assert.deepEqual(await folderOrder(), scrolledOrder, "scrolling changes nothing about the order")
+  await move(900, 500)
+  await frames()
+  await wheel(-scrolled)
+  await frames()
+  assert.equal(await anyFlipping(), 0, "scrolling back is not a move either")
+  window.setContentSize(fullSize[0], fullSize[1])
+  await frames()
+  await settle()
+  console.log("PASS: scrolling the rail moves no row")
 
   // 3. The pointer holds the order; leaving releases it.
   const rowPoint = await evaluate(`(() => { const r = document.querySelector('.thread-jump-scope [data-thread-row]').getBoundingClientRect(); return {x: Math.round(r.x + 30), y: Math.round(r.y + r.height / 2)} })()`)
@@ -277,6 +313,6 @@ async function checkWindow() {
   console.log("PASS: reduced motion is honoured")
 
   clearTimeout(watchdog)
-  console.log("Rail UI checks clean: stable folders, pointer hold, glides, status board, archived filter, reduced motion")
+  console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, status board, archived filter, reduced motion")
   app.exit(0)
 }

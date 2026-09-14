@@ -16,25 +16,34 @@ const root = await mkdtemp(join(tmpdir(), "mako-utility-model-location-"))
 const home = join(root, "home")
 const shared = join(home, ".mako", "utility-models")
 
-// Where connections live.
+// Where connections live. The launcher passes every host its root as
+// MAKO_DATA_ROOT, so the location is decided by where the root is, never by
+// whether the variable is set.
+const appData = join(root, "Application Support")
 assert.equal(
-  utilityModelDirectory({ dataRoot: join(root, "mako-dev"), env: {}, home }),
+  utilityModelDirectory({ dataRoot: join(appData, "mako-dev"), appData, home }),
   shared,
   "a profile host reads the user's connections"
 )
 assert.equal(
-  utilityModelDirectory({ dataRoot: join(root, "mako"), env: {}, home }),
+  utilityModelDirectory({ dataRoot: join(appData, "mako"), appData, home }),
   shared,
   "the default profile reads the same store"
 )
 assert.equal(
-  utilityModelDirectory({
-    dataRoot: join(root, "fixture"),
-    env: { MAKO_DATA_ROOT: join(root, "fixture") },
-    home,
-  }),
+  utilityModelDirectory({ dataRoot: join(appData, "mako-review-continuation"), appData, home }),
+  shared,
+  "a review profile reads the same store"
+)
+assert.equal(
+  utilityModelDirectory({ dataRoot: join(root, "fixture"), appData, home }),
   join(root, "fixture", "utility-models"),
-  "an isolated data root keeps its connections to itself"
+  "a temporary data root keeps its connections to itself"
+)
+assert.equal(
+  utilityModelDirectory({ dataRoot: join(root, "Application Support-not"), appData, home }),
+  join(root, "Application Support-not", "utility-models"),
+  "a sibling whose name merely starts with the app-data path is not a profile"
 )
 assert.equal(legacyUtilityModelDirectory(join(root, "mako-dev")), join(root, "mako-dev", "utility-models"))
 

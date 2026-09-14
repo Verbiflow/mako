@@ -11,7 +11,7 @@
 // Output: build/mako-notification-status (arm64, matching the app target).
 // Skipped on other platforms and when swiftc is missing, unless --require.
 import { execFileSync } from "node:child_process"
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -25,6 +25,19 @@ const bundleId = readArg("--bundle-id") ?? JSON.parse(readFileSync(join(root, "p
 if (process.platform !== "darwin") {
   if (require) throw new Error("The notification status helper builds only on macOS")
   process.exit(0)
+}
+// The helper's only inputs are its source and the bundle id baked into the
+// plist section; a sidecar records which id the output was built for so a
+// later packaging run can skip a swiftc invocation it would repeat.
+if (args.includes("--if-fresh")) {
+  const built = statSync(output, { throwIfNoEntry: false })
+  const source = statSync(join(root, "native/notification-status-macos/main.swift"), { throwIfNoEntry: false })
+  const stamped = statSync(`${output}.bundleid`, { throwIfNoEntry: false }) &&
+    readFileSync(`${output}.bundleid`, "utf8").trim() === bundleId
+  if (built && source && stamped && built.mtimeMs >= source.mtimeMs) {
+    console.log(`[notification-status] ${output} is current for ${bundleId}`)
+    process.exit(0)
+  }
 }
 // Invoked through xcrun so the SDK resolves; the bare compiler path cannot
 // load the standard library for the target.
@@ -60,6 +73,7 @@ try {
     { stdio: "inherit" }
   )
   execFileSync("chmod", ["755", output])
+  writeFileSync(`${output}.bundleid`, `${bundleId}\n`)
   console.log(`[notification-status] built ${output} for ${bundleId}`)
 } finally {
   rmSync(work, { recursive: true, force: true })

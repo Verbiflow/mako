@@ -71,15 +71,23 @@ async function manifest(root) {
     for (const entry of entries) await visit(join(path, entry.name))
   }
   for (const path of inputs) await visit(path)
-  const result = []
-  for (const path of files.sort())
-    result.push({ path, sha256: await digest(join(root, path)) })
+  const paths = files.sort()
+  const result = Array.from({ length: paths.length })
+  let next = 0
+  await Promise.all(
+    Array.from({ length: 16 }, async () => {
+      while (next < paths.length) {
+        const index = next++
+        result[index] = { path: paths[index], sha256: await digest(join(root, paths[index])) }
+      }
+    })
+  )
   return result
 }
 try {
   // The notification authorization helper ships beside the executable; see
   // electron/notification-authorization.ts for why it must live there.
-  execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require"], { cwd: project, stdio: "inherit" })
+  execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   const before = await manifest(project)
   for (const path of inputs) {
     await mkdir(dirname(join(stage, path)), { recursive: true })
@@ -114,6 +122,11 @@ try {
     config,
     JSON.stringify({
       ...buildConfig,
+      // Every native module we ship is a prebuilt platform package, so the
+      // @electron/rebuild pass only walks the dependency graph for nothing.
+      npmRebuild: false,
+      nodeGypRebuild: false,
+      buildDependenciesFromSource: false,
       directories: {
         ...buildConfig.directories,
         output,

@@ -659,19 +659,27 @@ async function check() {
     await until(
       "document.querySelector('[aria-label=\"Commit message\"]')?.value === 'fix: preserve commit drafts'"
     )
-    assert.ok(
-      await evaluate(
-        "document.body.textContent.includes('Sensitive file contents excluded')"
-      )
+    // The excluded files are a caution notice inside the card, one row above
+    // the toolbar, not a details element floating over it.
+    assert.match(
+      await evaluate("document.querySelector('[data-commit-notice=\"caution\"]')?.textContent ?? ''"),
+      /sensitive file[s]? left out of the draft/
     )
     await capture("generated-commit.png")
+    // Fast/Deep lives behind the model chip, not in the toolbar row.
+    assert.equal(await evaluate(`document.querySelector('[aria-label="Commit analysis mode"]')`), null)
+    await click('[aria-label^="Drafting model:"]')
+    await until(`document.querySelector('[aria-label="Commit analysis mode"]')`)
     assert.equal(await evaluate(`document.querySelector('[aria-label="Commit analysis mode"] button[aria-pressed="true"]')?.textContent.trim()`), "Fast")
     await click('[aria-label="Commit analysis mode"] button', "Deep")
     assert.equal(await evaluate(`document.querySelector('[aria-label="Commit analysis mode"] button[aria-pressed="true"]')?.textContent.trim()`), "Deep")
+    await capture("generation-settings.png")
+    await escape()
+    await until(`!document.querySelector('[aria-label="Commit analysis mode"]')`)
     delay = 1_000
     await click('[aria-label="Draft a message from the diff"]')
     await fill('[aria-label="Commit message"]', "My handwritten message")
-    await until("document.body.textContent.includes('Use generated draft')")
+    await until("document.querySelector('[data-commit-notice=\"neutral\"]')?.textContent.includes('Use draft')")
     assert.equal(
       await evaluate(
         "document.querySelector('[aria-label=\"Commit message\"]').value"

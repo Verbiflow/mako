@@ -60,8 +60,26 @@ async function runElectron() {
   const { startConversationMcp } =
     await import("../dist-electron/conversation-mcp.js")
   const { defaultCatalog } = await import("@mako/sessions")
-  const { nativeCheckpoint, canResumeBinding, resumeVerdict } =
+  const { nativeCheckpoint, resumeVerdict: genericResumeVerdict } =
     await import("../dist-electron/native-continuation.js")
+  const { resumable } =
+    await import("../dist-electron/contracts/conversation-control.js")
+  // The host's own policy: a driver that knows its store (Cursor's SDK
+  // index root, Devin's lock file) judges it; the rest hash the record and
+  // ask the provider's process probe.
+  const checkpoint = (provider, path) => {
+    const driver = providerHost.liveDrivers.get(provider)
+    return driver?.checkpoint ? driver.checkpoint(path) : nativeCheckpoint(path)
+  }
+  const resumeVerdict = (binding) => {
+    const driver = providerHost.liveDrivers.get(binding.provider)
+    return driver?.resumeVerdict
+      ? driver.resumeVerdict(binding)
+      : genericResumeVerdict(
+          binding,
+          providerHost.processProbes.get(binding.provider)
+        )
+  }
   const catalog = defaultCatalog()
   const { BrowserService } = await import("../dist-electron/browser-service.js")
   const { startControlService } =
@@ -96,12 +114,8 @@ async function runElectron() {
         : undefined
     },
     history: (path, before) => catalog.page(path, before),
-    checkpoint: nativeCheckpoint,
-    resumeVerdict: (binding) =>
-      resumeVerdict(
-        binding,
-        providerHost.processProbes.get(binding.provider)
-      ),
+    checkpoint: (path, provider) => checkpoint(provider, path),
+    resumeVerdict,
     emit: () => {},
   }
   let owner = new LiveConversations(dependencies)
@@ -716,7 +730,7 @@ async function runElectron() {
     }
     if (process.argv.includes("--restart")) {
       // The restart runs on the first requested provider whose driver can
-      // reopen a session (Cursor's session/load, Codex's thread resume);
+      // reopen a session (Cursor's SDK resume, Grok's session/load, Codex's thread resume);
       // Codex remains the default when none is named.
       const restartProvider =
         process.argv
@@ -763,7 +777,7 @@ async function runElectron() {
       stopCodexApps()
       mcp.close()
       const deadline = Date.now() + 30_000
-      while (!(await canResumeBinding(binding, providerHost.processProbes.get(binding.provider)))) {
+      while (!resumable(await resumeVerdict(binding), "same")) {
         if (Date.now() > deadline)
           throw new Error("Native session did not become safe to resume")
         await new Promise((resolve) => setTimeout(resolve, 250))
