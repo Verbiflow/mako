@@ -59,7 +59,13 @@ const TOOL_LABELS = new Map([
   ["TodoWrite", "Plan"],
   ["todo_write", "Plan"],
   ["update_plan", "Plan"],
+  ["updateTodos", "Plan"],
   ["CreatePlan", "Plan"],
+  ["createPlan", "Plan"],
+  ["askQuestion", "Question"],
+  ["AskQuestion", "Question"],
+  ["AskUserQuestion", "Question"],
+  ["generateImage", "Generate image"],
   ["TaskCreate", "Create task"],
   ["TaskUpdate", "Update task"],
   ["ToolSearch", "Find tool"],
@@ -319,7 +325,7 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
     } else if (name === "skill") {
       skills += 1
     } else if (
-      ["todowrite", "todo_write", "update_plan", "plan", "createplan", "taskcreate", "taskupdate"].includes(name)
+      ["todowrite", "todo_write", "update_plan", "updatetodos", "plan", "createplan", "taskcreate", "taskupdate"].includes(name)
     ) {
       plans += 1
     } else {

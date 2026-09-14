@@ -97,18 +97,3 @@ export function summaryNotification(
     body: rest > 0 ? `${shown.join(", ")} and ${rest} more` : shown.join(", "),
   }
 }
-
-/** Distinct threads waiting, by the kind of their newest unseen item. */
-export interface AttentionCounts {
-  ask: number
-  failed: number
-  ready: number
-}
-
-/** "2 threads need you", "1 answer ready": every number with its noun. */
-export function attentionLabel(counts: AttentionCounts): string {
-  const urgent = counts.ask + counts.failed
-  if (urgent > 0) return urgent === 1 ? "1 thread needs you" : `${urgent} threads need you`
-  if (counts.ready === 1) return "1 answer ready"
-  return `${counts.ready} answers ready`
-}

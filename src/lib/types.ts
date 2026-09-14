@@ -149,4 +149,10 @@ export type { ContinuationPlan } from "../../electron/shared"
 export type { AccessEnforcement, AccessTier } from "../../electron/contracts/access"
 export type { Interruption, InterruptionReason, TurnContinuation } from "../../electron/contracts/live-conversations"
 export type { MessageAnchor } from "../../electron/contracts/message-anchor"
+export type {
+  ProviderConnection,
+  ProviderConnectionAction,
+  ProviderConnectionSource,
+  ProviderConnectionState,
+} from "../../electron/contracts/provider-connection"
 export type { ProviderFailure, ProviderFailureKind } from "../../electron/contracts/provider-failure"
