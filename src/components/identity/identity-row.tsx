@@ -7,10 +7,10 @@ import { useAccounts } from "@/state/accounts"
 import { UserIcon } from "lucide-react"
 
 /**
- * The rail's footer identity — the same menu as the titlebar badge, with
- * room for a name when the rail is open. Superset keeps its org switcher
- * exactly here, and it is right: the bottom-left corner is where a desk
- * says whose it is.
+ * The desk's identity, in the rail's footer and nowhere else. Superset keeps
+ * its org switcher exactly here, and it is right: the bottom-left corner is
+ * where a desk says whose it is. The titlebar carried a second avatar with
+ * the same menu, which is one account asking to be recognised twice.
  */
 export function IdentityRow() {
   const login = useGitHub((state) => state.status?.login)
