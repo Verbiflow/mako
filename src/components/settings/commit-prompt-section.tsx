@@ -7,6 +7,7 @@ import { formatChord } from "@/extend/commands"
 import { setPref, usePrefs } from "@/state/prefs"
 import { git } from "@/state/git"
 import { utilityModels } from "@/state/model-runtime"
+import { refreshCommitModel, resolveCommitModel } from "@/state/commit-model"
 import type {
   UtilityModelSettings,
   UtilityProvider,
@@ -30,6 +31,9 @@ export function CommitPromptSection() {
   const [draft, setDraft] = useState<string | null>(null)
   const value = draft ?? stored ?? fallback
   const customized = Boolean(stored && stored !== fallback)
+  // With no explicit choice the first connection drafts, and this page says
+  // so rather than showing an empty picker beside a connected provider.
+  const draftingModel = resolveCommitModel(settings, commitModel).model
 
   const refresh = useCallback(async () => {
     try {
@@ -40,6 +44,9 @@ export function CommitPromptSection() {
       setSettings(next)
       setFallback(prompt)
       setError(null)
+      // The commit box reads the same connections; a change made here
+      // reaches its toolbar without waiting for a window focus.
+      void refreshCommitModel()
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -101,7 +108,7 @@ export function CommitPromptSection() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-ui font-medium">Drafting model</span>
               <SearchSelect
-                value={commitModel ?? ""}
+                value={draftingModel ?? ""}
                 label="Commit drafting model"
                 placeholder="Choose a connected model"
                 searchPlaceholder="Search connected models"
@@ -147,7 +154,7 @@ export function CommitPromptSection() {
                 )
                 const selected =
                   connection &&
-                  commitModel === `${connection.provider}/${connection.model}`
+                  draftingModel === `${connection.provider}/${connection.model}`
                 const issue = settings.issues.find(
                   (entry) => entry.provider === provider.id
                 )

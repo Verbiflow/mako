@@ -4,13 +4,23 @@ import { useLayoutEffect, useRef, type RefObject } from "react"
  * Rows that change place glide there instead of teleporting.
  *
  * Every rail row and header carries a `data-flip-key`. After each commit the
- * rows' positions are read once; a row whose top moved since the previous
- * commit is animated from where it was to where it is, over transform only,
- * so the main thread pays nothing while tokens land next door. A row that
- * was not there before arrives with the same short ease-out the rest of the
- * desk uses. Nothing animates on first fill, on a change of scene (another
- * view, a search) — those arrive, they do not move — offscreen, or under
- * reduced motion.
+ * rows' positions are read once; a row whose place in the list moved since
+ * the previous commit is animated from where it was to where it is, over
+ * transform only, so the main thread pays nothing while tokens land next
+ * door. A row that was not there before arrives with the same short ease-out
+ * the rest of the desk uses. Nothing animates on first fill, on a change of
+ * scene (another view, a search) — those arrive, they do not move —
+ * offscreen, or under reduced motion.
+ *
+ * **A place is measured inside the scrolled content, never on screen.** The
+ * viewport rectangle was the whole bug behind the rail "jumping around":
+ * scrolling moves every row's `getBoundingClientRect().top` without moving
+ * any row relative to the others, so the next commit for any reason at all —
+ * the minute timer, a thread reporting, the pointer entering and freezing the
+ * order — read the scroll distance as a move and slid the entire visible list
+ * back through it. Scroll the rail, then move the mouse into it, and the
+ * whole column lurched. An offset within the content changes only when a row
+ * actually changes place, which is the one thing worth animating.
  */
 const FLIP = "rail-flip"
 const MOVE_MS = 220
@@ -46,18 +56,23 @@ export function useRowFlip(
     for (const node of nodes)
       for (const running of node.getAnimations())
         if (running.id === FLIP) running.cancel()
+    const bounds = root.getBoundingClientRect()
+    // The row's top within the scrolled content: what the scrollbar reveals,
+    // not what the window happens to be showing.
+    const origin = bounds.top - root.scrollTop
     const tops = new Map<string, number>()
     for (const node of nodes) {
       const key = node.dataset["flipKey"]
-      if (key) tops.set(key, node.getBoundingClientRect().top)
+      if (key) tops.set(key, node.getBoundingClientRect().top - origin)
     }
     const before = previous.current
     previous.current = { scene, tops }
     if (!before || before.scene !== scene) return
     if (document.hidden || reducedMotion()) return
-    const bounds = root.getBoundingClientRect()
+    // Back to screen coordinates for the "is this worth animating" test: a
+    // row nobody can see should not schedule an animation.
     const near = (top: number) =>
-      top >= bounds.top - NEAR_PX && top <= bounds.bottom + NEAR_PX
+      top + origin >= bounds.top - NEAR_PX && top + origin <= bounds.bottom + NEAR_PX
     for (const node of nodes) {
       const key = node.dataset["flipKey"]
       if (!key) continue

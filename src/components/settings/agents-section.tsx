@@ -9,9 +9,20 @@ import {
   SettingRow,
 } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import {
+  ConnectionControls,
+  ConnectionKeyForm,
+  ConnectionNotes,
+  ConnectionStatus,
+} from "@/components/settings/provider-connections"
 import { HARNESS_LABEL } from "@/components/rail/harness-meta"
 import { setPref, usePrefs } from "@/state/prefs"
 import { providers, useProviders } from "@/state/providers"
+import {
+  connectionFor,
+  providerConnections,
+  useProviderConnections,
+} from "@/state/provider-connections"
 import { cn } from "@/lib/utils"
 import { formatBytes, formatRelative } from "@/lib/format"
 import { usageWindowLabel } from "@/lib/usage-window"
@@ -39,6 +50,7 @@ export function AgentsSection() {
 
   useEffect(() => {
     void Promise.all([providers.loadStatus(), providers.loadAll()])
+    providerConnections.load()
   }, [])
 
   return (
@@ -99,25 +111,95 @@ export function AgentsSection() {
       </p>
       <ListCard>
         {harnesses.map((entry) => (
-          <ListCardRow key={entry.id} className="flex items-center gap-2.5">
-            <HarnessIcon harness={entry.id} className="size-4" />
-            <span className="min-w-0 flex-1 text-ui">{entry.name}</span>
-            <span className="text-label text-faint">{entry.how}</span>
-            {availability === null ? (
-              <span className="w-14 shimmer text-right text-label text-faint">
-                …
-              </span>
-            ) : availability[entry.id] ? (
-              <span className="text-label text-added">Installed</span>
-            ) : (
-              <span className="text-label text-faint">Not installed</span>
-            )}
-          </ListCardRow>
+          <HarnessRow
+            key={entry.id}
+            harness={entry}
+            installed={availability === null ? null : Boolean(availability[entry.id])}
+          />
         ))}
       </ListCard>
 
       <HarnessAccounts />
     </div>
+  )
+}
+
+interface Harness {
+  id: string
+  name: string
+  how: string
+}
+
+/**
+ * One provider: what it is, how it is reached, whether it is installed, and —
+ * for a provider that owns a sign-in of its own — whether it currently holds
+ * a credential.
+ *
+ * Those last two are different facts and both are shown. "Installed" is about
+ * the CLI on this machine; the line beneath is about the key the transport
+ * runs under, which is the one that decides whether a prompt gets answered.
+ * It sits on the row because the row is where someone looks when a provider
+ * misbehaves, and it sits under the name rather than in the status column
+ * because it is a sentence. Only providers in the host's connection registry
+ * have one; the rest keep exactly the row they had.
+ */
+function HarnessRow({
+  harness,
+  installed,
+}: {
+  harness: Harness
+  installed: boolean | null
+}) {
+  const connection = useProviderConnections((state) =>
+    connectionFor(state, harness.id)
+  )
+  const [keyOpen, setKeyOpen] = useState(false)
+
+  return (
+    <ListCardRow className="flex flex-col gap-2.5">
+      <div>
+        <div className="group/harness flex items-center gap-2.5">
+          <HarnessIcon harness={harness.id} className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-ui">{harness.name}</span>
+          <span className="shrink-0 text-label text-faint">{harness.how}</span>
+          {installed === null ? (
+            <span className="w-14 shimmer shrink-0 text-right text-label text-faint">
+              …
+            </span>
+          ) : installed ? (
+            <span className="shrink-0 text-label text-muted-foreground">
+              Installed
+            </span>
+          ) : (
+            <span className="shrink-0 text-label text-faint">Not installed</span>
+          )}
+          {connection ? (
+            <ConnectionControls
+              connection={connection}
+              keyOpen={keyOpen}
+              onPasteKey={() => {
+                providerConnections.dismissFailure(connection.provider)
+                setKeyOpen(true)
+              }}
+            />
+          ) : null}
+        </div>
+        {connection ? (
+          <div className="pl-[26px]">
+            <ConnectionStatus connection={connection} />
+          </div>
+        ) : null}
+      </div>
+      {connection && keyOpen ? (
+        <ConnectionKeyForm
+          connection={connection}
+          onClose={() => setKeyOpen(false)}
+        />
+      ) : null}
+      {connection ? (
+        <ConnectionNotes connection={connection} keyOpen={keyOpen} />
+      ) : null}
+    </ListCardRow>
   )
 }
 
