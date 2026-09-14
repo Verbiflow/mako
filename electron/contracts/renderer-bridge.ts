@@ -34,11 +34,12 @@ import type {
   DelegateInput,
   ForkInput,
   TransferInput,
-  LiveCapability,
+  HarnessDescriptor,
 } from "../shared.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest } from "../shared.js"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
+import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type {
   Automation,
   BlockAddress,
@@ -67,6 +68,7 @@ import type {
   SearchResults,
   SessionState,
   SessionSummary,
+  SkillReference,
   SkillRegistrySnapshot,
   SkillSyncPreview,
   SkillSyncTarget,
@@ -197,14 +199,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     followThread: (path: string, fromByte: number) =>
       invokeTrustedHost<void>("mako:thread-follow", path, fromByte),
     unfollowThread: () => invokeTrustedHost<void>("mako:thread-unfollow"),
-    resumableHarnesses: () =>
-      invokeTrustedHost<string[]>("mako:thread-resumable"),
+    harnessDescriptors: () =>
+      invokeTrustedHost<HarnessDescriptor[]>("mako:harness-descriptors"),
     continuationPlan: (path: string) =>
       invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
     rememberThreadMode: (path: string, modeId: string) =>
       invokeTrustedHost<ThreadRef | null>("mako:thread-remember-mode", path, modeId),
-    continueTargets: () =>
-      invokeTrustedHost<string[]>("mako:thread-continue-targets"),
     continueThreadWith: (
       path: string,
       harness: string,
@@ -247,8 +247,6 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:thread-abort-run", path),
 
     /* Interactive foreign agents (ACP). */
-    liveCapabilities: () =>
-      invokeTrustedHost<LiveCapability[]>("mako:live-capabilities"),
     liveStart: (harness: string, cwd: string, options: LiveStartOptions) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-start", harness, cwd, options),
     nativeReceipt: (id: string) =>
@@ -352,6 +350,10 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<HarnessProfile[]>("mako:harness-profiles", force),
     harnessAvailability: () =>
       invokeTrustedHost<Record<string, boolean>>("mako:harness-availability"),
+    harnessUpdates: () =>
+      invokeTrustedHost<Record<string, HarnessUpdateInfo>>("mako:harness-updates"),
+    runHarnessUpdate: (provider: string) =>
+      invokeTrustedHost<HarnessUpdateInfo>("mako:harness-update", provider),
     daemonStatus: () =>
       invokeTrustedHost<{
         pid: number
@@ -440,6 +442,13 @@ export function createMakoBridge(transport: BridgeTransport) {
 
     discoverSkills: () =>
       invokeTrustedHost<SkillRegistrySnapshot>("mako:skills-discover"),
+    /** The `$skill` names in a message, resolved for the provider that will answer it. */
+    resolveSkillReferences: (names: string[], harness: string) =>
+      invokeTrustedHost<SkillReference[]>(
+        "mako:skills-resolve",
+        names,
+        harness
+      ),
     previewSkillSync: (skillId: string, target: SkillSyncTarget) =>
       invokeTrustedHost<SkillSyncPreview>(
         "mako:skills-sync-preview",

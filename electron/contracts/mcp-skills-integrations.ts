@@ -29,6 +29,8 @@ export interface SkillOrigin {
   account: string
   scope: SkillScope
   provenance: string
+  /** This copy's package hash; differs from the record's when the copies have drifted apart. */
+  hash: string
 }
 
 export interface SkillRecord {
@@ -43,6 +45,12 @@ export interface SkillRecord {
   license?: string
   compatibility?: string
   allowedTools?: string[]
+  /**
+   * `disable-model-invocation: true` in the frontmatter: only the user may
+   * invoke it. A typed `$name` is exactly that invocation, so a handover
+   * carries it like any other skill; the menu labels it `manual`.
+   */
+  manual?: boolean
   blockReason?: string
   conflict?: "name" | "drift"
 }
@@ -52,6 +60,40 @@ export interface SkillProviderStatus {
   label: string
   account: string
   available: boolean
+  /**
+   * Whether the installed CLI loads `~/.agents/skills` and `.agents/skills`
+   * on its own. Declared by the provider module and read as `false` until
+   * verified against the CLI, so an unverified provider is handed the skill
+   * in the prompt rather than trusted to find it.
+   */
+  readsUniversalRoot: boolean
+}
+
+/**
+ * How a `$skill` typed into a message reaches the selected provider.
+ *
+ * `native`: the provider's own roots (or a universal root it is known to
+ * read) hold the skill, so it loads it itself and the prompt only points at
+ * it. `handover`: the skill lives somewhere this provider does not read, so
+ * Mako carries the instructions inside the message and names the directory
+ * that holds the skill's supporting files. `missing`: no skill of that name
+ * anywhere Mako looks; the token goes out as typed.
+ */
+export type SkillDelivery =
+  | { kind: "native"; path: string }
+  | { kind: "handover"; path: string; from: SkillProvider }
+  | { kind: "missing" }
+
+/** One resolved `$skill` reference, ready to be written into a prompt. */
+export interface SkillReference {
+  name: string
+  delivery: SkillDelivery
+  description?: string
+  hash?: string
+  /** SKILL.md without its frontmatter; present for a handover within the size cap. */
+  body?: string
+  /** The body exceeded the cap, so the prompt points at SKILL.md instead of carrying it. */
+  oversize?: boolean
 }
 
 export interface SkillRegistrySnapshot {

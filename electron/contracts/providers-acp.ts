@@ -8,8 +8,20 @@ import type { AccessEnforcement, AccessTier } from "./access.js"
  */
 export type LiveSteering = "step" | "interrupt"
 
-export interface LiveCapability {
+/**
+ * One provider, described once. The desk renders every provider-shaped
+ * surface from this — what it is called, whether a headless run can continue
+ * its sessions, whether an interactive transport can drive it, and what the
+ * running session can be asked to do. New capabilities are fields here, not
+ * new channels.
+ */
+export interface HarnessDescriptor {
   provider: string
+  displayName: string
+  /** A headless native run can continue this provider's sessions. */
+  resumable: boolean
+  /** An interactive transport can drive this provider right now. */
+  live: boolean
   canResume: boolean
   observesNativeAgents?: boolean
   canSteer?: boolean
@@ -70,6 +82,27 @@ export interface LiveSessionMode {
   description?: string
 }
 
+/**
+ * A slash invocation the provider says this session accepts. `description`
+ * and `hint` are only what the provider reported — a transport that lists
+ * names alone (the Claude SDK) leaves them out rather than inventing copy.
+ */
+export interface LiveSessionCommand {
+  name: string
+  description?: string
+  hint?: string
+}
+
+/**
+ * The provider's own context reading, only when it reports exact numbers:
+ * tokens in context out of the window size, and cumulative session cost.
+ */
+export interface LiveSessionUsage {
+  used: number
+  size: number
+  cost?: { amount: number; currency: string }
+}
+
 export interface LiveSessionState {
   nativeRunId?: string
   nativeForkId?: string
@@ -83,6 +116,10 @@ export interface LiveSessionState {
   status: "starting" | "ready" | "running" | "failed" | "closed"
   modes: LiveSessionMode[]
   currentMode: string | null
+  /** Slash commands the provider advertised for this session, when it does. */
+  commands?: LiveSessionCommand[]
+  /** Exact context reading the provider last reported; absent until it does. */
+  usage?: LiveSessionUsage
   configOptions: import("@mako/sessions/settings").ModelOption[]
   settings?: SessionSettings
   /**

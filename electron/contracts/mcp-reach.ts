@@ -18,7 +18,6 @@ import type { HarnessProfile } from "./providers-acp.js"
  */
 export const MAKO_RUNTIME_SERVERS: ReadonlySet<string> = new Set([
   "mako-browser-use",
-  "mako-local-tools",
   "mako-local-control",
   "mako-backend",
 ])

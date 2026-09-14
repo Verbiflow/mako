@@ -149,8 +149,8 @@ export interface LiveBatch {
 }
 
 export type LiveDriverEvent =
-  | { type: "acp-agent"; id: string; agent: NativeAgentObservation }
-  | { type: "acp-session"; session: LiveSessionState }
-  | { type: "acp-update"; id: string; update: LiveUpdate }
-  | { type: "acp-updates"; id: string; updates: LiveUpdate[] }
-  | { type: "acp-permission"; request: LivePermissionRequest }
+  | { type: "live-agent"; id: string; agent: NativeAgentObservation }
+  | { type: "live-session"; session: LiveSessionState }
+  | { type: "live-update"; id: string; update: LiveUpdate }
+  | { type: "live-updates"; id: string; updates: LiveUpdate[] }
+  | { type: "live-permission"; request: LivePermissionRequest }

@@ -84,6 +84,9 @@ export const hostCallInputs = {
   "mako:git-unstage-all": z.tuple([]),
   "mako:github-status": z.tuple([]),
   "mako:harness-availability": z.tuple([]),
+  "mako:harness-descriptors": z.tuple([]),
+  "mako:harness-update": z.tuple([z.string()]),
+  "mako:harness-updates": z.tuple([]),
   "mako:harness-profiles": z.tuple([z.boolean().optional()]),
   "mako:harness-start": z.tuple([
     z.string(),
@@ -160,7 +163,6 @@ export const hostCallInputs = {
   "mako:live-action-acknowledge": z.tuple([z.string(), z.string()]),
   "mako:live-bind": z.tuple([z.string(), z.string()]),
   "mako:live-cancel": z.tuple([z.string()]),
-  "mako:live-capabilities": z.tuple([]),
   "mako:live-capture": z.tuple([z.string(), z.string()]),
   "mako:live-child-cancel": z.tuple([z.string(), z.string()]),
   "mako:live-clear-queue": z.tuple([z.string()]),
@@ -535,6 +537,7 @@ export const hostCallInputs = {
       scope: z.union([z.literal("workspace"), z.literal("user")]),
     }),
   ]),
+  "mako:skills-resolve": z.tuple([z.array(z.string()), z.string()]),
   "mako:skills-sync-apply": z.tuple([
     z.string(),
     z.array(
@@ -596,7 +599,6 @@ export const hostCallInputs = {
     z.object({ inline: z.boolean().optional() }).optional(),
   ]),
   "mako:thread-continuation-plan": z.tuple([z.string()]),
-  "mako:thread-continue-targets": z.tuple([]),
   "mako:thread-continue-with": z.tuple([
     z.string(),
     z.string(),
@@ -635,7 +637,6 @@ export const hostCallInputs = {
     z.number().optional(),
   ]),
   "mako:thread-remember-mode": z.tuple([z.string(), z.string()]),
-  "mako:thread-resumable": z.tuple([]),
   "mako:thread-run": z.tuple([z.string()]),
   "mako:thread-stop": z.tuple([
     z.union([

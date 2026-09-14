@@ -65,6 +65,22 @@ const ref = z
     "Element ref from this tab's latest observe result. Refs are replaced by the next observation and by navigation."
   )
 const browser = z.string().describe("Browser ID from status.")
+const VisualRegionSchema = z
+  .object({
+    x: z.number().finite().nonnegative().describe("Viewport CSS pixel X."),
+    y: z.number().finite().nonnegative().describe("Viewport CSS pixel Y."),
+    width: z
+      .number()
+      .finite()
+      .positive()
+      .describe("Region width in CSS pixels."),
+    height: z
+      .number()
+      .finite()
+      .positive()
+      .describe("Region height in CSS pixels."),
+  })
+  .strict()
 /** Where an input lands: an observed element or exact viewport CSS pixels. */
 const PointerTargetSchema = z
   .union([
@@ -73,6 +89,12 @@ const PointerTargetSchema = z
       .object({
         x: z.number().finite().describe("Viewport CSS pixel X."),
         y: z.number().finite().describe("Viewport CSS pixel Y."),
+        view: z
+          .string()
+          .optional()
+          .describe(
+            "Visual view token returned by screenshot. When supplied, the action is refused unless it names this tab's latest agent screenshot."
+          ),
       })
       .strict(),
   ])
@@ -151,6 +173,12 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
         .describe(
           "Return only focusable and control nodes (buttons, links, fields, options)."
         ),
+      since: z
+        .string()
+        .optional()
+        .describe(
+          "Observation token from this tab. If its semantic result is unchanged, return a compact unchanged receipt and keep its refs valid; otherwise return a complete fresh observation."
+        ),
       frameId: z
         .string()
         .optional()
@@ -192,6 +220,9 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
         .describe(
           "Capture only this observed element's box (plus a small margin)."
         ),
+      region: VisualRegionSchema.optional().describe(
+        "Magnify an arbitrary rectangle from the current viewport. Coordinates are viewport CSS pixels. Incompatible with ref and fullPage."
+      ),
     })
     .strict(),
   z
@@ -203,7 +234,7 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
         .min(1)
         .max(100_000)
         .describe(
-          "JavaScript expression evaluated in the page; a returned promise is awaited. Results over 200 KB are truncated."
+          "JavaScript expression evaluated in the page; a returned promise is awaited. A result past the inline budget is written whole to an artifact file and described, never cut."
         ),
       frameId: z
         .string()
