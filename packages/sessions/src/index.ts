@@ -65,6 +65,31 @@ export {
 export { type NativeFile, type SessionProvider } from "./providers/types.js"
 export { CodexProvider } from "./providers/codex.js"
 export { CursorProvider } from "./providers/cursor.js"
+export {
+  cursorLegacyIdentity,
+  cursorSdkAgentDirectory,
+  cursorSdkIndexPath,
+  cursorSdkStateRoot,
+  cursorSdkStorePath,
+  cursorStoreOrigin,
+  type CursorStoreOrigin,
+} from "./providers/cursor-sdk-paths.js"
+export {
+  CURSOR_SDK_IMPORT_METADATA_KEY,
+  cursorSdkAgentIdForDirectory,
+  cursorSdkDirectoryName,
+  readCursorSdkAgent,
+  type CursorSdkAgentRecord,
+  type CursorSdkImport,
+} from "./providers/cursor-sdk-index.js"
+export {
+  cursorSdkReportedSettings,
+  cursorSdkSelection,
+  normalizeCursorSdkModels,
+  type CursorSdkModelListItem,
+  type CursorSdkModelSelection,
+  type CursorSdkSelectionResult,
+} from "./providers/cursor-sdk-models.js"
 export { GrokProvider } from "./providers/grok.js"
 export { ClaudeProvider } from "./providers/claude.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
