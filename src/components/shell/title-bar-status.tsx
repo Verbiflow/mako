@@ -1,33 +1,25 @@
 import { useHostConnection } from "@/state/host-connection"
 import { Slot } from "@/extend/slot"
-import { actions, useSession } from "@/state/session"
-import { stage } from "@/state/stage"
-import { workspaceName } from "@/lib/format"
+import { useSession } from "@/state/session"
 import { HotIndicator } from "@/components/shell/hot-indicator"
-import { AttentionPill } from "@/components/shell/attention-pill"
 import { updates, useUpdates } from "@/state/updates"
-import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
-import {
-  ArrowUpCircleIcon,
-  FolderIcon,
-  GitBranchIcon,
-  PlugZapIcon,
-} from "lucide-react"
+import { ArrowUpCircleIcon, PlugZapIcon } from "lucide-react"
 
 /**
- * The always-on facts, in the titlebar's right cluster: where we are, what
- * branch, whether anything is listening, and — once one has downloaded — an
- * update. The old 22px status bar carried these; a strip of chrome whose
- * whole job was five small facts did not earn its height, so the facts moved
- * up here and the context/cost readings moved down beside the composer.
- * Every piece is a narrow-selector leaf: a token stream never repaints this.
+ * What is wrong, in the titlebar's right cluster — and nothing else.
+ *
+ * It carried the project, the branch and the changed-file count too, which
+ * repeated the workspace name already centred two inches away and put a
+ * permanently-lit `70 changed` beside it. Git's own surface is Changes, which
+ * shows the same count with the files under it; a second readout in the
+ * chrome was clutter that never earned its width. What is left only appears
+ * when it has something to say: a lost host, a downloaded update. Every piece
+ * is a narrow-selector leaf, so a token stream never repaints this.
  */
 export function TitleBarStatus() {
   return (
     <div className="mr-1 flex min-w-0 items-center gap-2 text-label text-faint">
       <ConnectionPill />
-      <AttentionPill />
-      <ProjectContext />
       <HotIndicator />
       <UpdatePill />
       <Slot name="titlebar.status" meta={undefined} />
@@ -53,45 +45,6 @@ function ConnectionPill() {
           ? "Connecting"
           : "Agent disconnected"}
     </button>
-  )
-}
-
-function ProjectContext() {
-  const { cwd, ready } = useWorkspaceFocus()
-  const branch = useSession((state) => state.git?.branch)
-  const changed = useSession((state) => state.git?.files.length ?? 0)
-  if (!cwd) return null
-  return (
-    <div className="flex min-w-0 items-center gap-0.5">
-      <button
-        type="button"
-        onClick={() => void actions.pickWorkspace()}
-        title={cwd}
-        className="no-drag flex min-w-0 items-center gap-1 rounded px-1 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-      >
-        <FolderIcon className="size-3" />
-        <span className="max-w-[9rem] truncate">{workspaceName(cwd)}</span>
-      </button>
-      {ready && branch ? (
-        <>
-          <span aria-hidden className="text-faint/50">
-            /
-          </span>
-          <button
-            type="button"
-            onClick={() => stage.open("changes")}
-            title={`${branch}${changed > 0 ? ` · ${changed} changed` : ""}`}
-            className="no-drag flex min-w-0 items-center gap-1 rounded px-1 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-          >
-            <GitBranchIcon className="size-3" />
-            <span className="max-w-[8rem] truncate font-mono">{branch}</span>
-            {changed > 0 ? (
-              <span className="text-caution">{changed} changed</span>
-            ) : null}
-          </button>
-        </>
-      ) : null}
-    </div>
   )
 }
 

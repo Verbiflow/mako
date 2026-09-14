@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react"
 import { IconAction } from "@/components/ui/kit"
 import { Slot } from "@/extend/slot"
 import { formatChord } from "@/extend/commands"
@@ -6,11 +5,8 @@ import { actions, useSession } from "@/state/session"
 import { togglePref, usePrefs } from "@/state/prefs"
 import { stage, useStage } from "@/state/stage"
 import { useTabs } from "@/state/tabs"
-import { MakoMark } from "@/components/ui/mako-mark"
 import { TitleBarStatus } from "@/components/shell/title-bar-status"
-import { workspaceName } from "@/lib/format"
 import { search } from "@/state/search"
-import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { composerTurnRunning } from "@/lib/composer-action"
 import { activeAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
@@ -18,10 +14,8 @@ import { cn } from "@/lib/utils"
 import {
   PanelLeftIcon,
   PanelRightIcon,
-  CommandIcon,
   PlusIcon,
   SearchIcon,
-  SettingsIcon,
   SquareIcon,
 } from "lucide-react"
 
@@ -34,10 +28,10 @@ import {
  * chrome looked wrong: a window has one header, not one per panel.
  *
  * When the rail is closed the segment collapses to just the toggle and the
- * traffic-light inset, and the title recentres over the full width.
+ * traffic-light inset. The focused tab already names the session, so the
+ * bar itself carries no title.
  */
 export function TitleBar() {
-  const { cwd, title: name } = useWorkspaceFocus()
   const builtinRunning = useSession(
     (state) => state.meta?.isStreaming ?? false
   )
@@ -95,13 +89,6 @@ export function TitleBar() {
         <Slot name="titlebar.leading" />
       </div>
 
-      <div className="flex min-w-0 flex-1 justify-center px-3">
-        <div className="flex min-w-0 max-w-full items-center gap-2">
-          <MakoMark className="size-3.5 text-foreground/60" />
-          <SessionTitle name={name} fallback={workspaceName(cwd)} />
-        </div>
-      </div>
-
       <div className="ml-auto flex items-center gap-1 pl-2">
         <TitleBarStatus />
         <Slot name="titlebar.trailing" />
@@ -115,28 +102,16 @@ export function TitleBar() {
             <SquareIcon />
           </IconAction>
         ) : null}
-        {/* A magnifier searches; it does not list commands. Once there was a
-            real search these two had to stop sharing an icon. */}
+        {/* Search is the one thing here with no other doorway. The palette
+            is Cmd+K, which is the most-known shortcut a desk has and needs no
+            glyph arguing for it, and Settings is a row in the identity menu
+            the rail's footer already carries. A titlebar is not a toolbar. */}
         <IconAction
           label="Search this project"
           keys={formatChord("mod+shift+f")}
           onClick={() => search.open()}
         >
           <SearchIcon />
-        </IconAction>
-        <IconAction
-          label="Command palette"
-          keys={formatChord("mod+k")}
-          onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))}
-        >
-          <CommandIcon />
-        </IconAction>
-        <IconAction
-          label="Settings"
-          keys={formatChord("mod+,")}
-          onClick={() => window.dispatchEvent(new CustomEvent("mako:settings"))}
-        >
-          <SettingsIcon />
         </IconAction>
         <IconAction
           label={companionOpen ? "Hide the right sidebar" : "Show the right sidebar"}
@@ -148,59 +123,5 @@ export function TitleBar() {
         </IconAction>
       </div>
     </header>
-  )
-}
-
-
-function SessionTitle({ name, fallback }: { name?: string; fallback: string }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(name ?? "")
-  const input = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (editing) {
-      input.current?.focus()
-      input.current?.select()
-    }
-  }, [editing])
-
-  if (editing) {
-    return (
-      <input
-        ref={input}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          setEditing(false)
-          const next = draft.trim()
-          if (next && next !== name) void actions.rename(next)
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur()
-          if (event.key === "Escape") {
-            setDraft(name ?? "")
-            setEditing(false)
-          }
-        }}
-        className="no-drag h-6 w-56 rounded-md bg-raised px-2 text-center text-ui font-medium outline-none ring-1 ring-ring"
-      />
-    )
-  }
-
-  return (
-    <button
-      type="button"
-      title="Rename session"
-      onClick={() => {
-        setDraft(name ?? "")
-        setEditing(true)
-      }}
-      className={cn(
-        "no-drag truncate rounded-md px-2 py-0.5 text-ui font-medium transition-colors duration-100 hover:bg-fill-hover",
-        name ? "text-foreground" : "text-faint"
-      )}
-    >
-      {name || fallback}
-    </button>
   )
 }

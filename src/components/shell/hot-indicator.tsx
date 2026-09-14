@@ -34,14 +34,49 @@ export function HotIndicator() {
   }, [reloaded])
 
   if (manualReload || !import.meta.env.DEV) {
+    // "Shared host" is the normal case — every dev client attaches to the
+    // profile's persistent host — so it was a permanent badge reporting the
+    // expected state forever. Only the *abnormal* worlds are worth a word:
+    // a sandbox profile, a standalone isolated host, or a second preview
+    // client, each of which means this window is not the desk you think.
+    const world = sandboxProfile
+      ? { label: `Sandbox: ${sandboxProfile}`, hint: `The ${sandboxProfile} profile has its own host, agents and history.` }
+      : interfacePreview
+        ? { label: "Shared preview", hint: "Another client of this host, with its own draft and layout." }
+        : sharedRuntime
+          ? null
+          : { label: "Isolated dev", hint: "Standalone host. Other hosts do not share its live state." }
     return (
       <div className="no-drag flex shrink-0 items-center gap-1 text-label">
-        {manualReload || interfacePreview || sharedRuntime ? <span title={sharedRuntime ? "Clients share agent processes and conversation history. Closing this window does not stop work." : "Standalone host. Other isolated hosts do not share its live state."} className="border border-hairline px-1.5 py-0.5 text-muted-foreground">{sandboxProfile ? `Sandbox: ${sandboxProfile}` : interfacePreview ? "Shared preview" : sharedRuntime ? "Shared host" : "Isolated dev"}</span> : null}
-        <button type="button" onClick={reloadInterface} title="Load the latest interface without stopping agents. Host changes need Restart Mako." className="pressable flex h-6 items-center gap-1 rounded px-1.5 hover:bg-fill-hover hover:text-foreground">
+        {world ? (
+          <span title={world.hint} className="border border-hairline px-1.5 py-0.5 text-muted-foreground">
+            {world.label}
+          </span>
+        ) : null}
+        {/* The glyph alone at rest — a standing "Reload UI" label is a button
+            explaining itself forever — and its own sentence the moment there
+            is something to load, because that is news and a bare glyph cannot
+            report it. */}
+        <button
+          type="button"
+          onClick={reloadInterface}
+          aria-label="Reload UI"
+          title="Load the latest interface without stopping agents. Host changes need Restart Mako."
+          className={cn(
+            "pressable flex h-6 items-center justify-center gap-1 rounded hover:bg-fill-hover hover:text-foreground",
+            update?.kind === "available" ? "px-1.5 text-foreground" : "w-6"
+          )}
+        >
           <RotateCcwIcon className="size-3" />
-          {update?.kind === "available" ? "Reload UI · changes ready" : "Reload UI"}
+          {update?.kind === "available" ? <span>Reload UI · changes ready</span> : null}
         </button>
-        <button type="button" onClick={openInterfacePreview} aria-label="Open shared-host preview" title="Open another client of this host with its own draft and layout." className="pressable flex size-6 items-center justify-center rounded hover:bg-fill-hover hover:text-foreground">
+        <button
+          type="button"
+          onClick={openInterfacePreview}
+          aria-label="Open shared-host preview"
+          title="Open another client of this host with its own draft and layout."
+          className="pressable flex size-6 items-center justify-center rounded hover:bg-fill-hover hover:text-foreground"
+        >
           <SquareArrowOutUpRightIcon className="size-3" />
         </button>
       </div>
