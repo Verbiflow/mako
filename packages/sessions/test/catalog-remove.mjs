@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -69,6 +70,43 @@ try {
   assert.equal(await cursor.remove(join(chat, "store.db")), false, "Desktop chats are not removable here")
   assert.equal(await exists(chat), true)
 
+  // Cursor SDK: the agent directory goes and the index forgets the agent, its
+  // runs and their events; a sibling agent's rows stay.
+  const sdkRoot = join(home, ".mako", "cursor-sdk")
+  const sdkAgent = (id) => join(sdkRoot, "agents", `agent-${createHash("sha256").update(id).digest("hex")}`)
+  await mkdir(sdkAgent("sdk-gone"), { recursive: true })
+  await mkdir(sdkAgent("sdk-kept"), { recursive: true })
+  const sdkStore = new DatabaseSync(join(sdkAgent("sdk-gone"), "store.db"))
+  sdkStore.exec("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);")
+  sdkStore.prepare("INSERT INTO meta (key, value) VALUES ('0', ?)").run(JSON.stringify({ agentId: "sdk-gone", latestRootBlobId: "" }))
+  sdkStore.close()
+  await writeFile(join(sdkAgent("sdk-kept"), "store.db"), "")
+  const index = new DatabaseSync(join(sdkRoot, "index.db"))
+  index.exec(
+    "CREATE TABLE agents (agent_id TEXT PRIMARY KEY, workspace_ref TEXT NOT NULL, status TEXT NOT NULL, latest_checkpoint_ref_json TEXT, name TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);" +
+      "CREATE TABLE runs (run_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, turn_number INTEGER NOT NULL, status TEXT NOT NULL, model TEXT, model_params_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);" +
+      "CREATE TABLE run_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, event_type TEXT NOT NULL, created_at TEXT NOT NULL);"
+  )
+  for (const agentId of ["sdk-gone", "sdk-kept"]) {
+    index.prepare("INSERT INTO agents (agent_id, workspace_ref, status, created_at, updated_at) VALUES (?, '/repo', 'IDLE', 't', 't')").run(agentId)
+    index.prepare("INSERT INTO runs (run_id, agent_id, turn_number, status, created_at, updated_at) VALUES (?, ?, 1, 'FINISHED', 't', 't')").run(`run-${agentId}`, agentId)
+    index.prepare("INSERT INTO run_events (run_id, seq, event_type, created_at) VALUES (?, 1, 'x', 't')").run(`run-${agentId}`)
+  }
+  index.close()
+  const sdkCursor = new CursorProvider(home, {})
+  assert.equal(await sdkCursor.remove(join(sdkAgent("sdk-gone"), "store.db")), true)
+  assert.equal(await exists(sdkAgent("sdk-gone")), false)
+  const after = new DatabaseSync(join(sdkRoot, "index.db"), { readOnly: true })
+  assert.deepEqual(after.prepare("SELECT agent_id FROM agents").all().map((row) => row.agent_id), ["sdk-kept"])
+  assert.deepEqual(after.prepare("SELECT agent_id FROM runs").all().map((row) => row.agent_id), ["sdk-kept"])
+  assert.deepEqual(after.prepare("SELECT run_id FROM run_events").all().map((row) => row.run_id), ["run-sdk-kept"])
+  after.close()
+  // An unreadable store is matched through the directory's hash.
+  assert.equal(await sdkCursor.remove(join(sdkAgent("sdk-kept"), "store.db")), true)
+  const emptied = new DatabaseSync(join(sdkRoot, "index.db"), { readOnly: true })
+  assert.equal(emptied.prepare("SELECT count(*) AS n FROM agents").get().n, 0)
+  emptied.close()
+
   // Grok: the session directory under its workspace directory.
   const grokSession = join(home, ".grok", "sessions", "%2FUsers%2Fkashyab%2Fflage", "01a08f77-b6a4-7d82-a7f5-fa1d0cbb7228")
   await mkdir(grokSession, { recursive: true })
@@ -126,7 +164,7 @@ try {
   assert.equal(devinCheck.prepare("SELECT COUNT(*) AS n FROM tool_call_state").get().n, 0)
   devinCheck.close()
   assert.equal(await devin.remove(`${join(home, "elsewhere.db")}#inky-cloak`), false)
-  console.log("Catalog removal: Codex rollouts and state rows, Claude session files, Cursor ACP sessions, Grok session directories, and OpenCode and Devin session rows are removed through their providers; foreign paths and Cursor Desktop chats are refused")
+  console.log("Catalog removal: Codex rollouts and state rows, Claude session files, Cursor ACP sessions and SDK agents with their index rows, Grok session directories, and OpenCode and Devin session rows are removed through their providers; foreign paths and Cursor Desktop chats are refused")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

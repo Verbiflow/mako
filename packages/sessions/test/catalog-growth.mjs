@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -99,10 +99,28 @@ try {
     claudeLine({ type: "user", sessionId: "62362b25", cwd: "/Users/kashyab/flage", timestamp: "2026-09-11T07:00:00Z", message: { role: "user", content: "Fix the reply rate on the Together AI sequence" } }) +
       claudeLine({ type: "assistant", sessionId: "62362b25", timestamp: "2026-09-11T07:00:05Z", message: { role: "assistant", model: "claude-fable-5", content: [{ type: "text", text: "On it." }] } })
   )
+  // A shell inside Claude Code or a router sets CLAUDE_CONFIG_DIR for its own
+  // store; a provider built on a fixture home must not list that store's
+  // sessions among the fixture's. This test once scanned the developer's real
+  // sessions and asserted on one of their titles.
+  const foreign = join(home, "foreign-config")
+  await mkdir(join(foreign, "projects", "-elsewhere"), { recursive: true })
+  await writeFile(
+    join(foreign, "projects", "-elsewhere", "11111111-2222-4333-8444-555555555555.jsonl"),
+    claudeLine({ type: "user", sessionId: "11111111", cwd: "/elsewhere", timestamp: "2026-09-11T06:00:00Z", message: { role: "user", content: "Foreign session" } })
+  )
+  const savedConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = foreign
   const claude = new ClaudeProvider(home)
+  const followsEnv = new ClaudeProvider()
+  if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
+  assert.ok(followsEnv.roots().includes(await realpath(join(foreign, "projects"))), "the default-home provider honours the process's CLAUDE_CONFIG_DIR")
+  assert.deepEqual(claude.roots(), [join(home, ".claude", "projects")], "a fixture-home provider reads nothing from the process environment")
   const claudeCatalog = new SessionCatalog([claude], { cachePath: join(home, "claude-cache.json") })
-  const [prompted] = await claudeCatalog.scan()
-  assert.equal(prompted.title, "Fix the reply rate on the Together AI sequence")
+  const prompted = (await claudeCatalog.scan()).find((ref) => ref.path === session)
+  assert.equal(prompted?.title, "Fix the reply rate on the Together AI sequence")
+  assert.equal((await claudeCatalog.scan()).length, 1, "only the fixture's session is listed")
   await appendFile(session, claudeLine({ type: "ai-title", sessionId: "62362b25", aiTitle: "Together AI reply-rate fix" }))
   const [titled] = await claudeCatalog.scan({ emitChanges: true })
   assert.equal(titled.title, "Together AI reply-rate fix", "an appended ai-title reaches the row")

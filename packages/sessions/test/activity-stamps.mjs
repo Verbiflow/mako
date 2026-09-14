@@ -10,11 +10,6 @@ import { GrokProvider } from "../dist/providers/grok.js"
 // reasons — a CLI flushing bookkeeping as it exits, a TUI rewriting a sidecar
 // — and none of those may move a row in the rail.
 
-// The Claude provider also reads CLAUDE_CONFIG_DIR; a shell inside Claude
-// Code sets it, and the user's real sessions would then sort among the
-// fixtures. This check is about the fixtures only.
-delete process.env.CLAUDE_CONFIG_DIR
-
 const line = (value) => `${JSON.stringify(value)}\n`
 const now = Date.now()
 const iso = (offsetMs) => new Date(now + offsetMs).toISOString()
