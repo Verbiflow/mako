@@ -4,10 +4,7 @@ import { parentPort } from "node:worker_threads"
 import { z } from "zod"
 import type { JsonValue } from "../json.js"
 import { artifactFileName } from "./artifacts.js"
-import {
-  computerHelpers,
-  type ComputerHelpers,
-} from "../computer/steps.js"
+import { computerHelpers, type ComputerHelpers } from "../computer/steps.js"
 
 const identifier = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/)
 const incoming = z.discriminatedUnion("kind", [
@@ -17,6 +14,7 @@ const incoming = z.discriminatedUnion("kind", [
     runId: z.number(),
     namespace: identifier,
     actions: z.array(identifier).max(128),
+    extra: z.record(identifier, z.array(identifier).max(128)).default({}),
     artifacts: z.string().min(1),
   }),
   z.object({
@@ -96,36 +94,42 @@ port.on("message", (raw) => {
   const runId = message.runId
   let active = true
   const requests = new Set<number>()
-  const api = Object.fromEntries(
-    message.actions.map((action) => [
-      action,
-      (args: Record<string, JsonValue> = {}) => {
-        if (!active)
-          throw new Error(
-            "This script has already finished; late control actions are refused"
-          )
-        return new Promise<JsonValue>((resolve, reject) => {
-          const id = ++sequence
-          requests.add(id)
-          pending.set(id, {
-            resolve: (value) => {
-              requests.delete(id)
-              resolve(value)
-            },
-            reject: (error) => {
-              requests.delete(id)
-              reject(error)
-            },
+  const apiFor = (namespace: string, actions: readonly string[]) =>
+    Object.fromEntries(
+      actions.map((action) => [
+        action,
+        (args: Record<string, JsonValue> = {}) => {
+          if (!active)
+            throw new Error(
+              "This script has already finished; late control actions are refused"
+            )
+          return new Promise<JsonValue>((resolve, reject) => {
+            const id = ++sequence
+            requests.add(id)
+            pending.set(id, {
+              resolve: (value) => {
+                requests.delete(id)
+                resolve(value)
+              },
+              reject: (error) => {
+                requests.delete(id)
+                reject(error)
+              },
+            })
+            port.postMessage({
+              kind: "call",
+              runId,
+              id,
+              namespace,
+              command: { ...args, action },
+            })
           })
-          port.postMessage({
-            kind: "call",
-            runId,
-            id,
-            command: { ...args, action },
-          })
-        })
-      },
-    ])
+        },
+      ])
+    )
+  const api = apiFor(message.namespace, message.actions)
+  const extras = Object.entries(message.extra).filter(
+    ([name]) => name !== message.namespace
   )
   const output = (kind: "output" | "image", value: JsonValue) => {
     if (active) port.postMessage({ kind, runId, value: jsonSafe(value) })
@@ -145,6 +149,7 @@ port.on("message", (raw) => {
     .then(() => {
       const run = new Function(
         message.namespace,
+        ...extras.map(([name]) => name),
         "state",
         "console",
         "emitImage",
@@ -154,6 +159,7 @@ port.on("message", (raw) => {
       )
       return run(
         api,
+        ...extras.map(([name, actions]) => apiFor(name, actions)),
         state,
         {
           log: (...values: JsonValue[]) =>

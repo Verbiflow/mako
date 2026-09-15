@@ -58,7 +58,10 @@ export interface LineOptions {
 }
 
 /** One element as one line: `<token> Role "label" =value`. */
-export function elementLine(element: Element, options: LineOptions = {}): string {
+export function elementLine(
+  element: Element,
+  options: LineOptions = {}
+): string {
   const parts: string[] = []
   if (element.element_token) parts.push(element.element_token)
   parts.push(element.role.replace(/^AX/, ""))
@@ -110,6 +113,92 @@ export function lineIdentity(line: string): string {
   return line.replace(/^s[0-9a-f]{8}:\d+ /, "")
 }
 
+/**
+ * A line's role and label, without token or value: what the same control
+ * reads as before and after its value changed, so a read-back finds it.
+ */
+export function lineAddress(line: string): string {
+  const match = /^(?:s[0-9a-f]{8}:\d+ )?([A-Za-z]+)( "(?:[^"\\]|\\.)*")?/.exec(
+    line
+  )
+  return match ? `${match[1]}${match[2] ?? ""}` : lineIdentity(line)
+}
+
+/**
+ * A snapshot's elements by address, so a token the model read from it can
+ * be carried to the same control in a newer snapshot of the same window.
+ * The driver honours tokens from a window's newest snapshot only, and every
+ * read a helper makes (fill's read-back, act's delta) takes one; without
+ * this, `fill(field)` followed by `click(button)` from one view failed on
+ * the button every time.
+ */
+export interface SnapshotIndex {
+  snapshot_id: string
+  pid: number
+  window_id: number
+  /** token → address#nth */
+  addresses: Map<string, string>
+  /** address#nth → token */
+  tokens: Map<string, string>
+}
+
+const snapshotElementsSchema = z.looseObject({
+  snapshot_id: z.string().min(1),
+  pid: z.number().int().positive(),
+  window_id: z.number().int().positive(),
+  elements: z.array(z.json()).optional(),
+})
+
+/** Role and label, the part of an element that survives a value change. */
+function elementAddress(element: Element): string {
+  return `${element.role}${element.label ? JSON.stringify(element.label) : ""}`
+}
+
+export function indexSnapshot(value: JsonValue): SnapshotIndex | undefined {
+  const parsed = snapshotElementsSchema.safeParse(value)
+  if (!parsed.success) return undefined
+  const addresses = new Map<string, string>()
+  const tokens = new Map<string, string>()
+  const seen = new Map<string, number>()
+  for (const raw of parsed.data.elements ?? []) {
+    const element = ElementSchema.safeParse(raw)
+    if (!element.success || !element.data.element_token) continue
+    const address = elementAddress(element.data)
+    const nth = seen.get(address) ?? 0
+    seen.set(address, nth + 1)
+    const key = `${address}#${nth}`
+    addresses.set(element.data.element_token, key)
+    tokens.set(key, element.data.element_token)
+  }
+  return {
+    snapshot_id: parsed.data.snapshot_id,
+    pid: parsed.data.pid,
+    window_id: parsed.data.window_id,
+    addresses,
+    tokens,
+  }
+}
+
+/**
+ * The token of the same control (same role, label and ordinal among its
+ * likes) in `to`, or undefined when that control is not in the newer
+ * snapshot — then the driver's own refusal is the right answer.
+ */
+export function carryToken(
+  token: string,
+  from: SnapshotIndex,
+  to: SnapshotIndex
+): string | undefined {
+  if (from.pid !== to.pid || from.window_id !== to.window_id) return undefined
+  const key = from.addresses.get(token)
+  return key === undefined ? undefined : to.tokens.get(key)
+}
+
+/** The `=value` a line shows for this text, truncated as `elementLine` truncates. */
+export function shownValue(text: string): string {
+  return `=${JSON.stringify(text.length > VALUE_LENGTH ? `${text.slice(0, VALUE_LENGTH)}…` : text)}`
+}
+
 export interface ViewDelta {
   added: string[]
   removed: string[]
@@ -117,7 +206,10 @@ export interface ViewDelta {
 }
 
 /** What appeared and what went between two views, by identity not token. */
-export function diffLines(before: readonly string[], after: readonly string[]): ViewDelta {
+export function diffLines(
+  before: readonly string[],
+  after: readonly string[]
+): ViewDelta {
   const previous = new Set(before.map(lineIdentity))
   const next = new Set(after.map(lineIdentity))
   const added = after.filter((line) => !previous.has(lineIdentity(line)))
@@ -162,7 +254,12 @@ export const WindowRecordSchema = z.looseObject({
   window_id: z.number().int(),
   title: z.string().nullable().optional(),
   bounds: z
-    .object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() })
+    .object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number(),
+    })
     .optional(),
   is_on_screen: z.boolean().nullable().optional(),
 })

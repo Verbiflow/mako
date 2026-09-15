@@ -15,6 +15,7 @@ const messageSchema = z.discriminatedUnion("kind", [
     runId: z.number(),
     kind: z.literal("call"),
     id: z.number(),
+    namespace: z.string(),
     command: z.record(z.string(), z.json()),
   }),
   z.object({ runId: z.number(), kind: z.literal("output"), value: z.json() }),
@@ -40,11 +41,21 @@ export interface ControlProgramFault {
 }
 
 export interface ControlProgramOptions {
+  /** The object programs are written against and whose helpers they get. */
   namespace: string
   actions: readonly string[]
+  /**
+   * Further objects a program may call, by name: the computer server
+   * lends programs the `browser` object for an application's page route.
+   */
+  extra?: Readonly<Record<string, readonly string[]>>
   /** Where results past the inline budget are written whole. */
   artifacts: string
-  call(command: JsonObject, signal: AbortSignal): Promise<JsonValue>
+  call(
+    command: JsonObject,
+    signal: AbortSignal,
+    namespace: string
+  ): Promise<JsonValue>
   image(value: JsonValue): ControlProgramOutput[]
   fault(detail: ControlProgramFault): Error
 }
@@ -88,9 +99,7 @@ export class ControlProgramRuntime {
   ): Promise<ControlProgramOutput[]> {
     const compiled = new URL("./worker.js", import.meta.url)
     this.worker ??= new Worker(
-      existsSync(compiled)
-        ? compiled
-        : new URL("./worker.ts", import.meta.url),
+      existsSync(compiled) ? compiled : new URL("./worker.ts", import.meta.url),
       { env: {}, resourceLimits: { maxOldGenerationSizeMb: 128 } }
     )
     const worker = this.worker
@@ -106,7 +115,13 @@ export class ControlProgramRuntime {
       let inlineText = 0
       let inlineImages = 0
       let finished = false
-      const finish = (error?: Error) => {
+      /**
+       * A program's own rejection (`retainWorker`) leaves the worker and its
+       * `state` in place: the worker reported it in order and is idle. Only
+       * a timeout, a cancellation or a worker fault terminates the worker,
+       * because then nothing about its state is known.
+       */
+      const finish = (error?: Error, retainWorker = false) => {
         if (finished) return
         finished = true
         clearTimeout(timer)
@@ -116,18 +131,18 @@ export class ControlProgramRuntime {
         worker.removeListener("exit", exited)
         controller.abort()
         if (error) {
-          this.worker = undefined
-          void worker.terminate()
+          if (!retainWorker) {
+            this.worker = undefined
+            void worker.terminate()
+          }
           reject(error)
         } else Promise.all(output).then(resolve, reject)
       }
       const receipt = (pending: Promise<{ artifact: true }>) =>
-        pending.then(
-          (value): ControlProgramOutput => ({
-            type: "text",
-            text: JSON.stringify(value),
-          })
-        )
+        pending.then((value): ControlProgramOutput => ({
+          type: "text",
+          text: JSON.stringify(value),
+        }))
       const appendText = (label: string, value: JsonValue) => {
         const text = JSON.stringify(value)
         const bytes = Buffer.byteLength(text)
@@ -181,7 +196,9 @@ export class ControlProgramRuntime {
         if (value.runId !== runId || finished) return
         if (value.kind === "call") {
           void Promise.resolve()
-            .then(() => this.options.call(value.command, active))
+            .then(() =>
+              this.options.call(value.command, active, value.namespace)
+            )
             .then(
               (result) => {
                 if (!finished)
@@ -213,7 +230,8 @@ export class ControlProgramRuntime {
                 : new Error("Control script returned an invalid image")
             )
           }
-        } else if (value.kind === "error") finish(new Error(value.message))
+        } else if (value.kind === "error")
+          finish(new Error(value.message), true)
         else {
           if (value.value !== null) appendText("result", value.value)
           finish()
@@ -249,6 +267,7 @@ export class ControlProgramRuntime {
         source,
         namespace,
         actions: this.options.actions,
+        extra: this.options.extra ?? {},
         artifacts,
       })
     })
