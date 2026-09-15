@@ -1,5 +1,6 @@
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { HarnessProfile } from "@/lib/types"
+import type { HarnessUpdateInfo } from "../../electron/contracts/harness-updates"
 import { createHook, createStore } from "@/state/store"
 
 export interface DaemonInfo {
@@ -16,6 +17,8 @@ interface ProviderState {
   contexts: Record<string, HarnessProfile>
   contextErrors: Record<string, string>
   availability: Record<string, boolean> | null
+  /** Per-provider runtime update reads — binary, installed, latest, channel. */
+  runtimeUpdates: Record<string, HarnessUpdateInfo> | null
   daemon: DaemonInfo | null
   daemonLogin: boolean | null
 }
@@ -25,6 +28,7 @@ export const providerStore = createStore<ProviderState>({
   contexts: {},
   contextErrors: {},
   availability: null,
+  runtimeUpdates: null,
   daemon: null,
   daemonLogin: null,
 })
@@ -215,6 +219,24 @@ export const providers = {
         .catch(() => null),
     ])
     providerStore.set({ availability, daemon, daemonLogin })
+  },
+
+  async loadRuntimeUpdates(): Promise<void> {
+    if (!hasBridge()) return
+    providerStore.set({
+      runtimeUpdates: await getMako()
+        .harnessUpdates()
+        .catch(() => null),
+    })
+  },
+
+  /** Runs the provider's own updater, then re-reads what is installed. */
+  async runRuntimeUpdate(provider: string): Promise<HarnessUpdateInfo> {
+    const next = await getMako().runHarnessUpdate(provider)
+    providerStore.set({
+      runtimeUpdates: { ...providerStore.get().runtimeUpdates, [provider]: next },
+    })
+    return next
   },
 
   async setDaemonLogin(enabled: boolean): Promise<void> {

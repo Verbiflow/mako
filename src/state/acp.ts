@@ -6,6 +6,7 @@ import {
   providerAccessModes,
   threadAccessMode,
 } from "@/state/provider-access"
+import { descriptorFor } from "@/state/descriptors"
 import {
   currentSettingsTarget,
   threadSettingsTarget,
@@ -82,10 +83,7 @@ export const acp = {
     return Boolean(
       live &&
       live.session.status === "running" &&
-      threadsStore
-        .get()
-        .liveCapabilities.find((item) => item.provider === live.harness)
-        ?.canSteer
+      descriptorFor(threadsStore.get(), live.harness)?.canSteer
     )
   },
 

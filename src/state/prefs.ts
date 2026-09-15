@@ -42,6 +42,8 @@ export interface Prefs {
   /** `provider/id` keys, most recent first. */
   favoriteModels: string[]
   recentModels: string[]
+  /** The ordered pick list ⌃⌘1–5 selects — provider and model id, ≤5. */
+  modelLoadout: { harness: string; model: string }[]
   showThinking: boolean
   denseTools: boolean
   railMode: RailMode
@@ -118,6 +120,7 @@ const defaults: Prefs = {
   lastCompanion: "changes",
   favoriteModels: [],
   recentModels: [],
+  modelLoadout: [],
   showThinking: true,
   denseTools: false,
   railMode: "threads",
@@ -208,6 +211,17 @@ function readChoice<const Choice extends string>(
 function readStringList(value: StoredValue, fallback: string[]): string[] {
   if (!isJsonArray(value) || !value.every(isJsonString)) return fallback
   return value
+}
+
+function readLoadout(value: StoredValue): { harness: string; model: string }[] {
+  if (!isJsonArray(value)) return []
+  return value.flatMap((entry) =>
+    isJsonObject(entry) &&
+    isJsonString(entry.harness) &&
+    isJsonString(entry.model)
+      ? [{ harness: entry.harness, model: entry.model }]
+      : []
+  )
 }
 
 function readNumberRecord(value: StoredValue): SurfaceWidthMap {
@@ -309,6 +323,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
       defaults.favoriteModels
     ),
     recentModels: readStringList(value.recentModels, defaults.recentModels),
+    modelLoadout: readLoadout(value.modelLoadout),
     showThinking: readBoolean(value.showThinking, defaults.showThinking),
     denseTools: readBoolean(value.denseTools, defaults.denseTools),
     railMode: readChoice(

@@ -13,6 +13,7 @@ import type {
 } from "@/state/thread-state"
 import { markObserved, markThreadReviewed } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
+import { openThreadTab } from "@/state/thread-tabs"
 import { toast } from "sonner"
 
 /** The composer harness to give back when the viewer closes. */
@@ -203,6 +204,7 @@ export const threadViewingActions = {
     const liveHarness = activated
       ? (activeAcp(acpStore.get())?.harness ?? ref.harness)
       : ref.harness
+    openThreadTab(ref.path)
     if (activated) {
       leaveViewerForLive(liveHarness)
       return

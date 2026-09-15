@@ -5,6 +5,7 @@ import type { AcpPresence } from "@/state/acp-presence"
 import { markSeen, subjectId } from "@/state/notifications"
 import { markThreadReviewed } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
+import { formatTranscript, type TranscriptDepth } from "@mako/sessions/transcript"
 import { threadArchiveKey, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget, type ThreadRef } from "../../electron/shared"
 import { toast } from "sonner"
 
@@ -95,5 +96,18 @@ export const threadLifecycle = {
       const accepted = await getMako().stopThread(target)
       toast(accepted ? "Stop requested. Queued messages are paused." : "That run already finished. No other run was stopped.")
     } catch (error) { toast.error("The run could not be stopped", { description: error instanceof Error ? error.message : String(error) }) }
+  },
+  /** One serializer for the clipboard and handoffs — the provider never knows. */
+  async copyTranscript(path: string, depth: TranscriptDepth) {
+    try {
+      const thread = await getMako().openThread(path)
+      if (!thread) throw new Error("The thread could not be read")
+      await navigator.clipboard.writeText(
+        formatTranscript(thread.entries, depth)
+      )
+      toast(depth === "concise" ? "Copied the concise transcript" : "Copied the full transcript")
+    } catch (error) {
+      toast.error("The transcript could not be copied", { description: error instanceof Error ? error.message : String(error) })
+    }
   },
 }

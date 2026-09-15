@@ -4,6 +4,8 @@ import type { LiveSessionMode, ThreadRef } from "@/lib/types"
 import { prefsStore, setPref } from "@/state/prefs"
 import type { ThreadsState } from "@/state/thread-state"
 
+import { descriptorFor } from "@/state/descriptors"
+
 const NO_MODES: LiveSessionMode[] = []
 
 /**
@@ -12,13 +14,10 @@ const NO_MODES: LiveSessionMode[] = []
  * built on it does not re-render on every token.
  */
 export function providerAccessModes(
-  state: Pick<ThreadsState, "liveCapabilities">,
+  state: Pick<ThreadsState, "descriptors">,
   harness: string
 ): LiveSessionMode[] {
-  return (
-    state.liveCapabilities.find((item) => item.provider === harness)?.modes ??
-    NO_MODES
-  )
+  return descriptorFor(state, harness)?.modes ?? NO_MODES
 }
 
 /** The saved choice for `harness`, only while the provider still offers it. */
@@ -36,13 +35,11 @@ export function savedProviderMode(
  * declared it — the level the picker reports before a session exists.
  */
 export function providerDefaultMode(
-  state: Pick<ThreadsState, "liveCapabilities">,
+  state: Pick<ThreadsState, "descriptors">,
   modes: readonly LiveSessionMode[],
   harness: string
 ): string | null {
-  const id = state.liveCapabilities.find(
-    (item) => item.provider === harness
-  )?.defaultMode
+  const id = descriptorFor(state, harness)?.defaultMode
   return id && modes.some((mode) => mode.id === id) ? id : null
 }
 

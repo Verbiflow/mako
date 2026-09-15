@@ -1,6 +1,7 @@
 import {
   modelByIdentity,
   migrateSettingsPreference,
+  optionDefault,
   resolveSessionSettings,
   type SessionSettings,
   type SettingValue,
@@ -243,10 +244,7 @@ export function resolveComposerSettingsInput(input: ComposerSettingsInput) {
   return { resolved, model, options: model?.options ?? [] }
 }
 
-export function resolveComposerSettings(
-  target: ComposerTarget,
-  profile?: HarnessProfile
-) {
+function composerSettingsInput(target: ComposerTarget, profile?: HarnessProfile) {
   const prefs = prefsStore.get()
   const conversation = settingsConversation(target)
   return resolveComposerSettingsInput({
@@ -263,7 +261,14 @@ export function resolveComposerSettings(
       conversation?.kind === "live"
         ? { options: conversation.session.configOptions }
         : undefined,
-  }).resolved
+  })
+}
+
+export function resolveComposerSettings(
+  target: ComposerTarget,
+  profile?: HarnessProfile
+) {
+  return composerSettingsInput(target, profile).resolved
 }
 
 /** Snapshot the user's intent before awaiting discovery. */
@@ -344,6 +349,38 @@ export function chooseComposerOption(
     model,
     options: { ...previous.options, [id]: value },
   })
+}
+
+/**
+ * Walk the provider's own values for a role — `reasoning` for effort, `speed`
+ * for the fast lane — and land on the next one. Options the provider did not
+ * report, or reports as fixed for this session, are not cycled.
+ */
+export function cycleComposerRole(role: "reasoning" | "speed"): string | null {
+  const target = currentSettingsTarget()
+  const { options, resolved } = composerSettingsInput(target)
+  const option = options.find(
+    (entry) => entry.role === role && entry.disabledReason === undefined
+  )
+  if (!option) return null
+  const current =
+    resolved.settings.options?.[option.id] ?? optionDefault(option)
+  if (option.kind === "boolean") {
+    chooseComposerOption(target, option.id, current !== true)
+    return current !== true ? "on" : "off"
+  }
+  const values = option.values.map((choice) => choice.value)
+  if (values.length === 0) return null
+  // Select values are strings; a boolean current (a misplaced speed value)
+  // stringifies to "true"/"false", which is what providers like Codex use.
+  const index = values.indexOf(
+    current === undefined ? "" : String(current)
+  )
+  const next = values[(index + 1) % values.length]!
+  chooseComposerOption(target, option.id, next)
+  return (
+    option.values.find((choice) => choice.value === next)?.label ?? next
+  )
 }
 
 export function resetComposerSettings(target: ComposerTarget): void {

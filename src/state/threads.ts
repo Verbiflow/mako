@@ -1,4 +1,4 @@
-import type { LiveCapability } from "@/lib/types"
+import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {
@@ -216,34 +216,21 @@ const threadCatalogActions = {
    */
   async refreshCapabilities() {
     if (!hasBridge()) return
-    const capabilities = await getMako()
-      .liveCapabilities()
-      .catch((): LiveCapability[] => [])
-    threadsStore.set({
-      liveCapabilities: capabilities,
-      acpable: capabilities.map((item) => item.provider),
-    })
+    const descriptors = await getMako()
+      .harnessDescriptors()
+      .catch((): HarnessDescriptor[] => [])
+    threadsStore.set({ descriptors })
   },
 
   async load() {
     if (!hasBridge()) return
-    const [raw, resumable, targets, capabilities]: [
-      ThreadCatalogResponse,
-      string[],
-      string[],
-      LiveCapability[],
-    ] = await Promise.all([
-      getMako().threads().catch(unavailableThreadCatalog),
-      getMako()
-        .resumableHarnesses()
-        .catch((): string[] => []),
-      getMako()
-        .continueTargets()
-        .catch((): string[] => []),
-      getMako()
-        .liveCapabilities()
-        .catch((): LiveCapability[] => []),
-    ])
+    const [raw, descriptors]: [ThreadCatalogResponse, HarnessDescriptor[]] =
+      await Promise.all([
+        getMako().threads().catch(unavailableThreadCatalog),
+        getMako()
+          .harnessDescriptors()
+          .catch((): HarnessDescriptor[] => []),
+      ])
     const nativeRequests = await getMako()
       .nativeRequests()
       .catch(() => [])
@@ -251,12 +238,7 @@ const threadCatalogActions = {
     // An engine one vintage older answers with a bare array; treat it as
     // ready rather than spinning forever against the shape difference.
     const result = normalizeThreadCatalog(raw)
-    threadsStore.set({
-      resumable,
-      targets,
-      liveCapabilities: capabilities,
-      acpable: capabilities.map((item) => item.provider),
-    })
+    threadsStore.set({ descriptors })
     applyThreads(result.threads, result.ready)
     if (result.activity) threadsStore.set({ externalActivity: result.activity })
     // The catalog scans for a moment at boot, and its "here is the list"

@@ -1,5 +1,5 @@
 import type {
-  LiveCapability,
+  HarnessDescriptor,
   NativeRequest,
   ExternalThreadActivity,
   Thread,
@@ -53,13 +53,8 @@ export interface ThreadsState {
     | { kind: "loading"; ref: ThreadRef }
     | { kind: "failed"; ref: ThreadRef; error: string }
     | null
-  /** Harnesses whose CLI can be driven headlessly from here. */
-  resumable: string[]
-  /** Harnesses a conversation can be continued on. */
-  targets: string[]
-  /** Harnesses that can be driven interactively (ACP). */
-  acpable: string[]
-  liveCapabilities: LiveCapability[]
+  /** Every provider the host can serve, described once. */
+  descriptors: HarnessDescriptor[]
   /** The native run for the viewed thread, if one was started. */
   run: ThreadRunState | null
   /** Every live run owned by Mako, with its start and current operation. */

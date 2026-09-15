@@ -17,20 +17,10 @@ import {
 import { threadStatus } from "@/state/thread-status"
 import { leaveViewerForLive, viewedThread } from "@/state/thread-viewing"
 import { threadsStore } from "@/state/thread-store"
+import { descriptorFor } from "@/state/descriptors"
+import { harnessLabel } from "@/lib/harness-label"
 import { toast } from "sonner"
 
-const HARNESS_NAMES = new Map([
-  ["codex", "Codex"],
-  ["claude", "Claude Code"],
-  ["cursor", "Cursor"],
-  ["grok", "Grok"],
-  ["devin", "Devin"],
-  ["opencode", "OpenCode"],
-])
-
-function harnessLabelOf(harness: string): string {
-  return HARNESS_NAMES.get(harness) ?? harness
-}
 
 /**
  * Show the translation while it happens, and for long enough to be seen.
@@ -147,7 +137,7 @@ export const threadContinuationActions = {
     attachments: PromptAttachment[] = []
   ): Promise<boolean> {
     if (!hasBridge()) return false
-    if (threadsStore.get().acpable.includes(harness)) {
+    if (descriptorFor(threadsStore.get(), harness)?.live === true) {
       try {
         const snapshot = await getMako().liveCapture(
           crypto.randomUUID(),
@@ -184,7 +174,7 @@ export const threadContinuationActions = {
           )
         }
       } else if (result.kind === "prepared") {
-        const supportsLive = threadsStore.get().acpable.includes(harness)
+        const supportsLive = descriptorFor(threadsStore.get(), harness)?.live === true
         const ok = supportsLive
           ? await (
               await import("@/state/acp")
@@ -222,7 +212,7 @@ export const threadContinuationActions = {
     harness: string
   ): Promise<boolean> {
     if (!hasBridge()) return false
-    if (threadsStore.get().acpable.includes(harness)) {
+    if (descriptorFor(threadsStore.get(), harness)?.live === true) {
       try {
         const source = await getMako().liveCapture(
           crypto.randomUUID(),
@@ -256,7 +246,7 @@ export const threadContinuationActions = {
         () => getMako().forkThread(ref.path, anchor.index, harness, anchor)
       )
       threadsStore.set({ composerHarness: harness })
-      const supportsLive = threadsStore.get().acpable.includes(harness)
+      const supportsLive = descriptorFor(threadsStore.get(), harness)?.live === true
       const ok = supportsLive
         ? await (
             await import("@/state/acp")
@@ -265,7 +255,7 @@ export const threadContinuationActions = {
       if (ok) {
         if (supportsLive) leaveViewerForLive(harness)
         toast("Forked", {
-          description: `A new ${harnessLabelOf(harness)} conversation starts after that answer.`,
+          description: `A new ${harnessLabel(harness)} conversation starts after that answer.`,
         })
       }
       return ok
@@ -341,7 +331,7 @@ export const threadContinuationActions = {
     try {
       const options = await settingsForSend(currentSettingsTarget(harness))
       await getMako().startHarness(harness, prompt, options)
-      toast(`${harnessLabelOf(harness)} is on it`, {
+      toast(`${harnessLabel(harness)} is on it`, {
         description:
           "Its native session will appear in the conversation list when the provider saves it.",
       })
@@ -377,7 +367,7 @@ export const threadContinuationActions = {
         return true
       }
       threadsStore.set({ composerHarness: harness })
-      const supportsLive = threadsStore.get().acpable.includes(harness)
+      const supportsLive = descriptorFor(threadsStore.get(), harness)?.live === true
       const ok = supportsLive
         ? await (
             await import("@/state/acp")
