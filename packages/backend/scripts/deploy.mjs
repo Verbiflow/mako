@@ -5,8 +5,13 @@ import { spawnSync } from "node:child_process"
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(backendRoot, "../..")
-const allowedAuthor =
-  process.env.VERCEL_DEPLOY_AUTHOR_EMAIL ?? "kashyab@getverbiflow.com"
+const allowedAuthor = process.env.VERCEL_DEPLOY_AUTHOR_EMAIL
+if (!allowedAuthor) {
+  console.error(
+    "Set VERCEL_DEPLOY_AUTHOR_EMAIL to the Git author email Vercel accepts"
+  )
+  process.exit(1)
+}
 
 function command(program, args) {
   const result = spawnSync(program, args, {
