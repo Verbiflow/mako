@@ -19,8 +19,9 @@
 > between releases, features that move or disappear, and rough edges. It runs
 > real agents against your real repositories and can drive your browser and
 > your Mac; keep your work committed and read what an agent asks before you
-> grant it. There is no support commitment yet. Bugs go to
-> [issues](https://github.com/Verbiflow/mako/issues).
+> grant it. If something breaks or confuses you, please
+> [open an issue](https://github.com/Verbiflow/mako/issues); every report is
+> read and helps decide what gets fixed next.
 
 <p align="center">
   <img src="docs/images/mako-desk.png" alt="Mako with a Claude Code thread open, the project rail on the left, and the changed files and commit box on the right" width="1120" />

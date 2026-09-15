@@ -1,8 +1,11 @@
 # Contributing to Mako
 
 Mako is alpha software under active daily development. Issues and pull
-requests are welcome; expect the code you touch to have moved by the time a
-review lands, and expect reviews to be direct.
+requests are welcome. A bug report, a confusing screen, a provider that
+behaves differently on your machine: all of it is useful, and you do not need
+a reproduction or a fix to file it. Pull requests get a real review; the code
+you touch may have moved by the time it lands, so open an issue first for
+anything larger than a fix.
 
 ## Before you start
 
