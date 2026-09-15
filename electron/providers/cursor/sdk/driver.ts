@@ -12,11 +12,11 @@ import type { ProviderBinding, ResumeVerdict } from "../../../contracts/conversa
 import { hostLog, hostWarn } from "../../../host-log.js"
 import {
   CONNECTION_LOST_STOP,
-  type LivePermissionRequest,
   type LivePermissionResponse,
   type LiveSessionState,
   type PromptAttachment,
 } from "../../../shared.js"
+import { createLiveEngine, type LiveEngineApi } from "../../../live-engine.js"
 import type {
   ProviderLiveDriver,
   ProviderStartOptions,
@@ -93,10 +93,7 @@ export function connectionLost(result: SdkRunResult): boolean {
   return CONNECTION_MESSAGE.test(result.error.message)
 }
 
-function update(live: Live, patch: Partial<LiveSessionState>): void {
-  live.state = { ...live.state, ...patch }
-  live.emit({ type: "acp-session", session: live.state })
-}
+type Engine = LiveEngineApi<Live>
 
 function configOptions(models: readonly SessionModel[], selection: SdkModelSelection | undefined): SessionModel["options"] {
   if (!selection) return []
@@ -178,17 +175,16 @@ function unfinishedToolNote(outcome: "finished" | "cancelled" | "error", error?:
 }
 
 /** Ends the turn's projection, closing any tool row the run left open. */
-function settleTurn(live: Live, outcome: "finished" | "cancelled" | "error", error?: string): void {
+function settleTurn(engine: Engine, live: Live, outcome: "finished" | "cancelled" | "error", error?: string): void {
   const projection = live.projection
   live.turn = null
   live.projection = null
   if (!projection) return
-  const updates = projection.finish(outcome, unfinishedToolNote(outcome, error))
-  if (updates.length > 0) live.emit({ type: "acp-updates", id: live.state.id, updates })
+  engine.emitUpdates(live, projection.finish(outcome, unfinishedToolNote(outcome, error)))
 }
 
-function finishTurn(live: Live, result: SdkRunResult): void {
-  settleTurn(live, result.status, result.error?.message)
+function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
+  settleTurn(engine, live, result.status, result.error?.message)
   const settings = result.model ? cursorSdkReportedSettings(result.model, live.models) : live.state.settings
   const patch: Partial<LiveSessionState> = {
     settings,
@@ -218,10 +214,10 @@ function finishTurn(live: Live, result: SdkRunResult): void {
       break
     }
   }
-  update(live, patch)
+  engine.patch(live, patch)
 }
 
-function receive(live: Live, event: SdkEvent): void {
+function receive(engine: Engine, live: Live, event: SdkEvent): void {
   if (live.closed) return
   switch (event.event) {
     case "message": {
@@ -233,19 +229,17 @@ function receive(live: Live, event: SdkEvent): void {
           configOptions: configOptions(live.models, event.message.model),
         }
       }
-      const updates = live.projection.message(event.message)
-      if (updates.length > 0) live.emit({ type: "acp-updates", id: live.state.id, updates })
+      engine.emitUpdates(live, live.projection.message(event.message))
       return
     }
     case "delta": {
       if (event.turn !== live.turn || !live.projection) return
-      const updates = live.projection.delta(event.delta)
-      if (updates.length > 0) live.emit({ type: "acp-updates", id: live.state.id, updates })
+      engine.emitUpdates(live, live.projection.delta(event.delta))
       return
     }
     case "result":
       if (event.turn !== live.turn) return
-      finishTurn(live, event.result)
+      finishTurn(engine, live, event.result)
       return
     case "login-url":
       return
@@ -256,20 +250,9 @@ function receive(live: Live, event: SdkEvent): void {
   }
 }
 
-function stop(live: Live): void {
+function stop(engine: Engine, live: Live): void {
   live.closed = true
-  for (const resolve of live.pendingPermissions.values()) resolve({ kind: "choice", optionId: null })
-  live.pendingPermissions.clear()
-}
-
-async function ask(live: Live, request: LivePermissionRequest): Promise<LivePermissionResponse> {
-  return new Promise<LivePermissionResponse>((resolve) => {
-    live.pendingPermissions.set(request.id, (response) => {
-      live.pendingPermissions.delete(request.id)
-      resolve(response)
-    })
-    live.emit({ type: "acp-permission", request })
-  })
+  engine.release(live)
 }
 
 /**
@@ -280,7 +263,8 @@ async function ask(live: Live, request: LivePermissionRequest): Promise<LivePerm
  * or on an exhausted retry budget, never on one reset frame.
  */
 export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies): ProviderLiveDriver {
-  const sessions = new Map<string, Live>()
+  const engine = createLiveEngine<Live>()
+  const sessions = engine.sessions
   let modelCache: ModelCache | null = null
 
   const now = () => dependencies.now?.() ?? Date.now()
@@ -320,7 +304,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     if (fresh.state.status === "signed-in") return
     const requestId = `${live.state.id}-authenticate-${now()}`
     const problem = fresh.state.problem?.message
-    const response = await ask(live, {
+    const response = await engine.ask(live, {
       id: requestId,
       sessionId: live.state.id,
       kind: "authentication",
@@ -400,7 +384,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         cwd,
         env,
         onEvent: (event) => {
-          if (live) receive(live, event)
+          if (live) receive(engine, live, event)
         },
       }
       const client = dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn)
@@ -431,11 +415,11 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       sessions.set(live.state.id, live)
       void live.client.exited.then(({ code, signal }) => {
         if (live.closed) return
-        stop(live)
+        stop(engine, live)
         const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
         hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail })
-        if (live.state.status === "running") settleTurn(live, "error", `Cursor's SDK process exited (${detail})`)
-        update(live, {
+        if (live.state.status === "running") settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`)
+        engine.patch(live, {
           status: live.state.status === "running" ? "failed" : live.state.status,
           connection: "disconnected",
           lastStop: live.state.status === "running" ? "failed" : live.state.lastStop,
@@ -461,7 +445,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         })
         if (live.closed) throw new Error("Cursor disconnected during startup")
         const reported = opened.model ?? selection
-        update(live, {
+        engine.patch(live, {
           status: "ready",
           connection: "connected",
           nativeId: opened.agentId,
@@ -478,7 +462,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         })
         return live.state
       } catch (error) {
-        stop(live)
+        stop(engine, live)
         sessions.delete(live.state.id)
         await live.client.close(2_000).catch(() => live.client.kill())
         if (error instanceof CursorSdkError) {
@@ -500,7 +484,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       const turn = randomUUID()
       live.turn = turn
       live.projection = new CursorSdkProjection(turn)
-      update(live, {
+      engine.patch(live, {
         status: "running",
         nativeRunId: undefined,
         lastStop: undefined,
@@ -508,7 +492,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         settings: cursorSdkReportedSettings(selection, live.models),
         configOptions: configOptions(live.models, selection),
       })
-      live.emit({ type: "acp-update", id, update: { kind: "user", text } })
+      engine.emitUpdate(live, { kind: "user", text })
       try {
         const images = promptImages(attachments)
         const sent = await live.client.request("send", {
@@ -517,12 +501,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           images: images.length > 0 ? images : undefined,
           model: selection,
         })
-        if (live.turn === turn) update(live, { nativeRunId: sent.runId })
+        if (live.turn === turn) engine.patch(live, { nativeRunId: sent.runId })
       } catch (error) {
         if (live.turn === turn) {
           const message = error instanceof Error ? error.message : String(error)
-          settleTurn(live, "error", message)
-          update(live, { status: "failed", lastStop: "failed", error: message })
+          settleTurn(engine, live, "error", message)
+          engine.patch(live, { status: "failed", lastStop: "failed", error: message })
         }
         throw error
       }
@@ -533,24 +517,24 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return { kind: "not-accepted", reason: "The Cursor turn has already changed" }
       const result = await live.client.request("steer", { text: promptText(input.text, input.attachments) })
       if (result.outcome === "complete_delivered") {
-        live.emit({
-          type: "acp-update",
-          id,
-          update: { kind: "user", text: input.text, steeringFor: input.expectedRunId },
+        engine.emitUpdate(live, {
+          kind: "user",
+          text: input.text,
+          steeringFor: input.expectedRunId,
         })
         return { kind: "accepted" }
       }
       return { kind: "not-accepted", reason: "Cursor could not fold the message into the running turn" }
     },
     async permission(id, requestId, response) {
-      requireLive(id).pendingPermissions.get(requestId)?.(response)
+      engine.respondPermission(id, requestId, response)
     },
     async setMode(id, modeId) {
       const live = requireLive(id)
       // Agent is the only mode, so there is nothing to reshape; an unknown
       // id is refused by name rather than quietly meaning the same thing.
       if (!isCursorSdkModeId(modeId)) throw new Error(`Cursor's SDK does not offer the mode "${modeId}"`)
-      update(live, { currentMode: modeId })
+      engine.patch(live, { currentMode: modeId })
     },
     async cancel(id) {
       const live = requireLive(id)
@@ -562,8 +546,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         // The run's own `cancelled` result normally lands first; if the
         // child never reports one, Stop is still definitive here.
         if (live.turn === turn && live.state.status === "running") {
-          settleTurn(live, "cancelled")
-          update(live, { status: "ready", lastStop: "cancelled", error: undefined })
+          settleTurn(engine, live, "cancelled")
+          engine.patch(live, { status: "ready", lastStop: "cancelled", error: undefined })
         }
       }
     },
@@ -572,7 +556,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       if (!live) return
       sessions.delete(id)
       if (live.closed) return
-      stop(live)
+      stop(engine, live)
       await live.client.close(5_000).catch(() => live.client.kill())
     },
   }

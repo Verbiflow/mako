@@ -107,12 +107,19 @@ export class CursorSdkProjection {
             this.remember(message.call_id, message.name, message.args)
             return this.toolStarted(message.call_id, message.name, message.args)
           }
-          // Arguments stream in while the call is being written; a plan tool
-          // is worth repainting as its entries fill in.
+          // Arguments stream in while the call is being written; the row
+          // opened with a placeholder and must not keep it. Cursor's
+          // createPlan begins `{"plan":""}` and fills in behind it.
           if (message.args === undefined || sameJson(started.input, message.args)) return []
           started.input = message.args
+          const updates: LiveUpdate[] = [
+            this.toolInput(message.call_id, message.name, message.args),
+          ]
           const plan = planEntries(message.name, message.args)
-          return plan ? [{ kind: "plan", entries: plan }] : []
+          if (plan) updates.push({ kind: "plan", entries: plan })
+          const proposal = proposedPlan(message.call_id, message.name, message.args, "drafting")
+          if (proposal) updates.push(proposal)
+          return updates
         }
         const started = this.tools.get(message.call_id)
         const updates: LiveUpdate[] = []
@@ -127,6 +134,12 @@ export class CursorSdkProjection {
           id: message.call_id,
           status: failed ? "failed" : "completed",
         }
+        if (started && args !== undefined && !sameJson(started.input, args)) {
+          // Full arguments that arrive only at completion still replace the
+          // placeholder the row opened with.
+          update.title = toolTitle(message.name, args)
+          update.input = clip(JSON.stringify(args, null, 2))
+        }
         const output = toolOutput(message.name, message.result)
         if (output !== undefined) update.output = output
         const details = toolDetails(message.name, args, message.result)
@@ -135,6 +148,8 @@ export class CursorSdkProjection {
         if (!failed) {
           const plan = planEntries(message.name, args)
           if (plan) updates.push({ kind: "plan", entries: plan })
+          const proposal = proposedPlan(message.call_id, message.name, args, "proposed")
+          if (proposal) updates.push(proposal)
         }
         this.tools.delete(message.call_id)
         return updates
@@ -194,7 +209,21 @@ export class CursorSdkProjection {
     updates.push(tool)
     const plan = planEntries(name, args)
     if (plan) updates.push({ kind: "plan", entries: plan })
+    const proposal = proposedPlan(id, name, args, "drafting")
+    if (proposal) updates.push(proposal)
     return updates
+  }
+
+  private toolInput(id: string, name: string, args: JsonValue): LiveUpdate {
+    const update: LiveUpdate = {
+      kind: "tool-update",
+      id,
+      title: toolTitle(name, args),
+      input: clip(JSON.stringify(args, null, 2)),
+    }
+    const details = toolDetails(name, args, undefined)
+    if (details) update.details = details
+    return update
   }
 }
 
@@ -449,6 +478,24 @@ function toolDetails(
   }
   const plan = planEntries(name, args)
   return plan ? [{ type: "plan", entries: plan }] : undefined
+}
+
+/**
+ * Cursor's plan tool gets the shared plan artifact Claude's ExitPlanMode and
+ * Codex's plan item already produce: `plan` streams in the arguments, so the
+ * block drafts as it fills and is proposed when the call completes.
+ */
+function proposedPlan(
+  id: string,
+  name: string,
+  args: JsonValue | undefined,
+  status: "drafting" | "proposed"
+): LiveUpdate | undefined {
+  if (name !== "createPlan") return undefined
+  const input = isObject(args) ? args : undefined
+  const plan = text(input?.plan)
+  if (plan === undefined) return undefined
+  return { kind: "proposed-plan", id, text: plan, status, replace: true }
 }
 
 const TODO_STATUS = new Map([

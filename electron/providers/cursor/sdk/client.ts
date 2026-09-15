@@ -70,8 +70,8 @@ function parseJsonLine(line: string): JsonValue | undefined {
 
 type Params<Method extends SdkMethod> = Extract<SdkRequest, { method: Method }> extends { params: infer P } ? P : undefined
 
-/** Requests that legitimately outlast the ordinary deadline: a browser sign-in, a run that finishes on its own schedule. */
-const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login"])
+/** Requests that legitimately outlast the ordinary deadline: a browser sign-in, and a steer — the run holds its acknowledgement until the agent takes the text or the turn ends, so a request timeout would kill a steer the child was still legitimately holding. */
+const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login", "steer"])
 
 export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
