@@ -193,6 +193,11 @@ async function start(
     CUA_DRIVER_EMBEDDED: "1",
     CUA_DRIVER_HOST_BUNDLE_ID: hostBundleId,
     CUA_DRIVER_PERMISSION_MODE: "standard",
+    // The driver posts every tool call to PostHog by default (seen as HTTP
+    // work in the daemon during each action). Mako's embedded daemon is
+    // Mako's process and reports nothing about the user's computer use to a
+    // third party; the user's own CLI keeps its own preference.
+    CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
   }
   const args = ["serve", "--embedded", "--socket", socket]
   const bundle = bundleOf(await realpath(command).catch(() => command))
@@ -243,7 +248,8 @@ async function launchBundle(
     await run("/usr/bin/open", openArgs, { timeout: 15_000, maxBuffer: 16_384 })
   } catch (error) {
     throw new Error(
-      `Embedded CUA Driver could not be launched: ${error instanceof Error ? error.message : String(error)}`
+      `Embedded CUA Driver could not be launched: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     )
   }
   let pid: number | null = null
@@ -255,13 +261,16 @@ async function launchBundle(
         "Embedded CUA Driver answered on its socket but its process was not found"
       )
   } catch (error) {
-    const tail = (await readFile(log, "utf8").catch(() => "")).trim().slice(-8_000)
+    const tail = (await readFile(log, "utf8").catch(() => ""))
+      .trim()
+      .slice(-8_000)
     const found = pid ?? (await discoverPid(socket))
     if (found !== null) process.kill(found, "SIGTERM")
     await unlink(socket).catch(() => undefined)
     throw new Error(
       tail ||
-        (error instanceof Error ? error.message : "Embedded CUA Driver failed")
+        (error instanceof Error ? error.message : "Embedded CUA Driver failed"),
+      { cause: error }
     )
   }
   return { pid, socket, executable: executablePath, log }

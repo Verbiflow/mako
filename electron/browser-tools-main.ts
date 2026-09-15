@@ -30,6 +30,8 @@ const descriptions = {
     'Read browser connection state without connecting, prompting, or opening tabs. Browser IDs identify connected extension profiles, plus "mako" for hidden windows of Mako\'s own interface. Only the mako entry means no Chrome profile has the Mako Browser extension connected yet.',
   connect:
     "Connect the selected browser profile through its installed Mako Browser extension. Installation grants browser access; ordinary reconnects do not require another debugging approval. Concurrent tasks join the same pending connection. Closing an MCP client does not disconnect Chrome.",
+  attach:
+    "Register a running Electron or Chromium application's DevTools endpoint as browser app:<bundle_id>, so its pages are driven like any tab: background keyboard, pointer, DOM reads and screenshots with no focus change. Mako's computer control calls this for launch_app({page_route: true}); call it yourself only for an application already listening on a loopback debugging port.",
   tabs: "List existing page, iframe and worker targets in a connected browser, with identity, URL, title, whether it is selectable as a page, and whether a task has claimed it. Does not select or activate a tab.",
   open: "Create and claim a new tab in a connected browser. Background by default. Returns the exact target handle for all later calls plus the navigation outcome; a failed navigation still returns the handle.",
   select:

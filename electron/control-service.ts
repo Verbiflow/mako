@@ -103,6 +103,7 @@ export async function startControlService(
         "tabs",
         "events",
         "connect",
+        "attach",
         "release",
       ].includes(command.action)
       if (tracksActivity)

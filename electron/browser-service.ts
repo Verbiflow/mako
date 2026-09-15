@@ -283,14 +283,21 @@ export class BrowserService {
   >()
   private closing = false
   private readonly discover: () => LocalBrowser[]
+  /**
+   * Applications attached at run time (`attach`): an Electron or Chromium
+   * app Mako launched with a private debugging port. They live beside the
+   * discovered browsers until their connection closes with the process.
+   */
+  private readonly attached = new Map<string, LocalBrowser>()
 
   constructor(definitions?: LocalBrowser[] | (() => LocalBrowser[])) {
-    this.discover =
+    const discover =
       definitions === undefined
         ? localBrowsers
         : Array.isArray(definitions)
           ? () => definitions
           : definitions
+    this.discover = () => [...discover(), ...this.attached.values()]
     this.browsers = new Map(
       this.discover().map((definition) => [
         definition.id,
@@ -416,6 +423,10 @@ export class BrowserService {
         }
         for (const [key, binding] of this.bindings)
           if (binding.connection === connection) this.bindings.delete(key)
+        // An attached application that closed its endpoint has exited; its
+        // row would otherwise offer a connection to nothing.
+        if (this.attached.delete(entry.definition.id))
+          this.browsers.delete(entry.definition.id)
         this.changed()
       })
       connection.onEvent((event) => this.event(connection, event))
@@ -742,6 +753,29 @@ export class BrowserService {
     if (command.action === "connect") {
       await this.connect(command.browser)
       return { ...this.entry(command.browser).status.connection }
+    }
+    if (command.action === "attach") {
+      const endpoint = new URL(command.endpoint)
+      if (endpoint.protocol !== "ws:" || endpoint.hostname !== "127.0.0.1")
+        fault(
+          "invalid-request",
+          "An attached application's endpoint must be ws://127.0.0.1:<port>/…; Mako never attaches a remote endpoint."
+        )
+      const previous = this.browsers.get(command.id)
+      if (previous?.connection) {
+        // The same id attached twice is a relaunch; the old endpoint is gone.
+        previous.connection.close()
+        previous.connection = undefined
+      }
+      this.attached.set(command.id, {
+        id: command.id,
+        name: command.name,
+        requiresApproval: false,
+        endpoint: async () => endpoint.href,
+      })
+      this.refresh()
+      await this.connect(command.id)
+      return { ...this.entry(command.id).status }
     }
     if (command.action === "tabs") {
       const result = targetsResult.parse(

@@ -69,20 +69,32 @@ export class ProviderChildren {
   track(child: ChildProcess, info: { kind: string; owner: string }): void {
     const pid = child.pid
     if (!pid) return
+    this.trackPid({ pid, executable: child.spawnfile, ...info })
+    child.once("exit", () => this.untrackPid(pid))
+  }
+
+  /**
+   * Record a process the host did not spawn itself but is responsible for:
+   * the native driver started through LaunchServices, whose pid is found
+   * after the fact. The caller removes it when it stops the process.
+   */
+  trackPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
     const record: ProviderChildRecord = {
-      pid,
+      pid: info.pid,
       startedAt: Date.now(),
-      executable: child.spawnfile,
+      executable: info.executable,
       kind: info.kind,
       owner: info.owner,
       host: this.hostPid,
     }
-    this.records = [...this.records.filter((entry) => entry.pid !== pid), record]
+    this.records = [...this.records.filter((entry) => entry.pid !== info.pid), record]
     this.write()
-    child.once("exit", () => {
-      this.records = this.records.filter((entry) => entry !== record)
-      this.write()
-    })
+  }
+
+  untrackPid(pid: number): void {
+    if (!this.records.some((entry) => entry.pid === pid)) return
+    this.records = this.records.filter((entry) => entry.pid !== pid)
+    this.write()
   }
 
   /**
@@ -136,4 +148,12 @@ export function installProviderChildren(dataRoot: string): ProviderChildren {
 
 export function trackProviderChild(child: ChildProcess, info: { kind: string; owner: string }): void {
   active?.track(child, info)
+}
+
+export function trackProviderPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
+  active?.trackPid(info)
+}
+
+export function untrackProviderPid(pid: number): void {
+  active?.untrackPid(pid)
 }
