@@ -85,8 +85,6 @@ export const hostCallInputs = {
   "mako:github-status": z.tuple([]),
   "mako:harness-availability": z.tuple([]),
   "mako:harness-descriptors": z.tuple([]),
-  "mako:harness-update": z.tuple([z.string()]),
-  "mako:harness-updates": z.tuple([]),
   "mako:harness-profiles": z.tuple([z.boolean().optional()]),
   "mako:harness-start": z.tuple([
     z.string(),
@@ -105,6 +103,8 @@ export const hostCallInputs = {
     z.string().optional(),
     z.boolean().optional(),
   ]),
+  "mako:harness-update": z.tuple([z.string()]),
+  "mako:harness-updates": z.tuple([]),
   "mako:host-log-path": z.tuple([]),
   "mako:install-update": z.tuple([]),
   "mako:installation-state": z.tuple([]),

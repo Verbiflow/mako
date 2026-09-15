@@ -106,6 +106,24 @@ export const KeyModifierSchema = z.enum(["Alt", "Control", "Meta", "Shift"])
 export const BrowserCommandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("status") }).strict(),
   z.object({ action: z.literal("connect"), browser }).strict(),
+  z
+    .object({
+      action: z.literal("attach"),
+      id: z
+        .string()
+        .regex(/^app:[A-Za-z0-9._-]+(?::\d+)?$/)
+        .describe(
+          "Browser id for the application: app:<bundle_id>, or app:<bundle_id>:<pid> for a second instance."
+        ),
+      name: z.string().min(1).max(120).describe("Display name."),
+      endpoint: z
+        .string()
+        .url()
+        .describe(
+          "The application's DevTools browser endpoint, ws://127.0.0.1:<port>/devtools/browser/<id>, read from its /json/version. Loopback only."
+        ),
+    })
+    .strict(),
   z.object({ action: z.literal("tabs"), browser }).strict(),
   z
     .object({
