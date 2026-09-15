@@ -35,8 +35,7 @@ export function AboutSection() {
 
       <p className="text-ui leading-relaxed text-muted-foreground">
         Mako is alpha software under active daily development. Expect breaking
-        changes between releases and features that move or disappear. Agents
-        run against your real repositories, so keep your work committed.
+        changes between releases and features that move or disappear.
       </p>
 
       <div className="flex items-center gap-2">

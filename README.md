@@ -16,10 +16,8 @@
 </p>
 
 > **Alpha.** Mako is under active daily development. Expect breaking changes
-> between releases, features that move or disappear, and rough edges. It runs
-> real agents against your real repositories and can drive your browser and
-> your Mac; keep your work committed and read what an agent asks before you
-> grant it. If something breaks or confuses you, please
+> between releases, features that move or disappear, and rough edges. If
+> something breaks or confuses you, please
 > [open an issue](https://github.com/Verbiflow/mako/issues); every report is
 > read and helps decide what gets fixed next.
 
