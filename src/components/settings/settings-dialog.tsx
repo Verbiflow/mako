@@ -7,6 +7,7 @@ import {
   type SettingsSection,
 } from "@/components/settings/sections/manifest"
 import { section as agents } from "@/components/settings/sections/agents"
+import { section as models } from "@/components/settings/sections/models"
 import { section as usage } from "@/components/settings/sections/usage"
 import { section as appearance } from "@/components/settings/sections/appearance"
 import { section as notifications } from "@/components/settings/sections/notifications"
@@ -25,6 +26,7 @@ import { section as about } from "@/components/settings/sections/about"
 
 const SECTIONS: readonly SettingsSection[] = [
   agents,
+  models,
   usage,
   appearance,
   notifications,

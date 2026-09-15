@@ -23,6 +23,7 @@ import {
   providerConnections,
   useProviderConnections,
 } from "@/state/provider-connections"
+import { HarnessUpdates } from "@/components/settings/harness-updates"
 import { cn } from "@/lib/utils"
 import { formatBytes, formatRelative } from "@/lib/format"
 import { usageWindowLabel } from "@/lib/usage-window"
@@ -119,6 +120,8 @@ export function AgentsSection() {
         ))}
       </ListCard>
 
+      <div className="h-3" />
+      <HarnessUpdates />
       <HarnessAccounts />
     </div>
   )
