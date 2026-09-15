@@ -11,4 +11,5 @@ export const codexSkillSource: ProviderSkillSource = {
   workspaceFolder: ".codex",
   targetUserRoot: (account) =>
     join(account.dir ?? join(homedir(), ".codex"), "skills"),
+  readsUniversalRoot: false,
 }
