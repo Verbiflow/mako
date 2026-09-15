@@ -1,13 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import {
-  chmod,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js"
@@ -302,10 +295,10 @@ async function testSerializedGuardedMerge(): Promise<void> {
       atomicJsonMcpMerge(file, expected, definition("alpha")),
       atomicJsonMcpMerge(file, expected, definition("beta")),
     ])
-    assert.deepEqual(
-      settled.map((result) => result.status).sort(),
-      ["fulfilled", "rejected"]
-    )
+    assert.deepEqual(settled.map((result) => result.status).sort(), [
+      "fulfilled",
+      "rejected",
+    ])
     const value = z
       .object({ mcpServers: z.record(z.string(), z.json()) })
       .parse(JSON.parse(await readFile(file, "utf8")))
@@ -398,9 +391,7 @@ async function testManagedDefinitions(): Promise<void> {
     false
   )
   assert.equal(
-    definitions.some(
-      (entry) => entry.definition.name === "mako-browser-use"
-    ),
+    definitions.some((entry) => entry.definition.name === "mako-browser-use"),
     true
   )
   assert.equal(
@@ -409,9 +400,7 @@ async function testManagedDefinitions(): Promise<void> {
     "the macOS harness server is gone; native control is the driver alone"
   )
   assert.equal(
-    definitions.some(
-      (entry) => entry.definition.name === "mako-local-control"
-    ),
+    definitions.some((entry) => entry.definition.name === "mako-local-control"),
     true
   )
   const browserTools = definitions.find(
@@ -444,7 +433,9 @@ async function testManagedDefinitions(): Promise<void> {
         z.object({ env: z.record(z.string(), z.string()) })
       ),
     })
-    .parse(JSON.parse(mergeJsonMcpConfig("", browserTools.definition, "cursor")))
+    .parse(
+      JSON.parse(mergeJsonMcpConfig("", browserTools.definition, "cursor"))
+    )
   assert.deepEqual(cursor.mcpServers["mako-browser-use"]?.env, {
     ELECTRON_RUN_AS_NODE: "1",
   })
@@ -523,7 +514,8 @@ async function testMakoRuntimeProjection(): Promise<void> {
     [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
   )
   const conversationUrl = "http://127.0.0.1:43123/mcp"
-  const scopedServers = z.object({ mcp_servers: z.record(z.string(), z.json()) })
+  const scopedServers = z
+    .object({ mcp_servers: z.record(z.string(), z.json()) })
     .parse(codexMcpConfig(snapshot, conversationUrl)).mcp_servers
   assert.deepEqual(scopedServers["mako-conversations"], {
     url: conversationUrl,
@@ -534,7 +526,11 @@ async function testMakoRuntimeProjection(): Promise<void> {
     .object({ mcp_servers: z.record(z.string(), z.json()) })
     .parse(codex).mcp_servers
   for (const [name, definition] of Object.entries(servers))
-    assert.deepEqual(scopedServers[name], definition, "conversation tools preserve existing server configuration")
+    assert.deepEqual(
+      scopedServers[name],
+      definition,
+      "conversation tools preserve existing server configuration"
+    )
   assert.deepEqual(Object.keys(servers).sort(), [
     "mako-browser-use",
     "mako-local-control",
@@ -543,15 +539,11 @@ async function testMakoRuntimeProjection(): Promise<void> {
     (server) => server.name === "mako-local-control"
   )
   assert.ok(localControl)
-  const preview = await previewMcpSync(
-    snapshot,
-    localControl.id,
-    {
-      provider: "claude",
-      account: "default",
-      scope: "user",
-    }
-  )
+  const preview = await previewMcpSync(snapshot, localControl.id, {
+    provider: "claude",
+    account: "default",
+    scope: "user",
+  })
   assert.equal(preview.action, "blocked")
   assert.match(preview.blockReason ?? "", /sessions launched by Mako/)
 
@@ -643,7 +635,7 @@ async function testEmbeddedCuaHost(): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "mako-cua-embedded-"))
   const command = join(directory, "cua-driver")
   const state = join(directory, "state")
-  const source = `#!${process.execPath}\nconst net = require("node:net")\nif (process.env.CUA_DRIVER_EMBEDDED !== "1") process.exit(2)\nif (process.env.CUA_DRIVER_HOST_BUNDLE_ID !== "dev.mako.test") process.exit(3)\nconst index = process.argv.indexOf("--socket")\nconst socket = process.argv[index + 1]\nconst server = net.createServer(connection => connection.end())\nserver.listen(socket)\nprocess.on("SIGTERM", () => server.close(() => process.exit(0)))\n`
+  const source = `#!${process.execPath}\nconst net = require("node:net")\nif (process.env.CUA_DRIVER_EMBEDDED !== "1") process.exit(2)\nif (process.env.CUA_DRIVER_HOST_BUNDLE_ID !== "dev.mako.test") process.exit(3)\nif (!process.argv.includes("--no-overlay")) process.exit(4)\nconst index = process.argv.indexOf("--socket")\nconst socket = process.argv[index + 1]\nconst server = net.createServer(connection => connection.end())\nserver.listen(socket)\nprocess.on("SIGTERM", () => server.close(() => process.exit(0)))\n`
   try {
     await writeFile(command, source)
     await chmod(command, 0o755)
@@ -731,7 +723,13 @@ function testIntegrationCatalog(): void {
       version: "0.1.0",
       environment: "test",
     },
-    [{ id: "chrome", name: "Google Chrome", connection: { status: "connected", generation: "fixture" } }]
+    [
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        connection: { status: "connected", generation: "fixture" },
+      },
+    ]
   )
   assert.deepEqual(
     granted.integrations.find((entry) => entry.id === "slack")?.connection,
@@ -758,10 +756,15 @@ function testIntegrationCatalog(): void {
       environment: "test",
     }
   )
-  assert.equal(denied.integrations.find((entry) => entry.id === "local-browser")?.connection.kind, "setup", "Installed browser tools must not imply an approved Chrome connection")
   assert.equal(
-    denied.integrations.find((entry) => entry.id === "computer-use")
+    denied.integrations.find((entry) => entry.id === "local-browser")
       ?.connection.kind,
+    "setup",
+    "Installed browser tools must not imply an approved Chrome connection"
+  )
+  assert.equal(
+    denied.integrations.find((entry) => entry.id === "computer-use")?.connection
+      .kind,
     "needs-permission"
   )
 }
@@ -769,19 +772,14 @@ function testIntegrationCatalog(): void {
 function testLocalSchemas(): void {
   assert.equal(BROWSER_TOOL_INPUTS.help.safeParse({}).success, true)
   assert.equal(
-    BROWSER_TOOL_INPUTS.exec.safeParse({ source: "return await browser.status()" })
-      .success,
+    BROWSER_TOOL_INPUTS.exec.safeParse({
+      source: "return await browser.status()",
+    }).success,
     true
   )
   for (const source of ["", "x".repeat(100_001)]) {
-    assert.equal(
-      BROWSER_TOOL_INPUTS.exec.safeParse({ source }).success,
-      false
-    )
-    assert.equal(
-      COMPUTER_TOOL_INPUTS.exec.safeParse({ source }).success,
-      false
-    )
+    assert.equal(BROWSER_TOOL_INPUTS.exec.safeParse({ source }).success, false)
+    assert.equal(COMPUTER_TOOL_INPUTS.exec.safeParse({ source }).success, false)
   }
   assert.equal(
     BROWSER_TOOL_INPUTS.help.safeParse({ action: "click", extra: 1 }).success,

@@ -33,7 +33,8 @@ const runCommand = promisify(execFile)
 // "prohibited" keeps the fixture out of the Dock and off the menu bar, which
 // is the harder background case; "regular" gives it Electron's default menu
 // so invoke_menu can be exercised.
-const fixturePolicy = process.env.MAKO_FIXTURE_POLICY === "regular" ? "regular" : "prohibited"
+const fixturePolicy =
+  process.env.MAKO_FIXTURE_POLICY === "regular" ? "regular" : "prohibited"
 const root = await mkdtemp(join(tmpdir(), "mako-control-e2e-"))
 const proof = randomUUID()
 const replacement = `replaced-${randomUUID().slice(0, 8)}`
@@ -108,7 +109,11 @@ const cocoaBuild = (async () => {
   }
   await writeFile(join(root, "cocoa.swift"), cocoaSource)
   try {
-    await runCommand("xcrun", ["swiftc", "-O", "-o", cocoaBinary, join(root, "cocoa.swift")], { timeout: 180_000 })
+    await runCommand(
+      "xcrun",
+      ["swiftc", "-O", "-o", cocoaBinary, join(root, "cocoa.swift")],
+      { timeout: 180_000 }
+    )
   } catch (error) {
     return `swiftc failed: ${error.stderr ?? error.message}`
   }
@@ -176,7 +181,10 @@ try {
   assert.ok(driverPid, "the daemon's pid is known to the host")
   await new Promise((resolve) => setTimeout(resolve, 1500))
   const seenDuringStart = await startSamples.stop()
-  assert.ok(!seenDuringStart.has(driverPid), `the driver became frontmost while starting (pids seen: ${[...seenDuringStart.keys()].join(", ")})`)
+  assert.ok(
+    !seenDuringStart.has(driverPid),
+    `the driver became frontmost while starting (pids seen: ${[...seenDuringStart.keys()].join(", ")})`
+  )
   assert.ok(seenDuringStart.has(userFrontmost), "sampler read the user's app")
   // The host's browser control, as a Mako task lends it: page routes are
   // registered there and programs get the browser object through it.
@@ -203,12 +211,26 @@ try {
     })
   )
   const tools = (await client.listTools()).tools.map((tool) => tool.name).sort()
-  assert.deepEqual(tools, ["mako_computer_exec", "mako_computer_help", "mako_computer_status"])
+  assert.deepEqual(tools, [
+    "mako_computer_exec",
+    "mako_computer_help",
+    "mako_computer_status",
+  ])
   const help = JSON.parse(
-    (await client.callTool({ name: "mako_computer_help", arguments: {} })).content[0].text
+    (await client.callTool({ name: "mako_computer_help", arguments: {} }))
+      .content[0].text
   )
-  for (const action of ["invoke_menu", "hotkey", "press_key", "verify_state", "zoom"])
-    assert.ok(help.actions.some((entry) => entry.action === action), `driver offers ${action}`)
+  for (const action of [
+    "invoke_menu",
+    "hotkey",
+    "press_key",
+    "verify_state",
+    "zoom",
+  ])
+    assert.ok(
+      help.actions.some((entry) => entry.action === action),
+      `driver offers ${action}`
+    )
 
   const permissions = await call("check_permissions", { prompt: false })
   assert.equal(permissions.accessibility, true)
@@ -218,14 +240,27 @@ try {
   // snapshot supersedes every earlier token, so it goes first.
   const windows = await call("list_windows", { pid: fixtureStatus.pid })
   const fixtureWindow = windows.windows.find(
-    (entry) => entry.pid === fixtureStatus.pid && entry.title === "Mako control fixture"
+    (entry) =>
+      entry.pid === fixtureStatus.pid && entry.title === "Mako control fixture"
   )
-  assert.ok(fixtureWindow, "Fixture window must be discovered by its actual pid")
+  assert.ok(
+    fixtureWindow,
+    "Fixture window must be discovered by its actual pid"
+  )
   assert.equal(fixtureWindow.kind, "document", "a titled window is a document")
-  appshots = new Appshots(async () => ({ command: resolveExecutable("cua-driver"), args: ["mcp", "--embedded", "--socket", socket] }))
-  const shot = await appshots.capture({ pid: fixtureStatus.pid, windowId: fixtureWindow.window_id })
+  appshots = new Appshots(async () => ({
+    command: resolveExecutable("cua-driver"),
+    args: ["mcp", "--embedded", "--socket", socket],
+  }))
+  const shot = await appshots.capture({
+    pid: fixtureStatus.pid,
+    windowId: fixtureWindow.window_id,
+  })
   assert.ok(shot.image.data.length > 1000)
-  assert.ok(shot.text.includes("Proof"), "Appshot includes text from the selected window")
+  assert.ok(
+    shot.text.includes("Proof"),
+    "Appshot includes text from the selected window"
+  )
 
   // One program: find the window by its real pid, snapshot it, keep the
   // identifiers in state, and return only what the next step needs.
@@ -243,10 +278,19 @@ try {
      emitImage(view);
      return {found: true, target: state.target, field: state.field, button: state.button, elements: view.elements.length, menuBar: view.menu_bar_elements_omitted ?? 0, roles: [...new Set(view.elements.map(e => e.role))], screenshot: view.content.some(b => b.type === 'image'), frame: field?.frame, bounds: view.window_bounds, scale: view.screenshot_scale, image: [view.screenshot_width, view.screenshot_height]}`
   )
-  assert.ok(found.found, `Fixture window must be discovered by its actual pid: ${JSON.stringify(found)}`)
-  assert.ok(found.field && found.button, "Proof field and button found from live accessibility state")
+  assert.ok(
+    found.found,
+    `Fixture window must be discovered by its actual pid: ${JSON.stringify(found)}`
+  )
+  assert.ok(
+    found.field && found.button,
+    "Proof field and button found from live accessibility state"
+  )
   assert.ok(found.screenshot, "Actual screenshot returned through the program")
-  assert.ok(!found.roles.some((role) => role.startsWith("AXMenu")), `the menu bar is not in a window state: ${found.roles.join(", ")}`)
+  assert.ok(
+    !found.roles.some((role) => role.startsWith("AXMenu")),
+    `the menu bar is not in a window state: ${found.roles.join(", ")}`
+  )
   const target = found.target
 
   // The compact read: the same window as one line per element, then a step
@@ -263,10 +307,19 @@ try {
      return {lines: lines.length, bytes, full, step, failed}`
   )
   assert.ok(stepped.lines >= 3, JSON.stringify(stepped))
-  assert.ok(stepped.bytes * 4 < stepped.full, `view lines (${stepped.bytes} B) are far smaller than the elements JSON (${stepped.full} B)`)
-  assert.ok(stepped.step.added.some((line) => /="act-proof"/.test(line)), `act returned the changed line: ${JSON.stringify(stepped.step)}`)
+  assert.ok(
+    stepped.bytes * 4 < stepped.full,
+    `view lines (${stepped.bytes} B) are far smaller than the elements JSON (${stepped.full} B)`
+  )
+  assert.ok(
+    stepped.step.added.some((line) => /="act-proof"/.test(line)),
+    `act returned the changed line: ${JSON.stringify(stepped.step)}`
+  )
   assert.equal(stepped.failed, "never. The window shows:")
-  await until(async () => (await fixtureState()).input === "act-proof", "renderer shows the value act set")
+  await until(
+    async () => (await fixtureState()).input === "act-proof",
+    "renderer shows the value act set"
+  )
 
   // Accessibility route: set the value, press the button, read back through
   // the renderer, all in one program. Two actions on two different elements
@@ -289,7 +342,10 @@ try {
     filled.setMs < 2_000 && filled.clickMs < 2_000,
     `actions on two elements finish without a cursor glide: ${JSON.stringify(filled)}`
   )
-  await until(async () => (await fixtureState()).value === proof, "renderer shows the proof")
+  await until(
+    async () => (await fixtureState()).value === proof,
+    "renderer shows the proof"
+  )
 
   // fill: text into the field without a keyboard, read back by the helper
   // and confirmed by the renderer; the frontmost app never moves. routes()
@@ -303,9 +359,16 @@ try {
      const verdicts = await routes();
      return {written, verdicts}`
   )
-  assert.equal(filledHelper.written.confirmed, true, JSON.stringify(filledHelper.written))
+  assert.equal(
+    filledHelper.written.confirmed,
+    true,
+    JSON.stringify(filledHelper.written)
+  )
   assert.match(filledHelper.written.line, new RegExp(`="${fillText}"`))
-  await until(async () => (await fixtureState()).input === fillText, "renderer shows what fill wrote")
+  await until(
+    async () => (await fixtureState()).input === fillText,
+    "renderer shows what fill wrote"
+  )
   assert.equal(filledHelper.verdicts.documents, 1)
   assert.match(filledHelper.verdicts.keyboard, /Cmd chords are refused/)
   assert.match(filledHelper.verdicts.page, /none: launch_app/)
@@ -335,19 +398,42 @@ try {
   // A background Cmd chord is refused before the driver is asked, in
   // milliseconds rather than after the driver's second-long wait.
   assert.equal(keyboard.chord.refused, true, JSON.stringify(keyboard.chord))
-  assert.ok(keyboard.chord.ms < 200, `refused before dispatch (${keyboard.chord.ms} ms)`)
+  assert.ok(
+    keyboard.chord.ms < 200,
+    `refused before dispatch (${keyboard.chord.ms} ms)`
+  )
   assert.match(keyboard.chord.reason, /menu key equivalent/)
   const afterKeys = await fixtureState()
   const keyboardLanded = afterKeys.input !== proof
   // The driver's verdict on posted keys is a hint, never "not delivered";
   // the read-back decides, and no result carries the driver's nudge.
   for (const outcome of [keyboard.remove, keyboard.typed]) {
-    assert.ok(["unconfirmed", "unverifiable", "refused", undefined].includes(outcome.status), JSON.stringify(outcome))
-    if (outcome.status === "refused") assert.doesNotMatch(outcome.reason, /foreground/, `the driver's error carries no foreground nudge through Mako: ${outcome.reason}`)
+    assert.ok(
+      ["unconfirmed", "unverifiable", "refused", undefined].includes(
+        outcome.status
+      ),
+      JSON.stringify(outcome)
+    )
+    if (outcome.status === "refused")
+      assert.doesNotMatch(
+        outcome.reason,
+        /foreground/,
+        `the driver's error carries no foreground nudge through Mako: ${outcome.reason}`
+      )
     assert.notEqual(outcome.status, "not-delivered")
-    if (outcome.escalation) assert.deepEqual(Object.keys(outcome.escalation), ["reason"], `the foreground nudge is stripped: ${JSON.stringify(outcome)}`)
+    if (outcome.escalation)
+      assert.deepEqual(
+        Object.keys(outcome.escalation),
+        ["reason"],
+        `the foreground nudge is stripped: ${JSON.stringify(outcome)}`
+      )
   }
-  if (!keyboardLanded) assert.equal(keyboard.remove.added, 0, "a dropped key changes nothing in the window")
+  if (!keyboardLanded)
+    assert.equal(
+      keyboard.remove.added,
+      0,
+      "a dropped key changes nothing in the window"
+    )
 
   // The routes that do reach a backgrounded renderer: set_value replaced the
   // text above; invoke_menu performs a menu item (Select All) and the
@@ -365,14 +451,34 @@ try {
   // Fronting is declared: without the flag the call never reaches the driver.
   assert.match(menu.undeclared, /takes the user's screen.*foreground: true/)
   const frontmostAfterMenu = await frontmostPid()
-  assert.equal(frontmostAfterMenu, frontmostBefore, "invoke_menu restores the previous frontmost application")
+  assert.equal(
+    frontmostAfterMenu,
+    frontmostBefore,
+    "invoke_menu restores the previous frontmost application"
+  )
   if (fixturePolicy === "regular") {
     assert.equal(menu.isError, false, JSON.stringify(menu))
-    assert.ok(Number.isInteger(menu.fronted?.ms) && menu.fronted.pid === target.pid, `a fronting call reports fronted: ${JSON.stringify(menu)}`)
-    await until(async () => (await fixtureState()).selection === (await fixtureState()).input.length && (await fixtureState()).input.length > 0, `invoke_menu Select All selected the field (${JSON.stringify(menu)})`)
+    assert.ok(
+      Number.isInteger(menu.fronted?.ms) && menu.fronted.pid === target.pid,
+      `a fronting call reports fronted: ${JSON.stringify(menu)}`
+    )
+    await until(
+      async () =>
+        (await fixtureState()).selection ===
+          (await fixtureState()).input.length &&
+        (await fixtureState()).input.length > 0,
+      `invoke_menu Select All selected the field (${JSON.stringify(menu)})`
+    )
   }
-  const statusAfterMenu = JSON.parse((await client.callTool({ name: "mako_computer_status", arguments: {} })).content[0].text)
-  assert.equal(statusAfterMenu.frontingEvents, fixturePolicy === "regular" ? 1 : 0, "status counts the fronting events of the task")
+  const statusAfterMenu = JSON.parse(
+    (await client.callTool({ name: "mako_computer_status", arguments: {} }))
+      .content[0].text
+  )
+  assert.equal(
+    statusAfterMenu.frontingEvents,
+    fixturePolicy === "regular" ? 1 : 0,
+    "status counts the fronting events of the task"
+  )
 
   const cleared = await exec(
     "clear-by-accessibility",
@@ -382,7 +488,10 @@ try {
      const set = await computer.set_value({element_token: state.field, value: ${JSON.stringify(replacement)}});
      return set.effect ?? null`
   )
-  await until(async () => (await fixtureState()).input === replacement, `set_value replaced the field in the background (${JSON.stringify(cleared)})`)
+  await until(
+    async () => (await fixtureState()).input === replacement,
+    `set_value replaced the field in the background (${JSON.stringify(cleared)})`
+  )
 
   // Foreground is never automatic: the fixture is not frontmost, so an
   // explicit foreground combo is refused before dispatch, and a program can
@@ -396,21 +505,35 @@ try {
   assert.equal(refused.sent, false)
   assert.match(refused.reason, /not frontmost/)
 
-  // A superseded token for a control that is still there is carried to the
-  // same control in the newest snapshot (fill's read-back and act's delta
-  // both take snapshots, so this is every second step of a program); one
-  // for a control the earlier snapshot never had is refused by the driver.
+  // Superseded tokens remain stale. Mako does not guess identity from a role,
+  // label or list position: reordered duplicate controls could turn that into
+  // an action on the wrong element.
   const stale = await exec(
     "stale-token",
-    `const carried = await computer.click({element_token: ${JSON.stringify(found.field)}});
+    `let existing; try { await computer.click({element_token: ${JSON.stringify(found.field)}}); existing = {refused: false} } catch (error) { existing = {refused: true, reason: error.message} }
      let gone; try { await computer.click({element_token: ${JSON.stringify(found.field.replace(/:\d+$/, ":9999"))}}); gone = {refused: false} } catch (error) { gone = {refused: true, reason: error.message} }
-     return {carried: carried.carried_token, gone}`
+     return {existing, gone}`
   )
-  assert.equal(stale.carried?.given, found.field, "the token the program gave is named")
-  assert.notEqual(stale.carried?.used, found.field, "and the newest snapshot's token was used")
-  assert.equal(stale.gone.refused, true, "a control the snapshot never had is refused")
-  assert.ok(stale.gone.reason.length > 0, "the refusal carries the driver's reason")
-  assert.equal(await frontmostPid(), frontmostBefore, "a carried click never fronts")
+  assert.equal(
+    stale.existing.refused,
+    true,
+    "an older snapshot token is refused"
+  )
+  assert.match(stale.existing.reason, /stale/)
+  assert.equal(
+    stale.gone.refused,
+    true,
+    "a control the snapshot never had is refused"
+  )
+  assert.ok(
+    stale.gone.reason.length > 0,
+    "the refusal carries the driver's reason"
+  )
+  assert.equal(
+    await frontmostPid(),
+    frontmostBefore,
+    "a stale click never fronts"
+  )
 
   // The page route: Mako launches a second Electron instance behind the user
   // with a private DevTools port, registers it as a browser, and a program
@@ -424,11 +547,30 @@ try {
      return launched`
   )
   assert.ok(launched.pid > 0, JSON.stringify(launched))
-  assert.match(launched.page_route.browser, /^app:Electron/)
-  assert.match(launched.page_route.endpoint, /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//)
-  assert.ok(launched.windows.some((row) => row.kind === "document"), `launch_app waited for the document window: ${JSON.stringify(launched.windows)}`)
-  const pageStatus = await until(async () => { try { return JSON.parse(await readFile(pageStatusFile, "utf8")) } catch { return null } }, "page fixture started")
-  assert.equal(pageStatus.pid, launched.pid, "the pid is the process that owns the port")
+  assert.match(
+    launched.page_route.browser,
+    /^app:com\.github\.Electron:\d+:[a-f0-9]{8}$/
+  )
+  assert.match(
+    launched.page_route.endpoint,
+    /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//
+  )
+  assert.ok(
+    launched.windows.some((row) => row.kind === "document"),
+    `launch_app waited for the document window: ${JSON.stringify(launched.windows)}`
+  )
+  const pageStatus = await until(async () => {
+    try {
+      return JSON.parse(await readFile(pageStatusFile, "utf8"))
+    } catch {
+      return null
+    }
+  }, "page fixture started")
+  assert.equal(
+    pageStatus.pid,
+    launched.pid,
+    "the pid is the process that owns the port"
+  )
   const driven = await exec(
     "drive-page-route",
     `const browserId = state.page.page_route.browser;
@@ -448,17 +590,50 @@ try {
      return {found: true, clickMs, clicked: clicked.outcome ?? clicked, image: shot.data.length, verdicts}`
   )
   assert.equal(driven.found, true, JSON.stringify(driven))
-  await until(async () => JSON.parse(await readFile(pageStatusFile, "utf8")).input === proof, `insertText replaced the field through the page route (${JSON.stringify(driven)})`)
-  await until(async () => JSON.parse(await readFile(pageStatusFile, "utf8")).value === proof, "Enter submitted through the page route")
-  assert.ok(driven.image > 1000, "a screenshot came back through the page route")
-  assert.ok(driven.clickMs < 500, `a page-route click completes quickly (${Math.round(driven.clickMs)} ms)`)
-  assert.match(driven.verdicts.page, new RegExp(`browser: "${launched.page_route.browser}"`))
-  const pageStatusAfter = JSON.parse((await client.callTool({ name: "mako_computer_status", arguments: {} })).content[0].text)
-  assert.equal(pageStatusAfter.pageRoutes[String(launched.pid)]?.browser, launched.page_route.browser)
+  await until(
+    async () =>
+      JSON.parse(await readFile(pageStatusFile, "utf8")).input === proof,
+    `insertText replaced the field through the page route (${JSON.stringify(driven)})`
+  )
+  await until(
+    async () =>
+      JSON.parse(await readFile(pageStatusFile, "utf8")).value === proof,
+    "Enter submitted through the page route"
+  )
+  assert.ok(
+    driven.image > 1000,
+    "a screenshot came back through the page route"
+  )
+  assert.ok(
+    driven.clickMs < 500,
+    `a page-route click completes quickly (${Math.round(driven.clickMs)} ms)`
+  )
+  assert.match(
+    driven.verdicts.page,
+    new RegExp(`browser: "${launched.page_route.browser}"`)
+  )
+  const pageStatusAfter = JSON.parse(
+    (await client.callTool({ name: "mako_computer_status", arguments: {} }))
+      .content[0].text
+  )
+  assert.equal(
+    pageStatusAfter.pageRoutes[String(launched.pid)]?.browser,
+    launched.page_route.browser
+  )
   const seenDuringPage = await pageSamples.stop()
-  assert.ok(!seenDuringPage.has(launched.pid), `the launched app never became frontmost (pids seen: ${[...seenDuringPage.keys()].join(", ")})`)
-  assert.deepEqual([...seenDuringPage.keys()], [frontmostBefore], `only the user's app was frontmost during the page route (${[...seenDuringPage.keys()].join(", ")})`)
-  await exec("kill-page-fixture", `return await computer.shell({command: 'kill ${launched.pid}'})`)
+  assert.ok(
+    !seenDuringPage.has(launched.pid),
+    `the launched app never became frontmost (pids seen: ${[...seenDuringPage.keys()].join(", ")})`
+  )
+  assert.deepEqual(
+    [...seenDuringPage.keys()],
+    [frontmostBefore],
+    `only the user's app was frontmost during the page route (${[...seenDuringPage.keys()].join(", ")})`
+  )
+  await exec(
+    "kill-page-fixture",
+    `return await computer.shell({command: 'kill ${launched.pid}'})`
+  )
 
   // The Cocoa fixture: the pid keyboard on the application kind it was
   // designed for. fill confirms, type_text lands, a Shift chord is never
@@ -466,9 +641,17 @@ try {
   const cocoaBuilt = await cocoaBuild
   let cocoaOutcome = { skipped: cocoaBuilt }
   if (cocoaBuilt === "built") {
-    cocoa = spawn(cocoaBinary, [cocoaStatusFile], { stdio: ["ignore", "ignore", "pipe"] })
+    cocoa = spawn(cocoaBinary, [cocoaStatusFile], {
+      stdio: ["ignore", "ignore", "pipe"],
+    })
     cocoa.stderr.on("data", (chunk) => process.stderr.write(chunk))
-    const cocoaStatus = await until(async () => { try { return JSON.parse(await readFile(cocoaStatusFile, "utf8")) } catch { return null } }, "cocoa fixture started")
+    const cocoaStatus = await until(async () => {
+      try {
+        return JSON.parse(await readFile(cocoaStatusFile, "utf8"))
+      } catch {
+        return null
+      }
+    }, "cocoa fixture started")
     // A bare binary (not a bundle) cannot be launched with open -g, so this
     // fixture is frontmost like the user's own app would be; the invariant
     // under test is that Mako's background actions do not change frontmost
@@ -495,7 +678,11 @@ try {
     // fill confirmed against the field's own accessibility read-back; on a
     // Cocoa field the driver even reports effect: confirmed, where Electron
     // could only say unverifiable.
-    assert.equal(cocoaRun.written.confirmed, true, JSON.stringify(cocoaRun.written))
+    assert.equal(
+      cocoaRun.written.confirmed,
+      true,
+      JSON.stringify(cocoaRun.written)
+    )
     assert.match(cocoaRun.written.line, new RegExp(`="${cocoaText}"`))
     // The pid keyboard the driver was designed for: type_text landed in the
     // background (the field now holds the fill text plus what was typed), the
@@ -503,12 +690,24 @@ try {
     // unverifiable, never not-delivered.
     assert.equal(cocoaRun.chord.refused, true)
     assert.ok(cocoaRun.chord.ms < 200)
-    assert.notEqual(cocoaRun.shifted.status, "not-delivered", `a Shift chord is never reported not delivered: ${JSON.stringify(cocoaRun.shifted)}`)
-    if (cocoaRun.shifted.escalation) assert.deepEqual(Object.keys(cocoaRun.shifted.escalation), ["reason"])
-    assert.equal(await frontmostPid(), cocoaBaseline, "Mako's background keyboard on the Cocoa fixture never changed frontmost")
+    assert.notEqual(
+      cocoaRun.shifted.status,
+      "not-delivered",
+      `a Shift chord is never reported not delivered: ${JSON.stringify(cocoaRun.shifted)}`
+    )
+    if (cocoaRun.shifted.escalation)
+      assert.deepEqual(Object.keys(cocoaRun.shifted.escalation), ["reason"])
+    assert.equal(
+      await frontmostPid(),
+      cocoaBaseline,
+      "Mako's background keyboard on the Cocoa fixture never changed frontmost"
+    )
     const cocoaField = JSON.parse(await readFile(cocoaStatusFile, "utf8")).input
     const typeLanded = cocoaField.includes("typed")
-    assert.ok(typeLanded, `type_text reached the Cocoa field in the background (field: ${JSON.stringify(cocoaField)})`)
+    assert.ok(
+      typeLanded,
+      `type_text reached the Cocoa field in the background (field: ${JSON.stringify(cocoaField)})`
+    )
     cocoaOutcome = {
       fill: `confirmed (${cocoaRun.written.result?.effect})`,
       cmdChord: `refused before dispatch in ${cocoaRun.chord.ms} ms`,
@@ -516,14 +715,22 @@ try {
       typeText: `landed (${cocoaField})`,
       routes: cocoaRun.verdicts.keyboard,
     }
-    assert.equal(await frontmostPid(), cocoaBaseline, "the Cocoa fixture stayed frontmost through Mako's background work")
+    assert.equal(
+      await frontmostPid(),
+      cocoaBaseline,
+      "the Cocoa fixture stayed frontmost through Mako's background work"
+    )
     cocoa.kill("SIGTERM")
     cocoa = null
   }
 
   const frontmostAfter = await frontmostPid()
   assert.notEqual(frontmostAfter, target.pid, "Fixture stays in the background")
-  assert.notEqual(frontmostAfter, launched.pid, "the page-route app never became frontmost")
+  assert.notEqual(
+    frontmostAfter,
+    launched.pid,
+    "the page-route app never became frontmost"
+  )
   const totalBytes = events.reduce((sum, event) => sum + event.bytes, 0)
   outcome = {
     status: "passed",
@@ -531,14 +738,22 @@ try {
     programs: events.length,
     resultBytes: totalBytes,
     fixturePolicy,
-    backgroundKeyboard: keyboardLanded ? "posted keys reached the backgrounded Electron renderer" : "posted keys dropped (delivery_failed) and reported not-delivered; set_value and invoke_menu did the work",
+    backgroundKeyboard: keyboardLanded
+      ? "posted keys reached the backgrounded Electron renderer"
+      : "posted keys dropped (delivery_failed) and reported not-delivered; set_value and invoke_menu did the work",
     invokeMenu: menu,
-    pageRoute: { browser: launched.page_route.browser, clickMs: Math.round(driven.clickMs) },
+    pageRoute: {
+      browser: launched.page_route.browser,
+      clickMs: Math.round(driven.clickMs),
+    },
     cocoa: cocoaOutcome,
-    appshot: { textCharacters: shot.text.length, imageBytes: Math.floor(shot.image.data.length * 3 / 4) },
+    appshot: {
+      textCharacters: shot.text.length,
+      imageBytes: Math.floor((shot.image.data.length * 3) / 4),
+    },
   }
   console.log(
-    `PASS: ${events.length} programs, ${totalBytes} result bytes; driver started behind the user's window, view/act/expect on the live window, native screenshot, accessibility fill and press with renderer read-back, background Cmd chord refused before dispatch, posted keys ${keyboardLanded ? "landed" : "dropped and reported unconfirmed, never not-delivered"}, invoke_menu refused without foreground: true and ${fixturePolicy === "regular" ? `selected the field with fronted.ms ${menu.fronted?.ms}` : "skipped (fixture has no menu bar; run with MAKO_FIXTURE_POLICY=regular)"} with the frontmost app restored, fill confirmed, set_value replaced the field, foreground refused without the flag and while not frontmost, superseded token carried and a missing control refused, page route ${launched.page_route.browser} launched behind the user and driven through browser.* (click ${Math.round(driven.clickMs)} ms, insertText, Enter, screenshot), Cocoa fixture ${JSON.stringify(cocoaOutcome)}, frontmost app unchanged throughout`
+    `PASS: ${events.length} programs, ${totalBytes} result bytes; driver started behind the user's window, view/act/expect on the live window, native screenshot, accessibility fill and press with renderer read-back, background Cmd chord refused before dispatch, posted keys ${keyboardLanded ? "landed" : "dropped and reported unconfirmed, never not-delivered"}, invoke_menu refused without foreground: true and ${fixturePolicy === "regular" ? `selected the field with fronted.ms ${menu.fronted?.ms}` : "skipped (fixture has no menu bar; run with MAKO_FIXTURE_POLICY=regular)"} with the frontmost app restored, fill confirmed, set_value replaced the field, foreground refused without the flag and while not frontmost, superseded and missing tokens refused without remapping, page route ${launched.page_route.browser} launched behind the user and driven through browser.* (click ${Math.round(driven.clickMs)} ms, insertText, Enter, screenshot), Cocoa fixture ${JSON.stringify(cocoaOutcome)}, frontmost app unchanged throughout`
   )
 } catch (error) {
   outcome = {
@@ -547,7 +762,9 @@ try {
   }
   throw error
 } finally {
-  await exec("end-session", "return await computer.end_session({})").catch(() => {})
+  await exec("end-session", "return await computer.end_session({})").catch(
+    () => {}
+  )
   await appshots?.close()
   await client.close()
   controlService?.close()

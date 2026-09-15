@@ -33,6 +33,7 @@ assert.equal(catalogUpdates, 2)
 catalog.close()
 
 const fixture = await browserFixture()
+const attachedFixture = await browserFixture()
 const service = new BrowserService([fixture.definition])
 let authorized = true
 const control = await startControlService(service, () => {
@@ -60,6 +61,37 @@ try {
     1,
     "Ten tasks must share one Chrome connection"
   )
+  const attachedId = "app:dev.mako.fixture:4242:deadbeef"
+  const attached = z.object({ id: z.literal(attachedId) }).parse(
+    await run("task-a", {
+      action: "attach",
+      id: attachedId,
+      name: "Attached fixture",
+      endpoint: await attachedFixture.definition.endpoint(),
+    })
+  )
+  assert.equal(attached.id, attachedId)
+  await assert.rejects(
+    run("task-b", {
+      action: "attach",
+      id: attachedId,
+      name: "Collision",
+      endpoint: await attachedFixture.definition.endpoint(),
+    }),
+    /already attached/
+  )
+  assert.deepEqual(await run("task-a", { action: "detach", id: attachedId }), {
+    id: attachedId,
+    detached: true,
+  })
+  assert.ok(
+    !service.status().some((entry) => entry.id === attachedId),
+    "detach removes the exact attached generation"
+  )
+  assert.deepEqual(await run("task-a", { action: "detach", id: attachedId }), {
+    id: attachedId,
+    detached: false,
+  })
   const a = BrowserTargetSchema.parse(
     await run("task-a", { action: "open", browser: "fixture" })
   )
@@ -162,6 +194,7 @@ try {
       nodes: z.array(z.object({ ref: z.string() })),
     })
     .parse(await run("task-a", { action: "observe", target: a }))
+  fixture.axNodes[0] = { ...fixture.axNodes[0], backendDOMNodeId: 2 }
   const unchanged = await run("task-a", {
     action: "observe",
     target: a,
@@ -178,7 +211,47 @@ try {
     ref: firstObservation.nodes[0]!.ref,
     text: "unchanged ref remains usable",
   })
+  assert.equal(
+    fixture.calls.filter((call) => call.method === "DOM.resolveNode").at(-1)
+      ?.params.backendNodeId,
+    2,
+    "an unchanged semantic observation refreshes the old ref's live backend node"
+  )
   await run("task-a", { action: "type", target: a, text: "after-observation" })
+  const doomed = BrowserTargetSchema.parse(
+    await run("task-doomed", { action: "open", browser: "fixture" })
+  )
+  const delayedCount = fixture.calls.filter(
+    (call) => call.method === "Input.insertText" && call.params.text === "delay"
+  ).length
+  const doomedCall = run("task-doomed", {
+    action: "type",
+    target: doomed,
+    text: "delay",
+  })
+  const doomedRejected = assert.rejects(
+    doomedCall,
+    (error: Error) =>
+      error instanceof BrowserFault &&
+      error.detail.code === "target-closed" &&
+      error.detail.outcome === "unknown"
+  )
+  for (
+    let count = 0;
+    fixture.calls.filter(
+      (call) =>
+        call.method === "Input.insertText" && call.params.text === "delay"
+    ).length === delayedCount;
+    count++
+  ) {
+    assert.ok(count < 100)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  fixture.emit(fixture.sessionFor(doomed.tab), "Target.targetDestroyed", {
+    targetId: doomed.tab,
+  })
+  fixture.completeDelayed()
+  await doomedRejected
   const magnified = z
     .object({
       view: z.string(),
@@ -287,7 +360,8 @@ try {
   )
   assert.equal(
     fixture.calls.filter((call) => call.params.text === "delay").length,
-    1
+    2,
+    "each of the two uncertain actions was dispatched exactly once"
   )
   fixture.targets.delete(a.tab)
   await assert.rejects(
@@ -1124,5 +1198,6 @@ try {
   )
 } finally {
   control.close()
+  await attachedFixture.close()
   await fixture.close()
 }

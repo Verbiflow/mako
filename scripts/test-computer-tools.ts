@@ -535,7 +535,9 @@ try {
       effect: "unverifiable",
     })
     assert.deepEqual(
-      steppedResult.step.added.map((line) => line.replace(/^s[0-9a-f]{8}/, "s*")),
+      steppedResult.step.added.map((line) =>
+        line.replace(/^s[0-9a-f]{8}/, "s*")
+      ),
       ['s*:2 StaticText "Done"']
     )
     assert.deepEqual(steppedResult.step.removed, [])
@@ -543,37 +545,33 @@ try {
     assert.equal(steppedResult.failed, "Wrong screen. The window shows:")
     assert.deepEqual(steppedResult.target, { pid: 42, window_id: 7 })
 
-    // The composed program every model writes: fill the field, then click
-    // the button with a token from the same view. fill's read-back took a
-    // new snapshot, so the button's token is superseded; Mako carries it to
-    // the same control in the newest snapshot and says so. A control that
-    // is gone is refused by the driver as before.
+    // fill returns its exact read-back view. The next action takes a token
+    // from that view; Mako never guesses that an older role/label still names
+    // the same control.
     const composed = await exec(
       client,
-      "const lines = await view({pid: 42, window_id: 7}); const field = lines.find(l => /TextField/.test(l)).split(' ')[0]; const button = lines.find(l => /Button \"Go\"/.test(l)).split(' ')[0]; const written = await fill(field, 'carried'); const clicked = await act('click', {element_token: button}, {settle: 10, wait: 50}); let gone; try { await computer.click({element_token: button.replace(/:\\d+$/, ':9')}) } catch (error) { gone = error.message } return {confirmed: written.confirmed, button, clicked: clicked.result, gone}"
+      "const lines = await view({pid: 42, window_id: 7}); const field = lines.find(l => /TextField/.test(l)).split(' ')[0]; const oldButton = lines.find(l => /Button \"Go\"/.test(l)).split(' ')[0]; const written = await fill(field, 'fresh'); const button = written.view.find(l => /Button \"Go\"/.test(l)).split(' ')[0]; const clicked = await act('click', {element_token: button}, {settle: 10, wait: 50}); let stale; try { await computer.click({element_token: oldButton}) } catch (error) { stale = error.message } return {confirmed: written.confirmed, oldButton, button, clicked: clicked.result, stale}"
     )
     assert.ok(!composed.isError, JSON.stringify(composed))
     const composedResult = z
       .object({
         confirmed: z.boolean(),
+        oldButton: z.string(),
         button: z.string(),
-        clicked: z.object({
-          carried_token: z.object({ given: z.string(), used: z.string() }),
-        }).loose(),
-        gone: z.string(),
+        clicked: z.object({ route: z.string() }).loose(),
+        stale: z.string(),
       })
       .parse(JSON.parse(firstText(composed.content)))
     assert.equal(composedResult.confirmed, true)
-    assert.equal(composedResult.clicked.carried_token.given, composedResult.button)
-    assert.notEqual(composedResult.clicked.carried_token.used, composedResult.button)
-    assert.match(composedResult.clicked.carried_token.used, /:0$/)
-    assert.match(composedResult.gone, /stale/)
+    assert.notEqual(composedResult.oldButton, composedResult.button)
+    assert.equal(composedResult.clicked.route, "accessibility")
+    assert.match(composedResult.stale, /stale/)
 
     // fill writes through set_value and reads the control back by role and
     // label; submit confirms; routes decides before any round trip.
     const filled = await exec(
       client,
-      "const lines = await view({pid: 42, window_id: 7}); const field = lines.find(l => /TextField/.test(l)).split(' ')[0]; const written = await fill(field, 'Ada', {wait: 300}); const sent = await submit(field); const verdicts = await routes(); return {written, sent: sent.route, verdicts}"
+      "const lines = await view({pid: 42, window_id: 7}); const field = lines.find(l => /TextField/.test(l)).split(' ')[0]; const written = await fill(field, 'Ada', {wait: 300}); const current = written.view.find(l => /TextField/.test(l)).split(' ')[0]; const sent = await submit(current); const verdicts = await routes(); return {written, sent: sent.route, verdicts}"
     )
     assert.ok(!filled.isError, JSON.stringify(filled))
     const filledResult = z
@@ -583,6 +581,7 @@ try {
           route: z.literal("set_value"),
           confirmed: z.literal(true),
           line: z.string(),
+          view: z.array(z.string()),
         }),
         sent: z.literal("confirm"),
         verdicts: z.object({
@@ -864,6 +863,7 @@ try {
 
     // The browser object rides on the host's browser control: a valid
     // command reaches it, an invalid one is refused before dispatch.
+    const browserCommandCount = browserCommands.length
     const browsed = await exec(
       client,
       "const status = await browser.status({}); let refused; try { await browser.click({}) } catch (error) { refused = error.message } return {status, refused}"
@@ -876,7 +876,8 @@ try {
       })
       .parse(JSON.parse(firstText(browsed.content)))
     assert.match(browsedResult.refused, /Invalid arguments for browser\.click/)
-    assert.deepEqual(browserCommands, [{ action: "status" }])
+    assert.equal(browserCommands.length, browserCommandCount + 1)
+    assert.deepEqual(browserCommands.at(-1), { action: "status" })
 
     // A huge tree returned from a program is written whole and outlined.
     const huge = await exec(
@@ -946,5 +947,5 @@ try {
   await rm(fixtureRoot, { recursive: true, force: true })
 }
 console.log(
-  "Computer MCP: three-tool program surface with the reference in the tool description, results as data, view/act/expect/windows/fill/submit/routes helpers, menu bar out of window states, window kinds, per-connection task session, symlinked output ancestors resolved, token-only actions carry their snapshot's pid and window, a superseded token carried to the same control, compact window state, key verdicts with the driver's nudge stripped, background Cmd chords refused before dispatch, fronting declared and counted, foreground preflight inside programs, shell and script actions, the browser object over host control, artifact receipts instead of truncation, file captures reach the preview, driver formats compile cleanly"
+  "Computer MCP: three-tool program surface with the reference in the tool description, results as data, target-bound view/act/expect/windows/fill/submit/routes helpers, menu bar out of window states, window kinds, per-connection task session, symlinked output ancestors resolved, token-only actions recover their exact snapshot pid and window while superseded tokens remain stale, compact window state, key verdicts with the driver's nudge stripped, background Cmd chords refused before dispatch, fronting declared and counted, foreground preflight inside programs, shell and script actions, the browser object over host control, artifact receipts instead of truncation, file captures reach the preview, driver formats compile cleanly"
 )

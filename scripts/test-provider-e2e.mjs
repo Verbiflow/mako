@@ -1,4 +1,8 @@
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
+import {
+  sampleFrontmost,
+  startElectronFixture,
+} from "./lib/control-fixture.mjs"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
@@ -7,6 +11,7 @@ import {
   writeFile,
   readFile,
   realpath,
+  rm,
   symlink,
   unlink,
 } from "node:fs/promises"
@@ -15,7 +20,15 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-if (process.argv.includes("--launch-only") && process.argv.slice(2).some((arg) => arg.startsWith("--") && arg !== "--launch-only")) throw new Error("Launch-only checks cannot be combined with prompt or mutation scenarios")
+if (
+  process.argv.includes("--launch-only") &&
+  process.argv
+    .slice(2)
+    .some((arg) => arg.startsWith("--") && arg !== "--launch-only")
+)
+  throw new Error(
+    "Launch-only checks cannot be combined with prompt or mutation scenarios"
+  )
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-provider-e2e-"))
   await writeFile(
@@ -46,6 +59,7 @@ async function runElectron() {
   const { app } = await import("electron")
   const root = process.env.MAKO_E2E_ROOT
   if (!root) throw new Error("Launch this test with Node")
+  const controlMode = process.argv.includes("--control")
   await mkdir(join(root, "user-data"))
   app.setPath("userData", join(root, "user-data"))
   await app.whenReady()
@@ -54,6 +68,8 @@ async function runElectron() {
   const { providerHost } = await import("../dist-electron/providers/index.js")
   const { discoverMcpRegistry } =
     await import("../dist-electron/mcp-registry.js")
+  const { ensureCuaEmbedded, stopCuaEmbedded } =
+    await import("../dist-electron/cua-embedded.js")
   const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
   const { bindCodexApp, stopCodexApps } =
     await import("../dist-electron/codex-app.js")
@@ -64,6 +80,12 @@ async function runElectron() {
     await import("../dist-electron/native-continuation.js")
   const { resumable } =
     await import("../dist-electron/contracts/conversation-control.js")
+  const cuaRoot = join("/tmp", `mako-provider-cua-${String(process.pid)}`)
+  if (controlMode) {
+    await mkdir(cuaRoot, { recursive: true })
+    if (!(await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")))
+      throw new Error("--control needs an installed CUA Driver")
+  }
   // The host's own policy: a driver that knows its store (Cursor's SDK
   // index root, Devin's lock file) judges it; the rest hash the record and
   // ask the provider's process probe.
@@ -130,6 +152,18 @@ async function runElectron() {
     await import("@mako/sessions/settings")
   const models = JSON.parse(process.env.MAKO_E2E_MODELS ?? "{}")
   const results = []
+  const controlTitle = `Mako provider control ${randomUUID()}`
+  const controlFixture = controlMode
+    ? await startElectronFixture({
+        root,
+        name: "provider-control-fixture",
+        title: controlTitle,
+        initial: "provider-control-seed",
+      })
+    : undefined
+  const controlStarted = controlFixture
+    ? await controlFixture.started()
+    : undefined
   const authentications = new Map()
   const delegationParents = new Set()
   const delegationChildren = new Set()
@@ -167,7 +201,12 @@ async function runElectron() {
           const once = permission.options.find(
             (option) => option.kind === "allow_once"
           )
-          const fixtureAuthentication = process.argv.includes("--launch-only") && snapshot.session.harness === "devin" && permission.kind === "authentication" && permission.options.length === 1 && permission.options[0].optionId === "devin-browser"
+          const fixtureAuthentication =
+            process.argv.includes("--launch-only") &&
+            snapshot.session.harness === "devin" &&
+            permission.kind === "authentication" &&
+            permission.options.length === 1 &&
+            permission.options[0].optionId === "devin-browser"
           const fixtureRead =
             permission.title === "Read File" &&
             reads.some((block) =>
@@ -176,6 +215,9 @@ async function runElectron() {
           const capabilitiesRead =
             permission.title ===
             "mcp__mako-conversations__mako_conversation_capabilities"
+          const fixtureControl =
+            controlMode &&
+            /mako-local-control|mako_computer_/i.test(permission.title)
           const fixtureDelegation =
             delegationParents.has(id) &&
             permission.title ===
@@ -189,13 +231,15 @@ async function runElectron() {
             (!fixtureRead &&
               !fixtureAuthentication &&
               !capabilitiesRead &&
+              !fixtureControl &&
               !fixtureDelegation &&
               !fixtureChildWrite)
           )
             throw new Error(
               `Permission outside the fixture read grant: ${permission.title}`
             )
-          if (fixtureAuthentication) authentications.set(id, (authentications.get(id) ?? 0) + 1)
+          if (fixtureAuthentication)
+            authentications.set(id, (authentications.get(id) ?? 0) + 1)
           await owner.permission(id, permission.id, {
             kind: "choice",
             optionId: once.optionId,
@@ -301,33 +345,65 @@ async function runElectron() {
           result.currentMode = state.currentMode
           result.availableModeIds = state.modes.map((mode) => mode.id)
           console.log(JSON.stringify(result))
-          await writeFile(join(root, "results.json"), JSON.stringify(results, null, 2))
+          await writeFile(
+            join(root, "results.json"),
+            JSON.stringify(results, null, 2)
+          )
           continue
         }
         const requestId = randomUUID()
         // --shell asks for a command instead of a file read. The permission
         // handler above rejects any command approval, so a completed shell
         // turn proves the selected access mode answered it without the user.
+        const frontmost = controlMode ? sampleFrontmost() : undefined
         owner.submit(
           id,
           requestId,
-          process.argv.includes("--shell")
-            ? "Run the shell command `cat proof.txt` with your terminal or shell tool and reply with only the fixture value it prints. This is an authorized disposable integration test. Do not modify files."
-            : "Read proof.txt in this workspace using your file tool. Reply with only the fixture value. This is an authorized disposable integration test. Do not modify files."
+          controlMode
+            ? `Read proof.txt to obtain the exact fixture value. Then use Mako's local computer control MCP to operate the background window titled ${JSON.stringify(controlTitle)}. The target pid is ${String(controlStarted?.pid)}. Replace its Proof field with that fixture value, press its Verify proof button, and reply "done". Do not bring the target to the foreground. This is an authorized disposable integration test.`
+            : process.argv.includes("--shell")
+              ? "Run the shell command `cat proof.txt` with your terminal or shell tool and reply with only the fixture value it prints. This is an authorized disposable integration test. Do not modify files."
+              : "Read proof.txt in this workspace using your file tool. Reply with only the fixture value. This is an authorized disposable integration test. Do not modify files."
         )
-        let completed = await waitFor(id, (snapshot) =>
-          snapshot?.requests.some(
-            (request) =>
-              request.id === requestId && request.status === "completed"
+        let completed
+        let frontmostSeen = []
+        try {
+          completed = await waitFor(id, (snapshot) =>
+            snapshot?.requests.some(
+              (request) =>
+                request.id === requestId && request.status === "completed"
+            )
           )
-        )
+        } finally {
+          if (frontmost) frontmostSeen = [...(await frontmost.stop()).keys()]
+        }
         result.currentMode = completed.session.currentMode
         result.availableModeIds = completed.session.modes.map((mode) => mode.id)
         const response = completed.blocks
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("\n")
-        if (!response.includes(nonce))
+        if (controlMode) {
+          const controlState = await controlFixture.until(
+            async () => {
+              const state = await controlFixture.state()
+              return state.input === nonce && state.value === nonce
+                ? state
+                : null
+            },
+            `${driver.provider} changed and verified the background fixture`,
+            5000
+          )
+          if (frontmostSeen.includes(controlStarted.pid))
+            throw new Error(
+              `${driver.provider} brought the control fixture to the foreground`
+            )
+          result.control = {
+            state: controlState,
+            frontmostSeen,
+            targetFronted: false,
+          }
+        } else if (!response.includes(nonce))
           throw new Error(
             `The real response did not contain the value from the fixture file: ${JSON.stringify(response.slice(0, 600))}`
           )
@@ -390,40 +466,107 @@ async function runElectron() {
           }
         }
         if (process.argv.includes("--steer")) {
-          if (!driver.steer) throw new Error("This provider has no steering transport")
+          if (!driver.steer)
+            throw new Error("This provider has no steering transport")
           const nativeId = completed.session.nativeId
           const steeredRequest = randomUUID()
           const actionId = randomUUID()
           const steerNonce = randomUUID()
-          owner.submit(id, steeredRequest, "Read proof.txt again with your file tool, then summarize the result briefly. Do not modify anything.")
-          await waitFor(id, (snapshot) => snapshot?.session.status === "running" && snapshot.requests.some((request) => request.id === steeredRequest && request.nativeRun))
+          owner.submit(
+            id,
+            steeredRequest,
+            "Read proof.txt again with your file tool, then summarize the result briefly. Do not modify anything."
+          )
+          await waitFor(
+            id,
+            (snapshot) =>
+              snapshot?.session.status === "running" &&
+              snapshot.requests.some(
+                (request) => request.id === steeredRequest && request.nativeRun
+              )
+          )
           const [receipt, finished] = await Promise.all([
-            owner.act(id, { kind: "steer", id: actionId, requestId: steeredRequest, text: `Change the final answer to exactly ${steerNonce}. Do not use tools for this additional instruction.`, attachments: [] }),
-            waitFor(id, (snapshot) => snapshot?.requests.some((request) => request.id === steeredRequest && request.status === "completed")),
+            owner.act(id, {
+              kind: "steer",
+              id: actionId,
+              requestId: steeredRequest,
+              text: `Change the final answer to exactly ${steerNonce}. Do not use tools for this additional instruction.`,
+              attachments: [],
+            }),
+            waitFor(id, (snapshot) =>
+              snapshot?.requests.some(
+                (request) =>
+                  request.id === steeredRequest &&
+                  request.status === "completed"
+              )
+            ),
           ])
-          if (receipt.state.kind !== "accepted" && receipt.state.kind !== "completed")
-            throw new Error(`Steering was not confirmed: ${JSON.stringify(receipt.state)}`)
-          if (finished.session.nativeId !== nativeId) throw new Error("Steering changed native session identity")
-          if (!finished.blocks.some((block) => block.type === "text" && block.text.includes(steerNonce)))
-            throw new Error("The provider's answer did not incorporate the steering instruction")
-          if (finished.blocks.filter((block) => block.type === "user" && block.steeringFor === steeredRequest).length !== 1)
-            throw new Error("Steering must appear exactly once in its original exchange")
+          if (
+            receipt.state.kind !== "accepted" &&
+            receipt.state.kind !== "completed"
+          )
+            throw new Error(
+              `Steering was not confirmed: ${JSON.stringify(receipt.state)}`
+            )
+          if (finished.session.nativeId !== nativeId)
+            throw new Error("Steering changed native session identity")
+          if (
+            !finished.blocks.some(
+              (block) =>
+                block.type === "text" && block.text.includes(steerNonce)
+            )
+          )
+            throw new Error(
+              "The provider's answer did not incorporate the steering instruction"
+            )
+          if (
+            finished.blocks.filter(
+              (block) =>
+                block.type === "user" && block.steeringFor === steeredRequest
+            ).length !== 1
+          )
+            throw new Error(
+              "Steering must appear exactly once in its original exchange"
+            )
           completed = finished
-          result.steering = "confirmed mid-turn instruction, same native session, one receipt"
+          result.steering =
+            "confirmed mid-turn instruction, same native session, one receipt"
         }
         if (process.argv.includes("--continuation")) {
           const nativeId = completed.session.nativeId
           const bindings = completed.control?.bindings.length
           const replyId = randomUUID()
           const queuedId = randomUUID()
-          owner.submit(id, replyId, "Repeat the original fixture value read from proof.txt, not any later steering marker. Do not use tools.")
-          owner.submit(id, queuedId, "Repeat the original value from proof.txt once more, not the steering marker. Do not use tools.")
-          completed = await waitFor(id, (snapshot) => snapshot?.requests.some((request) => request.id === queuedId && request.status === "completed"))
-          if (completed.session.nativeId !== nativeId || completed.control?.bindings.length !== bindings)
-            throw new Error("A follow-up or queued message created a different native session")
-          const tail = completed.blocks.filter((block) => block.type === "text").at(-1)?.text ?? ""
-          if (!tail.includes(nonce)) throw new Error("The continuation lost the previous turn's context")
-          result.continuation = "idle reply and queued follow-up retain native identity and context"
+          owner.submit(
+            id,
+            replyId,
+            "Repeat the original fixture value read from proof.txt, not any later steering marker. Do not use tools."
+          )
+          owner.submit(
+            id,
+            queuedId,
+            "Repeat the original value from proof.txt once more, not the steering marker. Do not use tools."
+          )
+          completed = await waitFor(id, (snapshot) =>
+            snapshot?.requests.some(
+              (request) =>
+                request.id === queuedId && request.status === "completed"
+            )
+          )
+          if (
+            completed.session.nativeId !== nativeId ||
+            completed.control?.bindings.length !== bindings
+          )
+            throw new Error(
+              "A follow-up or queued message created a different native session"
+            )
+          const tail =
+            completed.blocks.filter((block) => block.type === "text").at(-1)
+              ?.text ?? ""
+          if (!tail.includes(nonce))
+            throw new Error("The continuation lost the previous turn's context")
+          result.continuation =
+            "idle reply and queued follow-up retain native identity and context"
         }
         result.status = "passed"
         result.nativeId = completed.session.nativeId
@@ -431,6 +574,13 @@ async function runElectron() {
         result.toolCalls = completed.blocks
           .filter((block) => block.type === "tool")
           .map((block) => block.title)
+        if (
+          controlMode &&
+          !result.toolCalls.some((title) => /mako_computer_exec/i.test(title))
+        )
+          throw new Error(
+            `The provider changed the fixture without the requested local-control tool: ${JSON.stringify(result.toolCalls)}`
+          )
         result.proof = nonce
         await writeFile(
           join(root, `${driver.provider}.json`),
@@ -440,11 +590,13 @@ async function runElectron() {
         result.status = "failed"
         result.error = error instanceof Error ? error.message : String(error)
         const snapshot = owner.snapshot(id)
-        if (snapshot)
+        if (snapshot) {
+          result.nativeId ??= snapshot.session.nativeId
           await writeFile(
             join(root, `${driver.provider}.json`),
             JSON.stringify(snapshot, null, 2)
           )
+        }
       } finally {
         if (owner.snapshot(id)) await owner.close(id)
       }
@@ -736,8 +888,9 @@ async function runElectron() {
         process.argv
           .slice(2)
           .filter((arg) => !arg.startsWith("--"))
-          .find((candidate) => providerHost.liveDrivers.get(candidate)?.canResume) ??
-        "codex"
+          .find(
+            (candidate) => providerHost.liveDrivers.get(candidate)?.canResume
+          ) ?? "codex"
       const cwd = join(root, "restart-fixture")
       await mkdir(cwd)
       const id = randomUUID()
@@ -761,7 +914,8 @@ async function runElectron() {
       const refs = await catalog.scan()
       const ref = refs.find(
         (ref) =>
-          ref.harness === restartProvider && ref.nativeId === source.session.nativeId
+          ref.harness === restartProvider &&
+          ref.nativeId === source.session.nativeId
       )
       if (!ref) throw new Error("Exact native session ID was not discoverable")
       await owner.bind(id, ref.path)
@@ -1048,7 +1202,10 @@ async function runElectron() {
         JSON.stringify(results, null, 2)
       )
     }
-    await writeFile(join(root, "results.json"), JSON.stringify(results, null, 2))
+    await writeFile(
+      join(root, "results.json"),
+      JSON.stringify(results, null, 2)
+    )
     console.log(`Evidence: ${root}`)
     process.exitCode = results.some((result) => result.status === "failed")
       ? 1
@@ -1066,8 +1223,13 @@ async function runElectron() {
     owner.stop()
     stopAcp()
     stopCodexApps()
+    if (controlMode) {
+      stopCuaEmbedded()
+      await rm(cuaRoot, { recursive: true, force: true })
+    }
     mcp.close()
     control.close()
+    controlFixture?.stop()
     // A fixture ran in the user's real provider store, so the session it
     // created is deleted through that provider before the run ends. Pass
     // --keep-native to inspect a session in its own app afterwards.
@@ -1075,15 +1237,34 @@ async function runElectron() {
       const refs = await catalog.scan()
       for (const result of results) {
         if (!result.nativeId) continue
-        const owned = refs.filter((ref) => ref.harness === result.provider && ref.nativeId === result.nativeId)
+        const owned = refs.filter(
+          (ref) =>
+            ref.harness === result.provider && ref.nativeId === result.nativeId
+        )
         for (const ref of owned) {
-          const removed = await catalog.remove(ref.path).catch((error) => { console.error(`Fixture cleanup failed for ${ref.path}: ${error instanceof Error ? error.message : String(error)}`); return false })
-          result.nativeCleanup = removed ? "removed" : "left in place: the provider store keeps no removable form"
-          console.log(JSON.stringify({ provider: result.provider, nativeId: result.nativeId, nativeCleanup: result.nativeCleanup }))
+          const removed = await catalog.remove(ref.path).catch((error) => {
+            console.error(
+              `Fixture cleanup failed for ${ref.path}: ${error instanceof Error ? error.message : String(error)}`
+            )
+            return false
+          })
+          result.nativeCleanup = removed
+            ? "removed"
+            : "left in place: the provider store keeps no removable form"
+          console.log(
+            JSON.stringify({
+              provider: result.provider,
+              nativeId: result.nativeId,
+              nativeCleanup: result.nativeCleanup,
+            })
+          )
         }
         if (!owned.length) result.nativeCleanup = "not found in the catalog"
       }
-      await writeFile(join(root, "results.json"), JSON.stringify(results, null, 2))
+      await writeFile(
+        join(root, "results.json"),
+        JSON.stringify(results, null, 2)
+      )
     }
     await catalog.stop()
     app.exit(process.exitCode ?? 0)

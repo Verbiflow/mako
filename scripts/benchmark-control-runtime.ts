@@ -1,12 +1,9 @@
 /**
- * Measures the control surface a checkout exposes to an agent: how much of
- * the model's context the tool catalog costs, what one action and one
- * workflow return, and what happens to a result larger than the inline
- * budget. It detects the surface from the tool list, so the same file runs
- * against the prior per-action servers (copied into a worktree of that
- * revision) and against the program servers, and the two JSON reports are
- * comparable line by line. Fixtures stand in for Chrome and the native
- * driver; nothing here measures a page or an application.
+ * A transport/serialization microbenchmark for the control surface. It
+ * measures catalog bytes, response bytes, process overhead, and oversized
+ * output handling against deterministic fixtures. It does not measure model
+ * accuracy, real application behavior, background focus, or native latency;
+ * the installed-provider benchmark and local-control e2e own those claims.
  */
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -220,12 +217,13 @@ server.setRequestHandler(CallToolRequestSchema,request=>{
     const value={pid:args.pid,tree:"x".repeat(${OVERSIZE_CHARACTERS})}
     return {content:[{type:"text",text:JSON.stringify(value)}],structuredContent:value}
   }
-  return {content:[{type:"text",text:JSON.stringify({clicked:true,pid:args.pid,window_id:args.window_id,session:args.session})}]}
+  const value={clicked:true,pid:args.pid,window_id:args.window_id,session:args.session}
+  return {content:[{type:"text",text:JSON.stringify(value)}],structuredContent:value}
 })
 await server.connect(new StdioServerTransport())
 `
 const computerWorkflowProgram =
-  "const view = await computer.get_window_state({pid:42,window_id:7}); const click = await computer.click({element_token:view.structuredContent.elements[0].element_token}); return {snapshot:view.structuredContent.snapshot_id,controls:view.structuredContent.elements.length,clicked:JSON.parse(click.content[0].text).clicked}"
+  "const view = await computer.get_window_state({pid:42,window_id:7}); const click = await computer.click({element_token:view.elements[0].element_token}); return {snapshot:view.snapshot_id,controls:view.elements.length,clicked:click.clicked}"
 
 interface SurfaceReport {
   catalog: Awaited<ReturnType<typeof connect>>["catalog"]
@@ -443,6 +441,8 @@ console.log(
         liveCheck: "npm run test:local-control-e2e",
         invariant: "frontmost application remains unchanged",
       },
+      scope:
+        "transport microbenchmark only; no model, real application, visual accuracy, or background-control claim",
     },
     null,
     2

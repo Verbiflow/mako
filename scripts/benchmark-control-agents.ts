@@ -26,14 +26,22 @@
  */
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { appendFile, mkdtemp, readFile } from "node:fs/promises"
+import {
+  access,
+  appendFile,
+  mkdtemp,
+  readFile,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import {
+  StdioClientTransport,
+  getDefaultEnvironment,
+} from "@modelcontextprotocol/sdk/client/stdio.js"
 import { z } from "zod"
-import { createComputerToolsServer } from "../electron/computer-tools-main.js"
 import {
   cuaEmbeddedPid,
   ensureCuaEmbedded,
@@ -143,15 +151,31 @@ const expectationSchema = z
   })
   .strict()
 type Expectation = z.infer<typeof expectationSchema>
+const oracleResultSchema = z
+  .object({
+    state: z.boolean(),
+    expect: expectationSchema.optional(),
+    evidence: z.json().optional(),
+  })
+  .strict()
 
 const appTaskSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
     /** `{pid}` and `{window_id}` are substituted with the resolved target. */
     prompt: z.string().min(1),
-    expect: expectationSchema,
+    expect: expectationSchema.optional(),
+    /**
+     * Independent verification program run after the model. It must return
+     * {state:boolean, expect?:Expectation, evidence?:JSON}; the attempt passes
+     * only when state is true and the reply satisfies its live expectation.
+     */
+    oracle: z.string().optional(),
     /** A program run before each attempt, with `state.target` preset. */
     reset: z.string().optional(),
+  })
+  .refine((task) => task.expect !== undefined || task.oracle !== undefined, {
+    message: "a task needs expect or oracle",
   })
   .strict()
 
@@ -171,13 +195,14 @@ const taskFileSchema = z
   .strict()
 type TaskFile = z.infer<typeof taskFileSchema>
 
-export function replySatisfies(reply: string, expectation: Expectation): boolean {
+export function replySatisfies(
+  reply: string,
+  expectation: Expectation
+): boolean {
   for (const pattern of expectation.all ?? [])
     if (!new RegExp(pattern, "i").test(reply)) return false
   if (expectation.jsonArrayIncludes) {
-    const match = /\[[^\]]*\]\s*$/.exec(
-      reply.replace(/```\s*$/, "").trimEnd()
-    )
+    const match = /\[[^\]]*\]\s*$/.exec(reply.replace(/```\s*$/, "").trimEnd())
     if (!match) return false
     const parsed = z.array(z.unknown()).safeParse(JSON.parse(match[0]))
     if (!parsed.success) return false
@@ -201,8 +226,8 @@ interface Attempt {
   target: Target
   /** Runs before the model's first turn; may throw to abort the attempt. */
   reset(): Promise<void>
-  /** Judges the reply and, for fixture tasks, the fixture's own state. */
-  check(reply: string): Promise<boolean>
+  /** Judges the reply against independent application state. */
+  check(reply: string): Promise<{ success: boolean; evidence: JsonValue }>
 }
 
 // ── the model ────────────────────────────────────────────────────────────
@@ -248,7 +273,18 @@ const completionSchema = z
 const errorBodySchema = z.object({ error: z.unknown() }).loose()
 
 type ChatMessage =
-  | { role: "system" | "user"; content: string }
+  | {
+      role: "system" | "user"
+      content:
+        | string
+        | Array<
+            | { type: "text"; text: string }
+            | {
+                type: "image_url"
+                image_url: { url: string; detail: "high" }
+              }
+          >
+    }
   | z.infer<typeof assistantSchema>
   | { role: "tool"; tool_call_id: string; content: string }
 
@@ -284,14 +320,18 @@ interface ModelClient {
 
 function modelClient(options: Options): ModelClient {
   if (!options.endpoint || !options.model)
-    throw new Error("--live needs --endpoint and --model (or MAKO_BENCH_ENDPOINT and MAKO_BENCH_MODEL)")
+    throw new Error(
+      "--live needs --endpoint and --model (or MAKO_BENCH_ENDPOINT and MAKO_BENCH_MODEL)"
+    )
   const host = new URL(options.endpoint).hostname
   const azure = host.endsWith(".openai.azure.com")
   const auth = options.auth ?? (azure ? "api-key" : "bearer")
   const key =
     process.env.MAKO_BENCH_API_KEY ??
     (azure ? process.env.AZURE_OPENAI_API_KEY : undefined) ??
-    (host.endsWith("fireworks.ai") ? process.env.FIREWORKS_API_KEY : undefined) ??
+    (host.endsWith("fireworks.ai")
+      ? process.env.FIREWORKS_API_KEY
+      : undefined) ??
     process.env.OPENAI_API_KEY
   if (!key)
     throw new Error(
@@ -348,6 +388,7 @@ const toolResultSchema = z.object({
         type: z.string(),
         text: z.string().optional(),
         data: z.string().optional(),
+        mimeType: z.string().optional(),
       })
       .loose()
   ),
@@ -361,19 +402,38 @@ interface Surface {
 }
 
 async function openSurface(root: string): Promise<Surface> {
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.benchmark")
-  if (!socket) throw new Error("the native driver is not installed or did not start")
-  const server = createComputerToolsServer(
-    {
-      command: resolveExecutable("cua-driver"),
-      args: ["mcp", "--embedded", "--socket", socket],
-    },
-    "agent-benchmark"
+  const socket = await ensureCuaEmbedded(
+    join(root, "driver"),
+    "dev.mako.benchmark"
   )
-  const client = new Client({ name: "mako-control-agent-benchmark", version: "1" })
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  await server.connect(serverTransport)
-  await client.connect(clientTransport)
+  if (!socket)
+    throw new Error("the native driver is not installed or did not start")
+  const entry = join(process.cwd(), "dist-electron", "computer-tools-main.js")
+  await access(entry).catch(() => {
+    throw new Error(
+      "The production computer server is not built. Run npm run build:electron before the benchmark."
+    )
+  })
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [
+      entry,
+      "--socket",
+      socket,
+      "--driver",
+      resolveExecutable("cua-driver"),
+    ],
+    env: {
+      ...getDefaultEnvironment(),
+      MAKO_TASK_ID: `agent-benchmark-${randomUUID()}`,
+    },
+    stderr: "pipe",
+  })
+  const client = new Client({
+    name: "mako-control-agent-benchmark",
+    version: "1",
+  })
+  await client.connect(transport)
   const { tools } = await client.listTools()
   const exec = tools.find((tool) => tool.name === "mako_computer_exec")
   if (!exec) throw new Error("the server offers no mako_computer_exec")
@@ -397,7 +457,7 @@ async function openSurface(root: string): Promise<Surface> {
       ),
     close: async () => {
       await client.close()
-      await server.close()
+      await transport.close()
       stopCuaEmbedded()
     },
   }
@@ -405,7 +465,9 @@ async function openSurface(root: string): Promise<Surface> {
 
 /** A program's return value, the last text block, parsed as JSON. */
 function returned(result: z.infer<typeof toolResultSchema>): JsonValue {
-  const text = result.content.filter((block) => block.type === "text").at(-1)?.text
+  const text = result.content
+    .filter((block) => block.type === "text")
+    .at(-1)?.text
   return text === undefined ? null : z.json().parse(JSON.parse(text))
 }
 
@@ -422,6 +484,7 @@ interface TurnRecord {
 interface ToolRecord {
   ms: number
   bytes: number
+  imageBytes: number
   images: number
   isError: boolean
   source: string
@@ -449,6 +512,7 @@ interface Row {
   maxTurnPrompt: number
   perTurn: TurnRecord[]
   toolLog: ToolRecord[]
+  oracle: JsonValue
   reply: string
   error?: string
 }
@@ -495,13 +559,22 @@ async function attempt(
         reply = message.content ?? ""
         break
       }
+      const visualParts: Array<
+        | { type: "text"; text: string }
+        | {
+            type: "image_url"
+            image_url: { url: string; detail: "high" }
+          }
+      > = []
       for (const call of message.tool_calls) {
         calls++
         const parsedArguments = z
           .object({ source: z.string().default("") })
           .loose()
           .safeParse(JSON.parse(call.function.arguments || "{}"))
-        const source = parsedArguments.success ? parsedArguments.data.source : ""
+        const source = parsedArguments.success
+          ? parsedArguments.data.source
+          : ""
         const callStarted = performance.now()
         let result: z.infer<typeof toolResultSchema>
         try {
@@ -509,12 +582,16 @@ async function attempt(
         } catch (failure) {
           result = {
             isError: true,
-            content: [{ type: "text", text: String(failure instanceof Error ? failure.message : failure) }],
+            content: [
+              {
+                type: "text",
+                text: String(
+                  failure instanceof Error ? failure.message : failure
+                ),
+              },
+            ],
           }
         }
-        // Chat completions carry no images in a tool result; the model is
-        // told one was there and how large, which is what a harness that
-        // cannot show images would do.
         const text = result.content
           .map((block) =>
             block.type === "text"
@@ -525,24 +602,65 @@ async function attempt(
         const record: ToolRecord = {
           ms: Math.round(performance.now() - callStarted),
           bytes: Buffer.byteLength(text),
-          images: result.content.filter((block) => block.type === "image").length,
+          imageBytes: result.content.reduce(
+            (total, block) =>
+              total +
+              (block.type === "image"
+                ? Math.floor((block.data?.length ?? 0) * 0.75)
+                : 0),
+            0
+          ),
+          images: result.content.filter((block) => block.type === "image")
+            .length,
           isError: result.isError === true,
           source: source.slice(0, 400),
         }
         if (record.isError) record.error = text.slice(0, 300)
         toolLog.push(record)
-        messages.push({ role: "tool", tool_call_id: call.id, content: text || "(no text)" })
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: text || "(no text)",
+        })
+        for (const block of result.content) {
+          if (block.type !== "image" || !block.data) continue
+          if (visualParts.length === 0)
+            visualParts.push({
+              type: "text",
+              text: "Visual evidence returned by the computer-control tool:",
+            })
+          visualParts.push({
+            type: "image_url",
+            image_url: {
+              url: `data:${block.mimeType ?? "image/png"};base64,${block.data}`,
+              detail: "high",
+            },
+          })
+        }
       }
+      if (visualParts.length > 0)
+        messages.push({ role: "user", content: visualParts })
     }
     if (turns >= maxTurns && !reply) error = `no reply within ${maxTurns} turns`
   } catch (failure) {
-    error = String(failure instanceof Error ? failure.message : failure).slice(0, 300)
+    error = String(failure instanceof Error ? failure.message : failure).slice(
+      0,
+      300
+    )
   }
   const wallMs = Math.round(performance.now() - started)
   const seen = await sampler.stop()
   const frontmostSeen = [...seen.keys()]
-  const makoPids = new Set([task.target.pid, cuaEmbeddedPid() ?? -1])
-  const success = !error && (await task.check(reply))
+  const driverPid = cuaEmbeddedPid()
+  const forbiddenFront = new Set(
+    [task.target.pid, driverPid].filter(
+      (pid): pid is number => pid !== undefined && pid !== baseline
+    )
+  )
+  const oracle = error
+    ? { success: false, evidence: { skipped: "agent failed" } }
+    : await task.check(reply)
+  const success = !error && oracle.success
   const sum = (pick: (turn: TurnRecord) => number) =>
     perTurn.reduce((total, turn) => total + pick(turn), 0)
   const row: Row = {
@@ -550,8 +668,10 @@ async function attempt(
     task: task.id,
     run,
     success,
-    frontKept: !frontmostSeen.some((pid) => makoPids.has(pid)),
-    userSwitched: frontmostSeen.filter((pid) => pid !== baseline && !makoPids.has(pid)),
+    frontKept: frontmostSeen.every((pid) => !forbiddenFront.has(pid)),
+    userSwitched: frontmostSeen.filter(
+      (pid) => pid !== baseline && !forbiddenFront.has(pid)
+    ),
     frontmostSeen,
     wallMs,
     modelMs,
@@ -560,9 +680,13 @@ async function attempt(
     promptTokens: sum((turn) => turn.prompt),
     cachedTokens: sum((turn) => turn.cached),
     completionTokens: sum((turn) => turn.completion),
-    maxTurnPrompt: perTurn.reduce((most, turn) => Math.max(most, turn.prompt), 0),
+    maxTurnPrompt: perTurn.reduce(
+      (most, turn) => Math.max(most, turn.prompt),
+      0
+    ),
     perTurn,
     toolLog,
+    oracle: oracle.evidence,
     reply: reply.slice(0, 400),
   }
   if (error) row.error = error
@@ -572,7 +696,7 @@ async function attempt(
 // ── fixture tasks ────────────────────────────────────────────────────────
 
 /**
- * Three tasks on an Electron window behind the user's: read the field
+ * Four tasks on an Electron window behind the user's: read the field
  * (judgement only, no action), write a value and verify it (act, confirm
  * by the fixture's own state), and replace a prefilled value (the keyboard
  * temptation: select-all and retype does not work on a backgrounded
@@ -583,18 +707,26 @@ async function fixtureTasks(
   surface: Surface
 ): Promise<{ tasks: Attempt[]; stop(): void }> {
   const initial = `initial-${randomUUID().slice(0, 6)}`
+  const visualProof = `VISUAL-${randomUUID().slice(0, 8).toUpperCase()}`
   const fixture = await startElectronFixture({
     root,
     name: "bench-fixture",
     title: "Mako control fixture",
     initial,
+    visual: visualProof,
   })
   const status = z
     .object({ pid: z.number(), input: z.string(), value: z.string() })
     .loose()
   const started = status.parse(await fixture.started())
   const windowsSchema = z.array(
-    z.object({ window_id: z.number(), title: z.string().optional(), kind: z.string().optional() }).loose()
+    z
+      .object({
+        window_id: z.number(),
+        title: z.string().optional(),
+        kind: z.string().optional(),
+      })
+      .loose()
   )
   const windows = windowsSchema.parse(
     returned(await surface.exec(`return await windows(${started.pid})`))
@@ -610,7 +742,10 @@ async function fixtureTasks(
        if (!field) throw new Error('no Proof field: ' + lines.join(' | '));
        return await fill(field.split(' ')[0], ${JSON.stringify(initial)})`
     )
-    if (result.isError) throw new Error(`fixture reset failed: ${JSON.stringify(returned(result))}`)
+    if (result.isError)
+      throw new Error(
+        `fixture reset failed: ${JSON.stringify(returned(result))}`
+      )
     await fixture.until(
       async () => status.parse(await fixture.state()).input === initial,
       "fixture reset to its initial text"
@@ -618,17 +753,29 @@ async function fixtureTasks(
   }
   const fieldIs = async (expected: string, output?: string) => {
     try {
-      await fixture.until(async () => {
-        const state = status.parse(await fixture.state())
-        return state.input === expected && (output === undefined || state.value === output)
-      }, "fixture shows the task's result", 3000)
+      await fixture.until(
+        async () => {
+          const state = status.parse(await fixture.state())
+          return (
+            state.input === expected &&
+            (output === undefined || state.value === output)
+          )
+        },
+        "fixture shows the task's result",
+        3000
+      )
       return true
     } catch {
       return false
     }
   }
   // A write task carries a per-attempt value so a stale result never passes.
-  const writeTask = (id: string, prefix: string, instruction: (text: string) => string): Attempt => {
+  const writeTask = (
+    id: string,
+    prefix: string,
+    instruction: (text: string) => string,
+    replyCheck: (reply: string, expected: string) => boolean
+  ): Attempt => {
     let expected = ""
     return {
       id,
@@ -638,27 +785,63 @@ async function fixtureTasks(
         expected = `${prefix}-${randomUUID().slice(0, 8)}`
         await reset()
       },
-      check: async () => fieldIs(expected, expected),
+      check: async (reply) => {
+        const state = await fieldIs(expected, expected)
+        const replyMatched = replyCheck(reply, expected)
+        return {
+          success: state && replyMatched,
+          evidence: { expected, replyMatched, state },
+        }
+      },
     }
   }
   const tasks: Attempt[] = [
     {
       id: "fixture-read",
       target,
-      prompt: () => `${where} Without clicking anything, tell me the exact current text of its Proof field on the last line of your reply.`,
+      prompt: () =>
+        `${where} Without clicking anything, tell me the exact current text of its Proof field on the last line of your reply.`,
       reset,
-      check: async (reply) => reply.includes(initial),
+      check: async (reply) => {
+        const state = await fieldIs(initial)
+        return {
+          success: state && reply.includes(initial),
+          evidence: { expected: initial, state },
+        }
+      },
     },
     writeTask(
       "fixture-fill",
       "fill",
-      (text) => `Put exactly the text "${text}" into its Proof field (replacing whatever is there) and press its "Verify proof" button. Reply "done" when the result shows the text.`
+      (text) =>
+        `Put exactly the text "${text}" into its Proof field (replacing whatever is there) and press its "Verify proof" button. Reply "done" when the result shows the text.`,
+      (reply) => /\bdone\b/i.test(reply)
     ),
     writeTask(
       "fixture-replace",
       "replaced",
-      (text) => `Its Proof field already has text. Replace that text with exactly "${text}" and press "Verify proof", then reply with the text the result line shows.`
+      (text) =>
+        `Its Proof field already has text. Replace that text with exactly "${text}" and press "Verify proof", then reply with the text the result line shows.`,
+      (reply, expected) => reply.includes(expected)
     ),
+    {
+      id: "fixture-visual",
+      target,
+      prompt: () =>
+        `${where} Do not click anything. The bordered card near the bottom is painted pixels and is absent from accessibility text. Read its exact code and reply with only that code.`,
+      reset,
+      check: async (reply) => {
+        const state = await fieldIs(initial)
+        return {
+          success: state && reply.includes(visualProof),
+          evidence: {
+            expected: visualProof,
+            replyMatched: reply.includes(visualProof),
+            state,
+          },
+        }
+      },
+    },
   ]
   return { tasks, stop: () => fixture.stop() }
 }
@@ -681,35 +864,88 @@ async function pidForBundle(bundleId: string): Promise<number> {
   return pid
 }
 
-async function applicationTasks(file: TaskFile, surface: Surface): Promise<Attempt[]> {
+async function applicationTasks(
+  file: TaskFile,
+  surface: Surface
+): Promise<Attempt[]> {
   const pid = await pidForBundle(file.target.bundle_id)
   const windows = z
-    .array(z.object({ window_id: z.number(), title: z.string().optional(), kind: z.string().optional() }).loose())
+    .array(
+      z
+        .object({
+          window_id: z.number(),
+          title: z.string().optional(),
+          kind: z.string().optional(),
+        })
+        .loose()
+    )
     .parse(returned(await surface.exec(`return await windows(${pid})`)))
-  const wanted = file.target.window_title ? new RegExp(file.target.window_title) : undefined
+  const wanted = file.target.window_title
+    ? new RegExp(file.target.window_title)
+    : undefined
   // windows() lists the on-screen titled documents first, largest first.
-  const document = windows.find((row) => !wanted || wanted.test(row.title ?? ""))
+  const document = windows.find(
+    (row) => !wanted || wanted.test(row.title ?? "")
+  )
   if (!document)
-    throw new Error(`${file.target.bundle_id} has no matching window among ${JSON.stringify(windows)}`)
+    throw new Error(
+      `${file.target.bundle_id} has no matching window among ${JSON.stringify(windows)}`
+    )
   const target = { pid, window_id: document.window_id }
   const behind = file.behind ?? null
   return file.tasks.map((task) => ({
     id: task.id,
     target,
-    prompt: () => task.prompt.replaceAll("{pid}", String(pid)).replaceAll("{window_id}", String(document.window_id)),
+    prompt: () =>
+      task.prompt
+        .replaceAll("{pid}", String(pid))
+        .replaceAll("{window_id}", String(document.window_id)),
     reset: async () => {
       if (behind) {
-        await runCommand("osascript", ["-e", `tell application id ${JSON.stringify(behind)} to activate`], { timeout: 5000 })
+        await runCommand(
+          "osascript",
+          ["-e", `tell application id ${JSON.stringify(behind)} to activate`],
+          { timeout: 5000 }
+        )
         await new Promise((resolveWait) => setTimeout(resolveWait, 700))
       }
       if (task.reset) {
         const result = await surface.exec(
           `state.target = ${JSON.stringify(target)}; ${task.reset}`
         )
-        if (result.isError) throw new Error(`reset for ${task.id} failed: ${JSON.stringify(returned(result))}`)
+        if (result.isError)
+          throw new Error(
+            `reset for ${task.id} failed: ${JSON.stringify(returned(result))}`
+          )
       }
     },
-    check: async (reply) => replySatisfies(reply, task.expect),
+    check: async (reply) => {
+      let expectation = task.expect
+      let state = true
+      let evidence: JsonValue = { source: "static expectation" }
+      if (task.oracle) {
+        const result = await surface.exec(
+          `state.target = ${JSON.stringify(target)}; ${task.oracle}`
+        )
+        if (result.isError)
+          return {
+            success: false,
+            evidence: {
+              oracle_error: JSON.stringify(returned(result)).slice(0, 500),
+            },
+          }
+        const checked = oracleResultSchema.parse(returned(result))
+        state = checked.state
+        expectation = checked.expect ?? expectation
+        evidence = checked.evidence ?? { source: "live oracle" }
+      }
+      const replyMatched =
+        expectation !== undefined && replySatisfies(reply, expectation)
+      return {
+        success: state && replyMatched,
+        evidence: { state, replyMatched, detail: evidence },
+      }
+    },
   }))
 }
 
@@ -773,8 +1009,11 @@ if (!options.live) {
   const root = await mkdtemp(join(tmpdir(), "mako-agent-bench-"))
   process.env.MAKO_CONTROL_ARTIFACTS ??= join(root, "artifacts")
   const out = options.out ?? join(root, "results.jsonl")
+  await writeFile(out, "")
   const surface = await openSurface(root)
-  await surface.exec("await computer.start_session({capture_scope: 'window'}); return 1")
+  await surface.exec(
+    "await computer.start_session({capture_scope: 'window'}); return 1"
+  )
   let stopFixture = () => {}
   try {
     const attempts: Attempt[] = []
@@ -786,7 +1025,9 @@ if (!options.live) {
       attempts.push(...fixture.tasks)
     }
     if (taskFile) attempts.push(...(await applicationTasks(taskFile, surface)))
-    const selected = attempts.filter((task) => !options.only || options.only.has(task.id))
+    const selected = attempts.filter(
+      (task) => !options.only || options.only.has(task.id)
+    )
     if (!selected.length) throw new Error("no task selected")
     console.log(
       `Model ${model.name}; ${selected.length} task(s) × ${options.runs} run(s); tool description ${Buffer.byteLength(surface.tool.function.description)} bytes, instructions ${Buffer.byteLength(surface.instructions)} bytes; rows → ${out}`
@@ -803,7 +1044,9 @@ if (!options.live) {
       }
     }
     console.log(`\n${summarize(rows)}`)
-    console.log(`\nRows: ${out}\nArtifacts: ${process.env.MAKO_CONTROL_ARTIFACTS}`)
+    console.log(
+      `\nRows: ${out}\nArtifacts: ${process.env.MAKO_CONTROL_ARTIFACTS}`
+    )
   } finally {
     stopFixture()
     await surface.close()
