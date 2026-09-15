@@ -259,7 +259,7 @@ export const ThreadRow = memo(function ThreadRow({
         >
           <PinIcon className={cn("size-3", isPinned && "fill-current")} />
         </button>
-        <ThreadActions target={target} title={override ?? ref.title ?? "Untitled session"} archived={archived} running={working || activeElsewhere || status.kind === "needs-permission"} controlled={target.kind === "live" || working} />
+        <ThreadActions target={target} title={override ?? ref.title ?? "Untitled session"} archived={archived} running={working || activeElsewhere || status.kind === "needs-permission"} controlled={target.kind === "live" || working} path={ref.path} />
         <Detach path={ref.path} />
       </span>
     </div>

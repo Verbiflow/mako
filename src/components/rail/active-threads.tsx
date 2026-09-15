@@ -71,7 +71,7 @@ export function LiveAgentRow({
         className="absolute top-1/2 right-7 hidden -translate-y-1/2 items-center gap-0.5 rounded-md bg-raised p-0.5 group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
         onClick={(event) => event.stopPropagation()}
       >
-        <ThreadActions target={{ kind: "live", id: presence.key }} title={title} archived={archived} running={presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission"} controlled />
+        <ThreadActions target={{ kind: "live", id: presence.key }} title={title} archived={archived} running={presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission"} controlled path={presence.threadPath} />
       </span>
     </div>
   )

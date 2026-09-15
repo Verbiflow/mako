@@ -3,6 +3,7 @@ import { GitBranchIcon, ChevronDownIcon } from "lucide-react"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { stage } from "@/state/stage"
 import { useThreads } from "@/state/threads"
+import { descriptorFor } from "@/state/descriptors"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatTokens } from "@/lib/format"
@@ -58,10 +59,8 @@ function AgentRoster({
   provider?: string
 }) {
   const [visible, setVisible] = useState(40)
-  const supported = useThreads((state) =>
-    state.liveCapabilities.some(
-      (entry) => entry.provider === provider && entry.observesNativeAgents
-    )
+  const supported = useThreads(
+    (state) => descriptorFor(state, provider)?.observesNativeAgents === true
   )
   const agents = roster?.agents ?? []
   const working = agents.filter(
