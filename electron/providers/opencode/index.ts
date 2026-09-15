@@ -7,6 +7,8 @@ import { openCodeNativeRunner } from "./native-runner.js"
 import { openCodeProcessProbe } from "./process-probe.js"
 import { openCodeProfileLoader } from "./profile.js"
 import { openCodeSkillSource } from "./skills.js"
+import { cliUpdateSource } from "../update-source.js"
+import { openCodeExecutable } from "./installation.js"
 
 export const installOpenCode: ProviderModule = (host) => {
   host.accountCapabilities.register(openCodeAccountCapability)
@@ -17,4 +19,15 @@ export const installOpenCode: ProviderModule = (host) => {
   host.processProbes.register(openCodeProcessProbe)
   host.mcpSources.register(openCodeMcpSource)
   host.skillSources.register(openCodeSkillSource)
+  host.updateSources.register(
+    cliUpdateSource("opencode", {
+      binary: () => openCodeExecutable(),
+      npmPackage: "opencode-ai",
+      selfUpdate: {
+        label: "Update OpenCode",
+        command: "opencode",
+        args: ["upgrade"],
+      },
+    })
+  )
 }

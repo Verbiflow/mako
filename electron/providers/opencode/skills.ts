@@ -11,4 +11,5 @@ export const openCodeSkillSource: ProviderSkillSource = {
   userRoots: () => [configRoot(), join(homedir(), ".opencode", "skills")],
   workspaceFolder: ".opencode",
   targetUserRoot: configRoot,
+  readsUniversalRoot: false,
 }
