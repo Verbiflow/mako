@@ -58,14 +58,19 @@ export function tokenize(text: string, leading = true): Segment[] {
     const start = (match.index ?? 0) + lead.length
     if (!matchedBody || start < cursor) continue
 
-    if (start > cursor) segments.push({ kind: "text", text: text.slice(cursor, start) })
-
-    // A generated thread token is commonly followed by sentence punctuation.
-    // Keep that punctuation as prose rather than folding it into the native id.
+    // A thread token or a `$skill` is commonly followed by sentence
+    // punctuation ("use $grilling, then…"). Keep that punctuation as prose
+    // rather than folding it into the id or the name; a file path keeps its
+    // dots, and a half-typed `$mcp:` keeps its colon so the menu still
+    // narrows to servers. A `$` left with nothing after the trim is prose too.
     const body =
-      sigil === "@" && matchedBody.startsWith("thread:")
+      sigil === "$" || matchedBody.startsWith("thread:")
         ? matchedBody.replace(/[),.;!?]+$/, "")
         : matchedBody
+    if (!body) continue
+
+    if (start > cursor) segments.push({ kind: "text", text: text.slice(cursor, start) })
+
     const raw = `${sigil}${body}`
     const thread = sigil === "@" ? parseThreadToken(body) : null
     segments.push(

@@ -83,6 +83,7 @@ export function acpBlocksToMessages(
             type: "toolCall",
             id: `${turn}:${block.id}`,
             name,
+            kind: block.toolKind,
             arguments: block.input,
           },
           index

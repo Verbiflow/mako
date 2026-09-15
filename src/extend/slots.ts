@@ -90,6 +90,8 @@ export function registerSlot<K extends SlotName>(
 export interface ToolCall {
   id: string
   name: string
+  /** The provider's own kind — picks the body family when the name has no view. */
+  kind?: string
   arguments?: unknown
   result?: string
   attachments?: AttachmentContent[]
@@ -126,13 +128,32 @@ export function registerToolView(name: string, view: ToolView) {
   return toolViews.register(name, view)
 }
 
-export function useToolView(name: string): ToolView | undefined {
-  const views = useRegistry(toolViews)
-  const direct = views.get(name)
+/**
+ * Views keyed by the provider's own kind for a call — `edit`, `execute` —
+ * used only when the tool's name has no view of its own. A new tool name
+ * keeps a real body without registering anything.
+ */
+const toolKindViews = new Registry<ToolView>()
+
+export function registerToolKindView(kind: string, view: ToolView) {
+  return toolKindViews.register(kind, view)
+}
+
+function lookup(views: Registry<ToolView>, key: string): ToolView | undefined {
+  const direct = views.get(key)
   if (direct) return direct
-  const normalized = name.toLowerCase()
+  const normalized = key.toLowerCase()
   for (const [candidate, view] of views.entries()) {
     if (candidate.toLowerCase() === normalized) return view
   }
   return undefined
+}
+
+export function useToolView(call: Pick<ToolCall, "name" | "kind">): ToolView | undefined {
+  const views = useRegistry(toolViews)
+  const kindViews = useRegistry(toolKindViews)
+  const direct = lookup(views, call.name)
+  if (direct) return direct
+  if (!call.kind) return undefined
+  return lookup(kindViews, call.kind)
 }

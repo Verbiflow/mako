@@ -4,21 +4,28 @@ import {
   isMakoManagedServer,
   reachableMcpServers,
 } from "../../electron/contracts/mcp-reach"
+import {
+  UNIVERSAL_SKILL_PROVIDER,
+  skillDelivery,
+} from "../../electron/contracts/skill-reach"
 import { fuzzy } from "./fuzzy"
 import type {
   McpRegistrySnapshot,
   McpServerRecord,
   McpTransport,
+  SkillDelivery,
   SkillRecord,
   SkillRegistrySnapshot,
 } from "./types"
 
 /**
  * What the composer offers behind `/` and `$`: the skills and MCP servers the
- * selected provider will actually have when it answers. Skills come from that
- * provider's own roots plus the universal `.agents/skills` roots; servers come
- * from the same reach predicate the host projects into a launch. Everything
- * else lives in Settings, where syncing it is a deliberate act.
+ * selected provider will have when it answers. Every installed skill is
+ * offered, because a reference to one the provider lacks is handed over in
+ * the message (`skill-reach.ts`); the row says where the copy comes from so
+ * the pick is informed. Servers come from the same reach predicate the host
+ * projects into a launch. Installing a skill for a provider, so it loads it
+ * itself, lives in Settings.
  */
 
 export type CapabilityKind = "skill" | "mcp"
@@ -31,10 +38,17 @@ export interface CapabilityItem {
   builtIn: boolean
   /** Short provenance, shown only when it says something the name does not. */
   badge?: string
-  /** Provider id whose portable configuration the host projects into this launch. */
+  /**
+   * Where what the provider receives comes from, when not its own: for a
+   * skill the handover's source (another provider, or `agents` for the
+   * universal root), for a server the provider whose portable configuration
+   * reaches this launch.
+   */
   from?: string
   /** Set when the provider cannot use it as-is; the row is still listed, but dim. */
   blocked?: string
+  /** A skill's route to the provider; the chip in the draft reads the same. */
+  delivery?: SkillDelivery
 }
 
 export interface CapabilityMatch {
@@ -53,24 +67,21 @@ export interface CapabilityGroup {
 
 export interface CapabilityCatalog {
   groups: CapabilityGroup[]
-  /** Skills installed for other providers only; a hint towards Settings. */
-  elsewhere: number
+  /** Skills another provider owns that this one would be handed; a hint towards installing them. */
+  foreign: number
 }
 
 export interface SkillReach {
   items: CapabilityItem[]
-  /** Skills installed for other providers only. */
-  elsewhere: number
+  /** Skills another provider owns that this one would be handed. */
+  foreign: number
 }
-
-const UNIVERSAL_PROVIDER = "agents"
 
 /** Product copy for Mako's own servers; the registry's detail is operational. */
 const BUILT_IN_DESCRIPTIONS = new Map<string, string>([
   ["mako-backend", "Mako skills, integrations, and Slack"],
   ["mako-browser-use", "Drive a browser tab Mako controls"],
   ["mako-local-control", "Native apps, windows, and input on this Mac"],
-  ["mako-local-tools", "macOS app control through the local harness"],
   [MAKO_CONVERSATIONS_SERVER, "Delegate bounded tasks to other agents"],
 ])
 
@@ -78,19 +89,21 @@ export function isMakoServerName(name: string): boolean {
   return MAKO_RUNTIME_SERVERS.has(name) || name === MAKO_CONVERSATIONS_SERVER
 }
 
-function skillReaches(skill: SkillRecord, harness: string): boolean {
+/**
+ * Only what the name cannot carry. `manual` is the skill's own word
+ * (`disable-model-invocation`): the model never picks it up on its own, so
+ * typing it is the one way in. `project` is a copy that lives in this
+ * checkout.
+ */
+function skillBadge(
+  skill: SkillRecord,
+  delivery: SkillDelivery
+): string | undefined {
+  if (skill.manual) return "manual"
+  if (delivery.kind === "missing") return undefined
   return skill.origins.some(
     (origin) =>
-      origin.provider === harness || origin.provider === UNIVERSAL_PROVIDER
-  )
-}
-
-/** Only provenance the name cannot carry: a skill that lives in this checkout. */
-function skillBadge(skill: SkillRecord, harness: string): string | undefined {
-  return skill.origins.some(
-    (origin) =>
-      origin.scope === "workspace" &&
-      (origin.provider === harness || origin.provider === UNIVERSAL_PROVIDER)
+      origin.scope === "workspace" && origin.provenance === delivery.path
   )
     ? "project"
     : undefined
@@ -100,26 +113,36 @@ export function skillItems(
   snapshot: SkillRegistrySnapshot | null,
   harness: string
 ): SkillReach {
-  if (!snapshot) return { items: [], elsewhere: 0 }
+  if (!snapshot) return { items: [], foreign: 0 }
   const items: CapabilityItem[] = []
-  let elsewhere = 0
+  let foreign = 0
   for (const skill of snapshot.skills) {
-    if (!skillReaches(skill, harness)) {
-      elsewhere += 1
-      continue
-    }
+    const delivery = skillDelivery(skill, harness, snapshot.providers)
+    if (delivery.kind === "missing") continue
     const item: CapabilityItem = {
       kind: "skill",
       name: skill.name,
       description: skill.description,
       builtIn: false,
+      delivery,
     }
-    const badge = skillBadge(skill, harness)
+    const badge = skillBadge(skill, delivery)
     if (badge) item.badge = badge
+    if (delivery.kind === "handover") {
+      item.from = delivery.from
+      if (delivery.from !== UNIVERSAL_SKILL_PROVIDER) foreign += 1
+    }
     if (skill.blockReason) item.blocked = skill.blockReason
     items.push(item)
   }
-  return { items, elsewhere }
+  // The provider's own skills lead; what it would be handed follows. Within
+  // each, the registry's alphabetical order holds.
+  items.sort(
+    (left, right) =>
+      Number(right.delivery?.kind === "native") -
+      Number(left.delivery?.kind === "native")
+  )
+  return { items, foreign }
 }
 
 function serverDescription(server: McpServerRecord): string {
@@ -254,5 +277,5 @@ export function capabilityCatalog(
     ...group,
     matches: group.matches.map(({ item, indices }) => ({ item, indices })),
   }))
-  return { groups, elsewhere: found.elsewhere }
+  return { groups, foreign: found.foreign }
 }

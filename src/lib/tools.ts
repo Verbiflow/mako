@@ -232,6 +232,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
       byId.set(id, {
         id,
         name: block.name ?? "tool",
+        kind: block.kind,
         arguments: block.arguments,
         pending: true,
       })
@@ -500,8 +501,11 @@ export function subagentResultText(
 export function toolLabel(name: string): string {
   const label = NORMALIZED_TOOL_LABELS.get(name.toLowerCase())
   if (label) return label
-  if (name.startsWith("mako_macos_")) {
-    return `macOS ${name.slice("mako_macos_".length).replaceAll("_", " ")}`
+  if (name.startsWith("mako_computer_")) {
+    return `Computer ${name.slice("mako_computer_".length).replaceAll("_", " ")}`
+  }
+  if (name.startsWith("mako_browser_")) {
+    return `Browser ${name.slice("mako_browser_".length).replaceAll("_", " ")}`
   }
   if (name.startsWith("browser_")) {
     return `Browser ${name.slice("browser_".length).replaceAll("_", " ")}`
