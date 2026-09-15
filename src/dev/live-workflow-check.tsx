@@ -130,14 +130,23 @@ const snapshot: LiveSnapshot = {
 }
 threadsStore.set({
   composerHarness: "claude",
-  acpable: ["claude", "codex"],
-  liveCapabilities: [
+  descriptors: [
     {
       provider: "claude",
+      displayName: "Claude Code",
+      resumable: true,
+      live: true,
       canResume: true,
       canSteer: true,
       canCompact: true,
       observesNativeAgents: true,
+    },
+    {
+      provider: "codex",
+      displayName: "Codex",
+      resumable: true,
+      live: true,
+      canResume: true,
     },
   ],
 })

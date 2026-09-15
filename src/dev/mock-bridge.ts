@@ -7,6 +7,7 @@ import type {
 } from "../../electron/shared"
 import type { LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
 import { reduceLiveUpdates } from "../../electron/contracts/live-content"
+import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
 import type {
   ThreadContextOptions,
   ThreadFileContext,
@@ -500,6 +501,14 @@ export function installMockBridge() {
     }),
     applyMcpSync: async () => MCP,
     discoverSkills: async () => SKILLS,
+    resolveSkillReferences: async (names, harness) =>
+      names.map((name) => {
+        const skill = SKILLS.skills.find((entry) => entry.name === name)
+        const delivery = skillDeliveryFor(SKILLS.skills, SKILLS.providers, name, harness)
+        return delivery.kind === "handover"
+          ? { name, delivery, description: skill?.description, hash: skill?.hash, body: `# ${name}\n\nFixture instructions for ${name}.` }
+          : { name, delivery, description: skill?.description, hash: skill?.hash }
+      }),
     previewSkillSync: async (skillId, target) => ({
       skillId,
       target,
@@ -971,6 +980,29 @@ export function installMockBridge() {
       devin: true,
       opencode: true,
     }),
+    harnessUpdates: async () => ({
+      codex: {
+        binary: "/usr/local/bin/codex",
+        installed: "0.147.0",
+        latest: "0.154.0",
+        channel: "npm",
+        update: { label: "Update with npm", command: "npm", args: ["install", "-g", "@openai/codex"] },
+      },
+      claude: {
+        binary: "/usr/local/bin/claude",
+        installed: "2.1.266",
+        latest: "2.1.270",
+        channel: "self",
+        update: { label: "Update Claude Code", command: "claude", args: ["update"] },
+      },
+      devin: {
+        binary: "/Library/Application Support/Zed/external_agents/registry/devin/bin/devin",
+        installed: "3000.6.14",
+        channel: "managed",
+        managedBy: "Zed",
+      },
+    }),
+    runHarnessUpdate: async () => ({ channel: "self" }),
     daemonStatus: async () => ({
       pid: 4242,
       startedAt: Date.now() - 7_200_000,
@@ -980,13 +1012,17 @@ export function installMockBridge() {
     setDaemonLogin: async () => {},
     followThread: async () => {},
     unfollowThread: async () => {},
-    resumableHarnesses: async () => [
-      "codex",
-      "claude",
-      "cursor",
-      "grok",
-      "devin",
-    ],
+    harnessDescriptors: async () => {
+      const resumable = ["codex", "claude", "cursor", "grok", "devin"]
+      const live = ["claude", "codex", "cursor", "grok", "devin", "opencode"]
+      return [...new Set([...resumable, ...live])].map((provider) => ({
+        provider,
+        displayName: provider,
+        resumable: resumable.includes(provider),
+        live: live.includes(provider),
+        canResume: live.includes(provider),
+      }))
+    },
     continuationPlan: async (path: string) => {
       const thread = await window.mako?.openThread(path)
       if (!thread)
@@ -1002,10 +1038,6 @@ export function installMockBridge() {
       const thread = await window.mako?.openThread(path)
       return thread ? { ...thread.ref, accessMode: modeId } : null
     },
-    liveCapabilities: async () =>
-      ["claude", "codex", "cursor", "grok", "devin", "opencode"].map(
-        (provider) => ({ provider, canResume: true })
-      ),
     liveStart: async (
       harness: string,
       cwd: string,
@@ -1479,7 +1511,6 @@ export function installMockBridge() {
       }
       acpSessions.delete(id)
     },
-    continueTargets: async () => ["codex", "claude", "cursor", "grok", "devin"],
     continueThreadWith: async (path: string, harness: string) => {
       void path
       return harness === "claude" || harness === "codex"
