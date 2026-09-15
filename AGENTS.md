@@ -426,23 +426,33 @@ is the physics default) ends the glide at once: 20 ms per move, 1.1 s per
 action, the composed `fill` + `act` 2.5 s instead of 4.2–5.1 s. The host
 sets `set_agent_cursor_motion({glide_duration_ms: 1, dwell_after_click_ms:
 0})` and hides the overlay before the first call that names a session and
-again after `start_session`, which resets it. The second that remains is
-the driver's `WindowChangeDetector`, a one-second poll for a new window
-after every action whose private skip argument ingress strips from MCP
-calls; `act` overlaps its first read with it. Mako's embedded daemon and
+again after `start_session`, which resets it; the embedded daemon also starts
+with `--no-overlay`, so no overlay process activation or animation reaches the
+user. The second that remains is the driver's `WindowChangeDetector`, a
+one-second poll for a new window after every action whose private skip argument
+ingress strips from MCP calls; `act` overlaps its first read with it. Driver
+0.28.0/0.28.1 exposes no MCP or CLI duration control. Upstream's Rust
+`Snapshot::detect_with` can take one, but action tools call the fixed
+`detect_async()` path; test an upstreamable public duration without shortening
+focus-steal protection silently before considering a second native AX lane.
+Mako's embedded daemon and
 its MCP proxy run with `CUA_DRIVER_RS_TELEMETRY_ENABLED=0`: the driver
 posts every tool call to PostHog by default. `test-computer-tools.ts`
 checks the two cursor calls and their order; the e2e's `fill-and-verify`
 times a `set_value` and a `click` on two elements under 2 s each.
 
-`scripts/benchmark-control-agents.ts` runs hosted models against the
-shipped `mako_computer_exec` (the tool's own description and the server's
-instructions, no harness prelude): built-in fixture tasks and, with
-`--tasks <file>`, tasks against a real application such as
+`scripts/benchmark-control-agents.ts` starts the compiled production MCP server
+over stdio and runs hosted models against its shipped `mako_computer_exec` (the
+tool's own description and the server's instructions, no harness prelude).
+Built-in fixture tasks cover read, fill, replace, and an `aria-hidden` canvas
+whose random text requires a real image; image blocks reach multimodal chat
+endpoints. With `--tasks <file>`, tasks against a real application such as
 `docs/audits/2026-09-14/conductor-agent-tasks.json`; it samples the
-frontmost pid throughout and reports pass rate, wall and model time,
-turns, prompt tokens and whether the front was kept. Fixtures live in
-`scripts/lib/control-fixture.mjs`, shared with the e2e.
+frontmost pid throughout, runs an optional independent state-oracle program
+after the model, and reports pass, oracle evidence, wall/model/tool time,
+turns, prompt tokens, text/image bytes, and whether the target or driver took
+the front. Fixtures live in `scripts/lib/control-fixture.mjs`, shared with the
+e2e.
 
 `computer-tools-main.ts` wraps the native driver (`cua-driver`, an external
 install under `/Applications/CuaDriver.app`) and repairs what the driver gets
@@ -452,7 +462,10 @@ ancestor first. A driver session dies with the MCP transport that created it
 and cannot be revived from another, so the wrapper mints a per-connection id
 (`mako-<task>-<nonce>`); never reuse a fixed id across reconnects. The wrapper
 remembers which pid and window produced each snapshot so an `element_token`
-alone is enough, defaults `max_elements` to 300 and drops `tree_markdown`
+alone is enough. Tokens are strictly snapshot-bound: every read invalidates
+the older tokens for that window, and they are never remapped by role or
+label; `fill` returns the exact newest `view` for the next action. The wrapper
+defaults `max_elements` to 300 and drops `tree_markdown`
 because Electron trees otherwise exceed a provider's tool-result limit, and
 reads a `screenshot_out_file` capture back for the preview. Rust schemas carry
 `uint32`/`double` formats that every MCP client warns about; `driver-schema.ts`
@@ -468,7 +481,10 @@ Browser actions publish input-mode JSON Schemas (defaults optional, every
 field described, `$defs` kept) through `help`. Input is real:
 click moves, presses with a buttons mask and releases on its own budget; type
 checks editability and can clear and submit; press covers the keys insertText
-cannot. Observations carry element states, viewport scroll context, paging
+cannot. An attached Electron/Chromium route names one verified application
+generation as `app:<bundle>:<pid>:<nonce>`; a live id is never replaced,
+`detach` closes only that connection, and route cleanup never terminates the
+application. Observations carry element states, viewport scroll context, paging
 (`offset`/`nextOffset`) and short per-observation refs. The navigation waiter
 marks its event boundary before dispatching `Page.navigate`: the reply and the
 new document's lifecycle events can share one frame. Wheel scrolls settle on the
@@ -484,6 +500,9 @@ Cookie listings omit values unless `includeValues` is set. `wait` polls inside
 the page in slices shorter than the request timeout, and `networkIdle` counts
 requests from `Network` events, so only network events the tab really emits
 belong in a fixture that tests it.
+An unchanged semantic observation refreshes its refs to the newest backend
+node ids. If the exact target disappears after an action dispatch, the outcome
+is `target-closed`/`unknown`; no other tab is selected and nothing is retried.
 
 The browser with id `mako` (`desk-browser.ts`) is Mako itself: hidden 1600×1000
 windows of the desk exposed as page targets over a private loopback bridge,
@@ -1009,6 +1028,13 @@ mid-turn delivery, idle replies, queueing, native identity, and retained context
 `--restart` stops the host mid-conversation and reopens the same native session
 through the provider's own resume (Cursor's SDK `Agent.resume`, Grok's
 `session/load`, Codex's thread resume) with no portable history, on the first named provider that can.
+`--control` starts the embedded driver and a background Electron fixture, asks
+the installed provider to read a random workspace value and enter/verify it
+through `mako-local-control`, requires a real `mako_computer_exec` block, checks
+the fixture state and continuous frontmost sample independently, and removes
+the native session even when the turn fails. Grok needs an advertised tier that
+pre-approves lazy MCP calls (currently `MAKO_E2E_MODE=access:full`); Codex needs
+a model the installed CLI and account both accept.
 The installed OpenCode v2 ACP server rejects concurrent prompts. Its free
 `opencode/muse-spark-1.3-contributor-free` model passes normal replies and queueing;
 verify it with `--continuation`, not by advertising unsupported steering.
