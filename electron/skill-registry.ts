@@ -14,11 +14,17 @@ import { parse } from "yaml"
 import { z } from "zod"
 import { selectedAccount } from "./accounts.js"
 import { providerHost } from "./providers/index.js"
+import {
+  SKILL_HANDOVER_LIMIT,
+  skillDelivery,
+  skillDeliveryOrigin,
+} from "./contracts/skill-reach.js"
 import type {
   SkillOrigin,
   SkillProvider,
   SkillProviderStatus,
   SkillRecord,
+  SkillReference,
   SkillRegistrySnapshot,
   SkillScope,
   SkillSyncTarget,
@@ -29,6 +35,7 @@ const MAX_SKILL_BYTES = 64 * 1024 * 1024
 const MAX_SKILL_FILE_BYTES = 16 * 1024 * 1024
 const MAX_SCAN_DEPTH = 5
 const skillName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const FRONTMATTER = /^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/
 const frontmatterSchema = z
   .object({
     name: z.string().min(1).max(64),
@@ -38,6 +45,7 @@ const frontmatterSchema = z
     "allowed-tools": z
       .union([z.string(), z.array(z.string())])
       .optional(),
+    "disable-model-invocation": z.boolean().optional(),
   })
   .passthrough()
 
@@ -63,10 +71,15 @@ function posixPath(value: string): string {
 }
 
 function parseFrontmatter(contents: string) {
-  const match = /^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(contents)
+  const match = FRONTMATTER.exec(contents)
   if (!match?.[1]) return null
   const parsed = frontmatterSchema.safeParse(parse(match[1]))
   return parsed.success ? parsed.data : null
+}
+
+/** The instructions a SKILL.md carries: everything after its frontmatter. */
+export function skillBody(contents: string): string {
+  return contents.replace(FRONTMATTER, "").trim()
 }
 
 function allowedTools(value: string | string[] | undefined): string[] | undefined {
@@ -126,7 +139,7 @@ function hashFiles(files: SkillFiles["files"]): string {
 
 async function readSkill(
   directory: string,
-  origin: SkillOrigin
+  origin: Omit<SkillOrigin, "hash">
 ): Promise<DiscoveredSkill | null> {
   const manifest = join(directory, "SKILL.md")
   try {
@@ -152,10 +165,11 @@ async function readSkill(
       bytes: packageFiles.bytes,
       files: packageFiles.files.length,
       portable: reasons.length === 0,
-      origins: [origin],
+      origins: [{ ...origin, hash }],
     }
     if (metadata.license) record.license = metadata.license
     if (metadata.compatibility) record.compatibility = metadata.compatibility
+    if (metadata["disable-model-invocation"]) record.manual = true
     const tools = allowedTools(metadata["allowed-tools"])
     if (tools) record.allowedTools = tools
     if (reasons.length) record.blockReason = reasons.join("; ")
@@ -321,6 +335,7 @@ async function providerStatuses(): Promise<SkillProviderStatus[]> {
         label: providerHost.profiles.get(source.provider)?.label ?? source.provider,
         account: account.name,
         available,
+        readsUniversalRoot: source.readsUniversalRoot,
       }
     })
   )
@@ -368,4 +383,56 @@ export function skillSourceDirectory(
 
 export async function hashSkillDirectory(directory: string): Promise<string> {
   return hashFiles((await readSkillFiles(directory)).files)
+}
+
+/**
+ * Frontmatter the schema admits is small, so a SKILL.md this much larger
+ * than the handover cap cannot hold a body that fits and is not read at all.
+ */
+const HANDOVER_READ_LIMIT = SKILL_HANDOVER_LIMIT * 2
+
+/**
+ * Resolve the `$skill` names a message carries for the provider that will
+ * answer it. A handover reads the SKILL.md the chosen origin points at and
+ * carries its body when it fits `SKILL_HANDOVER_LIMIT`; a larger one, or one
+ * that cannot be read, is handed over by path alone. The hash is the chosen
+ * copy's own, so a later mention points back at the text that was sent even
+ * when the copies have drifted. Names are resolved once each, in the order
+ * given.
+ */
+export async function resolveSkillReferences(
+  snapshot: SkillRegistrySnapshot,
+  names: readonly string[],
+  harness: string
+): Promise<SkillReference[]> {
+  const unique = [...new Set(names)]
+  return Promise.all(
+    unique.map(async (name): Promise<SkillReference> => {
+      const skill = snapshot.skills.find((entry) => entry.name === name)
+      if (!skill) return { name, delivery: { kind: "missing" } }
+      const delivery = skillDelivery(skill, harness, snapshot.providers)
+      const reference: SkillReference = { name, delivery }
+      reference.description = skill.description
+      reference.hash =
+        skillDeliveryOrigin(skill, harness, snapshot.providers)?.origin.hash ??
+        skill.hash
+      if (delivery.kind !== "handover") return reference
+      try {
+        const stats = await lstat(delivery.path)
+        if (stats.size > HANDOVER_READ_LIMIT) {
+          reference.oversize = true
+          return reference
+        }
+        const body = skillBody(await readFile(delivery.path, "utf8"))
+        if (Buffer.byteLength(body, "utf8") > SKILL_HANDOVER_LIMIT) {
+          reference.oversize = true
+        } else {
+          reference.body = body
+        }
+      } catch {
+        reference.oversize = true
+      }
+      return reference
+    })
+  )
 }

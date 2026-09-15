@@ -49,12 +49,28 @@ export async function pageMetrics(
 export async function screenshotGeometry(
   connection: BrowserConnection,
   sessionId: string,
-  options: { fullPage: boolean; maxSide: number; box?: ElementBox },
+  options: {
+    fullPage: boolean
+    maxSide: number
+    box?: ElementBox
+    region?: ElementBox
+  },
   signal: AbortSignal
 ) {
   const metrics = await pageMetrics(connection, sessionId, signal)
   const visible = metrics.cssVisualViewport
   const content = metrics.cssContentSize
+  if (
+    options.region &&
+    (options.region.x + options.region.width > visible.clientWidth ||
+      options.region.y + options.region.height > visible.clientHeight)
+  )
+    throw new BrowserFault({
+      code: "invalid-request",
+      message:
+        "The screenshot region extends outside the current viewport. Capture the viewport again and choose a rectangle within its width and height.",
+      outcome: "not-dispatched",
+    })
   const area = options.box
     ? {
         x: Math.max(content.x, options.box.x),
@@ -62,14 +78,21 @@ export async function screenshotGeometry(
         width: Math.max(1, Math.min(options.box.width, content.width)),
         height: Math.max(1, Math.min(options.box.height, content.height)),
       }
-    : options.fullPage
-      ? content
-      : {
-          x: visible.pageX,
-          y: visible.pageY,
-          width: visible.clientWidth,
-          height: visible.clientHeight,
+    : options.region
+      ? {
+          x: visible.pageX + options.region.x,
+          y: visible.pageY + options.region.y,
+          width: options.region.width,
+          height: options.region.height,
         }
+      : options.fullPage
+        ? content
+        : {
+            x: visible.pageX,
+            y: visible.pageY,
+            width: visible.clientWidth,
+            height: visible.clientHeight,
+          }
   const density = z
     .object({ result: z.object({ value: z.number().positive().max(16) }) })
     .parse(

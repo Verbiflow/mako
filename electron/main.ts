@@ -5,6 +5,8 @@ import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo } from "./runtime-connection.js"
 import { lstat, mkdir, stat, unlink } from "node:fs/promises"
 import { rmSync } from "node:fs"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
@@ -18,7 +20,7 @@ import { createContinuationPlanner } from "./continuation.js"
 import { NativeRequests } from "./native-requests.js"
 import type {
   BlockAddress,
-  LiveCapability,
+  HarnessDescriptor,
   NativeRequestInput,
 } from "./shared.js"
 import { startConversationMcp } from "./conversation-mcp.js"
@@ -198,7 +200,10 @@ import {
 } from "./relay-worker.js"
 import type { RelayWorkspaceCandidate } from "./relay-workspace.js"
 import { applyMcpSync, previewMcpSync } from "./mcp-sync.js"
-import { discoverSkillRegistry } from "./skill-registry.js"
+import {
+  discoverSkillRegistry,
+  resolveSkillReferences,
+} from "./skill-registry.js"
 import {
   applySkillSync,
   previewSkillRemove,
@@ -940,8 +945,6 @@ function bindIpc() {
         .map((driver) => driver.provider),
     ]),
   ]
-  handle("mako:thread-resumable", installed)
-  handle("mako:thread-continue-targets", installed)
   const continuation = createContinuationPlanner({
     ref: async (path) =>
       listThreads().find((ref) => ref.path === path) ??
@@ -1076,6 +1079,33 @@ function bindIpc() {
         .map((profile) => [profile.provider, available.has(profile.provider)])
     )
   })
+  handle("mako:harness-updates", async () => {
+    const env = process.env
+    return Object.fromEntries(
+      await Promise.all(
+        providerHost.updateSources.list().map(async (source) => [
+          source.provider,
+          await source.check(env).catch((error) => ({
+            error: error instanceof Error ? error.message : String(error),
+          })),
+        ])
+      )
+    )
+  })
+  handle("mako:harness-update", async (_e, provider: string) => {
+    const source = providerHost.updateSources.get(provider)
+    if (!source) throw new Error(`${provider} does not update through Mako`)
+    const info = await source.check(process.env)
+    if (!info.update)
+      throw new Error(`${provider} does not update through Mako`)
+    const { command, args } = info.update
+    await promisify(execFile)(command, args, {
+      timeout: 180_000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true,
+    })
+    return source.check(process.env)
+  })
   handle("mako:daemon-status", () => daemonStatus())
   handle("mako:daemon-login", () => daemonLoginEnabled())
   handle("mako:daemon-login-set", (_e, enabled: boolean) =>
@@ -1193,6 +1223,15 @@ function bindIpc() {
   handle("mako:skills-discover", () =>
     withHost((host) => discoverSkillRegistry(host.workspace))
   )
+  handle("mako:skills-resolve", (_e, names: string[], harness: string) =>
+    withHost(async (host) =>
+      resolveSkillReferences(
+        await discoverSkillRegistry(host.workspace),
+        names,
+        harness
+      )
+    )
+  )
   handle(
     "mako:skills-sync-preview",
     (_e, skillId: string, target: SkillSyncTarget) =>
@@ -1236,25 +1275,33 @@ function bindIpc() {
       })
   )
 
-  handle("mako:live-capabilities", () =>
-    providerHost.liveDrivers
+  handle("mako:harness-descriptors", () => {
+    const resumable = new Set(resumableHarnesses())
+    const drivers = providerHost.liveDrivers
       .list()
       .filter((driver) => driver.available(app.getAppPath()))
-      .map((driver) => {
-        const capability: LiveCapability = {
-          provider: driver.provider,
-          canResume: driver.canResume,
-          observesNativeAgents: driver.observesNativeAgents === true,
-          canSteer: Boolean(driver.steer),
-          canCompact: Boolean(driver.compact),
-        }
-        if (driver.steer && driver.steering)
-          capability.steering = driver.steering
-        if (driver.modes?.length) capability.modes = [...driver.modes]
-        if (driver.defaultMode) capability.defaultMode = driver.defaultMode
-        return capability
-      })
-  )
+    const providers = new Set([
+      ...resumable,
+      ...drivers.map((driver) => driver.provider),
+    ])
+    return [...providers].map((provider) => {
+      const driver = drivers.find((entry) => entry.provider === provider)
+      const descriptor: HarnessDescriptor = {
+        provider,
+        displayName: providerHost.profiles.get(provider)?.label ?? provider,
+        resumable: resumable.has(provider),
+        live: driver !== undefined,
+        canResume: driver?.canResume ?? false,
+        observesNativeAgents: driver?.observesNativeAgents === true,
+        canSteer: Boolean(driver?.steer),
+        canCompact: Boolean(driver?.compact),
+      }
+      if (driver?.steering) descriptor.steering = driver.steering
+      if (driver?.modes?.length) descriptor.modes = [...driver.modes]
+      if (driver?.defaultMode) descriptor.defaultMode = driver.defaultMode
+      return descriptor
+    })
+  })
   handle(
     "mako:live-start",
     async (_event, harness: string, cwd: string, options: LiveStartOptions) => {

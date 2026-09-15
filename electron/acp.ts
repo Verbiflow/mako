@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } from "./providers/live-driver.js"
+import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
@@ -92,6 +93,7 @@ interface Live {
   id: string
   harness: string
   cwd: string
+  emit(event: LiveDriverEvent): void
   child: ChildProcessWithoutNullStreams
   connection: Connection | null
   sessionId: string | null
@@ -114,7 +116,8 @@ interface Live {
   nativeMode: string | null
 }
 
-const sessions = new Map<string, Live>()
+const engine = createLiveEngine<Live>()
+const sessions = engine.sessions
 let emit: (event: LiveDriverEvent) => void = () => {}
 
 
@@ -161,16 +164,11 @@ async function askUser(
     options: [],
     questions,
   }
-  const response = await new Promise<LivePermissionResponse>((resolve) => {
-    live.pendingPermissions.set(requestId, resolve)
-    emit({ type: "acp-permission", request })
-  })
-  live.pendingPermissions.delete(requestId)
-  return response
+  return engine.ask(live, request)
 }
 
 export function acpState(id: string): LiveSessionState | null {
-  return sessions.get(id)?.state ?? null
+  return engine.state(id)
 }
 
 /**
@@ -267,6 +265,7 @@ export async function liveStart(
     hostAccess: null,
     launchAccess,
     nativeMode: null,
+    emit: (event) => emit(event),
   }
   sessions.set(id, live)
 
@@ -297,7 +296,7 @@ export async function liveStart(
       status: live.state.status,
       stderr: stderrDetail(stderr),
     })
-    for (const resolve of live.pendingPermissions.values()) resolve({ kind: "choice", optionId: null })
+    engine.release(live)
     if (live.state.status === "closed") return
     update(live, {
       status: "failed",
@@ -334,11 +333,7 @@ export async function liveStart(
           kind: option.kind,
         })),
       }
-      const response = await new Promise<LivePermissionResponse>((resolve) => {
-        live.pendingPermissions.set(requestId, resolve)
-        emit({ type: "acp-permission", request })
-      })
-      live.pendingPermissions.delete(requestId)
+      const response = await engine.ask(live, request)
       const chosen = response.kind === "choice" ? response.optionId : null
       if (chosen === null) return { outcome: { outcome: "cancelled" as const } }
       return { outcome: { outcome: "selected" as const, optionId: chosen } }
@@ -352,7 +347,30 @@ export async function liveStart(
         acpObserveNativeMode(id, params.update.currentModeId)
         return
       }
-      forward(live, params, emit, updateState, live.state.settings)
+      if (params.update.sessionUpdate === "usage_update") {
+        const reading = params.update
+        update(live, {
+          usage: {
+            used: reading.used,
+            size: reading.size,
+            cost: reading.cost
+              ? { amount: reading.cost.amount, currency: reading.cost.currency }
+              : undefined,
+          },
+        })
+        return
+      }
+      if (params.update.sessionUpdate === "available_commands_update") {
+        update(live, {
+          commands: params.update.availableCommands.map((command) => ({
+            name: command.name,
+            description: command.description || undefined,
+            hint: command.input?.hint ? String(command.input.hint) : undefined,
+          })),
+        })
+        return
+      }
+      forward(live, params, emit, update, live.state.settings)
     },
   }
 
@@ -398,11 +416,7 @@ export async function liveStart(
           title: `${harness} requires sign-in before opening this session. Choose the provider's sign-in method to continue.`,
           options: methods.map((method) => ({ optionId: method.id, name: method.name, kind: "allow_once" })),
         }
-        const response = await new Promise<LivePermissionResponse>((resolve) => {
-          live.pendingPermissions.set(requestId, resolve)
-          emit({ type: "acp-permission", request })
-        })
-        live.pendingPermissions.delete(requestId)
+        const response = await engine.ask(live, request)
         return response.kind === "choice" ? response.optionId : null
       },
       authenticate: async (methodId) => {
@@ -626,7 +640,7 @@ export async function livePrompt(
   })
   live.turn = turn
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
-  emit({ type: "acp-update", id, update: { kind: "user", text } })
+  engine.emitUpdate(live, { kind: "user", text })
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
   void turn.send(() => connection.prompt({ sessionId, prompt })).catch(() => {})
   await Promise.resolve()
@@ -667,7 +681,7 @@ export function acpRespondPermission(
   requestId: string,
   response: LivePermissionResponse
 ): void {
-  sessions.get(id)?.pendingPermissions.get(requestId)?.(response)
+  engine.respondPermission(id, requestId, response)
 }
 
 export async function liveSetMode(id: string, modeId: string): Promise<void> {
@@ -717,7 +731,7 @@ export async function liveCancel(id: string): Promise<void> {
   live.turn?.cancel()
   // The protocol requires pending permission requests to settle as cancelled
   // once the client cancels; an agent may otherwise wait on them forever.
-  for (const resolve of live.pendingPermissions.values()) resolve({ kind: "choice", optionId: null })
+  engine.release(live)
   await live.connection.cancel({ sessionId: live.sessionId })
 }
 
@@ -726,8 +740,7 @@ export function liveClose(id: string): void {
   if (!live) return
   update(live, { status: "closed" })
   live.startup.abort()
-  for (const resolve of live.pendingPermissions.values())
-    resolve({ kind: "choice", optionId: null })
+  engine.release(live)
   live.child.kill()
   sessions.delete(id)
 }
@@ -737,14 +750,9 @@ export function stopAcp(): void {
 }
 
 function update(live: Live, patch: Partial<LiveSessionState>): void {
-  updateState(live, patch)
-}
-
-function updateState(live: Live, patch: Partial<LiveSessionState>): void {
   if (patch.configOptions && !patch.settings) {
     patch.settings = acpObservedSettings(live.configOptions, live.state.settings?.model)
   }
-  live.state = { ...live.state, ...patch }
-  emit({ type: "acp-session", session: live.state })
+  engine.patch(live, patch)
 }
 

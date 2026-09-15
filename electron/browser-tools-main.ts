@@ -12,10 +12,17 @@ import {
 } from "./contracts/browser-control.js"
 import { browserControlClient } from "./browser-control-client.js"
 import {
+  BROWSER_ACTIONS,
+  actionNameOf,
   BrowserToolsRuntime,
   type BrowserCall,
 } from "./browser-tools-runtime.js"
 import { browserProtocolHelp } from "./browser-protocol-help.js"
+import {
+  INLINE_IMAGE_COUNT,
+  INLINE_TEXT_BUDGET,
+  PROGRAM_TIME_LIMIT_MS,
+} from "@mako/control/program"
 import { isMainModule } from "./main-module.js"
 
 const descriptions = {
@@ -30,11 +37,11 @@ const descriptions = {
   release:
     "Release this task's exact tab binding. Leaves the tab and the shared Chrome connection open.",
   observe:
-    "Read the exact tab's title, URL, viewport scroll position and accessibility nodes within a 60 KB budget. Each node carries depth, role, name, value and live states (checked, disabled, focused, expanded, selected, required, pressed, level, url). Fresh refs address elements for click, type, press, hover, scroll, screenshot and upload; a new observation or navigation replaces them. Use interactiveOnly to see just controls, query to filter by text, and offset with nextOffset to page through a large tree.",
+    "Read the exact tab's title, URL, viewport scroll position and accessibility nodes within a 60 KB page. Each node carries depth, role, name, value and live states (checked, disabled, focused, expanded, selected, required, pressed, level, url). Fresh refs address elements for click, type, press, hover, scroll, screenshot and upload; a changed observation or navigation replaces them. Pass since with the prior observation token while polling: an unchanged page returns a compact receipt and preserves its refs, while any change returns a complete fresh observation. Use interactiveOnly to see just controls, query to filter by text, and offset with nextOffset to page through a large tree.",
   screenshot:
-    "Return an actual image plus its exact target identity and coordinate mapping. JPEG is the compact default; the longest side is 1568 px unless maxSide says otherwise; PNG, full-page and element-scoped (ref) captures are available. Does not change the selected target or reconnect.",
+    "Return an actual image, a visual view token, exact target identity and coordinate mapping. JPEG is the compact default; the longest side is 1568 px unless maxSide says otherwise. Use region to magnify a viewport rectangle, ref for one observed element, or fullPage for the document. Does not change the selected target or reconnect.",
   evaluate:
-    "Evaluate JavaScript in the exact tab and return the CDP result by value. Supports async expressions. May modify page state; use observations to read ordinary UI. For user interaction, use click/type/press: DOM click(), submit(), and dispatchEvent() do not produce trusted user input. Results over 200 KB are truncated with their size reported.",
+    "Evaluate JavaScript in the exact tab and return the CDP result by value. Supports async expressions. May modify page state; use observations to read ordinary UI. For user interaction, use click/type/press: DOM click(), submit(), and dispatchEvent() do not produce trusted user input.",
   cdp: "Send a Chrome DevTools Protocol command to this exact target. Supports DOM, Runtime, Input, Network, Emulation, Page dialogs and other permitted protocol domains. Chrome extensions do not expose Browser/SystemInfo commands; those require an explicitly configured direct-CDP transport. Target lifecycle uses open/select/release/close so ownership remains explicit. Use concurrent:true to answer a paused Fetch request or JavaScript dialog while another command is waiting. No failed command is replayed.",
   events:
     "Read a bounded, non-destructive event history for this exact tab: at most limit events (default 32) within 60 KB. Pass the returned cursor as after to continue; more reports remaining events and gap reports evicted history. Use cdp to enable needed domains, e.g. Network.enable. Page events are enabled automatically.",
@@ -43,7 +50,7 @@ const descriptions = {
   close:
     "Close this exact tab. Its old handle becomes invalid. Does not close Chrome or another task's tab.",
   click:
-    'Click a fresh observation ref or exact viewport CSS coordinates in the bound tab. Ref clicks scroll the element into view and verify it is present and not covered. Pass at as an object, for example {"ref":"observed-ref"} or {"x":100,"y":200}, never a JSON-encoded string. Coordinates come from this tab\'s latest screenshot. Sends a real pointer move, press and release; count:2 double-clicks; modifiers hold keys. Does not move the physical pointer.',
+    'Click a fresh observation ref or exact viewport CSS coordinates in the bound tab. Ref clicks scroll the element into view and verify it is present and not covered. Pass at as an object, for example {"ref":"observed-ref"} or {"x":100,"y":200,"view":"latest-view-token"}. Include the screenshot view token so stale visual coordinates are refused. Sends a real pointer move, press and release; count:2 double-clicks; modifiers hold keys. Does not move the physical pointer.',
   hover:
     "Move the pointer over a ref or viewport coordinates without pressing, to open hover menus and tooltips. Observe or screenshot afterwards to see the result.",
   scroll:
@@ -68,69 +75,151 @@ const descriptions = {
   selectOption:
     "Choose an option in an observed <select> by value or label and fire its input and change events. Lists the available options when nothing matches.",
 }
-const toolDescriptions = new Map(Object.entries(descriptions))
+const descriptionByAction = new Map<string, string>(
+  Object.entries(descriptions)
+)
 const serializedInput = z.object({
   properties: z.record(z.string(), z.json()),
   required: z.array(z.string()).optional(),
   $defs: z.record(z.string(), z.json()).optional(),
 })
-const readActions = new Set([
-  "status",
-  "tabs",
-  "observe",
-  "screenshot",
-  "events",
-  "frames",
-  "wait",
-])
-/** Text results above this many bytes are cut down to a preview. */
-const RESULT_BUDGET_BYTES = 200_000
-const RESULT_PREVIEW_BYTES = 64_000
-const instructions = `Mako browser control uses one host-owned Chrome connection across tasks. Start with mako_browser_status, connect the chosen browser if needed, then open a tab or inspect tabs and select an exact ID. Keep the returned {browser,tab,generation,lease} handle. Every later operation uses that handle; there is no implicit active tab. Switching providers in the same Mako task retains host bindings; rediscover handles if script state is gone. Page bindings enable focus emulation so hidden tabs receive real input without activating the physical tab; release disables it. Explicit CDP can change that emulation when testing focus-dependent behavior.
 
-Use observe for accessible UI and fresh element refs; use screenshot for visual content and coordinate grounding. Cross-check UI changes after actions. A new observation invalidates earlier refs, and navigation invalidates them too. Never guess refs, tab IDs or coordinates. A target-closed or stale-target error requires explicit rediscovery, never choosing the first available tab. A cancelled/timed-out action may have completed; observe before deciding what to do next. The host refuses further mutations on an uncertain binding until it is observed. click, hover, scroll, type and press send real input events; type reports the field it wrote into, and press covers keys that insertText cannot send (Enter, Tab, arrows, shortcuts).
+interface ActionReference {
+  action: string
+  signature: string
+  summary: string
+  description: string
+  inputSchema: Record<string, z.infer<typeof z.json>>
+}
 
-For flexible workflows use mako_browser_exec with asynchronous JavaScript. browser.<action>({arguments}) has the same arguments as the matching MCP tool, excluding action. Await every call. state is a persistent object local to this MCP client. console.log emits text; emitImage(await browser.screenshot({target: state.tab})) emits a real image. Example: state.tab = await browser.open({browser:'chrome',url:'http://127.0.0.1:5173'}); console.log(await browser.observe({target:state.tab})); emitImage(await browser.screenshot({target:state.tab}));
+/** The browser API as a program sees it, derived from the wire contract. */
+function actionReference(): ActionReference[] {
+  return BrowserCommandSchema.options.map((schema) => {
+    // Input mode keeps defaulted fields optional; output mode would
+    // publish every default as required.
+    const input = serializedInput.parse(z.toJSONSchema(schema, { io: "input" }))
+    const action = actionNameOf(schema)
+    delete input.properties.action
+    const required = new Set(
+      input.required?.filter((name) => name !== "action") ?? []
+    )
+    const parameters = Object.keys(input.properties).map((name) =>
+      required.has(name) ? name : `${name}?`
+    )
+    const description = descriptionByAction.get(action) ?? ""
+    const inputSchema: ActionReference["inputSchema"] = {
+      type: "object",
+      properties: input.properties,
+      required: [...required],
+      additionalProperties: false,
+    }
+    if (input.$defs) inputSchema.$defs = input.$defs
+    return {
+      action,
+      signature: `browser.${action}({${parameters.join(", ")}})`,
+      summary: description.split(/(?<=\.)\s/)[0] ?? "",
+      description,
+      inputSchema,
+    }
+  })
+}
+const reference = actionReference()
+const referenceByAction = new Map(
+  reference.map((entry) => [entry.action, entry])
+)
 
-Scripts run in a terminable local worker with a 60-second limit. They are trusted local JavaScript, not an OS sandbox. Return small results. Worker state resets after timeout/error; host tab bindings and the shared connection remain. Use mako_browser_help for protocol command schemas. CDP enables advanced network inspection, page evaluation, input, emulation, JavaScript dialogs, frame inspection and download configuration without requiring another browser runtime. Use explicit target lifecycle tools instead of raw Target mutations. For request interception or dialogs, enable the relevant domain first, read events, and use cdp with concurrent:true to unblock the pending operation; otherwise calls on one target are serialized. A page dialog (alert, confirm, prompt) blocks the tab until the dialog tool answers it; set its auto policy when a page is expected to raise dialogs. wait covers selectors, text, URL changes and network idle; download, pdf, cookies, frames, history and selectOption cover the rest of a page's lifecycle without raw protocol calls.
+const apiReference = reference
+  .map((entry) => `${entry.signature} — ${entry.summary}`)
+  .join("\n")
+
+const instructions = `Mako browser control is one program tool. mako_browser_exec runs trusted async JavaScript in a local worker with a \`browser\` object whose methods are the actions below; a single action is a one-line program (\`return await browser.tabs({browser:'chrome'})\`) and a workflow is several awaited calls with plain JavaScript between them, so intermediate results never pass through your context. Await every call. \`state\` persists between runs of this MCP client (keep tab handles there); \`console.log(value)\` adds a text block; \`emitImage(await browser.screenshot({...}))\` adds a real image with its view token and coordinate mapping; \`artifacts.save(name, value)\` writes a value or image to a file and returns its path. Read mako_browser_status first; call mako_browser_help({action}) for one action's full schema and mako_browser_help({domain, method}) for Chrome DevTools Protocol commands.
+
+API (required arguments plain, optional with ?):
+${apiReference}
+
+Output is never cut. A returned or logged value at or past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB, and every image after the ${INLINE_IMAGE_COUNT}th in one run, is written whole to a file and the result carries a receipt with the path, size, hash and an outline of the value's shape (keys and their sizes, array length and samples). Prefer returning the narrow selection you need; read a receipt's file only when you need the whole. Programs stop after ${PROGRAM_TIME_LIMIT_MS / 1000} seconds; on timeout, cancellation or an error the worker and \`state\` reset while host tab bindings and the shared Chrome connection remain. Scripts are trusted local code, not an OS sandbox. Browser actions keep exact task ownership and are never replayed; an action that fails validation dispatches nothing and says so.
+
+Targets: one host-owned Chrome connection serves every task. Connect the chosen browser if status shows it disconnected, then open a tab or inspect tabs and select an exact ID. Keep the returned {browser,tab,generation,lease} handle; every later call names it, there is no implicit active tab. Page bindings enable focus emulation so hidden tabs receive real input without activating the physical tab; release disables it. A target-closed or stale-target error requires explicit rediscovery, never choosing the first available tab.
+
+Perception: observe gives accessible UI and fresh element refs; pass since with its observation token when polling so an unchanged tree returns only a receipt and keeps those refs valid. screenshot gives pixels, a view token and coordinate mapping; region magnifies one viewport rectangle without changing browser zoom. Pass the view token with coordinate actions so an older visual target is refused after another capture or action. A changed observation or a navigation invalidates earlier refs. Never guess refs, tab IDs or coordinates. Cross-check UI changes after actions; a cancelled or timed-out action may have completed, so observe before deciding what to do next. The host refuses further mutations on an uncertain binding until it is observed. click, hover, scroll, type and press send real input events; type reports the field it wrote into, and press covers keys that insertText cannot send (Enter, Tab, arrows, shortcuts).
+
+Protocol: cdp enables network inspection, emulation, dialogs, frame inspection and download configuration without another browser runtime. Use open/select/release/close for target lifecycle, never raw Target mutations. For request interception or dialogs, enable the relevant domain first, read events, and use cdp with concurrent:true to unblock the pending operation; otherwise calls on one target are serialized. A page dialog blocks the tab until dialog answers it; set its auto policy when a page is expected to raise dialogs. wait covers selectors, text, URL changes and network idle; download, pdf, cookies, frames, history and selectOption cover the rest of a page's lifecycle.
 
 The browser with ID "mako" is Mako itself: open creates a hidden window of Mako's own interface (1600×1000, larger than the screen if needed) that only this task sees, so you can inspect, screenshot and drive the desk without touching the window the user is working in. It hosts Mako's interface only and does not navigate to other sites; close the tab when finished. Prefer it over computer tools whenever the target is Mako.
 
 For native windows, OS dialogs or content outside a browser page, use Mako computer tools. Browser connection approval is separate from macOS Accessibility/Screen Recording and provider tool approval. Local browser control never automatically switches to a hosted browser.`
 
 export const BROWSER_TOOL_INPUTS = {
-  exec: z.object({ source: z.string().min(1).max(100_000) }).strict(),
+  status: z.object({}).strict(),
+  exec: z
+    .object({
+      source: z
+        .string()
+        .min(1)
+        .max(100_000)
+        .describe(
+          "Async JavaScript body. Call browser.<action>({...}) and await every call; return the value you want to see."
+        ),
+    })
+    .strict(),
   help: z
-    .object({ domain: z.string().optional(), method: z.string().optional() })
+    .object({
+      action: z
+        .string()
+        .optional()
+        .describe(
+          "A browser action name. Returns its full input schema and description."
+        ),
+      domain: z
+        .string()
+        .optional()
+        .describe(
+          "A Chrome DevTools Protocol domain, for cdp. Lists its commands and events."
+        ),
+      method: z
+        .string()
+        .optional()
+        .describe(
+          "A command in that protocol domain. Returns its parameters and referenced types."
+        ),
+    })
     .strict(),
 }
-const imageResult = z.object({
-  data: z.string(),
-  mimeType: z.enum(["image/png", "image/jpeg"]),
-  target: z.json(),
-  coordinates: z.json().optional(),
-  clip: z.json().optional(),
-})
 
-/** Keep every tool result inside a context window; report what was cut. */
-function boundedText(value: z.infer<typeof z.json>) {
-  const text = JSON.stringify(value)
-  const bytes = Buffer.byteLength(text)
-  if (bytes <= RESULT_BUDGET_BYTES) return { text, structuredContent: value }
-  const summary = {
-    truncated: true,
-    bytes,
-    budget: RESULT_BUDGET_BYTES,
-    preview: text.slice(0, RESULT_PREVIEW_BYTES),
-    note: "The full result exceeded the tool budget. Return a smaller value: select the fields you need, slice arrays, or read the page in parts.",
+function browserHelp(args: z.infer<typeof BROWSER_TOOL_INPUTS.help>) {
+  if (args.action !== undefined) {
+    const entry = referenceByAction.get(args.action)
+    if (!entry)
+      throw new BrowserFault({
+        code: "invalid-request",
+        message: `Unknown browser action "${args.action}". Actions: ${BROWSER_ACTIONS.join(", ")}.`,
+        outcome: "not-dispatched",
+      })
+    return {
+      action: entry.action,
+      signature: entry.signature,
+      description: entry.description,
+      inputSchema: entry.inputSchema,
+    }
   }
-  return { text: JSON.stringify(summary), structuredContent: summary }
+  if (args.domain !== undefined || args.method !== undefined)
+    return browserProtocolHelp(args.domain, args.method)
+  return {
+    actions: reference.map((entry) => ({
+      action: entry.action,
+      signature: entry.signature,
+      summary: entry.summary,
+    })),
+    protocol:
+      "Call help with a domain to list Chrome DevTools Protocol commands, or with domain and method for one command's schema.",
+  }
 }
 
 export function createBrowserToolsServer(
-  call: BrowserCall = browserControlClient()
+  call: BrowserCall = browserControlClient(),
+  taskId = process.env.MAKO_TASK_ID
 ): Server {
-  const runtime = new BrowserToolsRuntime(call)
+  const runtime = new BrowserToolsRuntime(call, taskId)
   class BrowserServer extends Server {
     override async close(): Promise<void> {
       await super.close()
@@ -138,7 +227,7 @@ export function createBrowserToolsServer(
     }
   }
   const server = new BrowserServer(
-    { name: "mako-browser-use", version: "2.1.0" },
+    { name: "mako-browser-use", version: "3.0.0" },
     { capabilities: { tools: {}, logging: {} }, instructions }
   )
   server.onclose = () => {
@@ -147,73 +236,23 @@ export function createBrowserToolsServer(
   server.setRequestHandler(ListToolsRequestSchema, () =>
     ListToolsResultSchema.parse({
       tools: [
-        ...BrowserCommandSchema.options.map((schema) => {
-          // Input mode keeps defaulted fields optional; output mode would
-          // publish every default as required.
-          const input = serializedInput.parse(
-            z.toJSONSchema(schema, { io: "input" })
-          )
-          const action = z
-            .object({ const: z.string() })
-            .parse(input.properties.action).const
-          delete input.properties.action
-          const readOnly = readActions.has(action)
-          return {
-            name: `mako_browser_${action}`,
-            description: toolDescriptions.get(action),
-            inputSchema: {
-              type: "object",
-              properties: input.properties,
-              required:
-                input.required?.filter((name) => name !== "action") ?? [],
-              additionalProperties: false,
-              $defs: input.$defs,
-            },
-            annotations: {
-              readOnlyHint: readOnly,
-              destructiveHint:
-                !readOnly &&
-                ![
-                  "connect",
-                  "open",
-                  "select",
-                  "release",
-                  "hover",
-                  "scroll",
-                  "history",
-                  "selectOption",
-                ].includes(action),
-              idempotentHint:
-                readOnly || ["connect", "release", "hover"].includes(action),
-              openWorldHint: ![
-                "status",
-                "connect",
-                "tabs",
-                "select",
-                "release",
-                "events",
-              ].includes(action),
-            },
-          }
-        }),
         {
-          name: "mako_browser_exec",
-          description:
-            "Run flexible async JavaScript with the documented browser API, persistent state, console.log and emitImage. Await all calls. Trusted local code; 60-second worker limit. Browser actions retain exact task ownership and are never replayed.",
-          inputSchema: z.toJSONSchema(BROWSER_TOOL_INPUTS.exec, {
+          name: "mako_browser_status",
+          description: descriptions.status,
+          inputSchema: z.toJSONSchema(BROWSER_TOOL_INPUTS.status, {
             io: "input",
           }),
           annotations: {
-            readOnlyHint: false,
-            destructiveHint: true,
-            idempotentHint: false,
-            openWorldHint: true,
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
           },
         },
         {
           name: "mako_browser_help",
           description:
-            "Read installed Chrome protocol schemas. With no domain, lists domains. With a domain, lists commands/events; with method, returns that command and referenced domain types.",
+            "Reference for the browser program API. With no arguments, lists every browser.<action> signature. With action, returns that action's full input schema and description. With a Chrome DevTools Protocol domain (and method), returns protocol command schemas for browser.cdp.",
           inputSchema: z.toJSONSchema(BROWSER_TOOL_INPUTS.help, {
             io: "input",
           }),
@@ -224,83 +263,55 @@ export function createBrowserToolsServer(
             openWorldHint: false,
           },
         },
+        {
+          name: "mako_browser_exec",
+          description: `Run a browser control program: trusted async JavaScript with browser.<action>({...}) for every action in the server instructions, persistent state, console.log, emitImage and artifacts.save. One action or a whole workflow; await every call and return what you need to see. Results are never truncated: oversized values are written to files and described. ${PROGRAM_TIME_LIMIT_MS / 1000}-second limit; actions keep exact task ownership and are never replayed.`,
+          inputSchema: z.toJSONSchema(BROWSER_TOOL_INPUTS.exec, {
+            io: "input",
+          }),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+          },
+        },
       ],
     })
   )
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     let dispatched = false
     try {
-      if (request.params.name === "mako_browser_exec") {
-        const { source } = BROWSER_TOOL_INPUTS.exec.parse(
-          request.params.arguments
-        )
-        dispatched = true
-        return { content: await runtime.run(source, extra.signal) }
-      }
-      if (request.params.name === "mako_browser_help") {
-        const args = BROWSER_TOOL_INPUTS.help.parse(request.params.arguments)
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                await browserProtocolHelp(args.domain, args.method)
-              ),
-            },
-          ],
+      switch (request.params.name) {
+        case "mako_browser_status": {
+          BROWSER_TOOL_INPUTS.status.parse(request.params.arguments ?? {})
+          const value = await call({ action: "status" }, extra.signal)
+          return {
+            content: [{ type: "text", text: JSON.stringify(value) }],
+            structuredContent: { value },
+          }
         }
-      }
-      const action = request.params.name.replace(/^mako_browser_/, "")
-      const parsed = BrowserCommandSchema.safeParse({
-        ...request.params.arguments,
-        action,
-      })
-      if (!parsed.success)
-        throw new BrowserFault({
-          code: "invalid-request",
-          message: `Invalid arguments for ${request.params.name}. ${z.prettifyError(parsed.error).replace(/\s+/g, " ").trim()} Nothing was dispatched; correct the arguments and call again.`,
-          outcome: "not-dispatched",
-        })
-      const command = parsed.data
-      const token = request.params._meta?.progressToken
-      if (command.action === "connect" && token !== undefined)
-        await extra.sendNotification({
-          method: "notifications/progress",
-          params: {
-            progressToken: token,
-            progress: 0,
-            total: 1,
-            message:
-              "Connecting to the browser profile. Tasks share the connection and keep separate tabs.",
-          },
-        })
-      dispatched = true
-      const value = await call(command, extra.signal)
-      if (command.action === "screenshot") {
-        const image = imageResult.parse(value)
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                target: image.target,
-                coordinates: image.coordinates,
-                clip: image.clip,
-              }),
-            },
-            { type: "image", data: image.data, mimeType: image.mimeType },
-          ],
-          structuredContent: {
-            target: image.target,
-            coordinates: image.coordinates,
-            clip: image.clip,
-          },
+        case "mako_browser_help": {
+          const value = await browserHelp(
+            BROWSER_TOOL_INPUTS.help.parse(request.params.arguments ?? {})
+          )
+          return {
+            content: [{ type: "text", text: JSON.stringify(value) }],
+          }
         }
-      }
-      const bounded = boundedText(value)
-      return {
-        content: [{ type: "text", text: bounded.text }],
-        structuredContent: { value: bounded.structuredContent },
+        case "mako_browser_exec": {
+          const { source } = BROWSER_TOOL_INPUTS.exec.parse(
+            request.params.arguments
+          )
+          dispatched = true
+          return { content: await runtime.run(source, extra.signal) }
+        }
+        default:
+          throw new BrowserFault({
+            code: "invalid-request",
+            message: `Unknown tool ${request.params.name}. Browser control is mako_browser_status, mako_browser_help and mako_browser_exec; every action is a browser.<action> call inside mako_browser_exec.`,
+            outcome: "not-dispatched",
+          })
       }
     } catch (error) {
       const fault =
@@ -309,9 +320,11 @@ export function createBrowserToolsServer(
           : {
               code: dispatched ? "protocol-error" : "invalid-request",
               message:
-                error instanceof Error
-                  ? error.message
-                  : "Browser operation failed",
+                error instanceof z.ZodError
+                  ? `Invalid arguments for ${request.params.name}. ${z.prettifyError(error).replace(/\s+/g, " ").trim()}`
+                  : error instanceof Error
+                    ? error.message
+                    : "Browser operation failed",
               outcome: dispatched ? "unknown" : "not-dispatched",
             }
       return {

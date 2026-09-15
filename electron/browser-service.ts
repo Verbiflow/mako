@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { stat, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join } from "node:path"
 import { z } from "zod"
@@ -213,6 +213,14 @@ function modifierMask(modifiers: readonly Modifier[] | undefined): number {
   return (modifiers ?? []).reduce((mask, name) => mask | MODIFIER_BITS[name], 0)
 }
 
+function visualView(
+  command: Extract<BrowserCommand, { target: BrowserTarget }>
+): string | undefined {
+  if (!("at" in command) || !command.at || !("view" in command.at))
+    return undefined
+  return command.at.view
+}
+
 interface Binding {
   owner: string
   target: BrowserTarget
@@ -223,6 +231,8 @@ interface Binding {
   running: number
   tail: Promise<void>
   refs: Map<string, number>
+  view?: string
+  observation?: { token: string; digest: string }
   events: BrowserProtocolEvent[]
   dialog: DialogState | null
   dialogPolicy: "ask" | "accept" | "dismiss"
@@ -462,8 +472,11 @@ export class BrowserService {
       // an advertisement iframe loading must not invalidate the page's refs.
       if (event.method === "Page.frameNavigated") {
         const frame = mainFrame.safeParse(event.params)
-        if (!frame.success || frame.data.frame.parentId === undefined)
+        if (!frame.success || frame.data.frame.parentId === undefined) {
           binding.refs.clear()
+          binding.view = undefined
+          binding.observation = undefined
+        }
       }
       const bounded =
         JSON.stringify(event.params).length > EVENT_ENTRY_BYTES
@@ -806,6 +819,14 @@ export class BrowserService {
         "events",
         "release",
       ].includes(command.action)
+      const view = visualView(command)
+      if (view !== undefined && binding.view !== view)
+        throw new BrowserFault({
+          code: "stale-target",
+          message:
+            "These coordinates belong to an earlier visual view of this tab. Capture it again and use the new view token.",
+          outcome: "not-dispatched",
+        })
       if (binding.uncertain && !observation)
         throw new BrowserFault({
           code: "outcome-unknown",
@@ -827,6 +848,12 @@ export class BrowserService {
         const value = await this.bound(binding, command, signal)
         if (command.action === "observe" || command.action === "screenshot")
           binding.uncertain = false
+        if (
+          !["observe", "screenshot", "events", "frames", "wait"].includes(
+            command.action
+          )
+        )
+          binding.view = undefined
         return value
       } catch (error) {
         if (
@@ -847,8 +874,10 @@ export class BrowserService {
           !observation &&
           error instanceof BrowserFault &&
           error.detail.outcome === "unknown"
-        )
+        ) {
           binding.uncertain = true
+          binding.view = undefined
+        }
         throw error
       } finally {
         binding.running--
@@ -935,17 +964,57 @@ export class BrowserService {
               }
             : undefined,
         })
+        const semanticNodes = observation.value.nodes.map((node) => {
+          const semantic = { ...node }
+          delete semantic.ref
+          return semantic
+        })
+        const digest = createHash("sha256")
+          .update(
+            JSON.stringify({
+              ...observation.value,
+              nodes: semanticNodes,
+            })
+          )
+          .digest("base64url")
+        if (
+          command.since !== undefined &&
+          binding.observation?.token === command.since &&
+          binding.observation.digest === digest
+        )
+          return {
+            target: { ...binding.target },
+            observation: binding.observation.token,
+            unchanged: true,
+          }
+        const token = randomUUID()
         binding.refs = observation.refs
-        return observation.value
+        binding.observation = { token, digest }
+        return { ...observation.value, observation: token }
       }
       case "screenshot": {
+        if (
+          Number(command.fullPage) +
+            Number(command.ref !== undefined) +
+            Number(command.region !== undefined) >
+          1
+        )
+          fault(
+            "invalid-request",
+            "Choose one screenshot scope: fullPage, ref, or region."
+          )
         const box = command.ref
           ? await this.box(binding, command.ref, signal)
           : undefined
         const geometry = await screenshotGeometry(
           binding.connection,
           binding.sessionId,
-          { fullPage: command.fullPage, maxSide: command.maxSide, box },
+          {
+            fullPage: command.fullPage,
+            maxSide: command.maxSide,
+            box,
+            region: command.region,
+          },
           signal
         )
         const result = z
@@ -956,7 +1025,8 @@ export class BrowserService {
               ...(command.format === "jpeg"
                 ? { quality: command.quality }
                 : { optimizeForSpeed: true }),
-              captureBeyondViewport: command.fullPage || Boolean(box),
+              captureBeyondViewport:
+                command.fullPage || Boolean(box || command.region),
               clip: geometry.clip,
             })
           )
@@ -977,8 +1047,11 @@ export class BrowserService {
           instruction:
             "For click coordinates: x = imageX / imageScaleX + pageX - viewportPageX; y = imageY / imageScaleY + pageY - viewportPageY. Use scroll to bring offscreen content into the viewport before clicking it.",
         }
+        const view = randomUUID()
+        binding.view = view
         return {
           target: { ...binding.target },
+          view,
           coordinates,
           clip: geometry.clip,
           mimeType: command.format === "png" ? "image/png" : "image/jpeg",

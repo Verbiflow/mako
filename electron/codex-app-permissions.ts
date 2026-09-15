@@ -501,7 +501,7 @@ function registerServerRequest<
       options: question.options ?? [],
     })),
   }
-  callbacks.emit(context, { type: "acp-permission", request })
+  callbacks.emit(context, { type: "live-permission", request })
 }
 
 function decisionName(decision: CommandDecision): string {

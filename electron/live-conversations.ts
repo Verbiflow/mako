@@ -421,6 +421,7 @@ export class LiveConversations {
         modes: [],
         currentMode: null,
         configOptions: [],
+        settings: options.tuning,
       },
       revision: 0,
       threadPath: options.threadPath,
@@ -550,9 +551,9 @@ export class LiveConversations {
       this.accept(event)
     } catch (error) {
       const id =
-        event.type === "acp-session"
+        event.type === "live-session"
           ? event.session.id
-          : event.type === "acp-permission"
+          : event.type === "live-permission"
             ? event.request.sessionId
             : event.id
       const resident = this.records.get(this.bindingOwners.get(id) ?? id)
@@ -562,9 +563,9 @@ export class LiveConversations {
 
   private accept(raw: LiveDriverEvent): void {
     const bindingId =
-      raw.type === "acp-session"
+      raw.type === "live-session"
         ? raw.session.id
-        : raw.type === "acp-permission"
+        : raw.type === "live-permission"
           ? raw.request.sessionId
           : raw.id
     const owner = this.bindingOwners.get(bindingId) ?? bindingId
@@ -572,7 +573,7 @@ export class LiveConversations {
     if (!bound) return
     if (this.control(bound).activeBindingId !== bindingId) {
       const connection = bound.connections.get(bindingId)
-      if (connection && raw.type === "acp-session") {
+      if (connection && raw.type === "live-session") {
         connection.session = raw.session
         if (raw.session.connection === "disconnected")
           bound.connections.delete(bindingId)
@@ -580,20 +581,20 @@ export class LiveConversations {
       return
     }
     const event: LiveDriverEvent =
-      raw.type === "acp-session"
+      raw.type === "live-session"
         ? { ...raw, session: { ...raw.session, id: owner } }
-        : raw.type === "acp-permission"
+        : raw.type === "live-permission"
           ? { ...raw, request: { ...raw.request, sessionId: owner } }
           : { ...raw, id: owner }
     const id =
-      event.type === "acp-session"
+      event.type === "live-session"
         ? event.session.id
-        : event.type === "acp-permission"
+        : event.type === "live-permission"
           ? event.request.sessionId
           : event.id
     const resident = this.records.get(id)
     if (!resident?.driver) return
-    if (event.type === "acp-session") {
+    if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
       const finishedRequest = resident.snapshot.requests.find(
         (request) => request.status === "dispatching"
@@ -645,7 +646,7 @@ export class LiveConversations {
           this.checkpoints.settle(resident, finishedRequest.id)
         this.scheduleAutoContinue(resident)
       }
-    } else if (event.type === "acp-agent") {
+    } else if (event.type === "live-agent") {
       const agent = NativeAgentObservationSchema.parse(event.agent)
       resident.snapshot = {
         ...resident.snapshot,
@@ -659,7 +660,7 @@ export class LiveConversations {
           observedAt: Date.now(),
         }),
       }
-    } else if (event.type === "acp-permission") {
+    } else if (event.type === "live-permission") {
       resident.snapshot = {
         ...resident.snapshot,
         permissions: [
@@ -674,7 +675,7 @@ export class LiveConversations {
       (resident.snapshot.base || resident.snapshot.blocks.length)
     )) {
       const updates =
-        event.type === "acp-update" ? [event.update] : event.updates
+        event.type === "live-update" ? [event.update] : event.updates
       const dispatching = resident.snapshot.requests.some(
         (request) => request.status === "dispatching"
       )
@@ -710,7 +711,7 @@ export class LiveConversations {
       }
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
-    if (event.type === "acp-session" || event.type === "acp-permission")
+    if (event.type === "live-session" || event.type === "live-permission")
       this.flush(resident)
     else this.schedule(resident)
     if (!resident.opening && resident.snapshot.session.status === "ready")

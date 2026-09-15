@@ -72,6 +72,10 @@ export function forward<LiveSession extends { id: string }>(
             : undefined) ?? raw.kind,
         status: raw.status ?? "pending",
         ...toolContent(raw.content),
+        details: withLocations(
+          toolContent(raw.content).details,
+          raw.locations
+        ),
         input:
           raw.rawInput === undefined
             ? undefined
@@ -79,7 +83,8 @@ export function forward<LiveSession extends { id: string }>(
       }
       break
     }
-    case "tool_call_update":
+    case "tool_call_update": {
+      const content = toolContent(raw.content)
       update = {
         kind: "tool-update",
         id: raw.toolCallId,
@@ -89,12 +94,12 @@ export function forward<LiveSession extends { id: string }>(
           raw.rawInput === undefined
             ? undefined
             : JSON.stringify(raw.rawInput, null, 2),
-        ...toolContent(raw.content),
-        output:
-          toolContent(raw.content).output ??
-          parseAcpToolOutput({ value: raw.rawOutput }),
+        ...content,
+        details: withLocations(content.details, raw.locations),
+        output: content.output ?? parseAcpToolOutput({ value: raw.rawOutput }),
       }
       break
+    }
     case "plan":
       update = {
         kind: "plan",
@@ -124,7 +129,7 @@ export function forward<LiveSession extends { id: string }>(
     update.text ||
     (update.kind === "user" && update.attachments?.length)
   ) {
-    emit({ type: "acp-update", id: live.id, update })
+    emit({ type: "live-update", id: live.id, update })
   }
 }
 
@@ -211,6 +216,20 @@ function toolContent(
     attachments: attachments.length ? attachments : undefined,
     details: details.length ? details : undefined,
   }
+}
+
+/** A tool's own `locations` become file links beside its diff and terminal details. */
+function withLocations(
+  details: ToolDetail[] | undefined,
+  locations: ReadonlyArray<{ path: string; line?: number | null }> | null | undefined
+): ToolDetail[] | undefined {
+  if (!locations?.length) return details
+  const links: ToolDetail[] = locations.map((location) => ({
+    type: "location",
+    path: location.path,
+    line: location.line ?? undefined,
+  }))
+  return [...(details ?? []), ...links]
 }
 
 /** Devin's metadata names the tool the model actually called. */

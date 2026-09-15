@@ -55,10 +55,12 @@ import type {
   McpRegistrySnapshot,
 } from "./shared.js"
 import { trackProviderChild } from "./provider-children.js"
+import { createLiveEngine } from "./live-engine.js"
 
 type Live = {
   id: string
   cwd: string
+  emit(event: LiveDriverEvent): void
   child: ChildProcessWithoutNullStreams
   threadId: string | null
   promptSequence: number
@@ -86,7 +88,8 @@ type Live = {
 const STARTUP_TIMEOUT_MS = 10_000
 const MAX_STDERR_BUFFER = 16 * 1024
 const MAX_PROMPT_CHARS = 1_000_000
-const sessions = new Map<string, Live>()
+const engine = createLiveEngine<Live>()
+const sessions = engine.sessions
 let sendEvent: (event: LiveDriverEvent) => void = () => {}
 
 const permissionCallbacks: PermissionCallbacks<Live> = {
@@ -100,7 +103,7 @@ export function bindCodexApp(send: (event: LiveDriverEvent) => void): void {
 }
 
 export function codexAppState(id: string): LiveSessionState | null {
-  return sessions.get(id)?.state ?? null
+  return engine.state(id)
 }
 
 export async function codexAppStart(
@@ -146,6 +149,7 @@ export async function codexAppStart(
       configOptions: [],
     },
     tuning: options.tuning,
+    emit: (event) => emit(event),
     conversationToolsUrl: options.conversationTools?.url,
     control: options.conversationTools?.control,
     mcpSnapshot,
@@ -162,7 +166,7 @@ export async function codexAppStart(
       emitUpdate: (update) => emitUpdate(live, update),
       observeAgents: (item, replay) => {
         for (const agent of live.agents.project(item, replay))
-          emit({ type: "acp-agent", id: live.id, agent })
+          engine.emitAgent(live, agent)
       },
       handleServerRequest: (rpcId, method, params) =>
         handleServerRequest(live, permissionCallbacks, rpcId, method, params),
@@ -200,7 +204,7 @@ export async function codexAppStart(
       live.replayUpdates = null
     }
     if (replayUpdates.length > 0)
-      emit({ type: "acp-updates", id: live.id, updates: replayUpdates })
+      engine.emitUpdates(live, replayUpdates)
     const settings: SessionSettings = { model: response.model, options: {} }
     if (response.reasoningEffort)
       settings.options!.effort = response.reasoningEffort
@@ -484,8 +488,7 @@ function clearStartupTimer(live: Live): void {
 }
 
 function updateState(live: Live, patch: Partial<LiveSessionState>): void {
-  live.state = { ...live.state, ...patch }
-  emit({ type: "acp-session", session: live.state })
+  engine.patch(live, patch)
 }
 
 function emitUpdate(live: Live, update: LiveUpdate): void {
@@ -500,7 +503,7 @@ function emitUpdate(live: Live, update: LiveUpdate): void {
     live.replayUpdates.push(update)
     return
   }
-  emit({ type: "acp-update", id: live.id, update })
+  engine.emitUpdate(live, update)
 }
 
 function emit(event: LiveDriverEvent): void {

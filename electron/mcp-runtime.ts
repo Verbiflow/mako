@@ -35,15 +35,17 @@ function localEnvironment(
   const environment = isMakoNodeServer(definition.name)
     ? [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
     : []
-  if (
-    ["mako-browser-use", "mako-local-control"].includes(definition.name) &&
-    control
+  const controlServer = ["mako-browser-use", "mako-local-control"].includes(
+    definition.name
   )
+  if (controlServer && control)
     environment.push(
       { name: "MAKO_CONTROL_URL", value: control.url },
       { name: "MAKO_CONTROL_TOKEN", value: control.token }
     )
-  if (definition.name === "mako-local-control" && taskId)
+  // The task id names the driver session and the artifact directory that
+  // oversized program results are written to.
+  if (controlServer && taskId)
     environment.push({ name: "MAKO_TASK_ID", value: taskId })
   return environment
 }
