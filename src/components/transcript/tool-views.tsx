@@ -91,9 +91,10 @@ export function ToolGlyph({
   const normalized = name.toLowerCase()
   const Glyph =
     override ??
-    (normalized.startsWith("mako_macos_")
+    (normalized.startsWith("mako_computer_")
       ? MonitorCogIcon
-      : normalized.startsWith("browser_")
+      : normalized.startsWith("browser_") ||
+          normalized.startsWith("mako_browser_")
         ? GlobeIcon
         : ICONS.get(normalized)) ??
     WrenchIcon

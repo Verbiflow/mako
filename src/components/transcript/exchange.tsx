@@ -21,6 +21,7 @@ import {
 } from "@/lib/tools"
 import { formatTime, textOf } from "@/lib/format"
 import { parseAttachmentAppendix } from "@/lib/attachments"
+import { parseSkillAppendix } from "@/lib/skill-references"
 import {
   attachmentPromptSegments,
   reusablePromptAttachments,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/exchanges"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
+import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, turnStopLabel, type TurnStop } from "@/state/prompt-delivery"
 import { useTranscriptSource } from "./source-context"
@@ -189,10 +191,16 @@ function Continued({ continuation, timestamp }: { continuation: TurnContinuation
 
 function Prompt({ message }: { message: ChatMessage }) {
   const raw = textOf(message.blocks)
-  // Sent context appendices read back as chips, not walls of implementation detail.
-  const { body, plans } = useMemo(
-    () => parsePlanContext(stripThreadReferenceAppendix(raw)),
+  // Sent context appendices read back as chips, not walls of implementation
+  // detail. Skills were appended last, so they come off first; their entries
+  // tell each `$skill` chip whether the provider had the skill or was handed it.
+  const { body: withoutSkills, skills: sentSkills } = useMemo(
+    () => parseSkillAppendix(raw),
     [raw]
+  )
+  const { body, plans } = useMemo(
+    () => parsePlanContext(stripThreadReferenceAppendix(withoutSkills)),
+    [withoutSkills]
   )
   const { body: text, files } = useMemo(
     () => parseAttachmentAppendix(body),
@@ -212,8 +220,11 @@ function Prompt({ message }: { message: ChatMessage }) {
     [files, message.blocks]
   )
   const referenceFiles = useMemo(() => reusable.map((item) => ({ index: item.index, name: item.name, path: item.stagedPath })), [reusable])
+  // A copied prompt keeps its `$skill` tokens and drops the bodies they
+  // carried: pasted back into the composer they resolve again for whichever
+  // provider answers next.
   const { copied, copy } = useCopy(
-    appendPlanContext(restoreAttachmentReferences(text, reusable), plans) + raw.slice(stripThreadReferenceAppendix(raw).length),
+    appendPlanContext(restoreAttachmentReferences(text, reusable), plans) + withoutSkills.slice(stripThreadReferenceAppendix(withoutSkills).length),
     reusable
   )
   const compose = () =>
@@ -250,7 +261,7 @@ function Prompt({ message }: { message: ChatMessage }) {
           at a reading measure, unmistakably theirs without a ring. The
           assistant's reply below stays full-width and chrome-free. */}
       <div onCopy={event => copyPromptSelection(event, reusable)} className="max-w-[min(82%,64ch)] rounded-xl rounded-br-md bg-raised px-3.5 py-2.5">
-        <Prose text={text} references={referenceFiles} className="prompt-prose whitespace-normal" />
+        <Prose text={text} references={referenceFiles} skills={sentSkills} className="prompt-prose whitespace-normal" />
         <PlanContextChips plans={plans} />
         {message.blocks
           .filter((block) => block.type === "attachment")
@@ -724,7 +735,7 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
 function ForkButton({ exchange }: { exchange: ExchangeData }) {
   const [open, setOpen] = useState(false)
   const viewing = useThreads((state) => state.viewing?.ref)
-  const targets = useThreads((state) => state.targets)
+  const targets = useThreads((state) => continueTargets(state))
   const last = exchange.response.at(-1)
   const nativeEntry = useSession((state) =>
     last && state.tree.some((entry) => entry.id === last.id) ? last.id : null

@@ -11,6 +11,7 @@ import { SearchSelect } from "@/components/ui/search-select"
 import { useDrafts, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
 import { acp, useAcp, activeLiveAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
+import { liveHarnesses } from "@/state/descriptors"
 import { harnessLabel } from "@/components/rail/harness-meta"
 
 const EMPTY_CHILDREN: never[] = []
@@ -33,7 +34,7 @@ export function ConversationRelations() {
       )
     )
   )
-  const targets = useThreads((state) => state.acpable)
+  const targets = useThreads((state) => liveHarnesses(state))
   const conversationId = useAcp((state) => state.activeKey ?? "")
   const draftKey = `delegation:${conversationId}`
   const task = useDrafts(

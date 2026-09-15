@@ -36,7 +36,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false)
   const dense = usePrefs((prefs) => prefs.denseTools)
   const source = useTranscriptSource()
-  const view = useToolView(call.name)
+  const view = useToolView(call)
 
   const summary = view?.summary?.(call) ?? primaryArgument(call.arguments)
   const openPath = view?.openPath?.(call)

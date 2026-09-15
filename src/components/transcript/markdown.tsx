@@ -15,6 +15,7 @@ import {
   ThreadChip,
 } from "@/components/composer/reference-chip"
 import type { PromptReference } from "@/lib/prompt-markdown"
+import { isSkillName, type SkillAppendixEntry } from "@/lib/skill-references"
 import type { AttachmentFileReference } from "@/lib/attachments"
 import { ProseStreamingContext } from "./prose-layout-context"
 import { ChangingLabel } from "@/components/ui/changing-label"
@@ -67,6 +68,10 @@ const STREAM_FRAME_MS = 90
 const EMPTY_REFERENCES = new Map<string, PromptReference>()
 const PromptReferencesContext =
   createContext<ReadonlyMap<string, PromptReference>>(EMPTY_REFERENCES)
+const EMPTY_SKILLS = new Map<string, SkillAppendixEntry>()
+/** What a sent prompt's appendix said about each `$skill`, so its chip can say the same. */
+const PromptSkillsContext =
+  createContext<ReadonlyMap<string, SkillAppendixEntry>>(EMPTY_SKILLS)
 
 export const Prose = memo(function Prose({
   text,
@@ -74,14 +79,24 @@ export const Prose = memo(function Prose({
   className,
   urlTransform,
   references,
+  skills,
 }: {
   text: string
   className?: string
   references?: readonly AttachmentFileReference[]
+  /** The skill entries a sent prompt carried; a `$skill` with none went out as typed. */
+  skills?: readonly SkillAppendixEntry[]
   /** While true the parse is rate-limited rather than run per token. */
   streaming?: boolean
   urlTransform?: (url: string) => string
 }) {
+  const skillMap = useMemo(
+    () =>
+      skills && skills.length > 0
+        ? new Map(skills.map((entry) => [entry.name, entry]))
+        : EMPTY_SKILLS,
+    [skills]
+  )
   const throttled = useThrottled(text, Boolean(streaming))
   const parsed = useParsedProse(throttled, Boolean(streaming) && !references)
   const source = parsed?.text ?? throttled
@@ -138,7 +153,7 @@ export const Prose = memo(function Prose({
     >
       <ProseStreamingContext value={Boolean(streaming)}>
         <PromptReferencesContext value={referenceMap}>
-          {rendered}
+          <PromptSkillsContext value={skillMap}>{rendered}</PromptSkillsContext>
         </PromptReferencesContext>
       </ProseStreamingContext>
     </div>
@@ -249,6 +264,7 @@ function MarkdownMedia({ src, alt }: ComponentProps<"img">) {
 function CitationLink({ href, children }: ComponentProps<"a">) {
   const source = useTranscriptSource()
   const references = useContext(PromptReferencesContext)
+  const sentSkills = useContext(PromptSkillsContext)
   const reference = href ? references.get(href) : undefined
   if (reference?.kind === "attachment")
     return (
@@ -264,7 +280,16 @@ function CitationLink({ href, children }: ComponentProps<"a">) {
     return (
       <ThreadChip harness={reference.harness} id={reference.id} />
     )
-  if (reference?.kind === "skill") return <SkillChip name={reference.name} />
+  if (reference?.kind === "skill") {
+    // `$5` is prose the tokenizer let through, never a skill nothing has.
+    if (!isSkillName(reference.name)) return <>{children}</>
+    return (
+      <SkillChip
+        name={reference.name}
+        sent={sentSkills.get(reference.name) ?? (sentSkills.size > 0 ? null : undefined)}
+      />
+    )
+  }
   if (reference?.kind === "mcp") return <McpChip name={reference.name} />
   const target = markdownFileTarget(href)
   if (!href)
