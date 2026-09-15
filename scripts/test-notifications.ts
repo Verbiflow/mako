@@ -225,7 +225,7 @@ function subjectFor(path: string, title = path): NotificationSubject {
     target: { kind: "thread", path },
     title,
     agent: "Claude Code",
-    workspace: "pi-ui",
+    workspace: "mako",
   }
 }
 
@@ -268,7 +268,7 @@ function reset() {
     id: "thread:/c:ask:perm-1",
     subject: "thread:/c",
     title: "Migrate schema",
-    subtitle: "Claude Code needs you · pi-ui",
+    subtitle: "Claude Code needs you · mako",
     body: "Run npm test?",
   })
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/c", "thread:/b"], "the ask joins the unseen answer")
@@ -346,7 +346,7 @@ function liveConversation(overrides: Partial<LiveAcpConversation> = {}): LiveAcp
     key: "live-1",
     draftKey: "live-1",
     harness: "claude",
-    cwd: "/Users/kashyab/pi-ui",
+    cwd: "/Users/dev/mako",
     title: "Notifications",
     threadPath: "/sessions/live-1.jsonl",
     blocks: [],
@@ -359,7 +359,7 @@ function liveConversation(overrides: Partial<LiveAcpConversation> = {}): LiveAcp
       connection: "connected",
       id: "live-1",
       harness: "claude",
-      cwd: "/Users/kashyab/pi-ui",
+      cwd: "/Users/dev/mako",
       status: "ready",
       modes: [],
       currentMode: null,
@@ -459,7 +459,7 @@ assert.equal(
     "running"
   )
   await fake.advance(BURST_SETTLE_MS)
-  assert.equal(fake.log.desktop.at(-1)?.subtitle, "Claude Code failed · pi-ui")
+  assert.equal(fake.log.desktop.at(-1)?.subtitle, "Claude Code failed · mako")
   assert.equal(fake.log.desktop.at(-1)?.body, "Provider exited")
 
   // A dropped connection the host is about to continue itself is not an
@@ -628,11 +628,11 @@ assert.equal(parseAuthorizationReadout('{"authorization":"weird","alert":"enable
     id: "n1",
     subject: "thread:/a",
     title: "Rail",
-    subtitle: "Claude Code finished · pi-ui",
+    subtitle: "Claude Code finished · mako",
     body: "Done.",
     silent: true,
   })
-  assert.equal(handles[0]?.body, "Claude Code finished · pi-ui\nDone.", "off macOS the subtitle folds into the body")
+  assert.equal(handles[0]?.body, "Claude Code finished · mako\nDone.", "off macOS the subtitle folds into the body")
   handles[0]!.fire("show")
   assert.deepEqual(await first, { delivered: true }, "shown means delivered")
 

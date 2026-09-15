@@ -837,27 +837,27 @@ const homeRef = {
   harness: "claude",
   nativeId: "home",
   path: "/home",
-  cwd: "/Users/kashyab",
+  cwd: "/Users/dev",
 } satisfies ThreadRef
-assert.equal(threadFolderKey(homeRef), "/Users/kashyab")
+assert.equal(threadFolderKey(homeRef), "/Users/dev")
 assert.equal(
   threadBelongsToWorkspace(
-    { ...homeRef, cwd: "/Users/kashyab/repos/nu/arca" },
-    "/Users/kashyab"
+    { ...homeRef, cwd: "/Users/dev/repos/nu/arca" },
+    "/Users/dev"
   ),
   true
 )
 assert.equal(
   threadBelongsToWorkspace(
-    { ...homeRef, cwd: "/Users/kashyab-other/repo" },
-    "/Users/kashyab"
+    { ...homeRef, cwd: "/Users/dev-other/repo" },
+    "/Users/dev"
   ),
   false
 )
 assert.deepEqual(
   groupThreadFolders({
     refs: [],
-    currentCwd: "/Users/kashyab",
+    currentCwd: "/Users/dev",
     pinnedThreads: [],
     pinnedFolders: [],
     sortBy: "recent",
@@ -867,7 +867,7 @@ assert.deepEqual(
     count: folder.refs.length,
     current: folder.current,
   })),
-  [{ cwd: "/Users/kashyab", name: "Home", count: 0, current: true }]
+  [{ cwd: "/Users/dev", name: "Home", count: 0, current: true }]
 )
 assert.deepEqual(
   groupThreadFolders({

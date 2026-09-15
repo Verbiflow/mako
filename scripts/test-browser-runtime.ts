@@ -54,6 +54,18 @@ try {
   )
   assert.match(JSON.stringify(next), /next/)
   assert.deepEqual(calls, ["status"])
+  // A program's own error keeps the worker and its state: a refused action
+  // once cost the next program its target as well as the step.
+  await first.run("state.kept = 'yes'; return 1", new AbortController().signal)
+  await assert.rejects(
+    first.run("throw new Error('my own fault')", new AbortController().signal),
+    /my own fault/
+  )
+  const kept = await first.run(
+    "return state.kept ?? 'lost'",
+    new AbortController().signal
+  )
+  assert.match(JSON.stringify(kept), /yes/)
   const late = new BrowserToolsRuntime(async () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     return []
@@ -229,7 +241,7 @@ try {
   assert.equal(nodes.sample?.length, 3)
   assert.equal(outlineOf("y".repeat(1000)).head?.length, 240)
   console.log(
-    "Control scripts: shared typed adapter, isolated persistent state, CPU-bound cancellation, canceled queued work never dispatches, recovery after worker reset, ordered artifact receipts instead of truncation, image spill past the inline count, and bounded artifact names"
+    "Control scripts: shared typed adapter, isolated persistent state, CPU-bound cancellation, canceled queued work never dispatches, recovery after worker reset, state kept through a program's own error, ordered artifact receipts instead of truncation, image spill past the inline count, and bounded artifact names"
   )
 } finally {
   await first.close()
