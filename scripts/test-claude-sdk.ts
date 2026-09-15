@@ -84,9 +84,9 @@ await driver.prompt("sdk-fixture", "Begin", [])
 const original = await input?.next()
 assert.equal(original?.value?.message.content[0].text, "Begin")
 const running = events.findLast(
-  (event) => event.type === "acp-session" && event.session.status === "running"
+  (event) => event.type === "live-session" && event.session.status === "running"
 )
-assert.ok(running?.type === "acp-session" && running.session.nativeRunId)
+assert.ok(running?.type === "live-session" && running.session.nativeRunId)
 assert.ok(driver.steer)
 assert.deepEqual(
   await driver.steer("sdk-fixture", {
@@ -118,8 +118,8 @@ await assert.rejects(missing, /not confirmed steering/)
 await assert.rejects(driver.cancel("sdk-fixture"), /interrupt timed out/)
 assert.equal(closed, true)
 assert.equal(
-  events.findLast((event) => event.type === "acp-session")?.type,
-  "acp-session"
+  events.findLast((event) => event.type === "live-session")?.type,
+  "live-session"
 )
 await assert.rejects(
   driver.prompt("sdk-fixture", "After stop", []),

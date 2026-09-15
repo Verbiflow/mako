@@ -105,7 +105,7 @@ try {
     await owner.start("fixture", root, { conversationId: id })
     await tick()
     owner.observe({
-      type: "acp-update",
+      type: "live-update",
       id,
       update: { kind: "text", text: `Saved ${index}` },
     })

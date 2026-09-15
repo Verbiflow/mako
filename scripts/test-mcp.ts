@@ -23,7 +23,7 @@ import {
 } from "../electron/mcp.js"
 import { integrationCatalog } from "../electron/integrations.js"
 import { BROWSER_TOOL_INPUTS } from "../electron/browser-tools-main.js"
-import { LOCAL_TOOL_INPUTS } from "../electron/local-tools-main.js"
+import { COMPUTER_TOOL_INPUTS } from "../electron/computer-tools-main.js"
 import {
   cuaEmbeddedSocket,
   ensureCuaEmbedded,
@@ -405,7 +405,8 @@ async function testManagedDefinitions(): Promise<void> {
   )
   assert.equal(
     definitions.some((entry) => entry.definition.name === "mako-local-tools"),
-    true
+    false,
+    "the macOS harness server is gone; native control is the driver alone"
   )
   assert.equal(
     definitions.some(
@@ -413,10 +414,10 @@ async function testManagedDefinitions(): Promise<void> {
     ),
     true
   )
-  const localTools = definitions.find(
-    (entry) => entry.definition.name === "mako-local-tools"
+  const browserTools = definitions.find(
+    (entry) => entry.definition.name === "mako-browser-use"
   )
-  assert.ok(localTools)
+  assert.ok(browserTools)
   const managedSnapshot: McpRegistrySnapshot = {
     cwd: tmpdir(),
     generatedAt: 1,
@@ -431,9 +432,7 @@ async function testManagedDefinitions(): Promise<void> {
       .filter(
         (entry) =>
           !entry.definition.blockReason &&
-          ["mako-browser-use", "mako-local-tools"].includes(
-            entry.definition.name
-          )
+          entry.definition.name === "mako-browser-use"
       )
       .map((entry) => entry.definition.name)
       .sort()
@@ -445,8 +444,8 @@ async function testManagedDefinitions(): Promise<void> {
         z.object({ env: z.record(z.string(), z.string()) })
       ),
     })
-    .parse(JSON.parse(mergeJsonMcpConfig("", localTools.definition, "cursor")))
-  assert.deepEqual(cursor.mcpServers["mako-local-tools"]?.env, {
+    .parse(JSON.parse(mergeJsonMcpConfig("", browserTools.definition, "cursor")))
+  assert.deepEqual(cursor.mcpServers["mako-browser-use"]?.env, {
     ELECTRON_RUN_AS_NODE: "1",
   })
 }
@@ -455,7 +454,7 @@ async function testManagedCommandIsolation(): Promise<void> {
   if (process.platform !== "darwin") return
   const directory = await mkdtemp(join(tmpdir(), "mako-mcp-command-env-"))
   const report = join(directory, "environment.json")
-  const command = join(directory, "macos-harness")
+  const command = join(directory, "cua-driver")
   const keys = ["MAKO_BACKEND_TOKEN", "MAKO_CUA_SOCKET"]
   await writeFile(
     command,
@@ -476,7 +475,7 @@ async function testManagedCommandIsolation(): Promise<void> {
 
 async function testMakoRuntimeProjection(): Promise<void> {
   const managed = (
-    name: "mako-browser-use" | "mako-local-tools" | "mako-local-control",
+    name: "mako-browser-use" | "mako-local-control",
     command: string,
     args: string[]
   ): McpDiscoveredDefinition => ({
@@ -485,10 +484,7 @@ async function testMakoRuntimeProjection(): Promise<void> {
       transport: "stdio",
       command,
       args,
-      envNames:
-        name === "mako-local-tools" || name === "mako-browser-use"
-          ? ["ELECTRON_RUN_AS_NODE"]
-          : [],
+      envNames: name === "mako-browser-use" ? ["ELECTRON_RUN_AS_NODE"] : [],
       headerNames: [],
       portable: true,
     },
@@ -505,7 +501,6 @@ async function testMakoRuntimeProjection(): Promise<void> {
     providers: [],
     servers: mergeMcpDefinitions([
       managed("mako-browser-use", process.execPath, ["browser-tools.js"]),
-      managed("mako-local-tools", process.execPath, ["local-tools.js"]),
       managed("mako-local-control", "cua-driver", [
         "mcp",
         "--embedded",
@@ -521,11 +516,7 @@ async function testMakoRuntimeProjection(): Promise<void> {
   const acpServers = acpMcpServers(snapshot, "claude", ["stdio"])
   assert.deepEqual(
     acpServers.map((server) => server.name),
-    ["mako-browser-use", "mako-local-control", "mako-local-tools"]
-  )
-  assert.deepEqual(
-    acpServers.find((server) => server.name === "mako-local-tools")?.env,
-    [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
+    ["mako-browser-use", "mako-local-control"]
   )
   assert.deepEqual(
     acpServers.find((server) => server.name === "mako-browser-use")?.env,
@@ -547,7 +538,6 @@ async function testMakoRuntimeProjection(): Promise<void> {
   assert.deepEqual(Object.keys(servers).sort(), [
     "mako-browser-use",
     "mako-local-control",
-    "mako-local-tools",
   ])
   const localControl = snapshot.servers.find(
     (server) => server.name === "mako-local-control"
@@ -569,7 +559,6 @@ async function testMakoRuntimeProjection(): Promise<void> {
     ...snapshot,
     servers: mergeMcpDefinitions([
       managed("mako-browser-use", process.execPath, ["browser-tools.js"]),
-      managed("mako-local-tools", process.execPath, ["local-tools.js"]),
       managed("mako-local-control", "cua-driver", [
         "mcp",
         "--embedded",
@@ -587,7 +576,7 @@ async function testMakoRuntimeProjection(): Promise<void> {
     acpMcpServers(nativeSnapshot, "claude", ["stdio"]).map(
       (server) => server.name
     ),
-    ["mako-browser-use", "mako-local-control", "mako-local-tools"]
+    ["mako-browser-use", "mako-local-control"]
   )
 }
 
@@ -789,42 +778,21 @@ function testLocalSchemas(): void {
       BROWSER_TOOL_INPUTS.exec.safeParse({ source }).success,
       false
     )
+    assert.equal(
+      COMPUTER_TOOL_INPUTS.exec.safeParse({ source }).success,
+      false
+    )
   }
-  assert.equal(LOCAL_TOOL_INPUTS.apps.safeParse({}).success, true)
-  assert.equal(LOCAL_TOOL_INPUTS.apps.safeParse({ extra: true }).success, false)
   assert.equal(
-    LOCAL_TOOL_INPUTS.click.safeParse({ app: "Finder", x: 10, y: 20 }).success,
-    true
-  )
-  assert.equal(
-    LOCAL_TOOL_INPUTS.click.safeParse({ app: "Finder", x: "10", y: 20 })
-      .success,
+    BROWSER_TOOL_INPUTS.help.safeParse({ action: "click", extra: 1 }).success,
     false
   )
+  assert.equal(COMPUTER_TOOL_INPUTS.help.safeParse({}).success, true)
   assert.equal(
-    LOCAL_TOOL_INPUTS.type.safeParse({
-      app: "Finder",
-      text: "x".repeat(100_001),
-    }).success,
-    false
-  )
-  assert.equal(
-    LOCAL_TOOL_INPUTS.script.safeParse({
-      source: "tell application \"Finder\" to get name",
-      language: "AppleScript",
-    }).success,
+    COMPUTER_TOOL_INPUTS.help.safeParse({ tool: "hotkey" }).success,
     true
   )
-  assert.equal(
-    LOCAL_TOOL_INPUTS.script.safeParse({ source: "x", language: "Python" })
-      .success,
-    false
-  )
-  assert.equal(
-    LOCAL_TOOL_INPUTS.exec.safeParse({ source: "print(mac.list_apps())" })
-      .success,
-    true
-  )
+  assert.equal(COMPUTER_TOOL_INPUTS.status.safeParse({ a: 1 }).success, false)
 }
 
 testProtocolVersion()

@@ -10,7 +10,7 @@ const directory = await mkdtemp(join(tmpdir(), "mako-mcp-entry-"))
 try {
   for (const [file, tool] of [
     ["browser-tools-main.ts", "mako_browser_exec"],
-    ["local-tools-main.ts", "mako_macos_see"],
+    ["computer-tools-main.ts", "mako_computer_exec"],
   ]) {
     const path = join(directory, file)
     await symlink(

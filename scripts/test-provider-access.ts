@@ -23,9 +23,9 @@ const modes: LiveSessionMode[] = [
   { id: "access:full", name: "Full access", access: "full", enforcement: "host" },
 ]
 const state = {
-  liveCapabilities: [
-    { provider: "cursor", canResume: false, modes, defaultMode: "agent" },
-    { provider: "grok", canResume: true },
+  descriptors: [
+    { provider: "cursor", displayName: "Cursor", resumable: true, live: true, canResume: false, modes, defaultMode: "agent" },
+    { provider: "grok", displayName: "Grok", resumable: true, live: true, canResume: true },
   ],
 }
 

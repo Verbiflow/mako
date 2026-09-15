@@ -13,6 +13,7 @@ import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess }
 import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
 import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
 import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
+import { validateLiveDriver } from "../electron/providers/live-driver.ts"
 
 const allowReject = [
   { optionId: "allow-once", kind: "allow_once" },
@@ -225,3 +226,21 @@ assert.equal(acpLiveDriver(openCodeAcpSource).defaultMode, accessModeId("ask"))
 assert.equal(codexLiveDriver.defaultMode, accessModeId("ask"))
 assert.equal(claudeLiveDriver.defaultMode, "default")
 assert.equal(cursorDriver.defaultMode, "full-access")
+
+// Invariants the interface cannot type fail at install, not at a call site.
+assert.throws(
+  () => validateLiveDriver({ provider: "x", canResume: false, steer: async () => ({ kind: "accepted" as const }) }),
+  /steer and steering/
+)
+assert.throws(
+  () => validateLiveDriver({ provider: "x", canResume: false, steering: "interrupt" }),
+  /steer and steering/
+)
+assert.throws(
+  () => validateLiveDriver({ provider: "x", canResume: false, modes: [{ id: "a", name: "A", access: "full" }] }),
+  /no enforcer/
+)
+assert.throws(
+  () => validateLiveDriver({ provider: "x", canResume: false, modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
+  /not one of its declared modes/
+)

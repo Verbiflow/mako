@@ -38,7 +38,7 @@ const driver: ProviderLiveDriver = {
     const session = sessions.get(id)
     if (!session) throw new Error("Missing test session")
     owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: { ...session, status: "running" },
     })
   },
@@ -114,7 +114,7 @@ try {
   )
   const stableB = acpStore.get().conversations[b.key]
   owner.observe({
-    type: "acp-update",
+    type: "live-update",
     id: a.key,
     update: { kind: "text", text: "background A" },
   })
@@ -122,7 +122,7 @@ try {
   assert.equal(acpStore.get().conversations[b.key], stableB)
   assert.equal(acpStore.get().conversations[a.key]?.blocks.at(-1)?.type, "text")
   owner.observe({
-    type: "acp-permission",
+    type: "live-permission",
     request: {
       id: "permission-a",
       sessionId: a.key,
@@ -138,7 +138,7 @@ try {
   assert.equal(await acp.send("queued B"), true)
   assert.equal(activeLiveAcp(acpStore.get())?.queued[0]?.text, "queued B")
   assert.equal(sent.length, 2)
-  owner.observe({ type: "acp-session", session: sessions.get(b.key)! })
+  owner.observe({ type: "live-session", session: sessions.get(b.key)! })
   await tick()
   assert.equal(sent.at(-1)?.text, "queued B")
   assert.equal(activeLiveAcp(acpStore.get())?.queued.length, 0)
@@ -152,7 +152,7 @@ try {
       },
     },
   })
-  owner.observe({ type: "acp-session", session: sessions.get(b.key)! })
+  owner.observe({ type: "live-session", session: sessions.get(b.key)! })
   assert.equal(activeLiveAcp(acpStore.get())?.sending, false)
   assert.equal(activeLiveAcp(acpStore.get())?.canceling, false)
   loseStartReply = true

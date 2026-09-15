@@ -67,6 +67,20 @@ try {
     await run("task-b", { action: "open", browser: "fixture" })
   )
   assert.notEqual(a.tab, b.tab)
+  assert.ok(
+    fixture.calls
+      .filter((call) => call.method === "Target.createTarget")
+      .every((call) => call.params.background === true),
+    "new tabs stay in the background unless activation is explicit"
+  )
+  assert.ok(
+    fixture.calls.some(
+      (call) =>
+        call.method === "Emulation.setFocusEmulationEnabled" &&
+        call.params.enabled === true
+    ),
+    "background tabs receive target-local focus emulation"
+  )
   await Promise.all([
     run("task-a", { action: "type", target: a, text: "a" }),
     run("task-b", { action: "type", target: b, text: "b" }),
@@ -142,8 +156,83 @@ try {
     }),
     /outcome is unknown/
   )
-  await run("task-a", { action: "observe", target: a })
+  const firstObservation = z
+    .object({
+      observation: z.string(),
+      nodes: z.array(z.object({ ref: z.string() })),
+    })
+    .parse(await run("task-a", { action: "observe", target: a }))
+  const unchanged = await run("task-a", {
+    action: "observe",
+    target: a,
+    since: firstObservation.observation,
+  })
+  assert.deepEqual(unchanged, {
+    target: a,
+    observation: firstObservation.observation,
+    unchanged: true,
+  })
+  await run("task-a", {
+    action: "type",
+    target: a,
+    ref: firstObservation.nodes[0]!.ref,
+    text: "unchanged ref remains usable",
+  })
   await run("task-a", { action: "type", target: a, text: "after-observation" })
+  const magnified = z
+    .object({
+      view: z.string(),
+      clip: z.object({
+        x: z.number(),
+        y: z.number(),
+        width: z.number(),
+        height: z.number(),
+        scale: z.number(),
+      }),
+      coordinates: z.object({
+        viewportWidth: z.number(),
+        viewportHeight: z.number(),
+      }),
+    })
+    .parse(
+      await run("task-a", {
+        action: "screenshot",
+        target: a,
+        region: { x: 10, y: 20, width: 100, height: 50 },
+      })
+    )
+  assert.deepEqual(magnified.clip, {
+    x: 10,
+    y: 20,
+    width: 100,
+    height: 50,
+    scale: 0.5,
+  })
+  assert.deepEqual(magnified.coordinates, {
+    viewportWidth: 800,
+    viewportHeight: 600,
+  })
+  await run("task-a", {
+    action: "click",
+    target: a,
+    at: { x: 40, y: 30, view: magnified.view },
+  })
+  await assert.rejects(
+    run("task-a", {
+      action: "click",
+      target: a,
+      at: { x: 40, y: 30, view: magnified.view },
+    }),
+    /earlier visual view/
+  )
+  await assert.rejects(
+    run("task-a", {
+      action: "screenshot",
+      target: a,
+      region: { x: 750, y: 20, width: 100, height: 50 },
+    }),
+    /outside the current viewport/
+  )
   const originalNodes = fixture.axNodes.splice(0)
   fixture.axNodes.push(
     ...Array.from({ length: 100 }, (_, index) => ({
@@ -159,9 +248,11 @@ try {
     action: "observe",
     target: a,
     maxNodes: 1000,
+    since: firstObservation.observation,
   })
   const observation = z
     .object({
+      observation: z.string(),
       nodes: z.array(
         z.object({ ref: z.string(), name: z.string(), value: z.string() })
       ),
@@ -169,6 +260,7 @@ try {
       truncatedTextFields: z.number(),
     })
     .parse(bounded)
+  assert.notEqual(observation.observation, firstObservation.observation)
   assert.ok(
     Buffer.byteLength(JSON.stringify(bounded)) <= 60_000,
     "actual UTF-8 result fits the tool text budget"

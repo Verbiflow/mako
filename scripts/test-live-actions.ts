@@ -52,7 +52,7 @@ const driver: ProviderLiveDriver = {
       nativeRunId: randomUUID(),
     }
     states.set(id, running)
-    owner.observe({ type: "acp-session", session: running })
+    owner.observe({ type: "live-session", session: running })
   },
   async steer(id, input) {
     steeringCalls++
@@ -69,7 +69,7 @@ const driver: ProviderLiveDriver = {
       nativeRunId: randomUUID(),
     }
     states.set(id, running)
-    owner.observe({ type: "acp-session", session: running })
+    owner.observe({ type: "live-session", session: running })
   },
   async permission() {},
   async cancel() {},
@@ -90,7 +90,7 @@ function finish() {
   assert.ok(state)
   const ready: LiveSessionState = { ...state, status: "ready" }
   states.set(id, ready)
-  owner.observe({ type: "acp-session", session: ready })
+  owner.observe({ type: "live-session", session: ready })
 }
 function steering(requestId: string): LiveActionInput {
   return {

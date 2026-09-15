@@ -45,7 +45,7 @@ try {
       },
     },
     (event) => {
-      if (event.type === "acp-update") updates.push(event.update)
+      if (event.type === "live-update") updates.push(event.update)
     },
     () => {}
   )
@@ -73,7 +73,7 @@ try {
       },
     },
     (event) => {
-      if (event.type === "acp-update") updates.push(event.update)
+      if (event.type === "live-update") updates.push(event.update)
     },
     () => {}
   )

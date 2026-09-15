@@ -10,6 +10,7 @@ import { FolderActivity } from "../src/components/rail/rail-activity"
 import { ThreadStatusMark } from "../src/components/rail/thread-status"
 import type { ThreadFolder } from "../src/lib/thread-folders"
 import { AttachmentStrip, InlineAttachment } from "../src/components/composer/attachments"
+import { MentionMenu } from "../src/components/composer/mention-menu"
 import type { Attachment } from "../src/lib/attachments"
 import { projectDraftKey } from "../src/state/drafts"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
@@ -31,7 +32,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { LiveActionStatus } from "../src/components/viewer/live-action-status"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
-import { AccessModeList, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
+import { AccessModeList, ContextReading, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
 import { threadsStore } from "../src/state/threads"
 import { TransferStatus } from "../src/components/viewer/transfer-status"
 import { ConversationRelations } from "../src/components/viewer/conversation-relations"
@@ -90,7 +91,7 @@ conversation.session = { ...conversation.session, status: "ready", connection: "
 // The access picker shows one ladder: tier labels in tier order, the
 // provider's own name beside them, and who enforces a host-made tier.
 threadsStore.set({
-  liveCapabilities: [{ provider: "claude", canResume: true, canSteer: true, steering: "step", canCompact: true }],
+  descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, canResume: true, canSteer: true, steering: "step", canCompact: true }],
 })
 conversation.session = {
   ...conversation.session,
@@ -130,7 +131,7 @@ const singleModeMarkup = renderToStaticMarkup(<LiveComposerControls canCompact={
 assert.match(singleModeMarkup, /aria-label="Access: Full access"/)
 assert.doesNotMatch(singleModeMarkup, /<button[^>]*aria-label="Access:/)
 threadsStore.set({
-  liveCapabilities: [{ provider: "cursor", canResume: false, modes: conversation.session.modes }],
+  descriptors: [{ provider: "cursor", displayName: "Cursor", resumable: true, live: true, canResume: false, modes: conversation.session.modes }],
   composerHarness: "cursor",
 })
 const nextSessionMarkup = renderToStaticMarkup(<NextSessionModePicker />)
@@ -139,8 +140,11 @@ assert.doesNotMatch(nextSessionMarkup, /<button/)
 // A provider with a declared default reports that level before any choice:
 // an unchosen session runs under it, so the chip names it.
 threadsStore.set({
-  liveCapabilities: [{
+  descriptors: [{
     provider: "grok",
+    displayName: "Grok",
+    resumable: true,
+    live: true,
     canResume: true,
     modes: [
       { id: "access:plan", name: "Plan", access: "plan", enforcement: "launch" },
@@ -526,4 +530,43 @@ const openMarkup = renderToStaticMarkup(<ThreadStatusMark status={{kind:"externa
 assert.doesNotMatch(openMarkup, /<canvas/)
 assert.match(openMarkup, /Open in Codex/)
 assert.match(openMarkup, />5m</, "the open state keeps the time")
+
+// Commands the provider advertised lead the slash menu, in its own words
+// and named by provider — nothing the session did not report is shown.
+conversation.session = {
+  ...conversation.session,
+  commands: [
+    { name: "compact", description: "Summarize the conversation so far", hint: "instructions" },
+    { name: "review" },
+  ],
+}
+publish()
+const commandsMarkup = renderToStaticMarkup(
+  <MentionMenu kind="/" query="" onPick={() => {}} onDismiss={() => {}} />
+)
+assert.match(commandsMarkup, /Claude Code commands/)
+assert.match(commandsMarkup, /compact/)
+assert.match(commandsMarkup, /Summarize the conversation so far/)
+const filteredCommands = renderToStaticMarkup(
+  <MentionMenu kind="/" query="rev" onPick={() => {}} onDismiss={() => {}} />
+)
+assert.match(filteredCommands, /Claude Code commands/)
+assert.match(filteredCommands, /rev/)
+assert.doesNotMatch(filteredCommands, /compact/)
+conversation.session = { ...conversation.session, commands: undefined }
+publish()
+
+// The provider's own context reading says what the window holds, in the
+// provider's numbers only — nothing is shown until it reports.
+conversation.session = {
+  ...conversation.session,
+  usage: { used: 164_000, size: 200_000, cost: { amount: 0.42, currency: "USD" } },
+}
+publish()
+const readingMarkup = renderToStaticMarkup(
+  <ContextReading usage={conversation.session.usage!} />
+)
+assert.match(readingMarkup, /164k of 200k tokens/)
+assert.match(readingMarkup, /82% of the window/)
+assert.match(readingMarkup, /\$0\.42 so far/)
 console.log("Activity feedback: contextual recovery, distinct main states, tuned inline project/thread orbs, idle cleanup, and explicit external-running labels verified")

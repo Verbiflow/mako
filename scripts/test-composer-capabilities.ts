@@ -35,6 +35,20 @@ assert.deepEqual(tokenize("use $mcp:mako-browser-use here"), [
   { kind: "mcp", name: "mako-browser-use", raw: "$mcp:mako-browser-use" },
   { kind: "text", text: " here" },
 ])
+assert.deepEqual(
+  tokenize("use $grilling, then $mcp:github. Done $5)."),
+  [
+    { kind: "text", text: "use " },
+    { kind: "skill", name: "grilling", raw: "$grilling" },
+    { kind: "text", text: ", then " },
+    { kind: "mcp", name: "github", raw: "$mcp:github" },
+    { kind: "text", text: ". Done " },
+    { kind: "skill", name: "5", raw: "$5" },
+    { kind: "text", text: ")." },
+  ],
+  "sentence punctuation after a capability token stays prose"
+)
+assert.deepEqual(tokenize("costs $."), [{ kind: "text", text: "costs $." }], "a sigil with nothing left after the trim is prose")
 assert.deepEqual(tokenize("/frontend-design make it sing"), [
   { kind: "skill", name: "frontend-design", raw: "/frontend-design" },
   { kind: "text", text: " make it sing" },
@@ -172,7 +186,7 @@ function skill(name: string, origins: Array<[provider: string, scope: "user" | "
     bytes: 1,
     files: 1,
     portable: true,
-    origins: origins.map(([provider, scope]) => ({ provider, account: "default", scope, provenance: `${provider}:${scope}/${name}` })),
+    origins: origins.map(([provider, scope]) => ({ provider, account: "default", scope, provenance: `${provider}:${scope}/${name}`, hash: name })),
     ...extra,
   }
 }
@@ -193,21 +207,51 @@ const skillsSnapshot: SkillRegistrySnapshot = {
 
 const claudeSkills = skillItems(skillsSnapshot, "claude")
 assert.deepEqual(
-  claudeSkills.items.map((item) => [item.name, item.badge ?? null, item.blocked ?? null]),
+  claudeSkills.items.map((item) => [item.name, item.delivery?.kind, item.from ?? null, item.badge ?? null, item.blocked ?? null]),
   [
-    ["apple-design", null, null],
-    ["blast-radius", null, null],
-    ["frontend-design", null, null],
-    ["repo-only", "project", null],
-    ["broken", null, "contains symbolic links"],
-  ]
+    ["apple-design", "native", null, null, null],
+    ["blast-radius", "native", null, null, null],
+    ["repo-only", "native", null, "project", null],
+    ["broken", "native", null, null, "contains symbolic links"],
+    ["frontend-design", "handover", "agents", null, null],
+    ["hyperframes", "handover", "cursor", null, null],
+  ],
+  "own skills lead; universal and foreign copies are handed over, each naming its source"
 )
-assert.equal(claudeSkills.elsewhere, 1, "cursor-only skills count as elsewhere")
+assert.equal(claudeSkills.foreign, 1, "only another provider's skill counts as foreign; the universal root is nobody's")
 assert.deepEqual(
-  skillItems(skillsSnapshot, "grok").items.map((item) => item.name),
-  ["apple-design", "frontend-design"],
-  "a provider with no roots still sees the universal skills"
+  skillItems(skillsSnapshot, "grok").items.map((item) => [item.name, item.delivery?.kind]),
+  [
+    ["apple-design", "handover"],
+    ["blast-radius", "handover"],
+    ["frontend-design", "handover"],
+    ["hyperframes", "handover"],
+    ["repo-only", "handover"],
+    ["broken", "handover"],
+  ],
+  "a provider with no roots is offered everything, all of it handed over"
 )
+const universalReader: SkillRegistrySnapshot = {
+  ...skillsSnapshot,
+  providers: [{ id: "grok", label: "Grok", account: "default", available: true, readsUniversalRoot: true }],
+}
+assert.deepEqual(
+  skillItems(universalReader, "grok").items.filter((item) => item.delivery?.kind === "native").map((item) => item.name),
+  ["apple-design", "frontend-design"],
+  "a provider verified to read .agents/skills loads those itself"
+)
+assert.equal(
+  skillItems(skillsSnapshot, "cursor").items.find((item) => item.name === "repo-only")?.delivery?.path,
+  "claude:workspace/repo-only",
+  "a handover prefers the project copy"
+)
+assert.equal(
+  skillItems(skillsSnapshot, "codex").items.find((item) => item.name === "apple-design")?.from,
+  "agents",
+  "a handover prefers the universal copy over another provider's"
+)
+const manual: SkillRegistrySnapshot = { ...skillsSnapshot, skills: [skill("wait-what", [["agents", "user"]], { manual: true })] }
+assert.equal(skillItems(manual, "cursor").items[0]?.badge, "manual", "a skill only the user may invoke says so")
 
 assert.deepEqual(mcpTransportsFor("sdk"), ["stdio", "http"])
 assert.deepEqual(mcpTransportsFor("app-server"), ["stdio", "http"])
@@ -239,12 +283,12 @@ assert.ok(
 )
 assert.ok(mcpItems(mcpSnapshot, "grok", mcpTransportsFor("acp")).some((item) => item.name === "events" && item.from === "cursor"))
 const browse = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, "")
-assert.deepEqual(browse.groups.map((group) => [group.label, group.matches.length, group.total]), [["Skills", 5, 5], ["MCP servers", 6, 6]])
+assert.deepEqual(browse.groups.map((group) => [group.label, group.matches.length, group.total]), [["Skills", 6, 6], ["MCP servers", 6, 6]])
 const many: SkillRegistrySnapshot = { ...skillsSnapshot, skills: Array.from({ length: 9 }, (_, at) => skill(`skill-${at}`, [["agents", "user"]])) }
 const capped = capabilityCatalog(many, mcpSnapshot, "claude", CLAUDE, "")
 assert.deepEqual([capped.groups[0]?.matches.length, capped.groups[0]?.total], [6, 9], "browsing caps the list but reports the whole")
 assert.equal(capabilityCatalog(many, mcpSnapshot, "claude", CLAUDE, "skill-8").groups[0]?.matches[0]?.item.name, "skill-8", "typing reaches past the cap")
-assert.equal(browse.elsewhere, 1)
+assert.equal(browse.foreign, 1)
 
 const search = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, "mako")
 assert.deepEqual(search.groups.map((group) => group.label), ["MCP servers"], "an empty group is dropped")

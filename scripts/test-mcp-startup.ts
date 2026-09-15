@@ -7,19 +7,21 @@ import { providerHost } from "../electron/providers/index.js"
 import { discoverMcpRegistry } from "../electron/mcp-registry.js"
 import type { ProviderMcpSource } from "../electron/providers/mcp-source.js"
 
+// Provider discovery and the managed driver's version probe run at the same
+// time: each fixture finishes only once it sees the other has started.
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-startup-"))
 const providerStarted = join(root, "provider-started")
-const doctorStarted = join(root, "doctor-started")
+const driverStarted = join(root, "driver-started")
 for (const [name, own, peer, output] of [
   [
     "fixture-provider",
     providerStarted,
-    doctorStarted,
+    driverStarted,
     JSON.stringify({
       mcpServers: { fixture: { url: "http://127.0.0.1:9/mcp" } },
     }),
   ],
-  ["macos-harness", doctorStarted, providerStarted, "doctor passed"],
+  ["cua-driver", driverStarted, providerStarted, "cua-driver 0.28.0"],
 ]) {
   await writeFile(
     join(root, name),
@@ -51,15 +53,22 @@ try {
   const snapshot = await discoverMcpRegistry(root, root)
   assert.ok(
     snapshot.servers.some((server) => server.name === "fixture"),
-    "Provider discovery must run alongside the managed doctor, not before it"
+    "Provider discovery must run alongside the managed driver probe, not before it"
   )
   assert.equal(
-    await readFile(doctorStarted, "utf8"),
+    await readFile(driverStarted, "utf8"),
     "finished",
     "Managed diagnostics must still complete"
   )
   assert.ok(
-    snapshot.servers.some((server) => server.name === "mako-local-tools")
+    snapshot.servers.some((server) => server.name === "mako-local-control")
+  )
+  assert.ok(
+    snapshot.servers.some((server) => server.name === "mako-browser-use")
+  )
+  assert.ok(
+    !snapshot.servers.some((server) => server.name === "mako-local-tools"),
+    "no second native control server is registered"
   )
   console.log(
     "MCP startup: provider discovery and managed diagnostics run concurrently without skipping either result"

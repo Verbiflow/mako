@@ -193,8 +193,10 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
       { content: "Reply", status: "in_progress" },
     ])
   )
-  assert.equal(grown.length, 1)
-  assert.ok(grown[0].kind === "plan" && grown[0].entries.length === 2)
+  assert.equal(grown.length, 2)
+  const repaint = grown[0]
+  assert.ok(repaint.kind === "tool-update" && repaint.input?.includes("Reply"), "streamed arguments replace the row's input")
+  assert.ok(grown[1].kind === "plan" && grown[1].entries.length === 2)
   const done = projection.message({
     ...run,
     type: "tool_call",
@@ -214,6 +216,73 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
   assert.deepEqual(
     finalPlan.entries.map((entry) => entry.status),
     ["completed", "completed"]
+  )
+}
+
+// Cursor's plan tool starts `{"plan":""}` and streams the real arguments
+// behind it. Every growth repaints the row's input — the placeholder must
+// not survive — and the plan text becomes the shared proposed-plan
+// artifact: drafting while it fills, proposed when the call completes.
+{
+  const projection = new CursorSdkProjection("t-plan")
+  const call = (status: "running" | "completed", args: JsonValue, result?: JsonValue): SdkMessage => {
+    const message: SdkMessage = {
+      ...run,
+      type: "tool_call",
+      call_id: "tool-plan",
+      name: "createPlan",
+      status,
+      args,
+    }
+    if (result !== undefined) message.result = result
+    return message
+  }
+  const started = projection.message(call("running", { plan: "" }))
+  assert.ok(
+    !started.some((update) => update.kind === "proposed-plan"),
+    "an empty plan drafts no artifact"
+  )
+  const grown = projection.message(call("running", { plan: "1. Read the files\n2. Write the fix" }))
+  const painting = grown.find((update) => update.kind === "tool-update")
+  assert.ok(
+    painting?.kind === "tool-update" && painting.input?.includes("Write the fix"),
+    "streamed arguments replace the placeholder"
+  )
+  const drafting = grown.find((update) => update.kind === "proposed-plan")
+  assert.ok(
+    drafting?.kind === "proposed-plan" &&
+      drafting.status === "drafting" &&
+      drafting.text.includes("Write the fix"),
+    "the plan drafts as its arguments fill in"
+  )
+  const done = projection.message(
+    call("completed", { plan: "1. Read the files\n2. Write the fix" }, { status: "success" })
+  )
+  const proposed = done.find((update) => update.kind === "proposed-plan")
+  assert.ok(proposed?.kind === "proposed-plan" && proposed.status === "proposed")
+
+  // Arguments that arrive only at completion still replace the start's
+  // placeholder — no stale `{"plan":""}` survives.
+  const late = new CursorSdkProjection("t-late")
+  late.message({
+    ...run,
+    type: "tool_call",
+    call_id: "tool-plan",
+    name: "createPlan",
+    status: "running",
+    args: { plan: "" },
+  })
+  const settled = late.message(
+    call("completed", { plan: "the whole plan" }, { status: "success" })
+  )
+  const completion = settled.find((update) => update.kind === "tool-update")
+  assert.ok(
+    completion?.kind === "tool-update" && completion.input?.includes("the whole plan"),
+    "a completion-only payload still updates the row"
+  )
+  assert.ok(
+    settled.some((update) => update.kind === "proposed-plan" && update.status === "proposed"),
+    "a completion-only payload still proposes the plan"
   )
 }
 
@@ -311,3 +380,43 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
 }
 
 console.log("cursor sdk projection, modes and wire ok")
+
+// A steer's ack is turn-paced: held past the request deadline it stays
+// pending, while an ordinary request still fails at that deadline.
+{
+  const { CursorSdkClient } = await import("../electron/providers/cursor/sdk/client.ts")
+  const { writeFileSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const stub = join(tmpdir(), `cursor-sdk-silent-${process.pid}.mjs`)
+  writeFileSync(stub, "process.stdin.resume()\n")
+  const client = new CursorSdkClient({
+    owner: "test",
+    cwd: tmpdir(),
+    env: {},
+    onEvent() {},
+    execPath: process.execPath,
+    entry: stub,
+    requestTimeoutMs: 50,
+  })
+  const steer = client
+    .request("steer", { text: "hold" })
+    .then(() => "answered", () => "failed")
+  const cancel = client.request("cancel", undefined).then(
+    () => "answered",
+    (error: Error) => error.message
+  )
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.equal(
+    await Promise.race([steer, Promise.resolve("pending")]),
+    "pending",
+    "a steer held by the turn is not a disconnect"
+  )
+  assert.match(
+    await cancel,
+    /did not answer cancel/,
+    "an ordinary request still dies at the deadline"
+  )
+  client.kill()
+}
+console.log("cursor sdk: steer outlives the request deadline, cancel does not")

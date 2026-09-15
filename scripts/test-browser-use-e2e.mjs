@@ -51,22 +51,24 @@ async function clientFor(owner) {
   clients.push({ client, server })
   return client
 }
+// Every action is a one-line program; a screenshot is emitted so the image
+// arrives as a native block beside its receipt.
 async function call(client, action, args = {}, fail = false) {
+  const source =
+    action === "screenshot"
+      ? `emitImage(await browser.screenshot(${JSON.stringify(args)}))`
+      : `return await browser.${action}(${JSON.stringify(args)})`
   const result = await client.callTool(
-    { name: `mako_browser_${action}`, arguments: args },
+    { name: "mako_browser_exec", arguments: { source } },
     undefined,
     { timeout: 70_000 }
   )
-  events.push({
-    action,
-    isError: !!result.isError,
-    text: result.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n"),
-  })
+  const text = result.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+  events.push({ action, isError: !!result.isError, text: text.join("\n") })
   assert.equal(!!result.isError, fail, events.at(-1).text)
-  return result
+  return { ...result, value: text[0] === undefined ? null : JSON.parse(text[0]) }
 }
 let outcome
 try {
@@ -82,7 +84,7 @@ try {
     [b, "/b"],
   ]) {
     const opened = await call(client, "open", { browser: id, url: url + path })
-    targets.push(opened.structuredContent.value)
+    targets.push(opened.value)
   }
   const [ta, tb] = targets
   assert.match(
@@ -101,20 +103,19 @@ try {
   const png = Buffer.from(image.data, "base64")
   assert.equal(png.subarray(1, 4).toString(), "PNG")
   assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0)
-  const coordinates = screen.structuredContent.coordinates
+  const coordinates = screen.value.coordinates
   assert.equal(coordinates.imageWidth, png.readUInt32BE(16))
   assert.equal(coordinates.imageHeight, png.readUInt32BE(20))
   assert.equal(
     coordinates.imageScaleX,
-    coordinates.imageWidth / screen.structuredContent.clip.width
+    coordinates.imageWidth / screen.value.clip.width
   )
   assert.equal(
     coordinates.imageScaleY,
-    coordinates.imageHeight / screen.structuredContent.clip.height
+    coordinates.imageHeight / screen.value.clip.height
   )
   await writeFile(join(root, "fixture.png"), png)
-  const observed = (await call(a, "observe", { target: ta })).structuredContent
-    .value
+  const observed = (await call(a, "observe", { target: ta })).value
   const input = observed.nodes.find(
     (node) => node.role === "textbox" && node.name === "Proof"
   )
@@ -137,7 +138,7 @@ try {
     browser: id,
     tab: ta.tab,
   })
-  assert.deepEqual(reclaimed.structuredContent.value, ta)
+  assert.deepEqual(reclaimed.value, ta)
   assert.equal(
     browser.status().find((item) => item.id === id).connection.generation,
     generation
@@ -162,7 +163,7 @@ try {
   if (appUrl) {
     const appTarget = (
       await call(replacement, "open", { browser: id, url: appUrl })
-    ).structuredContent.value
+    ).value
     try {
       const deadline = Date.now() + 30_000
       let observation
@@ -173,7 +174,7 @@ try {
               target: appTarget,
               maxNodes: 1000,
             })
-          ).structuredContent.value
+          ).value
         )
         if (
           observation.nodes.some((node) =>
@@ -203,7 +204,7 @@ try {
               target: appTarget,
               maxNodes: 1000,
             })
-          ).structuredContent.value
+          ).value
         )
       }
       const thread = observation.nodes.find(
@@ -229,7 +230,7 @@ try {
         })
         exchanges = z
           .number()
-          .parse(measured.structuredContent.value.result.value)
+          .parse(measured.value.result.value)
         if (!exchanges) await new Promise((resolve) => setTimeout(resolve, 100))
       }
       const screenshot = await call(replacement, "screenshot", {

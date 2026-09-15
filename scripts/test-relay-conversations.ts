@@ -39,7 +39,7 @@ function driver(provider: string): ProviderLiveDriver {
       assert.ok(session)
       dispatches.push(id)
       owner.observe({
-        type: "acp-session",
+        type: "live-session",
         session: { ...session, status: "running" },
       })
     },
@@ -78,12 +78,12 @@ function finish(id: string, text = "completed fixture") {
   const session = sessions.get(id)
   assert.ok(session)
   owner.observe({
-    type: "acp-update",
+    type: "live-update",
     id,
     update: { kind: "text", id: randomUUID(), text },
   })
   owner.observe({
-    type: "acp-session",
+    type: "live-session",
     session: { ...session, status: "ready" },
   })
 }
@@ -102,7 +102,7 @@ try {
   const pending = relay.execute(first)
   await until(() => dispatches.length === 1)
   owner.observe({
-    type: "acp-permission",
+    type: "live-permission",
     request: {
       id: "permission",
       sessionId: jobId,
@@ -124,12 +124,12 @@ try {
   })
   assert.deepEqual(permissions, ["permission"])
   owner.observe({
-    type: "acp-update",
+    type: "live-update",
     id: jobId,
     update: { kind: "thinking", id: "thought", text: "Check the fixture" },
   })
   owner.observe({
-    type: "acp-update",
+    type: "live-update",
     id: jobId,
     update: {
       kind: "plan",

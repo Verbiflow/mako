@@ -132,11 +132,11 @@ const response = permissions.tool(
   { plan: text },
   { signal, requestId: "permission", toolUseID: plan.id }
 )
-const emittedPlan = events.find((event) => event.type === "acp-updates")
-assert.ok(emittedPlan?.type === "acp-updates")
+const emittedPlan = events.find((event) => event.type === "live-updates")
+assert.ok(emittedPlan?.type === "live-updates")
 assert.equal(emittedPlan.updates[0]?.kind, "proposed-plan")
-const permission = events.find((event) => event.type === "acp-permission")
-assert.ok(permission?.type === "acp-permission")
+const permission = events.find((event) => event.type === "live-permission")
+assert.ok(permission?.type === "live-permission")
 assert.equal(permission.request.options[0]?.name, "Approve plan")
 permissions.respond("permission", { kind: "choice", optionId: "reject_once" })
 const decision = await response

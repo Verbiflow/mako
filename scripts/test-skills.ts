@@ -109,7 +109,13 @@ try {
     generatedAt: 1,
     skills: records,
     providers: [
-      { id: "grok", label: "Grok", account: "default", available: true },
+      {
+        id: "grok",
+        label: "Grok",
+        account: "default",
+        available: true,
+        readsUniversalRoot: false,
+      },
     ],
   }
   const target = {

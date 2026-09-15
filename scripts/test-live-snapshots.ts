@@ -56,7 +56,7 @@ const driver: ProviderLiveDriver = {
     sent.push(text)
     const running: LiveSessionState = { ...state, status: "running" }
     states.set(id, running)
-    owner.observe({ type: "acp-session", session: running })
+    owner.observe({ type: "live-session", session: running })
   },
   permission: async () => {},
   cancel: async () => {},
@@ -83,13 +83,13 @@ function finish(id: string, answer: string) {
   const state = states.get(id)
   assert.ok(state)
   owner.observe({
-    type: "acp-update",
+    type: "live-update",
     id,
     update: { kind: "text", text: answer },
   })
   const ready: LiveSessionState = { ...state, status: "ready" }
   states.set(id, ready)
-  owner.observe({ type: "acp-session", session: ready })
+  owner.observe({ type: "live-session", session: ready })
 }
 try {
   const id = randomUUID(),

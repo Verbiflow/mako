@@ -369,7 +369,7 @@ async function liveConversationsRoundTrip() {
     assert.equal(starts.length, 1, "the refused host spawned nothing")
 
     // Changes while connected are remembered as they happen.
-    events({ type: "acp-session", session: state(id, { currentMode: "agent", settings: { model: "gpt-5.3-codex" } }) })
+    events({ type: "live-session", session: state(id, { currentMode: "agent", settings: { model: "gpt-5.3-codex" } }) })
     first.snapshot(id)
     await tick()
     assert.equal(dev.recall("cursor", "agent-live")?.modeId, "agent")

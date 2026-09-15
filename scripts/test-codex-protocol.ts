@@ -101,8 +101,8 @@ handleServerRequest(
   }
 )
 const permissionEvent = permissionEvents.at(-1)
-assert.equal(permissionEvent?.type, "acp-permission")
-if (permissionEvent?.type === "acp-permission") {
+assert.equal(permissionEvent?.type, "live-permission")
+if (permissionEvent?.type === "live-permission") {
   assert.equal(permissionEvent.request.questions?.[0]?.allowOther, true)
   assert.equal(
     permissionEvent.request.questions?.[0]?.options[0]?.label,
@@ -249,7 +249,7 @@ handleServerRequest(
   confirmation
 )
 const confirmationEvent = permissionEvents.at(-1)
-assert.ok(confirmationEvent?.type === "acp-permission")
+assert.ok(confirmationEvent?.type === "live-permission")
 assert.ok(
   confirmationEvent.request.options.some(
     (option) => option.kind === "allow_once"
@@ -283,7 +283,7 @@ for (const patch of [
     { ...confirmation, ...patch }
   )
   const event = permissionEvents.at(-1)
-  assert.ok(event?.type === "acp-permission")
+  assert.ok(event?.type === "live-permission")
   assert.equal(
     event.request.options.some((option) => option.kind === "allow_once"),
     false

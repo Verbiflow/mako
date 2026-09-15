@@ -250,7 +250,7 @@ try {
   await owner.start("fixture", root, { conversationId: id })
   const initial = owner.snapshot(id)
   assert.ok(initial)
-  owner.observe({ type: "acp-agent", id, agent })
+  owner.observe({ type: "live-agent", id, agent })
   const observed = owner.snapshot(id)
   assert.equal(observed?.nativeAgents?.agents[0]?.provider, "fixture")
   assert.equal(observed?.blocks, initial.blocks)
@@ -262,7 +262,7 @@ try {
   assert.equal(journal.read()?.nativeAgents?.agents[0]?.nativeId, "one")
   journal.close()
   owner.observe({
-    type: "acp-agent",
+    type: "live-agent",
     id: randomUUID(),
     agent: { ...agent, nativeId: "stale" },
   })

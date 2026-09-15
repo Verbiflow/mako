@@ -71,6 +71,12 @@ const live = acpBlocksToMessages(
 )
 assert.deepEqual(pairTools(live.messages[0]!.blocks)[0]!.attachments, [image])
 assert.equal(pairTools(live.messages[0]!.blocks)[0]!.pending, false)
+// The provider's kind rides the call so a name the registry does not know
+// still finds its body family.
+const kinded = pairTools([
+  { type: "toolCall", id: "kind", name: "mystery_tool", kind: "execute" },
+])[0]!
+assert.equal(kinded.kind, "execute")
 const empty = pairTools([
   { type: "toolCall", id: "empty", name: "Shell" },
   { type: "toolResult", id: "empty", text: "" },

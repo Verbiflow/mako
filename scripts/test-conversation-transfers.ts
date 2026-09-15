@@ -69,7 +69,7 @@ function driver(provider: string): ProviderLiveDriver {
       assert.ok(session)
       const running = { ...session, status: "running" as const }
       sessions.set(id, running)
-      owner.observe({ type: "acp-session", session: running })
+      owner.observe({ type: "live-session", session: running })
     },
     async cancel() {},
     async permission() {},
@@ -112,10 +112,10 @@ async function until(predicate: () => boolean) {
 function finish(id: string, text: string) {
   const session = sessions.get(id)
   assert.ok(session)
-  owner.observe({ type: "acp-update", id, update: { kind: "text", text } })
+  owner.observe({ type: "live-update", id, update: { kind: "text", text } })
   const ready = { ...session, status: "ready" as const, lastStop: "end_turn" }
   sessions.set(id, ready)
-  owner.observe({ type: "acp-session", session: ready })
+  owner.observe({ type: "live-session", session: ready })
 }
 function command(provider: string, text: string): TransferInput {
   return { id: randomUUID(), provider, text, attachments: [] }
@@ -167,7 +167,7 @@ try {
   // Late provider events from the dormant connection must not complete beta's run.
   const beforeLate = owner.snapshot(id)
   owner.observe({
-    type: "acp-update",
+    type: "live-update",
     id,
     update: { kind: "text", text: "stale alpha output" },
   })
@@ -301,7 +301,7 @@ try {
   assert.ok(listed.tools.some((tool) => tool.name === "mako_delegate_task"))
   const parentRunning = sessions.get(beta.id)!
   owner.observe({
-    type: "acp-session",
+    type: "live-session",
     session: { ...parentRunning, currentMode: "restricted" },
   })
   const refused = await mcpClient.callTool({
@@ -314,7 +314,7 @@ try {
     "provider-specific restrictions cannot silently expand through delegation"
   )
   assert.equal(owner.snapshot(childInput.id), null)
-  owner.observe({ type: "acp-session", session: parentRunning })
+  owner.observe({ type: "live-session", session: parentRunning })
   assert.throws(() => owner.authorizeAgent(id, randomUUID()), /no longer owns/)
   const delegated = await mcpClient.callTool({
     name: "mako_delegate_task",
@@ -343,7 +343,7 @@ try {
     "delegation gives only the explicit task, not hidden parent history"
   )
   owner.observe({
-    type: "acp-permission",
+    type: "live-permission",
     request: {
       id: "child-permission",
       sessionId: childInput.id,
@@ -432,7 +432,7 @@ try {
   // A dormant provider that disconnects must receive a full handoff on a fresh connection.
   const dormant = sessions.get(id)!
   owner.observe({
-    type: "acp-session",
+    type: "live-session",
     session: { ...dormant, connection: "disconnected", status: "failed" },
   })
   const disconnectedReturn = command(

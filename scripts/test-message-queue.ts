@@ -34,7 +34,7 @@ const driver: ProviderLiveDriver = {
   async prompt(_id, text) {
     sent.push(text)
     session = { ...session, status: "running" }
-    owner.observe({ type: "acp-session", session })
+    owner.observe({ type: "live-session", session })
   },
   permission: async () => {},
   cancel: async () => {},
@@ -72,7 +72,7 @@ try {
     change: { kind: "pause" },
   })
   session = { ...session!, status: "ready" }
-  owner.observe({ type: "acp-session", session })
+  owner.observe({ type: "live-session", session })
   await tick()
   assert.deepEqual(
     sent,

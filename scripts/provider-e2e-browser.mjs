@@ -66,25 +66,9 @@ export async function runBrowserFixture(
               (option) => option.kind === "allow_once"
             )
             const permitted = [
+              "mako_browser_status",
+              "mako_browser_help",
               "mako_browser_exec",
-              "mako_browser_screenshot",
-              ...[
-                "status",
-                "connect",
-                "tabs",
-                "open",
-                "select",
-                "observe",
-                "evaluate",
-                "cdp",
-                "events",
-                "navigate",
-                "close",
-                "click",
-                "type",
-                "release",
-                "help",
-              ].map((name) => `mako_browser_${name}`),
             ].some(
               (tool) =>
                 permission.title ===
@@ -119,7 +103,7 @@ export async function runBrowserFixture(
         owner.submit(
           id,
           requestId,
-          `This is an authorized disposable browser integration test. Use the mako-browser-use MCP tools to open ${url}/${provider}. Call mako_browser_screenshot to inspect the picture. Read the displayed fixture value and count the red and blue squares. Fill all three form fields and click Verify, then confirm the page says Verified successfully. Use real browser input and click events through the browser tools, not direct network requests, DOM value assignments, or synthetic DOM events. Do not use shell, files, other browser tools, or other websites. Close only your created fixture tab after verification. Reply with the fixture value and the counts.`
+          `This is an authorized disposable browser integration test. Use the mako-browser-use MCP tools (mako_browser_exec programs) to open ${url}/${provider}. Emit a screenshot with emitImage(await browser.screenshot({target})) to inspect the picture. Read the displayed fixture value and count the red and blue squares. Fill all three form fields and click Verify, then confirm the page says Verified successfully. Use real browser input and click events through the browser tools, not direct network requests, DOM value assignments, or synthetic DOM events. Do not use shell, files, other browser tools, or other websites. Close only your created fixture tab after verification. Reply with the fixture value and the counts.`
         )
         const completed = await wait((snapshot) =>
           snapshot?.requests.some(

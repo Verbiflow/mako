@@ -272,3 +272,93 @@ console.log("composer settings: starting conversations keep their send target")
   )
   assert.equal(optionLabel(speed, { kind: "known", value: "true", source: "session" }), "Fast")
 }
+
+// The role cycle walks only the provider's own values: effort steps through
+// the select's choices, speed flips its boolean, and an unreported role is
+// a no-op rather than an invented toggle.
+{
+  const { cycleComposerRole } = await import("../src/state/composer-settings.ts")
+  const { providerStore, providerProfileKey } = await import("../src/state/providers.ts")
+  const { prefsStore, setPref } = await import("../src/state/prefs.ts")
+  const harnessed: HarnessProfile = {
+    ...profile,
+    models: [
+      {
+        id: "opus",
+        label: "Opus 5",
+        options: [
+          {
+            id: "effort",
+            label: "Effort",
+            kind: "select",
+            role: "reasoning",
+            values: [
+              { value: "low", label: "Low" },
+              { value: "high", label: "High", default: true },
+            ],
+          },
+          { id: "fast", label: "Fast", kind: "boolean", role: "speed" },
+        ],
+      },
+    ],
+  }
+  providerStore.set({
+    contexts: { [providerProfileKey("claude", cwd)]: harnessed },
+  })
+  threadsStore.set({ composerHarness: "claude", viewing: null, opening: null })
+  setPref("settingsOverrides", {})
+  setPref("providerSettings", {})
+  assert.equal(cycleComposerRole("reasoning"), "Low")
+  assert.equal(cycleComposerRole("reasoning"), "High")
+  assert.equal(cycleComposerRole("reasoning"), "Low")
+  const overrides = prefsStore.get().settingsOverrides
+  assert.equal(
+    Object.values(overrides)[0]?.options?.effort,
+    "low",
+    "the cycle lands as the same override the picker writes"
+  )
+  assert.equal(cycleComposerRole("speed"), "on")
+  assert.equal(cycleComposerRole("speed"), "off")
+  assert.equal(
+    Object.values(prefsStore.get().settingsOverrides)[0]?.options?.fast,
+    false
+  )
+  providerStore.set({ contexts: {} })
+}
+console.log("composer settings: role cycling walks only reported options")
+
+// The loadout orders its five picks, refuses duplicates and overflow, and a
+// same-provider pick writes the model the picker would.
+{
+  const { addToLoadout, applyLoadoutEntry, moveLoadoutEntry, removeFromLoadout, LOADOUT_LIMIT } =
+    await import("../src/state/model-loadout.ts")
+  const { providerStore, providerProfileKey } = await import("../src/state/providers.ts")
+  const { prefsStore, setPref } = await import("../src/state/prefs.ts")
+  providerStore.set({
+    contexts: { [providerProfileKey("claude", cwd)]: profile },
+  })
+  acpStore.set({ conversations: {}, activeKey: null })
+  threadsStore.set({ composerHarness: "claude", viewing: null, opening: null })
+  setPref("modelLoadout", [])
+  setPref("settingsOverrides", {})
+  setPref("providerSettings", {})
+  addToLoadout("claude", "opus")
+  addToLoadout("claude", "sonnet")
+  addToLoadout("claude", "opus")
+  assert.equal(prefsStore.get().modelLoadout.length, 2, "a duplicate never repeats a slot")
+  for (let i = 0; i < LOADOUT_LIMIT + 2; i++) addToLoadout("codex", `model-${i}`)
+  assert.equal(prefsStore.get().modelLoadout.length, LOADOUT_LIMIT)
+  setPref("modelLoadout", [{ harness: "claude", model: "opus" }, { harness: "claude", model: "sonnet" }])
+  moveLoadoutEntry(1, -1)
+  assert.equal(prefsStore.get().modelLoadout[0]?.model, "sonnet")
+  applyLoadoutEntry(1)
+  assert.equal(
+    prefsStore.get().providerSettings.claude?.settings.model,
+    "opus",
+    "a same-provider pick is the provider's saved default"
+  )
+  removeFromLoadout(0)
+  assert.equal(prefsStore.get().modelLoadout.length, 1)
+  providerStore.set({ contexts: {} })
+}
+console.log("composer settings: the loadout orders, bounds, and applies its picks")

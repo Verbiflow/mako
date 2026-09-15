@@ -107,11 +107,16 @@ async function queuedSettings() {
       conversationId: f.id,
       tuning: first,
     })
+    assert.deepEqual(
+      f.owner.snapshot(f.id)?.session.settings,
+      first,
+      "the provisional session keeps the settings shown when the user sent"
+    )
     f.started.resolve(f.state)
     await tick()
     f.owner.submit(f.id, request, "same prompt", [], first)
     f.owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: { ...f.state, status: "running" },
     })
     const next = randomUUID()
@@ -131,7 +136,7 @@ async function queuedSettings() {
       persisted?.requests.map((item) => item.tuning),
       [first, second]
     )
-    f.owner.observe({ type: "acp-session", session: f.state })
+    f.owner.observe({ type: "live-session", session: f.state })
     assert.deepEqual(f.settings, [first, second])
   } finally {
     f.cleanup()
@@ -157,25 +162,25 @@ async function acceptanceAndRaces() {
     await tick()
     assert.deepEqual(f.sent, ["first"])
     f.owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: { ...f.state, status: "running" },
     })
     const second = randomUUID()
     f.owner.submit(f.id, second, "second")
     f.owner.observe({
-      type: "acp-update",
+      type: "live-update",
       id: f.id,
       update: { kind: "text", id: "item", text: "par" },
     })
     f.owner.observe({
-      type: "acp-update",
+      type: "live-update",
       id: f.id,
       update: { kind: "text", id: "item", text: "corrected", replace: true },
     })
-    f.owner.observe({ type: "acp-session", session: f.state })
+    f.owner.observe({ type: "live-session", session: f.state })
     assert.deepEqual(f.sent, ["first", "second"])
     f.owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: { ...f.state, status: "running" },
     })
     f.prompts[0]!.reject(new Error("late first response"))
@@ -217,7 +222,7 @@ async function durabilityAndBatching() {
     f.events.length = 0
     for (let index = 0; index < 1000; index++)
       f.owner.observe({
-        type: "acp-update",
+        type: "live-update",
         id: f.id,
         update: { kind: "text", text: "ha" },
       })
@@ -236,7 +241,7 @@ async function durabilityAndBatching() {
     assert.ok(batches.every((event) => event.batch.updates.length <= 128))
     f.owner.submit(f.id, randomUUID(), "running")
     f.owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: { ...f.state, status: "running" },
     })
     f.owner.submit(f.id, randomUUID(), "waiting")
@@ -363,16 +368,16 @@ async function failureIsolationAndAssets() {
       /disk unavailable/
     )
     fault.mock.restore()
-    f.owner.observe({ type: "acp-session", session: { ...f.state } })
+    f.owner.observe({ type: "live-session", session: { ...f.state } })
     assert.deepEqual(f.sent, [], "rejected acceptance cannot execute later")
     const long = "abcdefgh".repeat(50_000)
     f.owner.observe({
-      type: "acp-update",
+      type: "live-update",
       id: f.id,
       update: { kind: "text", text: long, id: "large-answer" },
     })
     f.owner.observe({
-      type: "acp-update",
+      type: "live-update",
       id: f.id,
       update: {
         kind: "tool",
@@ -424,7 +429,7 @@ async function coalescedToolBursts() {
     f.started.resolve(f.state)
     await tick()
     f.owner.observe({
-      type: "acp-update",
+      type: "live-update",
       id: f.id,
       update: { kind: "tool", id: "input", title: "Write", status: "running" },
     })
@@ -432,7 +437,7 @@ async function coalescedToolBursts() {
     f.events.length = 0
     for (let index = 1; index <= 64; index++)
       f.owner.observe({
-        type: "acp-update",
+        type: "live-update",
         id: f.id,
         update: {
           kind: "tool-update",
@@ -472,9 +477,9 @@ async function settledVerdicts() {
     const first = randomUUID()
     f.owner.submit(f.id, first, "first")
     await tick()
-    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
     f.owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: { ...f.state, status: "ready", lastStop: "cancelled" },
     })
     f.prompts[0]?.resolve()
@@ -487,9 +492,9 @@ async function settledVerdicts() {
     const second = randomUUID()
     f.owner.submit(f.id, second, "second")
     await tick()
-    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
     f.owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: {
         ...f.state,
         status: "failed",
@@ -510,9 +515,9 @@ async function settledVerdicts() {
     const third = randomUUID()
     f.owner.submit(f.id, third, "third")
     await tick()
-    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
     f.owner.observe({
-      type: "acp-session",
+      type: "live-session",
       session: {
         ...f.state,
         status: "failed",
@@ -550,7 +555,7 @@ async function refusedStartup() {
     assert.equal(failed?.session.connection, "disconnected")
     assert.equal(failed?.session.error, "Selected model is unavailable")
     assert.equal(failed?.requests[0]?.status, "failed")
-    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "failed", error: "late stderr noise" } })
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "failed", error: "late stderr noise" } })
     assert.equal(f.owner.snapshot(f.id)?.session.error, "Selected model is unavailable")
     assert.deepEqual(f.sent, [])
   } finally { f.cleanup() }
@@ -572,8 +577,8 @@ async function autoContinuedTurn() {
   const tuning = { model: "model-a", options: { effort: "high" } }
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
   const dropTurn = async (f: ReturnType<typeof fixture>, index: number) => {
-    f.owner.observe({ type: "acp-session", session: { ...f.state, status: "running" } })
-    f.owner.observe({ type: "acp-session", session: { ...f.state, ...dropped } })
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "live-session", session: { ...f.state, ...dropped } })
     f.prompts[index]?.resolve()
     await tick()
   }

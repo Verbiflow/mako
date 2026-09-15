@@ -51,7 +51,7 @@ async function checkRuntime() {
       assert.ok(state)
       sent.push(text)
       live.observe({
-        type: "acp-session",
+        type: "live-session",
         session: { ...state, status: "running" },
       })
       await new Promise<void>((resolve) => releases.set(id, resolve))

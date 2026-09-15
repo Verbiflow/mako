@@ -32,7 +32,7 @@ function lane(name, command, args) {
   })
 }
 
-await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/relay"])
+await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/relay", "packages/control"])
 
 const lanes = await Promise.allSettled([
   lane("tsgo", process.execPath, [tsgo, "-b"]),

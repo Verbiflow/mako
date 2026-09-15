@@ -27,14 +27,14 @@ const driver: ProviderLiveDriver = {
     const state = states.get(id)
     assert.ok(state)
     sent.push(text)
-    owner.observe({type:"acp-session",session:{...state,status:"running"}})
+    owner.observe({type:"live-session",session:{...state,status:"running"}})
     await new Promise<void>((resolve) => releases.set(id, resolve))
   },
   async cancel(id) {
     cancellations++
     const state = states.get(id)
     assert.ok(state)
-    owner.observe({type:"acp-session",session:{...state,status:"ready",lastStop:"cancelled"}})
+    owner.observe({type:"live-session",session:{...state,status:"ready",lastStop:"cancelled"}})
     releases.get(id)?.()
   },
   async permission() {}, async setMode() {}, close(id) { releases.get(id)?.() },
