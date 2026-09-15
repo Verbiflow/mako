@@ -15,6 +15,8 @@ import {
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { listCursorSdkModels } from "./sdk/models.js"
 import { cursorSkillSource } from "./skills.js"
+import { cliUpdateSource } from "../update-source.js"
+import { resolveExecutable } from "../../executable.js"
 
 async function openExternal(url: string): Promise<void> {
   const { shell } = await import("electron")
@@ -58,4 +60,14 @@ export const installCursor: ProviderModule = (host) => {
     provider: "cursor",
     emit: (thread) => emitCursorSession(thread, {}),
   })
+  host.updateSources.register(
+    cliUpdateSource("cursor", {
+      binary: (env) => resolveExecutable("cursor-agent", env),
+      selfUpdate: {
+        label: "Update Cursor Agent",
+        command: "cursor-agent",
+        args: ["update"],
+      },
+    })
+  )
 }
