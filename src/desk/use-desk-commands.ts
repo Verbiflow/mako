@@ -20,6 +20,8 @@ import { stage } from "@/state/stage"
 import { surfaces } from "@/extend/surfaces"
 import { tabsStore } from "@/state/tabs"
 import { search } from "@/state/search"
+import { cycleComposerRole } from "@/state/composer-settings"
+import { applyLoadoutEntry } from "@/state/model-loadout"
 import { AGENT_TAB_ID, viewer, viewerStore } from "@/state/viewer"
 import { markAllSeen, nextUnseen, openItem } from "@/state/notifications"
 import { toast } from "sonner"
@@ -237,6 +239,39 @@ const DESK_COMMANDS: DeskCommand[] = [
     keys: "mod+.",
     run: cycleEffort,
   },
+  {
+    id: "composer.cycle-effort",
+    title: "Cycle the provider's effort",
+    section: "Model",
+    keys: "mod+shift+/",
+    hint: "Only the levels this provider reports",
+    run: () => {
+      const landed = cycleComposerRole("reasoning")
+      toast(
+        landed ? `Effort: ${landed}` : "This model reports no effort to change"
+      )
+    },
+  },
+  {
+    id: "composer.toggle-speed",
+    title: "Toggle the fast lane",
+    section: "Model",
+    keys: "mod+shift+e",
+    hint: "Only where the model reports a speed option",
+    run: () => {
+      const landed = cycleComposerRole("speed")
+      toast(
+        landed ? `Fast lane: ${landed}` : "This model reports no fast lane"
+      )
+    },
+  },
+  ...[1, 2, 3, 4, 5].map((slot) => ({
+    id: `composer.loadout-${slot}`,
+    title: `Pick loadout model ${slot}`,
+    section: "Model" as const,
+    keys: `mod+ctrl+${slot}`,
+    run: () => applyLoadoutEntry(slot - 1),
+  })),
   {
     id: "model.refresh",
     title: "Reload model catalog",

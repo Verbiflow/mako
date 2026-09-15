@@ -10,7 +10,7 @@ import {
   GitCompareIcon,
   TerminalSquareIcon,
 } from "lucide-react"
-import { registerSlot, registerToolView, type ToolCall } from "@/extend/slots"
+import { registerSlot, registerToolKindView, registerToolView, type ToolCall } from "@/extend/slots"
 import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
@@ -185,19 +185,24 @@ export function installBuiltins(): () => void {
           summary: (call: ToolCall) => primaryArgument(call.arguments),
         })
     ),
-    ...[
-      "mako_macos_apps",
-      "mako_macos_state",
-      "mako_macos_see",
-      "mako_macos_click",
-      "mako_macos_key",
-      "mako_macos_type",
-      "mako_macos_script",
-      "mako_macos_exec",
-    ].map((name) =>
+    // Mako's control programs: the row reads the program's first line.
+    ...["mako_browser_exec", "mako_computer_exec"].map((name) =>
+      registerToolView(name, {
+        summary: (call: ToolCall) => {
+          const source = argAt(call.arguments, "source")
+          const line = source?.split("\n").find((entry) => entry.trim())
+          return line?.trim() ?? primaryArgument(call.arguments)
+        },
+      })
+    ),
+    ...["mako_browser_help", "mako_computer_help"].map((name) =>
       registerToolView(name, {
         summary: (call: ToolCall) =>
-          argAt(call.arguments, "app") ?? primaryArgument(call.arguments),
+          argAt(call.arguments, "action") ??
+          argAt(call.arguments, "tool") ??
+          argAt(call.arguments, "method") ??
+          argAt(call.arguments, "domain") ??
+          "Reference",
       })
     ),
     ...SUBAGENT_TOOLS.map((name) =>
@@ -215,6 +220,21 @@ export function installBuiltins(): () => void {
         icon: GitBranchIcon,
       })
     ),
+
+    // The provider's own kind keeps a real body when the name is unknown to
+    // the registry: an `execute` still renders a terminal, an `edit` a diff.
+    registerToolKindView("execute", { body: BashBody }),
+    ...["edit", "delete", "move"].map((kind) =>
+      registerToolKindView(kind, {
+        body: EditBody,
+        openPath: (call: ToolCall) =>
+          primaryArgument(call.arguments) || undefined,
+      })
+    ),
+    registerToolKindView("read", {
+      openPath: (call: ToolCall) =>
+        primaryArgument(call.arguments) || undefined,
+    }),
   ]
   return () => disposers.forEach((dispose) => dispose())
 }
