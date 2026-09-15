@@ -111,9 +111,9 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
       action: z.literal("attach"),
       id: z
         .string()
-        .regex(/^app:[A-Za-z0-9._-]+(?::\d+)?$/)
+        .regex(/^app:[A-Za-z0-9._-]+:\d+:[a-f0-9]{8}$/)
         .describe(
-          "Browser id for the application: app:<bundle_id>, or app:<bundle_id>:<pid> for a second instance."
+          "Generation-scoped browser id for the application: app:<bundle_id>:<pid>:<nonce>."
         ),
       name: z.string().min(1).max(120).describe("Display name."),
       endpoint: z
@@ -122,6 +122,15 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
         .describe(
           "The application's DevTools browser endpoint, ws://127.0.0.1:<port>/devtools/browser/<id>, read from its /json/version. Loopback only."
         ),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("detach"),
+      id: z
+        .string()
+        .regex(/^app:[A-Za-z0-9._-]+:\d+:[a-f0-9]{8}$/)
+        .describe("Exact attached application browser id."),
     })
     .strict(),
   z.object({ action: z.literal("tabs"), browser }).strict(),
