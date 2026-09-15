@@ -18,6 +18,7 @@
   "include": ["electron/**/*.ts"],
   "references": [
     { "path": "./packages/sessions" },
-    { "path": "./packages/relay" }
+    { "path": "./packages/relay" },
+    { "path": "./packages/control" }
   ]
 }

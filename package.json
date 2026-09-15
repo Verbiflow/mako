@@ -33,7 +33,7 @@
     "icons": "swiftc -O -o build/make-icns scripts/make-icns.swift && build/make-icns mako-icons/_masters/desktop-gradient.png build/Mako.iconset && iconutil -c icns build/Mako.iconset -o build/Mako.icns && cp build/Mako.iconset/icon_512x512@2x.png public/icons/app-icon.png",
     "icons:browser": "node scripts/build-favicons.mjs",
     "lint": "eslint . && npm run lint:anti-slop && node scripts/check-actionable-toasts.mjs",
-    "lint:anti-slop": "oxlint --config oxlint.config.ts src electron browser-extension packages/sessions/src packages/relay/src packages/relay/test packages/backend/app packages/backend/agent packages/backend/scripts packages/backend/src packages/backend/test scripts",
+    "lint:anti-slop": "oxlint --config oxlint.config.ts src electron browser-extension packages/sessions/src packages/relay/src packages/relay/test packages/control/src packages/control/test packages/backend/app packages/backend/agent packages/backend/scripts packages/backend/src packages/backend/test scripts",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "node scripts/typecheck-bounded.mjs",
     "typecheck:all": "npm run typecheck && npm run backend:typecheck",
@@ -51,7 +51,7 @@
     "test:plugins": "tsx scripts/test-plugins.ts",
     "test:providers": "tsx scripts/test-providers.ts && tsx scripts/test-transport-agreement.ts && tsx scripts/test-codex-activity.ts && tsx scripts/test-opencode-activity.ts && tsx scripts/test-opencode-plugin.ts",
     "test:provider-launch-options": "tsx --tsconfig tsconfig.app.json scripts/test-provider-launch-options.ts && tsx scripts/test-acp-authentication.ts && tsx scripts/test-devin-environment.ts",
-    "test:skills": "tsx scripts/test-skills.ts",
+    "test:skills": "tsx scripts/test-skills.ts && tsx scripts/test-skill-references.ts && esbuild scripts/test-skill-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-skill-ui.mjs --log-level=warning && node node_modules/.tmp/test-skill-ui.mjs",
     "test:stage": "tsx scripts/test-stage-layout.ts && tsx scripts/test-thread-opening.ts && tsx scripts/test-composer-settings.ts && tsx scripts/test-commit-model-status.ts && tsx scripts/test-composer-capabilities.ts && tsx scripts/test-session-identity.ts && tsx scripts/test-ui-preferences.ts && tsx packages/sessions/test/thread-references.mjs",
     "test:renderer-assets": "node scripts/test-renderer-assets.mjs && node --max-old-space-size=256 scripts/test-packaged-import-guards.mjs",
     "test:tuning": "npm run -s build --workspace @mako/sessions && tsx scripts/test-profile-transport.ts && tsx scripts/test-devin-settings.ts && tsx scripts/test-opencode-settings.ts && tsx scripts/test-tuning-import.ts && tsx scripts/test-session-settings.ts && tsx scripts/test-profile-refresh.ts && tsx scripts/check-harness-models.ts && node --import tsx docs/audits/2026-09-07/harness-defaults/reproduce.mjs",
@@ -60,6 +60,8 @@
     "relay:build": "npm run build --workspace @mako/relay",
     "relay:test": "npm test --workspace @mako/relay",
     "relay:typecheck": "npm run typecheck --workspace @mako/relay",
+    "control:build": "npm run build --workspace @mako/control",
+    "control:test": "npm test --workspace @mako/control",
     "preview": "vite preview",
     "package": "npm run package:mac",
     "package:mac": "npm run build && npm run test:renderer-assets && node scripts/package-mac.mjs",
@@ -89,6 +91,7 @@
     "test:browser-extension-e2e": "npm run test:browser-extension && node scripts/test-browser-extension-e2e.mjs",
     "test:transcript": "tsx scripts/test-transcript-tools.ts && tsx scripts/test-content-contract.ts && tsx scripts/test-transcript-persistence.ts && tsx scripts/test-canvas-preview.ts",
     "test:workspace-snapshots": "tsx scripts/test-workspace-snapshots.ts && tsx scripts/test-live-snapshots.ts && tsx scripts/test-snapshot-retention.ts && tsx scripts/test-snapshot-budget.ts",
+    "benchmark:control": "node --import tsx scripts/benchmark-control-runtime.ts",
     "benchmark:snapshots": "node --max-old-space-size=256 --import tsx scripts/benchmark-snapshots.ts",
     "test:rewind-e2e": "npm run build:electron && node scripts/test-rewind-e2e.mjs",
     "generate:codex-inputs": "node scripts/generate-codex-inputs.mjs",
@@ -111,6 +114,7 @@
     "@cursor/sdk": "1.0.31",
     "@kiri/client": "file:vendor/kiri-client-0.2.6.tgz",
     "@lydell/node-pty": "1.1.0",
+    "@mako/control": "^0.1.0",
     "@mako/relay": "^0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "ai": "7.0.89",
@@ -211,6 +215,14 @@
       {
         "from": "packages/relay",
         "to": "node_modules/@mako/relay",
+        "filter": [
+          "package.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "packages/control",
+        "to": "node_modules/@mako/control",
         "filter": [
           "package.json",
           "dist/**"

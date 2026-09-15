@@ -5,7 +5,8 @@
     { "path": "./tsconfig.node.json" },
     { "path": "./tsconfig.electron.json" },
     { "path": "./packages/sessions" },
-    { "path": "./packages/relay" }
+    { "path": "./packages/relay" },
+    { "path": "./packages/control" }
   ],
   "compilerOptions": {
     "paths": {

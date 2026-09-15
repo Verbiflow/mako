@@ -274,6 +274,60 @@ or registry snapshots.
 
 ## Browser and computer control
 
+Each control server is three tools: `status`, `help` and `exec`
+(`mako_browser_*`, `mako_computer_*`). `exec` runs trusted async JavaScript
+in a `worker_threads` Worker (`control-program-runtime.ts`,
+`control-program-worker.ts`, shared by both servers) with a `browser` or
+`computer` object whose methods are the actions; a single action is a
+one-line program and a workflow is several awaited calls with plain
+JavaScript between them, so an observation the model only needs to decide
+from never enters its context. Every action still passes the host's own
+checks (session, snapshot, path, foreground, preview), because the worker
+only forwards commands to the same `call` the direct tools used. `help`
+generates the API reference from the live schema (`BrowserCommandSchema`;
+the driver's own tool list) so the catalog costs 4 KB rather than the 177 KB
+that 94 per-action tools did; `docs/audits/2026-09-14/control-runtime-baseline.md`
+has the measurements against the prior surface and
+`scripts/benchmark-control-runtime.ts` re-takes them. The macOS harness
+server (`mako-local-tools`) is gone; the driver does everything it did.
+
+Output is never cut. A returned or logged value at or past
+`INLINE_TEXT_BUDGET` (200 KB), a run's inline text past
+`INLINE_TOTAL_BUDGET`, and every image after the `INLINE_IMAGE_COUNT`th are
+written whole under the task's artifact directory
+(`control-artifacts.ts`: `MAKO_CONTROL_ARTIFACTS` or the temp directory,
+keyed by `MAKO_TASK_ID`) and the result carries a receipt with the path,
+size, hash and an outline of the value's shape; `artifacts.save(name,
+value)` lets a program keep something on purpose. Before this the prior
+program surface failed a run whose output passed 200 KB (`output-limit`,
+outcome unknown, every action already taken in it lost) and the direct
+computer tools put a 300 KB tree into the model. What a program returns
+crosses the port as JSON: an object with an `undefined` member once failed
+the host's message schema as "invalid message" and lost the run, so the
+worker round-trips every output and names a value JSON cannot carry. A
+computer action resolves to the driver's result with the text echo of
+`structuredContent` removed, otherwise a window state returned whole cost
+twice. `test-browser-runtime.ts`, `test-browser-tools.ts` and
+`test-computer-tools.ts` cover the surface, the spill, the receipts and
+the preflight checks inside programs.
+
+Keyboard input to a backgrounded Electron or Chromium renderer does not
+land. Measured 2026-09-14 with `scripts/test-local-control-e2e.mjs`
+against an Electron fixture behind the user's window: a pid-posted click
+lands and `set_value` through accessibility writes the field, but
+`hotkey`, `press_key` and `type_text` posted to the pid are dropped with
+`escalation.reason: "delivery_failed"` and the renderer's value does not
+move. The wrapper marks that result `mako_routes.status: "not-delivered"`
+and names the routes that work (`set_value`, `invoke_menu`); a combo the
+driver merely could not read back is `unverifiable`. `invoke_menu`
+activates a menu item by fronting the app for the activation and restoring
+the previous frontmost app itself, so it needs a menu bar (the fixture's
+`MAKO_FIXTURE_POLICY=regular`) and is refused without one. The ladder in
+`BACKGROUND_INPUT_LADDER` and the server instructions say this in order;
+`delivery_mode: "foreground"` is the only keyboard route into a renderer and
+is refused while the window is not frontmost. The e2e asserts the frontmost
+pid before and after every program.
+
 `computer-tools-main.ts` wraps the native driver (`cua-driver`, an external
 install under `/Applications/CuaDriver.app`) and repairs what the driver gets
 wrong for agents. The driver refuses an output path whose deepest existing
@@ -294,8 +348,8 @@ driver afterwards and tasks get a new session on their next call. The driver
 cannot scroll Electron windows in the background and foreground input contends
 with the user, so the desk itself is reached through the browser tools instead.
 
-Browser tools publish input-mode JSON Schemas (defaults optional, every field
-described, `$defs` kept) and bound every text result to 200 KB. Input is real:
+Browser actions publish input-mode JSON Schemas (defaults optional, every
+field described, `$defs` kept) through `help`. Input is real:
 click moves, presses with a buttons mask and releases on its own budget; type
 checks editability and can clear and submit; press covers the keys insertText
 cannot. Observations carry element states, viewport scroll context, paging
@@ -616,15 +670,44 @@ files, and diffs for that thread, never more sessions.
 The composer groups file attachments, screenshots, references, skills, and MCP
 settings under one + popover. `composer.controls` contributions render inside
 that menu and may dismiss it before capture. Typing `$` anywhere or `/` at the
-start of an empty draft opens one capability menu listing the skills and MCP
-servers the *selected* provider will actually have: skills from that provider's
-own roots plus the universal `.agents/skills` roots, and servers from the same
-reach predicate the host projects into a launch (`electron/contracts/mcp-reach.ts`,
-plus the launch-attached conversation tools). Mako's managed servers wear the
-fin. A pick inserts plain text in the sigil typed (`$name`, `/name`,
-`$mcp:server`); providers receive exactly that text. Skills installed only for
-other providers are a count in the footer that opens Settings, never a row.
-`scripts/test-composer-capabilities.ts` covers the tokens, reach, and ranking. Terminal remains on Command-J and
+start of an empty draft opens one capability menu listing every installed
+skill and the MCP servers the *selected* provider will have: servers from the
+same reach predicate the host projects into a launch
+(`electron/contracts/mcp-reach.ts`, plus the launch-attached conversation
+tools). Mako's managed servers wear the fin. A pick inserts plain text in the
+sigil typed (`$name`, `/name`, `$mcp:server`); sentence punctuation after a
+token stays prose. `scripts/test-composer-capabilities.ts` covers the tokens,
+reach, and ranking.
+
+A `$skill` reaches whichever provider answers. `electron/contracts/skill-reach.ts`
+is the one rule: a skill under the provider's own roots is `native` (the
+message points at it), one found only under another provider's roots or the
+universal `.agents/skills` is a `handover` (the host reads SKILL.md and the
+message carries its body under a `[Skill name from source]` marker, or a
+pointer above `SKILL_HANDOVER_LIMIT`), and an unknown name is `missing` and
+goes out as typed. Every provider declares `readsUniversalRoot` on its skill
+source, `false` until a live check shows the CLI loading a skill that exists
+in `.agents/skills` alone; none is verified yet, so a universal skill is
+handed over everywhere. `disable-model-invocation: true` marks a skill
+`manual`; a typed reference is that invocation and carries it like any other.
+A body is carried once per conversation (`skills.attach` in
+`src/state/skills.ts`), later mentions point back; the key is the
+conversation the send continues on the same harness, and a handoff, a move
+or a fresh start begins with nothing handed. Names are read from the user's
+words alone (never a referenced thread's title), need a letter (`$5` is
+prose), and a host that cannot resolve them keeps the draft with the reason
+rather than sending the bare token. Before this, `$wait-what` typed for
+Cursor went out as five characters and the menu listed a skill the provider
+could not load. The draft's chip says the route without taking width (a
+dotted underline for a handover, a dashed edge for a missing name), the
+transcript chip adds the source's mark, the menu row names the source, and
+Settings > Skills is a matrix of skills by place — a filled dot is a copy the
+provider loads itself, an outline is a provider that is handed the skill, a
+caution dot is a copy that drifted from the listed one (`SkillOrigin.hash`),
+and a dot opens the install, replace or remove for that one cell, previewed
+first. `scripts/test-skill-references.ts` covers the rule, the read, the
+appendix and the round trip; `test-skill-ui.tsx` covers the matrix and both
+chips. Terminal remains on Command-J and
 in the command palette, not as an extra composer icon. Context usage is shown
 only with an exact, usable reading; unsupported providers do not get an empty
 ring. Chat activity uses one compact 20px mark and no redundant Responding row
