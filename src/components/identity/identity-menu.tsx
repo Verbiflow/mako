@@ -6,6 +6,8 @@ import { github, useGitHub } from "@/state/github"
 import { accounts, useAccounts, usageKey } from "@/state/accounts"
 import { cn } from "@/lib/utils"
 import { usageWindowLabel } from "@/lib/usage-window"
+import { harnessLabel } from "@/lib/harness-label"
+import { useThreads } from "@/state/threads"
 import { CheckIcon, CopyIcon, SettingsIcon } from "lucide-react"
 
 /**
@@ -22,6 +24,7 @@ export function IdentityMenu() {
   const avatar = useGitHub((state) => state.userAvatar)
   const list = useAccounts((state) => state.accounts)
   const usage = useAccounts((state) => state.usage)
+  const descriptors = useThreads((state) => state.descriptors)
   const busy = useAccounts((state) => state.busy)
 
   useEffect(() => {
@@ -91,7 +94,9 @@ export function IdentityMenu() {
                     {identity}
                   </span>
                   <span className="flex items-center gap-2 text-label text-faint">
-                    {account.harness === "claude" ? "Claude Code" : "Codex"}
+                    {descriptors.find(
+                      (entry) => entry.provider === account.harness
+                    )?.displayName ?? harnessLabel(account.harness)}
                     {stats?.status === "ok" ? (
                       <>
                         {stats.session ? (

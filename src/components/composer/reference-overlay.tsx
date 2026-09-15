@@ -1,7 +1,17 @@
-import { memo } from "react"
+import { memo, useEffect } from "react"
 import { tokenize } from "@/lib/mentions"
 import { attachmentRanges } from "@/lib/attachment-references"
 import type { Attachment } from "@/lib/attachments"
+import {
+  MISSING_SKILL_CHIP_CLASS,
+  draftSkillDelivery,
+  isSkillName,
+  skillChipTitle,
+} from "@/lib/skill-references"
+import { cn } from "@/lib/utils"
+import { useSession } from "@/state/session"
+import { skills, useSkills } from "@/state/skills"
+import { useThreads } from "@/state/threads"
 import { InlineAttachment } from "./attachments"
 
 /**
@@ -11,6 +21,11 @@ import { InlineAttachment } from "./attachments"
  * font, same leading, same wrapping — because the caret the user sees belongs
  * to the textarea and this layer only supplies the glyphs. Any divergence
  * shows up immediately as text drifting away from the cursor.
+ *
+ * That is why a `$skill` here says how it will reach the provider with
+ * nothing that takes width: a skill the provider lacks and will be handed
+ * wears a dotted underline, one nothing has installed wears a dashed edge and
+ * quieter ink. The transcript chip, free of the textarea, adds the mark.
  */
 export const ReferenceOverlay = memo(function ReferenceOverlay({
   text,
@@ -32,6 +47,18 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
     cursor = range.end
   }
   const segments = [...pieces, ...tokenize(text.slice(cursor), cursor === 0)]
+
+  const harness = useThreads((state) => state.composerHarness)
+  const snapshot = useSkills((state) => state.snapshot)
+  const workspaceCwd = useSession((state) => state.meta?.cwd ?? "")
+  // A draft that names a skill without ever opening the menu still gets an
+  // honest chip: the registry loads once per workspace and is cached.
+  const referencesSkill = segments.some(
+    (segment) => segment.kind === "skill" && isSkillName(segment.name)
+  )
+  useEffect(() => {
+    if (referencesSkill) skills.ensure(workspaceCwd)
+  }, [referencesSkill, workspaceCwd])
 
   return (
     <div
@@ -71,6 +98,36 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
                   ? segment.path
                   : `${segment.harness} conversation`
               }
+            >
+              {segment.raw}
+            </span>
+          )
+        }
+        // `$5` in a sentence about money is prose the tokenizer let
+        // through, not a skill nothing has installed.
+        if (segment.kind === "skill" && !isSkillName(segment.name))
+          return (
+            <span aria-hidden key={index}>
+              {segment.raw}
+            </span>
+          )
+        if (segment.kind === "skill") {
+          const delivery = snapshot
+            ? draftSkillDelivery(snapshot, segment.name, harness)
+            : undefined
+          return (
+            <span
+              key={index}
+              data-skill-delivery={delivery?.kind}
+              title={skillChipTitle(segment.name, delivery)}
+              className={cn(
+                "rounded-[3px] text-foreground",
+                delivery?.kind === "missing"
+                  ? MISSING_SKILL_CHIP_CLASS
+                  : "bg-fill-selected ring-1 ring-border ring-inset",
+                delivery?.kind === "handover" &&
+                  "underline decoration-dotted decoration-muted-foreground underline-offset-[3px]"
+              )}
             >
               {segment.raw}
             </span>

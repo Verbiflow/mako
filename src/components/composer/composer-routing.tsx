@@ -5,6 +5,7 @@ import { ForeignEffortPicker } from "@/components/composer/foreign-effort"
 import { ForeignModelPicker } from "@/components/composer/foreign-model"
 import { activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
+import { descriptorFor } from "@/state/descriptors"
 
 const EMPTY_QUEUE: never[] = []
 
@@ -20,10 +21,8 @@ export function ComposerRouting() {
       activeLiveAcp(state)?.session.status === "ready" &&
       activeLiveAcp(state)?.session.connection === "connected"
   )
-  const canCompact = useThreads((state) =>
-    state.liveCapabilities.some(
-      (item) => item.provider === activeHarness && item.canCompact
-    )
+  const canCompact = useThreads(
+    (state) => descriptorFor(state, activeHarness)?.canCompact === true
   )
   const liveThreadPath = useAcp((state) => activeAcp(state)?.threadPath)
   const queued = useAcp((state) => activeAcp(state)?.queued ?? EMPTY_QUEUE)

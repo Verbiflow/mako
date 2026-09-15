@@ -17,7 +17,8 @@ import { fuzzy } from "@/lib/fuzzy"
 import { cn } from "@/lib/utils"
 import { modelKey, toggleFavoriteModel, usePrefs } from "@/state/prefs"
 import type { HarnessModel } from "@/lib/types"
-import { CheckIcon, ChevronDownIcon, StarIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ListPlusIcon, StarIcon } from "lucide-react"
+import { addToLoadout, removeFromLoadout } from "@/state/model-loadout"
 
 export function ForeignModelPicker({ view }: { view: ComposerSettingsView }) {
   const { target, profile, resolved, model: selected, refresh } = view
@@ -25,6 +26,7 @@ export function ForeignModelPicker({ view }: { view: ComposerSettingsView }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
   const favorites = usePrefs((prefs) => prefs.favoriteModels)
+  const loadout = usePrefs((prefs) => prefs.modelLoadout)
   const identity =
     resolved.model.kind === "known" ? resolved.model.value : undefined
   const effective = selected?.id ?? identity
@@ -112,10 +114,17 @@ export function ForeignModelPicker({ view }: { view: ComposerSettingsView }) {
               model={model}
               selected={effective === model.id}
               favorite={favorites.includes(modelKey(harness, model.id))}
+              loadoutIndex={loadout.findIndex(
+                (entry) => entry.harness === harness && entry.model === model.id
+              )}
               onChoose={() => set(model.id)}
               onFavorite={() =>
                 toggleFavoriteModel(modelKey(harness, model.id))
               }
+              onLoadout={(index) => {
+                if (index >= 0) removeFromLoadout(index)
+                else addToLoadout(harness, model.id)
+              }}
             />
           ))}
           {profile && models.length === 0 ? (
@@ -136,14 +145,18 @@ function ModelRow({
   model,
   selected,
   favorite,
+  loadoutIndex,
   onChoose,
   onFavorite,
+  onLoadout,
 }: {
   model: HarnessModel
   selected: boolean
   favorite: boolean
+  loadoutIndex: number
   onChoose: () => void
   onFavorite: () => void
+  onLoadout: (index: number) => void
 }) {
   const optionSummary = model.options
     .map((option) =>
@@ -190,6 +203,30 @@ function ModelRow({
         {selected ? (
           <CheckIcon className="size-3.5 shrink-0 text-foreground" />
         ) : null}
+      </button>
+      <button
+        type="button"
+        aria-label={
+          loadoutIndex >= 0
+            ? `Remove ${model.label} from the loadout`
+            : `Add ${model.label} to the loadout`
+        }
+        title={
+          loadoutIndex >= 0
+            ? `In the loadout — ⌃⌘${loadoutIndex + 1}`
+            : "Add to the loadout (⌃⌘1–5)"
+        }
+        onClick={() => onLoadout(loadoutIndex)}
+        className={cn(
+          "rounded p-1 text-faint transition-opacity duration-150 hover:text-foreground",
+          loadoutIndex >= 0
+            ? "text-foreground/70"
+            : "opacity-0 group-hover/model:opacity-100 focus:opacity-100"
+        )}
+      >
+        <ListPlusIcon
+          className={cn("size-3.5", loadoutIndex >= 0 && "fill-current")}
+        />
       </button>
       <button
         type="button"

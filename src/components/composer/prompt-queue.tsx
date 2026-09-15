@@ -15,6 +15,7 @@ import { editQueuedPrompt, type QueueTarget } from "@/state/acp-queue"
 import { parsePlanContext } from "@/lib/proposed-plan"
 import { stripThreadReferenceAppendix } from "@/lib/thread-references"
 import { parseAttachmentAppendix } from "@/lib/attachments"
+import { stripSkillAppendix } from "@/lib/skill-references"
 
 const EMPTY: PendingPrompt[] = []
 
@@ -184,7 +185,7 @@ function QueueRow({
   editable: boolean
 }) {
   const rawBody = parsePlanContext(
-    stripThreadReferenceAppendix(request.text)
+    stripThreadReferenceAppendix(stripSkillAppendix(request.text))
   ).body
   const parsedBody = parseAttachmentAppendix(rawBody).body
   const body = request.text.startsWith(parsedBody) ? parsedBody : rawBody

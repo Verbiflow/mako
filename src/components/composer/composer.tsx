@@ -81,7 +81,9 @@ import {
   store as sessionStore,
   useSession,
 } from "@/state/session"
+import { skills } from "@/state/skills"
 import { threads, threadsStore, useThreads } from "@/state/threads"
+import { descriptorFor } from "@/state/descriptors"
 import { XIcon, Maximize2Icon, Minimize2Icon } from "lucide-react"
 
 type ComposerTextEvent = CustomEvent<string>
@@ -391,10 +393,44 @@ export function Composer() {
       }
       const staged = settledItems
       const attachmentPrompt = buildForeignPrompt(text, staged)
-      const full = await appendThreadReferences(
+      const referenced = await appendThreadReferences(
         appendPlanContext(attachmentPrompt, draftPlans),
         threadsStore.get().threads
       )
+      // Skills go last: the provider that answers decides what each `$skill`
+      // needs, and a body already carried into this conversation is pointed
+      // at, not repeated. "This conversation" follows the routing below
+      // exactly: a reply on the same harness continues one, and a handoff,
+      // a move to another harness or a fresh start begins one that has been
+      // handed nothing.
+      const continuesViewing =
+        viewingRef && (!liveSession || viewingOwnsComposer)
+      const skillKey = continuesViewing
+        ? harness === viewingRef.harness &&
+          !viewingRef.archived &&
+          !viewingRef.resumeUnavailable
+          ? viewingRef.path
+          : null
+        : activeConversation && harness === activeConversation.harness
+          ? activeConversation.key
+          : null
+      const liveCommands = new Set(
+        liveSession?.commands?.map((command) => command.name)
+      )
+      const withSkills = await skills.attach(
+        referenced,
+        harness,
+        skillKey,
+        text,
+        liveCommands
+      )
+      if (withSkills.failed !== undefined) {
+        toast.error(
+          `The skills in this message could not be resolved: ${withSkills.failed.replace(/\.?$/, ".")} Your draft is saved.`
+        )
+        return
+      }
+      const full = withSkills.text
       if (!full.trim()) return
       const acpAttachments = staged.map(toAcpPromptAttachment)
       const recoveryId = preserveSendingDraft({
@@ -414,7 +450,7 @@ export function Composer() {
       setMention(null)
       let ok: boolean
       try {
-        if (viewingRef && (!liveSession || viewingOwnsComposer)) {
+        if (continuesViewing) {
           // An archived conversation has no native session to resume — a
           // reply re-materializes it: the emitters write a fresh native
           // session (same harness or any other) from the archived history,
@@ -454,7 +490,7 @@ export function Composer() {
               ok = await acp.send(full, acpAttachments)
             }
           }
-        } else if (threadsStore.get().acpable.includes(harness)) {
+        } else if (descriptorFor(threadsStore.get(), harness)?.live) {
           ok = await acp.startFresh(harness, cwd ?? "", full, acpAttachments)
         } else {
           ok = await threads.startNew(harness, full)
@@ -464,8 +500,10 @@ export function Composer() {
         toast.error(error instanceof Error ? error.message : String(error))
         return
       }
-      if (ok) attachments.discard(restorableDraft.attachments)
-      else {
+      if (ok) {
+        attachments.discard(restorableDraft.attachments)
+        skills.rememberHanded(skillKey, withSkills.handed)
+      } else {
         const currentDraftKey =
           activeAcp(acpStore.get())?.draftKey ??
           threadsStore.get().opening?.ref.path ??
@@ -603,15 +641,11 @@ export function Composer() {
 
   const busy = status.streaming || status.compacting
   const liveHarness = useAcp((state) => activeAcp(state)?.harness ?? null)
-  const supportsSteering = useThreads((state) =>
-    state.liveCapabilities.some(
-      (item) => item.provider === liveHarness && item.canSteer
-    )
+  const supportsSteering = useThreads(
+    (state) => descriptorFor(state, liveHarness)?.canSteer === true
   )
   const steeringKind = useThreads(
-    (state) =>
-      state.liveCapabilities.find((item) => item.provider === liveHarness)
-        ?.steering ?? null
+    (state) => descriptorFor(state, liveHarness)?.steering ?? null
   )
   const steerOnEnter = usePrefs((state) => state.steerOnEnter)
   const steerTitle = steeringTitle(steeringKind)

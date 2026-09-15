@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { BookOpenIcon, FileIcon, PlugIcon } from "lucide-react"
+import { BookOpenIcon, FileIcon, PlugIcon, SlashIcon } from "lucide-react"
 import { harnessTitle } from "@/components/composer/harness-title"
+import { SkillSourceMark } from "@/components/composer/reference-chip"
 import { Chip, Eyebrow, Keys } from "@/components/ui/kit"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -11,7 +12,8 @@ import {
   type CapabilityItem,
 } from "@/lib/composer-capabilities"
 import { fileDir, fileName, workspaceName } from "@/lib/format"
-import { fuzzy } from "@/lib/fuzzy"
+import { fuzzy, type FuzzyMatch } from "@/lib/fuzzy"
+import { activeLiveAcp, useAcp } from "@/state/acp"
 import {
   capabilityToken,
   fileKind,
@@ -21,14 +23,17 @@ import {
 } from "@/lib/mentions"
 import { cn } from "@/lib/utils"
 import { mcpTransportsFor } from "../../../electron/contracts/mcp-reach"
+import { UNIVERSAL_SKILL_PROVIDER } from "../../../electron/contracts/skill-reach"
 import { useWorkspaceFiles } from "@/state/files"
 import { mcp, useMcp } from "@/state/mcp"
 import { useProviders } from "@/state/providers"
 import { useSession } from "@/state/session"
 import { skills, useSkills } from "@/state/skills"
 import { useThreads } from "@/state/threads"
+import type { LiveSessionCommand } from "@/lib/types"
 
 const REFERENCE_LIMIT = 9
+const EMPTY_COMMANDS: LiveSessionCommand[] = []
 
 export type MentionKind = "@" | "$" | "/"
 
@@ -42,6 +47,8 @@ interface Row {
   indices: number[]
   hint?: string
   badge?: string
+  /** The provider whose copy this one would be handed, named beside the badge. */
+  from?: string
   blocked?: string
   icon: React.ReactNode
 }
@@ -144,7 +151,8 @@ export function MentionMenu({
           title: item.name,
           indices,
           hint: item.description,
-          badge: item.badge ?? (item.from ? `from ${harnessTitle(item.from)}` : undefined),
+          badge: item.badge,
+          from: item.from,
           blocked: item.blocked,
           icon: <CapabilityGlyph item={item} />,
         })),
@@ -152,12 +160,51 @@ export function MentionMenu({
     )
   }, [capabilities, harness, kind, mcpSnapshot, query, skillsSnapshot, transports])
 
-  const elsewhere = useMemo(
-    () => (capabilities ? skillItems(skillsSnapshot, harness).elsewhere : 0),
+  const foreign = useMemo(
+    () => (capabilities ? skillItems(skillsSnapshot, harness).foreign : 0),
     [capabilities, harness, skillsSnapshot]
   )
 
-  const groups = capabilities ? capabilityGroups : referenceGroups
+  const commands = useAcp(
+    (state) => activeLiveAcp(state)?.session.commands ?? EMPTY_COMMANDS
+  )
+  const commandsHarness = useAcp(
+    (state) => activeLiveAcp(state)?.session.harness ?? harness
+  )
+
+  // Commands the running provider advertised lead the slash menu: they are
+  // the one thing only this session can answer.
+  const commandGroup = useMemo<Group[]>(() => {
+    if (kind !== "/" || commands.length === 0) return []
+    const matches = commands
+      .map((command) => ({
+        command,
+        match: fuzzy(query.trim(), command.name),
+      }))
+      .filter(
+        (entry): entry is { command: LiveSessionCommand; match: FuzzyMatch } =>
+          entry.match !== null
+      )
+      .sort((a, b) => b.match.score - a.match.score)
+    if (!matches.length) return []
+    return [
+      {
+        label: `${harnessTitle(commandsHarness)} commands`,
+        rows: matches.map(({ command, match }) => ({
+          value: `/${command.name}`,
+          key: `command:${command.name}`,
+          title: command.name,
+          indices: match.indices,
+          hint: command.description ?? command.hint,
+          icon: <SlashIcon className="size-3.5 text-muted-foreground" />,
+        })),
+      },
+    ]
+  }, [commands, commandsHarness, kind, query])
+
+  const groups = capabilities
+    ? [...commandGroup, ...capabilityGroups]
+    : referenceGroups
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups])
 
   const [cursor, setCursor] = useState(0)
@@ -318,6 +365,17 @@ export function MentionMenu({
                     ) : (
                       <span className="flex-1" />
                     )}
+                    {row.from ? (
+                      <span
+                        className="inline-flex shrink-0 items-center gap-1 text-label text-faint"
+                        data-skill-from={row.from}
+                      >
+                        <SkillSourceMark from={row.from} className="size-3" />
+                        {row.from === UNIVERSAL_SKILL_PROVIDER
+                          ? "universal"
+                          : harnessTitle(row.from)}
+                      </span>
+                    ) : null}
                     {row.badge ? (
                       <Chip
                         tone={row.badge === "changed" ? "caution" : "neutral"}
@@ -340,11 +398,11 @@ export function MentionMenu({
         <Keys keys={["↩"]} /> insert
         <Keys keys={["Esc"]} /> dismiss
         <span className="flex-1" />
-        {capabilities && elsewhere > 0 ? (
+        {capabilities && foreign > 0 ? (
           <SettingsLink section="skills">
-            {elsewhere === 1
-              ? "1 more skill for other providers"
-              : `${elsewhere} more skills for other providers`}
+            {foreign === 1
+              ? `1 skill is handed over · install it for ${harnessTitle(harness)}`
+              : `${foreign} skills are handed over · install them for ${harnessTitle(harness)}`}
           </SettingsLink>
         ) : null}
       </div>

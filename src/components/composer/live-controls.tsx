@@ -3,7 +3,7 @@ import { useState } from "react"
 import { RadioGroup } from "radix-ui"
 import { CheckIcon, MoreHorizontalIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
 import { ACCESS_TIERS, accessTierInfo } from "../../../electron/contracts/access"
-import type { LiveSessionMode } from "@/lib/types"
+import type { LiveSessionMode, LiveSessionUsage } from "@/lib/types"
 import { usePrefs } from "@/state/prefs"
 import {
   chooseProviderMode,
@@ -14,6 +14,7 @@ import {
   threadAccessMode,
 } from "@/state/provider-access"
 import { useThreads } from "@/state/threads"
+import { formatCost, formatTokens } from "@/lib/format"
 import {
   Popover,
   PopoverContent,
@@ -35,6 +36,7 @@ export function LiveComposerControls({
   const connected = useAcp(
     (state) => activeLiveAcp(state)?.session.connection === "connected"
   )
+  const usage = useAcp((state) => activeLiveAcp(state)?.session.usage)
   const conversationId = useAcp((state) => state.activeKey)
   const [open, setOpen] = useState(false)
   return (
@@ -59,6 +61,7 @@ export function LiveComposerControls({
           sideOffset={8}
           className="max-h-[60vh] w-80 overflow-y-auto p-1"
         >
+          {usage ? <ContextReading usage={usage} /> : null}
           {canCompact ? (
             <button
               type="button"
@@ -94,6 +97,24 @@ export function LiveComposerControls({
         </PopoverContent>
       </Popover>
     </>
+  )
+}
+
+/** The provider's own context reading, beside the action that frees it. */
+export function ContextReading({ usage }: { usage: LiveSessionUsage }) {
+  return (
+    <div className="px-2 py-2" data-context-reading>
+      <span className="text-ui">
+        Context · {formatTokens(usage.used)} of {formatTokens(usage.size)}{" "}
+        tokens
+      </span>
+      <span className="block text-label text-faint">
+        {Math.round((usage.used / usage.size) * 100)}% of the window
+        {usage.cost
+          ? ` · ${usage.cost.currency === "USD" ? formatCost(usage.cost.amount) : `${usage.cost.amount} ${usage.cost.currency}`} so far`
+          : ""}
+      </span>
+    </div>
   )
 }
 

@@ -1,7 +1,14 @@
 import { capabilityToken, fileKind, threadToken } from "@/lib/mentions"
 import { isMakoServerName } from "@/lib/composer-capabilities"
 import { fileName } from "@/lib/format"
+import {
+  MISSING_SKILL_CHIP_CLASS,
+  skillChipTitle,
+  type SkillAppendixEntry,
+} from "@/lib/skill-references"
 import { findThreadReference } from "@/lib/thread-references"
+import type { SkillDelivery } from "@/lib/types"
+import { UNIVERSAL_SKILL_PROVIDER } from "../../../electron/contracts/skill-reach"
 import { desktop } from "@/state/desktop"
 import { useThreads } from "@/state/threads"
 import { MakoMark } from "@/components/ui/mako-mark"
@@ -13,6 +20,7 @@ import {
   FileCodeIcon,
   FileIcon,
   FileTextIcon,
+  GlobeIcon,
   ImageIcon,
   PaletteIcon,
   PlugIcon,
@@ -115,15 +123,64 @@ const capabilityChipClass = cn(
   "[&_svg]:translate-y-[1.5px]"
 )
 
-export function SkillChip({ name }: { name: string }) {
+/**
+ * How a `$skill` reached the provider, in the transcript. `undefined` is a
+ * prompt sent before Mako resolved skills, or prose that is not a prompt;
+ * the chip says nothing it cannot know.
+ */
+export type SkillChipSent = SkillAppendixEntry | null | undefined
+
+function sentDelivery(sent: SkillChipSent): SkillDelivery | undefined {
+  if (sent === undefined) return undefined
+  if (sent === null) return { kind: "missing" }
+  return sent.from
+    ? { kind: "handover", path: "", from: sent.from }
+    : { kind: "native", path: "" }
+}
+
+/** The glyph that says where a handover came from: the provider's mark, or the universal root's. */
+export function SkillSourceMark({
+  from,
+  className,
+}: {
+  from: string
+  className?: string
+}) {
+  return from === UNIVERSAL_SKILL_PROVIDER ? (
+    <GlobeIcon className={className} aria-hidden />
+  ) : (
+    <HarnessIcon harness={from} className={className} tinted={false} />
+  )
+}
+
+export function SkillChip({
+  name,
+  sent,
+}: {
+  name: string
+  sent?: SkillChipSent
+}) {
+  const delivery = sentDelivery(sent)
+  const kind = delivery?.kind
   return (
     <span
-      title={`Skill: ${name}`}
+      title={skillChipTitle(name, delivery)}
       data-copy-reference={capabilityToken("$", "skill", name)}
-      className={capabilityChipClass}
+      data-skill-delivery={kind}
+      className={cn(
+        capabilityChipClass,
+        kind === "missing" && "ring-0",
+        kind === "missing" && MISSING_SKILL_CHIP_CLASS
+      )}
     >
       <BookOpenIcon className="size-3 shrink-0 text-muted-foreground" />
       {name}
+      {delivery?.kind === "handover" ? (
+        <SkillSourceMark
+          from={delivery.from}
+          className="size-2.5 shrink-0 self-center text-faint"
+        />
+      ) : null}
     </span>
   )
 }
