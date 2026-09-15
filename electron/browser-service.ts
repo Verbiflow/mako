@@ -232,7 +232,7 @@ interface Binding {
   tail: Promise<void>
   refs: Map<string, number>
   view?: string
-  observation?: { token: string; digest: string }
+  observation?: { token: string; digest: string; refs: string[] }
   events: BrowserProtocolEvent[]
   dialog: DialogState | null
   dialogPolicy: "ask" | "accept" | "dismiss"
@@ -762,11 +762,11 @@ export class BrowserService {
           "An attached application's endpoint must be ws://127.0.0.1:<port>/…; Mako never attaches a remote endpoint."
         )
       const previous = this.browsers.get(command.id)
-      if (previous?.connection) {
-        // The same id attached twice is a relaunch; the old endpoint is gone.
-        previous.connection.close()
-        previous.connection = undefined
-      }
+      if (previous)
+        fault(
+          "invalid-request",
+          `Application browser "${command.id}" is already attached. Detach that exact generation before reusing its id.`
+        )
       this.attached.set(command.id, {
         id: command.id,
         name: command.name,
@@ -774,8 +774,28 @@ export class BrowserService {
         endpoint: async () => endpoint.href,
       })
       this.refresh()
-      await this.connect(command.id)
+      try {
+        await this.connect(command.id)
+      } catch (error) {
+        this.attached.delete(command.id)
+        this.browsers.delete(command.id)
+        this.changed()
+        throw error
+      }
       return { ...this.entry(command.id).status }
+    }
+    if (command.action === "detach") {
+      const entry = this.browsers.get(command.id)
+      if (!entry || !this.attached.has(command.id))
+        return { id: command.id, detached: false }
+      entry.connectAbort?.abort()
+      entry.connection?.close()
+      for (const [key, binding] of this.bindings)
+        if (binding.target.browser === command.id) this.bindings.delete(key)
+      this.attached.delete(command.id)
+      this.browsers.delete(command.id)
+      this.changed()
+      return { id: command.id, detached: true }
     }
     if (command.action === "tabs") {
       const result = targetsResult.parse(
@@ -880,6 +900,16 @@ export class BrowserService {
       binding.running++
       try {
         const value = await this.bound(binding, command, signal)
+        if (
+          !["close", "release"].includes(command.action) &&
+          this.bindings.get(this.key(binding.target)) !== binding
+        )
+          throw new BrowserFault({
+            code: "target-closed",
+            message:
+              "The exact tab closed after the command was dispatched. Its outcome is unknown; no command was retried and no other tab was selected.",
+            outcome: "unknown",
+          })
         if (command.action === "observe" || command.action === "screenshot")
           binding.uncertain = false
         if (
@@ -1015,15 +1045,29 @@ export class BrowserService {
           command.since !== undefined &&
           binding.observation?.token === command.since &&
           binding.observation.digest === digest
-        )
-          return {
-            target: { ...binding.target },
-            observation: binding.observation.token,
-            unchanged: true,
+        ) {
+          const nextNodeIds = [...observation.refs.values()]
+          if (binding.observation.refs.length === nextNodeIds.length) {
+            binding.refs = new Map(
+              binding.observation.refs.map((ref, index) => [
+                ref,
+                z.number().parse(nextNodeIds[index]),
+              ])
+            )
+            return {
+              target: { ...binding.target },
+              observation: binding.observation.token,
+              unchanged: true,
+            }
           }
+        }
         const token = randomUUID()
         binding.refs = observation.refs
-        binding.observation = { token, digest }
+        binding.observation = {
+          token,
+          digest,
+          refs: [...observation.refs.keys()],
+        }
         return { ...observation.value, observation: token }
       }
       case "screenshot": {

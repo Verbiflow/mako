@@ -1,47 +1,28 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process"
-import {
-  access,
-  chmod,
-  mkdir,
-  readdir,
-  readFile,
-  realpath,
-  unlink,
-} from "node:fs/promises"
+import { spawn, type ChildProcess } from "node:child_process"
+import { access, chmod, mkdir, readdir, unlink } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { homedir } from "node:os"
 import { delimiter, isAbsolute, join } from "node:path"
-import { promisify } from "node:util"
 import { hostLog } from "./host-log.js"
 import { trackProviderPid, untrackProviderPid } from "./provider-children.js"
-
-const run = promisify(execFile)
 
 /**
  * The embedded native driver, one per host.
  *
- * How it is launched decides whether the user loses focus. A direct
- * `spawn` of the driver's executable made it the frontmost application for
- * about a fifth of a second every time a host started it (sampled 60 ms
- * apart on 2026-09-14: `Mako:3067` → `cua-driver:39603` → `Mako:3067`),
- * which is exactly the "takes my desktop" the driver was blamed for. The
- * driver's own CLI launches its bundle through LaunchServices, so the host
- * does the same: `/usr/bin/open -g -n -a CuaDriver.app --args serve …`,
- * where `-g` keeps the new process behind the user's window. `open` returns
- * at once and owns no child, so the daemon's pid is discovered from its
- * command line once the socket answers, recorded in
- * `runtime/provider-children.json` for the next host to reap, and signalled
- * by pid on stop. An executable outside an application bundle (a fixture
- * script) is still spawned directly.
+ * Cua's embedding contract requires the host to spawn the daemon directly:
+ * LaunchServices breaks the macOS responsibility chain and gives the driver
+ * a second TCC identity. A direct 0.28.0 daemon used to activate for about
+ * 200 ms while constructing its cursor overlay. The documented
+ * `--no-overlay` daemon flag removes that UI path; 20 ms sampling on
+ * 2026-09-14 observed only the user's original frontmost pid during startup.
+ * The host therefore keeps a real child handle, inherits Mako's grants, and
+ * tears the exact process down without pgrep.
  */
 interface Daemon {
   pid: number
   socket: string
   executable: string
-  /** Present only for the direct spawn route. */
-  child?: ChildProcess
-  /** Where `open` connected the daemon's stderr. */
-  log?: string
+  child: ChildProcess
 }
 
 let daemon: Daemon | null = null
@@ -74,12 +55,6 @@ async function executable(
     }
   }
   return null
-}
-
-/** The `.app` an executable belongs to, when it is inside one. */
-export function bundleOf(path: string): string | null {
-  const match = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(path)
-  return match ? match[1] : null
 }
 
 function probe(path: string): Promise<boolean> {
@@ -134,24 +109,6 @@ async function waitForSocket(
   throw new Error("Embedded CUA Driver did not open its private socket")
 }
 
-/** The daemon `open` started for this socket, found by its own command line. */
-async function discoverPid(socket: string): Promise<number | null> {
-  try {
-    const { stdout } = await run(
-      "pgrep",
-      ["-f", "--", `serve --embedded --socket ${socket}`],
-      { timeout: 2_000, maxBuffer: 4_096 }
-    )
-    const pids = stdout
-      .split("\n")
-      .map((line) => Number(line.trim()))
-      .filter((pid) => Number.isInteger(pid) && pid > 0)
-    return pids[0] ?? null
-  } catch {
-    return null
-  }
-}
-
 export function ensureCuaEmbedded(
   stateDir: string,
   hostBundleId: string,
@@ -167,7 +124,7 @@ export function ensureCuaEmbedded(
 }
 
 function daemonRuns(current: Daemon): boolean {
-  return current.child ? current.child.exitCode === null : alive(current.pid)
+  return current.child.exitCode === null
 }
 
 function forget(current: Daemon): void {
@@ -199,11 +156,15 @@ async function start(
     // third party; the user's own CLI keeps its own preference.
     CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
   }
-  const args = ["serve", "--embedded", "--socket", socket]
-  const bundle = bundleOf(await realpath(command).catch(() => command))
-  const started = bundle
-    ? await launchBundle(bundle, command, socket, args, driverEnv, stateDir)
-    : await spawnDirect(command, socket, args, { ...env, ...driverEnv })
+  // Cua's documented daemon API disables the overlay at construction. Hiding
+  // a session cursor after startup still left the installed 0.28.0 build
+  // awaiting its glide before semantic AX actions; --no-overlay removes that
+  // render path entirely and keeps background control visually quiet.
+  const args = ["serve", "--embedded", "--no-overlay", "--socket", socket]
+  const started = await spawnDirect(command, socket, args, {
+    ...env,
+    ...driverEnv,
+  })
   daemon = started
   trackProviderPid({
     pid: started.pid,
@@ -213,67 +174,10 @@ async function start(
   })
   hostLog("computer", "driver started", {
     pid: started.pid,
-    route: bundle ? "open -g" : "spawn",
+    route: "spawn",
     executable: started.executable,
   })
   return started.socket
-}
-
-/** LaunchServices starts the bundle behind the user's window; nothing is activated. */
-async function launchBundle(
-  bundle: string,
-  executablePath: string,
-  socket: string,
-  args: string[],
-  driverEnv: Record<string, string>,
-  stateDir: string
-): Promise<Daemon> {
-  const log = join(stateDir, `embedded-${process.pid}.log`)
-  await unlink(log).catch(() => undefined)
-  const openArgs = [
-    "-g",
-    "-n",
-    "-a",
-    bundle,
-    ...Object.entries(driverEnv).flatMap(([name, value]) => [
-      "--env",
-      `${name}=${value}`,
-    ]),
-    "--stderr",
-    log,
-    "--args",
-    ...args,
-  ]
-  try {
-    await run("/usr/bin/open", openArgs, { timeout: 15_000, maxBuffer: 16_384 })
-  } catch (error) {
-    throw new Error(
-      `Embedded CUA Driver could not be launched: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error }
-    )
-  }
-  let pid: number | null = null
-  try {
-    await waitForSocket(socket, () => null)
-    pid = await discoverPid(socket)
-    if (pid === null)
-      throw new Error(
-        "Embedded CUA Driver answered on its socket but its process was not found"
-      )
-  } catch (error) {
-    const tail = (await readFile(log, "utf8").catch(() => ""))
-      .trim()
-      .slice(-8_000)
-    const found = pid ?? (await discoverPid(socket))
-    if (found !== null) process.kill(found, "SIGTERM")
-    await unlink(socket).catch(() => undefined)
-    throw new Error(
-      tail ||
-        (error instanceof Error ? error.message : "Embedded CUA Driver failed"),
-      { cause: error }
-    )
-  }
-  return { pid, socket, executable: executablePath, log }
 }
 
 async function spawnDirect(
@@ -328,13 +232,6 @@ export function stopCuaEmbedded(): void {
   if (!running) return
   daemon = null
   untrackProviderPid(running.pid)
-  if (running.child) running.child.kill("SIGTERM")
-  else if (alive(running.pid)) {
-    try {
-      process.kill(running.pid, "SIGTERM")
-    } catch {
-      // Gone between the check and the signal.
-    }
-  }
+  running.child.kill("SIGTERM")
   void unlink(running.socket).catch(() => undefined)
 }

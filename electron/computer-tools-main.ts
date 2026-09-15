@@ -15,7 +15,6 @@ import {
   KEYBOARD_TOOLS,
   KEY_ROUTE_ADVICE,
   MAKO_ACTIONS,
-  carryToken,
   deliveredForeground,
   indexSnapshot,
   keyRouteAdvice,
@@ -39,6 +38,7 @@ import { BROWSER_ACTIONS } from "./browser-tools-runtime.js"
 import { browserControlClient } from "./browser-control-client.js"
 import { BrowserCommandSchema } from "./contracts/browser-control.js"
 import { execFile } from "node:child_process"
+import { realpath } from "node:fs/promises"
 import { createServer } from "node:net"
 import { basename } from "node:path"
 import {
@@ -71,7 +71,7 @@ const instructions = `Mako computer control is one program tool over a host-owne
 
 How to work: windows(pid) to pick the document window; view(target) to read it as one line per element; act('click', {element_token}) for a step whose result you must see, since what changed comes back with it (act reads the window while the driver's own verification wait runs, so a step costs one wait, not two); fill(element_token, text) to write a field without a keyboard and read it back; submit(element_token) for Enter without a keyboard; routes(target) to learn which routes reach a window before spending a round trip on a refusal; chain steps in one program when each follows from the last without your judgement, with expect() guarding the assumptions and until() waiting for the screen; then answer. When the intent has a command, script({language, source}) runs AppleScript or JXA and shell({command}) runs a command line, both without touching focus; a Finder listing is one line there and eleven windows of accessibility on the GUI route. A window is about 800 tokens as view() lines and about 12,000 as get_window_state JSON: read with view, and use get_window_state when you need frames, actions or the screenshot. \`state\` persists between programs of this MCP client (the helpers keep state.target and state.last there); \`console.log(value)\` adds a text block; \`emitImage(result)\` adds the image a result carries (get_window_state with its screenshot, zoom) with its snapshot receipt; \`artifacts.save(name, value)\` writes a value or image to a file and returns its path. Your session identity is supplied automatically and cannot collide with another task; never pass session.
 
-Grounding: an element_token alone addresses an action, because Mako remembers which pid and window produced each snapshot; every read (view, act, until, get_window_state) takes a new snapshot; a token from an earlier snapshot of the same window is carried to the same control (same role, label and position among its likes) in the newest one, and the result says so in carried_token, so fill(field) then act('click', {element_token: button}) from one view works; only a control that is gone is refused as stale. Screenshot coordinates are window-local pixels of that window's latest capture (element frames are screen points: subtract window_bounds and multiply by screenshot_scale); for a small target zoom a region and pass from_zoom:true with coordinates read off the zoom image. Reobserve after acting: transport success is not proof the UI changed, and a timeout or cancellation does not prove an action did not run. A stale token or a missing window means rediscover, never another window.
+Grounding: an element_token alone addresses an action, because Mako remembers which pid and window produced each snapshot; every read (view, act, until, get_window_state) takes a new snapshot and invalidates the earlier tokens for that window. Never carry a token by role or label: duplicate or reordered controls can make that target unsafe. fill() returns view, the exact newest lines from its read-back, so take the next token from written.view before another action. Screenshot coordinates are window-local pixels of that window's latest capture (element frames are screen points: subtract window_bounds and multiply by screenshot_scale); for a small target zoom a region and pass from_zoom:true with coordinates read off the zoom image. Reobserve after acting: transport success is not proof the UI changed, and a timeout or cancellation does not prove an action did not run. A stale token or a missing window means rediscover, never another window.
 
 Background input, in order (details in mako_computer_help().routes): 1 accessibility — fill, set_value and element_token clicks (action press/pick/confirm/open), for anything an observed element exposes; this is how a backgrounded Electron or Chromium field is written, since set_value replaces text where a keyboard would select-all and retype. 2 page route — launch_app({bundle_id, page_route: true}) starts an Electron or Chromium app in the background with a private DevTools port and registers it as browser 'app:<bundle_id>'; the browser object is available in every computer program (browser.tabs({browser}), browser.select, browser.click, browser.type, browser.press, browser.observe, browser.screenshot), with keyboard, pointer, DOM reads and screenshots that never touch focus. 3 command — script and shell. 4 window pointer with x,y. 5 pid keyboard (type_text, press_key, hotkey): native Cocoa fields only and never a Cmd chord — Mako refuses a background Cmd chord before it is posted because an application that is not frontmost does not dispatch menu key equivalents (force: true posts it anyway); a Chromium or Electron renderer that is not frontmost drops every posted key; the driver cannot read keys back, so send them through act() and let the delta say whether they landed, and treat mako_routes.status 'unconfirmed' as a reason to read, not to retry. 6 invoke_menu for a menu item or its shortcut: the driver fronts the application for the call and restores the previous frontmost app itself, so it requires foreground: true and reports fronted.ms. 7 delivery_mode:'foreground' with foreground: true: Mako verifies that the exact application and window are already frontmost and refuses otherwise; bring_to_front requires foreground: true too. Mako never fronts on its own, and a result never asks you to: the user is working in another application. Electron and Chromium windows ignore background scrolling on macOS; use their page route. Do not repeat text based on delivered_chars alone: the driver can report zero when the field received everything.
 
@@ -500,6 +500,35 @@ async function listenerPid(
   return Number.isInteger(pid) && pid > 0 ? pid : undefined
 }
 
+const runningApplicationSchema = z.object({
+  bundle_id: z.string().nullable(),
+  bundle_path: z.string(),
+})
+
+/** Bundle identity independently reported by AppKit for an exact live pid. */
+async function runningApplication(
+  pid: number,
+  signal: AbortSignal
+): Promise<z.infer<typeof runningApplicationSchema>> {
+  const source = `ObjC.import("AppKit"); const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(${String(pid)}); if (!app) throw new Error("pid is not an NSRunningApplication"); const unwrap = value => value ? ObjC.unwrap(value) : null; JSON.stringify({bundle_id: unwrap(app.bundleIdentifier), bundle_path: unwrap(app.bundleURL.path)})`
+  const result = await runCommand(
+    "/usr/bin/osascript",
+    ["-l", "JavaScript", "-e", source],
+    { timeout: 5_000 },
+    signal
+  )
+  if (result.exit_code !== 0)
+    throw new Error(
+      `Could not verify the application owning DevTools pid ${String(pid)}: ${result.stderr.trim() || "AppKit returned no identity"}.`
+    )
+  return runningApplicationSchema.parse(JSON.parse(result.stdout.trim()))
+}
+
+function routeIdentity(value: string): string {
+  const cleaned = value.replace(/[^A-Za-z0-9._-]+/g, "-")
+  return cleaned.replace(/^-+|-+$/g, "") || "application"
+}
+
 export interface PageRoute {
   browser: string | null
   endpoint: string
@@ -523,15 +552,53 @@ export function createComputerToolsServer(
   let session = `mako-${taskId}-${randomUUID().slice(0, 8)}`
   // The driver wants the pid and window that produced a snapshot, and
   // honours tokens from a window's newest snapshot only; remember each
-  // snapshot's identity and element addresses, and the newest per window,
-  // so a token alone is enough and one read from an earlier snapshot is
-  // carried to the same control rather than refused as stale.
+  // Snapshot identity lets a token alone recover its exact pid and window.
+  // Tokens are never remapped by role or label: a duplicate or reordered
+  // control would make that guess unsafe.
   const snapshots = new Map<string, SnapshotIndex>()
-  const newestSnapshot = new Map<string, string>()
   // Every call that took the screen, counted for the task; and the page
   // routes of the Electron or Chromium applications this task launched.
   let frontingEvents = 0
   const pageRoutes = new Map<number, PageRoute>()
+  const detachPageRoute = async (route: PageRoute): Promise<void> => {
+    if (!browserCall || route.browser === null) return
+    await browserCall(
+      BrowserCommandSchema.parse({ action: "detach", id: route.browser }),
+      AbortSignal.timeout(2_000)
+    ).catch(() => {})
+  }
+  const removePageRoute = async (pid: number): Promise<void> => {
+    const route = pageRoutes.get(pid)
+    if (!route) return
+    pageRoutes.delete(pid)
+    await detachPageRoute(route)
+  }
+  const pageRouteValue = async (): Promise<Record<string, PageRoute>> => {
+    if (browserCall) {
+      try {
+        const statuses = z
+          .array(z.looseObject({ id: z.string() }))
+          .parse(
+            await browserCall(
+              BrowserCommandSchema.parse({ action: "status" }),
+              AbortSignal.timeout(2_000)
+            )
+          )
+        const live = new Set(statuses.map((entry) => entry.id))
+        for (const [pid, route] of pageRoutes)
+          if (route.browser !== null && !live.has(route.browser))
+            pageRoutes.delete(pid)
+      } catch {
+        // A browser-control outage does not prove that its attached app died.
+      }
+    }
+    return Object.fromEntries(
+      [...pageRoutes].map(([pid, route]) => [String(pid), route])
+    )
+  }
+  const closePageRoutes = async (): Promise<void> => {
+    await Promise.all([...pageRoutes.keys()].map(removePageRoute))
+  }
   // The driver draws an animated "agent cursor" on the user's screen and
   // glides it to every target before acting, awaiting the glide. Measured
   // 2026-09-14 on driver 0.28.0 against Cocoa and Electron windows: a
@@ -642,9 +709,7 @@ export function createComputerToolsServer(
       backgroundCmdChords: "refused before dispatch unless force: true",
     },
     frontingEvents,
-    pageRoutes: Object.fromEntries(
-      [...pageRoutes].map(([pid, route]) => [String(pid), route])
-    ),
+    pageRoutes: await pageRouteValue(),
     artifacts,
   })
   const help = async (args: z.infer<typeof COMPUTER_TOOL_INPUTS.help>) => {
@@ -700,10 +765,6 @@ export function createComputerToolsServer(
       if (oldest !== undefined) snapshots.delete(oldest)
     }
     snapshots.set(snapshot.snapshot_id, snapshot)
-    newestSnapshot.set(
-      `${snapshot.pid}:${snapshot.window_id}`,
-      snapshot.snapshot_id
-    )
   }
   const invokeTool = async (
     name: string,
@@ -745,7 +806,6 @@ export function createComputerToolsServer(
       ? token.data.split(":")[0]
       : snapshotIdSchema.safeParse(args.snapshot_id).data
     const remembered = snapshotId ? snapshots.get(snapshotId) : undefined
-    let carried: { given: string; used: string } | undefined
     if (remembered) {
       if (input.properties?.pid && !positiveInteger.safeParse(args.pid).success)
         args.pid = remembered.pid
@@ -754,22 +814,6 @@ export function createComputerToolsServer(
         !positiveInteger.safeParse(args.window_id).success
       )
         args.window_id = remembered.window_id
-      // A token from a superseded snapshot of the window goes to the same
-      // control in the newest one; a control that is gone stays as given
-      // and the driver refuses it by name.
-      const newestId = newestSnapshot.get(
-        `${remembered.pid}:${remembered.window_id}`
-      )
-      if (token.success && newestId && newestId !== snapshotId) {
-        const newest = snapshots.get(newestId)
-        const used = newest
-          ? carryToken(token.data, remembered, newest)
-          : undefined
-        if (used) {
-          carried = { given: token.data, used }
-          args.element_token = used
-        }
-      }
     }
     if (args.delivery_mode === "foreground" && input.properties?.pid)
       await verifyForegroundInput(client, args, signal)
@@ -813,13 +857,10 @@ export function createComputerToolsServer(
     const pid = positiveInteger.safeParse(args.pid).data
     const result = withStructured(projected, (value) => {
       const stripped = withoutEscalationNudge(value)
-      const noted: StructuredContent = carried
-        ? { ...stripped, carried_token: carried }
-        : stripped
-      if (!fronted) return noted
+      if (!fronted) return stripped
       const receipt: StructuredContent = { ms: Date.now() - startedAt }
       if (pid !== undefined) receipt.pid = pid
-      return { ...noted, fronted: receipt }
+      return { ...stripped, fronted: receipt }
     })
     const inline = result.content?.find((block) => block.type === "image")
     const file = captureFileSchema.safeParse(result.structuredContent).data
@@ -863,7 +904,7 @@ export function createComputerToolsServer(
       request.app_path !== undefined
         ? basename(request.app_path, ".app")
         : (request.name ?? bundleId?.split(".").at(-1) ?? "app")
-    const identity = bundleId ?? label
+    const requestedIdentity = bundleId ?? label
     const launch = await runCommand(
       "/usr/bin/open",
       [
@@ -882,18 +923,34 @@ export function createComputerToolsServer(
     )
     if (launch.exit_code !== 0)
       throw new Error(
-        `launch_app could not open ${identity}: ${launch.stderr.trim() || `open exited ${String(launch.exit_code)}`}`
+        `launch_app could not open ${requestedIdentity}: ${launch.stderr.trim() || `open exited ${String(launch.exit_code)}`}`
       )
     const endpoint = await awaitDevTools(port, signal)
     if (!endpoint)
       throw new Error(
-        `${identity} was launched but no DevTools endpoint answered on 127.0.0.1:${port} within ${PAGE_ROUTE_WAIT_MS / 1000} s: it is not an Electron or Chromium application, or it ignored --remote-debugging-port. The application may be running; list_apps shows it, and the driver's own routes reach it.`
+        `${requestedIdentity} was launched but no DevTools endpoint answered on 127.0.0.1:${port} within ${PAGE_ROUTE_WAIT_MS / 1000} s: it is not an Electron or Chromium application, or it ignored --remote-debugging-port. The application may be running; list_apps shows it, and the driver's own routes reach it.`
       )
     const pid = await listenerPid(port, signal)
     if (pid === undefined)
       throw new Error(
-        `${identity} answers on 127.0.0.1:${port} but no process owns the port; lsof could not read it.`
+        `${requestedIdentity} answers on 127.0.0.1:${port} but no process owns the port; lsof could not read it.`
       )
+    const application = await runningApplication(pid, signal)
+    if (bundleId && application.bundle_id !== bundleId)
+      throw new Error(
+        `The DevTools endpoint belongs to ${application.bundle_id ?? "an unidentified application"} (pid ${String(pid)}), not requested bundle ${bundleId}; Mako refused the route.`
+      )
+    if (request.app_path) {
+      const [requestedPath, ownerPath] = await Promise.all([
+        realpath(request.app_path),
+        realpath(application.bundle_path),
+      ])
+      if (requestedPath !== ownerPath)
+        throw new Error(
+          `The DevTools endpoint belongs to ${ownerPath} (pid ${String(pid)}), not requested application ${requestedPath}; Mako refused the route.`
+        )
+    }
+    const identity = application.bundle_id ?? requestedIdentity
     // Its first document window, so the caller can act without a list.
     const deadline = Date.now() + WINDOW_WAIT_MS
     let windows: z.infer<typeof windowRowsSchema>["windows"]
@@ -909,10 +966,7 @@ export function createComputerToolsServer(
         break
       await wait(200, signal)
     }
-    const taken = [...pageRoutes.values()].some(
-      (route) => route.browser === `app:${identity}`
-    )
-    const browserId = taken ? `app:${identity}:${pid}` : `app:${identity}`
+    const browserId = `app:${routeIdentity(identity)}:${String(pid)}:${randomUUID().slice(0, 8)}`
     let browser: string | null = null
     let note: string
     if (browserCall) {
@@ -940,7 +994,7 @@ export function createComputerToolsServer(
     pageRoutes.set(pid, route)
     if (pageRoutes.size > MAX_RUNNING_FRONTS) {
       const oldest = pageRoutes.keys().next().value
-      if (oldest !== undefined) pageRoutes.delete(oldest)
+      if (oldest !== undefined) await removePageRoute(oldest)
     }
     return {
       pid,
@@ -998,10 +1052,7 @@ export function createComputerToolsServer(
       })
       return result
     }
-    if (action === "page_routes")
-      return Object.fromEntries(
-        [...pageRoutes].map(([pid, route]) => [String(pid), route])
-      )
+    if (action === "page_routes") return pageRouteValue()
     throw new Error(`Unknown Mako action "${action}"`)
   }
   const program = async () => {
@@ -1078,6 +1129,7 @@ export function createComputerToolsServer(
       observations.close()
       await super.close()
       await runtime?.close()
+      await closePageRoutes()
       await client.close()
     }
   }
@@ -1089,6 +1141,7 @@ export function createComputerToolsServer(
     closed = true
     observations.close()
     void runtime?.close()
+    void closePageRoutes()
     void client.close()
   }
   const reference = async () => {
