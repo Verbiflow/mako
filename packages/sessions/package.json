@@ -1,6 +1,7 @@
 {
   "name": "@mako/sessions",
   "version": "0.1.0",
+  "license": "Elastic-2.0",
   "description": "One format for coding-agent sessions. Reads every harness's native store, keeps a live catalog, and renders any thread for continuation on any other harness.",
   "type": "module",
   "main": "dist/index.js",

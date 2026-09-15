@@ -27,9 +27,9 @@ try {
   )
   metadata
     .prepare("INSERT INTO threads (id, name, title, cwd, updated_at_ms, thread_source, rollout_path) VALUES (?, NULL, ?, ?, ?, 'user', ?)")
-    .run(parent, "Together AI reported this\n\n1. BCC", "/Users/kashyab/flage", Date.parse("2026-09-11T07:50:38Z"), rollout)
+    .run(parent, "Together AI reported this\n\n1. BCC", "/Users/dev/app", Date.parse("2026-09-11T07:50:38Z"), rollout)
   metadata.close()
-  await writeFile(rollout, line("session_meta", { id: parent, cwd: "/Users/kashyab/flage" }) + line("event_msg", { type: "task_started" }))
+  await writeFile(rollout, line("session_meta", { id: parent, cwd: "/Users/dev/app" }) + line("event_msg", { type: "task_started" }))
 
   const codex = new CodexProvider(home)
   const catalog = new SessionCatalog([codex], { cachePath: join(home, "cache.json") })
@@ -62,14 +62,14 @@ try {
   const named = await catalog.scan({ emitChanges: true })
   assert.deepEqual(named.map((ref) => ref.path), [rollout])
   assert.equal(named[0].title, "Investigate email sequence behavior", "the native name replaces the prompt title without rereading the rollout")
-  assert.equal(named[0].cwd, "/Users/kashyab/flage")
+  assert.equal(named[0].cwd, "/Users/dev/app")
   const resumedDb = new DatabaseSync(metadataPath)
   resumedDb.prepare("UPDATE threads SET rollout_path = ? WHERE id = ?").run(resumed, parent)
   resumedDb.close()
   await later()
   await writeFile(
     resumed,
-    line("session_meta", { id: parent, cwd: "/Users/kashyab/flage", history_mode: "resume" }) +
+    line("session_meta", { id: parent, cwd: "/Users/dev/app", history_mode: "resume" }) +
       line("turn_context", { model: "gpt-5.6-sol" }) +
       line("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "Continue from here" }] })
   )
@@ -90,13 +90,13 @@ try {
   await catalog.stop()
 
   // Claude writes its own title later in the same file.
-  const projects = join(home, ".claude", "projects", "-Users-kashyab-flage")
+  const projects = join(home, ".claude", "projects", "-Users-dev-app")
   await mkdir(projects, { recursive: true })
   const session = join(projects, "62362b25-2460-43e5-9cff-390f9712d579.jsonl")
   const claudeLine = (value) => `${JSON.stringify(value)}\n`
   await writeFile(
     session,
-    claudeLine({ type: "user", sessionId: "62362b25", cwd: "/Users/kashyab/flage", timestamp: "2026-09-11T07:00:00Z", message: { role: "user", content: "Fix the reply rate on the Together AI sequence" } }) +
+    claudeLine({ type: "user", sessionId: "62362b25", cwd: "/Users/dev/app", timestamp: "2026-09-11T07:00:00Z", message: { role: "user", content: "Fix the reply rate on the Together AI sequence" } }) +
       claudeLine({ type: "assistant", sessionId: "62362b25", timestamp: "2026-09-11T07:00:05Z", message: { role: "assistant", model: "claude-fable-5", content: [{ type: "text", text: "On it." }] } })
   )
   // A shell inside Claude Code or a router sets CLAUDE_CONFIG_DIR for its own

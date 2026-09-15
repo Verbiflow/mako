@@ -48,7 +48,7 @@ try {
   await catalog.stop()
 
   // Claude: only the session file.
-  const projects = join(home, ".claude", "projects", "-Users-kashyab-flage")
+  const projects = join(home, ".claude", "projects", "-Users-dev-app")
   await mkdir(projects, { recursive: true })
   const session = join(projects, "62362b25-2460-43e5-9cff-390f9712d579.jsonl")
   await writeFile(session, `${JSON.stringify({ type: "user", sessionId: "62362b25", cwd: home, message: { role: "user", content: "Hi" } })}\n`)
@@ -108,14 +108,14 @@ try {
   emptied.close()
 
   // Grok: the session directory under its workspace directory.
-  const grokSession = join(home, ".grok", "sessions", "%2FUsers%2Fkashyab%2Fflage", "01a08f77-b6a4-7d82-a7f5-fa1d0cbb7228")
+  const grokSession = join(home, ".grok", "sessions", "%2FUsers%2Fdev%2Fapp", "01a08f77-b6a4-7d82-a7f5-fa1d0cbb7228")
   await mkdir(grokSession, { recursive: true })
   await writeFile(join(grokSession, "updates.jsonl"), "")
   await writeFile(join(grokSession, "summary.json"), "{}")
   const grok = new GrokProvider(home)
   assert.equal(await grok.remove(join(grokSession, "updates.jsonl")), true)
   assert.equal(await exists(grokSession), false)
-  assert.equal(await exists(join(home, ".grok", "sessions", "%2FUsers%2Fkashyab%2Fflage")), true, "the workspace directory stays")
+  assert.equal(await exists(join(home, ".grok", "sessions", "%2FUsers%2Fdev%2Fapp")), true, "the workspace directory stays")
   // OpenCode and Devin keep sessions as rows; removal takes the session, its
   // messages and parts, and its child sessions, and leaves neighbours alone.
   const openCodeRoot = join(home, ".local", "share", "opencode")
@@ -127,7 +127,7 @@ try {
     CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
     INSERT INTO session VALUES ('ses_fixture', 'p', NULL, '/tmp/mako-provider-e2e-x/opencode', 'Fixture', 1, 2);
     INSERT INTO session VALUES ('ses_child', 'p', 'ses_fixture', '/tmp/mako-provider-e2e-x/opencode', 'Child', 1, 2);
-    INSERT INTO session VALUES ('ses_keep', 'p', NULL, '/Users/kashyab/flage', 'Keep', 1, 2);
+    INSERT INTO session VALUES ('ses_keep', 'p', NULL, '/Users/dev/app', 'Keep', 1, 2);
     INSERT INTO message VALUES ('m1', 'ses_fixture', 1, 2, '{}'), ('m2', 'ses_child', 1, 2, '{}'), ('m3', 'ses_keep', 1, 2, '{}');
     INSERT INTO part VALUES ('p1', 'm1', 'ses_fixture', 1, 2, '{}'), ('p3', 'm3', 'ses_keep', 1, 2, '{}');
   `)
@@ -150,7 +150,7 @@ try {
     CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, node_id INTEGER NOT NULL, parent_node_id INTEGER, chat_message TEXT NOT NULL, created_at INTEGER NOT NULL, metadata TEXT);
     CREATE TABLE tool_call_state (session_id TEXT, tool_call_id TEXT, tool_call_json TEXT, tool_call_update_json TEXT);
     INSERT INTO sessions VALUES ('inky-cloak', '/tmp/mako-provider-e2e-x/devin', 'local', 'm', 'Fixture', 1, 2, 0, 1);
-    INSERT INTO sessions VALUES ('equinox-manner', '/Users/kashyab/pi-ui', 'local', 'm', 'Keep', 1, 2, 0, 1);
+    INSERT INTO sessions VALUES ('equinox-manner', '/Users/dev/mako', 'local', 'm', 'Keep', 1, 2, 0, 1);
     INSERT INTO message_nodes (session_id, node_id, parent_node_id, chat_message, created_at) VALUES ('inky-cloak', 1, NULL, '{}', 1), ('equinox-manner', 1, NULL, '{}', 1);
     INSERT INTO tool_call_state VALUES ('inky-cloak', 't1', '{}', '{}');
   `)

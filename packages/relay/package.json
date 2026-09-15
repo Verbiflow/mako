@@ -1,6 +1,7 @@
 {
   "name": "@mako/relay",
   "version": "0.1.0",
+  "license": "Elastic-2.0",
   "description": "Provider-neutral remote job, event, and headless worker protocol for Mako.",
   "type": "module",
   "main": "dist/index.js",

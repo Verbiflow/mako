@@ -20,14 +20,14 @@ const touch = async (path, at) => {
 const home = await mkdtemp(join(tmpdir(), "mako-activity-stamps-"))
 try {
   // ---------------------------------------------------------------- Claude
-  const projects = join(home, ".claude", "projects", "-Users-kashyab-pi-ui")
+  const projects = join(home, ".claude", "projects", "-Users-dev-mako")
   await mkdir(projects, { recursive: true })
   const message = (sessionId, type, text, at) =>
     line({
       type,
       uuid: `${sessionId}-${type}-${at}`,
       sessionId,
-      cwd: "/Users/kashyab/pi-ui",
+      cwd: "/Users/dev/mako",
       timestamp: at,
       message: {
         role: type,
@@ -153,7 +153,7 @@ try {
 
   // ------------------------------------------------------------------ Grok
   const sessionId = "01a08dbe-aedc-7423-99a5-f768af93cb5e"
-  const sessionDir = join(home, ".grok", "sessions", encodeURIComponent("/Users/kashyab/flage"), sessionId)
+  const sessionDir = join(home, ".grok", "sessions", encodeURIComponent("/Users/dev/app"), sessionId)
   await mkdir(sessionDir, { recursive: true })
   const transcript = join(sessionDir, "updates.jsonl")
   const transcriptAt = now - 24 * 3_600_000
@@ -161,7 +161,7 @@ try {
   await touch(transcript, transcriptAt)
   const summary = (title, updatedAt) =>
     JSON.stringify({
-      info: { id: sessionId, cwd: "/Users/kashyab/flage" },
+      info: { id: sessionId, cwd: "/Users/dev/app" },
       generated_title: title,
       created_at: iso(-48 * 3_600_000),
       updated_at: updatedAt,
