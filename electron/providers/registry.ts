@@ -4,8 +4,14 @@ export interface ProviderCapability {
 
 export class ProviderRegistry<T extends ProviderCapability> {
   private readonly values = new Map<string, T>()
+  private readonly validate?: (value: T) => void
+
+  constructor(validate?: (value: T) => void) {
+    this.validate = validate
+  }
 
   register(value: T): () => void {
+    this.validate?.(value)
     if (this.values.has(value.provider)) {
       throw new Error(`Provider ${value.provider} already registered this capability`)
     }

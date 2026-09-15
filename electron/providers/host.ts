@@ -9,7 +9,9 @@ import type { ProviderProcessProbe } from "./process-probe.js"
 import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderSessionEmitter } from "./session-emitter.js"
 import type { ProviderSkillSource } from "./skill-source.js"
+import type { ProviderUpdateSource } from "./update-source.js"
 import { ProviderRegistry } from "./registry.js"
+import { validateLiveDriver } from "./live-driver.js"
 
 export interface ProviderHost {
   artifactPreviews: ProviderRegistry<ProviderArtifactPreview>
@@ -24,6 +26,8 @@ export interface ProviderHost {
   accountCapabilities: ProviderRegistry<ProviderAccountCapability>
   /** Transports with their own sign-in, shown and driven from Settings. */
   connections: ProviderRegistry<ProviderConnectionCapability>
+  /** How each provider's runtime updates — and whether Mako can run it. */
+  updateSources: ProviderRegistry<ProviderUpdateSource>
 }
 
 export type ProviderModule = (host: ProviderHost) => void
@@ -31,7 +35,7 @@ export type ProviderModule = (host: ProviderHost) => void
 export function createProviderHost(): ProviderHost {
   return {
     artifactPreviews: new ProviderRegistry(),
-    liveDrivers: new ProviderRegistry(),
+    liveDrivers: new ProviderRegistry(validateLiveDriver),
     nativeRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),
     profiles: new ProviderRegistry(),
@@ -40,6 +44,7 @@ export function createProviderHost(): ProviderHost {
     skillSources: new ProviderRegistry(),
     sessionEmitters: new ProviderRegistry(),
     connections: new ProviderRegistry(),
+    updateSources: new ProviderRegistry(),
     accountCapabilities: new ProviderRegistry(),
   }
 }

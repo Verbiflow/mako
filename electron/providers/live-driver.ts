@@ -70,3 +70,18 @@ export interface ProviderSteerInput {
 /** A thrown transport error means delivery is unknown, never permission to resend. */
 export type ProviderSteerResult =
   { kind: "accepted" } | { kind: "not-accepted"; reason: string }
+
+/**
+ * What the interface cannot type: the invariants a driver must keep. The
+ * registry runs this at install, so a driver that contradicts itself fails
+ * at startup rather than at a call site months later.
+ */
+export function validateLiveDriver(driver: ProviderLiveDriver): void {
+  if (Boolean(driver.steer) !== Boolean(driver.steering))
+    throw new Error(`${driver.provider}: steer and steering are declared together or not at all`)
+  for (const mode of driver.modes ?? [])
+    if (mode.access && !mode.enforcement)
+      throw new Error(`${driver.provider}: mode ${mode.id} names a tier with no enforcer`)
+  if (driver.defaultMode && !driver.modes?.some((mode) => mode.id === driver.defaultMode))
+    throw new Error(`${driver.provider}: defaultMode ${driver.defaultMode} is not one of its declared modes`)
+}
