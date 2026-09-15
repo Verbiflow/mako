@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import {
-  carryToken,
   indexSnapshot,
   diffLines,
   elementLine,
@@ -201,37 +200,32 @@ assert.equal(
   undefined
 )
 
-// A token read from one snapshot is carried to the same control (role,
-// label, ordinal among its likes) in a newer snapshot of the same window;
-// a control that is gone, or another window, carries nothing.
+// Snapshot memory retains only the exact window identity. Tokens are opaque
+// and are never remapped by role or label.
 const first = indexSnapshot({
   snapshot_id: "s00000001",
   pid: 4,
   window_id: 9,
   elements: [
-    { element_token: "s00000001:0", role: "AXTextField", label: "Proof", value: "" },
+    {
+      element_token: "s00000001:0",
+      role: "AXTextField",
+      label: "Proof",
+      value: "",
+    },
     { element_token: "s00000001:1", role: "AXButton", label: "Verify proof" },
     { element_token: "s00000001:2", role: "AXButton", label: "Verify proof" },
     { role: "AXGroup" },
   ],
 })
-const second = indexSnapshot({
-  snapshot_id: "s00000002",
+assert.deepEqual(first, {
+  snapshot_id: "s00000001",
   pid: 4,
   window_id: 9,
-  elements: [
-    { element_token: "s00000002:0", role: "AXTextField", label: "Proof", value: "filled" },
-    { element_token: "s00000002:1", role: "AXButton", label: "Verify proof" },
-  ],
 })
-assert.equal(carryToken("s00000001:0", first, second), "s00000002:0")
-assert.equal(carryToken("s00000001:1", first, second), "s00000002:1")
-assert.equal(carryToken("s00000001:2", first, second), undefined, "the second Verify is gone")
-assert.equal(carryToken("s00000001:9", first, second), undefined, "an unknown token")
 assert.equal(
-  carryToken("s00000001:0", first, { ...second, window_id: 10 }),
+  indexSnapshot({ elements: [] }),
   undefined,
-  "never across windows"
+  "a snapshot needs its identity"
 )
-assert.equal(indexSnapshot({ elements: [] }), undefined, "a snapshot needs its identity")
 console.log("projection ok")

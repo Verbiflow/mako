@@ -17,7 +17,6 @@ export {
   MENU_ROLES,
   PASSIVE_ROLES,
   WindowRecordSchema,
-  carryToken,
   diffLines,
   elementLine,
   elementLines,

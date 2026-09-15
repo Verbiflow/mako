@@ -44,7 +44,6 @@ const RESULT_KEYS = [
   "mako_routes",
   "escalation",
   "fronted",
-  "carried_token",
 ]
 
 export interface ViewOptions extends LineOptions {
@@ -75,6 +74,7 @@ export interface FillOptions {
   target?: Target
 }
 export type Predicate = (lines: string[]) => boolean
+export type Expectation = boolean | Predicate
 
 const DEFAULT_MAX = 400
 const DEFAULT_SETTLE_MS = 400
@@ -102,6 +102,8 @@ export interface FillResult {
   confirmed: boolean
   /** The control's line after the write, when it was found. */
   line?: string
+  /** The newest view; use its tokens for the next action. */
+  view: string[]
   result: JsonObject
 }
 
@@ -136,14 +138,14 @@ export interface ComputerHelpers {
     predicate: Predicate,
     options?: UntilOptions
   ): Promise<{ satisfied: boolean; ms: number; view: string[] }>
-  expect(predicate: Predicate, message?: string): Promise<void>
+  expect(expectation: Expectation, message?: string): Promise<void>
   windows(pid: number): Promise<JsonObject[]>
   fill(
     element_token: string,
     text: string,
     options?: FillOptions
   ): Promise<FillResult>
-  submit(element_token: string): Promise<SubmitResult>
+  submit(element_token: string, target?: Target): Promise<SubmitResult>
   routes(target?: Target): Promise<RouteVerdicts>
 }
 
@@ -191,12 +193,26 @@ export function computerHelpers(
     const lines = elementLines(parsed.data.elements, lineOptions)
     state.last = lines
     state.lastAt = Date.now()
+    state.lastTarget = selected
     return lines
   }
-  const lastView = (maxAgeMs: number): string[] | undefined => {
+  const sameTarget = (left: Target, right: Target) =>
+    left.pid === right.pid && left.window_id === right.window_id
+  const lastView = (
+    maxAgeMs: number,
+    target?: Target
+  ): string[] | undefined => {
     const cached = z.array(z.string()).safeParse(state.last)
     const at = z.number().safeParse(state.lastAt)
-    if (!cached.success || !at.success || Date.now() - at.data > maxAgeMs)
+    const rememberedTarget = targetSchema.safeParse(state.lastTarget)
+    if (
+      !cached.success ||
+      !at.success ||
+      Date.now() - at.data > maxAgeMs ||
+      (target &&
+        (!rememberedTarget.success ||
+          !sameTarget(rememberedTarget.data, target)))
+    )
       return undefined
     return cached.data
   }
@@ -208,12 +224,32 @@ export function computerHelpers(
         if (parsed.data[key] !== undefined) result[key] = parsed.data[key]
     return result
   }
-  const addressOf = (element_token: string): string | undefined => {
-    const line = lastView(Number.POSITIVE_INFINITY)?.find((entry) =>
+  const boundArgs = (args: JsonObject, target: Target): JsonObject => {
+    const pid = z.number().int().positive().safeParse(args.pid)
+    const window = z.number().int().positive().safeParse(args.window_id)
+    if (pid.success && pid.data !== target.pid)
+      throw new Error(
+        `The action names pid ${pid.data}, but the selected window belongs to pid ${target.pid}.`
+      )
+    if (window.success && window.data !== target.window_id)
+      throw new Error(
+        `The action names window ${window.data}, but the selected window is ${target.window_id}.`
+      )
+    return { ...args, pid: target.pid, window_id: target.window_id }
+  }
+  const addressOf = (
+    element_token: string,
+    target: Target
+  ): string | undefined => {
+    const line = lastView(Number.POSITIVE_INFINITY, target)?.find((entry) =>
       entry.startsWith(`${element_token} `)
     )
     return line ? lineAddress(line) : undefined
   }
+  const unsupportedConfirm = (error: Error): boolean =>
+    /(?:confirm|AXConfirm).*(?:unsupported|not supported|not available|not implemented|-25205|-25206)/i.test(
+      error.message
+    )
   return {
     view,
     /**
@@ -234,9 +270,9 @@ export function computerHelpers(
       const selected = resolveTarget(options.target)
       const addressed = z.string().safeParse(args.element_token).success
       const before = addressed
-        ? (lastView(Number.POSITIVE_INFINITY) ?? [])
-        : (lastView(BEFORE_MAX_AGE_MS) ?? (await view(selected)))
-      const pending = call(action, args)
+        ? (lastView(Number.POSITIVE_INFINITY, selected) ?? [])
+        : (lastView(BEFORE_MAX_AGE_MS, selected) ?? (await view(selected)))
+      const pending = call(action, boundArgs(args, selected))
       let settled = false
       let failed = false
       void pending.then(
@@ -280,9 +316,20 @@ export function computerHelpers(
       }
       return { satisfied: true, ms: Date.now() - started, view: lines }
     },
-    expect: async (predicate, message) => {
-      const lines = lastView(EXPECT_MAX_AGE_MS) ?? (await view())
-      if (predicate(lines)) return
+    expect: async (expectation, message) => {
+      const selected = resolveTarget()
+      const lines =
+        lastView(EXPECT_MAX_AGE_MS, selected) ?? (await view(selected))
+      const fixed = z.boolean().safeParse(expectation)
+      const met = fixed.success
+        ? fixed.data
+        : z
+            .function({
+              input: [z.array(z.string())],
+              output: z.boolean(),
+            })
+            .parse(expectation)(lines)
+      if (met) return
       throw new Error(
         `${message ?? "Expectation failed"}. The window shows:\n${lines.join("\n")}`
       )
@@ -327,15 +374,19 @@ export function computerHelpers(
      */
     fill: async (element_token, text, options = {}) => {
       const selected = resolveTarget(options.target)
-      const address = addressOf(element_token)
+      const address = addressOf(element_token, selected)
       const result = resultOf(
-        await call("set_value", { element_token, value: text })
+        await call(
+          "set_value",
+          boundArgs({ element_token, value: text }, selected)
+        )
       )
       const expected = shownValue(text)
       const deadline = Date.now() + (options.wait ?? FILL_WAIT_MS)
       let line: string | undefined
+      let lines: string[] = []
       for (;;) {
-        const lines = await view(selected)
+        lines = await view(selected)
         line = address
           ? lines.find((entry) => lineAddress(entry) === address)
           : lines.find((entry) => entry.includes(expected))
@@ -344,22 +395,44 @@ export function computerHelpers(
       }
       const confirmed = line?.includes(expected) ?? false
       return line
-        ? { action: "fill", route: "set_value", confirmed, line, result }
-        : { action: "fill", route: "set_value", confirmed, result }
+        ? {
+            action: "fill",
+            route: "set_value",
+            confirmed,
+            line,
+            view: lines,
+            result,
+          }
+        : {
+            action: "fill",
+            route: "set_value",
+            confirmed,
+            view: lines,
+            result,
+          }
     },
     /**
      * Enter without a keyboard: the control's confirm action, or its press
      * when it has no confirm. Background, no focus change.
      */
-    submit: async (element_token) => {
+    submit: async (element_token, target) => {
+      const selected = resolveTarget(target)
       try {
         const result = resultOf(
-          await call("click", { element_token, action: "confirm" })
+          await call(
+            "click",
+            boundArgs({ element_token, action: "confirm" }, selected)
+          )
         )
         return { action: "submit", route: "confirm", result }
-      } catch {
+      } catch (error) {
+        const parsed = z.instanceof(Error).safeParse(error)
+        if (!parsed.success || !unsupportedConfirm(parsed.data)) throw error
         const result = resultOf(
-          await call("click", { element_token, action: "press" })
+          await call(
+            "click",
+            boundArgs({ element_token, action: "press" }, selected)
+          )
         )
         return { action: "submit", route: "press", result }
       }

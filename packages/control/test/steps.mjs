@@ -101,6 +101,7 @@ assert.deepEqual(home, [
 ])
 assert.deepEqual(state.target, { pid: 42, window_id: 7 })
 assert.deepEqual(state.last, home)
+assert.deepEqual(state.lastTarget, { pid: 42, window_id: 7 })
 assert.deepEqual(calls.at(-1)[1], {
   pid: 42,
   window_id: 7,
@@ -153,7 +154,17 @@ assert.deepEqual(step.removed, ['Button "Settings"', 'StaticText "Dashboard"'])
 assert.equal(step.unchanged, 0)
 assert.deepEqual(calls.filter((c) => c[0] === "click")[0][1], {
   element_token: "s0000000a:1",
+  pid: 42,
+  window_id: 7,
 })
+await assert.rejects(
+  () => h.act("click", { pid: 99 }),
+  /names pid 99, but the selected window belongs to pid 42/
+)
+await assert.rejects(
+  () => h.act("click", { window_id: 99 }),
+  /names window 99, but the selected window is 7/
+)
 await assert.rejects(() => h.act("nope", {}), /Unknown computer action "nope"/)
 await assert.rejects(() => h.act("refuse", {}, { settle: 0 }), /driver refused/)
 
@@ -169,13 +180,19 @@ await assert.rejects(() => h.act("refuse", {}, { settle: 0 }), /driver refused/)
       reads.push(snapshot)
       return {
         elements: [
-          { element_token: `${snapshot}:1`, role: "AXButton", label: snapshot === "s00000010" ? "Open" : "Close" },
+          {
+            element_token: `${snapshot}:1`,
+            role: "AXButton",
+            label: snapshot === "s00000010" ? "Open" : "Close",
+          },
         ],
       }
     },
     click: async (args) => {
       if (!args.element_token.startsWith(snapshot))
-        throw new Error("element_token is stale; call get_window_state again to refresh")
+        throw new Error(
+          "element_token is stale; call get_window_state again to refresh"
+        )
       snapshot = "s00000011"
       return { effect: "unverifiable" }
     },
@@ -187,15 +204,29 @@ await assert.rejects(() => h.act("refuse", {}, { settle: 0 }), /driver refused/)
   const tokenSteps = computerHelpers(tokenApi, aged)
   const seen = await tokenSteps.view()
   aged.lastAt = Date.now() - 60_000 // an earlier turn
-  const acted = await tokenSteps.act("click", { element_token: seen[0].split(" ")[0] }, { settle: 5, wait: 50 })
-  assert.deepEqual(reads, ["s00000010", "s00000011"], "one read for the view, one after the click, none between")
+  const acted = await tokenSteps.act(
+    "click",
+    { element_token: seen[0].split(" ")[0] },
+    { settle: 5, wait: 50 }
+  )
+  assert.deepEqual(
+    reads,
+    ["s00000010", "s00000011"],
+    "one read for the view, one after the click, none between"
+  )
   assert.deepEqual(acted.added, ['s00000011:1 Button "Close"'])
   assert.deepEqual(acted.removed, ['Button "Open"'])
   // A failed action returns as soon as its rejection is known; the wait is
   // not spent re-reading a window the action never touched.
   const t2 = Date.now()
-  await assert.rejects(() => tokenSteps.act("fail", {}, { settle: 5, wait: 2000 }), /nothing was posted/)
-  assert.ok(Date.now() - t2 < 500, `a refused action does not wait out the delta (${Date.now() - t2} ms)`)
+  await assert.rejects(
+    () => tokenSteps.act("fail", {}, { settle: 5, wait: 2000 }),
+    /nothing was posted/
+  )
+  assert.ok(
+    Date.now() - t2 < 500,
+    `a refused action does not wait out the delta (${Date.now() - t2} ms)`
+  )
 }
 
 // until polls to a condition or reports the time it gave up at.
@@ -213,6 +244,11 @@ assert.equal(gaveUp.view.length, 3)
 
 // expect stops the program with the screen in the message.
 await h.expect((lines) => lines.length === 3)
+await h.expect(true)
+await assert.rejects(
+  () => h.expect(false, "Expected a computed condition"),
+  /Expected a computed condition\. The window shows:/
+)
 await assert.rejects(
   () => h.expect((lines) => lines.length === 99, "Expected the home screen"),
   /Expected the home screen\. The window shows:\ns0000000b:1 Button "Back"/
@@ -242,7 +278,10 @@ assert.match(filled.line, /TextField "Proof" ="hello there"$/)
 assert.deepEqual(calls.filter((c) => c[0] === "set_value").at(-1)[1], {
   element_token: "s0000000c:1",
   value: "hello there",
+  pid: 42,
+  window_id: 7,
 })
+assert.deepEqual(filled.view, state.last)
 // A control that never shows the text is reported unconfirmed, not assumed.
 const stubbornApi = {
   ...api,
@@ -275,6 +314,19 @@ assert.deepEqual(
   clicks.map((c) => c.action),
   ["confirm", "press"]
 )
+assert.ok(clicks.every((call) => call.pid === 42 && call.window_id === 7))
+let uncertainCalls = 0
+const uncertain = computerHelpers(
+  {
+    click: async () => {
+      uncertainCalls++
+      throw new Error("timed out after dispatch; outcome unknown")
+    },
+  },
+  { target: { pid: 42, window_id: 7 } }
+)
+await assert.rejects(() => uncertain.submit("s0000000c:1"), /outcome unknown/)
+assert.equal(uncertainCalls, 1, "an unknown confirm outcome is never repeated")
 
 // routes: verdicts before a round trip, from the window list and the page routes.
 const verdicts = await h.routes({ pid: 42, window_id: 7 })

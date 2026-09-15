@@ -99,7 +99,7 @@ assert.match(
 )
 // Helpers and Mako's own actions are in the reference beside the driver's.
 assert.match(text, /\n  fill\(element_token, text/)
-assert.match(text, /\n  submit\(element_token\)/)
+assert.match(text, /\n  submit\(element_token, target\?\)/)
 assert.match(text, /\n  routes\(target\?\)/)
 assert.match(
   text,

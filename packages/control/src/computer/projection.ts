@@ -124,22 +124,11 @@ export function lineAddress(line: string): string {
   return match ? `${match[1]}${match[2] ?? ""}` : lineIdentity(line)
 }
 
-/**
- * A snapshot's elements by address, so a token the model read from it can
- * be carried to the same control in a newer snapshot of the same window.
- * The driver honours tokens from a window's newest snapshot only, and every
- * read a helper makes (fill's read-back, act's delta) takes one; without
- * this, `fill(field)` followed by `click(button)` from one view failed on
- * the button every time.
- */
+/** The exact window that minted an opaque snapshot token. */
 export interface SnapshotIndex {
   snapshot_id: string
   pid: number
   window_id: number
-  /** token → address#nth */
-  addresses: Map<string, string>
-  /** address#nth → token */
-  tokens: Map<string, string>
 }
 
 const snapshotElementsSchema = z.looseObject({
@@ -149,49 +138,14 @@ const snapshotElementsSchema = z.looseObject({
   elements: z.array(z.json()).optional(),
 })
 
-/** Role and label, the part of an element that survives a value change. */
-function elementAddress(element: Element): string {
-  return `${element.role}${element.label ? JSON.stringify(element.label) : ""}`
-}
-
 export function indexSnapshot(value: JsonValue): SnapshotIndex | undefined {
   const parsed = snapshotElementsSchema.safeParse(value)
   if (!parsed.success) return undefined
-  const addresses = new Map<string, string>()
-  const tokens = new Map<string, string>()
-  const seen = new Map<string, number>()
-  for (const raw of parsed.data.elements ?? []) {
-    const element = ElementSchema.safeParse(raw)
-    if (!element.success || !element.data.element_token) continue
-    const address = elementAddress(element.data)
-    const nth = seen.get(address) ?? 0
-    seen.set(address, nth + 1)
-    const key = `${address}#${nth}`
-    addresses.set(element.data.element_token, key)
-    tokens.set(key, element.data.element_token)
-  }
   return {
     snapshot_id: parsed.data.snapshot_id,
     pid: parsed.data.pid,
     window_id: parsed.data.window_id,
-    addresses,
-    tokens,
   }
-}
-
-/**
- * The token of the same control (same role, label and ordinal among its
- * likes) in `to`, or undefined when that control is not in the newer
- * snapshot — then the driver's own refusal is the right answer.
- */
-export function carryToken(
-  token: string,
-  from: SnapshotIndex,
-  to: SnapshotIndex
-): string | undefined {
-  if (from.pid !== to.pid || from.window_id !== to.window_id) return undefined
-  const key = from.addresses.get(token)
-  return key === undefined ? undefined : to.tokens.get(key)
 }
 
 /** The `=value` a line shows for this text, truncated as `elementLine` truncates. */
