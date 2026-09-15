@@ -8,6 +8,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { LiveSessionMode, LiveSessionState } from "../../shared.js"
+import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type {
   ProviderLiveDriver,
   ProviderStartOptions,
@@ -75,10 +76,7 @@ export interface ClaudeSdkDependencies {
   receiptTimeoutMs?: number
 }
 
-function update(live: Live, patch: Partial<LiveSessionState>): void {
-  live.state = { ...live.state, ...patch }
-  live.emit({ type: "acp-session", session: live.state })
-}
+type Engine = LiveEngineApi<Live>
 
 function stop(live: Live): void {
   live.closed = true
@@ -112,25 +110,29 @@ function acknowledge(live: Live, message: SDKMessage): void {
   }
 }
 
-async function pump(live: Live): Promise<void> {
+async function pump(engine: Engine, live: Live): Promise<void> {
   try {
     for await (const message of live.query) {
       if (live.closed) return
       acknowledge(live, message)
       live.transcript.observe(message)
       const agent = live.agents.project(message)
-      if (agent) live.emit({ type: "acp-agent", id: live.state.id, agent })
+      if (agent) engine.emitAgent(live, agent)
       const updates = live.projection.project(message)
       if (updates.length)
-        live.emit({ type: "acp-updates", id: live.state.id, updates })
+        engine.emitUpdates(live, updates)
       if (message.type === "system" && message.subtype === "init") {
         const options = { ...live.state.settings?.options }
         if (message.effort) options.effort = message.effort
         if (message.fast_mode_state)
           options.fast = message.fast_mode_state !== "off"
-        update(live, {
+        const terminal = new Set(message.terminal_slash_commands ?? [])
+        engine.patch(live, {
           nativeId: message.session_id,
           currentMode: message.permissionMode,
+          commands: (message.slash_commands ?? [])
+            .filter((name) => !terminal.has(name))
+            .map((name) => ({ name })),
           settings: {
             ...live.state.settings,
             model: message.model,
@@ -149,7 +151,7 @@ async function pump(live: Live): Promise<void> {
         ? undefined
         : await live.transcript.forkPoint(live.state.nativeId)
       if (live.closed) return
-      update(live, {
+      engine.patch(live, {
         nativePath: live.transcript.path,
         nativeForkId,
         status: message.is_error ? "failed" : "ready",
@@ -165,7 +167,7 @@ async function pump(live: Live): Promise<void> {
   } catch (error) {
     if (live.closed) return
     stop(live)
-    update(live, {
+    engine.patch(live, {
       status: "failed",
       connection: "disconnected",
       error: error instanceof Error ? error.message : String(error),
@@ -202,7 +204,8 @@ async function tune(live: Live, settings?: SessionSettings): Promise<void> {
 export function createClaudeSdkDriver(
   dependencies: ClaudeSdkDependencies
 ): ProviderLiveDriver {
-  const sessions = new Map<string, Live>()
+  const engine = createLiveEngine<Live>()
+  const sessions = engine.sessions
   const starting = new Map<string, symbol>()
   function requireLive(id: string): Live {
     const live = sessions.get(id)
@@ -300,7 +303,7 @@ export function createClaudeSdkDriver(
         },
       }
       sessions.set(live.state.id, live)
-      void pump(live)
+      void pump(engine, live)
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([
@@ -314,7 +317,7 @@ export function createClaudeSdkDriver(
         ])
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
-        update(live, {
+        engine.patch(live, {
           status: "ready",
           connection: "connected",
           nativePath: transcript.path,
@@ -339,14 +342,14 @@ export function createClaudeSdkDriver(
       const uuid = randomUUID()
       live.projection.reset()
       live.transcript.reset()
-      update(live, {
+      engine.patch(live, {
         status: "running",
         nativeForkId: undefined,
         nativeRunId: uuid,
         lastStop: undefined,
         error: undefined,
       })
-      live.emit({ type: "acp-update", id, update: { kind: "user", text } })
+      engine.emitUpdate(live, { kind: "user", text })
       live.input.send({
         type: "user",
         uuid,
@@ -407,7 +410,7 @@ export function createClaudeSdkDriver(
       if (live.state.status === "running")
         throw new Error("Wait for Claude to finish before compacting")
       const uuid = randomUUID()
-      update(live, {
+      engine.patch(live, {
         status: "running",
         nativeRunId: uuid,
         lastStop: undefined,
@@ -428,7 +431,7 @@ export function createClaudeSdkDriver(
       const live = requireLive(id)
       const mode = ClaudeModeSchema.parse(modeId)
       await live.query.setPermissionMode(mode)
-      update(live, { currentMode: mode })
+      engine.patch(live, { currentMode: mode })
     },
     async cancel(id) {
       const live = requireLive(id)
@@ -454,7 +457,7 @@ export function createClaudeSdkDriver(
         // makes Stop definitive; the next prompt resumes the same native session.
         stop(live)
         await live.exited()
-        update(live, {
+        engine.patch(live, {
           status: "ready",
           connection: "disconnected",
           lastStop: "interrupted",

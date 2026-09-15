@@ -73,7 +73,7 @@ export class ClaudePermissions {
       this.pending.set(request.id, settle)
       signal.addEventListener("abort", abort, { once: true })
       this.emit({
-        type: "acp-permission",
+        type: "live-permission",
         request: { ...request, sessionId: this.id },
       })
     })
@@ -83,7 +83,7 @@ export class ClaudePermissions {
     if (!options.agentID) {
       const updates = claudeProposedPlan({ name, input, id: options.toolUseID })
       if (updates.length)
-        this.emit({ type: "acp-updates", id: this.id, updates })
+        this.emit({ type: "live-updates", id: this.id, updates })
     }
     if (name === "AskUserQuestion") {
       const parsed = QuestionsSchema.parse(input)
