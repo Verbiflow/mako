@@ -61,7 +61,13 @@ export function sampleFrontmost(intervalMs = 60) {
  * `policy` "prohibited" keeps it out of the Dock and off the menu bar, the
  * harder background case; "regular" gives it Electron's default menu.
  */
-export function electronFixtureSource({ title, html, status, userData, policy }) {
+export function electronFixtureSource({
+  title,
+  html,
+  status,
+  userData,
+  policy,
+}) {
   return `
 const {app, BrowserWindow} = require('electron');
 const fs = require('node:fs');
@@ -72,19 +78,37 @@ app.whenReady().then(async () => {
  const window = new BrowserWindow({show:false,width:650,height:420,title:${JSON.stringify(title)},webPreferences:{contextIsolation:true}});
  await window.loadFile(${JSON.stringify(html)});
  window.showInactive();
- setInterval(async () => { if (!window.isDestroyed()) fs.writeFileSync(${JSON.stringify(status + ".next")}, JSON.stringify({pid:process.pid, argv:process.argv, input:await window.webContents.executeJavaScript('document.getElementById("proof").value'), selection:await window.webContents.executeJavaScript('(()=>{const e=document.getElementById("proof");return e.selectionEnd-e.selectionStart})()'), value:await window.webContents.executeJavaScript('document.getElementById("result").textContent')})); fs.renameSync(${JSON.stringify(status + ".next")}, ${JSON.stringify(status)}); }, 100);
+ let writing = false;
+ setInterval(async () => {
+   if (writing || window.isDestroyed()) return;
+   writing = true;
+   try {
+     fs.writeFileSync(${JSON.stringify(status + ".next")}, JSON.stringify({pid:process.pid, argv:process.argv, input:await window.webContents.executeJavaScript('document.getElementById("proof").value'), selection:await window.webContents.executeJavaScript('(()=>{const e=document.getElementById("proof");return e.selectionEnd-e.selectionStart})()'), value:await window.webContents.executeJavaScript('document.getElementById("result").textContent')}));
+     fs.renameSync(${JSON.stringify(status + ".next")}, ${JSON.stringify(status)});
+   } finally {
+     writing = false;
+   }
+ }, 100);
 });
 app.on('window-all-closed', () => app.quit());
 `
 }
 
 /** The fixture page: a labelled Proof field, a Verify button and a result. */
-export function fixtureHtml({ title, initial = "", form = false }) {
+export function fixtureHtml({
+  title,
+  initial = "",
+  form = false,
+  visual = "",
+}) {
   const input = `<label>Proof <input aria-label="Proof" id="proof" value="${initial}"></label>`
   const verify = form
     ? `<form onsubmit="event.preventDefault();document.getElementById('result').textContent=document.getElementById('proof').value"><button type="submit">Verify proof</button></form><output id="result"></output><script>document.getElementById('proof').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('result').textContent = e.target.value })</script>`
     : `<button onclick="document.getElementById('result').textContent=document.getElementById('proof').value">Verify proof</button><output id="result"></output>`
-  return `<title>${title}</title><h1>${title}</h1>${input}${verify}`
+  const canvas = visual
+    ? `<canvas id="visual" width="560" height="110" aria-hidden="true"></canvas><script>{const canvas=document.getElementById("visual");const context=canvas.getContext("2d");context.fillStyle="#f3eee6";context.fillRect(0,0,canvas.width,canvas.height);context.fillStyle="#211b18";context.font="bold 34px sans-serif";context.fillText(${JSON.stringify(visual)},24,68);context.strokeStyle="#211b18";context.lineWidth=5;context.strokeRect(8,8,canvas.width-16,canvas.height-16)}</script>`
+    : ""
+  return `<title>${title}</title><h1>${title}</h1>${input}${verify}${canvas}`
 }
 
 /**
@@ -98,12 +122,13 @@ export async function startElectronFixture({
   policy = "prohibited",
   initial = "",
   form = false,
+  visual = "",
   start = true,
 }) {
   const html = join(root, `${name}.html`)
   const status = join(root, `${name}-status.json`)
   const main = join(root, `${name}.cjs`)
-  await writeFile(html, fixtureHtml({ title, initial, form }))
+  await writeFile(html, fixtureHtml({ title, initial, form, visual }))
   await writeFile(
     main,
     electronFixtureSource({
