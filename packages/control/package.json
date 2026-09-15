@@ -1,0 +1,24 @@
+{
+  "name": "@mako/control",
+  "version": "0.1.0",
+  "description": "Computer and browser control for coding agents: a program runtime with lossless output, compact observations, step primitives and route policy over a native driver. Pure Node; no Electron, no MCP transport.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./program": "./dist/program/index.js",
+    "./computer": "./dist/computer/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsgo -b",
+    "test": "npm run -s build && node test/artifacts.mjs && node test/projection.mjs && node test/reference.mjs && node test/steps.mjs",
+    "typecheck": "tsgo -b --force"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}

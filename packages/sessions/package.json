@@ -9,6 +9,7 @@
     ".": "./dist/index.js",
     "./tool-output": "./dist/tool-output.js",
     "./content": "./dist/content.js",
+    "./transcript": "./dist/transcript.js",
     "./attachment-storage": "./dist/attachment-storage.js",
     "./thread-schema": "./dist/thread-schema.js",
     "./settings": "./dist/settings.js",

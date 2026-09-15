@@ -71,6 +71,11 @@ export const ToolDetailSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("terminal"), terminalId: z.string() }),
   z.object({
+    type: z.literal("location"),
+    path: z.string(),
+    line: z.number().optional(),
+  }),
+  z.object({
     type: z.literal("plan"),
     entries: z.array(z.object({ content: z.string(), status: z.string() })),
   }),
@@ -85,6 +90,10 @@ export function describeToolDetails(details: ToolDetail[]): string {
           return `File: ${detail.path}\nBefore:\n${detail.oldText ?? ""}\nAfter:\n${detail.newText}`
         case "terminal":
           return `Provider terminal: ${detail.terminalId}`
+        case "location":
+          return detail.line === undefined
+            ? detail.path
+            : `${detail.path}:${detail.line}`
         case "plan":
           return detail.entries
             .map((entry) => `${entry.status}: ${entry.content}`)

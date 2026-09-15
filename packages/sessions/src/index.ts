@@ -46,9 +46,11 @@ export {
 } from "./daemon.js"
 export { LineAssembler } from "./daemon-wire.js"
 export {
+  formatTranscript,
   renderTranscript,
   renderTranscriptBundle,
   type TranscriptAsset,
+  type TranscriptDepth,
   type TranscriptBundle,
   type TranscriptBundleMetadata,
   type TranscriptLoss,

@@ -751,3 +751,70 @@ function fits(
     document.markdown.length + sidecarCharacters <= totalBudget
   )
 }
+
+/**
+ * How much of a conversation the copy carries. Concise is what a reader
+ * needs — prompts and final answers; full folds in each tool call's name and
+ * touched paths. Everything else is counted, never silently dropped.
+ */
+export type TranscriptDepth = "concise" | "full"
+
+/**
+ * One serializer for copy-to-clipboard, handoff prompts, and a future CLI:
+ * a pure fold over the `ThreadEntry` projection live and stored sessions
+ * share, so every provider reads the same.
+ */
+export function formatTranscript(
+  entries: readonly ThreadEntry[],
+  depth: TranscriptDepth = "concise"
+): string {
+  const sections: string[] = []
+  for (const entry of entries) {
+    if (entry.kind === "user") {
+      const heading = entry.steeringFor ? "## User (steered)" : "## User"
+      sections.push(`${heading}\n\n${entry.text}`)
+      continue
+    }
+    if (entry.kind === "event") {
+      if (depth === "full")
+        sections.push(
+          `## Event\n\n${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}`
+        )
+      continue
+    }
+    const texts: string[] = []
+    const tools: string[] = []
+    let elided = 0
+    for (const block of entry.blocks) {
+      if (block.type === "text") {
+        texts.push(block.text)
+        continue
+      }
+      if (block.type === "tool" && depth === "full") {
+        tools.push(toolLine(block))
+        continue
+      }
+      elided += 1
+    }
+    const body = [texts.join("\n\n"), ...tools].filter(Boolean).join("\n\n")
+    const tail =
+      elided > 0 ? `[${elided} block${elided === 1 ? "" : "s"} elided]` : ""
+    if (!body && !tail) continue
+    sections.push(
+      `## Assistant${entry.model ? ` (${entry.model})` : ""}\n\n${body}${tail ? `\n\n${tail}` : ""}`
+    )
+  }
+  return sections.join("\n\n")
+}
+
+function toolLine(block: Extract<EntryBlock, { type: "tool" }>): string {
+  const paths = (block.details ?? []).flatMap((detail) =>
+    detail.type === "diff" || detail.type === "location" ? [detail.path] : []
+  )
+  const flag = block.error
+    ? " (failed)"
+    : block.canceled
+      ? " (canceled)"
+      : ""
+  return `- \`${block.name}\`${paths.length ? ` — ${[...new Set(paths)].join(", ")}` : ""}${flag}`
+}

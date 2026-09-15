@@ -220,3 +220,40 @@ assert.ok(compatible.includes(longOutput))
 assert.ok(!compatible.includes("transcript-assets/tool-000001-output.txt"))
 
 console.log("Transcript bundle tests clean: ordering, fidelity, fences, sidecars, determinism, and budgets verified.")
+
+// formatTranscript is the clipboard/harness serializer: concise keeps prompts
+// and answers, full folds tool lines in, and everything elided is counted.
+const { formatTranscript } = await import("../dist/index.js")
+const copyEntries = [
+  { kind: "user", id: "u1", text: "Ship the feature" },
+  {
+    kind: "assistant",
+    id: "a1",
+    model: "sonnet",
+    blocks: [
+      { type: "thinking", text: "plan it" },
+      {
+        type: "tool",
+        name: "Edit",
+        input: "{}",
+        details: [{ type: "diff", path: "src/app.ts", oldText: null, newText: "x" }],
+      },
+      { type: "text", text: "Done, one file changed." },
+    ],
+  },
+]
+const concise = formatTranscript(copyEntries)
+assert.ok(concise.includes("## User\n\nShip the feature"))
+assert.ok(concise.includes("## Assistant (sonnet)"))
+assert.ok(concise.includes("Done, one file changed."))
+assert.ok(concise.includes("[2 blocks elided]"))
+assert.ok(!concise.includes("`Edit`"), "concise hides tool lines")
+const full = formatTranscript(copyEntries, "full")
+assert.ok(full.includes("- `Edit` — src/app.ts"), "full names the tool and its paths")
+assert.ok(!full.includes("blocks elided"))
+const steered = formatTranscript([
+  { kind: "user", id: "u1", text: "first" },
+  { kind: "user", id: "u2", steeringFor: "u1", text: "also this" },
+])
+assert.ok(steered.includes("## User (steered)\n\nalso this"))
+console.log("Transcript serializer: concise and full depths, elision counts, steering markers verified.")
