@@ -1,0 +1,50 @@
+Mako
+Copyright (c) 2026 Verbiflow
+
+Mako is licensed under the Elastic License 2.0; see LICENSE. Versions up to
+and including v0.1.37 were released under the MIT License and remain
+available under it.
+
+Trademarks
+
+"Mako", the Mako fin logo and the Verbiflow name are trademarks of Verbiflow.
+The Elastic License 2.0 grants no rights in them. A modified or redistributed
+copy must carry the notice of modification the license requires and must not
+present itself as Mako or as published by Verbiflow. Claude Code, Codex,
+Cursor, Grok, Devin, OpenCode and every other provider name belong to their
+respective owners; Mako drives their tools and is not affiliated with or
+endorsed by them.
+
+Third-party components
+
+Mako ships or depends on the following, each under its own terms.
+
+Kiri (https://github.com/Verbiflow/kiri)
+  The Git engine shipped as a sidecar under Resources. MIT License.
+
+@pierre/diffs, @pierre/theme, @pierre/theming
+  Diff rendering. Apache License 2.0.
+
+@cursor/sdk and its platform packages (Anysphere Inc.)
+  Runs Cursor agents. Proprietary; use is subject to Cursor's Terms of
+  Service. Not covered by the Elastic License 2.0.
+
+@anthropic-ai/claude-agent-sdk and its platform packages (Anthropic PBC)
+  Runs Claude Code. Proprietary; use is subject to Anthropic's legal
+  agreements. Not covered by the Elastic License 2.0.
+
+Pretext
+  Text measurement for paragraph geometry. MIT License; see
+  public/licenses/pretext.txt.
+
+Interface Sounds by Kenney (https://www.kenney.nl)
+  Notification sounds. CC0 1.0; see public/licenses/interface-sounds.txt.
+
+Electron, React, the AI SDK, the Model Context Protocol SDK and the remaining
+npm dependencies
+  Each under the license declared in its package (MIT, Apache 2.0, ISC, BSD or
+  similar). Run `npx license-checker-rseidelsohn --production` in a checkout
+  for the complete list.
+
+The Elastic License 2.0 text is published by Elasticsearch B.V. at
+https://www.elastic.co/licensing/elastic-license.

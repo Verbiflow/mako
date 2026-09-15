@@ -744,14 +744,14 @@ export function installMockBridge() {
         {
           harness: "claude" as const,
           name: "default",
-          email: "iamkashyab@gmail.com",
+          email: "personal@example.com",
           dir: "~/.claude",
           active: true,
         },
         {
           harness: "claude" as const,
-          name: "kashyab@getverbiflow.com",
-          email: "kashyab@getverbiflow.com",
+          name: "work@example.com",
+          email: "work@example.com",
           dir: "~/.subrouter/codex/claude/_p1",
           active: false,
           source: "subrouter" as const,
@@ -759,7 +759,7 @@ export function installMockBridge() {
         {
           harness: "codex" as const,
           name: "default",
-          email: "ambaranikashyab@gmail.com",
+          email: "codex@example.com",
           dir: "~/.codex",
           active: false,
         },

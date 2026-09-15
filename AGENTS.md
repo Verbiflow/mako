@@ -156,7 +156,7 @@ titles (`test/catalog-growth.mjs` covers both readings).
 ## The built-in runtime's session tree is not a tree
 
 It is a parent-linked chain: every entry is a child of the previous one, so
-nesting depth grows once per *entry*, not once per branch. A real session is
+nesting depth grows once per _entry_, not once per branch. A real session is
 345 entries nested 334 deep, with 7 user turns and 45 model/thinking changes.
 
 This has bitten twice. Rendered as written it is a staircase that runs off the
@@ -178,10 +178,10 @@ Four registries, all in `src/extend/`. Everything the desk itself ships is
 registered through them, so nothing built-in is privileged:
 
 ```ts
-registerCommand({ id, title, section, keys: "mod+j", run })  // palette + keyboard
-registerSlot("my-badge", "composer.controls", Component)      // UI seams
-registerToolView("bash", { summary, body, icon })             // transcript rows
-registerSurface({ id, label, icon, render, minWidth })        // stage companions
+registerCommand({ id, title, section, keys: "mod+j", run }) // palette + keyboard
+registerSlot("my-badge", "composer.controls", Component) // UI seams
+registerToolView("bash", { summary, body, icon }) // transcript rows
+registerSurface({ id, label, icon, render, minWidth }) // stage companions
 ```
 
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
@@ -223,7 +223,7 @@ turns inline code into one when the whole span reads as a path with a known
 extension, alongside the providers' own citation forms. Most of those names
 carry no directory, because prose says `use-row-flip.ts`, so
 `WorkspaceFiles.locate` resolves a relative request against the workspace root
-first and then by *suffix* against the tracked file list: one match is the
+first and then by _suffix_ against the tracked file list: one match is the
 answer and `FileContents.path` reports it, so the tab, its refresh, its `@`
 mention and Open in your editor all name the file that was read. Several or
 none is a sentence naming what was looked for; an absolute request is taken
@@ -246,12 +246,12 @@ should be instant, and `drafts` in `composer.tsx` keeps the text per session so
 switching tabs mid-sentence costs nothing.
 
 Restoring a refused send is where this gets subtle, and the trap is timing.
-`session.prompt()` does not resolve when the prompt is *accepted*; it awaits
+`session.prompt()` does not resolve when the prompt is _accepted_; it awaits
 `_runAgentPrompt` and the whole `continue()` loop, so an awaited `send` settles
 minutes later, when the answer is done. Restoring a draft on that promise
 overwrites the paragraph the user has since typed — losing work in the name of
 saving it — and can paint it into whatever session is on screen by then.
-Rejection is a *preflight* fact (no model, no key), so read it from the
+Rejection is a _preflight_ fact (no model, no key), so read it from the
 built-in runtime's `PromptOptions.preflightResult` and settle in one tick, while the composer is
 still provably empty. Anything that repaints the textarea later must first
 check that the draft is still empty and the session has not changed; otherwise
@@ -274,42 +274,89 @@ or registry snapshots.
 
 ## Browser and computer control
 
+`@mako/control` (`packages/control`) is the pure layer under both control
+servers, like `@mako/sessions` under the catalog: no Electron, no MCP
+transport, testable against a fake driver. `program/` is the runtime that
+runs trusted async JavaScript in a `worker_threads` Worker and the artifact
+spill; `computer/` is what turns a native driver's answers into something
+a model can read every turn: `projection` (one line per element, the menu
+bar out of a window state, `kind` on window records, the driver's data
+unwrapped from its MCP envelope), `steps` (`view`, `act`, `until`,
+`expect`, `windows`, built over the same actions a program calls by hand),
+`reference` (the API text rendered from the live tool catalog) and `policy`
+(the background input ladder and the keyboard verdicts). The hosts in
+`electron/` (`computer-tools-main.ts`, `browser-tools-main.ts`) add what
+only a host knows: the driver connection and session, snapshot memory,
+path resolution, the foreground preflight, previews.
+`packages/control/test` covers the pure layer; `docs/audits/2026-09-14/`
+holds the measurements the design rests on and the plan that remains.
+
 Each control server is three tools: `status`, `help` and `exec`
-(`mako_browser_*`, `mako_computer_*`). `exec` runs trusted async JavaScript
-in a `worker_threads` Worker (`control-program-runtime.ts`,
-`control-program-worker.ts`, shared by both servers) with a `browser` or
-`computer` object whose methods are the actions; a single action is a
-one-line program and a workflow is several awaited calls with plain
-JavaScript between them, so an observation the model only needs to decide
-from never enters its context. Every action still passes the host's own
-checks (session, snapshot, path, foreground, preview), because the worker
-only forwards commands to the same `call` the direct tools used. `help`
-generates the API reference from the live schema (`BrowserCommandSchema`;
-the driver's own tool list) so the catalog costs 4 KB rather than the 177 KB
-that 94 per-action tools did; `docs/audits/2026-09-14/control-runtime-baseline.md`
-has the measurements against the prior surface and
-`scripts/benchmark-control-runtime.ts` re-takes them. The macOS harness
-server (`mako-local-tools`) is gone; the driver does everything it did.
+(`mako_browser_*`, `mako_computer_*`). `exec` runs a program with a
+`browser` or `computer` object whose methods are the actions; a single
+action is a one-line program and a workflow is several awaited calls with
+plain JavaScript between them, so an observation the model only needs to
+decide from never enters its context. Every action still passes the host's
+own checks, because the worker only forwards commands to the same `call`
+the direct tools used. The computer `exec` tool's description carries the
+whole reference (helpers, then every driver action as
+`computer.name({args}) → {returns}  first sentence`), rendered from the
+live driver at list time, because every model measured spent two turns and
+28 KB on `status` then `help` before touching a window. `help` remains for
+one action's full schema. The macOS harness server (`mako-local-tools`) is
+gone; the driver does everything it did.
+
+A computer action resolves to the driver's data, not the MCP result: every
+model measured lost a turn to `result.structuredContent.apps` before it
+found the data, and a window state returned whole paid for the tree twice
+through the text echo. A refused action throws with the driver's message,
+so `try`/`catch` in a program is the branch. `get_window_state` omits the
+application's menu bar (118 of 180 elements on a real app were the Apple
+menu and its Recent Items; `include_menu_bar` restores them) and
+`tree_markdown`; `list_windows` records carry `kind: document | helper |
+unknown`, because Finder keeps nine untitled 30-pixel strips at layer 0
+and every model asked to list its windows counted them at every size of
+context (F11). `view(target)` reads a window as one line per element
+(~13 tokens a line against ~65 as JSON: 12,006 tokens for a real window's
+state, 838 as lines); `act(action, args)` performs one action and returns
+the lines that appeared and disappeared, re-reading every 250 ms while
+nothing has changed (a WebKit page transition outlasted one settle and
+the empty delta cost a turn), so a click and what it revealed are one
+call and one turn; `expect` stops a chained program with the
+current view in the error when the screen is not what it assumed. Every
+read is a new driver snapshot and the driver honours only the newest
+snapshot's tokens; the host carries an older token to the same control
+in the newest snapshot (below), so a program may address its next action
+with a token from any of its lines.
 
 Output is never cut. A returned or logged value at or past
-`INLINE_TEXT_BUDGET` (200 KB), a run's inline text past
-`INLINE_TOTAL_BUDGET`, and every image after the `INLINE_IMAGE_COUNT`th are
-written whole under the task's artifact directory
-(`control-artifacts.ts`: `MAKO_CONTROL_ARTIFACTS` or the temp directory,
-keyed by `MAKO_TASK_ID`) and the result carries a receipt with the path,
-size, hash and an outline of the value's shape; `artifacts.save(name,
-value)` lets a program keep something on purpose. Before this the prior
-program surface failed a run whose output passed 200 KB (`output-limit`,
-outcome unknown, every action already taken in it lost) and the direct
-computer tools put a 300 KB tree into the model. What a program returns
-crosses the port as JSON: an object with an `undefined` member once failed
-the host's message schema as "invalid message" and lost the run, so the
-worker round-trips every output and names a value JSON cannot carry. A
-computer action resolves to the driver's result with the text echo of
-`structuredContent` removed, otherwise a window state returned whole cost
-twice. `test-browser-runtime.ts`, `test-browser-tools.ts` and
-`test-computer-tools.ts` cover the surface, the spill, the receipts and
-the preflight checks inside programs.
+`INLINE_TEXT_BUDGET` (40 KB, about 10 K tokens; it was 200 KB, and the
+same task then cost 306 K prompt tokens against 18 K), a run's inline text
+past `INLINE_TOTAL_BUDGET`, and every image after the `INLINE_IMAGE_COUNT`th
+are written whole under the task's artifact directory
+(`MAKO_CONTROL_ARTIFACTS` or the temp directory, keyed by `MAKO_TASK_ID`)
+and the result carries a receipt with the path, size, hash and an outline
+of the value's shape; `artifacts.save(name, value)` lets a program keep
+something on purpose. What a program returns crosses the port as JSON: an
+object with an `undefined` member once failed the host's message schema as
+"invalid message" and lost the run, so the worker round-trips every output
+and names a value JSON cannot carry. `test-browser-runtime.ts`,
+`test-browser-tools.ts` and `test-computer-tools.ts` cover the surface,
+the spill, the receipts and the preflight checks inside programs.
+
+The driver is started behind the user's window. `cua-embedded.ts` once
+spawned the executable directly and the driver was the frontmost
+application for a fifth of a second every time a host started it (sampled
+at 60 ms: `Mako` → `cua-driver` → `Mako`), which is the focus theft the
+whole feature was blamed for. The bundle is now launched the way the
+driver's own CLI launches it, `/usr/bin/open -g -n -a CuaDriver.app --args
+serve …`; `open` owns no child, so the daemon's pid is discovered from its
+command line once the socket answers, recorded in
+`runtime/provider-children.json` (`trackProviderPid`) for the next host to
+reap, and signalled by pid on stop. An executable outside a bundle (a
+fixture script) is still spawned directly. `test-local-control-e2e.mjs`
+samples the frontmost pid continuously from before the driver starts and
+fails if the daemon's pid is ever seen.
 
 Keyboard input to a backgrounded Electron or Chromium renderer does not
 land. Measured 2026-09-14 with `scripts/test-local-control-e2e.mjs`
@@ -325,8 +372,77 @@ the previous frontmost app itself, so it needs a menu bar (the fixture's
 `MAKO_FIXTURE_POLICY=regular`) and is refused without one. The ladder in
 `BACKGROUND_INPUT_LADDER` and the server instructions say this in order;
 `delivery_mode: "foreground"` is the only keyboard route into a renderer and
-is refused while the window is not frontmost. The e2e asserts the frontmost
-pid before and after every program.
+is refused while the window is not frontmost.
+
+Nothing fronts the user's application unless the call says so.
+`invoke_menu`, `bring_to_front` and `delivery_mode: "foreground"` are
+refused before dispatch without `foreground: true`; a call that took the
+screen reports `fronted: {ms, pid}` and `status.frontingEvents` counts
+them, and the driver's own nudges towards the foreground
+(`escalation.target: "foreground"`) are stripped from every result so a
+model is never talked into stealing focus. A background Cmd chord is
+refused before it is posted (an application that is not frontmost does
+not dispatch menu key equivalents; `force: true` posts it anyway), and a
+shift chord the driver could not read back is `unverifiable`, never
+`not-delivered`. The semantic keyboard is `fill(token, text)` (the
+accessibility value write, read back until the line shows the text),
+`submit(token)` (the control's confirm action, else its press) and
+`routes(target)` (the verdict of every input route for a window before a
+round trip is spent on a refusal); `computer.script({language, source})`
+runs AppleScript or JXA and `computer.shell({command})` a command, both
+spilling long output like any result. An Electron or Chromium app gets a
+page route: `launch_app({bundle_id, page_route: true})` starts it in the
+background with a private DevTools port and registers it as browser
+`app:<bundle_id>`, and the `browser` object is available inside every
+computer program, so keyboard, pointer and DOM reads that never touch
+focus reach the one kind of window the pid keyboard cannot.
+
+A token from an earlier snapshot is carried, not refused. `fill`'s
+read-back and `act`'s delta each take a new snapshot, so the token a
+program read for its next control was stale by the time it used it (every
+second step of every program). The host indexes each snapshot by
+`role|label#nth` (`indexSnapshot`, `carryToken` in
+`packages/control/src/computer/projection.ts`) and, when a token's snapshot
+is older than the window's newest, addresses the same control in the
+newest one, reporting `carried_token: {given, used}`; a control that is
+gone is refused by the driver as before, and a token never carries across
+windows. An action addressed by `element_token` is dispatched before `act`
+reads anything, so `act` itself never makes the model's token stale. A
+program's own error keeps the worker and its `state` (only a timeout or
+cancellation ends it): a refused action once cost the next program its
+target as well as the step. `windows(pid)` puts the on-screen titled
+document windows first, largest first: Conductor lists an off-screen
+untitled 500×500 window before its main one and a caller that took the
+first row viewed an empty window.
+
+The driver's agent cursor is quieted per session. It glides an overlay
+along a Dubins path to every new target and awaits the arrival before
+acting, and `set_agent_cursor_enabled(false)` hides the overlay without
+stopping the awaited glide; measured 2026-09-14 on driver 0.28.0 against
+Cocoa and Electron fixtures, every `click` or `set_value` on an element
+other than the last one took 2.5 s and a repeat on the same element 0.1–1.1
+s, `move_cursor` alone 1.5–2.5 s by distance. `glide_duration_ms: 1` (`0`
+is the physics default) ends the glide at once: 20 ms per move, 1.1 s per
+action, the composed `fill` + `act` 2.5 s instead of 4.2–5.1 s. The host
+sets `set_agent_cursor_motion({glide_duration_ms: 1, dwell_after_click_ms:
+0})` and hides the overlay before the first call that names a session and
+again after `start_session`, which resets it. The second that remains is
+the driver's `WindowChangeDetector`, a one-second poll for a new window
+after every action whose private skip argument ingress strips from MCP
+calls; `act` overlaps its first read with it. Mako's embedded daemon and
+its MCP proxy run with `CUA_DRIVER_RS_TELEMETRY_ENABLED=0`: the driver
+posts every tool call to PostHog by default. `test-computer-tools.ts`
+checks the two cursor calls and their order; the e2e's `fill-and-verify`
+times a `set_value` and a `click` on two elements under 2 s each.
+
+`scripts/benchmark-control-agents.ts` runs hosted models against the
+shipped `mako_computer_exec` (the tool's own description and the server's
+instructions, no harness prelude): built-in fixture tasks and, with
+`--tasks <file>`, tasks against a real application such as
+`docs/audits/2026-09-14/conductor-agent-tasks.json`; it samples the
+frontmost pid throughout and reports pass rate, wall and model time,
+turns, prompt tokens and whether the front was kept. Fixtures live in
+`scripts/lib/control-fixture.mjs`, shared with the e2e.
 
 `computer-tools-main.ts` wraps the native driver (`cua-driver`, an external
 install under `/Applications/CuaDriver.app`) and repairs what the driver gets
@@ -671,7 +787,7 @@ The composer groups file attachments, screenshots, references, skills, and MCP
 settings under one + popover. `composer.controls` contributions render inside
 that menu and may dismiss it before capture. Typing `$` anywhere or `/` at the
 start of an empty draft opens one capability menu listing every installed
-skill and the MCP servers the *selected* provider will have: servers from the
+skill and the MCP servers the _selected_ provider will have: servers from the
 same reach predicate the host projects into a launch
 (`electron/contracts/mcp-reach.ts`, plus the launch-attached conversation
 tools). Mako's managed servers wear the fin. A pick inserts plain text in the

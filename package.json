@@ -4,9 +4,9 @@
   "version": "0.0.1",
   "description": "Desktop app for Claude Code, Codex, Cursor, Grok, Devin, and OpenCode.",
   "author": "Verbiflow",
-  "license": "MIT",
-  "repository": "github:kashyab12/mako",
-  "homepage": "https://github.com/kashyab12/mako",
+  "license": "Elastic-2.0",
+  "repository": "github:Verbiflow/mako",
+  "homepage": "https://github.com/Verbiflow/mako",
   "type": "module",
   "main": "dist-electron/entry.js",
   "scripts": {
@@ -293,10 +293,14 @@
         "nsis"
       ]
     },
+    "extraResources": [
+      "LICENSE",
+      "NOTICE"
+    ],
     "publish": [
       {
         "provider": "github",
-        "owner": "kashyab12",
+        "owner": "Verbiflow",
         "repo": "mako",
         "releaseType": "release"
       }

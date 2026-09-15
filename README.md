@@ -11,9 +11,16 @@
 <p align="center">
   <a href="https://github.com/Verbiflow/mako/releases"><img src="https://img.shields.io/github/v/release/Verbiflow/mako?display_name=tag&sort=semver" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20silicon-black" alt="Apple silicon" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black" alt="MIT license" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Elastic%202.0-black" alt="Elastic License 2.0" /></a>
   <a href="https://github.com/Verbiflow/mako/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/Verbiflow/mako/release.yml?label=release" alt="Release workflow" /></a>
 </p>
+
+> **Alpha.** Mako is under active daily development. Expect breaking changes
+> between releases, features that move or disappear, and rough edges. It runs
+> real agents against your real repositories and can drive your browser and
+> your Mac; keep your work committed and read what an agent asks before you
+> grant it. There is no support commitment yet. Bugs go to
+> [issues](https://github.com/Verbiflow/mako/issues).
 
 <p align="center">
   <img src="docs/images/mako-desk.png" alt="Mako with a Claude Code thread open, the project rail on the left, and the changed files and commit box on the right" width="1120" />
@@ -262,5 +269,14 @@ Read [AGENTS.md](AGENTS.md) before touching provider or host code.
 
 ## License
 
-[MIT](LICENSE) © 2026 Verbiflow. Provider names and marks belong to their
+Mako is source-available under the [Elastic License 2.0](LICENSE),
+© 2026 Verbiflow. Use it, modify it, fork it, and run it for yourself or
+your company at any size, free, including the optional backend for your own
+team. The license forbids one thing: offering Mako itself to third parties
+as a hosted or managed service. Versions up to v0.1.37 were released under
+MIT and stay that way.
+
+Third-party components and trademarks are listed in [NOTICE](NOTICE).
+Contributions are accepted under the terms in
+[CONTRIBUTING.md](CONTRIBUTING.md). Provider names and marks belong to their
 respective owners.
