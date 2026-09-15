@@ -11,4 +11,5 @@ export const devinSkillSource: ProviderSkillSource = {
   userRoots: () => [configRoot(), join(homedir(), ".devin", "skills")],
   workspaceFolder: ".devin",
   targetUserRoot: configRoot,
+  readsUniversalRoot: false,
 }
