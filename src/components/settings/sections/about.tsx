@@ -5,6 +5,6 @@ export const section = {
   id: "about",
   title: "About",
   group: "Application",
-  keywords: ["version", "github", "open source", "license", "apple silicon"],
+  keywords: ["version", "github", "source available", "license", "alpha", "apple silicon"],
   Component: AboutSection,
 } as const satisfies SettingsSection

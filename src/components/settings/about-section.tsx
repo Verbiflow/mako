@@ -23,14 +23,20 @@ export function AboutSection() {
             Run coding agents on your Mac.
           </span>
           <span className="mt-0.5 block text-label text-faint">
-            Version {version || "development"} · Apple silicon
+            Version {version || "development"} · Alpha · Apple silicon
           </span>
         </span>
       </div>
 
       <p className="text-ui leading-relaxed text-muted-foreground">
         Mako opens sessions from Claude Code, Codex, Cursor, Grok, Devin, and
-        OpenCode 2 and OpenCode. Credentials remain in each provider’s own storage.
+        OpenCode. Credentials remain in each provider’s own storage.
+      </p>
+
+      <p className="text-ui leading-relaxed text-muted-foreground">
+        Mako is alpha software under active daily development. Expect breaking
+        changes between releases and features that move or disappear. Agents
+        run against your real repositories, so keep your work committed.
       </p>
 
       <div className="flex items-center gap-2">
@@ -48,16 +54,17 @@ export function AboutSection() {
       </div>
 
       <p className="text-label leading-relaxed text-faint">
-        Released under the{" "}
+        Source available under the{" "}
         <button
           type="button"
           onClick={() => void desktop.openUrl(`${REPOSITORY}/blob/main/LICENSE`)}
           className="pressable rounded text-muted-foreground underline decoration-foreground/20 underline-offset-2 hover:text-foreground"
         >
-          MIT License
+          Elastic License 2.0
         </button>
-        . © 2026 Verbiflow. Provider names and marks belong to their respective
-        owners.
+        : free to use, modify and run for yourself or your company; not to
+        offer as a hosted service. © 2026 Verbiflow. Provider names and marks
+        belong to their respective owners.
       </p>
     </div>
   )

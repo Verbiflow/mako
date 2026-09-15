@@ -4,8 +4,20 @@ import { cn } from "@/lib/utils"
 import type { Exchange } from "@/lib/exchanges"
 import { promptLabel } from "@/lib/exchanges"
 
+/**
+ * Width of the scroller's own overlay scrollbar track at the pane edge. The
+ * ticks sit inward of it: the gutter is padding inside the scroller, so the
+ * scrollbar paints in the same column, and a `nav` laid over the track took
+ * every pointer event meant for the thumb — it could not be grabbed for the
+ * middle of the pane, and hovering it opened the flyout instead.
+ */
+const SCROLLBAR_TRACK = 12
+
+/** Width of the tick column, inward of the scrollbar track. */
+const TICKS_WIDTH = 26
+
 /** Width of the reserved gutter. The scroller pads by this, so nothing overlaps. */
-export const NAVIGATOR_WIDTH = 26
+export const NAVIGATOR_WIDTH = SCROLLBAR_TRACK + TICKS_WIDTH
 
 /**
  * Below this the pane is too tight to give up a gutter, and the navigator
@@ -77,8 +89,8 @@ export const TurnNavigator = memo(function TurnNavigator({
         setOpen(false)
         setHovered(null)
       }}
-      style={{ width: NAVIGATOR_WIDTH }}
-      className="absolute top-[15%] right-0 bottom-[15%] z-10 flex items-center justify-end"
+      style={{ width: TICKS_WIDTH, right: SCROLLBAR_TRACK }}
+      className="absolute top-[15%] bottom-[15%] z-10 flex items-center justify-end"
     >
       <NavigatorItems
         exchanges={exchanges}
