@@ -7,6 +7,8 @@ import { grokNativeRunner } from "./native-runner.js"
 import { grokProcessProbe } from "./process-probe.js"
 import { grokProfileLoader } from "./profile.js"
 import { grokSkillSource } from "./skills.js"
+import { cliUpdateSource } from "../update-source.js"
+import { resolveExecutable } from "../../executable.js"
 
 export const installGrok: ProviderModule = (host) => {
   host.nativeRunners.register(grokNativeRunner)
@@ -20,4 +22,11 @@ export const installGrok: ProviderModule = (host) => {
     provider: "grok",
     emit: (thread) => emitGrokSession(thread, {}),
   })
+  host.updateSources.register(
+    cliUpdateSource("grok", {
+      binary: (env) => resolveExecutable("grok", env),
+      npmPackage: "@xai-official/grok",
+      selfUpdate: { label: "Update Grok", command: "grok", args: ["update"] },
+    })
+  )
 }

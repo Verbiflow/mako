@@ -10,4 +10,5 @@ export const grokSkillSource: ProviderSkillSource = {
   userRoots: () => [root()],
   workspaceFolder: ".grok",
   targetUserRoot: root,
+  readsUniversalRoot: false,
 }
