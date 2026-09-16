@@ -1,9 +1,23 @@
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../json.js"
 import {
+  ControlIntentSchema,
+  WindowTargetSchema,
+  actionReceipt,
+  selectRoute,
+  withReceiptVerification,
+  windowCapabilities,
+  type ActionReceipt,
+  type ControlCapabilities,
+  type ControlIntent,
+  type RouteDecision,
+  type WindowTarget,
+} from "./control-contract.js"
+import {
   diffLines,
   elementLines,
   lineAddress,
+  lineToken,
   shownValue,
   windowKind,
   WindowRecordSchema,
@@ -23,11 +37,7 @@ import {
 export type Action = (args?: JsonObject) => Promise<JsonValue>
 export type Actions = Readonly<Record<string, Action>>
 
-const targetSchema = z.object({
-  pid: z.number().int().positive(),
-  window_id: z.number().int().positive(),
-})
-export type Target = z.infer<typeof targetSchema>
+export type Target = WindowTarget
 
 const windowStateSchema = z.looseObject({ elements: z.array(z.json()) })
 const windowListSchema = z.looseObject({ windows: z.array(z.json()) })
@@ -60,6 +70,11 @@ export interface ActOptions {
    */
   wait?: number
   target?: Target
+  /**
+   * An exact postcondition over the fresh view. When supplied, act keeps
+   * observing until it is met or wait expires and records the verdict.
+   */
+  postcondition?: Predicate
 }
 export interface UntilOptions {
   /** Milliseconds before giving up; default 5000. */
@@ -77,7 +92,7 @@ export type Predicate = (lines: string[]) => boolean
 export type Expectation = boolean | Predicate
 
 const DEFAULT_MAX = 400
-const DEFAULT_SETTLE_MS = 400
+const DEFAULT_SETTLE_MS = 50
 const DEFAULT_WAIT_MS = 2_500
 const RECHECK_MS = 250
 const DEFAULT_TIMEOUT_MS = 5_000
@@ -104,6 +119,7 @@ export interface FillResult {
   line?: string
   /** The newest view; use its tokens for the next action. */
   view: string[]
+  receipt: ActionReceipt
   result: JsonObject
 }
 
@@ -111,21 +127,11 @@ export interface SubmitResult {
   action: "submit"
   /** The accessibility action that was accepted. */
   route: "confirm" | "press"
+  receipt: ActionReceipt
   result: JsonObject
 }
 
-export interface RouteVerdicts {
-  target: Target
-  /** Document windows of the pid, which decide whether pid keyboard is unambiguous. */
-  documents: number
-  onScreen: boolean | null
-  accessibility: string
-  pointer: string
-  keyboard: string
-  page: string
-  command: string
-  foreground: string
-}
+export type RouteVerdicts = ControlCapabilities
 
 export interface ComputerHelpers {
   view(target?: Target, options?: ViewOptions): Promise<string[]>
@@ -133,12 +139,23 @@ export interface ComputerHelpers {
     action: string,
     args?: JsonObject,
     options?: ActOptions
-  ): Promise<ViewDelta & { action: string; result: JsonObject }>
+  ): Promise<
+    ViewDelta & {
+      action: string
+      postcondition: boolean | null
+      receipt: ActionReceipt
+      result: JsonObject
+      target: Target
+      opened: JsonObject[]
+      closed: JsonObject[]
+    }
+  >
   until(
     predicate: Predicate,
     options?: UntilOptions
   ): Promise<{ satisfied: boolean; ms: number; view: string[] }>
   expect(expectation: Expectation, message?: string): Promise<void>
+  token(line: string): string
   windows(pid: number): Promise<JsonObject[]>
   fill(
     element_token: string,
@@ -147,6 +164,7 @@ export interface ComputerHelpers {
   ): Promise<FillResult>
   submit(element_token: string, target?: Target): Promise<SubmitResult>
   routes(target?: Target): Promise<RouteVerdicts>
+  route(intent: ControlIntent, target?: Target): Promise<RouteDecision>
 }
 
 export function computerHelpers(
@@ -163,11 +181,11 @@ export function computerHelpers(
   }
   const resolveTarget = (target?: Target): Target => {
     if (target) {
-      const parsed = targetSchema.parse(target)
+      const parsed = WindowTargetSchema.parse(target)
       state.target = parsed
       return parsed
     }
-    const remembered = targetSchema.safeParse(state.target)
+    const remembered = WindowTargetSchema.safeParse(state.target)
     if (!remembered.success)
       throw new Error(
         "No window is selected: pass {pid, window_id} or set state.target first (windows(pid) lists an application's document windows)."
@@ -204,7 +222,7 @@ export function computerHelpers(
   ): string[] | undefined => {
     const cached = z.array(z.string()).safeParse(state.last)
     const at = z.number().safeParse(state.lastAt)
-    const rememberedTarget = targetSchema.safeParse(state.lastTarget)
+    const rememberedTarget = WindowTargetSchema.safeParse(state.lastTarget)
     if (
       !cached.success ||
       !at.success ||
@@ -250,6 +268,68 @@ export function computerHelpers(
     /(?:confirm|AXConfirm).*(?:unsupported|not supported|not available|not implemented|-25205|-25206)/i.test(
       error.message
     )
+  const listWindows = async (pid: number): Promise<JsonObject[]> => {
+    if (!api.list_windows) return []
+    const result = await call("list_windows", { pid })
+    const parsed = windowListSchema.safeParse(result)
+    if (!parsed.success) return []
+    // The window an agent means comes first: a titled document that is on
+    // screen, largest first. Conductor lists an untitled 500×500 window
+    // that is off screen before its main window, and a caller that took
+    // the first row viewed an empty window.
+    const ranked: { record: JsonObject; rank: number; area: number }[] = []
+    for (const raw of parsed.data.windows) {
+      const window = WindowRecordSchema.safeParse(raw)
+      if (!window.success) continue
+      const kind = windowKind(window.data)
+      if (kind === "helper") continue
+      const record: JsonObject = {
+        window_id: window.data.window_id,
+        title: window.data.title ?? "",
+        kind,
+      }
+      const { bounds, is_on_screen } = window.data
+      if (bounds) record.bounds = bounds
+      if (is_on_screen !== undefined && is_on_screen !== null)
+        record.is_on_screen = is_on_screen
+      ranked.push({
+        record,
+        rank: (kind === "document" ? 2 : 0) + (is_on_screen === true ? 1 : 0),
+        area: bounds ? bounds.width * bounds.height : 0,
+      })
+    }
+    return ranked
+      .sort((left, right) => right.rank - left.rank || right.area - left.area)
+      .map((row) => row.record)
+  }
+  const readCapabilities = async (target?: Target) => {
+    const selected = resolveTarget(target)
+    const list = windowListSchema.safeParse(
+      await call("list_windows", { pid: selected.pid })
+    )
+    const records = list.success
+      ? list.data.windows.flatMap((raw) => {
+          const window = WindowRecordSchema.safeParse(raw)
+          return window.success ? [window.data] : []
+        })
+      : []
+    const documents = records.filter(
+      (window) => windowKind(window) !== "helper"
+    )
+    const current = records.find(
+      (window) => window.window_id === selected.window_id
+    )
+    const pages = api.page_routes
+      ? pageRoutesSchema.safeParse(await call("page_routes", {}))
+      : undefined
+    const page = pages?.success ? pages.data[String(selected.pid)] : undefined
+    return windowCapabilities({
+      target: selected,
+      documentWindows: documents.length,
+      onScreen: current?.is_on_screen ?? null,
+      pageBrowser: page?.browser,
+    })
+  }
   return {
     view,
     /**
@@ -269,10 +349,12 @@ export function computerHelpers(
     act: async (action, args = {}, options = {}) => {
       const selected = resolveTarget(options.target)
       const addressed = z.string().safeParse(args.element_token).success
+      const dispatchedArgs = boundArgs(args, selected)
+      const windowsBefore = await listWindows(selected.pid)
       const before = addressed
         ? (lastView(Number.POSITIVE_INFINITY, selected) ?? [])
         : (lastView(BEFORE_MAX_AGE_MS, selected) ?? (await view(selected)))
-      const pending = call(action, boundArgs(args, selected))
+      const pending = call(action, dispatchedArgs)
       let settled = false
       let failed = false
       void pending.then(
@@ -289,18 +371,71 @@ export function computerHelpers(
       const deadline = Date.now() + (options.wait ?? DEFAULT_WAIT_MS)
       let after = await view(selected)
       let delta = diffLines(before, after)
+      let postcondition = options.postcondition
+        ? options.postcondition(after)
+        : null
       while (
         !failed &&
-        delta.added.length === 0 &&
-        delta.removed.length === 0 &&
+        (options.postcondition
+          ? postcondition === false
+          : delta.added.length === 0 && delta.removed.length === 0) &&
         (!settled || Date.now() < deadline)
       ) {
         await wait(RECHECK_MS)
         after = await view(selected)
         delta = diffLines(before, after)
+        postcondition = options.postcondition
+          ? options.postcondition(after)
+          : null
       }
-      const result = resultOf(await pending)
-      return { action, result, ...delta }
+      const rawResult = await pending
+      const windowsAfter = await listWindows(selected.pid)
+      const idsBefore = new Set(
+        windowsBefore.flatMap((window) => {
+          const id = z.number().int().positive().safeParse(window.window_id)
+          return id.success ? [id.data] : []
+        })
+      )
+      const idsAfter = new Set(
+        windowsAfter.flatMap((window) => {
+          const id = z.number().int().positive().safeParse(window.window_id)
+          return id.success ? [id.data] : []
+        })
+      )
+      const opened = windowsAfter.filter((window) => {
+        const id = z.number().int().positive().safeParse(window.window_id)
+        return id.success && !idsBefore.has(id.data)
+      })
+      const closed = windowsBefore.filter((window) => {
+        const id = z.number().int().positive().safeParse(window.window_id)
+        return id.success && !idsAfter.has(id.data)
+      })
+      const result = resultOf(rawResult)
+      const baseReceipt = actionReceipt(
+        action,
+        dispatchedArgs,
+        selected,
+        rawResult
+      )
+      const receipt = withReceiptVerification(baseReceipt, {
+        kind: options.postcondition ? "read-back" : "observation",
+        status:
+          postcondition === true
+            ? "confirmed"
+            : delta.added.length > 0 || delta.removed.length > 0
+              ? "changed"
+              : "unchanged",
+      })
+      return {
+        action,
+        postcondition,
+        receipt,
+        result,
+        target: selected,
+        opened,
+        closed,
+        ...delta,
+      }
     },
     until: async (predicate, options = {}) => {
       const selected = resolveTarget(options.target)
@@ -334,39 +469,8 @@ export function computerHelpers(
         `${message ?? "Expectation failed"}. The window shows:\n${lines.join("\n")}`
       )
     },
-    windows: async (pid) => {
-      const result = await call("list_windows", { pid })
-      const parsed = windowListSchema.safeParse(result)
-      if (!parsed.success) return []
-      // The window an agent means comes first: a titled document that is on
-      // screen, largest first. Conductor lists an untitled 500×500 window
-      // that is off screen before its main window, and a caller that took
-      // the first row viewed an empty window.
-      const ranked: { record: JsonObject; rank: number; area: number }[] = []
-      for (const raw of parsed.data.windows) {
-        const window = WindowRecordSchema.safeParse(raw)
-        if (!window.success) continue
-        const kind = windowKind(window.data)
-        if (kind === "helper") continue
-        const record: JsonObject = {
-          window_id: window.data.window_id,
-          title: window.data.title ?? "",
-          kind,
-        }
-        const { bounds, is_on_screen } = window.data
-        if (bounds) record.bounds = bounds
-        if (is_on_screen !== undefined && is_on_screen !== null)
-          record.is_on_screen = is_on_screen
-        ranked.push({
-          record,
-          rank: (kind === "document" ? 2 : 0) + (is_on_screen === true ? 1 : 0),
-          area: bounds ? bounds.width * bounds.height : 0,
-        })
-      }
-      return ranked
-        .sort((left, right) => right.rank - left.rank || right.area - left.area)
-        .map((row) => row.record)
-    },
+    token: lineToken,
+    windows: listWindows,
     /**
      * Text into a control without a keyboard: the accessibility value
      * write, then the control read back until it shows the text. Works on
@@ -375,11 +479,17 @@ export function computerHelpers(
     fill: async (element_token, text, options = {}) => {
       const selected = resolveTarget(options.target)
       const address = addressOf(element_token, selected)
-      const result = resultOf(
-        await call(
-          "set_value",
-          boundArgs({ element_token, value: text }, selected)
-        )
+      const dispatchedArgs = boundArgs(
+        { element_token, value: text },
+        selected
+      )
+      const rawResult = await call("set_value", dispatchedArgs)
+      const result = resultOf(rawResult)
+      const baseReceipt = actionReceipt(
+        "set_value",
+        dispatchedArgs,
+        selected,
+        rawResult
       )
       const expected = shownValue(text)
       const deadline = Date.now() + (options.wait ?? FILL_WAIT_MS)
@@ -394,6 +504,10 @@ export function computerHelpers(
         await wait(FILL_RECHECK_MS)
       }
       const confirmed = line?.includes(expected) ?? false
+      const receipt = withReceiptVerification(baseReceipt, {
+        kind: "read-back",
+        status: confirmed ? "confirmed" : "unchanged",
+      })
       return line
         ? {
             action: "fill",
@@ -401,6 +515,7 @@ export function computerHelpers(
             confirmed,
             line,
             view: lines,
+            receipt,
             result,
           }
         : {
@@ -408,6 +523,7 @@ export function computerHelpers(
             route: "set_value",
             confirmed,
             view: lines,
+            receipt,
             result,
           }
     },
@@ -418,23 +534,43 @@ export function computerHelpers(
     submit: async (element_token, target) => {
       const selected = resolveTarget(target)
       try {
-        const result = resultOf(
-          await call(
-            "click",
-            boundArgs({ element_token, action: "confirm" }, selected)
-          )
+        const dispatchedArgs = boundArgs(
+          { element_token, action: "confirm" },
+          selected
         )
-        return { action: "submit", route: "confirm", result }
+        const rawResult = await call("click", dispatchedArgs)
+        const result = resultOf(rawResult)
+        return {
+          action: "submit",
+          route: "confirm",
+          receipt: actionReceipt(
+            "click",
+            dispatchedArgs,
+            selected,
+            rawResult
+          ),
+          result,
+        }
       } catch (error) {
         const parsed = z.instanceof(Error).safeParse(error)
         if (!parsed.success || !unsupportedConfirm(parsed.data)) throw error
-        const result = resultOf(
-          await call(
-            "click",
-            boundArgs({ element_token, action: "press" }, selected)
-          )
+        const dispatchedArgs = boundArgs(
+          { element_token, action: "press" },
+          selected
         )
-        return { action: "submit", route: "press", result }
+        const rawResult = await call("click", dispatchedArgs)
+        const result = resultOf(rawResult)
+        return {
+          action: "submit",
+          route: "press",
+          receipt: actionReceipt(
+            "click",
+            dispatchedArgs,
+            selected,
+            rawResult
+          ),
+          result,
+        }
       }
     },
     /**
@@ -443,52 +579,10 @@ export function computerHelpers(
      * than one document window and refused when the window is off screen;
      * a page route exists only for an application Mako launched with one.
      */
-    routes: async (target) => {
-      const selected = resolveTarget(target)
-      const list = windowListSchema.safeParse(
-        await call("list_windows", { pid: selected.pid })
-      )
-      const records = list.success
-        ? list.data.windows.flatMap((raw) => {
-            const window = WindowRecordSchema.safeParse(raw)
-            return window.success ? [window.data] : []
-          })
-        : []
-      const documents = records.filter(
-        (window) => windowKind(window) !== "helper"
-      )
-      const current = records.find(
-        (window) => window.window_id === selected.window_id
-      )
-      const onScreen = current?.is_on_screen ?? null
-      const pages = api.page_routes
-        ? pageRoutesSchema.safeParse(await call("page_routes", {}))
-        : undefined
-      const page = pages?.success ? pages.data[String(selected.pid)] : undefined
-      return {
-        target: selected,
-        documents: documents.length,
-        onScreen,
-        accessibility:
-          "available: fill, set_value, click(element_token), submit; background and verifiable",
-        pointer:
-          onScreen === false
-            ? "refused while the window is off screen or minimized"
-            : "available: window-local x,y from the latest capture; background",
-        keyboard:
-          documents.length > 1
-            ? `refused before dispatch: ${documents.length} document windows share this pid (same_pid_keyboard_ambiguity)`
-            : onScreen === false
-              ? "refused: the window is minimized or hidden"
-              : "type_text and non-Cmd keys post in the background to a Cocoa field; a renderer drops them; Cmd chords are refused before dispatch",
-        page: page
-          ? `available: browser.<action>({browser: ${JSON.stringify(page.browser)}, ...})`
-          : "none: launch_app({bundle_id, page_route: true}) gives an Electron or Chromium app one",
-        command:
-          "script({language, source}) and shell({command}) run without touching focus",
-        foreground:
-          "requires foreground: true on the call and the window already frontmost; bring_to_front and invoke_menu take the screen and require the flag",
-      }
+    routes: readCapabilities,
+    route: async (intent, target) => {
+      const selectedIntent = ControlIntentSchema.parse(intent)
+      return selectRoute(selectedIntent, await readCapabilities(target))
     },
   }
 }

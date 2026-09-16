@@ -113,6 +113,16 @@ export function lineIdentity(line: string): string {
   return line.replace(/^s[0-9a-f]{8}:\d+ /, "")
 }
 
+/** The opaque token at the start of a compact element line. */
+export function lineToken(line: string): string {
+  const token = /^(s[0-9a-f]{8}:\d+)(?: |$)/.exec(line)?.[1]
+  if (!token)
+    throw new Error(
+      "This line has no element token. Use a line from the newest view."
+    )
+  return token
+}
+
 /**
  * A line's role and label, without token or value: what the same control
  * reads as before and after its value changed, so a read-back finds it.
