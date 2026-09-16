@@ -29,6 +29,31 @@ const messageSchema = z.discriminatedUnion("kind", [
 ])
 
 export const PROGRAM_TIME_LIMIT_MS = 60_000
+export const PROGRAM_YIELD_MS = 10_000
+const MAX_RETAINED_CELLS = 8
+
+export const ControlProgramRequestSchema = z
+  .object({
+    source: z
+      .string()
+      .min(1)
+      .max(100_000)
+      .optional()
+      .describe("Async JavaScript body; await every action."),
+    cell: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Running cell to collect without replay."),
+  })
+  .refine(
+    (request) =>
+      (request.source === undefined) !== (request.cell === undefined),
+    { message: "Pass exactly one of source or cell" }
+  )
+  .strict()
+export type ControlProgramRequest = z.infer<typeof ControlProgramRequestSchema>
 
 export type ControlProgramOutput =
   | { type: "text"; text: string }
@@ -58,6 +83,13 @@ export interface ControlProgramOptions {
   ): Promise<JsonValue>
   image(value: JsonValue): ControlProgramOutput[]
   fault(detail: ControlProgramFault): Error
+  /** Test override; production cells yield after ten seconds. */
+  yieldAfterMs?: number
+}
+
+interface ProgramCell {
+  promise: Promise<ControlProgramOutput[]>
+  settled: boolean
 }
 
 /**
@@ -75,27 +107,126 @@ export class ControlProgramRuntime {
   private tail: Promise<void> = Promise.resolve()
   private readonly stopping = new AbortController()
   private readonly options: ControlProgramOptions
+  private readonly cells = new Map<number, ProgramCell>()
 
   constructor(options: ControlProgramOptions) {
     this.options = options
   }
 
   run(source: string, signal: AbortSignal): Promise<ControlProgramOutput[]> {
+    const retained = this.cells.keys().next().value
+    if (retained !== undefined)
+      return Promise.reject(
+        new Error(
+          `Control cell ${String(retained)} must be collected before another program starts. Call this same exec tool with {cell:${String(retained)}}.`
+        )
+      )
     const active = AbortSignal.any([signal, this.stopping.signal])
+    const cellId = ++this.sequence
     const result = this.tail.then(() => {
       active.throwIfAborted()
-      return this.execute(source, active)
+      return this.execute(source, active, cellId)
     })
     this.tail = result.then(
       () => undefined,
       () => undefined
     )
-    return result
+    return new Promise((resolve, reject) => {
+      let yielded = false
+      const timer = setTimeout(() => {
+        yielded = true
+        this.retainCell(cellId, result)
+        resolve([
+          {
+            type: "text",
+            text: JSON.stringify({
+              cell: cellId,
+              status: "running",
+              wait: "Call this same exec tool with {cell} to receive the result. The program continues without another model turn.",
+            }),
+          },
+        ])
+      }, this.options.yieldAfterMs ?? PROGRAM_YIELD_MS)
+      void result.then(
+        (output) => {
+          if (yielded) return
+          clearTimeout(timer)
+          resolve(output)
+        },
+        (error) => {
+          if (yielded) return
+          clearTimeout(timer)
+          reject(error)
+        }
+      )
+    })
+  }
+
+  wait(cellId: number, signal: AbortSignal): Promise<ControlProgramOutput[]> {
+    signal.throwIfAborted()
+    const cell = this.cells.get(cellId)
+    if (!cell)
+      return Promise.reject(
+        new Error(
+          `Control cell ${String(cellId)} is not retained; it was already collected or belongs to another MCP client.`
+        )
+      )
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        signal.removeEventListener("abort", abort)
+        reject(
+          this.options.fault({
+            code: "cancelled",
+            message:
+              "Stopped waiting for the control cell. The cell may still complete; wait for the same cell before starting another mutation.",
+            outcome: "unknown",
+          })
+        )
+      }
+      signal.addEventListener("abort", abort, { once: true })
+      void cell.promise.then(
+        (output) => {
+          signal.removeEventListener("abort", abort)
+          this.cells.delete(cellId)
+          resolve(output)
+        },
+        (error) => {
+          signal.removeEventListener("abort", abort)
+          this.cells.delete(cellId)
+          reject(error)
+        }
+      )
+    })
+  }
+
+  private retainCell(
+    cellId: number,
+    promise: Promise<ControlProgramOutput[]>
+  ): void {
+    while (this.cells.size >= MAX_RETAINED_CELLS) {
+      const settled = [...this.cells].find(([, cell]) => cell.settled)
+      if (!settled)
+        throw new Error(
+          "Too many control cells are still running; wait for one before starting another."
+        )
+      this.cells.delete(settled[0])
+    }
+    const cell: ProgramCell = { promise, settled: false }
+    this.cells.set(cellId, cell)
+    void promise.then(
+      () => {
+        cell.settled = true
+      },
+      () => {
+        cell.settled = true
+      }
+    )
   }
 
   private execute(
     source: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    runId: number
   ): Promise<ControlProgramOutput[]> {
     const compiled = new URL("./worker.js", import.meta.url)
     this.worker ??= new Worker(
@@ -103,7 +234,6 @@ export class ControlProgramRuntime {
       { env: {}, resourceLimits: { maxOldGenerationSizeMb: 128 } }
     )
     const worker = this.worker
-    const runId = ++this.sequence
     const controller = new AbortController()
     const active = AbortSignal.any([signal, controller.signal])
     const { artifacts, namespace } = this.options
@@ -278,5 +408,6 @@ export class ControlProgramRuntime {
     await this.tail
     await this.worker?.terminate()
     this.worker = undefined
+    this.cells.clear()
   }
 }

@@ -3,8 +3,11 @@ import { join } from "node:path"
 import { parentPort } from "node:worker_threads"
 import { z } from "zod"
 import type { JsonValue } from "../json.js"
+import { pageHelpers } from "../browser/steps.js"
 import { artifactFileName } from "./artifacts.js"
 import { computerHelpers, type ComputerHelpers } from "../computer/steps.js"
+import { controlLineRef } from "../control/projection.js"
+import { checkpointTask, recallTask } from "./task-state.js"
 
 const identifier = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/)
 const incoming = z.discriminatedUnion("kind", [
@@ -128,6 +131,16 @@ port.on("message", (raw) => {
       ])
     )
   const api = apiFor(message.namespace, message.actions)
+  const controlApi =
+    message.namespace === "control"
+      ? Object.assign(api, { ref: controlLineRef })
+      : api
+  const page =
+    message.namespace === "control"
+      ? pageHelpers((action, args) =>
+          controlApi.advanced({ backend: "page", name: action, args })
+        )
+      : undefined
   const extras = Object.entries(message.extra).filter(
     ([name]) => name !== message.namespace
   )
@@ -150,16 +163,20 @@ port.on("message", (raw) => {
       const run = new Function(
         message.namespace,
         ...extras.map(([name]) => name),
+        "page",
         "state",
         "console",
         "emitImage",
         "artifacts",
+        "checkpoint",
+        "recall",
         ...Object.keys(helpers),
         `return (async () => {${message.source}\n})()`
       )
       return run(
-        api,
+        controlApi,
         ...extras.map(([name, actions]) => apiFor(name, actions)),
+        page,
         state,
         {
           log: (...values: JsonValue[]) =>
@@ -167,6 +184,9 @@ port.on("message", (raw) => {
         },
         (value: JsonValue) => output("image", value),
         artifacts,
+        (value: Record<string, JsonValue>) =>
+          checkpointTask(state, z.record(z.string(), z.json()).parse(value)),
+        () => recallTask(state),
         ...Object.values(helpers)
       )
     })

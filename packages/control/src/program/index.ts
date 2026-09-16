@@ -1,6 +1,9 @@
 export {
   ControlProgramRuntime,
+  ControlProgramRequestSchema,
   PROGRAM_TIME_LIMIT_MS,
+  PROGRAM_YIELD_MS,
+  type ControlProgramRequest,
   type ControlProgramFault,
   type ControlProgramOptions,
   type ControlProgramOutput,
@@ -17,3 +20,11 @@ export {
   type ArtifactOutline,
   type ArtifactReceipt,
 } from "./artifacts.js"
+export {
+  TaskCheckpointSchema,
+  TaskMemorySchema,
+  checkpointTask,
+  recallTask,
+  type TaskCheckpoint,
+  type TaskMemory,
+} from "./task-state.js"
