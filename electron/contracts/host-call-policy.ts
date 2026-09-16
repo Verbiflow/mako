@@ -43,6 +43,8 @@ const reads = [
   "mako:live-snapshot",
   "mako:live-state",
   "mako:harness-availability",
+  /** Answers from the host's readings; a re-read it starts behind the answer is idempotent. */
+  "mako:harness-updates",
   "mako:accounts",
   "mako:provider-connections",
   "mako:list-models",
@@ -51,6 +53,7 @@ const reads = [
   "mako:crashes",
   "mako:crashes-dir",
   "mako:host-log-path",
+  "mako:provider-residency",
   "mako:daemon-status",
   "mako:daemon-login",
   "mako:utility-model-settings",

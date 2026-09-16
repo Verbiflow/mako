@@ -107,7 +107,7 @@ export interface LiveSessionState {
   nativeRunId?: string
   nativeForkId?: string
   nativePath?: string
-  connection: "starting" | "connected" | "disconnected"
+  connection: "starting" | "connected" | "hibernated" | "disconnected"
   id: string
   nativeId?: string
   harness: string

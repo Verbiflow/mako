@@ -95,6 +95,7 @@ import type {
 } from "../shared.js"
 
 import type { CrashReport } from "../crash.js"
+import type { ProviderResidencySnapshot } from "./provider-residency.js"
 import type {
   AccountHarness,
   AccountProvider,
@@ -350,8 +351,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<HarnessProfile[]>("mako:harness-profiles", force),
     harnessAvailability: () =>
       invokeTrustedHost<Record<string, boolean>>("mako:harness-availability"),
-    harnessUpdates: () =>
-      invokeTrustedHost<Record<string, HarnessUpdateInfo>>("mako:harness-updates"),
+    harnessUpdates: (refresh?: boolean) =>
+      invokeTrustedHost<Record<string, HarnessUpdateInfo>>("mako:harness-updates", refresh),
     runHarnessUpdate: (provider: string) =>
       invokeTrustedHost<HarnessUpdateInfo>("mako:harness-update", provider),
     daemonStatus: () =>
@@ -669,6 +670,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     crashesDir: () => invokeTrustedHost<string>("mako:crashes-dir"),
     /** The host's own log of provider starts, failures and exits; empty when no host log is open. */
     hostLogPath: () => invokeTrustedHost<string>("mako:host-log-path"),
+    providerResidency: () =>
+      invokeTrustedHost<ProviderResidencySnapshot>(
+        "mako:provider-residency"
+      ),
     clearCrashes: () => invokeTrustedHost<void>("mako:clear-crashes"),
     reportCrash: (
       kind: "renderer-error" | "renderer-rejection",

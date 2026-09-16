@@ -13,6 +13,7 @@ export const TransferInputSchema = z.object({
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
+  modeId: z.string().optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 export const ProviderBindingSchema = z.object({
@@ -22,6 +23,7 @@ export const ProviderBindingSchema = z.object({
   nativeId: z.string().optional(),
   path: z.string().optional(),
   tuning: ProviderSelectionSchema.optional(),
+  modeId: z.string().optional(),
   coveredBlocks: z.number().int().nonnegative(),
   includesBase: z.boolean(),
 })

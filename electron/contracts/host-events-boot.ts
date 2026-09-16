@@ -23,6 +23,7 @@ import type {
 } from "./conversation-session.js"
 import type { GitStatus } from "./git-workspace-search.js"
 import type { ProviderConnection } from "./provider-connection.js"
+import type { HarnessUpdates } from "./harness-updates.js"
 import type { Capabilities } from "./mcp-skills-integrations.js"
 import type { HarnessProfile } from "./providers-acp.js"
 
@@ -67,6 +68,8 @@ export type HostEventBody =
   | { type: "harness-profile"; profile: HarnessProfile; cwd?: string }
   /** A provider transport's sign-in changed; window-wide. */
   | { type: "provider-connections"; connections: ProviderConnection[] }
+  /** A runtime's installed or public version was read, or an update moved; window-wide. */
+  | { type: "runtime-updates"; updates: HarnessUpdates }
   | { type: "notice"; level: "info" | "success" | "error"; message: string }
   /** The file open in the viewer changed on disk (any writer). */
   | { type: "file-changed"; path: string }
