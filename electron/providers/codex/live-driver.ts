@@ -23,9 +23,7 @@ export const codexLiveDriver: ProviderLiveDriver = {
     ;(await import("../../codex-app.js")).codexAppPermission(...args)
   },
   cancel: async (id) => (await import("../../codex-app.js")).codexAppCancel(id),
-  close: (id) => {
-    void import("../../codex-app.js").then((module) => module.codexAppClose(id))
-  },
+  close: async (id) => (await import("../../codex-app.js")).codexAppClose(id),
   steering: "step",
   modes: codexAccessModes(),
   defaultMode: CODEX_DEFAULT_MODE,
