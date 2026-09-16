@@ -292,6 +292,22 @@ function pageUrl(url: string): string {
   return parsed.href
 }
 
+function browserStatus(
+  definition: LocalBrowser,
+  connection: BrowserControlStatus["connection"]
+): BrowserControlStatus {
+  const status: BrowserControlStatus = {
+    id: definition.id,
+    name: definition.name,
+    connection,
+  }
+  if (definition.kind) status.kind = definition.kind
+  if (definition.profile) status.profile = definition.profile
+  if (definition.origin) status.origin = definition.origin
+  if (definition.sourceRoot) status.sourceRoot = definition.sourceRoot
+  return status
+}
+
 /** Host-owned transport; task-owned bindings. No implicit current tab exists. */
 export class BrowserService {
   private readonly browsers: Map<string, BrowserEntry>
@@ -328,11 +344,9 @@ export class BrowserService {
         {
           definition,
           selections: Promise.resolve(),
-          status: {
-            id: definition.id,
-            name: definition.name,
-            connection: { status: "disconnected" },
-          },
+          status: browserStatus(definition, {
+            status: "disconnected",
+          }),
         },
       ])
     )
@@ -355,19 +369,26 @@ export class BrowserService {
       const entry = this.browsers.get(definition.id)
       if (entry) {
         entry.definition = definition
-        if (entry.status.name !== definition.name) {
-          entry.status = { ...entry.status, name: definition.name }
+        if (
+          entry.status.name !== definition.name ||
+          entry.status.kind !== definition.kind ||
+          entry.status.profile !== definition.profile ||
+          entry.status.origin !== definition.origin ||
+          entry.status.sourceRoot !== definition.sourceRoot
+        ) {
+          entry.status = browserStatus(
+            definition,
+            entry.status.connection
+          )
           changed = true
         }
       } else {
         this.browsers.set(definition.id, {
           definition,
           selections: Promise.resolve(),
-          status: {
-            id: definition.id,
-            name: definition.name,
-            connection: { status: "disconnected" },
-          },
+          status: browserStatus(definition, {
+            status: "disconnected",
+          }),
         })
         changed = true
       }

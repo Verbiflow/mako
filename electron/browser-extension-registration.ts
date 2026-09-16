@@ -55,6 +55,7 @@ export function extensionBrowsers(
         id: registration.id,
         name: registration.name,
         requiresApproval: false,
+        kind: "chromium",
         endpoint: async () => readRegistration(path).endpoint,
       })
     } catch {

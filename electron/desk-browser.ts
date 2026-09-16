@@ -66,6 +66,8 @@ export class DeskBrowser {
   private readonly token = randomBytes(24).toString("base64url")
   private server: WebSocketServer | undefined
   private endpoint: string | undefined
+  private starting: Promise<string> | undefined
+  private generation = 0
 
   constructor(options: DeskBrowserOptions) {
     this.options = options
@@ -84,11 +86,26 @@ export class DeskBrowser {
 
   async start(): Promise<string> {
     if (this.endpoint) return this.endpoint
+    if (this.starting) return this.starting
+    const operation = this.open(this.generation)
+    this.starting = operation
+    try {
+      return await operation
+    } finally {
+      if (this.starting === operation) this.starting = undefined
+    }
+  }
+
+  private async open(generation: number): Promise<string> {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
     await new Promise<void>((resolve, reject) => {
       server.once("listening", resolve)
       server.once("error", reject)
     })
+    if (generation !== this.generation) {
+      server.close()
+      throw new Error("Mako's desk browser closed while it was starting")
+    }
     const address = z.object({ port: z.number() }).parse(server.address())
     this.server = server
     this.endpoint = `ws://127.0.0.1:${address.port}/devtools/browser/${this.token}`
@@ -292,6 +309,7 @@ export class DeskBrowser {
   }
 
   close(): void {
+    this.generation += 1
     if (this.reaper) clearInterval(this.reaper)
     this.reaper = undefined
     for (const page of this.pages.values()) page.destroy()

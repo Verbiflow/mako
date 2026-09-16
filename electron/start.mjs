@@ -12,6 +12,7 @@ import { webHostProxy } from "./web-dev-proxy.mjs"
 import { manualDevUpdates } from "./dev-updates.mjs"
 import { buildPreload } from "../scripts/build-preload.mjs"
 import { createHash } from "node:crypto"
+import { publishDevRendererRegistration } from "../dist-electron/dev-renderer-registration.js"
 
 // ORCA: Electron-based hosts leak this. If it stays set, Electron boots as Node
 // and `require("electron")` is the npm stub instead of the real API.
@@ -66,6 +67,14 @@ if (!url) {
   await rm(cacheDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   throw new Error("Vite did not expose a local development URL")
 }
+const removeDevRendererRegistration = publishDevRendererRegistration(
+  runtime.directory,
+  {
+    profile: profile ?? "default",
+    sourceRoot: root,
+    url,
+  }
+)
 
 // The renderer hot-reloads through Vite; the host cannot. Keeping the host
 // compiler running means an edit under electron/ is on disk by the time the
@@ -122,6 +131,7 @@ async function stop(code, signal) {
   }
   await stopPreloadBuild()
   await server.close()
+  removeDevRendererRegistration()
   await releaseLease?.()
   await rm(cacheDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   process.exitCode = code

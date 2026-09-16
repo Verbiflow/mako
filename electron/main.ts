@@ -25,8 +25,13 @@ import { startConversationMcp } from "./conversation-mcp.js"
 import { BrowserService } from "./browser-service.js"
 import { localBrowsers } from "./browser-discovery.js"
 import { DeskBrowser } from "./desk-browser.js"
+import { publishDeskBrowserRegistration } from "./desk-browser-registration.js"
+import {
+  watchDevRendererRegistration,
+} from "./dev-renderer-registration.js"
 import { deskPageForWindow } from "./desk-browser-window.js"
 import { deskUrlPolicy } from "./desk-browser-policy.js"
+import { guardDeskNavigation } from "./desk-browser-navigation.js"
 import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
 import { compileCacheStatus } from "./compile-cache.js"
 import { serveDesk } from "./desk-protocol.js"
@@ -237,6 +242,10 @@ const rendererBundle = join(__dirname, "../dist")
  */
 const PRELOAD = join(__dirname, "preload.cjs")
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
+const configuredDevServerUrl = isDev
+  ? process.env.VITE_DEV_SERVER_URL ?? null
+  : null
+let activeDevServerUrl = configuredDevServerUrl
 /**
  * One data directory per instance. The single-instance lock lives in
  * userData, so a source checkout that shared the installed app's directory
@@ -361,6 +370,12 @@ const deskBrowser = new DeskBrowser({
     trackRenderer(hidden)
     deskWindows.add(hidden)
     hidden.once("closed", () => deskWindows.delete(hidden))
+    guardDeskNavigation(
+      hidden.webContents,
+      isDeskUrl,
+      (url) =>
+        hostWarn("browser", "blocked hidden desk navigation", { url })
+    )
     hidden.webContents.setWindowOpenHandler(({ url }) => {
       void shell.openExternal(url)
       return { action: "deny" }
@@ -374,10 +389,44 @@ const deskBrowser = new DeskBrowser({
     return deskPageForWindow(hidden)
   },
 })
+let removeDeskBrowserRegistration: (() => void) | undefined
+let stopDevRendererWatch: (() => void) | undefined
 const browserControl = new BrowserService(() => [
   ...localBrowsers(),
   deskBrowser.definition,
 ])
+let devRendererGeneration = 0
+async function configureDevRenderer(
+  registration: {
+    profile: string
+    sourceRoot: string
+    url: string
+  } | null
+): Promise<void> {
+  const generation = ++devRendererGeneration
+  activeDevServerUrl = registration?.url ?? configuredDevServerUrl
+  removeDeskBrowserRegistration?.()
+  removeDeskBrowserRegistration = undefined
+  if (!registration) {
+    browserControl.refresh()
+    return
+  }
+  try {
+    const endpoint = await deskBrowser.start()
+    if (generation !== devRendererGeneration) return
+    removeDeskBrowserRegistration = publishDeskBrowserRegistration({
+      endpoint,
+      origin: new URL(registration.url).origin,
+      profile: registration.profile,
+      sourceRoot: registration.sourceRoot,
+    })
+  } catch (error) {
+    hostWarn("browser", "dev desk registration failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+  browserControl.refresh()
+}
 const controlPreviews = new ControlPreviews(
   browserControl,
   (image) => {
@@ -762,9 +811,9 @@ async function createWindow() {
   })
 
   if (isDev) {
-    await window.loadURL(
-      process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"
-    )
+    if (!activeDevServerUrl)
+      throw new Error("The development renderer is not registered")
+    await window.loadURL(activeDevServerUrl)
   } else {
     await window.loadURL(deskUrl())
   }
@@ -785,18 +834,17 @@ async function loadDesk(
   previewId: string
 ): Promise<void> {
   if (isDev) {
-    const url = new URL(
-      process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"
-    )
+    if (!activeDevServerUrl)
+      throw new Error("The development renderer is not registered")
+    const url = new URL(activeDevServerUrl)
     url.searchParams.set("preview", previewId)
     await target.loadURL(url.href)
   } else await target.loadURL(deskUrl({ preview: previewId }))
 }
-const isDeskUrl = deskUrlPolicy({
-  devServerUrl: isDev
-    ? (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173")
-    : null,
-})
+const isDeskUrl = (url: string) =>
+  deskUrlPolicy({
+    devServerUrl: isDev ? activeDevServerUrl : null,
+  })(url)
 
 async function openPreviewWindow(): Promise<void> {
   const preview = new BrowserWindow({
@@ -823,9 +871,9 @@ async function openPreviewWindow(): Promise<void> {
   const id = crypto.randomUUID()
   try {
     if (isDev) {
-      const url = new URL(
-        process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"
-      )
+      if (!activeDevServerUrl)
+        throw new Error("The development renderer is not registered")
+      const url = new URL(activeDevServerUrl)
       url.searchParams.set("preview", id)
       await preview.loadURL(url.href)
     } else await preview.loadURL(deskUrl({ preview: id }))
@@ -1643,6 +1691,24 @@ app.whenReady().then(async () => {
     if (process.env.MAKO_RUNTIME_TRACE === "1")
       console.info("[mako-runtime]", stage)
   }
+  if (isDev && webSocket) {
+    stopDevRendererWatch = watchDevRendererRegistration(
+      dirname(webSocket),
+      {
+        profile: instanceProfile || "dev",
+        sourceRoot: app.getAppPath(),
+      },
+      (registration) => {
+        void configureDevRenderer(registration)
+      }
+    )
+  } else if (isDev && configuredDevServerUrl) {
+    await configureDevRenderer({
+      profile: instanceProfile || "dev",
+      sourceRoot: app.getAppPath(),
+      url: configuredDevServerUrl,
+    })
+  }
   trace("electron ready")
   // Agents an earlier host left running are ended before this one starts any.
   await providerChildren.reap().catch((error) => {
@@ -1928,6 +1994,11 @@ app.on("before-quit", (event) =>
       stopCuaEmbedded()
       void appshots.close()
       controlService?.close()
+      stopDevRendererWatch?.()
+      stopDevRendererWatch = undefined
+      devRendererGeneration += 1
+      removeDeskBrowserRegistration?.()
+      removeDeskBrowserRegistration = undefined
       deskBrowser.close()
       stopWorkspaceIpc()
       stopWatching()
