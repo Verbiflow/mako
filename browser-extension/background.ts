@@ -14,6 +14,43 @@ let port: chrome.runtime.Port | null = null
 let router: ExtensionRouter | null = null
 let connecting = false
 
+const userAgentDataSchema = z.object({
+  brands: z.array(z.object({ brand: z.string(), version: z.string() })),
+})
+const browserNavigatorSchema = z
+  .object({
+    brave: z.object({}).loose().optional(),
+    userAgentData: userAgentDataSchema.optional(),
+  })
+  .loose()
+
+function browserProduct(): string {
+  const userAgent = navigator.userAgent
+  const browserNavigator = browserNavigatorSchema.parse(navigator)
+  const known = [
+    [/Edg\//, "Edge"],
+    [/OPR\//, "Opera"],
+    [/Vivaldi\//, "Vivaldi"],
+    [/YaBrowser\//, "Yandex"],
+    [/(?:^| )Arc\//, "Arc"],
+    [/(?:^| )Aside\//, "Aside"],
+  ] as const
+  const matched = known.find(([pattern]) => pattern.test(userAgent))
+  if (matched) return matched[1]
+  if (browserNavigator.brave) return "Brave"
+  const brands =
+    browserNavigator.userAgentData?.brands.map(({ brand }) => brand) ?? []
+  const product = brands.find(
+    (brand) =>
+      !/^(?:Chromium|Not.?A.?Brand)$/i.test(brand) &&
+      brand !== "Google Chrome"
+  )
+  if (product) return product
+  if (brands.includes("Google Chrome") || /Chrome\//.test(userAgent))
+    return "Chrome"
+  return "Chromium"
+}
+
 async function status(value: string) {
   await chrome.storage.local.set({ status: value })
 }
@@ -60,12 +97,13 @@ async function connect(): Promise<void> {
       )
       chrome.alarms.create("reconnect", { delayInMinutes: 1 })
     })
-    const browser = navigator.userAgent.includes("Edg/") ? "edge" : "chrome"
+    const product = browserProduct()
     next.postMessage({
       kind: "hello",
       profileId,
-      browser,
-      label: `${browser === "edge" ? "Edge" : "Chrome"} profile ${profileId.slice(0, 6)}`,
+      family: "chromium",
+      product,
+      label: `${product} profile ${profileId.slice(0, 6)}`,
     })
   } catch {
     await status("Browser connection could not start. Reconnect to try again.")
@@ -77,7 +115,9 @@ async function connect(): Promise<void> {
 chrome.debugger.onEvent.addListener((source, method, params) =>
   router?.event(source, method, params)
 )
-chrome.debugger.onDetach.addListener((source) => router?.detached(source))
+chrome.debugger.onDetach.addListener((source, reason) =>
+  router?.detached(source, reason)
+)
 chrome.runtime.onInstalled.addListener(() => void connect())
 chrome.runtime.onStartup.addListener(() => void connect())
 chrome.alarms.onAlarm.addListener((alarm) => {

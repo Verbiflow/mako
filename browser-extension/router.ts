@@ -8,21 +8,29 @@ import { ExtensionFieldsSchema } from "../electron/browser-extension-protocol.js
 type DebuggerEventParams = Parameters<
   Parameters<typeof chrome.debugger.onEvent.addListener>[0]
 >[2]
+type DebuggerDetachReason = Parameters<
+  Parameters<typeof chrome.debugger.onDetach.addListener>[0]
+>[1]
 
 interface AttachedTarget {
   client: string
   sessionId: string
   target: chrome.debugger.TargetInfo
 }
+interface CreatedTarget {
+  client: string
+  tabId: number
+}
 
 /** One extension owns debugger attachments; each attachment belongs to one host client. */
 export class ExtensionRouter {
   private readonly attached = new Map<string, AttachedTarget>()
-  private readonly creating = new Map<string, string>()
+  private readonly creating = new Map<string, CreatedTarget>()
+  private readonly created = new Map<string, CreatedTarget>()
   private readonly clients = new Set<string>()
   private tail: Promise<void> = Promise.resolve()
   constructor(
-    private readonly api: Pick<typeof chrome, "debugger" | "tabs">,
+    private readonly api: Pick<typeof chrome, "debugger" | "tabs" | "windows">,
     private readonly emit: (message: ExtensionMessage) => void
   ) {}
 
@@ -100,28 +108,41 @@ export class ExtensionRouter {
       return {}
     }
     if (command.method === "Target.createTarget") {
-      if (this.creating.size >= 512)
+      if (this.creating.size + this.created.size >= 512)
         throw new Error("Release unused tabs first")
       const url = z
         .string()
         .regex(/^(https?:|about:)/)
         .parse(command.params.url)
-      const tab = await this.api.tabs.create({ url, active: false })
+      const background = command.params.background !== false
+      const newWindow = command.params.newWindow === true
+      const tab = newWindow
+        ? (
+            await this.api.windows?.create?.({
+              url,
+              focused: !background,
+              type: "normal",
+            })
+          )?.tabs?.[0]
+        : await this.api.tabs.create({ url, active: !background })
+      if (tab?.id === undefined)
+        throw new Error("The browser created no controllable tab")
+      const tabId = tab.id
       for (let attempt = 0; attempt < 20; attempt++) {
         const target = (await this.api.debugger.getTargets()).find(
-          (entry) => entry.tabId === tab.id
+          (entry) => entry.tabId === tabId
         )
         if (target) {
           if (!this.clients.has(client)) {
-            if (tab.id !== undefined) await this.api.tabs.remove(tab.id)
+            await this.api.tabs.remove(tabId)
             throw new Error("Browser client disconnected")
           }
-          this.creating.set(target.id, client)
+          this.creating.set(target.id, { client, tabId })
           return { targetId: target.id }
         }
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
-      if (tab.id !== undefined) await this.api.tabs.remove(tab.id)
+      await this.api.tabs.remove(tabId)
       throw new Error("The new tab did not become available")
     }
     const targets = await this.api.debugger.getTargets()
@@ -132,8 +153,8 @@ export class ExtensionRouter {
     if (command.method === "Target.getTargetInfo")
       return { targetInfo: targetInfo(target) }
     if (command.method === "Target.attachToTarget") {
-      const creator = this.creating.get(target.id)
-      if (creator && creator !== client)
+      const creator = this.creating.get(target.id) ?? this.created.get(target.id)
+      if (creator && creator.client !== client)
         throw new Error("Another client owns this tab")
       if (this.attached.size >= 512)
         throw new Error("Release unused tab sessions first")
@@ -150,17 +171,21 @@ export class ExtensionRouter {
       }
       const sessionId = crypto.randomUUID()
       this.attached.set(sessionId, { client, sessionId, target })
+      if (creator) this.created.set(target.id, creator)
       this.creating.delete(target.id)
       return { sessionId }
     }
     const owned = [...this.attached.values()].some(
       (entry) => entry.client === client && entry.target.id === target.id
     )
-    if (!owned && this.creating.get(target.id) !== client)
+    const createdOwner =
+      this.creating.get(target.id)?.client ?? this.created.get(target.id)?.client
+    if (!owned && createdOwner !== client)
       throw new Error("Another client owns this tab")
     if (command.method === "Target.closeTarget" && target.tabId !== undefined) {
       await this.api.tabs.remove(target.tabId)
       this.creating.delete(target.id)
+      this.created.delete(target.id)
       return { success: true }
     }
     if (
@@ -198,7 +223,10 @@ export class ExtensionRouter {
     }
   }
 
-  detached(source: chrome.debugger.Debuggee): void {
+  detached(
+    source: chrome.debugger.Debuggee,
+    reason?: DebuggerDetachReason
+  ): void {
     for (const [id, attached] of this.attached) {
       if (
         source.targetId !== attached.target.id &&
@@ -213,6 +241,8 @@ export class ExtensionRouter {
         params: { sessionId: id, targetId: attached.target.id },
       })
     }
+    if (reason === "target_closed" && source.targetId)
+      this.created.delete(source.targetId)
   }
 
   async disconnect(client: string): Promise<void> {
@@ -224,8 +254,13 @@ export class ExtensionRouter {
         .detach({ targetId: attached.target.id })
         .catch(() => {})
     }
-    for (const [target, owner] of this.creating)
-      if (owner === client) this.creating.delete(target)
+    for (const [target, created] of this.creating) {
+      if (created.client !== client) continue
+      this.creating.delete(target)
+      await this.api.tabs.remove(created.tabId).catch(() => {})
+    }
+    for (const [target, created] of this.created)
+      if (created.client === client) this.created.delete(target)
   }
 
   async close(): Promise<void> {
