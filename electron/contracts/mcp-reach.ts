@@ -17,8 +17,7 @@ import type { HarnessProfile } from "./providers-acp.js"
  * observed unavailable are never projected.
  */
 export const MAKO_RUNTIME_SERVERS: ReadonlySet<string> = new Set([
-  "mako-browser-use",
-  "mako-local-control",
+  "mako-control",
   "mako-backend",
 ])
 

@@ -148,7 +148,25 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
         .boolean()
         .default(true)
         .describe(
-          "Create the tab without activating it in the physical window. Default true."
+          "Create without activating it in the physical browser. Default true."
+        ),
+      disposition: z
+        .enum(["tab", "window"])
+        .default("tab")
+        .describe(
+          "Create a tab in an existing window or a separate browser window. Default tab."
+        ),
+      lifetime: z
+        .enum(["task", "persistent"])
+        .default("task")
+        .describe(
+          "Task resources close when this control client ends; persistent resources remain until explicitly closed. Default task."
+        ),
+      context: z
+        .enum(["profile", "isolated"])
+        .default("profile")
+        .describe(
+          "Use the connected profile or a disposable browser context. Isolated contexts require a direct CDP connection and always use task lifetime. Default profile."
         ),
     })
     .strict(),
