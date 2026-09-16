@@ -43,6 +43,21 @@ export async function installWebBridge(): Promise<void> {
       const waiter = (value: boolean) => { clearTimeout(deadline); resolve(value) }
       waiters.add(waiter)
     })
+  /**
+   * What a non-OK proxy reply means. The dev proxy answers 403 itself when it
+   * does not trust this page's origin and 502–504 when it could not reach the
+   * host's socket; only the second is the host being away, and telling the
+   * user to start a host that is running sent them in circles.
+   */
+  const refusal = (response: Response): Error => {
+    if (response.status === 403)
+      return new Error(
+        `Mako's dev proxy refused this page's origin (${location.origin}). Open the URL that npm run web printed.`
+      )
+    if (response.status >= 502 && response.status <= 504)
+      return new Error("The real Mako host is unavailable. Start it with npm run web.")
+    return new Error(`The Mako host answered ${response.status} ${response.statusText}`.trimEnd())
+  }
   /** The host went away under a call; `unconfirmed` when it may have run first. */
   class Disconnected extends Error {
     readonly unconfirmed: boolean
@@ -74,7 +89,7 @@ export async function installWebBridge(): Promise<void> {
       throw new Disconnected(true)
     }
     if (reply.status === 502 || reply.status === 503 || reply.status === 504) throw new Disconnected(false)
-    if (!reply.ok) throw new Error("The Mako host is unavailable")
+    if (!reply.ok) throw refusal(reply)
     // This transport shares createMakoBridge's result contract with Electron IPC.
     const result = await reply.json()
     if (!result.ok) {
@@ -103,10 +118,9 @@ export async function installWebBridge(): Promise<void> {
     method: "POST",
     headers: { "x-mako-client": "web", "x-mako-window": clientId },
   })
-  if (!response.ok || !response.body)
-    throw new Error(
-      "The real Mako host is unavailable. Start it with npm run web."
-    )
+  if (!response.ok) throw refusal(response)
+  if (!response.body)
+    throw new Error("The real Mako host is unavailable. Start it with npm run web.")
   let reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
   const dispatch = (line: string) => {
     if (!line.trim()) return
