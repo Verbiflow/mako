@@ -4,6 +4,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { verifyForegroundInput } from "../electron/computer-input-target.js"
+import type { JsonObject } from "../electron/codex-app-json.js"
 
 const server = new Server(
   { name: "target-fixture", version: "1" },
@@ -46,23 +47,27 @@ const [ct, st] = InMemoryTransport.createLinkedPair()
 try {
   await server.connect(st)
   await client.connect(ct)
+  const driver = {
+    callTool: (name: string, args: JsonObject) =>
+      client.callTool({ name, arguments: args }),
+  }
   const target = { pid: 7, window_id: 70 }
   const signal = AbortSignal.timeout(5000)
-  await verifyForegroundInput(client, target, signal)
+  await verifyForegroundInput(driver, target, signal)
   activePid = 8
   const previousReads = windowReads
   await assert.rejects(
-    verifyForegroundInput(client, target, signal),
+    verifyForegroundInput(driver, target, signal),
     /application is not frontmost/
   )
   assert.equal(windowReads, previousReads)
   activePid = 7
   frontWindow = 71
   await assert.rejects(
-    verifyForegroundInput(client, target, signal),
+    verifyForegroundInput(driver, target, signal),
     /window is not frontmost/
   )
-  await assert.rejects(verifyForegroundInput(client, { pid: 7 }, signal))
+  await assert.rejects(verifyForegroundInput(driver, { pid: 7 }, signal))
   console.log(
     "Foreground guard: accepts matching target; refuses another app, another window, and incomplete identity"
   )

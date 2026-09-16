@@ -217,7 +217,7 @@ async function runElectron() {
             "mcp__mako-conversations__mako_conversation_capabilities"
           const fixtureControl =
             controlMode &&
-            /mako-local-control|mako_computer_/i.test(permission.title)
+            /mako-control|mako_control_/i.test(permission.title)
           const fixtureDelegation =
             delegationParents.has(id) &&
             permission.title ===

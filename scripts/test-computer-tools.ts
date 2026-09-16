@@ -109,7 +109,9 @@ try {
         command: process.execPath,
         args: ["--input-type=module", "--eval", failOnce + source],
       },
-      task
+      task,
+      undefined,
+      { surface: "driver" }
     )
     const client = new Client({ name: "computer-test", version: "1" })
     const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -274,12 +276,22 @@ try {
     image?: { data: string; mimeType: string }
   }> = []
   const browserCommands: unknown[] = []
+  let browserOwnerReleases = 0
   const control = createServer((request, response) => {
     let body = ""
     request.on("data", (chunk: Buffer) => {
       body += chunk.toString("utf8")
     })
     request.on("end", () => {
+      if (request.url === "/browser/release-owner") {
+        browserOwnerReleases++
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(
+            JSON.stringify({ ok: true, value: { released: 0, closed: 0 } })
+          )
+        return
+      }
       const parsed = z.json().parse(JSON.parse(body))
       if (request.url === "/browser") {
         browserCommands.push(parsed)
@@ -311,7 +323,9 @@ try {
       command: process.execPath,
       args: ["--input-type=module", "--eval", driverSource],
     },
-    "paths"
+    "paths",
+    undefined,
+    { surface: "driver" }
   )
   const client = new Client({ name: "computer-test", version: "1" })
   const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -375,10 +389,12 @@ try {
       "act",
       "until",
       "expect",
+      "token",
       "windows",
       "fill",
       "submit",
       "routes",
+      "route",
     ])
     assert.deepEqual(status.makoActions, ["script", "shell", "page_routes"])
     assert.match(status.browser, /available in programs/)
@@ -585,16 +601,35 @@ try {
         }),
         sent: z.literal("confirm"),
         verdicts: z.object({
-          documents: z.number(),
-          keyboard: z.string(),
-          page: z.string(),
+          target: z.object({
+            pid: z.number(),
+            window_id: z.number(),
+          }),
+          routes: z.array(
+            z.object({
+              route: z.string(),
+              status: z.string(),
+              reason: z.string().optional(),
+            })
+          ),
         }),
       })
       .parse(JSON.parse(firstText(filled.content)))
     assert.match(filledResult.written.line, /TextField "Name" ="Ada"$/)
-    assert.equal(filledResult.verdicts.documents, 2)
-    assert.match(filledResult.verdicts.keyboard, /2 document windows/)
-    assert.match(filledResult.verdicts.page, /none: launch_app/)
+    assert.deepEqual(filledResult.verdicts.target, {
+      pid: 42,
+      window_id: 7,
+    })
+    const keyboardCapability = filledResult.verdicts.routes.find(
+      (route) => route.route === "pid-keyboard"
+    )
+    assert.equal(keyboardCapability?.status, "unavailable")
+    assert.match(keyboardCapability?.reason ?? "", /2 document windows/)
+    assert.equal(
+      filledResult.verdicts.routes.find((route) => route.route === "page")
+        ?.status,
+      "unavailable"
+    )
     // A refused driver action is a thrown error inside the program.
     const refused = await exec(
       client,
@@ -933,6 +968,7 @@ try {
   } finally {
     await client.close()
     await server.close()
+    assert.ok(browserOwnerReleases > 0)
     control.close()
     delete process.env.MAKO_CONTROL_URL
     delete process.env.MAKO_CONTROL_TOKEN
@@ -946,6 +982,312 @@ try {
   console.warn = originalWarn
   await rm(fixtureRoot, { recursive: true, force: true })
 }
+
+let unifiedPageValue = ""
+const unifiedPageTarget = {
+  browser: "fixture-browser",
+  tab: "fixture-tab",
+  generation: "fixture-generation",
+  lease: "fixture-lease",
+}
+const unifiedServer = createComputerToolsServer(
+  {
+    command: process.execPath,
+    args: ["--input-type=module", "--eval", driverSource],
+  },
+  "unified-control",
+  undefined,
+  {
+    surface: "control",
+    browserCall: async (command) => {
+      if (command.action === "status")
+        return [{ id: "fixture-browser", connection: { status: "connected" } }]
+      if (command.action === "tabs")
+        return [{ id: "fixture-tab", title: "Fixture", url: "about:blank" }]
+      if (command.action === "open" || command.action === "select")
+        return unifiedPageTarget
+      if (command.action === "observe")
+        return {
+          observation: `page-${unifiedPageValue || "empty"}`,
+          nodes: [
+            {
+              depth: 0,
+              role: "RootWebArea",
+              name: "Fixture settings",
+            },
+            {
+              depth: 1,
+              role: "region",
+              name: "Account",
+            },
+            {
+              ref: "abc123:1",
+              depth: 2,
+              role: "textbox",
+              name: "Page proof",
+              value: unifiedPageValue,
+            },
+          ],
+          viewport: null,
+          matched: 1,
+          nextOffset: null,
+          omitted: 0,
+        }
+      if (command.action === "type") {
+        unifiedPageValue = command.text
+        return { typed: true }
+      }
+      if (command.action === "cdp")
+        return { result: { value: command.method } }
+      return { echo: command }
+    },
+  }
+)
+const unifiedClient = new Client({ name: "control-test", version: "1" })
+const [unifiedClientTransport, unifiedServerTransport] =
+  InMemoryTransport.createLinkedPair()
+try {
+  await unifiedServer.connect(unifiedServerTransport)
+  await unifiedClient.connect(unifiedClientTransport)
+  assert.match(unifiedClient.getInstructions() ?? "", /provider-neutral code API/)
+  const tools = await unifiedClient.listTools()
+  assert.deepEqual(
+    tools.tools.map((tool) => tool.name).sort(),
+    ["mako_control_exec", "mako_control_help", "mako_control_status"]
+  )
+  const help = JSON.parse(
+    firstText(
+      (
+        await unifiedClient.callTool({
+          name: "mako_control_help",
+          arguments: {},
+        })
+      ).content
+    )
+  )
+  assert.deepEqual(
+    z
+      .object({ actions: z.array(z.object({ action: z.string() })) })
+      .parse(help)
+      .actions.map((action) => action.action),
+    ["targets", "observe", "act", "wait", "events", "advanced"]
+  )
+  const protocolHelp = JSON.parse(
+    firstText(
+      (
+        await unifiedClient.callTool({
+          name: "mako_control_help",
+          arguments: { domain: "Runtime", method: "evaluate" },
+        })
+      ).content
+    )
+  )
+  assert.equal(protocolHelp.command.name, "evaluate")
+  const routed = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const target = {kind: 'window', pid: 42, window_id: 7};
+const before = await control.observe({target, interactive: true});
+const ref = control.ref(before.lines.find(line => /TextField "Name"/.test(line)));
+return control.act({target, operation: {kind: 'set-text', ref, text: 'unified'}});`,
+    },
+  })
+  assert.ok(!routed.isError, JSON.stringify(routed))
+  const result = z
+    .object({
+      dispatched: z.literal(true),
+      plan: z.object({
+        route: z.literal("accessibility"),
+        topology: z.literal("none"),
+      }),
+      receipt: z.object({
+        outcome: z.literal("confirmed"),
+        verification: z.object({ status: z.literal("confirmed") }),
+      }),
+      observation: z.object({
+        target: z.object({ kind: z.literal("window") }).loose(),
+        lines: z.array(z.string()),
+      }),
+    })
+    .parse(JSON.parse(firstText(routed.content)))
+  assert.ok(
+    result.observation.lines.some((line) => line.includes('="unified"'))
+  )
+  const crossTarget = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const observed = await control.observe({target:{kind:'window',pid:42,window_id:7},interactive:true});
+const ref = control.ref(observed.lines[0]);
+return control.act({target:{kind:'window',pid:42,window_id:9},operation:{kind:'activate',ref}});`,
+    },
+  })
+  assert.equal(crossTarget.isError, true)
+  assert.match(
+    String(crossTarget.structuredContent?.message),
+    /not from this target's latest observation/
+  )
+  const pageRun = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const target={kind:'page',...${JSON.stringify(unifiedPageTarget)}};
+const observed=await control.observe({target,interactive:true});
+const ref=control.ref(observed.lines.find(line=>line.includes('Page proof')));
+return control.act({target,operation:{kind:'set-text',ref,text:'page value'}});`,
+    },
+  })
+  assert.ok(!pageRun.isError, JSON.stringify(pageRun))
+  const pageResult = z
+    .object({
+      plan: z.object({ route: z.literal("page") }),
+      receipt: z.object({ outcome: z.literal("confirmed") }),
+      observation: z.object({ lines: z.array(z.string()) }),
+    })
+    .parse(JSON.parse(firstText(pageRun.content)))
+  assert.ok(
+    pageResult.observation.lines.some((line) =>
+      line.includes('="page value"')
+    )
+  )
+  const pageHelpersRun = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const target=await page.open({browser:'fixture-browser'});
+const observed=await page.observe(target);
+const selected=page.select(observed,{roles:['textbox'],text:'proof'});
+const protocol=await page.cdp(target,'Runtime.evaluate',{expression:'document.title'});
+return {target,lines:page.lines(selected),selection:{matched:selected.matched,context:selected.context},protocol};`,
+    },
+  })
+  assert.ok(!pageHelpersRun.isError, JSON.stringify(pageHelpersRun))
+  const pageHelpersResult = z
+    .object({
+      target: z.object({ kind: z.literal("page") }).loose(),
+      lines: z.array(z.string()),
+      selection: z.object({
+        matched: z.literal(1),
+        context: z.literal(2),
+      }),
+      protocol: z.object({
+        result: z.object({ value: z.literal("Runtime.evaluate") }),
+      }),
+    })
+    .parse(JSON.parse(firstText(pageHelpersRun.content)))
+  assert.match(pageHelpersResult.lines.at(-1) ?? "", /textbox "Page proof"/)
+  const backgroundRefusals = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const hidden=await control.act({target:{kind:'window',pid:42,window_id:8},operation:{kind:'pointer',at:{x:2,y:2}}});
+const chord=await control.act({target:{kind:'window',pid:42,window_id:7},operation:{kind:'press-key',key:'a',modifiers:['Meta']}});
+return {hidden:hidden.plan.status,chord:chord.plan.status};`,
+    },
+  })
+  assert.deepEqual(JSON.parse(firstText(backgroundRefusals.content)), {
+    hidden: "foreground-required",
+    chord: "foreground-required",
+  })
+} finally {
+  await unifiedClient.close()
+  await unifiedServer.close()
+}
+
+const guardDriverSource = `
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+const server=new Server({name:'guard-fixture',version:'1'},{capabilities:{tools:{}}});
+const target={session:{type:'string'},pid:{type:'integer'},window_id:{type:'integer'},element_token:{type:'string'},max_elements:{type:'integer'}};
+server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
+  {name:'get_window_state',inputSchema:{type:'object',properties:target,required:['session','pid','window_id']}},
+  {name:'click',inputSchema:{type:'object',properties:target,required:['session','element_token']}},
+  {name:'list_windows',inputSchema:{type:'object',properties:{session:{type:'string'},pid:{type:'integer'}},required:['session','pid']}}
+]}));
+let opened=false;
+server.setRequestHandler(CallToolRequestSchema,request=>{
+  const args=request.params.arguments;
+  if(request.params.name==='get_window_state'){
+    const value={snapshot_id:'s00000001',pid:args.pid,window_id:args.window_id,elements:[{element_token:'s00000001:0',role:'AXButton',label:'Open later'}]};
+    return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
+  }
+  if(request.params.name==='click'){
+    setTimeout(()=>{opened=true},60);
+    const value={route:'accessibility',effect:'unverifiable'};
+    return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
+  }
+  const windows=[{window_id:7,title:'Main',is_on_screen:true},...(opened?[{window_id:9,title:'Late',is_on_screen:true}]:[])];
+  const value={windows};
+  return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
+});
+await server.connect(new StdioServerTransport());`
+const previousGuard = process.env.MAKO_CONTROL_ASYNC_GUARD
+process.env.MAKO_CONTROL_ASYNC_GUARD = "1"
+const guardServer = createComputerToolsServer(
+  {
+    command: process.execPath,
+    args: ["--input-type=module", "--eval", guardDriverSource],
+  },
+  "guard-control",
+  undefined,
+  { surface: "control" }
+)
+const guardClient = new Client({ name: "guard-test", version: "1" })
+const [guardClientTransport, guardServerTransport] =
+  InMemoryTransport.createLinkedPair()
+try {
+  await guardServer.connect(guardServerTransport)
+  await guardClient.connect(guardClientTransport)
+  const acted = await guardClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const target={kind:'window',pid:42,window_id:7};
+const observed=await control.observe({target,interactive:true});
+const ref=control.ref(observed.lines[0]);
+return control.act({target,operation:{kind:'activate',ref}});`,
+    },
+  })
+  const actedValue = z
+    .object({
+      guard: z.object({
+        status: z.literal("watching"),
+        action_id: z.string(),
+      }),
+    })
+    .parse(JSON.parse(firstText(acted.content)))
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  const events = await guardClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source:
+        "return control.events({target:{kind:'window',pid:42,window_id:7},after:0})",
+    },
+  })
+  const eventValue = z
+    .object({
+      events: z.array(
+        z.object({
+          kind: z.string(),
+          detail: z.object({
+            action_id: z.string(),
+            opened: z.array(z.number()).optional(),
+          }),
+        })
+      ),
+    })
+    .parse(JSON.parse(firstText(events.content)))
+  assert.ok(
+    eventValue.events.some(
+      (event) =>
+        event.kind === "topology" &&
+        event.detail.action_id === actedValue.guard.action_id &&
+        event.detail.opened?.includes(9)
+    ),
+    "a late popup is emitted after the verified action returns"
+  )
+} finally {
+  await guardClient.close()
+  await guardServer.close()
+  if (previousGuard === undefined) delete process.env.MAKO_CONTROL_ASYNC_GUARD
+  else process.env.MAKO_CONTROL_ASYNC_GUARD = previousGuard
+}
 console.log(
-  "Computer MCP: three-tool program surface with the reference in the tool description, results as data, target-bound view/act/expect/windows/fill/submit/routes helpers, menu bar out of window states, window kinds, per-connection task session, symlinked output ancestors resolved, token-only actions recover their exact snapshot pid and window while superseded tokens remain stale, compact window state, key verdicts with the driver's nudge stripped, background Cmd chords refused before dispatch, fronting declared and counted, foreground preflight inside programs, shell and script actions, the browser object over host control, artifact receipts instead of truncation, file captures reach the preview, driver formats compile cleanly"
+  "Computer MCP: driver-adapter regression and unified three-tool program surfaces, host-routed closed operations with receipts, results as data, target-bound refs, compact observations, background policy, browser lending, artifact receipts, previews and clean driver schemas verified"
 )

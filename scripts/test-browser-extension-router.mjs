@@ -13,6 +13,7 @@ const { ExtensionRouter } = await import(
 const messages = []
 const attached = new Set()
 const created = []
+const createdWindows = []
 const sent = []
 const targets = [
   {
@@ -56,6 +57,29 @@ const api = {
       if (index >= 0) targets.splice(index, 1)
     },
     update: async () => ({}),
+  },
+  windows: {
+    create: async (options) => {
+      createdWindows.push(options)
+      const tab = {
+        id: 3,
+        windowId: 30,
+        active: !options.focused,
+        index: 0,
+        pinned: false,
+        highlighted: false,
+        incognito: false,
+      }
+      targets.push({
+        id: "window-page",
+        tabId: tab.id,
+        type: "page",
+        title: "",
+        url: options.url,
+        attached: false,
+      })
+      return { id: 30, focused: options.focused, tabs: [tab] }
+    },
   },
 }
 const router = new ExtensionRouter(api, (message) => messages.push(message))
@@ -111,8 +135,27 @@ try {
     (await request("a", "Target.closeTarget", { targetId: "new-page" })).kind,
     "error"
   )
+  const attachedNew = await request("b", "Target.attachToTarget", {
+    targetId: "new-page",
+  })
+  await request("b", "Target.detachFromTarget", {
+    sessionId: attachedNew.result.sessionId,
+  })
   await request("b", "Target.closeTarget", { targetId: "new-page" })
   assert.equal(targets.length, 1)
+  const openedWindow = await request("window-owner", "Target.createTarget", {
+    url: "about:blank",
+    newWindow: true,
+    background: true,
+  })
+  assert.equal(openedWindow.kind, "response")
+  assert.equal(createdWindows[0].focused, false)
+  await router.disconnect("window-owner")
+  assert.equal(
+    targets.some((target) => target.id === "window-page"),
+    false,
+    "an unattached temporary window closes when its client disappears"
+  )
   let releaseAttach
   let beganAttach
   const began = new Promise((resolve) => {
@@ -132,7 +175,7 @@ try {
   assert.equal((await racing).kind, "error")
   assert.equal(attached.size, 0)
   console.log(
-    "Browser extension router: exact ownership, stale sessions, routed events, background creation, foreign close rejection and disconnect during attachment passed"
+    "Browser extension router: exact ownership, stale sessions, routed events, background tab/window creation, orphan cleanup, foreign close rejection and disconnect during attachment passed"
   )
 } finally {
   await router.close()

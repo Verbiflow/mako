@@ -8,13 +8,13 @@ const request = {
     {
       optionId: "allow_session",
       kind: "allow_always",
-      name: "Yes, allow calling mako_browser_open on the mako-browser-use MCP server (this session)",
+      name: "Yes, allow calling mako_control_exec on the mako-control MCP server (this session)",
     },
   ],
 } satisfies Parameters<typeof devinPermissionTitle>[0]
 assert.equal(
   devinPermissionTitle(request),
-  "mako-browser-use: mako_browser_open"
+  "mako-control: mako_control_exec"
 )
 assert.equal(devinPermissionTitle({ ...request, options: [] }), undefined)
 assert.equal(
@@ -23,7 +23,7 @@ assert.equal(
     options: [
       {
         ...request.options[0],
-        name: "Yes, allow calling all tools on the mako-browser-use MCP server (this session)",
+        name: "Yes, allow calling all tools on the mako-control MCP server (this session)",
       },
     ],
   }),

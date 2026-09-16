@@ -43,6 +43,10 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { z } from "zod"
 import {
+  ControlProgramRequestSchema,
+  type ControlProgramRequest,
+} from "@mako/control/program"
+import {
   cuaEmbeddedPid,
   ensureCuaEmbedded,
   stopCuaEmbedded,
@@ -67,6 +71,9 @@ interface Options {
   reasoning: string | undefined
   runs: number
   maxTurns: number
+  transport: "mcp" | "direct-sdk"
+  surface: "legacy" | "unified"
+  images: boolean
   tasksFile: string | undefined
   only: Set<string> | undefined
   out: string | undefined
@@ -81,6 +88,9 @@ function parseArguments(argv: readonly string[]): Options {
     reasoning: undefined,
     runs: 2,
     maxTurns: 12,
+    transport: "mcp",
+    surface: "unified",
+    images: true,
     tasksFile: undefined,
     only: undefined,
     out: undefined,
@@ -118,6 +128,19 @@ function parseArguments(argv: readonly string[]): Options {
       case "--max-turns":
         options.maxTurns = Number(next(index++, flag))
         break
+      case "--transport":
+        options.transport = z
+          .enum(["mcp", "direct-sdk"])
+          .parse(next(index++, flag))
+        break
+      case "--surface":
+        options.surface = z
+          .enum(["legacy", "unified"])
+          .parse(next(index++, flag))
+        break
+      case "--no-images":
+        options.images = false
+        break
       case "--tasks":
         options.tasksFile = next(index++, flag)
         break
@@ -148,6 +171,17 @@ const expectationSchema = z
   .object({
     all: z.array(z.string()).optional(),
     jsonArrayIncludes: z.array(z.string()).optional(),
+    jsonObjectArrays: z
+      .record(
+        z.string(),
+        z
+          .object({
+            includes: z.array(z.string()).optional(),
+            minItems: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+      )
+      .optional(),
   })
   .strict()
 type Expectation = z.infer<typeof expectationSchema>
@@ -210,7 +244,43 @@ export function replySatisfies(
     for (const wanted of expectation.jsonArrayIncludes)
       if (!got.includes(wanted.toLowerCase())) return false
   }
+  if (expectation.jsonObjectArrays) {
+    const parsed = lastJsonObject(reply)
+    if (!parsed) return false
+    for (const [key, expected] of Object.entries(
+      expectation.jsonObjectArrays
+    )) {
+      const array = z.array(z.unknown()).safeParse(parsed[key])
+      if (!array.success) return false
+      if (
+        expected.minItems !== undefined &&
+        array.data.length < expected.minItems
+      )
+        return false
+      const got = array.data.map((entry) => String(entry).toLowerCase())
+      for (const wanted of expected.includes ?? [])
+        if (!got.includes(wanted.toLowerCase())) return false
+    }
+  }
   return true
+}
+
+function lastJsonObject(reply: string): Record<string, JsonValue> | undefined {
+  const text = reply.replace(/```\s*$/, "").trimEnd()
+  let index = text.lastIndexOf("{")
+  while (index >= 0) {
+    let value: JsonValue
+    try {
+      value = z.json().parse(JSON.parse(text.slice(index)))
+    } catch {
+      index = text.lastIndexOf("{", index - 1)
+      continue
+    }
+    const candidate = z.record(z.string(), z.json()).safeParse(value)
+    if (candidate.success) return candidate.data
+    index = text.lastIndexOf("{", index - 1)
+  }
+  return undefined
 }
 
 interface Target {
@@ -397,11 +467,15 @@ const toolResultSchema = z.object({
 interface Surface {
   instructions: string
   tool: ChatTool
-  exec(source: string): Promise<z.infer<typeof toolResultSchema>>
+  exec(request: string | ControlProgramRequest): Promise<z.infer<typeof toolResultSchema>>
   close(): Promise<void>
 }
 
-async function openSurface(root: string): Promise<Surface> {
+async function openSurface(
+  root: string,
+  cuaTransport: Options["transport"],
+  surface: Options["surface"]
+): Promise<Surface> {
   const socket = await ensureCuaEmbedded(
     join(root, "driver"),
     "dev.mako.benchmark"
@@ -422,10 +496,12 @@ async function openSurface(root: string): Promise<Surface> {
       socket,
       "--driver",
       resolveExecutable("cua-driver"),
+      ...(surface === "computer" ? ["--driver-test"] : []),
     ],
     env: {
       ...getDefaultEnvironment(),
       MAKO_TASK_ID: `agent-benchmark-${randomUUID()}`,
+      MAKO_CUA_TRANSPORT: cuaTransport,
     },
     stderr: "pipe",
   })
@@ -435,8 +511,10 @@ async function openSurface(root: string): Promise<Surface> {
   })
   await client.connect(transport)
   const { tools } = await client.listTools()
-  const exec = tools.find((tool) => tool.name === "mako_computer_exec")
-  if (!exec) throw new Error("the server offers no mako_computer_exec")
+  const execName =
+    surface === "unified" ? "mako_control_exec" : "mako_computer_exec"
+  const exec = tools.find((tool) => tool.name === execName)
+  if (!exec) throw new Error(`the server offers no ${execName}`)
   return {
     instructions: client.getInstructions() ?? "",
     tool: {
@@ -447,18 +525,22 @@ async function openSurface(root: string): Promise<Surface> {
         parameters: exec.inputSchema,
       },
     },
-    exec: async (source) =>
-      toolResultSchema.parse(
+    exec: async (request) => {
+      const source = z.string().safeParse(request)
+      return toolResultSchema.parse(
         await client.callTool(
-          { name: "mako_computer_exec", arguments: { source } },
+          {
+            name: execName,
+            arguments: source.success ? { source: source.data } : request,
+          },
           undefined,
           { timeout: 90_000 }
         )
-      ),
+      )
+    },
     close: async () => {
       await client.close()
       await transport.close()
-      stopCuaEmbedded()
     },
   }
 }
@@ -494,6 +576,9 @@ interface ToolRecord {
 
 interface Row {
   model: string
+  transport: Options["transport"]
+  surface: Options["surface"]
+  images: boolean
   task: string
   run: number
   success: boolean
@@ -522,7 +607,10 @@ async function attempt(
   model: ModelClient,
   task: Attempt,
   run: number,
-  maxTurns: number
+  maxTurns: number,
+  images: boolean,
+  transport: Options["transport"],
+  surfaceMode: Options["surface"]
 ): Promise<Row> {
   await surface.exec(
     `state.target = ${JSON.stringify(task.target)}; state.last = undefined; return 1`
@@ -568,17 +656,18 @@ async function attempt(
       > = []
       for (const call of message.tool_calls) {
         calls++
-        const parsedArguments = z
-          .object({ source: z.string().default("") })
-          .loose()
-          .safeParse(JSON.parse(call.function.arguments || "{}"))
-        const source = parsedArguments.success
-          ? parsedArguments.data.source
-          : ""
+        const parsedArguments = ControlProgramRequestSchema.safeParse(
+          JSON.parse(call.function.arguments || "{}")
+        )
+        const request = parsedArguments.success
+          ? parsedArguments.data
+          : { source: "" }
+        const source =
+          request.source ?? `wait for control cell ${String(request.cell)}`
         const callStarted = performance.now()
         let result: z.infer<typeof toolResultSchema>
         try {
-          result = await surface.exec(source)
+          result = await surface.exec(request)
         } catch (failure) {
           result = {
             isError: true,
@@ -622,7 +711,7 @@ async function attempt(
           tool_call_id: call.id,
           content: text || "(no text)",
         })
-        for (const block of result.content) {
+        for (const block of images ? result.content : []) {
           if (block.type !== "image" || !block.data) continue
           if (visualParts.length === 0)
             visualParts.push({
@@ -665,6 +754,9 @@ async function attempt(
     perTurn.reduce((total, turn) => total + pick(turn), 0)
   const row: Row = {
     model: model.name,
+    transport,
+    surface: surfaceMode,
+    images,
     task: task.id,
     run,
     success,
@@ -737,7 +829,8 @@ async function fixtureTasks(
   const where = `A window titled "Mako control fixture" (pid ${target.pid}, window id ${target.window_id}) is open behind the app I'm working in; do not bring it to the front.`
   const reset = async () => {
     const result = await surface.exec(
-      `const lines = await view(state.target);
+      `state.target = ${JSON.stringify(target)};
+       const lines = await view(state.target);
        const field = lines.find(l => /TextField "Proof"/.test(l));
        if (!field) throw new Error('no Proof field: ' + lines.join(' | '));
        return await fill(field.split(' ')[0], ${JSON.stringify(initial)})`
@@ -992,6 +1085,26 @@ function selfCheck(taskFile: TaskFile | undefined) {
     throw new Error("all should be case-insensitive on every pattern")
   if (replySatisfies("Claude — PONG", line))
     throw new Error("all should require every pattern")
+  const audit = {
+    jsonObjectArrays: {
+      pages: { includes: ["General", "Account"] },
+      observations: { minItems: 2 },
+    },
+  }
+  if (
+    !replySatisfies(
+      'Audit:\n```json\n{"pages":["Account","General"],"observations":["a","b"]}\n```',
+      audit
+    )
+  )
+    throw new Error("jsonObjectArrays should read a final fenced object")
+  if (
+    replySatisfies(
+      '{"pages":["General"],"observations":["one"]}',
+      audit
+    )
+  )
+    throw new Error("jsonObjectArrays should enforce members and minimums")
   console.log(
     `Agent benchmark self-check: reply checkers hold${taskFile ? `; ${taskFile.tasks.length} task(s) on ${taskFile.target.bundle_id} parse` : ""}. Run with --live to measure.`
   )
@@ -1010,8 +1123,12 @@ if (!options.live) {
   process.env.MAKO_CONTROL_ARTIFACTS ??= join(root, "artifacts")
   const out = options.out ?? join(root, "results.jsonl")
   await writeFile(out, "")
-  const surface = await openSurface(root)
-  await surface.exec(
+  const surface = await openSurface(root, options.transport, options.surface)
+  const administration =
+    options.surface === "legacy"
+      ? surface
+      : await openSurface(root, options.transport, "legacy")
+  await administration.exec(
     "await computer.start_session({capture_scope: 'window'}); return 1"
   )
   let stopFixture = () => {}
@@ -1020,22 +1137,32 @@ if (!options.live) {
     const wantsFixture =
       !options.only || [...options.only].some((id) => id.startsWith("fixture-"))
     if (wantsFixture) {
-      const fixture = await fixtureTasks(root, surface)
+      const fixture = await fixtureTasks(root, administration)
       stopFixture = fixture.stop
       attempts.push(...fixture.tasks)
     }
-    if (taskFile) attempts.push(...(await applicationTasks(taskFile, surface)))
+    if (taskFile)
+      attempts.push(...(await applicationTasks(taskFile, administration)))
     const selected = attempts.filter(
       (task) => !options.only || options.only.has(task.id)
     )
     if (!selected.length) throw new Error("no task selected")
     console.log(
-      `Model ${model.name}; ${selected.length} task(s) × ${options.runs} run(s); tool description ${Buffer.byteLength(surface.tool.function.description)} bytes, instructions ${Buffer.byteLength(surface.instructions)} bytes; rows → ${out}`
+      `Model ${model.name}; surface ${options.surface}; transport ${options.transport}; images ${options.images ? "forwarded" : "withheld"}; ${selected.length} task(s) × ${options.runs} run(s); tool description ${Buffer.byteLength(surface.tool.function.description)} bytes, instructions ${Buffer.byteLength(surface.instructions)} bytes; rows → ${out}`
     )
     const rows: Row[] = []
     for (const task of selected) {
       for (let run = 1; run <= options.runs; run++) {
-        const row = await attempt(surface, model, task, run, options.maxTurns)
+        const row = await attempt(
+          surface,
+          model,
+          task,
+          run,
+          options.maxTurns,
+          options.images,
+          options.transport,
+          options.surface
+        )
         rows.push(row)
         await appendFile(out, `${JSON.stringify(row)}\n`)
         console.log(
@@ -1049,6 +1176,8 @@ if (!options.live) {
     )
   } finally {
     stopFixture()
+    if (administration !== surface) await administration.close()
     await surface.close()
+    stopCuaEmbedded()
   }
 }

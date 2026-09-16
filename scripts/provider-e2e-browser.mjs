@@ -66,16 +66,16 @@ export async function runBrowserFixture(
               (option) => option.kind === "allow_once"
             )
             const permitted = [
-              "mako_browser_status",
-              "mako_browser_help",
-              "mako_browser_exec",
+              "mako_control_status",
+              "mako_control_help",
+              "mako_control_exec",
             ].some(
               (tool) =>
                 permission.title ===
-                  `mako-browser-use: Allow the mako-browser-use MCP server to run tool "${tool}"?` ||
-                permission.title === `mcp__mako-browser-use__${tool}` ||
-                permission.title === `mako-browser-use: ${tool}` ||
-                permission.title === `mako-browser-use-${tool}: ${tool}`
+                  `mako-control: Allow the mako-control MCP server to run tool "${tool}"?` ||
+                permission.title === `mcp__mako-control__${tool}` ||
+                permission.title === `mako-control: ${tool}` ||
+                permission.title === `mako-control-${tool}: ${tool}`
             )
             if (!once || !permitted)
               throw new Error(
@@ -103,7 +103,7 @@ export async function runBrowserFixture(
         owner.submit(
           id,
           requestId,
-          `This is an authorized disposable browser integration test. Use the mako-browser-use MCP tools (mako_browser_exec programs) to open ${url}/${provider}. Emit a screenshot with emitImage(await browser.screenshot({target})) to inspect the picture. Read the displayed fixture value and count the red and blue squares. Fill all three form fields and click Verify, then confirm the page says Verified successfully. Use real browser input and click events through the browser tools, not direct network requests, DOM value assignments, or synthetic DOM events. Do not use shell, files, other browser tools, or other websites. Close only your created fixture tab after verification. Reply with the fixture value and the counts.`
+          `This is an authorized disposable browser integration test. Use mako_control_exec programs only. Through control.advanced({backend:'page', name:'open', args:{...}}), open ${url}/${provider} in the connected browser, select its exact returned page target, and emit its screenshot with control.advanced name:'screenshot'. Read the displayed fixture value and count the red and blue squares. Use control.observe and control.act closed operations to fill all three form fields and click Verify, then confirm the page says Verified successfully. Use real browser input and click events, not direct network requests, DOM value assignments, or synthetic DOM events. Do not use shell, files, another browser server, or other websites. Close only your created fixture page through control.advanced after verification. Reply with the fixture value and the counts.`
         )
         const completed = await wait((snapshot) =>
           snapshot?.requests.some(

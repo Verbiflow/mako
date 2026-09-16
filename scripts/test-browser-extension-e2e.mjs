@@ -53,7 +53,7 @@ function quote(value) {
 const launcher = join(root, "host")
 await writeFile(
   launcher,
-  `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(entry)} "$@"\n`,
+  `#!/bin/sh\n${process.env.MAKO_EXPECT_BROWSER_PRODUCT ? `export MAKO_BROWSER_PRODUCT=${quote(process.env.MAKO_EXPECT_BROWSER_PRODUCT)}\n` : ""}exec ${quote(process.execPath)} ${quote(entry)} "$@"\n`,
   { mode: 0o700 }
 )
 await writeFile(
@@ -122,6 +122,11 @@ try {
     )
     child.stderr.on("data", (chunk) => logs.push(chunk.toString()))
     const value = await registration()
+    if (process.env.MAKO_EXPECT_BROWSER_PRODUCT)
+      assert.match(
+        value.name,
+        new RegExp(process.env.MAKO_EXPECT_BROWSER_PRODUCT, "i")
+      )
     if (previousId) {
       assert.equal(
         value.id,
@@ -210,9 +215,36 @@ try {
         Buffer.from(screenshot.data, "base64").subarray(0, 2).toString("hex"),
         "ffd8"
       )
-      await run({ action: "close", target })
+      await assert.rejects(
+        run({
+          action: "open",
+          browser: value.id,
+          context: "isolated",
+        }),
+        /cannot create isolated contexts/
+      )
+      const temporaryWindow = BrowserTargetSchema.parse(
+        await run({
+          action: "open",
+          browser: value.id,
+          disposition: "window",
+        })
+      )
+      assert.deepEqual(await service.releaseOwner("extension-e2e"), {
+        released: 2,
+        closed: 2,
+      })
+      const remaining = await run({ action: "tabs", browser: value.id })
+      assert.equal(
+        remaining.some(
+          (entry) =>
+            entry.targetId === target.tab ||
+            entry.targetId === temporaryWindow.tab
+        ),
+        false
+      )
       console.log(
-        `Chrome extension round ${round + 1}: native messaging, trusted input, cross-client exclusion, screenshot and close passed`
+        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, screenshot, temporary tab/window ownership and cleanup passed`
       )
     } finally {
       await service.close()

@@ -196,6 +196,7 @@ try {
       command: process.execPath,
       args: [
         resolve("dist-electron/computer-tools-main.js"),
+        "--driver-test",
         "--driver",
         resolveExecutable("cua-driver"),
         "--socket",
@@ -354,10 +355,13 @@ try {
   const filledHelper = await exec(
     "fill-helper",
     `const lines = await view(state.target);
-     const field = lines.find(l => /TextField "Proof"/.test(l)).split(' ')[0];
+     const field = token(lines.find(l => /TextField "Proof"/.test(l)));
      const written = await fill(field, ${JSON.stringify(fillText)});
+     const button = token(written.view.find(l => /Button "Verify proof"/.test(l)));
+     const t0 = Date.now();
+     const clicked = await act('click', {element_token: button}, {wait: 800});
      const verdicts = await routes();
-     return {written, verdicts}`
+     return {written, clicked, actMs: Date.now() - t0, verdicts}`
   )
   assert.equal(
     filledHelper.written.confirmed,
@@ -365,13 +369,23 @@ try {
     JSON.stringify(filledHelper.written)
   )
   assert.match(filledHelper.written.line, new RegExp(`="${fillText}"`))
+  assert.ok(
+    filledHelper.actMs < 2_000,
+    `act and independent verification stay bounded (${filledHelper.actMs} ms)`
+  )
   await until(
     async () => (await fixtureState()).input === fillText,
     "renderer shows what fill wrote"
   )
-  assert.equal(filledHelper.verdicts.documents, 1)
-  assert.match(filledHelper.verdicts.keyboard, /Cmd chords are refused/)
-  assert.match(filledHelper.verdicts.page, /none: launch_app/)
+  const keyboardCapability = filledHelper.verdicts.routes.find(
+    (route) => route.route === "pid-keyboard"
+  )
+  assert.equal(keyboardCapability.status, "available")
+  assert.match(keyboardCapability.detail, /renderer-backed controls/i)
+  assert.equal(
+    filledHelper.verdicts.routes.find((route) => route.route === "page").status,
+    "unavailable"
+  )
   assert.equal(await frontmostPid(), frontmostBefore, "fill never fronts")
 
   // Background keyboard, measured rather than assumed: a focus click by
@@ -608,9 +622,9 @@ try {
     driven.clickMs < 500,
     `a page-route click completes quickly (${Math.round(driven.clickMs)} ms)`
   )
-  assert.match(
-    driven.verdicts.page,
-    new RegExp(`browser: "${launched.page_route.browser}"`)
+  assert.equal(
+    driven.verdicts.routes.find((route) => route.route === "page").browser,
+    launched.page_route.browser
   )
   const pageStatusAfter = JSON.parse(
     (await client.callTool({ name: "mako_computer_status", arguments: {} }))
@@ -724,6 +738,87 @@ try {
     cocoa = null
   }
 
+  const routedClient = new Client({
+    name: "mako-routed-control-e2e",
+    version: "1",
+  })
+  let routed
+  try {
+    const routedCredentials = controlService.mint(
+      "mako-routed-control-e2e",
+      "binding"
+    )
+    await routedClient.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [
+          resolve("dist-electron/computer-tools-main.js"),
+          "--driver",
+          resolveExecutable("cua-driver"),
+          "--socket",
+          socket,
+        ],
+        env: {
+          ...process.env,
+          MAKO_CONTROL_URL: routedCredentials.url,
+          MAKO_CONTROL_TOKEN: routedCredentials.token,
+          MAKO_TASK_ID: "routed-e2e",
+        },
+        stderr: "pipe",
+      })
+    )
+    assert.deepEqual(
+      (await routedClient.listTools()).tools.map((tool) => tool.name).sort(),
+      ["mako_control_exec", "mako_control_help", "mako_control_status"]
+    )
+    const routedText = `routed-${randomUUID().slice(0, 8)}`
+    const started = performance.now()
+    const setRouted = () =>
+      routedClient.callTool(
+        {
+          name: "mako_control_exec",
+          arguments: {
+            source: `const target={kind:'window',pid:${fixtureStatus.pid},window_id:${target.window_id}};
+const observed=await control.observe({target,interactive:true});
+const ref=observed.lines.find(line=>/TextField "Proof"/.test(line)).split(' ')[0];
+return control.act({target,operation:{kind:'set-text',ref,text:${JSON.stringify(routedText)}}});`,
+          },
+        },
+        undefined,
+        { timeout: 70_000 }
+      )
+    let result = await setRouted()
+    assert.ok(!result.isError, JSON.stringify(result))
+    let value = JSON.parse(
+      result.content.filter((block) => block.type === "text").at(-1).text
+    )
+    const firstOutcome = value.receipt.outcome
+    if (firstOutcome !== "confirmed") {
+      result = await setRouted()
+      assert.ok(!result.isError, JSON.stringify(result))
+      value = JSON.parse(
+        result.content.filter((block) => block.type === "text").at(-1).text
+      )
+    }
+    assert.equal(value.plan.route, "accessibility")
+    assert.equal(value.receipt.outcome, "confirmed", JSON.stringify(value))
+    assert.equal(value.receipt.delivery, "background")
+    assert.equal(value.guard.status, "settled")
+    await until(
+      async () => (await fixtureState()).input === routedText,
+      "routed set-text reached the renderer"
+    )
+    routed = {
+      milliseconds: Math.round(performance.now() - started),
+      responseBytes: Buffer.byteLength(JSON.stringify(result.content)),
+      lines: value.observation.lines.length,
+      route: value.plan.route,
+      attempts: firstOutcome === "confirmed" ? 1 : 2,
+    }
+  } finally {
+    await routedClient.close()
+  }
+
   const frontmostAfter = await frontmostPid()
   assert.notEqual(frontmostAfter, target.pid, "Fixture stays in the background")
   assert.notEqual(
@@ -746,6 +841,8 @@ try {
       browser: launched.page_route.browser,
       clickMs: Math.round(driven.clickMs),
     },
+    routed,
+    verifiedActMs: filledHelper.actMs,
     cocoa: cocoaOutcome,
     appshot: {
       textCharacters: shot.text.length,
@@ -753,7 +850,7 @@ try {
     },
   }
   console.log(
-    `PASS: ${events.length} programs, ${totalBytes} result bytes; driver started behind the user's window, view/act/expect on the live window, native screenshot, accessibility fill and press with renderer read-back, background Cmd chord refused before dispatch, posted keys ${keyboardLanded ? "landed" : "dropped and reported unconfirmed, never not-delivered"}, invoke_menu refused without foreground: true and ${fixturePolicy === "regular" ? `selected the field with fronted.ms ${menu.fronted?.ms}` : "skipped (fixture has no menu bar; run with MAKO_FIXTURE_POLICY=regular)"} with the frontmost app restored, fill confirmed, set_value replaced the field, foreground refused without the flag and while not frontmost, superseded and missing tokens refused without remapping, page route ${launched.page_route.browser} launched behind the user and driven through browser.* (click ${Math.round(driven.clickMs)} ms, insertText, Enter, screenshot), Cocoa fixture ${JSON.stringify(cocoaOutcome)}, frontmost app unchanged throughout`
+    `PASS: ${events.length} driver-adapter programs, ${totalBytes} driver-adapter result bytes; routed set-text ${routed.milliseconds} ms/${routed.responseBytes} bytes through ${routed.route}; driver started behind the user's window, native and page control stayed behind the user, route-bound refs and verified receipts held, background Cmd chord and undeclared foreground were refused, Cocoa fixture ${JSON.stringify(cocoaOutcome)}, frontmost app unchanged throughout`
   )
 } catch (error) {
   outcome = {

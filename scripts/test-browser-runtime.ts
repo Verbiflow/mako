@@ -66,6 +66,22 @@ try {
     new AbortController().signal
   )
   assert.match(JSON.stringify(kept), /yes/)
+  await first.run(
+    "return checkpoint({objective:'Audit settings', location:'General', remember:{pages:['General','Account']}, completed:['Open settings'], pending:['Inspect account']})",
+    new AbortController().signal
+  )
+  const remembered = await first.run(
+    "return recall()",
+    new AbortController().signal
+  )
+  assert.deepEqual(JSON.parse(textOf(remembered[0])), {
+    revision: 1,
+    objective: "Audit settings",
+    location: "General",
+    facts: { pages: ["General", "Account"] },
+    completed: ["Open settings"],
+    pending: ["Inspect account"],
+  })
   const late = new BrowserToolsRuntime(async () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     return []
@@ -163,7 +179,6 @@ try {
       .parse(JSON.parse(await readFile(receipt.path, "utf8")))
     assert.equal(stored.rows.length, 20_000)
     assert.deepEqual(spilled[2], { type: "text", text: '{"done":true}' })
-
     // Images past the inline count are written as files and described.
     const images = await shared.run(
       `for (let i = 0; i < ${INLINE_IMAGE_COUNT + 2}; i++) emitImage(await computer.capture({}))`,
@@ -217,6 +232,42 @@ try {
     await shared.close()
   }
 
+  const yielding = new ControlProgramRuntime({
+    namespace: "browser",
+    actions: [],
+    artifacts: join(artifacts, "yielding"),
+    call: async () => null,
+    image: () => [],
+    fault: (detail) => new Error(detail.message),
+    yieldAfterMs: 10,
+  })
+  try {
+    const yielded = await yielding.run(
+      "await new Promise(resolve => setTimeout(resolve, 40)); return {done:true}",
+      new AbortController().signal
+    )
+    const cell = z
+      .object({ cell: z.number(), status: z.literal("running") })
+      .parse(JSON.parse(textOf(yielded[0])))
+    await assert.rejects(
+      yielding.run("return 'unsafe overlap'", new AbortController().signal),
+      /must be collected/
+    )
+    const resumed = await yielding.wait(
+      cell.cell,
+      new AbortController().signal
+    )
+    assert.deepEqual(resumed, [
+      { type: "text", text: '{"done":true}' },
+    ])
+    await assert.rejects(
+      yielding.wait(cell.cell, new AbortController().signal),
+      /not retained/
+    )
+  } finally {
+    await yielding.close()
+  }
+
   const outline = outlineOf({
     title: "x".repeat(400),
     nodes: [{ ref: "a" }, { ref: "b" }, { ref: "c" }, { ref: "d" }],
@@ -241,7 +292,7 @@ try {
   assert.equal(nodes.sample?.length, 3)
   assert.equal(outlineOf("y".repeat(1000)).head?.length, 240)
   console.log(
-    "Control scripts: shared typed adapter, isolated persistent state, CPU-bound cancellation, canceled queued work never dispatches, recovery after worker reset, state kept through a program's own error, ordered artifact receipts instead of truncation, image spill past the inline count, and bounded artifact names"
+    "Control scripts: shared typed adapter, isolated persistent state, bounded task memory, resumable long cells, cancellation without replay, ordered artifact receipts instead of truncation, native images, and bounded artifact names"
   )
 } finally {
   await first.close()

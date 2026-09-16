@@ -96,7 +96,11 @@ try {
     await run("task-a", { action: "open", browser: "fixture" })
   )
   const b = BrowserTargetSchema.parse(
-    await run("task-b", { action: "open", browser: "fixture" })
+    await run("task-b", {
+      action: "open",
+      browser: "fixture",
+      lifetime: "persistent",
+    })
   )
   assert.notEqual(a.tab, b.tab)
   assert.ok(
@@ -105,13 +109,12 @@ try {
       .every((call) => call.params.background === true),
     "new tabs stay in the background unless activation is explicit"
   )
-  assert.ok(
-    fixture.calls.some(
-      (call) =>
-        call.method === "Emulation.setFocusEmulationEnabled" &&
-        call.params.enabled === true
-    ),
-    "background tabs receive target-local focus emulation"
+  assert.equal(
+    fixture.calls.filter(
+      (call) => call.method === "Emulation.setFocusEmulationEnabled"
+    ).length,
+    0,
+    "an idle background binding must not claim page focus"
   )
   await Promise.all([
     run("task-a", { action: "type", target: a, text: "a" }),
@@ -121,6 +124,33 @@ try {
     (call) => call.method === "Input.insertText"
   )
   assert.notEqual(inputCalls[0].sessionId, inputCalls[1].sessionId)
+  for (const input of inputCalls) {
+    const index = fixture.calls.indexOf(input)
+    const before = fixture.calls
+      .slice(0, index)
+      .findLast(
+        (call) =>
+          call.sessionId === input.sessionId &&
+          call.method === "Emulation.setFocusEmulationEnabled"
+      )
+    const after = fixture.calls
+      .slice(index + 1)
+      .find(
+        (call) =>
+          call.sessionId === input.sessionId &&
+          call.method === "Emulation.setFocusEmulationEnabled"
+      )
+    assert.equal(
+      before?.params.enabled,
+      true,
+      "focus emulation starts before hidden input"
+    )
+    assert.equal(
+      after?.params.enabled,
+      false,
+      "focus emulation ends after hidden input"
+    )
+  }
   await assert.rejects(
     run("task-b", { action: "type", target: a, text: "wrong" }),
     /another task/
@@ -401,15 +431,40 @@ try {
   )
   assert.equal(fixture.connections(), 1)
   await remote({ action: "status" }, new AbortController().signal)
+  const replacementCredentials = control.mint("task-a", "binding-a")
   const replaced = browserControlClient({
-    MAKO_CONTROL_URL: credentials.url,
-    MAKO_CONTROL_TOKEN: credentials.token,
+    MAKO_CONTROL_URL: replacementCredentials.url,
+    MAKO_CONTROL_TOKEN: replacementCredentials.token,
   })
   await replaced({ action: "status" }, new AbortController().signal)
   assert.equal(
     fixture.connections(),
     1,
     "Replacing an MCP client must not disconnect Chrome"
+  )
+  const remoteTemporary = BrowserTargetSchema.parse(
+    await remote(
+      BrowserCommandSchema.parse({ action: "open", browser: "fixture" }),
+      new AbortController().signal
+    )
+  )
+  assert.equal(fixture.targets.has(remoteTemporary.tab), true)
+  await remote.close()
+  assert.equal(
+    fixture.targets.has(remoteTemporary.tab),
+    true,
+    "a superseded control client cannot clean up its replacement"
+  )
+  await replaced.close()
+  assert.equal(
+    fixture.targets.has(remoteTemporary.tab),
+    false,
+    "closing a control client removes its task-lifetime browser resources"
+  )
+  assert.equal(
+    service.status()[0].connection.status,
+    "connected",
+    "owner cleanup retains the shared browser connection"
   )
   authorized = false
   await assert.rejects(
@@ -428,7 +483,7 @@ try {
       target: reclaimed,
       text: "stale-generation",
     }),
-    /earlier Chrome connection/
+    /earlier browser connection/
   )
   assert.equal(fixture.connections(), 2)
 
@@ -630,6 +685,17 @@ try {
   await assert.rejects(
     run("task-c", { action: "click", target: c, at: { ref: checkboxRef } }),
     /hidden or covered/
+  )
+  assert.equal(
+    fixture.calls
+      .filter(
+        (call) =>
+          call.sessionId === fixture.sessionFor(c.tab) &&
+          call.method === "Emulation.setFocusEmulationEnabled"
+      )
+      .at(-1)?.params.enabled,
+    false,
+    "failed input must release target-local focus emulation"
   )
   fixture.page.hidden = false
 
@@ -1180,6 +1246,110 @@ try {
   await assert.rejects(
     run("task-c", { action: "selectOption", target: c, ref: selectRef }),
     /Pass value or label/
+  )
+  assert.equal(
+    fixture.calls.filter((call) => call.method === "Target.activateTarget")
+      .length,
+    0,
+    "no page recovery path may activate the user's physical tab"
+  )
+  const temporaryWindow = BrowserTargetSchema.parse(
+    await run("lifecycle-owner", {
+      action: "open",
+      browser: "fixture",
+      disposition: "window",
+    })
+  )
+  assert.equal(
+    fixture.calls
+      .filter((call) => call.method === "Target.createTarget")
+      .at(-1)?.params.newWindow,
+    true
+  )
+  await run("lifecycle-owner", {
+    action: "release",
+    target: temporaryWindow,
+  })
+  const lifecycleTabs = z
+    .array(z.object({ targetId: z.string(), claimed: z.boolean() }))
+    .parse(await run("lifecycle-owner", { action: "tabs", browser: "fixture" }))
+  assert.equal(
+    lifecycleTabs.find((entry) => entry.targetId === temporaryWindow.tab)
+      ?.claimed,
+    true
+  )
+  await assert.rejects(
+    run("lifecycle-other", {
+      action: "select",
+      browser: "fixture",
+      tab: temporaryWindow.tab,
+    }),
+    /temporary browser resource/
+  )
+  const transferred = BrowserTargetSchema.parse(
+    await run("lifecycle-other", {
+      action: "select",
+      browser: "fixture",
+      tab: temporaryWindow.tab,
+      takeover: true,
+    })
+  )
+  assert.deepEqual(await service.releaseOwner("lifecycle-owner"), {
+    released: 0,
+    closed: 0,
+  })
+  assert.deepEqual(await service.releaseOwner("lifecycle-other"), {
+    released: 1,
+    closed: 1,
+  })
+  assert.equal(fixture.targets.has(transferred.tab), false)
+
+  const persistent = BrowserTargetSchema.parse(
+    await run("persistent-owner", {
+      action: "open",
+      browser: "fixture",
+      lifetime: "persistent",
+    })
+  )
+  assert.deepEqual(await service.releaseOwner("persistent-owner"), {
+    released: 1,
+    closed: 0,
+  })
+  assert.equal(
+    fixture.targets.has(persistent.tab),
+    true,
+    "persistent targets survive owner cleanup"
+  )
+  await assert.rejects(
+    run("isolated-owner", {
+      action: "open",
+      browser: "fixture",
+      context: "isolated",
+      lifetime: "persistent",
+    }),
+    /must use task lifetime/
+  )
+  const isolated = BrowserTargetSchema.parse(
+    await run("isolated-owner", {
+      action: "open",
+      browser: "fixture",
+      context: "isolated",
+      disposition: "window",
+    })
+  )
+  const isolatedCreate = fixture.calls
+    .filter((call) => call.method === "Target.createTarget")
+    .at(-1)
+  z.string().parse(isolatedCreate?.params.browserContextId)
+  assert.equal(isolatedCreate?.params.newWindow, true)
+  assert.deepEqual(await service.releaseOwner("isolated-owner"), {
+    released: 1,
+    closed: 1,
+  })
+  assert.equal(fixture.targets.has(isolated.tab), false)
+  assert.equal(
+    fixture.calls.at(-1)?.method,
+    "Target.disposeBrowserContext"
   )
 
   // With no browser discovered the message says what to install.

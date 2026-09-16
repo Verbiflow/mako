@@ -23,7 +23,10 @@ import {
   stopCuaEmbedded,
 } from "../electron/cua-embedded.js"
 import { atomicJsonMcpMerge, mergeJsonMcpConfig } from "../electron/mcp-sync.js"
-import type { McpDiscoveredDefinition } from "../electron/mcp-registry.js"
+import {
+  isMakoNodeServer,
+  type McpDiscoveredDefinition,
+} from "../electron/mcp-registry.js"
 import type { JsonValue } from "../electron/codex-app-json.js"
 import type { McpProvider, McpRegistrySnapshot } from "../electron/shared.js"
 
@@ -50,6 +53,9 @@ function discovered(
 
 function testProtocolVersion(): void {
   assert.equal(LATEST_PROTOCOL_VERSION, "2025-11-25")
+  assert.equal(isMakoNodeServer("mako-control"), true)
+  assert.equal(isMakoNodeServer("mako-browser-use"), false)
+  assert.equal(isMakoNodeServer("mako-local-control"), false)
 }
 
 function testProviderFixtures(): void {
@@ -392,7 +398,7 @@ async function testManagedDefinitions(): Promise<void> {
   )
   assert.equal(
     definitions.some((entry) => entry.definition.name === "mako-browser-use"),
-    true
+    false
   )
   assert.equal(
     definitions.some((entry) => entry.definition.name === "mako-local-tools"),
@@ -401,12 +407,13 @@ async function testManagedDefinitions(): Promise<void> {
   )
   assert.equal(
     definitions.some((entry) => entry.definition.name === "mako-local-control"),
-    true
+    false
   )
-  const browserTools = definitions.find(
-    (entry) => entry.definition.name === "mako-browser-use"
+  const controlTools = definitions.find(
+    (entry) => entry.definition.name === "mako-control"
   )
-  assert.ok(browserTools)
+  assert.ok(controlTools)
+  assert.equal(controlTools.definition.args?.includes("--driver-test"), false)
   const managedSnapshot: McpRegistrySnapshot = {
     cwd: tmpdir(),
     generatedAt: 1,
@@ -421,7 +428,7 @@ async function testManagedDefinitions(): Promise<void> {
       .filter(
         (entry) =>
           !entry.definition.blockReason &&
-          entry.definition.name === "mako-browser-use"
+          entry.definition.name === "mako-control"
       )
       .map((entry) => entry.definition.name)
       .sort()
@@ -434,9 +441,9 @@ async function testManagedDefinitions(): Promise<void> {
       ),
     })
     .parse(
-      JSON.parse(mergeJsonMcpConfig("", browserTools.definition, "cursor"))
+      JSON.parse(mergeJsonMcpConfig("", controlTools.definition, "cursor"))
     )
-  assert.deepEqual(cursor.mcpServers["mako-browser-use"]?.env, {
+  assert.deepEqual(cursor.mcpServers["mako-control"]?.env, {
     ELECTRON_RUN_AS_NODE: "1",
   })
 }
@@ -466,7 +473,7 @@ async function testManagedCommandIsolation(): Promise<void> {
 
 async function testMakoRuntimeProjection(): Promise<void> {
   const managed = (
-    name: "mako-browser-use" | "mako-local-control",
+    name: "mako-control",
     command: string,
     args: string[]
   ): McpDiscoveredDefinition => ({
@@ -475,7 +482,7 @@ async function testMakoRuntimeProjection(): Promise<void> {
       transport: "stdio",
       command,
       args,
-      envNames: name === "mako-browser-use" ? ["ELECTRON_RUN_AS_NODE"] : [],
+      envNames: ["ELECTRON_RUN_AS_NODE"],
       headerNames: [],
       portable: true,
     },
@@ -491,13 +498,7 @@ async function testMakoRuntimeProjection(): Promise<void> {
     generatedAt: 1,
     providers: [],
     servers: mergeMcpDefinitions([
-      managed("mako-browser-use", process.execPath, ["browser-tools.js"]),
-      managed("mako-local-control", "cua-driver", [
-        "mcp",
-        "--embedded",
-        "--socket",
-        "/tmp/mako-cua.sock",
-      ]),
+      managed("mako-control", process.execPath, ["computer-tools.js"]),
     ]).map((server) => ({
       ...server,
       managed: true,
@@ -507,10 +508,10 @@ async function testMakoRuntimeProjection(): Promise<void> {
   const acpServers = acpMcpServers(snapshot, "claude", ["stdio"])
   assert.deepEqual(
     acpServers.map((server) => server.name),
-    ["mako-browser-use", "mako-local-control"]
+    ["mako-control"]
   )
   assert.deepEqual(
-    acpServers.find((server) => server.name === "mako-browser-use")?.env,
+    acpServers.find((server) => server.name === "mako-control")?.env,
     [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
   )
   const conversationUrl = "http://127.0.0.1:43123/mcp"
@@ -531,12 +532,9 @@ async function testMakoRuntimeProjection(): Promise<void> {
       definition,
       "conversation tools preserve existing server configuration"
     )
-  assert.deepEqual(Object.keys(servers).sort(), [
-    "mako-browser-use",
-    "mako-local-control",
-  ])
+  assert.deepEqual(Object.keys(servers).sort(), ["mako-control"])
   const localControl = snapshot.servers.find(
-    (server) => server.name === "mako-local-control"
+    (server) => server.name === "mako-control"
   )
   assert.ok(localControl)
   const preview = await previewMcpSync(snapshot, localControl.id, {
@@ -550,13 +548,7 @@ async function testMakoRuntimeProjection(): Promise<void> {
   const nativeSnapshot: McpRegistrySnapshot = {
     ...snapshot,
     servers: mergeMcpDefinitions([
-      managed("mako-browser-use", process.execPath, ["browser-tools.js"]),
-      managed("mako-local-control", "cua-driver", [
-        "mcp",
-        "--embedded",
-        "--socket",
-        "/tmp/mako-cua.sock",
-      ]),
+      managed("mako-control", process.execPath, ["computer-tools.js"]),
       discovered("claude", "node_repl", { command: process.execPath }),
     ]).map((server) => ({
       ...server,
@@ -568,7 +560,7 @@ async function testMakoRuntimeProjection(): Promise<void> {
     acpMcpServers(nativeSnapshot, "claude", ["stdio"]).map(
       (server) => server.name
     ),
-    ["mako-browser-use", "mako-local-control"]
+    ["mako-control"]
   )
 }
 
@@ -668,30 +660,10 @@ function testIntegrationCatalog(): void {
       ]),
       {
         id: "local-control",
-        name: "mako-local-control",
+        name: "mako-control",
         transport: "stdio",
-        command: "cua-driver",
-        args: ["mcp"],
-        envNames: [],
-        headerNames: [],
-        origins: [
-          {
-            provider: "mako",
-            account: "local",
-            scope: "managed",
-            provenance: "fixture",
-          },
-        ],
-        portable: true,
-        availability: "available",
-        managed: true,
-      },
-      {
-        id: "local-browser",
-        name: "mako-browser-use",
-        transport: "stdio",
-        command: "browser-use",
-        args: [],
+        command: process.execPath,
+        args: ["computer-tools.js"],
         envNames: [],
         headerNames: [],
         origins: [
@@ -729,7 +701,14 @@ function testIntegrationCatalog(): void {
         name: "Google Chrome",
         connection: { status: "connected", generation: "fixture" },
       },
-    ]
+    ],
+    {
+      executable: "/usr/local/bin/cua-driver",
+      version: "0.28.0",
+      verified: "0.28.0",
+      outdated: false,
+      detail: "ready",
+    }
   )
   assert.deepEqual(
     granted.integrations.find((entry) => entry.id === "slack")?.connection,
@@ -754,6 +733,14 @@ function testIntegrationCatalog(): void {
       url: "https://mako.example/api/mcp",
       version: "0.1.0",
       environment: "test",
+    },
+    [],
+    {
+      executable: "/usr/local/bin/cua-driver",
+      version: "0.28.0",
+      verified: "0.28.0",
+      outdated: false,
+      detail: "ready",
     }
   )
   assert.equal(

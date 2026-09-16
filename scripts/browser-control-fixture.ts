@@ -8,16 +8,20 @@ const commandSchema = z.object({
   params: z.record(z.string(), z.json()),
   sessionId: z.string().optional(),
 })
+interface FixtureTarget {
+  title: string
+  url: string
+  type?: string
+  browserContextId?: string
+}
 export async function browserFixture() {
   const server = new WebSocketServer({ port: 0, host: "127.0.0.1" })
   await new Promise<void>((resolve) => server.once("listening", resolve))
   const { port } = z.object({ port: z.number() }).parse(server.address())
   let connections = 0
   let sequence = 0
-  const targets = new Map<
-    string,
-    { title: string; url: string; type?: string }
-  >()
+  const targets = new Map<string, FixtureTarget>()
+  const browserContexts = new Set<string>()
   const sessions = new Map<string, string>()
   const calls: z.infer<typeof commandSchema>[] = []
   const sockets = new Set<WebSocket>()
@@ -88,9 +92,37 @@ export async function browserFixture() {
           JSON.stringify({ method, sessionId: command.sessionId, params })
         )
       switch (command.method) {
+        case "Target.createBrowserContext": {
+          const browserContextId = `context-${++sequence}`
+          browserContexts.add(browserContextId)
+          reply({ browserContextId })
+          break
+        }
+        case "Target.disposeBrowserContext": {
+          const browserContextId = z
+            .string()
+            .parse(command.params.browserContextId)
+          browserContexts.delete(browserContextId)
+          for (const [targetId, target] of targets)
+            if (target.browserContextId === browserContextId)
+              targets.delete(targetId)
+          for (const [sessionId, targetId] of sessions)
+            if (!targets.has(targetId)) sessions.delete(sessionId)
+          reply({})
+          break
+        }
         case "Target.createTarget": {
           const targetId = `tab-${++sequence}`
-          targets.set(targetId, { title: targetId, url: "about:blank" })
+          const browserContextId = z
+            .string()
+            .optional()
+            .parse(command.params.browserContextId)
+          const target: FixtureTarget = {
+            title: targetId,
+            url: "about:blank",
+          }
+          if (browserContextId) target.browserContextId = browserContextId
+          targets.set(targetId, target)
           reply({ targetId })
           break
         }
@@ -101,6 +133,7 @@ export async function browserFixture() {
               type: info.type ?? "page",
               title: info.title,
               url: info.url,
+              browserContextId: info.browserContextId,
             })),
           })
           break
@@ -115,6 +148,7 @@ export async function browserFixture() {
                 type: info.type ?? "page",
                 title: info.title,
                 url: info.url,
+                browserContextId: info.browserContextId,
               },
             })
           break

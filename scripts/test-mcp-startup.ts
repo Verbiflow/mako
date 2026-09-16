@@ -61,10 +61,7 @@ try {
     "Managed diagnostics must still complete"
   )
   assert.ok(
-    snapshot.servers.some((server) => server.name === "mako-local-control")
-  )
-  assert.ok(
-    snapshot.servers.some((server) => server.name === "mako-browser-use")
+    snapshot.servers.some((server) => server.name === "mako-control")
   )
   assert.ok(
     !snapshot.servers.some((server) => server.name === "mako-local-tools"),
