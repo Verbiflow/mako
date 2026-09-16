@@ -11,6 +11,10 @@ export type BrowserConnectionState = z.infer<typeof BrowserStateSchema>
 export interface BrowserControlStatus {
   id: string
   name: string
+  kind?: "chromium" | "desk"
+  profile?: string
+  origin?: string
+  sourceRoot?: string
   connection: BrowserConnectionState
 }
 
