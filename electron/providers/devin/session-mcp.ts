@@ -11,6 +11,7 @@ import {
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import type { McpServer } from "@agentclientprotocol/sdk"
+import { removeRetiredMakoMcp } from "../../retired-mcp.js"
 
 /** Devin's ACP tool router currently reads file configuration, not session MCP additions. */
 export async function prepareDevinMcp(
@@ -51,6 +52,7 @@ export async function prepareDevinMcp(
       .object({ mcpServers: z.record(z.string(), z.json()).default({}) })
       .catchall(z.json())
       .parse(JSON.parse(nativeText))
+    removeRetiredMakoMcp(config.mcpServers)
     for (const server of servers) {
       if ("command" in server) {
         config.mcpServers[server.name] = {
