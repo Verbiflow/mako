@@ -135,9 +135,23 @@ async function runElectron() {
         ? { ...conversation, control: control?.mint(id, binding) }
         : undefined
     },
+    revokeTools: async (binding, id) => {
+      mcp?.revoke(binding, id)
+      await control?.revoke(id, binding)
+    },
     history: (path, before) => catalog.page(path, before),
     checkpoint: (path, provider) => checkpoint(provider, path),
+    nativePath: (session) =>
+      catalog
+        .list()
+        .find(
+          (ref) =>
+            ref.harness === session.harness &&
+            ref.nativeId === session.nativeId
+        )?.path,
     resumeVerdict,
+    providerIdleMs: process.argv.includes("--hibernate") ? 500 : undefined,
+    providerWarmLimit: process.argv.includes("--hibernate") ? 0 : undefined,
     emit: () => {},
   }
   let owner = new LiveConversations(dependencies)
@@ -464,6 +478,44 @@ async function runElectron() {
               )
             result.restoredEffort = originalEffort
           }
+        }
+        if (process.argv.includes("--hibernate")) {
+          await catalog.scan()
+          owner.discoverNativePaths()
+          const nativeId = completed.session.nativeId
+          const hibernateBegan = performance.now()
+          await waitFor(
+            id,
+            (snapshot) => snapshot?.session.connection === "hibernated",
+            60_000
+          )
+          result.hibernateMs = performance.now() - hibernateBegan
+          const wakeBegan = performance.now()
+          const wakeRequest = randomUUID()
+          owner.submit(
+            id,
+            wakeRequest,
+            "Repeat the exact fixture value from your previous answer. Do not use any tools."
+          )
+          completed = await waitFor(id, (snapshot) =>
+            snapshot?.requests.some(
+              (request) =>
+                request.id === wakeRequest && request.status === "completed"
+            )
+          )
+          if (completed.session.nativeId !== nativeId)
+            throw new Error(
+              "Hibernation woke a different native provider session"
+            )
+          const wakeResponse = completed.blocks
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("\n")
+          if (!wakeResponse.includes(nonce))
+            throw new Error(
+              "The provider lost conversation context while waking from hibernation"
+            )
+          result.wakeMs = performance.now() - wakeBegan
         }
         if (process.argv.includes("--steer")) {
           if (!driver.steer)

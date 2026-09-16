@@ -7,13 +7,26 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
+import { SessionMemory } from "../electron/session-memory.js"
+import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
 import { reduceLiveUpdates } from "../electron/contracts/live-content.js"
 import { CONNECTION_LOST_STOP } from "../electron/contracts/providers-acp.js"
-import type { LiveSessionState, HostEvent } from "../electron/shared.js"
+import type {
+  LiveDriverEvent,
+  LiveSessionState,
+  HostEvent,
+} from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { projectLive } from "../src/state/live-projection.js"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+const waitFor = async (predicate: () => boolean, message: string) => {
+  const timeout = Date.now() + 2_000
+  while (!predicate()) {
+    if (Date.now() >= timeout) throw new Error(message)
+    await new Promise<void>((resolve) => setTimeout(resolve, 5))
+  }
+}
 function deferred<Value>() {
   let resolve!: (value: Value) => void
   let reject!: (error: Error) => void
@@ -88,6 +101,393 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
       owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
+  }
+}
+
+async function hibernatesAndWakesExactlyOnce() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-hibernate-"))
+  const memoryPath = join(root, "session-memory.sqlite")
+  const memory = new SessionMemory(memoryPath, {
+    pid: 11_001,
+    startedAt: Date.now(),
+    label: "the first test host",
+  }, { alive: () => true })
+  const observer = new SessionMemory(
+    memoryPath,
+    {
+      pid: 11_002,
+      startedAt: Date.now(),
+      label: "the second test host",
+    },
+    { alive: () => true }
+  )
+  const workspaceSnapshots = new WorkspaceSnapshots(
+    join(root, "workspace-snapshots")
+  )
+  const id = randomUUID()
+  const nativePath = join(root, "native-session")
+  let starts = 0
+  let closes = 0
+  let releaseFirstClose: (() => void) | undefined
+  let firstClosePending = true
+  const prompts: string[] = []
+  const emitters: Array<(event: LiveDriverEvent) => void> = []
+  const startModes: Array<string | undefined> = []
+  const startTunings: Array<SessionSettings | undefined> = []
+  const session = (
+    bindingId: string,
+    currentMode: string | null = null
+  ): LiveSessionState => ({
+    id: bindingId,
+    nativeId: "native-hibernate",
+    nativePath,
+    harness: "test-provider",
+    cwd: root,
+    status: "ready",
+    connection: "connected",
+    modes: [{ id: "full", name: "Full" }],
+    currentMode,
+    configOptions: [],
+  })
+  const driver: ProviderLiveDriver = {
+    canResume: true,
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      starts++
+      if (options.emit) emitters.push(options.emit)
+      startModes.push(options.modeId)
+      startTunings.push(options.tuning)
+      return session(options.conversationId, options.modeId ?? null)
+    },
+    prompt: async (bindingId, text) => {
+      prompts.push(text)
+      emitters.at(-1)?.({
+        type: "live-session",
+        session: {
+          ...session(bindingId, startModes.at(-1) ?? null),
+          status: "running",
+        },
+      })
+      emitters.at(-1)?.({
+        type: "live-session",
+        session: session(bindingId, startModes.at(-1) ?? null),
+      })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => {
+      closes++
+      if (firstClosePending) {
+        firstClosePending = false
+        await new Promise<void>((resolve) => {
+          releaseFirstClose = resolve
+        })
+      }
+    },
+    setMode: async () => {},
+  }
+  const owner = new LiveConversations({
+    appPath: root,
+    root: join(root, "journals"),
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    memory,
+    providerIdleMs: 15,
+    providerWarmLimit: 2,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+    workspaceSnapshots,
+  })
+  try {
+    await owner.start("test-provider", root, { conversationId: id })
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    assert.equal(
+      owner.snapshot(id)?.session.connection,
+      "connected",
+      "a provider with no completed turn is not yet safe to resume"
+    )
+    owner.submit(id, randomUUID(), "seed before hibernation")
+    await waitFor(
+      () => owner.snapshot(id)?.requests[0]?.status === "completed",
+      "the seed turn did not complete"
+    )
+    await waitFor(
+      () => closes === 1,
+      "the idle provider did not begin closing"
+    )
+    assert.equal(
+      owner.snapshot(id)?.session.connection,
+      "connected",
+      "hibernation is not published before provider exit"
+    )
+    assert.equal(
+      observer.heldBy("test-provider", "native-hibernate")?.conversationId,
+      id,
+      "the native hold remains until provider exit"
+    )
+    releaseFirstClose?.()
+    await waitFor(
+      () => owner.snapshot(id)?.session.connection === "hibernated",
+      "the idle provider did not finish hibernating"
+    )
+    assert.equal(starts, 1)
+    assert.equal(closes, 1)
+    assert.equal(
+      observer.heldBy("test-provider", "native-hibernate"),
+      null,
+      "hibernation releases exclusive native ownership"
+    )
+    await owner.setMode(id, "full")
+    assert.equal(starts, 1, "changing a hibernated mode does not wake a process")
+
+    owner.submit(id, randomUUID(), "first after wake", [], {
+      model: "new-model",
+    })
+    owner.submit(id, randomUUID(), "second after wake")
+    await waitFor(
+      () => prompts.length === 3,
+      "queued prompts did not drain after waking"
+    )
+    assert.equal(starts, 2, "concurrent prompts share one provider wake")
+    assert.equal(startModes[1], "full", "the saved mode applies at wake")
+    assert.deepEqual(
+      startTunings[1],
+      { model: "new-model" },
+      "the first queued turn's settings apply at wake"
+    )
+    assert.deepEqual(prompts, [
+      "seed before hibernation",
+      "first after wake",
+      "second after wake",
+    ])
+    assert.equal(owner.snapshot(id)?.session.connection, "connected")
+    assert.equal(
+      observer.heldBy("test-provider", "native-hibernate")?.conversationId,
+      id,
+      "wake reacquires native ownership before dispatch"
+    )
+    emitters[0]?.({
+      type: "live-session",
+      session: {
+        ...session(id, "full"),
+        status: "closed",
+        connection: "disconnected",
+      },
+    })
+    assert.equal(
+      owner.snapshot(id)?.session.connection,
+      "connected",
+      "a late event from the retired generation cannot disconnect the wake"
+    )
+
+    await waitFor(
+      () => owner.snapshot(id)?.session.connection === "hibernated",
+      "the woken provider did not become idle again"
+    )
+    const persisted = new LiveJournal(join(root, "journals"), id)
+    assert.equal(
+      persisted.read()?.session.connection,
+      "hibernated",
+      "a hibernated session survives journal validation and reopen"
+    )
+    persisted.close()
+    observer.hold("test-provider", "native-hibernate", "other-conversation")
+    const refused = randomUUID()
+    owner.submit(id, refused, "must not double-open")
+    await waitFor(
+      () =>
+        owner.snapshot(id)?.requests.find((request) => request.id === refused)
+          ?.status === "failed",
+      "a competing host hold did not refuse the wake"
+    )
+    assert.equal(starts, 2, "ownership refusal happens before provider spawn")
+    assert.equal(owner.snapshot(id)?.session.connection, "disconnected")
+    observer.release(
+      "test-provider",
+      "native-hibernate",
+      "other-conversation"
+    )
+  } finally {
+    owner.stop()
+    workspaceSnapshots.close()
+    observer.close()
+    memory.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function boundsWarmProviders() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-warm-pool-"))
+  const ids = [randomUUID(), randomUUID(), randomUUID()]
+  const closed: string[] = []
+  let owner: LiveConversations
+  const driver: ProviderLiveDriver = {
+    canResume: true,
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => ({
+      id: options.conversationId,
+      nativeId: options.conversationId,
+      nativePath: join(root, options.conversationId),
+      harness: "test-provider",
+      cwd: root,
+      status: "ready",
+      connection: "connected",
+      modes: [],
+      currentMode: null,
+      configOptions: [],
+    }),
+    prompt: async (id) => {
+      const current = owner.snapshot(id)?.session
+      assert.ok(current)
+      owner.observe({
+        type: "live-session",
+        session: { ...current, status: "running" },
+      })
+      owner.observe({
+        type: "live-session",
+        session: { ...current, status: "ready" },
+      })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: (id) => {
+      closed.push(id)
+    },
+    setMode: async () => {},
+  }
+  owner = new LiveConversations({
+    appPath: root,
+    root: join(root, "journals"),
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    providerIdleMs: 60_000,
+    providerWarmLimit: 2,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  try {
+    for (const id of ids) {
+      await owner.start("test-provider", root, { conversationId: id })
+      const requestId = randomUUID()
+      owner.submit(id, requestId, "seed")
+      await waitFor(
+        () =>
+          owner
+            .snapshot(id)
+            ?.requests.some(
+              (request) =>
+                request.id === requestId && request.status === "completed"
+            ) === true,
+        "a warm-pool seed turn did not complete"
+      )
+    }
+    await waitFor(
+      () => owner.snapshot(ids[0])?.session.connection === "hibernated",
+      "the warm pool did not retire its oldest provider"
+    )
+    assert.deepEqual(closed, [ids[0]])
+    assert.equal(owner.snapshot(ids[1])?.session.connection, "connected")
+    assert.equal(owner.snapshot(ids[2])?.session.connection, "connected")
+    assert.deepEqual(
+      {
+        active: owner.residency().active,
+        warm: owner.residency().warm,
+        hibernated: owner.residency().hibernated,
+      },
+      { active: 0, warm: 2, hibernated: 1 },
+      "Diagnostics distinguishes work from retained and hibernated processes"
+    )
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function failedCloseKeepsOwnership() {
+  const root = mkdtempSync(join(tmpdir(), "mako-close-ownership-"))
+  const memoryPath = join(root, "session-memory.sqlite")
+  const memory = new SessionMemory(
+    memoryPath,
+    { pid: 21_001, startedAt: 1, label: "closing host" },
+    { alive: () => true }
+  )
+  const observer = new SessionMemory(
+    memoryPath,
+    { pid: 21_002, startedAt: 2, label: "observer host" },
+    { alive: () => true }
+  )
+  const id = randomUUID()
+  let closes = 0
+  let revocations = 0
+  const driver: ProviderLiveDriver = {
+    provider: "test-provider",
+    canResume: true,
+    available: () => true,
+    start: async (cwd, options) => ({
+      id: options.conversationId,
+      nativeId: "native-close-failure",
+      nativePath: join(root, "native-close-failure"),
+      harness: "test-provider",
+      cwd,
+      status: "ready",
+      connection: "connected",
+      modes: [],
+      currentMode: null,
+      configOptions: [],
+    }),
+    prompt: async () => {},
+    permission: async () => {},
+    cancel: async () => {},
+    setMode: async () => {},
+    close: async () => {
+      closes++
+      throw new Error("process still alive")
+    },
+  }
+  const owner = new LiveConversations({
+    root: join(root, "journals"),
+    appPath: root,
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    memory,
+    revokeTools: () => {
+      revocations++
+    },
+  })
+  try {
+    await owner.start("test-provider", root, { conversationId: id })
+    await waitFor(
+      () => owner.snapshot(id)?.session.status === "ready",
+      "the close ownership fixture did not start"
+    )
+    const firstClose = owner.close(id)
+    const concurrentClose = owner.close(id)
+    await assert.rejects(firstClose, /did not close/)
+    await assert.rejects(concurrentClose, /did not close/)
+    assert.equal(closes, 1, "concurrent close shares one provider shutdown")
+    await assert.rejects(owner.close(id), /did not close/)
+    assert.equal(closes, 2, "a failed provider shutdown can be retried")
+    assert.equal(
+      revocations,
+      2,
+      "each provider shutdown attempt revokes its credentials"
+    )
+    assert.equal(
+      observer.heldBy(
+        "test-provider",
+        "native-close-failure"
+      )?.conversationId,
+      id,
+      "a failed close retains native ownership"
+    )
+  } finally {
+    owner.stop()
+    observer.close()
+    memory.close()
+    rmSync(root, { recursive: true, force: true })
   }
 }
 
@@ -700,7 +1100,10 @@ await queuedSettings()
 await acceptanceAndRaces()
 await closeDuringStartup()
 await durabilityAndBatching()
+await hibernatesAndWakesExactlyOnce()
+await boundsWarmProviders()
+await failedCloseKeepsOwnership()
 identityAndToolLifecycle()
 console.log(
-  "Live conversations: durable deduplicated acceptance, startup/terminal races, recovery, batching, tool lifecycle, and 499/499 completed exchange identities passed"
+  "Live conversations: durable deduplicated acceptance, startup/terminal races, idle hibernation with one resume, recovery, batching, tool lifecycle, and 499/499 completed exchange identities passed"
 )

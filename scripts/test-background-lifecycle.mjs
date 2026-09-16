@@ -97,7 +97,7 @@ async function checkBackground() {
   app.setPath("userData", join(process.env.MAKO_LIFECYCLE_ROOT, "profile"))
   await app.whenReady()
   await checkMcpStartup()
-  const { stderrDetail } = await import("../dist-electron/acp.js")
+  const { stderrDetail } = await import("../dist-electron/acp-startup.js")
   assert.equal(
     stderrDetail(
       "Model unavailable\n\u001b[2m2026-09-09T00:00:00Z\u001b[0m  INFO SessionEnd dispatched"

@@ -83,6 +83,7 @@ async function reconnectAfterRestart() {
   await before.start("cursor", "/repo", { conversationId: id })
   await until(() => before.snapshot(id)?.session.status === "ready", "the first session")
   before.stop()
+  await tick()
   assert.equal(dev.heldBy("cursor", "agent-restart"), null, "a stopped host holds nothing")
 
   const reconnect = (owner: LiveConversations, text: string) => {
@@ -218,6 +219,13 @@ try {
   assert.equal(seen?.conversationId, "conv-a")
   assert.throws(() => dev.hold("cursor", "agent-1", "conv-b"), (error: Error) => error instanceof SessionHeldError && error.message === heldReason("the installed Mako app"))
   installed.hold("cursor", "agent-1", "conv-a")
+  assert.throws(
+    () => installed.hold("cursor", "agent-1", "conv-other"),
+    (error: Error) =>
+      error instanceof SessionHeldError &&
+      error.message === heldReason("the installed Mako app"),
+    "one host cannot silently move a live native session to another conversation"
+  )
   assert.equal(dev.heldBy("cursor", "agent-1")?.since, now, "re-holding keeps the original since")
   installed.release("cursor", "agent-1", "conv-other")
   assert.ok(dev.heldBy("cursor", "agent-1"), "a release scoped to another conversation drops nothing")
@@ -308,6 +316,7 @@ async function liveConversationsRoundTrip() {
   const applied: string[] = []
   const starts: string[] = []
   const launched: (string | undefined)[] = []
+  const launchedModels: Array<string | undefined> = []
   const state = (id: string, extra: Partial<LiveSessionState> = {}): LiveSessionState => ({
     id,
     nativeId: "agent-live",
@@ -332,6 +341,7 @@ async function liveConversationsRoundTrip() {
     start: async (_cwd, options) => {
       starts.push(options.conversationId)
       launched.push(options.modeId)
+      launchedModels.push(options.tuning?.model)
       events = options.emit
       return state(options.conversationId)
     },
@@ -349,11 +359,22 @@ async function liveConversationsRoundTrip() {
   const id = randomUUID()
   try {
     // The host applies the mode the ledger remembers when the renderer sends none.
-    installed.remember("cursor", "agent-live", { modeId: "access:full" })
+    installed.remember("cursor", "agent-live", {
+      modeId: "access:full",
+      settings: {
+        model: "remembered-model",
+        options: { effort: "high" },
+      },
+    })
     await first.start("cursor", "/repo", { conversationId: id, resume: "agent-live" })
     await tick()
     await tick()
     assert.deepEqual(launched, ["access:full"], "the remembered tier travels into the launch itself")
+    assert.deepEqual(
+      launchedModels,
+      ["remembered-model"],
+      "remembered settings reach process launch when the caller sends none"
+    )
     assert.deepEqual(applied, ["access:full"], "a reopened session is put back in the tier it last ran under")
     assert.equal(first.snapshot(id)?.session.currentMode, "access:full")
     const recalled = dev.recall("cursor", "agent-live")
@@ -386,7 +407,8 @@ async function liveConversationsRoundTrip() {
     assert.equal(installed.heldBy("cursor", "agent-live")?.hostLabel, "Mako's dev host", "the other host may reopen it once released")
     assert.deepEqual(applied, ["access:full"], "the provider's own current mode needs no re-application")
     second.stop()
-    assert.equal(installed.heldBy("cursor", "agent-live"), null, "stopping a host releases every hold it had")
+    await tick()
+    assert.equal(installed.heldBy("cursor", "agent-live"), null, "stopping a host releases a hold after its provider exits")
 
     // A failed start releases the hold it took.
     const failing = new LiveConversations({

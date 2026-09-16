@@ -437,6 +437,43 @@ try {
     MAKO_CONTROL_TOKEN: replacementCredentials.token,
   })
   await replaced({ action: "status" }, new AbortController().signal)
+  const revokedCredentials = control.mint("task-revoked", "binding-revoked")
+  const revoked = browserControlClient({
+    MAKO_CONTROL_URL: revokedCredentials.url,
+    MAKO_CONTROL_TOKEN: revokedCredentials.token,
+  })
+  await revoked({ action: "status" }, new AbortController().signal)
+  await control.revoke("task-revoked", "binding-revoked")
+  await assert.rejects(
+    revoked({ action: "status" }, new AbortController().signal),
+    /no longer active/i,
+    "a hibernated binding cannot reuse its control credential"
+  )
+  const failedDestinationCredentials = control.mint(
+    "task-a",
+    "binding-failed-destination"
+  )
+  const failedDestination = browserControlClient({
+    MAKO_CONTROL_URL: failedDestinationCredentials.url,
+    MAKO_CONTROL_TOKEN: failedDestinationCredentials.token,
+  })
+  await failedDestination(
+    { action: "status" },
+    new AbortController().signal
+  )
+  const failedDestinationTarget = BrowserTargetSchema.parse(
+    await failedDestination(
+      { action: "open", browser: "fixture" },
+      new AbortController().signal
+    )
+  )
+  await control.revoke("task-a", "binding-failed-destination")
+  assert.equal(
+    fixture.targets.has(failedDestinationTarget.tab),
+    false,
+    "revoking a failed binding removes only that binding's browser resources"
+  )
+  await replaced({ action: "status" }, new AbortController().signal)
   assert.equal(
     fixture.connections(),
     1,

@@ -3,7 +3,21 @@ import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createServer } from "vite"
-import { webHostProxy } from "../electron/web-dev-proxy.mjs"
+import { trustedLocalOrigins, webHostProxy } from "../electron/web-dev-proxy.mjs"
+
+// A loopback URL admits every loopback spelling of itself, nothing else.
+assert.deepEqual(
+  [...trustedLocalOrigins(["http://127.0.0.1:5173/"])].sort(),
+  ["http://127.0.0.1:5173", "http://[::1]:5173", "http://localhost:5173"]
+)
+assert.deepEqual([...trustedLocalOrigins(["http://[::1]:5174/"])].sort(), [
+  "http://127.0.0.1:5174",
+  "http://[::1]:5174",
+  "http://localhost:5174",
+])
+assert.deepEqual([...trustedLocalOrigins(["http://192.168.1.20:5173/"])], [
+  "http://192.168.1.20:5173",
+])
 import { startWebHost } from "../dist-electron/web-host.js"
 
 const directory = await mkdtemp(join(tmpdir(), "mako-web-test-"))
@@ -51,6 +65,7 @@ try {
   })
   for (const invalid of [
     { ...headers, origin: "https://outside.example" },
+    { ...headers, origin: origin.replace("127.0.0.1", "localhost").replace(/:\d+$/, ":1") },
     { ...headers, "sec-fetch-site": "cross-site" },
     { ...headers, "x-mako-client": "" },
   ]) {
@@ -85,7 +100,15 @@ try {
   })
   assert.equal(valid.status, 200)
   assert.deepEqual((await valid.json()).value, ["/thread", null, 100])
+  // The tab a user types is `localhost:<port>`; it is the same page.
+  const aliased = await fetch(origin + "/__mako/rpc", {
+    method: "POST",
+    headers: { ...headers, origin: origin.replace("127.0.0.1", "localhost") },
+    body,
+  })
+  assert.equal(aliased.status, 200)
   assert.deepEqual(calls, [
+    { channel: "mako:thread-page", args: ["/thread", undefined, 100] },
     { channel: "mako:thread-page", args: ["/thread", undefined, 100] },
   ])
   assert.equal((await stat(socket)).mode & 0o777, 0o600)

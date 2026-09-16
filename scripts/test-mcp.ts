@@ -29,6 +29,7 @@ import {
 } from "../electron/mcp-registry.js"
 import type { JsonValue } from "../electron/codex-app-json.js"
 import type { McpProvider, McpRegistrySnapshot } from "../electron/shared.js"
+import { migrateRetiredMakoMcpFile } from "../electron/retired-mcp.js"
 
 function discovered(
   provider: McpProvider,
@@ -56,6 +57,80 @@ function testProtocolVersion(): void {
   assert.equal(isMakoNodeServer("mako-control"), true)
   assert.equal(isMakoNodeServer("mako-browser-use"), false)
   assert.equal(isMakoNodeServer("mako-local-control"), false)
+  assert.deepEqual(
+    mergeMcpDefinitions([
+      discovered("cursor", "mako-browser-use", {
+        command: "/usr/bin/env",
+        args: [
+          "ELECTRON_RUN_AS_NODE=1",
+          "/Applications/Mako.app/Contents/MacOS/Mako",
+          join("/app", "dist-electron", "browser-tools-main.js"),
+        ],
+      }),
+      discovered("claude", "mako-local-control", {
+        command: "/usr/bin/env",
+        args: [
+          "ELECTRON_RUN_AS_NODE=1",
+          "/Applications/Mako.app/Contents/MacOS/Mako",
+          join("/app", "dist-electron", "computer-tools-main.js"),
+        ],
+      }),
+      discovered("codex", "mako-local-tools", {
+        command: "/usr/bin/env",
+        args: [
+          "ELECTRON_RUN_AS_NODE=1",
+          "/Applications/Mako.app/Contents/MacOS/Mako",
+          join("/app", "dist-electron", "local-tools-main.js"),
+        ],
+      }),
+    ]),
+    [],
+    "retired Mako control registrations are tombstoned during discovery"
+  )
+  assert.equal(
+    mergeMcpDefinitions([
+      discovered("cursor", "mako-browser-use", {
+        command: "/usr/local/bin/user-owned-server",
+        args: ["/work/dist-electron/browser-tools-main.js"],
+      }),
+    ]).length,
+    1,
+    "a user-owned server is not removed merely because it reuses an old name"
+  )
+}
+
+async function testRetiredMcpMigration(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "mako-retired-mcp-"))
+  const file = join(root, "mcp.json")
+  try {
+    await writeFile(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          "mako-browser-use": {
+            command: "/usr/bin/env",
+            args: [
+              "ELECTRON_RUN_AS_NODE=1",
+              "/Applications/Mako.app/Contents/MacOS/Mako",
+              "/app/dist-electron/browser-tools-main.js",
+            ],
+          },
+          "mako-local-control": {
+            command: "/usr/local/bin/user-owned-server",
+          },
+          docs: { command: "/usr/local/bin/docs" },
+        },
+      })
+    )
+    assert.equal(await migrateRetiredMakoMcpFile(file), true)
+    const migrated = JSON.parse(await readFile(file, "utf8"))
+    assert.deepEqual(Object.keys(migrated.mcpServers).sort(), [
+      "docs",
+      "mako-local-control",
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 function testProviderFixtures(): void {
@@ -781,6 +856,7 @@ function testLocalSchemas(): void {
 }
 
 testProtocolVersion()
+await testRetiredMcpMigration()
 testProviderFixtures()
 testAxiomPreview()
 await testAxiomSyncPreview()

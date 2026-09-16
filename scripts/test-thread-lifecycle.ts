@@ -19,7 +19,7 @@ let cancellations = 0
 const driver: ProviderLiveDriver = {
   provider: "fixture", canResume: true, available: () => true,
   async start(cwd, options) {
-    const state: LiveSessionState = { id:options.conversationId, nativeId:options.conversationId, harness:"fixture", cwd, status:"ready", connection:"connected", modes:[], currentMode:null, configOptions:[] }
+    const state: LiveSessionState = { id:options.conversationId, nativeId:options.conversationId, nativePath:join(root,`${options.conversationId}.json`), harness:"fixture", cwd, status:"ready", connection:"connected", modes:[], currentMode:null, configOptions:[] }
     states.set(state.id, state)
     return state
   },
@@ -74,6 +74,18 @@ try {
   assert.deepEqual(sent.sort(),["first","other"])
   assert.equal(await lifecycle.stop({kind:"live",id,requestId}),true)
   assert.equal(cancellations,1)
+  const otherTarget = { kind: "live", id: other } as const
+  lifecycle.archive({ id: randomUUID(), target: otherTarget, archived: true })
+  const otherState = states.get(other)
+  assert.ok(otherState)
+  owner.observe({
+    type: "live-session",
+    session: { ...otherState, status: "ready", lastStop: "end_turn" },
+  })
+  releases.get(other)?.()
+  await wait(
+    () => owner.snapshot(other)?.session.connection === "hibernated"
+  )
   lifecycle.archive({id:randomUUID(),target,archived:true})
   const secondReader=new ThreadArchives(join(root,"archives.sqlite"))
   assert.deepEqual(secondReader.snapshot(),archives.snapshot())

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ProviderChildren } from "../electron/provider-children.ts"
@@ -21,32 +28,98 @@ try {
   const earlier = new ProviderChildren(dir, 4242)
   const orphan = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
   orphan.unref()
+  const nodeLink = join(dir, "node-link")
+  await symlink(process.execPath, nodeLink)
+  const titled = spawn(
+    nodeLink,
+    ["-e", "process.title = 'mako-test-child'; setInterval(() => {}, 60_000)"],
+    { stdio: "ignore", detached: true }
+  )
+  titled.unref()
+  const shebangPath = join(dir, "provider-cli")
+  await writeFile(
+    shebangPath,
+    "#!/usr/bin/env node\nsetInterval(() => {}, 60_000)\n"
+  )
+  await chmod(shebangPath, 0o700)
+  const shebang = spawn(shebangPath, [], {
+    stdio: "ignore",
+    detached: true,
+  })
+  shebang.unref()
+  const wrapperPath = join(dir, "provider-wrapper")
+  await writeFile(
+    wrapperPath,
+    "#!/bin/sh\nsleep 0.05\nexec sleep 120\n"
+  )
+  await chmod(wrapperPath, 0o700)
+  const wrapper = spawn(wrapperPath, [], {
+    stdio: "ignore",
+    detached: true,
+  })
+  wrapper.unref()
   const finished = spawn("sleep", ["0.1"], { stdio: "ignore" })
   earlier.track(orphan, { kind: "acp:test", owner: "conv-1" })
+  earlier.track(titled, { kind: "sdk:test", owner: "conv-title" })
+  earlier.track(shebang, { kind: "acp:test", owner: "conv-shebang" })
+  earlier.track(wrapper, { kind: "acp:test", owner: "conv-wrapper" })
   earlier.track(finished, { kind: "acp:test", owner: "conv-2" })
   await new Promise<void>((resolve) => finished.once("exit", () => resolve()))
   await settle()
   const written = JSON.parse(await readFile(join(dir, "runtime", "provider-children.json"), "utf8"))
-  assert.equal(written.children.length, 1, "a child that exited is removed from the registry")
+  assert.equal(written.children.length, 4, "a child that exited is removed from the registry")
   assert.equal(written.children[0].pid, orphan.pid)
+  assert.equal(
+    written.children.find(
+      (entry: { owner: string }) => entry.owner === "conv-shebang"
+    )?.executableIdentity,
+    process.execPath,
+    "tracking records the interpreter image after a shebang exec"
+  )
 
   // A reused pid: same number, but the record says it started an hour ago.
   const reused = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
   reused.unref()
   earlier.track(reused, { kind: "acp:test", owner: "conv-3" })
   const raw = JSON.parse(await readFile(join(dir, "runtime", "provider-children.json"), "utf8"))
-  for (const entry of raw.children) if (entry.pid === reused.pid) entry.startedAt -= 3_600_000
+  for (const entry of raw.children)
+    if (entry.owner === "conv-shebang")
+      delete entry.executableIdentity
+  for (const entry of raw.children)
+    if (entry.pid === reused.pid) {
+      entry.startedAt -= 3_600_000
+      if (entry.processStartedAt) entry.processStartedAt += 1_000
+    }
   raw.children.push({ pid: 999_999_9, startedAt: Date.now(), executable: "sleep", kind: "acp:test", owner: "gone", host: 4242 })
   await rm(join(dir, "runtime", "provider-children.json"))
-  const { writeFile } = await import("node:fs/promises")
   await writeFile(join(dir, "runtime", "provider-children.json"), JSON.stringify(raw))
 
   // The next host reaps only what still matches its record.
   const next = new ProviderChildren(dir, process.pid)
   const killed = await next.reap()
   await settle()
-  assert.deepEqual(killed.map((entry) => entry.owner), ["conv-1"])
+  assert.deepEqual(killed.map((entry) => entry.owner), [
+    "conv-1",
+    "conv-title",
+    "conv-shebang",
+    "conv-wrapper",
+  ])
   assert.equal(alive(orphan.pid!), false, "the orphan whose identity matched was terminated")
+  assert.equal(
+    alive(titled.pid!),
+    false,
+    "an orphan remains identifiable after overwriting its process title"
+  )
+  assert.equal(
+    alive(shebang.pid!),
+    false,
+    "a shebang provider is matched by its actual interpreter image"
+  )
+  assert.equal(
+    alive(wrapper.pid!),
+    false,
+    "tracking follows a shell wrapper into its final process image"
+  )
   assert.equal(alive(reused.pid!), true, "a pid whose start time does not match the record is left alone")
   const after = JSON.parse(await readFile(join(dir, "runtime", "provider-children.json"), "utf8"))
   assert.deepEqual(after.children, [], "leftovers are cleared whether killed or already gone")
@@ -62,4 +135,4 @@ try {
 } finally {
   await rm(dir, { recursive: true, force: true })
 }
-console.log("Provider children: exited children leave the registry, a later host terminates only pids whose start time and command still match, and its own children are untouched")
+console.log("Provider children: exited children leave the registry, a later host terminates only pids whose start time and executable still match after a title change, and its own children are untouched")
