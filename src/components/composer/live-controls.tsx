@@ -33,8 +33,8 @@ export function LiveComposerControls({
   canCompact: boolean
   compactEnabled: boolean
 }) {
-  const connected = useAcp(
-    (state) => activeLiveAcp(state)?.session.connection === "connected"
+  const connection = useAcp(
+    (state) => activeLiveAcp(state)?.session.connection
   )
   const usage = useAcp((state) => activeLiveAcp(state)?.session.usage)
   const conversationId = useAcp((state) => state.activeKey)
@@ -80,7 +80,12 @@ export function LiveComposerControls({
           ) : null}
           <TransferStatus history />
           <LiveActionStatus history />
-          {!connected ? <CaptureNotice /> : null}
+          {connection === "disconnected" ? <CaptureNotice /> : null}
+          {connection === "hibernated" ? (
+            <p className="px-2 py-2 text-label text-faint">
+              The provider reconnects to this session when you send.
+            </p>
+          ) : null}
           <button
             type="button"
             onClick={() => {
