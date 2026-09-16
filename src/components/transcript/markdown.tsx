@@ -16,6 +16,7 @@ import {
 } from "@/components/composer/reference-chip"
 import type { PromptReference } from "@/lib/prompt-markdown"
 import { isSkillName, type SkillAppendixEntry } from "@/lib/skill-references"
+import type { ThreadAppendixEntry } from "@/lib/thread-references"
 import type { AttachmentFileReference } from "@/lib/attachments"
 import { ProseStreamingContext } from "./prose-layout-context"
 import { ChangingLabel } from "@/components/ui/changing-label"
@@ -80,12 +81,15 @@ export const Prose = memo(function Prose({
   urlTransform,
   references,
   skills,
+  threads,
 }: {
   text: string
   className?: string
   references?: readonly AttachmentFileReference[]
   /** The skill entries a sent prompt carried; a `$skill` with none went out as typed. */
   skills?: readonly SkillAppendixEntry[]
+  /** Referenced conversations with no token to restore; their placeholders read as title chips. */
+  threads?: readonly ThreadAppendixEntry[]
   /** While true the parse is rate-limited rather than run per token. */
   streaming?: boolean
   urlTransform?: (url: string) => string
@@ -109,9 +113,10 @@ export const Prose = memo(function Prose({
             text: source,
             files: references,
             references: new Map<string, PromptReference>(),
+            threads,
           }
         : null,
-    [source, references]
+    [source, references, threads]
   )
   const referenceMap = referenceInput?.references ?? EMPTY_REFERENCES
   const plugins = useMemo<
@@ -280,6 +285,9 @@ function CitationLink({ href, children }: ComponentProps<"a">) {
     return (
       <ThreadChip harness={reference.harness} id={reference.id} />
     )
+  if (reference?.kind === "thread-title")
+    return <ThreadChip harness={reference.harness} title={reference.title} />
+
   if (reference?.kind === "skill") {
     // `$5` is prose the tokenizer let through, never a skill nothing has.
     if (!isSkillName(reference.name)) return <>{children}</>

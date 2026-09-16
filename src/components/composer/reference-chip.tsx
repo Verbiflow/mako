@@ -22,6 +22,7 @@ import {
   FileTextIcon,
   GlobeIcon,
   ImageIcon,
+  MessagesSquareIcon,
   PaletteIcon,
   PlugIcon,
 } from "lucide-react"
@@ -86,33 +87,45 @@ export function FileChip({
   )
 }
 
+/**
+ * A referenced conversation. With a token (`harness` and `id`) the chip
+ * resolves the catalog row exactly as the send does, so it never names a
+ * conversation the prompt would then report as unavailable, and copying it
+ * yields the token. A prompt sent before the appendix carried tokens has
+ * only what its heading said, so the chip shows that `title` and copies as
+ * text.
+ */
 export function ThreadChip({
   harness,
   id,
+  title,
 }: {
-  harness: string
+  harness?: string
   /** The token's id: the provider's identity, or a native id from an older draft. */
-  id: string
+  id?: string
+  /** The heading's title, for a reference that carried no token. */
+  title?: string
 }) {
-  // The send resolves the same way, so the chip never names a conversation
-  // the prompt would then report as unavailable.
   const thread = useThreads((state) =>
-    findThreadReference(state.threads, harness, id)
+    harness && id ? findThreadReference(state.threads, harness, id) : undefined
   )
+  const label = thread?.title ?? title ?? "Referenced conversation"
   return (
     <span
-      title={thread?.title ?? `${harness} conversation`}
-      data-copy-reference={threadToken(harness, id)}
+      title={thread?.title ?? title ?? `${harness ?? "referenced"} conversation`}
+      data-copy-reference={harness && id ? threadToken(harness, id) : undefined}
       className={cn(
         "inline-flex max-w-[18rem] items-baseline gap-1 rounded bg-raised px-1 align-baseline",
         "text-[0.92em] leading-[1.35] text-foreground ring-1 ring-hairline ring-inset",
         "[&_svg]:translate-y-[1.5px]"
       )}
     >
-      <HarnessIcon harness={harness} className="size-3 shrink-0 text-faint" />
-      <span className="truncate">
-        {thread?.title ?? "Referenced conversation"}
-      </span>
+      {harness ? (
+        <HarnessIcon harness={harness} className="size-3 shrink-0 text-faint" />
+      ) : (
+        <MessagesSquareIcon className="size-3 shrink-0 text-faint" />
+      )}
+      <span className="truncate">{label}</span>
     </span>
   )
 }

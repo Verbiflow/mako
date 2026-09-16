@@ -27,7 +27,10 @@ import {
   reusablePromptAttachments,
   restoreAttachmentReferences,
 } from "@/lib/attachment-references"
-import { stripThreadReferenceAppendix } from "@/lib/thread-references"
+import {
+  parseThreadReferenceAppendix,
+  restoreThreadReferences,
+} from "@/lib/thread-references"
 import {
   responseSections,
   responseText,
@@ -198,14 +201,26 @@ function Prompt({ message }: { message: ChatMessage }) {
     () => parseSkillAppendix(raw),
     [raw]
   )
-  const { body, plans } = useMemo(
-    () => parsePlanContext(stripThreadReferenceAppendix(withoutSkills)),
+  // Referenced conversations went out as "[Referenced conversation N]" with
+  // a heading naming each; the heading's token puts the chip back where the
+  // placeholder stands. A heading from before tokens were carried has only
+  // a title, and its placeholder reads as that title.
+  const { body: withoutThreads, references: sentThreads } = useMemo(
+    () => parseThreadReferenceAppendix(withoutSkills),
     [withoutSkills]
   )
-  const { body: text, files } = useMemo(
-    () => parseAttachmentAppendix(body),
-    [body]
+  const titledThreads = useMemo(
+    () => sentThreads.filter((entry) => !entry.token),
+    [sentThreads]
   )
+  const { body, plans } = useMemo(
+    () => parsePlanContext(withoutThreads),
+    [withoutThreads]
+  )
+  const { body: text, files } = useMemo(() => {
+    const parsed = parseAttachmentAppendix(body)
+    return { body: restoreThreadReferences(parsed.body, sentThreads), files: parsed.files }
+  }, [body, sentThreads])
   // References the user typed read back as the chips they were written as.
   const segments = useMemo(
     () => attachmentPromptSegments(text, files),
@@ -220,11 +235,14 @@ function Prompt({ message }: { message: ChatMessage }) {
     [files, message.blocks]
   )
   const referenceFiles = useMemo(() => reusable.map((item) => ({ index: item.index, name: item.name, path: item.stagedPath })), [reusable])
-  // A copied prompt keeps its `$skill` tokens and drops the bodies they
-  // carried: pasted back into the composer they resolve again for whichever
-  // provider answers next.
+  // A copied prompt keeps its `$skill` and `@thread:` tokens and drops the
+  // bodies and bundles they carried: pasted back into the composer they
+  // resolve again for whichever provider answers next. Only a prompt whose
+  // headings carried no token keeps its appendix, since the headings are
+  // then the only record of what was referenced.
   const { copied, copy } = useCopy(
-    appendPlanContext(restoreAttachmentReferences(text, reusable), plans) + withoutSkills.slice(stripThreadReferenceAppendix(withoutSkills).length),
+    appendPlanContext(restoreAttachmentReferences(text, reusable), plans) +
+      (titledThreads.length > 0 ? withoutSkills.slice(withoutThreads.length) : ""),
     reusable
   )
   const compose = () =>
@@ -261,7 +279,7 @@ function Prompt({ message }: { message: ChatMessage }) {
           at a reading measure, unmistakably theirs without a ring. The
           assistant's reply below stays full-width and chrome-free. */}
       <div onCopy={event => copyPromptSelection(event, reusable)} className="max-w-[min(82%,64ch)] rounded-xl rounded-br-md bg-raised px-3.5 py-2.5">
-        <Prose text={text} references={referenceFiles} skills={sentSkills} className="prompt-prose whitespace-normal" />
+        <Prose text={text} references={referenceFiles} skills={sentSkills} threads={titledThreads} className="prompt-prose whitespace-normal" />
         <PlanContextChips plans={plans} />
         {message.blocks
           .filter((block) => block.type === "attachment")

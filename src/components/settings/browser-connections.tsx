@@ -20,7 +20,9 @@ function connectionText(
 }
 
 export function BrowserConnections() {
-  const browsers = useMcp((state) => state.browsers)
+  const browsers = useMcp((state) => state.browsers).filter(
+    (browser) => browser.kind !== "desk"
+  )
   const setup = useMcp((state) => state.browserSetup)
   const preparing = useMcp((state) => state.preparingBrowser)
   return (

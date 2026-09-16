@@ -184,6 +184,9 @@ function QueueRow({
   request: PendingPrompt
   editable: boolean
 }) {
+  // The body must stay a prefix of the queued text: an edit is spliced onto
+  // the appendices that follow it, so the placeholders a referenced
+  // conversation left are kept here rather than restored to tokens.
   const rawBody = parsePlanContext(
     stripThreadReferenceAppendix(stripSkillAppendix(request.text))
   ).body
