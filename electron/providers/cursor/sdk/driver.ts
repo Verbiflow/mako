@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import {
   cursorLegacyIdentity,
   cursorSdkReportedSettings,
@@ -27,6 +29,7 @@ import { CursorSdkClient, CursorSdkError } from "./client.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
 import { CursorSdkProjection } from "./projection.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
+import { migrateRetiredMakoMcpFile } from "../../../retired-mcp.js"
 import type {
   SdkEvent,
   SdkImage,
@@ -433,6 +436,14 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         live.models = catalog.models
         const selection = selectionFor(live, options.tuning, catalog.defaultModel)
         const importFrom = importSource(options, cwd)
+        await Promise.allSettled([
+          migrateRetiredMakoMcpFile(
+            join(dependencies.home ?? homedir(), ".cursor", "mcp.json")
+          ),
+          migrateRetiredMakoMcpFile(
+            join(cwd, ".cursor", "mcp.json")
+          ),
+        ])
         const opened = await live.client.request("open", {
           cwd,
           stateRoot,

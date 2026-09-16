@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
 import { hostWarn } from "../../../host-log.js"
 import { trackProviderChild } from "../../../provider-children.js"
+import { headlessNodeExecutable } from "../../../headless-node.js"
 import {
   CURSOR_SDK_MAX_LINE_BYTES,
   CURSOR_SDK_WIRE_VERSION,
@@ -97,7 +98,7 @@ export class CursorSdkClient {
     this.options = options
     const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
     delete env.NODE_OPTIONS
-    this.child = spawn(options.execPath ?? process.execPath, [options.entry ?? cursorSdkChildEntry()], {
+    this.child = spawn(headlessNodeExecutable(options.execPath), [options.entry ?? cursorSdkChildEntry()], {
       cwd: options.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],

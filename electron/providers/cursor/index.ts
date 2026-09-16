@@ -15,7 +15,6 @@ import {
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { listCursorSdkModels } from "./sdk/models.js"
 import { cursorSkillSource } from "./skills.js"
-import { cliUpdateSource } from "../update-source.js"
 import { resolveExecutable } from "../../executable.js"
 
 async function openExternal(url: string): Promise<void> {
@@ -60,14 +59,18 @@ export const installCursor: ProviderModule = (host) => {
     provider: "cursor",
     emit: (thread) => emitCursorSession(thread, {}),
   })
-  host.updateSources.register(
-    cliUpdateSource("cursor", {
-      binary: (env) => resolveExecutable("cursor-agent", env),
-      selfUpdate: {
-        label: "Update Cursor Agent",
-        command: "cursor-agent",
-        args: ["update"],
-      },
-    })
-  )
+  // The install script keeps versions under ~/.local/share/cursor-agent and
+  // links ~/.local/bin/cursor-agent; there is no package to read a public
+  // version from, so `cursor-agent update` is both the check and the update.
+  host.updateSources.register({
+    provider: "cursor",
+    binary: (env) => resolveExecutable("cursor-agent", env),
+    native: {
+      label: "Update Cursor Agent",
+      args: ["update"],
+      ownsPath: (path) =>
+        path.includes("/.local/share/cursor-agent/") ||
+        path.endsWith("/.local/bin/cursor-agent"),
+    },
+  })
 }
