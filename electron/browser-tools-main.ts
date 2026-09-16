@@ -19,6 +19,7 @@ import {
 } from "./browser-tools-runtime.js"
 import { browserProtocolHelp } from "./browser-protocol-help.js"
 import {
+  ControlProgramRequestSchema,
   INLINE_IMAGE_COUNT,
   INLINE_TEXT_BUDGET,
   PROGRAM_TIME_LIMIT_MS,
@@ -27,19 +28,19 @@ import { isMainModule } from "./main-module.js"
 
 const descriptions = {
   status:
-    'Read browser connection state without connecting, prompting, or opening tabs. Browser IDs identify connected extension profiles, plus "mako" for hidden windows of Mako\'s own interface. Only the mako entry means no Chrome profile has the Mako Browser extension connected yet.',
+    'Read browser connection state without connecting, prompting, or opening pages. Browser IDs identify connected Chromium-family extension profiles, plus "mako" for hidden windows of Mako\'s own interface. Only the mako entry means no external browser profile has the Mako Browser extension connected yet.',
   connect:
-    "Connect the selected browser profile through its installed Mako Browser extension. Installation grants browser access; ordinary reconnects do not require another debugging approval. Concurrent tasks join the same pending connection. Closing an MCP client does not disconnect Chrome.",
+    "Connect the selected Chromium-family browser profile through its installed Mako Browser extension. Installation grants browser access; ordinary reconnects do not require another debugging approval. Concurrent tasks join the same pending connection. Closing an MCP client cleans up its temporary pages without disconnecting the browser.",
   attach:
     "Register one exact generation of a running Electron or Chromium application's DevTools endpoint as browser app:<bundle_id>:<pid>:<nonce>, so its pages are driven like any tab: background keyboard, pointer, DOM reads and screenshots with no focus change. A live id is never replaced implicitly.",
   detach:
     "Remove one exact attached application generation and close its DevTools connection. Idempotent; it never terminates the application.",
   tabs: "List existing page, iframe and worker targets in a connected browser, with identity, URL, title, whether it is selectable as a page, and whether a task has claimed it. Does not select or activate a tab.",
-  open: "Create and claim a new tab in a connected browser. Background by default. Returns the exact target handle for all later calls plus the navigation outcome; a failed navigation still returns the handle.",
+  open: "Create and claim a new tab or separate browser window. Background and task-lifetime by default: closing the control client closes it without disconnecting the browser. lifetime:persistent leaves it open until explicit close. context:isolated creates and later disposes a private context when direct CDP supports it; extension profiles refuse instead of faking isolation. Returns the exact target handle plus the navigation outcome; a failed navigation still returns the handle.",
   select:
     "Claim the exact tab ID you inspected in tabs. Explicit takeover can transfer an idle tab from another task. Never selects a substitute or activates the tab.",
   release:
-    "Release this task's exact tab binding. Leaves the tab and the shared Chrome connection open.",
+    "Release this task's exact page binding. Leaves the page and shared browser connection open; a task-lifetime page still closes when its owning control client ends.",
   observe:
     "Read the exact tab's title, URL, viewport scroll position and accessibility nodes within a 60 KB page. Each node carries depth, role, name, value and live states (checked, disabled, focused, expanded, selected, required, pressed, level, url). Fresh refs address elements for click, type, press, hover, scroll, screenshot and upload; a changed observation or navigation replaces them. Pass since with the prior observation token while polling: an unchanged page returns a compact receipt and preserves its refs, while any change returns a complete fresh observation. Use interactiveOnly to see just controls, query to filter by text, and offset with nextOffset to page through a large tree.",
   screenshot:
@@ -52,7 +53,7 @@ const descriptions = {
   navigate:
     "Navigate this exact tab. By default waits for this navigation’s load event (up to timeoutMs, default 30 seconds); waitUntil:domcontentloaded returns earlier and waitUntil:commit returns once the navigation is accepted. A redirect counts as the same navigation. Expiry returns completion:timeout rather than failing; observe afterwards to verify the result. Supports http, https, about and data URLs.",
   close:
-    "Close this exact tab. Its old handle becomes invalid. Does not close Chrome or another task's tab.",
+    "Close this exact tab or window. Its old handle becomes invalid. Does not close the browser or another task's page.",
   click:
     'Click a fresh observation ref or exact viewport CSS coordinates in the bound tab. Ref clicks scroll the element into view and verify it is present and not covered. Pass at as an object, for example {"ref":"observed-ref"} or {"x":100,"y":200,"view":"latest-view-token"}. Include the screenshot view token so stale visual coordinates are refused. Sends a real pointer move, press and release; count:2 double-clicks; modifiers hold keys. Does not move the physical pointer.',
   hover:
@@ -136,14 +137,14 @@ const apiReference = reference
   .map((entry) => `${entry.signature} — ${entry.summary}`)
   .join("\n")
 
-const instructions = `Mako browser control is one program tool. mako_browser_exec runs trusted async JavaScript in a local worker with a \`browser\` object whose methods are the actions below; a single action is a one-line program (\`return await browser.tabs({browser:'chrome'})\`) and a workflow is several awaited calls with plain JavaScript between them, so intermediate results never pass through your context. Await every call. \`state\` persists between runs of this MCP client (keep tab handles there); \`console.log(value)\` adds a text block; \`emitImage(await browser.screenshot({...}))\` adds a real image with its view token and coordinate mapping; \`artifacts.save(name, value)\` writes a value or image to a file and returns its path. Read mako_browser_status first; call mako_browser_help({action}) for one action's full schema and mako_browser_help({domain, method}) for Chrome DevTools Protocol commands.
+const instructions = `Mako browser control is one program tool. mako_browser_exec runs trusted async JavaScript in a local worker with a \`browser\` object whose methods are the actions below; a single action is a one-line program (\`return await browser.tabs({browser:'chrome'})\`) and a workflow is several awaited calls with plain JavaScript between them, so intermediate results never pass through your context. Await every call. \`state\` persists between runs of this MCP client (keep tab handles there); \`checkpoint({objective?, location?, remember?, completed?, pending?})\` keeps a bounded working set for a long task and \`recall()\` reads it, while raw pages and images belong in artifacts; \`console.log(value)\` adds a text block; \`emitImage(await browser.screenshot({...}))\` adds a real image with its view token and coordinate mapping; \`artifacts.save(name, value)\` writes a value or image to a file and returns its path. Read mako_browser_status first; call mako_browser_help({action}) for one action's full schema and mako_browser_help({domain, method}) for Chrome DevTools Protocol commands.
 
 API (required arguments plain, optional with ?):
 ${apiReference}
 
 Output is never cut. A returned or logged value at or past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB, and every image after the ${INLINE_IMAGE_COUNT}th in one run, is written whole to a file and the result carries a receipt with the path, size, hash and an outline of the value's shape (keys and their sizes, array length and samples). Prefer returning the narrow selection you need; read a receipt's file only when you need the whole. Programs stop after ${PROGRAM_TIME_LIMIT_MS / 1000} seconds; on timeout, cancellation or an error the worker and \`state\` reset while host tab bindings and the shared Chrome connection remain. Scripts are trusted local code, not an OS sandbox. Browser actions keep exact task ownership and are never replayed; an action that fails validation dispatches nothing and says so.
 
-Targets: one host-owned Chrome connection serves every task. Connect the chosen browser if status shows it disconnected, then open a tab or inspect tabs and select an exact ID. Keep the returned {browser,tab,generation,lease} handle; every later call names it, there is no implicit active tab. Page bindings enable focus emulation so hidden tabs receive real input without activating the physical tab; release disables it. A target-closed or stale-target error requires explicit rediscovery, never choosing the first available tab.
+Targets: one host-owned connection per Chromium-family profile serves every task. Connect the chosen browser if status shows it disconnected, then open a task-lifetime tab/window or inspect tabs and select an exact ID. Keep the returned {browser,tab,generation,lease} handle; every later call names it, there is no implicit active tab. Hidden-page input enables target-local focus emulation only for the duration of that action and disables it in cleanup; it never activates the physical page. A target-closed or stale-target error requires explicit rediscovery, never choosing the first available target.
 
 Perception: observe gives accessible UI and fresh element refs; pass since with its observation token when polling so an unchanged tree returns only a receipt and keeps those refs valid. screenshot gives pixels, a view token and coordinate mapping; region magnifies one viewport rectangle without changing browser zoom. Pass the view token with coordinate actions so an older visual target is refused after another capture or action. A changed observation or a navigation invalidates earlier refs. Never guess refs, tab IDs or coordinates. Cross-check UI changes after actions; a cancelled or timed-out action may have completed, so observe before deciding what to do next. The host refuses further mutations on an uncertain binding until it is observed. click, hover, scroll, type and press send real input events; type reports the field it wrote into, and press covers keys that insertText cannot send (Enter, Tab, arrows, shortcuts).
 
@@ -155,17 +156,7 @@ For native windows, OS dialogs or content outside a browser page, use Mako compu
 
 export const BROWSER_TOOL_INPUTS = {
   status: z.object({}).strict(),
-  exec: z
-    .object({
-      source: z
-        .string()
-        .min(1)
-        .max(100_000)
-        .describe(
-          "Async JavaScript body. Call browser.<action>({...}) and await every call; return the value you want to see."
-        ),
-    })
-    .strict(),
+  exec: ControlProgramRequestSchema,
   help: z
     .object({
       action: z
@@ -231,7 +222,7 @@ export function createBrowserToolsServer(
     }
   }
   const server = new BrowserServer(
-    { name: "mako-browser-use", version: "3.0.0" },
+    { name: "mako-browser-test-runtime", version: "3.0.0" },
     { capabilities: { tools: {}, logging: {} }, instructions }
   )
   server.onclose = () => {
@@ -269,7 +260,7 @@ export function createBrowserToolsServer(
         },
         {
           name: "mako_browser_exec",
-          description: `Run a browser control program: trusted async JavaScript with browser.<action>({...}) for every action in the server instructions, persistent state, console.log, emitImage and artifacts.save. One action or a whole workflow; await every call and return what you need to see. Results are never truncated: oversized values are written to files and described. ${PROGRAM_TIME_LIMIT_MS / 1000}-second limit; actions keep exact task ownership and are never replayed.`,
+          description: `Run or resume a browser control program: pass {source} with trusted async JavaScript, or {cell} when a program yielded after ten seconds. browser.<action>({...}) exposes every action in the server instructions; persistent state and bounded checkpoint/recall task memory survive cells. Await every action and return only what you need to see. Results are never truncated: oversized values are written to files and described. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit; actions keep exact task ownership and are never replayed.`,
           inputSchema: z.toJSONSchema(BROWSER_TOOL_INPUTS.exec, {
             io: "input",
           }),
@@ -304,11 +295,14 @@ export function createBrowserToolsServer(
           }
         }
         case "mako_browser_exec": {
-          const { source } = BROWSER_TOOL_INPUTS.exec.parse(
-            request.params.arguments
-          )
+          const input = BROWSER_TOOL_INPUTS.exec.parse(request.params.arguments)
           dispatched = true
-          return { content: await runtime.run(source, extra.signal) }
+          return {
+            content:
+              input.source !== undefined
+                ? await runtime.run(input.source, extra.signal)
+                : await runtime.wait(z.number().parse(input.cell), extra.signal),
+          }
         }
         default:
           throw new BrowserFault({

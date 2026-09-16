@@ -43,13 +43,18 @@ export async function startControlService(
   previews?: ControlPreviews
 ) {
   const scopes = new Map<string, Scope>()
+  const latestControlToken = new Map<string, string>()
   const server = createServer((request, response) => {
     const abort = new AbortController()
     response.once("close", () => abort.abort())
     void (async () => {
       if (
         request.method !== "POST" ||
-        !["/browser", "/computer-observation"].includes(request.url ?? "") ||
+        ![
+          "/browser",
+          "/browser/release-owner",
+          "/computer-observation",
+        ].includes(request.url ?? "") ||
         request.headers.origin
       ) {
         response.writeHead(403).end()
@@ -57,11 +62,24 @@ export async function startControlService(
       }
       const token = request.headers.authorization?.replace(/^Bearer /, "")
       const scope = token ? scopes.get(token) : undefined
-      if (!scope || scope.expiresAt < Date.now()) {
+      if (!token || !scope || scope.expiresAt < Date.now()) {
         response.writeHead(401).end()
         return
       }
       authorize(scope.conversationId, scope.bindingId)
+      if (request.url === "/browser/release-owner") {
+        const isLatest =
+          latestControlToken.get(scope.conversationId) === token
+        scopes.delete(token)
+        if (isLatest) latestControlToken.delete(scope.conversationId)
+        const value = isLatest
+          ? await browser.releaseOwner(scope.conversationId)
+          : { released: 0, closed: 0 }
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify({ ok: true, value }))
+        return
+      }
       if (request.url === "/computer-observation") {
         const observation = ComputerObservationSchema.parse(
           JSON.parse(await body(request, 9 * 1024 * 1024))
@@ -181,17 +199,23 @@ export async function startControlService(
   return {
     mint(conversationId: string, bindingId: string): ControlCredentials {
       for (const [token, scope] of scopes)
-        if (scope.expiresAt < Date.now()) scopes.delete(token)
+        if (scope.expiresAt < Date.now()) {
+          scopes.delete(token)
+          if (latestControlToken.get(scope.conversationId) === token)
+            latestControlToken.delete(scope.conversationId)
+        }
       const token = randomBytes(32).toString("base64url")
       scopes.set(token, {
         conversationId,
         bindingId,
         expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       })
+      latestControlToken.set(conversationId, token)
       return { url: `http://127.0.0.1:${port}/browser`, token }
     },
     close() {
       scopes.clear()
+      latestControlToken.clear()
       server.closeAllConnections()
       server.close()
       previews?.close()

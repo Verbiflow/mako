@@ -14,7 +14,13 @@ export const ExtensionHostMessageSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("disconnect"), client: z.string() }),
 ])
 export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("hello"), profileId: z.string().uuid(), label: z.string().min(1).max(80), browser: z.enum(["chrome", "edge", "brave", "chromium"]) }),
+  z.object({
+    kind: z.literal("hello"),
+    profileId: z.string().uuid(),
+    label: z.string().min(1).max(80),
+    family: z.literal("chromium"),
+    product: z.string().min(1).max(80),
+  }),
   z.object({ kind: z.literal("response"), client: z.string(), id: z.number().int(), result: fields }),
   z.object({ kind: z.literal("error"), client: z.string(), id: z.number().int(), message: z.string().max(4000) }),
   z.object({ kind: z.literal("event"), client: z.string(), sessionId: z.string().optional(), method: z.string().max(200), params: fields }),

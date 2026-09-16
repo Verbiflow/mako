@@ -45,9 +45,7 @@ export function extensionBrowsers(
   }
   const browsers: LocalBrowser[] = []
   for (const name of names
-    .filter((name) =>
-      /^(chrome|edge|brave|chromium)-[a-f0-9-]{36}\.json$/.test(name)
-    )
+    .filter((name) => /^chromium-[a-f0-9-]{36}\.json$/.test(name))
     .sort()
     .slice(0, 64)) {
     const path = join(root, name)

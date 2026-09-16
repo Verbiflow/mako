@@ -1,8 +1,10 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { z } from "zod"
 import type { ComputerBackend } from "./computer-tools-main.js"
-import { driverSchemaValidator } from "./driver-schema.js"
+import {
+  connectMcpComputerDriver,
+  type ComputerDriverClient,
+  type ComputerDriverConnector,
+} from "./computer-driver-client.js"
 import type {
   Appshot,
   AppshotTarget,
@@ -31,33 +33,27 @@ const response = z.object({
 
 /** Explicit window capture. This connection never focuses an app or sends input. */
 export class Appshots {
-  private connection: Promise<Client> | undefined
+  private connection: Promise<ComputerDriverClient> | undefined
   private readonly backend: () => Promise<ComputerBackend | null>
-  constructor(backend: () => Promise<ComputerBackend | null>) {
+  private readonly connectDriver: ComputerDriverConnector
+  constructor(
+    backend: () => Promise<ComputerBackend | null>,
+    connectDriver: ComputerDriverConnector = connectMcpComputerDriver
+  ) {
     this.backend = backend
+    this.connectDriver = connectDriver
   }
 
-  private client(): Promise<Client> {
+  private client(): Promise<ComputerDriverClient> {
     this.connection ??= (async () => {
       const backend = await this.backend()
       if (!backend)
         throw new Error("Appshots require the macOS computer-control driver.")
-      const client = new Client(
-        { name: "mako-appshots", version: "1" },
-        { jsonSchemaValidator: driverSchemaValidator() }
-      )
-      client.onclose = () => {
+      const client = await this.connectDriver(backend)
+      client.onClose(() => {
         this.connection = undefined
-      }
-      try {
-        await client.connect(
-          new StdioClientTransport({ ...backend, stderr: "pipe" })
-        )
-        return client
-      } catch (error) {
-        await client.close()
-        throw error
-      }
+      })
+      return client
     })().catch((error) => {
       this.connection = undefined
       throw error
@@ -72,7 +68,7 @@ export class Appshots {
   ) {
     const client = await this.client()
     const result = response.parse(
-      await client.callTool({ name, arguments: args }, undefined, {
+      await client.callTool(name, args, {
         timeout: 15_000,
         signal,
       })

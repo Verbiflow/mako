@@ -172,15 +172,23 @@ export async function startBrowserNativeHost(
       .object({ port: z.number().int().positive() })
       .parse(server.address())
     endpoint = `ws://127.0.0.1:${address.port}/mako-browser/${secret}`
-    const id = `${profile.browser}:${profile.profileId}`
-    registration = join(root, `${profile.browser}-${profile.profileId}.json`)
+    const id = `${profile.family}:${profile.profileId}`
+    const product = z
+      .string()
+      .min(1)
+      .max(80)
+      .safeParse(process.env.MAKO_BROWSER_PRODUCT)
+    const name = product.success
+      ? `${product.data} profile ${profile.profileId.slice(0, 6)}`
+      : profile.label
+    registration = join(root, `${profile.family}-${profile.profileId}.json`)
     const temporary = `${registration}.${process.pid}.tmp`
     await writeFile(
       temporary,
       JSON.stringify({
         version: 1,
         id,
-        name: profile.label,
+        name,
         endpoint,
         pid: process.pid,
       }),

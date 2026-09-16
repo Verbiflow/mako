@@ -35,9 +35,7 @@ function localEnvironment(
   const environment = isMakoNodeServer(definition.name)
     ? [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
     : []
-  const controlServer = ["mako-browser-use", "mako-local-control"].includes(
-    definition.name
-  )
+  const controlServer = definition.name === "mako-control"
   if (controlServer && control)
     environment.push(
       { name: "MAKO_CONTROL_URL", value: control.url },

@@ -11,7 +11,7 @@ const reply = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(false), fault: BrowserFaultSchema }),
 ])
 export function browserControlClient(env: NodeJS.ProcessEnv = process.env) {
-  return async (
+  const call = async (
     command: BrowserCommand,
     signal: AbortSignal
   ): Promise<JsonValue> => {
@@ -62,4 +62,22 @@ export function browserControlClient(env: NodeJS.ProcessEnv = process.env) {
     if (!value.ok) throw new BrowserFault(value.fault)
     return value.value
   }
+  return Object.assign(call, {
+    async close(): Promise<void> {
+      const endpoint = env.MAKO_CONTROL_URL
+      const token = env.MAKO_CONTROL_TOKEN
+      if (!endpoint || !token) return
+      const url = new URL(endpoint)
+      if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") return
+      url.pathname = `${url.pathname}/release-owner`
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => undefined)
+      if (!response?.ok) return
+      const value = reply.parse(await response.json())
+      if (!value.ok) throw new BrowserFault(value.fault)
+    },
+  })
 }

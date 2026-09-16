@@ -1,5 +1,5 @@
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { z } from "zod"
+import type { ComputerDriverClient } from "./computer-driver-client.js"
 
 const target = z.object({
   pid: z.number().int().positive(),
@@ -25,14 +25,14 @@ const windows = z.object({
 
 /** Foreground delivery is global input in the native driver. Refuse an already-mismatched window. */
 export async function verifyForegroundInput(
-  client: Client,
+  client: Pick<ComputerDriverClient, "callTool">,
   value: Parameters<typeof target.parse>[0],
   signal: AbortSignal
 ): Promise<void> {
   const expected = target.parse(value)
   const active = apps
     .parse(
-      await client.callTool({ name: "list_apps", arguments: {} }, undefined, {
+      await client.callTool("list_apps", {}, {
         signal,
         timeout: 5000,
       })
@@ -45,11 +45,8 @@ export async function verifyForegroundInput(
   const visible = windows
     .parse(
       await client.callTool(
-        {
-          name: "list_windows",
-          arguments: { pid: expected.pid, on_screen_only: true },
-        },
-        undefined,
+        "list_windows",
+        { pid: expected.pid, on_screen_only: true },
         { signal, timeout: 5000 }
       )
     )

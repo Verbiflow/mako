@@ -431,14 +431,10 @@ async function readCliDefinitions(
   }
 }
 
-const MAKO_NODE_SERVERS = new Set(["mako-browser-use", "mako-local-control"])
+const MAKO_NODE_SERVERS = new Set(["mako-control"])
 
 export function isMakoNodeServer(name: string): boolean {
   return MAKO_NODE_SERVERS.has(name)
-}
-
-function browserServerPath(appPath: string): string {
-  return join(appPath, "dist-electron", "browser-tools-main.js")
 }
 
 function managedRuntimeEnvironment(): NodeJS.ProcessEnv {
@@ -472,22 +468,7 @@ export async function managedMcpDefinitions(
     McpInternalDefinition & { availability: boolean; detail: string }
   > = [
     {
-      name: "mako-browser-use",
-      transport: "stdio",
-      command: process.platform === "win32" ? execPath : "/usr/bin/env",
-      args:
-        process.platform === "win32"
-          ? [browserServerPath(appPath)]
-          : ["ELECTRON_RUN_AS_NODE=1", execPath, browserServerPath(appPath)],
-      envNames: process.platform === "win32" ? ["ELECTRON_RUN_AS_NODE"] : [],
-      headerNames: [],
-      portable: true,
-      availability: true,
-      detail:
-        "Browser control is built into Mako; connect a local browser before use",
-    },
-    {
-      name: "mako-local-control",
+      name: "mako-control",
       transport: "stdio",
       command: process.platform === "win32" ? execPath : "/usr/bin/env",
       args: [
@@ -502,14 +483,14 @@ export async function managedMcpDefinitions(
       envNames: process.platform === "win32" ? ["ELECTRON_RUN_AS_NODE"] : [],
       headerNames: [],
       portable: true,
-      availability: cua,
+      availability: true,
       detail: cua
         ? driver.outdated
-          ? `${driver.detail}. Update it from Settings > Integrations.`
-          : "Local browser and computer control run under Mako permissions"
-        : cuaPath
-          ? "Mako has not started local browser and computer control"
-          : "CUA Driver is not installed",
+          ? `Browser and system routes are ready; native control needs an update. ${driver.detail}`
+          : "Page, native and system control share one host-routed code API"
+        : cuaPath && !cuaSocket
+          ? "Page and system routes are ready; Mako has not started native control"
+          : "Page and system routes are ready; install CUA Driver for native windows",
     },
     {
       name: "mako-backend",

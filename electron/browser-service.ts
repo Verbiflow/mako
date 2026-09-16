@@ -226,7 +226,7 @@ interface Binding {
   target: BrowserTarget
   connection: BrowserConnection
   sessionId: string
-  page: boolean
+  focusEmulated: boolean
   uncertain: boolean
   running: number
   tail: Promise<void>
@@ -247,6 +247,24 @@ interface BrowserEntry {
   connectAbort?: AbortController
   selections: Promise<void>
 }
+interface OwnedTarget {
+  owner: string
+  browser: string
+  tab: string
+  connection: BrowserConnection
+  browserContextId?: string
+}
+export type BrowserFocusPolicy = "lease" | "action" | "off"
+export interface BrowserServiceOptions {
+  focusPolicy?: BrowserFocusPolicy
+}
+const FOCUS_INPUT_ACTIONS: ReadonlySet<BrowserCommand["action"]> = new Set([
+  "click",
+  "hover",
+  "scroll",
+  "type",
+  "press",
+])
 function fault(
   code:
     | "target-closed"
@@ -278,11 +296,13 @@ function pageUrl(url: string): string {
 export class BrowserService {
   private readonly browsers: Map<string, BrowserEntry>
   private readonly bindings = new Map<string, Binding>()
+  private readonly ownedTargets = new Map<string, OwnedTarget>()
   private readonly listeners = new Set<
     (statuses: BrowserControlStatus[]) => void
   >()
   private closing = false
   private readonly discover: () => LocalBrowser[]
+  private readonly focusPolicy: BrowserFocusPolicy
   /**
    * Applications attached at run time (`attach`): an Electron or Chromium
    * app Mako launched with a private debugging port. They live beside the
@@ -290,7 +310,10 @@ export class BrowserService {
    */
   private readonly attached = new Map<string, LocalBrowser>()
 
-  constructor(definitions?: LocalBrowser[] | (() => LocalBrowser[])) {
+  constructor(
+    definitions?: LocalBrowser[] | (() => LocalBrowser[]),
+    options: BrowserServiceOptions = {}
+  ) {
     const discover =
       definitions === undefined
         ? localBrowsers
@@ -298,6 +321,7 @@ export class BrowserService {
           ? () => definitions
           : definitions
     this.discover = () => [...discover(), ...this.attached.values()]
+    this.focusPolicy = options.focusPolicy ?? "action"
     this.browsers = new Map(
       this.discover().map((definition) => [
         definition.id,
@@ -423,6 +447,8 @@ export class BrowserService {
         }
         for (const [key, binding] of this.bindings)
           if (binding.connection === connection) this.bindings.delete(key)
+        for (const [key, target] of this.ownedTargets)
+          if (target.connection === connection) this.ownedTargets.delete(key)
         // An attached application that closed its endpoint has exited; its
         // row would otherwise offer a connection to nothing.
         if (this.attached.delete(entry.definition.id))
@@ -469,10 +495,16 @@ export class BrowserService {
     for (const [key, binding] of this.bindings) {
       if (binding.connection !== connection) continue
       if (
-        (event.method === "Target.targetDestroyed" &&
-          event.params.targetId === binding.target.tab) ||
-        (event.method === "Target.detachedFromTarget" &&
-          event.params.sessionId === binding.sessionId)
+        event.method === "Target.targetDestroyed" &&
+        event.params.targetId === binding.target.tab
+      ) {
+        this.bindings.delete(key)
+        this.ownedTargets.delete(key)
+        continue
+      }
+      if (
+        event.method === "Target.detachedFromTarget" &&
+        event.params.sessionId === binding.sessionId
       ) {
         this.bindings.delete(key)
         continue
@@ -575,7 +607,7 @@ export class BrowserService {
     if (!connection)
       fault(
         "disconnected",
-        "Connect this browser first. Actions never initiate or retry a Chrome connection."
+        "Connect this browser first. Actions never initiate or retry a browser connection."
       )
     return connection
   }
@@ -617,6 +649,7 @@ export class BrowserService {
     }
     const key = this.key(target)
     const existing = this.bindings.get(key)
+    const owned = this.ownedTargets.get(key)
     if (existing?.owner === owner) return existing.target
     if (!existing && this.bindings.size >= 512)
       fault(
@@ -627,6 +660,11 @@ export class BrowserService {
       fault(
         "target-busy",
         "Another task owns this tab. Choose another tab, or explicitly take over after its action finishes."
+      )
+    if (owned && owned.owner !== owner && !takeover)
+      fault(
+        "target-busy",
+        "Another task owns this temporary browser resource. Choose another target, or explicitly take it over."
       )
     const info = z
       .object({ targetInfo })
@@ -640,6 +678,7 @@ export class BrowserService {
         `Target ${tab} is a ${info.targetInfo.type}, not a page. Select a page target from tabs; workers and service workers accept no page input.`
       )
     if (existing) {
+      if (existing.focusEmulated)
       await connection.send(
         "Emulation.setFocusEmulationEnabled",
         { enabled: false },
@@ -662,20 +701,20 @@ export class BrowserService {
     )
     try {
       await connection.send("Page.enable", {}, signal, sessionId)
-      // Hidden tabs can acknowledge Input commands without delivering events.
-      // Focus emulation keeps this target interactive without activating its tab.
-      await connection.send(
-        "Emulation.setFocusEmulationEnabled",
-        { enabled: true },
-        signal,
-        sessionId
-      )
+      const focusEmulated = this.focusPolicy === "lease"
+      if (focusEmulated)
+        await connection.send(
+          "Emulation.setFocusEmulationEnabled",
+          { enabled: true },
+          signal,
+          sessionId
+        )
       this.bindings.set(key, {
         owner,
         target,
         connection,
         sessionId,
-        page,
+        focusEmulated,
         uncertain: false,
         running: 0,
         tail: Promise.resolve(),
@@ -686,6 +725,7 @@ export class BrowserService {
         network: { enabled: false, inflight: new Set() },
         downloads: new Map(),
       })
+      if (owned) owned.owner = owner
     } catch (error) {
       await connection
         .send(
@@ -792,6 +832,8 @@ export class BrowserService {
       entry.connection?.close()
       for (const [key, binding] of this.bindings)
         if (binding.target.browser === command.id) this.bindings.delete(key)
+      for (const [key, target] of this.ownedTargets)
+        if (target.browser === command.id) this.ownedTargets.delete(key)
       this.attached.delete(command.id)
       this.browsers.delete(command.id)
       this.changed()
@@ -808,9 +850,13 @@ export class BrowserService {
       return result.targetInfos.map((tab) => ({
         ...tab,
         selectable: PAGE_TARGET_TYPES.has(tab.type),
-        claimed: this.bindings.has(
-          this.key({ browser: command.browser, tab: tab.targetId })
-        ),
+        claimed:
+          this.bindings.has(
+            this.key({ browser: command.browser, tab: tab.targetId })
+          ) ||
+          this.ownedTargets.has(
+            this.key({ browser: command.browser, tab: tab.targetId })
+          ),
       }))
     }
     if (command.action === "select")
@@ -824,28 +870,103 @@ export class BrowserService {
         )),
       }
     if (command.action === "open") {
-      if (this.bindings.size >= 512)
+      if (this.bindings.size >= 512 || this.ownedTargets.size >= 512)
         fault(
           "invalid-request",
-          "Release unused bindings before opening more targets."
+          "Close unused temporary targets before opening more pages."
         )
       const url = pageUrl(command.url)
-      const { targetId } = z
-        .object({ targetId: z.string() })
-        .parse(
-          await this.connection(command.browser).send(
-            "Target.createTarget",
-            { url: "about:blank", background: command.background },
-            signal
-          )
+      const connection = this.connection(command.browser)
+      if (command.context === "isolated" && command.lifetime === "persistent")
+        fault(
+          "invalid-request",
+          "An isolated browser context must use task lifetime so Mako can dispose it completely."
         )
-      const target = await this.select(
-        owner,
-        command.browser,
-        targetId,
-        false,
-        signal
-      )
+      let browserContextId: string | undefined
+      if (command.context === "isolated") {
+        try {
+          browserContextId = z
+            .object({ browserContextId: z.string() })
+            .parse(
+              await connection.send(
+                "Target.createBrowserContext",
+                { disposeOnDetach: true },
+                signal
+              )
+            ).browserContextId
+        } catch (error) {
+          if (signal.aborted) throw error
+          fault(
+            "unavailable",
+            "This browser transport cannot create isolated contexts. Use context:profile, or attach a direct CDP browser endpoint."
+          )
+        }
+      }
+      let targetId: string
+      try {
+        const targetParameters: JsonObject = {
+          url: "about:blank",
+          background: command.background,
+          newWindow: command.disposition === "window",
+        }
+        if (browserContextId)
+          targetParameters.browserContextId = browserContextId
+        targetId = z
+          .object({ targetId: z.string() })
+          .parse(
+            await connection.send(
+              "Target.createTarget",
+              targetParameters,
+              signal
+            )
+          ).targetId
+      } catch (error) {
+        if (browserContextId)
+          await connection
+            .send(
+              "Target.disposeBrowserContext",
+              { browserContextId },
+              AbortSignal.timeout(2000)
+            )
+            .catch(() => {})
+        throw error
+      }
+      let target: BrowserTarget
+      try {
+        target = await this.select(
+          owner,
+          command.browser,
+          targetId,
+          false,
+          signal
+        )
+      } catch (error) {
+        if (browserContextId)
+          await connection
+            .send(
+              "Target.disposeBrowserContext",
+              { browserContextId },
+              AbortSignal.timeout(2000)
+            )
+            .catch(() => {})
+        else
+          await connection
+            .send(
+              "Target.closeTarget",
+              { targetId },
+              AbortSignal.timeout(2000)
+            )
+            .catch(() => {})
+        throw error
+      }
+      if (command.lifetime === "task")
+        this.ownedTargets.set(this.key(target), {
+          owner,
+          browser: target.browser,
+          tab: target.tab,
+          connection,
+          browserContextId,
+        })
       if (url === "about:blank") return { ...target }
       // The tab exists and is bound whatever the navigation does; return the
       // handle with the navigation's outcome rather than losing the tab.
@@ -899,7 +1020,12 @@ export class BrowserService {
         })
       binding.running++
       try {
-        const value = await this.bound(binding, command, signal)
+        const value = await this.withActionFocus(
+          binding,
+          command,
+          signal,
+          () => this.bound(binding, command, signal)
+        )
         if (
           !["close", "release"].includes(command.action) &&
           this.bindings.get(this.key(binding.target)) !== binding
@@ -968,7 +1094,7 @@ export class BrowserService {
     if (connection.generation !== target.generation)
       fault(
         "stale-target",
-        "This target belongs to an earlier Chrome connection. List and select the exact tab again."
+        "This target belongs to an earlier browser connection. List and select the exact page again."
       )
     const binding = this.bindings.get(this.key(target))
     if (!binding)
@@ -984,6 +1110,54 @@ export class BrowserService {
         "This handle belongs to an earlier claim of the tab. Use the handle returned by your latest select call."
       )
     return binding
+  }
+
+  private async withActionFocus<T>(
+    binding: Binding,
+    command: Extract<BrowserCommand, { target: BrowserTarget }>,
+    signal: AbortSignal,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    if (
+      this.focusPolicy !== "action" ||
+      !FOCUS_INPUT_ACTIONS.has(command.action)
+    )
+      return operation()
+    let enableAttempted = false
+    try {
+      enableAttempted = true
+      await binding.connection.send(
+        "Emulation.setFocusEmulationEnabled",
+        { enabled: true },
+        signal,
+        binding.sessionId
+      )
+      binding.focusEmulated = true
+      return await operation()
+    } finally {
+      if (
+        enableAttempted &&
+        this.bindings.get(this.key(binding.target)) === binding
+      ) {
+        await binding.connection
+          .send(
+            "Emulation.setFocusEmulationEnabled",
+            { enabled: false },
+            AbortSignal.timeout(2000),
+            binding.sessionId
+          )
+          .then(
+            () => {
+              binding.focusEmulated = false
+            },
+            () => {
+              // Keep it marked so release or takeover makes another bounded
+              // disable attempt. Failure never grants permission to activate.
+              binding.focusEmulated = true
+            }
+          )
+      }
+    }
   }
 
   private async bound(
@@ -1202,14 +1376,21 @@ export class BrowserService {
           command.timeoutMs
         )
       case "close": {
-        const result = await root("Target.closeTarget", {
-          targetId: binding.target.tab,
-        })
-        this.bindings.delete(this.key(binding.target))
+        const key = this.key(binding.target)
+        const owned = this.ownedTargets.get(key)
+        const result = owned?.browserContextId
+          ? await root("Target.disposeBrowserContext", {
+              browserContextId: owned.browserContextId,
+            })
+          : await root("Target.closeTarget", {
+              targetId: binding.target.tab,
+            })
+        this.bindings.delete(key)
+        this.ownedTargets.delete(key)
         return result
       }
       case "release": {
-        if (binding.page)
+        if (binding.focusEmulated)
           await send("Emulation.setFocusEmulationEnabled", { enabled: false })
         const result = await root("Target.detachFromTarget", {
           sessionId: binding.sessionId,
@@ -1926,6 +2107,64 @@ export class BrowserService {
     }
   }
 
+  /** End one task's leases and close every task-lifetime target it created. */
+  async releaseOwner(owner: string): Promise<{
+    released: number
+    closed: number
+  }> {
+    let released = 0
+    let closed = 0
+    const bindings = [...this.bindings.values()].filter(
+      (binding) => binding.owner === owner
+    )
+    for (const binding of bindings) {
+      await binding.tail
+      const key = this.key(binding.target)
+      if (this.bindings.get(key) !== binding) continue
+      const signal = AbortSignal.timeout(2000)
+      if (binding.focusEmulated)
+        await binding.connection
+          .send(
+            "Emulation.setFocusEmulationEnabled",
+            { enabled: false },
+            signal,
+            binding.sessionId
+          )
+          .catch(() => {})
+      await binding.connection
+        .send(
+          "Target.detachFromTarget",
+          { sessionId: binding.sessionId },
+          signal
+        )
+        .catch(() => {})
+      this.bindings.delete(key)
+      released++
+    }
+    const targets = [...this.ownedTargets.entries()].filter(
+      ([, target]) => target.owner === owner
+    )
+    for (const [key, target] of targets) {
+      this.ownedTargets.delete(key)
+      const didClose = await target.connection
+        .send(
+          target.browserContextId
+            ? "Target.disposeBrowserContext"
+            : "Target.closeTarget",
+          target.browserContextId
+            ? { browserContextId: target.browserContextId }
+            : { targetId: target.tab },
+          AbortSignal.timeout(2000)
+        )
+        .then(
+          () => true,
+          () => false
+        )
+      if (didClose) closed++
+    }
+    return { released, closed }
+  }
+
   disconnect(id: string): void {
     const entry = this.entry(id)
     const connection = entry.connection
@@ -1936,6 +2175,8 @@ export class BrowserService {
     entry.status = { ...entry.status, connection: { status: "disconnected" } }
     for (const [key, binding] of this.bindings)
       if (binding.target.browser === id) this.bindings.delete(key)
+    for (const [key, target] of this.ownedTargets)
+      if (target.browser === id) this.ownedTargets.delete(key)
     connection?.close()
     this.changed()
   }

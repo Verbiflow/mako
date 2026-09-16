@@ -11,10 +11,10 @@ import {
   type ControlProgramOutput,
 } from "@mako/control/program"
 
-export type BrowserCall = (
-  command: BrowserCommand,
-  signal: AbortSignal
-) => Promise<JsonValue>
+export interface BrowserCall {
+  (command: BrowserCommand, signal: AbortSignal): Promise<JsonValue>
+  close?(): Promise<void>
+}
 
 const imageSchema = z.object({
   data: z.string().max(24 * 1024 * 1024),
@@ -42,8 +42,10 @@ export type BrowserOutput = ControlProgramOutput
 /** One bounded script worker per MCP client; approved transport lives in the host. */
 export class BrowserToolsRuntime {
   private readonly runtime: ControlProgramRuntime
+  private readonly call: BrowserCall
 
   constructor(call: BrowserCall, taskId = process.env.MAKO_TASK_ID) {
+    this.call = call
     this.runtime = new ControlProgramRuntime({
       namespace: "browser",
       actions: BROWSER_ACTIONS,
@@ -85,7 +87,12 @@ export class BrowserToolsRuntime {
     return this.runtime.run(source, signal)
   }
 
-  close(): Promise<void> {
-    return this.runtime.close()
+  wait(cell: number, signal: AbortSignal): Promise<BrowserOutput[]> {
+    return this.runtime.wait(cell, signal)
+  }
+
+  async close(): Promise<void> {
+    await this.runtime.close()
+    await this.call.close?.()
   }
 }

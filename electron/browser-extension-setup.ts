@@ -1,8 +1,16 @@
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
-import { chmod, cp, mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  writeFile,
+} from "node:fs/promises"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { z } from "zod"
 
 export interface BrowserExtensionSetup {
@@ -11,8 +19,88 @@ export interface BrowserExtensionSetup {
 }
 
 const manifestSchema = z.object({ key: z.string().min(1) })
+const chromiumLocalStateSchema = z
+  .object({
+    browser: z
+      .object({
+        first_run_finished: z.literal(true),
+      })
+      .loose(),
+    profile: z
+      .object({
+        info_cache: z.record(z.string(), z.json()),
+      })
+      .loose(),
+  })
+  .loose()
 function quote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function chromiumProductName(profile: string): string {
+  return basename(profile)
+    .split(/[-_. ]+/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ")
+    .slice(0, 80)
+}
+
+async function childDirectories(
+  directory: string,
+  limit: number
+): Promise<string[]> {
+  try {
+    return (await readdir(directory, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(directory, entry.name))
+      .sort()
+      .slice(0, limit)
+  } catch {
+    return []
+  }
+}
+
+async function isChromiumProfileRoot(directory: string): Promise<boolean> {
+  try {
+    const path = join(directory, "Local State")
+    const metadata = await lstat(path)
+    if (!metadata.isFile() || metadata.size > 8 * 1024 * 1024) return false
+    const state = chromiumLocalStateSchema.parse(
+      JSON.parse(await readFile(path, "utf8"))
+    )
+    return Object.keys(state.profile.info_cache).length > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Chromium products keep `Local State` at their user-data root. Discovering
+ * that capability supports branded forks without a product-name allowlist.
+ */
+export async function chromiumProfileRoots(base: string): Promise<string[]> {
+  const firstLevel = await childDirectories(base, 512)
+  const nested = await Promise.all(
+    firstLevel.map(async (directory) => ({
+      directory,
+      children: await childDirectories(directory, 32),
+    }))
+  )
+  const candidates = [
+    ...firstLevel,
+    ...nested.flatMap(({ children }) => children).slice(0, 2048),
+  ]
+  const checks = await Promise.all(
+    candidates.map(async (directory) => ({
+      directory,
+      matches: await isChromiumProfileRoot(directory),
+    }))
+  )
+  return checks
+    .filter(({ matches }) => matches)
+    .map(({ directory }) => directory)
+    .sort()
 }
 
 /** Register the native helper only for this extension, and materialize its reviewable files. */
@@ -51,25 +139,23 @@ export async function prepareBrowserExtension(
     process.platform === "darwin"
       ? join(home, "Library", "Application Support")
       : join(home, ".config")
-  const profiles =
-    process.platform === "darwin"
-      ? [
-          "Google/Chrome",
-          "Google/ChromeForTesting",
-          "Microsoft Edge",
-          "BraveSoftware/Brave-Browser",
-          "Chromium",
-        ]
-      : [
-          "google-chrome",
-          "google-chrome-for-testing",
-          "microsoft-edge",
-          "BraveSoftware/Brave-Browser",
-          "chromium",
-        ]
+  const profiles = await chromiumProfileRoots(base)
   for (const profile of profiles) {
-    if (!existsSync(join(base, profile))) continue
-    const hosts = join(base, profile, "NativeMessagingHosts")
+    const product = chromiumProductName(profile)
+    const profileKey = createHash("sha256")
+      .update(profile)
+      .digest("hex")
+      .slice(0, 16)
+    const profileHelper = join(bin, `mako-browser-host-${profileKey}`)
+    const profileTemporary = `${profileHelper}.${process.pid}.tmp`
+    await writeFile(
+      profileTemporary,
+      `#!/bin/sh\nexport MAKO_BROWSER_PRODUCT=${quote(product)}\nexec ${quote(helper)} "$@"\n`,
+      { mode: 0o700 }
+    )
+    await chmod(profileTemporary, 0o700)
+    await rename(profileTemporary, profileHelper)
+    const hosts = join(profile, "NativeMessagingHosts")
     await mkdir(hosts, { recursive: true })
     await writeFile(
       join(hosts, "dev.mako.browser.json"),
@@ -77,7 +163,7 @@ export async function prepareBrowserExtension(
         {
           name: "dev.mako.browser",
           description: "Mako Browser",
-          path: helper,
+          path: profileHelper,
           type: "stdio",
           allowed_origins: [`chrome-extension://${extensionId}/`],
         },

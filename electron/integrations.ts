@@ -199,6 +199,11 @@ function localConnection(
   permissions: MakoComputerPermissions,
   driver?: CuaDriverStatus
 ): IntegrationConnection {
+  if (!driver?.executable)
+    return {
+      kind: "unavailable",
+      detail: driver?.detail ?? "CUA Driver is not installed",
+    }
   if (!server || server.availability === "unavailable") {
     return {
       kind: "unavailable",
@@ -254,11 +259,8 @@ export function integrationCatalog(
   driver?: CuaDriverStatus,
   relay?: RelayPresence
 ): IntegrationCatalogSnapshot {
-  const localControl = snapshot.servers.find(
-    (server) => server.name === "mako-local-control"
-  )
-  const localBrowser = snapshot.servers.find(
-    (server) => server.name === "mako-browser-use"
+  const unifiedControl = snapshot.servers.find(
+    (server) => server.name === "mako-control"
   )
   const services: IntegrationRecord[] = DEFINITIONS.map((definition) => ({
     ...definition,
@@ -266,7 +268,7 @@ export function integrationCatalog(
       definition.auth === "mako-backend"
         ? backendConnection(backendStatus, relay)
         : definition.auth === "local-browser"
-          ? localBrowserConnection(localBrowser, browsers)
+          ? localBrowserConnection(unifiedControl, browsers)
           : serviceConnection(definition, snapshot.servers, githubConnected),
   }))
   const local: IntegrationRecord[] = [
@@ -291,7 +293,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Local Chrome", "Inspect", "Interact", "Capture"],
       events: [],
-      connection: localBrowserConnection(localBrowser, browsers),
+      connection: localBrowserConnection(unifiedControl, browsers),
     },
     {
       id: "computer-use",
@@ -302,7 +304,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Read UI", "Click", "Type", "Capture"],
       events: [],
-      connection: localConnection(localControl, permissions, driver),
+      connection: localConnection(unifiedControl, permissions, driver),
     },
     {
       id: "apple-mail",
@@ -313,7 +315,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Read UI", "Draft", "App automation"],
       events: [],
-      connection: localConnection(localControl, permissions, driver),
+      connection: localConnection(unifiedControl, permissions, driver),
     },
     {
       id: "apple-messages",
@@ -324,7 +326,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Read UI", "Draft", "App automation"],
       events: [],
-      connection: localConnection(localControl, permissions, driver),
+      connection: localConnection(unifiedControl, permissions, driver),
     },
   ]
   return {
