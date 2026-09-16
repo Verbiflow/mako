@@ -1,8 +1,26 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { z } from "zod"
 import { BrowserService } from "../electron/browser-service.js"
 import { DeskBrowser, type DeskPage } from "../electron/desk-browser.js"
 import { deskUrlPolicy } from "../electron/desk-browser-policy.js"
+import {
+  guardDeskNavigation,
+  type DeskNavigationEvent,
+} from "../electron/desk-browser-navigation.js"
+import {
+  publishDeskBrowserRegistration,
+  registeredDeskBrowsers,
+} from "../electron/desk-browser-registration.js"
+import {
+  publishDevRendererRegistration,
+  readDevRendererRegistration,
+  watchDevRendererRegistration,
+  type DevRendererRegistration,
+} from "../electron/dev-renderer-registration.js"
 import { deskFile } from "../electron/desk-scheme.js"
 import {
   BrowserCommandSchema,
@@ -110,6 +128,33 @@ assert.equal(dev("http://127.0.0.1:5173/?preview=a"), true)
 assert.equal(dev("http://127.0.0.1:5174/"), false)
 assert.equal(dev("mako-app://desk/index.html"), false)
 assert.equal(dev("file:///anything/dist/index.html"), false)
+const navigationListeners = new Map<
+  string,
+  (event: DeskNavigationEvent, url: string) => void
+>()
+guardDeskNavigation(
+  {
+    on: (event, listener) => {
+      navigationListeners.set(event, listener)
+    },
+  },
+  dev,
+  () => {}
+)
+for (const event of ["will-navigate", "will-redirect"] as const) {
+  let prevented = false
+  navigationListeners.get(event)?.(
+    { preventDefault: () => { prevented = true } },
+    "https://example.test"
+  )
+  assert.equal(prevented, true, `${event} cannot leave the dev origin`)
+  prevented = false
+  navigationListeners.get(event)?.(
+    { preventDefault: () => { prevented = true } },
+    "http://127.0.0.1:5173/another-route"
+  )
+  assert.equal(prevented, false, `${event} may stay within the dev origin`)
+}
 
 // The scheme serves the bundle and nothing beside it.
 const root = "/Applications/Mako.app/Contents/Resources/app.asar/dist"
@@ -271,4 +316,235 @@ try {
 } finally {
   service.close()
   desk.close()
+}
+
+const registrationRoot = await mkdtemp(
+  join(tmpdir(), "mako-desk-registration-")
+)
+const remoteCreated: string[] = []
+const remoteDesk = new DeskBrowser({
+  allowsUrl: dev,
+  createPage: async (previewId) => {
+    remoteCreated.push(previewId)
+    return fakePage(previewId, [])
+  },
+})
+let removeRegistration: (() => void) | undefined
+try {
+  removeRegistration = publishDeskBrowserRegistration(
+    {
+      endpoint: await remoteDesk.start(),
+      origin: "http://127.0.0.1:5173",
+      profile: "dev",
+      sourceRoot: registrationRoot,
+    },
+    registrationRoot
+  )
+  for (let index = 0; index < 32; index++) {
+    const id = `mako-dev-${index.toString(16).padStart(16, "0")}`
+    await writeFile(
+      join(registrationRoot, `${id}.json`),
+      JSON.stringify({
+        version: 1,
+        id,
+        name: "Stale Mako dev",
+        endpoint:
+          "ws://127.0.0.1:65535/devtools/browser/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        pid: 99_999_999,
+        startedAt: 0,
+        profile: "dev",
+        origin: "http://127.0.0.1:5173",
+        sourceRoot: registrationRoot,
+      })
+    )
+  }
+  const discovered = registeredDeskBrowsers(registrationRoot)
+  assert.equal(discovered.length, 1)
+  assert.equal(discovered[0]?.kind, "desk")
+  assert.equal(discovered[0]?.profile, "dev")
+  assert.equal(discovered[0]?.origin, "http://127.0.0.1:5173")
+  assert.equal(discovered[0]?.sourceRoot, registrationRoot)
+  const remoteService = new BrowserService(
+    () => registeredDeskBrowsers(registrationRoot)
+  )
+  try {
+    const [remoteStatus] = remoteService.refresh()
+    assert.equal(remoteStatus?.kind, "desk")
+    assert.equal(remoteStatus?.origin, "http://127.0.0.1:5173")
+    const remoteRun = (
+      input: Parameters<typeof BrowserCommandSchema.parse>[0]
+    ) =>
+      remoteService.execute(
+        "installed-host-task",
+        BrowserCommandSchema.parse(input),
+        new AbortController().signal
+      )
+    await remoteRun({
+      action: "connect",
+      browser: discovered[0]!.id,
+    })
+    const opened = BrowserTargetSchema.parse(
+      await remoteRun({
+        action: "open",
+        browser: discovered[0]!.id,
+      })
+    )
+    assert.equal(remoteCreated.length, 1)
+    assert.equal(remoteDesk.openPages, 1)
+    await remoteRun({ action: "close", target: opened })
+  } finally {
+    remoteService.close()
+  }
+  removeRegistration()
+  removeRegistration = undefined
+  assert.deepEqual(registeredDeskBrowsers(registrationRoot), [])
+  const reusedId = "mako-dev-eeeeeeeeeeeeeeee"
+  const reusedPath = join(registrationRoot, `${reusedId}.json`)
+  await writeFile(
+    reusedPath,
+    JSON.stringify({
+      version: 1,
+      id: reusedId,
+      name: "Reused pid",
+      endpoint:
+        "ws://127.0.0.1:65535/devtools/browser/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      pid: process.pid,
+      startedAt: 0,
+      profile: "dev",
+      origin: "http://127.0.0.1:5173",
+      sourceRoot: registrationRoot,
+    })
+  )
+  const [reused] = registeredDeskBrowsers(registrationRoot)
+  assert.ok(reused)
+  await assert.rejects(
+    reused.endpoint(),
+    /no longer running/,
+    "a reused pid cannot connect a stale desk endpoint"
+  )
+  await rm(reusedPath, { force: true })
+  await writeFile(
+    join(registrationRoot, "mako-dev-0000000000000000.json"),
+    JSON.stringify({
+      version: 1,
+      id: "mako-dev-0000000000000000",
+      name: "Stale Mako dev",
+      endpoint:
+        "ws://127.0.0.1:65535/devtools/browser/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      pid: 99_999_999,
+      profile: "dev",
+      origin: "http://127.0.0.1:5173",
+      sourceRoot: registrationRoot,
+    })
+  )
+  assert.deepEqual(
+    registeredDeskBrowsers(registrationRoot),
+    [],
+    "a dead development host is never advertised"
+  )
+} finally {
+  removeRegistration?.()
+  remoteDesk.close()
+  await rm(registrationRoot, { recursive: true, force: true })
+}
+
+const runtimeRoot = await mkdtemp(
+  join(tmpdir(), "mako-dev-renderer-")
+)
+const runtimeDirectory = join(runtimeRoot, "runtime")
+const rendererRegistry = join(runtimeRoot, "registrations")
+await mkdir(runtimeDirectory)
+let observedRenderer: DevRendererRegistration | null = null
+const stopWatching = watchDevRendererRegistration(
+  runtimeDirectory,
+  { profile: "dev", sourceRoot: runtimeRoot },
+  (registration) => {
+    observedRenderer = registration
+  },
+  rendererRegistry
+)
+const removeRenderer = publishDevRendererRegistration(runtimeDirectory, {
+  profile: "dev",
+  sourceRoot: runtimeRoot,
+  url: "http://127.0.0.1:5173",
+}, rendererRegistry)
+try {
+  assert.equal(
+    (
+      await readDevRendererRegistration(
+        runtimeDirectory,
+        {
+          profile: "dev",
+          sourceRoot: runtimeRoot,
+        },
+        rendererRegistry
+      )
+    )?.url,
+    "http://127.0.0.1:5173"
+  )
+  await rm(runtimeDirectory, { recursive: true, force: true })
+  assert.equal(
+    (
+      await readDevRendererRegistration(
+        runtimeDirectory,
+        { profile: "dev", sourceRoot: runtimeRoot },
+        rendererRegistry
+      )
+    )?.url,
+    "http://127.0.0.1:5173",
+    "host runtime-directory replacement preserves the launcher registration"
+  )
+  for (let attempt = 0; attempt < 500 && !observedRenderer; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(observedRenderer?.url, "http://127.0.0.1:5173")
+  const otherLauncher = spawn(process.execPath, [
+    "-e",
+    "setInterval(() => {}, 1000)",
+  ])
+  let removeOtherRenderer: (() => void) | undefined
+  try {
+    assert.ok(otherLauncher.pid)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    removeOtherRenderer = publishDevRendererRegistration(
+      runtimeDirectory,
+      {
+        profile: "dev",
+        sourceRoot: runtimeRoot,
+        url: "http://127.0.0.1:5174",
+        pid: otherLauncher.pid,
+      },
+      rendererRegistry
+    )
+    for (
+      let attempt = 0;
+      attempt < 500 && observedRenderer?.url !== "http://127.0.0.1:5174";
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(observedRenderer?.url, "http://127.0.0.1:5174")
+    removeOtherRenderer()
+    removeOtherRenderer = undefined
+    for (
+      let attempt = 0;
+      attempt < 500 && observedRenderer?.url !== "http://127.0.0.1:5173";
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(
+      observedRenderer?.url,
+      "http://127.0.0.1:5173",
+      "closing the newest launcher restores the older live renderer"
+    )
+  } finally {
+    removeOtherRenderer?.()
+    otherLauncher.kill()
+  }
+  removeRenderer()
+  for (let attempt = 0; attempt < 500 && observedRenderer; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(observedRenderer, null)
+} finally {
+  removeRenderer()
+  stopWatching()
+  await rm(runtimeRoot, { recursive: true, force: true })
 }

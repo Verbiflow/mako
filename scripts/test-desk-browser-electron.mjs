@@ -1,7 +1,7 @@
 // Drives a hidden Electron window through the desk browser bridge with the
 // production BrowserService: observe, click, type with clear and submit,
 // scroll, viewport and element screenshots, and window teardown. Run after
-// `npm run build:electron`: node scripts/test-desk-browser-electron.mjs
+// `npm run build:electron`: electron scripts/test-desk-browser-electron.mjs
 import { app, BrowserWindow } from "electron"
 import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync } from "node:fs"
