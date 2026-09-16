@@ -26,9 +26,7 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       ;(await import("../acp.js")).acpRespondPermission(...args)
     },
     cancel: async (id) => (await import("../acp.js")).liveCancel(id),
-    close: (id) => {
-      void import("../acp.js").then((module) => module.liveClose(id))
-    },
+    close: async (id) => (await import("../acp.js")).liveClose(id),
     setMode: async (...args) => {
       await (await import("../acp.js")).liveSetMode(...args)
     },

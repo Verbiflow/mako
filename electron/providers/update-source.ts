@@ -1,118 +1,35 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
-import type { HarnessUpdateInfo } from "../contracts/harness-updates.js"
 import type { ProviderCapability } from "./registry.js"
 
-const run = promisify(execFile)
-
+/**
+ * What a provider knows about the runtime it launches, stated once.
+ *
+ * The provider says where its binary is, which package publishes it and
+ * which updaters exist. `electron/runtime-updates.ts` does the rest for every
+ * provider alike: reads the installed version, places the binary's real path
+ * on one channel (npm, bun, pnpm, Homebrew, the CLI's own installer, an app
+ * bundle, another app's registry), asks the registry what is current, runs
+ * the update and tells discovery the binary changed. A provider never
+ * spawns `npm` or reads a version itself.
+ */
 export interface ProviderUpdateSource extends ProviderCapability {
-  check(env: NodeJS.ProcessEnv): Promise<HarnessUpdateInfo>
-}
-
-interface CliUpdateOptions {
   /** Resolve the binary the driver actually launches. */
   binary(env: NodeJS.ProcessEnv): string | null | Promise<string | null>
-  /** Arguments that print the installed version. */
+  /** Arguments that print the installed version. Default `--version`. */
   versionArgs?: string[]
-  /** The npm package, when the CLI publishes one — feeds `latest` and the npm update path. */
+  /** The npm package, when the CLI publishes one: feeds `latest` and the npm, bun and pnpm plans. */
   npmPackage?: string
-  /** The CLI's own updater, used when the binary lives in a self-managed home. */
-  selfUpdate?: { command: string; args: string[]; label: string }
+  /** The Homebrew formula or cask, when the CLI ships one. Without it a brew install is shown, never upgraded. */
+  homebrew?: { name: string; cask?: boolean }
+  /**
+   * The CLI's own updater, and the install root its installer owns. Chosen
+   * only when the binary's path is inside that root: the same `claude` from
+   * npm updates through npm, and `claude update` would refuse it.
+   */
+  native?: {
+    label: string
+    args: string[]
+    ownsPath(path: string): boolean
+  }
   /** Path fragments meaning another app owns this install, e.g. Zed's registry. */
   managedBy?: [needle: string, owner: string][]
-}
-
-const VERSION_ARGS = ["--version"]
-
-function parseVersion(output: string): string | undefined {
-  return output.match(/\d+(?:\.\d+)+(?:[-.\w]*)?/)?.[0]
-}
-
-async function commandVersion(
-  binary: string,
-  args: string[],
-  env: NodeJS.ProcessEnv
-): Promise<string | undefined> {
-  try {
-    const { stdout } = await run(binary, args, {
-      env,
-      timeout: 8_000,
-      maxBuffer: 64 * 1024,
-      windowsHide: true,
-    })
-    return parseVersion(stdout)
-  } catch {
-    return undefined
-  }
-}
-
-async function npmLatest(
-  pkg: string,
-  env: NodeJS.ProcessEnv
-): Promise<string | undefined> {
-  try {
-    const { stdout } = await run("npm", ["view", pkg, "version"], {
-      env,
-      timeout: 10_000,
-      maxBuffer: 64 * 1024,
-      windowsHide: true,
-    })
-    return stdout.trim() || undefined
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * One check for CLI runtimes: which binary the driver would launch, what it
- * reports as its version, who owns updates (app bundle, Zed's registry, brew,
- * the CLI's own updater, or npm), and what the public latest is.
- */
-export function cliUpdateSource(
-  provider: string,
-  options: CliUpdateOptions
-): ProviderUpdateSource {
-  return {
-    provider,
-    async check(env) {
-      const binary = await options.binary(env)
-      if (!binary) return {}
-      const info: HarnessUpdateInfo = { binary }
-      info.installed = await commandVersion(
-        binary,
-        options.versionArgs ?? VERSION_ARGS,
-        env
-      )
-      const managed = options.managedBy?.find(([needle]) => binary.includes(needle))
-      const app = binary.match(/\/([^/]+\.app)\/Contents\//)
-      if (managed) {
-        info.channel = "managed"
-        info.managedBy = managed[1]
-      } else if (app) {
-        info.channel = "app"
-        info.managedBy = app[1]
-      } else if (binary.includes("Cellar") || binary.startsWith("/opt/homebrew")) {
-        info.channel = "brew"
-        if (options.npmPackage)
-          info.update = {
-            label: "Update with Homebrew",
-            command: "brew",
-            args: ["upgrade", options.npmPackage.split("/").pop()!],
-          }
-      } else if (options.selfUpdate) {
-        info.channel = "self"
-        info.update = options.selfUpdate
-      } else if (options.npmPackage) {
-        info.channel = "npm"
-        info.update = {
-          label: "Update with npm",
-          command: "npm",
-          args: ["install", "-g", options.npmPackage],
-        }
-      }
-      if (options.npmPackage)
-        info.latest = await npmLatest(options.npmPackage, env)
-      return info
-    },
-  }
 }
