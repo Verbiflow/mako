@@ -3,7 +3,9 @@ import { autoContinuePending } from "@/state/prompt-delivery"
 import { projectAcp } from "@/state/live-projection"
 import {
   chooseProviderMode,
+  providerDefaultMode,
   providerAccessModes,
+  savedProviderMode,
   threadAccessMode,
 } from "@/state/provider-access"
 import { descriptorFor } from "@/state/descriptors"
@@ -50,6 +52,7 @@ import {
   type LiveAcpConversation,
   type StartingAcpConversation,
 } from "@/state/acp-state"
+import { prefsStore } from "@/state/prefs"
 import {
   markThreadReviewed,
   setThreadAttention,
@@ -472,14 +475,24 @@ export const acp = {
     if (!current || !hasBridge()) return false
     const id = crypto.randomUUID()
     try {
-      const snapshot = await getMako().liveTransfer(current.key, {
+      const state = threadsStore.get()
+      const modes = providerAccessModes(state, harness)
+      const modeId =
+        savedProviderMode(
+          prefsStore.get().providerModes,
+          modes,
+          harness
+        ) ?? providerDefaultMode(state, modes, harness)
+      const input: TransferInput = {
         id,
         provider: harness,
         text: prompt,
         attachments,
         tuning:
           tuning ?? (await settingsForSend(currentSettingsTarget(harness))),
-      })
+      }
+      if (modeId) input.modeId = modeId
+      const snapshot = await getMako().liveTransfer(current.key, input)
       applyLiveSnapshot(snapshot)
       leaveViewerForLive(harness)
       return true

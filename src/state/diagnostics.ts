@@ -1,4 +1,5 @@
 import type { CrashReport } from "../../electron/crash.ts"
+import type { ProviderResidencySnapshot } from "../../electron/contracts/provider-residency.ts"
 import { getMako } from "@/lib/bridge"
 
 export const diagnostics = {
@@ -12,6 +13,10 @@ export const diagnostics = {
 
   hostLogPath(): Promise<string> {
     return getMako().hostLogPath()
+  },
+
+  providerResidency(): Promise<ProviderResidencySnapshot> {
+    return getMako().providerResidency()
   },
 
   clear(): Promise<void> {

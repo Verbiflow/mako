@@ -1,6 +1,9 @@
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { HarnessProfile } from "@/lib/types"
-import type { HarnessUpdateInfo } from "../../electron/contracts/harness-updates"
+import type {
+  HarnessUpdateInfo,
+  HarnessUpdates,
+} from "../../electron/contracts/harness-updates"
 import { createHook, createStore } from "@/state/store"
 
 export interface DaemonInfo {
@@ -17,8 +20,8 @@ interface ProviderState {
   contexts: Record<string, HarnessProfile>
   contextErrors: Record<string, string>
   availability: Record<string, boolean> | null
-  /** Per-provider runtime update reads — binary, installed, latest, channel. */
-  runtimeUpdates: Record<string, HarnessUpdateInfo> | null
+  /** The host's per-provider runtime readings — binary, installed, latest, channel, phase. */
+  runtimeUpdates: HarnessUpdates | null
   daemon: DaemonInfo | null
   daemonLogin: boolean | null
 }
@@ -106,6 +109,11 @@ function admit(profile: HarnessProfile, cwd: string): void {
       [key]: observed,
     },
   })
+}
+
+/** The host's runtime readings landed, from a request or a `runtime-updates` event. */
+export function admitRuntimeUpdates(updates: HarnessUpdates): void {
+  providerStore.set({ runtimeUpdates: updates })
 }
 
 export const providers = {
@@ -221,21 +229,23 @@ export const providers = {
     providerStore.set({ availability, daemon, daemonLogin })
   },
 
-  async loadRuntimeUpdates(): Promise<void> {
+  /**
+   * The host's runtime readings as they stand. The host reads on its own
+   * clock and pushes every change as `runtime-updates`; this answers at once
+   * from what it holds, and `refresh` asks it to read everything again.
+   */
+  async loadRuntimeUpdates(refresh = false): Promise<void> {
     if (!hasBridge()) return
-    providerStore.set({
-      runtimeUpdates: await getMako()
-        .harnessUpdates()
-        .catch(() => null),
-    })
+    const updates = await getMako()
+      .harnessUpdates(refresh)
+      .catch(() => null)
+    if (updates) admitRuntimeUpdates(updates)
   },
 
-  /** Runs the provider's own updater, then re-reads what is installed. */
+  /** Runs the runtime's update on the host, which reports progress as events and settles with the receipt. */
   async runRuntimeUpdate(provider: string): Promise<HarnessUpdateInfo> {
     const next = await getMako().runHarnessUpdate(provider)
-    providerStore.set({
-      runtimeUpdates: { ...providerStore.get().runtimeUpdates, [provider]: next },
-    })
+    admitRuntimeUpdates({ ...providerStore.get().runtimeUpdates, [provider]: next })
     return next
   },
 

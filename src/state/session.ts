@@ -7,7 +7,7 @@ import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
-import { admitProfile, providers } from "@/state/providers"
+import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts } from "@/state/acp-queue"
@@ -213,6 +213,10 @@ function apply(event: HostEvent) {
   if (event.type === "provider-connections") {
     providerConnectionsStore.set({ connections: event.connections, loadedAt: Date.now() })
     void threads.refreshCapabilities()
+    return
+  }
+  if (event.type === "runtime-updates") {
+    admitRuntimeUpdates(event.updates)
     return
   }
   const active = tabsStore.get().activeId
@@ -529,6 +533,7 @@ export const actions = {
       }
       hostConnectionStore.set({ kind: "connected" })
       void providers.loadAll()
+      void providers.loadRuntimeUpdates()
       void threads.load()
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
@@ -559,6 +564,8 @@ export const actions = {
     }
     const unsubscribe = bridge.onEvent(apply)
     void providers.loadAll()
+    // Settings paints versions the moment it opens; the host has been reading them since it started.
+    void providers.loadRuntimeUpdates()
     try {
       const boot = await withTimeout(
         bridge.boot(),
