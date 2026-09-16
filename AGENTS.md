@@ -274,37 +274,61 @@ or registry snapshots.
 
 ## Browser and computer control
 
-`@mako/control` (`packages/control`) is the pure layer under both control
-servers, like `@mako/sessions` under the catalog: no Electron, no MCP
+`@mako/control` (`packages/control`) is the pure layer under the control
+server, like `@mako/sessions` under the catalog: no Electron, no MCP
 transport, testable against a fake driver. `program/` is the runtime that
 runs trusted async JavaScript in a `worker_threads` Worker and the artifact
-spill; `computer/` is what turns a native driver's answers into something
+spill; `control/` is the provider-neutral target, operation and planner
+contract plus the compact page projection; `browser/` owns the pinned,
+complete CDP type mapping and pure AX working-set selectors; `computer/` turns a native
+driver's answers into something
 a model can read every turn: `projection` (one line per element, the menu
 bar out of a window state, `kind` on window records, the driver's data
 unwrapped from its MCP envelope), `steps` (`view`, `act`, `until`,
 `expect`, `windows`, built over the same actions a program calls by hand),
 `reference` (the API text rendered from the live tool catalog) and `policy`
 (the background input ladder and the keyboard verdicts). The hosts in
-`electron/` (`computer-tools-main.ts`, `browser-tools-main.ts`) add what
-only a host knows: the driver connection and session, snapshot memory,
-path resolution, the foreground preflight, previews.
+`electron/computer-tools-main.ts` adds what only a host knows: the driver
+connection and session, snapshot memory, path resolution, the foreground
+preflight and previews. `browser-tools-main.ts` is a focused regression harness,
+not a managed or runtime-recognized server.
 `packages/control/test` covers the pure layer; `docs/audits/2026-09-14/`
-holds the measurements the design rests on and the plan that remains.
+holds the measurements the design rests on.
 
-Each control server is three tools: `status`, `help` and `exec`
-(`mako_browser_*`, `mako_computer_*`). `exec` runs a program with a
-`browser` or `computer` object whose methods are the actions; a single
-action is a one-line program and a workflow is several awaited calls with
-plain JavaScript between them, so an observation the model only needs to
-decide from never enters its context. Every action still passes the host's
-own checks, because the worker only forwards commands to the same `call`
-the direct tools used. The computer `exec` tool's description carries the
-whole reference (helpers, then every driver action as
-`computer.name({args}) → {returns}  first sentence`), rendered from the
-live driver at list time, because every model measured spent two turns and
-28 KB on `status` then `help` before touching a window. `help` remains for
-one action's full schema. The macOS harness server (`mako-local-tools`) is
-gone; the driver does everything it did.
+Every provider receives one managed `mako-control` MCP server through the
+same projection path; no harness gets a privileged control surface. It has
+three tools (`mako_control_status`, `mako_control_help`,
+`mako_control_exec`), and `exec` exposes one `control` object. Closed
+operations (`set-text`, `activate`, `press-key`, `pointer`, `scroll`,
+`select-option`, `command`) name intent, not a backend: the host planner
+selects page control for an exact page target and a capability-proven
+background route for a native window. Every action returns the plan,
+receipt, compact post-action observation and delta. `advanced` is the
+explicit escape hatch for lifecycle or driver actions the closed contract
+does not express. Do not add another model-facing browser or native server;
+only `mako-control` receives control credentials or runtime treatment.
+
+A single action is a one-line program and a workflow is several awaited
+calls with plain JavaScript between them, so intermediate observations the
+model does not need never enter its context. Route refs are bound to their
+exact page/window and latest observation. The host owns validation,
+foreground refusal, paths, driver sessions and post-action verification;
+the worker cannot bypass them. Long values spill whole to artifacts and
+long exploratory programs yield as resumable cells with bounded
+`checkpoint`/`recall` memory. Only an idempotent `set-text` with a
+`suspected-noop` receipt may be reobserved and retried once; pointer,
+activation and unknown outcomes are never replayed.
+
+Unified programs also receive a `page` helper. `open` and `claim` mint exact
+page targets, `observe` retains structured AX nodes inside the worker,
+`select` filters them by text, role and state with bounded ancestor context,
+`lines` returns only that working set, and `cdp` is typed from Mako's pinned
+`devtools-protocol`; protocol schemas are fetched through help only when
+needed, never loaded into every prompt. These helpers call the same host
+actions as `control.advanced` and add no authority. Hidden-tab input enables
+`Emulation.setFocusEmulationEnabled` only around the input action and disables
+it in `finally`; an idle lease no longer tells the page it is focused, and no
+failure or timeout may call `Target.activateTarget`.
 
 A computer action resolves to the driver's data, not the MCP result: every
 model measured lost a turn to `result.structuredContent.apps` before it
@@ -322,12 +346,12 @@ state, 838 as lines); `act(action, args)` performs one action and returns
 the lines that appeared and disappeared, re-reading every 250 ms while
 nothing has changed (a WebKit page transition outlasted one settle and
 the empty delta cost a turn), so a click and what it revealed are one
-call and one turn; `expect` stops a chained program with the
-current view in the error when the screen is not what it assumed. Every
-read is a new driver snapshot and the driver honours only the newest
-snapshot's tokens; the host carries an older token to the same control
-in the newest snapshot (below), so a program may address its next action
-with a token from any of its lines.
+call and one turn; its receipt also names same-application windows opened
+or closed by the action. `expect` stops a chained program with the current
+view in the error when the screen is not what it assumed. Every read is a
+new driver snapshot and only its newest tokens are valid. `token(line)`
+extracts one without hand-parsing it; never remap an older token by role or
+label because duplicate or reordered controls can silently change its target.
 
 Output is never cut. A returned or logged value at or past
 `INLINE_TEXT_BUDGET` (40 KB, about 10 K tokens; it was 200 KB, and the
@@ -503,6 +527,18 @@ belong in a fixture that tests it.
 An unchanged semantic observation refreshes its refs to the newest backend
 node ids. If the exact target disappears after an action dispatch, the outcome
 is `target-closed`/`unknown`; no other tab is selected and nothing is retried.
+
+External browsers are capability-discovered Chromium profiles, not a product
+allowlist: `browser-extension-setup.ts` recognizes bounded user-data roots from
+their standard `Local State` browser/profile records, so branded forks use the
+same extension transport. `open` defaults to a background, task-lifetime target;
+`disposition: "window"` creates a separate window and
+`lifetime: "persistent"` is the explicit opt-out. A released temporary target
+keeps its owner, takeover transfers that owner, and MCP-client cleanup closes
+owned tabs and windows without disconnecting the shared browser.
+`context: "isolated"` uses `Target.createBrowserContext` only on direct CDP,
+is always task-lifetime, and is disposed as one unit; extension transports
+refuse it because their debugger API has no browser-context capability.
 
 The browser with id `mako` (`desk-browser.ts`) is Mako itself: hidden 1600×1000
 windows of the desk exposed as page targets over a private loopback bridge,
@@ -1030,7 +1066,7 @@ through the provider's own resume (Cursor's SDK `Agent.resume`, Grok's
 `session/load`, Codex's thread resume) with no portable history, on the first named provider that can.
 `--control` starts the embedded driver and a background Electron fixture, asks
 the installed provider to read a random workspace value and enter/verify it
-through `mako-local-control`, requires a real `mako_computer_exec` block, checks
+through `mako-control`, requires a real `mako_control_exec` block, checks
 the fixture state and continuous frontmost sample independently, and removes
 the native session even when the turn fails. Grok needs an advertised tier that
 pre-approves lazy MCP calls (currently `MAKO_E2E_MODE=access:full`); Codex needs

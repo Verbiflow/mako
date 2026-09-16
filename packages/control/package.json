@@ -9,17 +9,20 @@
   "exports": {
     ".": "./dist/index.js",
     "./program": "./dist/program/index.js",
-    "./computer": "./dist/computer/index.js"
+    "./computer": "./dist/computer/index.js",
+    "./control": "./dist/control/index.js",
+    "./browser": "./dist/browser/index.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsgo -b",
-    "test": "npm run -s build && node test/artifacts.mjs && node test/projection.mjs && node test/reference.mjs && node test/steps.mjs && node test/policy.mjs",
+    "test": "npm run -s build && node test/artifacts.mjs && node test/browser-observation.mjs && node test/control-contract.mjs && node test/control-plane.mjs && node test/projection.mjs && node test/reference.mjs && node test/steps.mjs && node test/policy.mjs && node test/task-state.mjs",
     "typecheck": "tsgo -b --force"
   },
   "dependencies": {
+    "devtools-protocol": "0.0.1692173",
     "zod": "4.4.3"
   }
 }

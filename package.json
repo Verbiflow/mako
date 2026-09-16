@@ -117,6 +117,7 @@
     "@mako/control": "^0.1.0",
     "@mako/relay": "^0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@trycua/cua-driver": "0.28.1",
     "ai": "7.0.89",
     "devtools-protocol": "0.0.1692173",
     "electron-updater": "^6.8.9",
@@ -307,7 +308,8 @@
     ],
     "asarUnpack": [
       "node_modules/@anthropic-ai/claude-agent-sdk-*/**",
-      "node_modules/@cursor/sdk-*/**"
+      "node_modules/@cursor/sdk-*/**",
+      "node_modules/@trycua/cua-driver-*/**"
     ]
   },
   "workspaces": [
