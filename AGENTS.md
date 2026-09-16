@@ -547,9 +547,18 @@ keeps a profile host alive, and navigating only to the exact desk document
 (`desk-browser-policy.ts`). It exists so an agent can inspect or capture Mako
 without touching the window the user is in. Scripts run there inside the
 trusted renderer with its host bridge; it is a convenience for the user's own
-agents, not an isolation boundary, which is why the URL policy is exact. `test-desk-browser.ts`
-covers the bridge with in-memory pages and `test:desk-browser-electron` drives a
-real hidden window.
+agents, not an isolation boundary, which is why the URL policy is exact.
+A web launcher publishes its exact Vite URL through
+`dev-renderer-registration.ts`; the matching host publishes its private
+endpoint through `desk-browser-registration.ts`, and another host discovers it as a distinct
+`mako-dev-<checkout>` desk carrying the exact origin and source root. The
+hidden window is still created by the development host—an installed host never
+loads Vite under its own preload, and verification needs neither Chromium nor
+a visible desktop window. Renderer registrations are launcher-owned and
+survive a host runtime-directory replacement; concurrent launchers fall back
+to the newest one still alive. `test-desk-browser.ts` covers local and cross-host
+bridges with in-memory pages and `test:desk-browser-electron` drives a real
+hidden window.
 
 ## How a renderer loads
 
@@ -878,7 +887,23 @@ caution dot is a copy that drifted from the listed one (`SkillOrigin.hash`),
 and a dot opens the install, replace or remove for that one cell, previewed
 first. `scripts/test-skill-references.ts` covers the rule, the read, the
 appendix and the round trip; `test-skill-ui.tsx` covers the matrix and both
-chips. Terminal remains on Command-J and
+chips.
+
+A referenced conversation (`@thread:<harness>:<id>`, picked from the `@`
+menu) travels the same way: the body the provider reads says
+`[Referenced conversation N]` and an appendix heading names the
+conversation, its harness and the transcript bundle
+(`src/lib/thread-references.ts`). The heading ends with the token the
+placeholder replaced, and the transcript's `Prompt` reads the headings back
+(`parseThreadReferenceAppendix`, `restoreThreadReferences`) before it strips
+them, so the chip returns to where it was typed, copying it yields the
+token, and Reuse references the conversation again. For a month the heading
+carried no token and nothing mapped the placeholder back, so every sent
+prompt read `I thought [Referenced conversation 1] fixed this` for good; a
+prompt from then shows a title-only chip from its heading. Headings must
+count up from one, because a remote inline bundle carries an earlier
+transcript that may quote one. `npm run test:thread-references` covers the
+appendix, the read-back and both chips. Terminal remains on Command-J and
 in the command palette, not as an extra composer icon. Context usage is shown
 only with an exact, usable reading; unsupported providers do not get an empty
 ring. Chat activity uses one compact 20px mark and no redundant Responding row
