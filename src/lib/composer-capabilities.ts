@@ -80,8 +80,7 @@ export interface SkillReach {
 /** Product copy for Mako's own servers; the registry's detail is operational. */
 const BUILT_IN_DESCRIPTIONS = new Map<string, string>([
   ["mako-backend", "Mako skills, integrations, and Slack"],
-  ["mako-browser-use", "Drive a browser tab Mako controls"],
-  ["mako-local-control", "Native apps, windows, and input on this Mac"],
+  ["mako-control", "Drive pages, native windows, and system tasks"],
   [MAKO_CONVERSATIONS_SERVER, "Delegate bounded tasks to other agents"],
 ])
 

@@ -11,7 +11,7 @@ function connectionText(
     case "connecting":
       return "Connecting to the Mako Browser extension…"
     case "awaiting-approval":
-      return "Connecting. Allow the debugging connection in Chrome if prompted."
+      return "Connecting. Allow the browser’s debugging connection if prompted."
     case "unavailable":
       return connection.reason
     case "disconnected":
@@ -45,8 +45,9 @@ export function BrowserConnections() {
       {setup ? (
         <div className="mt-3 border-l border-hairline pl-3 text-ui text-muted-foreground">
           <p>
-            Open <code>chrome://extensions</code>, enable Developer mode, then
-            choose Load unpacked and select this folder:
+            In your Chromium browser, open <code>chrome://extensions</code>,
+            enable Developer mode, then choose Load unpacked and select this
+            folder:
           </p>
           <input
             aria-label="Browser extension folder"
@@ -57,7 +58,7 @@ export function BrowserConnections() {
           />
           <p className="mt-2">
             Approve the extension’s browser permission, then refresh profiles
-            here. Chrome may still show a banner while a tab is controlled.
+            here. Your browser may show a banner while a page is controlled.
           </p>
         </div>
       ) : null}

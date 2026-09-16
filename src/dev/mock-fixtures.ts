@@ -356,30 +356,8 @@ export const MCP: McpRegistrySnapshot = {
       portable: true,
     },
     {
-      id: "mock-browser-use",
-      name: "mako-browser-use",
-      transport: "stdio",
-      command: "/Applications/Mako.app/Contents/MacOS/Mako",
-      args: ["browser-tools-main.js"],
-      envNames: [],
-      headerNames: [],
-      origins: [
-        {
-          provider: "mako",
-          account: "local",
-          scope: "managed",
-          provenance: "Mako managed",
-        },
-      ],
-      portable: true,
-      managed: true,
-      availability: "available",
-      detail:
-        "Built-in browser tools share one approved local connection across tasks",
-    },
-    {
-      id: "mock-local-control",
-      name: "mako-local-control",
+      id: "mock-control",
+      name: "mako-control",
       transport: "stdio",
       command: "/Applications/Mako.app/Contents/MacOS/Mako",
       args: [
@@ -402,7 +380,7 @@ export const MCP: McpRegistrySnapshot = {
       portable: true,
       managed: true,
       availability: "available",
-      detail: "Local browser and computer control run under Mako permissions",
+      detail: "Page, native and system control share one host-routed code API",
     },
   ],
 }
