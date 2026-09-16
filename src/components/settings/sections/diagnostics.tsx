@@ -3,7 +3,7 @@ import type { SettingsSection } from "./manifest"
 
 export const section = {
   id: "diagnostics",
-  title: "Crash reports",
+  title: "Diagnostics",
   group: "Application",
   keywords: [
     "crash",

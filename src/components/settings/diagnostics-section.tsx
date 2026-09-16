@@ -4,6 +4,7 @@ import { desktop } from "@/state/desktop"
 import { diagnostics } from "@/state/diagnostics"
 import { formatRelative } from "@/lib/format"
 import type { CrashReport } from "../../../electron/crash.ts"
+import type { ProviderResidencySnapshot } from "../../../electron/contracts/provider-residency.ts"
 
 /**
  * What broke, and where it is written down.
@@ -17,12 +18,18 @@ export function DiagnosticsSection() {
   const [crashes, setCrashes] = useState<CrashReport[]>([])
   const [dir, setDir] = useState("")
   const [hostLog, setHostLog] = useState("")
+  const [residency, setResidency] =
+    useState<ProviderResidencySnapshot | null>(null)
   const [openId, setOpenId] = useState<string>()
 
   const load = useCallback(() => {
     void diagnostics.list().then(setCrashes).catch(() => setCrashes([]))
     void diagnostics.directory().then(setDir).catch(() => setDir(""))
     void diagnostics.hostLogPath().then(setHostLog).catch(() => setHostLog(""))
+    void diagnostics
+      .providerResidency()
+      .then(setResidency)
+      .catch(() => setResidency(null))
   }, [])
 
   useEffect(load, [load])
@@ -105,6 +112,48 @@ export function DiagnosticsSection() {
           >
             Show the log
           </Action>
+        </div>
+      ) : null}
+
+      {residency ? (
+        <div className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+          <div className="px-3 py-2">
+            <p className="text-ui">Provider residency</p>
+            <p className="text-label text-faint">
+              {residency.active} active conversations · {residency.warm} warm
+              resumable processes · {residency.protected} processes awaiting a
+              resumable checkpoint · {residency.hibernated} hibernated
+              conversations · {residency.disconnected} disconnected
+              conversations
+            </p>
+            <p className="mt-1 text-label leading-relaxed text-faint">
+              Mako keeps at most {residency.warmLimit} resumable idle processes
+              for faster follow-ups and hibernates them after idle for{" "}
+              {Math.round(residency.idleMs / 60_000)} minutes.
+            </p>
+          </div>
+          {residency.entries.length > 0 ? (
+            <div className="max-h-56 overflow-auto border-t border-hairline">
+              {residency.entries.slice(0, 20).map((entry) => (
+                <div
+                  key={entry.conversationId}
+                  className="flex items-center gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0"
+                >
+                  <span className="min-w-0 flex-1 truncate text-label">
+                    {entry.provider}: {entry.title}
+                  </span>
+                  <span className="shrink-0 text-label text-faint">
+                    {entry.state}
+                  </span>
+                </div>
+              ))}
+              {residency.entries.length > 20 ? (
+                <p className="px-3 py-1.5 text-label text-faint">
+                  {residency.entries.length - 20} more conversations
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
