@@ -5,8 +5,6 @@ import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo } from "./runtime-connection.js"
 import { lstat, mkdir, stat, unlink } from "node:fs/promises"
 import { rmSync } from "node:fs"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
@@ -36,6 +34,7 @@ import { adoptDeskOrigin } from "./renderer-storage.js"
 import { prepareBrowserExtension } from "./browser-extension-setup.js"
 import { startControlService } from "./control-service.js"
 import type { DelegateInput, ForkInput, MessageAnchor, TransferInput } from "./shared.js"
+import { TransferInputSchema } from "./contracts/conversation-control.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { WorkspaceGit } from "./host-git.js"
 import { resolveFilePreview } from "./file-previews.js"
@@ -153,8 +152,10 @@ import {
   harnessProfiles,
   harnessProfilesNow,
   onHarnessProfile,
+  refreshHarnessProfiles,
   resolveHarnessTuning,
 } from "./harnesses.js"
+import { RuntimeUpdates } from "./runtime-updates.js"
 import { bindLineageDirect, chainOf } from "./lineage.js"
 import {
   accountUsage,
@@ -402,6 +403,20 @@ let controlService: Awaited<ReturnType<typeof startControlService>> | null =
   null
 let liveConversations: LiveConversations
 let threadArchives: ThreadArchives
+/**
+ * Runtime versions are a per-user fact, like the provider profiles beside
+ * them: every host on this machine launches the same binaries.
+ */
+const runtimeUpdates = new RuntimeUpdates({
+  sources: () => providerHost.updateSources.list(),
+  path: join(homedir(), ".mako", "runtime-updates.json"),
+  emit: (updates) => emit({ type: "runtime-updates", updates }),
+  // A new binary lists new models: drop the catalog and discover again, so
+  // the picker shows what the updated CLI offers without a restart.
+  onRuntimeChanged: ({ provider }) => {
+    void refreshHarnessProfiles(provider)
+  },
+})
 let threadLifecycle: ThreadLifecycle
 let window: BrowserWindow | null = null
 const rendererWindows = new Set<BrowserWindow>()
@@ -1079,33 +1094,14 @@ function bindIpc() {
         .map((profile) => [profile.provider, available.has(profile.provider)])
     )
   })
-  handle("mako:harness-updates", async () => {
-    const env = process.env
-    return Object.fromEntries(
-      await Promise.all(
-        providerHost.updateSources.list().map(async (source) => [
-          source.provider,
-          await source.check(env).catch((error) => ({
-            error: error instanceof Error ? error.message : String(error),
-          })),
-        ])
-      )
-    )
-  })
-  handle("mako:harness-update", async (_e, provider: string) => {
-    const source = providerHost.updateSources.get(provider)
-    if (!source) throw new Error(`${provider} does not update through Mako`)
-    const info = await source.check(process.env)
-    if (!info.update)
-      throw new Error(`${provider} does not update through Mako`)
-    const { command, args } = info.update
-    await promisify(execFile)(command, args, {
-      timeout: 180_000,
-      maxBuffer: 512 * 1024,
-      windowsHide: true,
-    })
-    return source.check(process.env)
-  })
+  // What is known answers at once; a reading that is due runs behind it and
+  // arrives as `runtime-updates`. `refresh` re-reads everything, registry included.
+  handle("mako:harness-updates", (_e, refresh?: boolean) =>
+    runtimeUpdates.read(refresh === true)
+  )
+  handle("mako:harness-update", (_e, provider: string) =>
+    runtimeUpdates.update(provider)
+  )
   handle("mako:daemon-status", () => daemonStatus())
   handle("mako:daemon-login", () => daemonLoginEnabled())
   handle("mako:daemon-login-set", (_e, enabled: boolean) =>
@@ -1317,9 +1313,19 @@ function bindIpc() {
       // store live; renderer state that says otherwise is stale, not a vote.
       if (options.resume && options.threadPath)
         await continuation.assertLive(options.threadPath, harness, options.resume)
-      const tuning = await resolveHarnessLaunch(harness, cwd, options.tuning)
+      const remembered = options.resume
+        ? sessionMemory?.recall(harness, options.resume)
+        : undefined
+      const tuning = await resolveHarnessLaunch(
+        harness,
+        cwd,
+        options.tuning ?? remembered?.settings
+      )
       trace("profile")
-      await liveConversations.start(harness, cwd, { ...options, tuning })
+      await liveConversations.start(harness, cwd, {
+        ...options,
+        tuning,
+      })
       trace("accepted")
       return liveConversations.snapshot(options.conversationId)
     }
@@ -1378,12 +1384,13 @@ function bindIpc() {
   handle(
     "mako:live-transfer",
     async (_event, id: string, input: TransferInput) => {
+      const parsed = TransferInputSchema.parse(input)
       const tuning = await resolveHarnessLaunch(
-        input.provider,
+        parsed.provider,
         liveConversations.snapshot(id)?.session.cwd,
-        input.tuning
+        parsed.tuning
       )
-      return liveConversations.transfer(id, { ...input, tuning })
+      return liveConversations.transfer(id, { ...parsed, tuning })
     }
   )
   handle(
@@ -1558,6 +1565,7 @@ function bindIpc() {
   handle("mako:crashes", () => listCrashes())
   handle("mako:crashes-dir", () => crashesDir())
   handle("mako:host-log-path", () => hostLogPath() ?? "")
+  handle("mako:provider-residency", () => liveConversations.residency())
   handle("mako:clear-crashes", () => clearCrashes())
   handle(
     "mako:report-crash",
@@ -1712,6 +1720,10 @@ app.whenReady().then(async () => {
         ? { ...tools, control: controlService?.mint(conversationId, bindingId) }
         : undefined
     },
+    revokeTools: async (bindingId, conversationId) => {
+      conversationMcp?.revoke(bindingId, conversationId)
+      await controlService?.revoke(conversationId, bindingId)
+    },
     providers: () =>
       providerHost.liveDrivers.list().map((driver) => driver.provider),
     driver: (provider) => providerHost.liveDrivers.get(provider),
@@ -1855,6 +1867,10 @@ app.whenReady().then(async () => {
       sessionMemory?.remember(ref.harness, ref.nativeId, { settings }),
   })
   trace("drivers ready")
+  // The last host's readings paint first; this host's own run a few seconds
+  // behind startup, and hourly for the public versions.
+  await runtimeUpdates.load()
+  runtimeUpdates.start()
   bindAutomations(emit, async (cwd, prompt) => {
     const resumable = new Set(resumableHarnesses())
     const profile = (await harnessProfiles()).find(
@@ -1915,6 +1931,7 @@ app.on("before-quit", (event) =>
       deskBrowser.close()
       stopWorkspaceIpc()
       stopWatching()
+      runtimeUpdates.stop()
       void stopRelayWorker()
       stopThreads()
       stopDrivers()

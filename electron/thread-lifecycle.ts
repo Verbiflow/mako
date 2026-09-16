@@ -53,11 +53,22 @@ export class ThreadLifecycle {
     const identity = target.kind === "native" ? target : { provider: owner?.session.harness, nativeId: owner?.session.nativeId }
     const ref = this.dependencies.threads().find((ref) => target.kind === "file" ? ref.path === target.path : ref.harness === identity.provider && ref.nativeId === identity.nativeId)
     const token = ref && this.dependencies.nativeToken(ref.path)
-    return { archived, stop: ref && token ? { kind: "native", path: ref.path, token } : null, external: Boolean(owner?.session.connection !== "connected" && ref && (ref.locked || ref.active || this.dependencies.external(ref.path))) }
+    return { archived, stop: ref && token ? { kind: "native", path: ref.path, token } : null, external: Boolean(owner?.session.connection === "disconnected" && ref && (ref.locked || ref.active || this.dependencies.external(ref.path))) }
   }
 
   archive(command: ArchiveCommand) {
-    return this.dependencies.archives.set(command, this.keys(command.target))
+    const owner = this.owner(command.target)
+    const keys = this.keys(command.target)
+    const receipt = this.dependencies.archives.set(
+      command,
+      keys
+    )
+    if (owner)
+      this.dependencies.live.setArchived(
+        owner.session.id,
+        keys.some((key) => receipt.keys.includes(key))
+      )
+    return receipt
   }
 
   async stop(target: StopTarget): Promise<boolean> {

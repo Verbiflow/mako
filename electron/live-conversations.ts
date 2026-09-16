@@ -1,5 +1,9 @@
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
+import type {
+  ProviderResidencyEntry,
+  ProviderResidencySnapshot,
+} from "./contracts/provider-residency.js"
 import {
   QueuedPromptEditSchema,
   type QueuedPromptEdit,
@@ -12,7 +16,7 @@ import {
 import type { SessionSettings } from "@mako/sessions/settings"
 import { captureNativeHistory } from "./native-history.js"
 import { prepareLiveContext, contextPrompt } from "./live-context.js"
-import { LiveTransfers } from "./live-transfers.js"
+import { LiveTransfers, reconnectRefusal } from "./live-transfers.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
 import { LiveActions } from "./live-actions.js"
 import type { LiveActionInput } from "./contracts/live-actions.js"
@@ -25,13 +29,17 @@ import type {
   Resident,
   FailureBoundary,
 } from "./live-runtime.js"
-import { ForkInputSchema } from "./contracts/conversation-control.js"
+import {
+  ForkInputSchema,
+  resumable,
+} from "./contracts/conversation-control.js"
 import { resolveAnchor } from "./contracts/message-anchor.js"
 import type {
   DelegateInput,
   ForkInput,
   TransferInput,
   ConversationControl,
+  ProviderBinding,
 } from "./contracts/conversation-control.js"
 import { liveEntries } from "./live-context.js"
 import { randomUUID } from "node:crypto"
@@ -63,6 +71,9 @@ import {
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
+
+export const PROVIDER_IDLE_MS = 10 * 60_000
+export const PROVIDER_WARM_LIMIT = 2
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
@@ -102,6 +113,9 @@ export class LiveConversations {
       control: (resident) => this.control(resident),
       flush: (resident) => this.flush(resident),
       drain: (resident) => this.drain(resident),
+      residencyChanged: (resident) => this.scheduleHibernation(resident),
+      driverEvents: (resident, bindingId) =>
+        this.driverEvents(resident, bindingId),
       open: (provider, cwd, options, ancestry) =>
         this.open(provider, cwd, options, ancestry),
     }
@@ -177,6 +191,65 @@ export class LiveConversations {
 
   hasActiveWork(): boolean { return this.lifecycleWork().length > 0 }
 
+  residency(): ProviderResidencySnapshot {
+    const entries: ProviderResidencyEntry[] = [...this.records.values()]
+      .filter(
+        (resident) => resident.snapshot.session.status !== "closed"
+      )
+      .map(
+      (resident) => {
+        const { session } = resident.snapshot
+        const control = this.control(resident)
+        const binding = control.bindings.find(
+          (candidate) => candidate.id === control.activeBindingId
+        )
+        const resumable =
+          Boolean(binding?.nativeId && binding.path) &&
+          resident.snapshot.requests.some(
+            (request) =>
+              request.status === "completed" ||
+              request.status === "interrupted"
+          )
+        const state: ProviderResidencyEntry["state"] =
+          session.connection === "hibernated"
+            ? "hibernated"
+            : session.connection === "disconnected"
+              ? "disconnected"
+              : session.status === "running" ||
+                  resident.opening ||
+                  resident.transferring ||
+                  resident.snapshot.requests.some(
+                    (request) =>
+                      request.status === "queued" ||
+                      request.status === "dispatching"
+                  )
+                ? "active"
+                : resumable
+                  ? "warm"
+                  : "protected"
+        return {
+          conversationId: session.id,
+          provider: session.harness,
+          title: session.title || "Untitled conversation",
+          state,
+        }
+      }
+      )
+    const count = (state: ProviderResidencyEntry["state"]) =>
+      entries.filter((entry) => entry.state === state).length
+    return {
+      entries,
+      active: count("active"),
+      warm: count("warm"),
+      protected: count("protected"),
+      hibernated: count("hibernated"),
+      disconnected: count("disconnected"),
+      warmLimit:
+        this.dependencies.providerWarmLimit ?? PROVIDER_WARM_LIMIT,
+      idleMs: this.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS,
+    }
+  }
+
   lifecycleWork(): LifecycleWork[] {
     const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => {
       const { snapshot } = resident
@@ -195,7 +268,17 @@ export class LiveConversations {
   async closeForExit(ids = [...this.records.keys()]): Promise<void> {
     const results = await Promise.allSettled(ids.map(async (id) => {
       const resident = this.records.get(id)
-      if (!resident || resident.snapshot.session.status === "closed") return
+      if (
+        !resident ||
+        (resident.snapshot.session.status === "closed" &&
+          !resident.driver &&
+          !resident.connections.size &&
+          !resident.opening &&
+          !resident.hibernating &&
+          !resident.waking &&
+          !resident.transferOperation)
+      )
+        return
       resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => request.status === "queued" ? { ...request, status: "held" } : request) }
       this.flush(resident)
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -228,6 +311,25 @@ export class LiveConversations {
     if (!resident) return null
     this.flush(resident)
     return this.stamp(resident.snapshot)
+  }
+
+  hibernateIfIdle(id: string, reason = "explicit"): boolean {
+    const resident = this.load(id)
+    if (!resident || !this.canHibernate(resident)) return false
+    void this.hibernate(resident, reason)
+    return true
+  }
+
+  setArchived(id: string, archived: boolean): void {
+    const resident = this.load(id)
+    if (!resident) return
+    resident.retireWhenIdle = archived
+    if (archived) {
+      if (this.canHibernate(resident))
+        void this.hibernate(resident, "thread-archived")
+    } else if (this.canHibernate(resident)) {
+      this.scheduleHibernation(resident)
+    }
   }
 
   /** The snapshot as this host numbers it; the renderer merges batches only onto the same epoch. */
@@ -321,6 +423,7 @@ export class LiveConversations {
       journal,
       driver: null,
       connections: new Map(),
+      bindingGenerations: new Map(),
       transferring: false,
       generation: 0,
       opening: false,
@@ -370,17 +473,16 @@ export class LiveConversations {
     const driver = this.dependencies.driver(provider)
     if (!driver?.available(this.dependencies.appPath))
       throw new Error(`${provider} has no available interactive transport`)
-    // Reopening a store another Mako host has live would put two agents on
-    // one session; the ledger refuses it here, before anything is spawned.
-    if (options.resume)
-      this.dependencies.memory?.hold(provider, options.resume, options.conversationId)
     // The tier a reopened session last ran under travels into the launch: a
     // launch-enforced tier (OpenCode's Ask, every Grok tier) is read from the
     // process environment and can never be applied to a running session.
-    const rememberedMode = options.resume && !options.modeId
-      ? this.dependencies.memory?.recall(provider, options.resume)?.modeId
+    const remembered = options.resume
+      ? this.dependencies.memory?.recall(provider, options.resume)
       : undefined
+    const rememberedMode =
+      !options.modeId ? remembered?.modeId : undefined
     const modeId = options.modeId ?? rememberedMode
+    const tuning = options.tuning ?? remembered?.settings
     const base = options.threadPath
       ? await captureNativeHistory(
           options.threadPath,
@@ -406,7 +508,8 @@ export class LiveConversations {
             includesBase: Boolean(options.resume) || !base,
             nativeId: options.resume,
             path: options.threadPath,
-            tuning: options.tuning,
+            tuning,
+            modeId,
           },
         ],
         transfers: [],
@@ -421,7 +524,7 @@ export class LiveConversations {
         modes: [],
         currentMode: null,
         configOptions: [],
-        settings: options.tuning,
+        settings: tuning,
       },
       revision: 0,
       threadPath: options.threadPath,
@@ -434,11 +537,11 @@ export class LiveConversations {
             LiveRequestSchema.parse({
               ...options.initialRequest,
               displayText: options.displayPrompt,
-              tuning: options.tuning,
+              tuning,
               inputDigest: promptFingerprint(
                 options.initialRequest.text,
                 options.initialRequest.attachments,
-                options.tuning
+                tuning
               ),
               attachments: this.assets.retainPrompt(
                 options.initialRequest.attachments
@@ -450,6 +553,7 @@ export class LiveConversations {
     }
     const resident: Resident = {
       connections: new Map(),
+      bindingGenerations: new Map(),
       transferring: false,
       snapshot,
       journalSnapshot: snapshot,
@@ -462,23 +566,53 @@ export class LiveConversations {
       timer: null,
       displayPrompt: options.displayPrompt,
     }
-    resident.journal.commit(snapshot)
+    let held = false
+    try {
+      // The ledger hold is taken after every fallible history read but before
+      // anything can spawn. A failed journal commit releases it immediately.
+      if (options.resume) {
+        this.dependencies.memory?.hold(
+          provider,
+          options.resume,
+          options.conversationId
+        )
+        held = true
+      }
+      resident.journal.commit(snapshot)
+    } catch (error) {
+      resident.journal.close()
+      if (held && options.resume)
+        this.releaseHold(provider, options.resume, options.conversationId)
+      throw error
+    }
     this.records.set(id, resident)
     this.bindingOwners.set(id, id)
     const generation = resident.generation
-    void driver
-      .start(cwd, {
+    const openingOperation = Promise.resolve()
+      .then(() =>
+        driver.start(cwd, {
         ...options,
         modeId,
-        emit: (event) => this.observe(event),
+        tuning,
+        emit: this.driverEvents(resident, id),
         mcpSnapshot: this.dependencies.mcpSnapshot
           ? () => this.dependencies.mcpSnapshot!(cwd)
           : undefined,
-        conversationTools: this.dependencies.tools?.(id, id),
-      })
+          conversationTools: this.dependencies.tools?.(id, id),
+        })
+      )
       .then(async (session) => {
         if (resident.generation !== generation) {
-          driver.close(id)
+          try {
+            await driver.close(id)
+            await this.revokeTools(id, id)
+            resident.opening = false
+            resident.driver = null
+          } catch (error) {
+            resident.driver = driver
+            resident.connections.set(id, { driver, session })
+            throw error
+          }
           return
         }
         resident.snapshot = {
@@ -505,20 +639,25 @@ export class LiveConversations {
         resident.opening = false
         this.flush(resident)
         this.drain(resident)
+        this.scheduleHibernation(resident)
       })
-      .catch((error) => {
+      .catch(async (error) => {
         if (resident.generation !== generation) return
-        resident.opening = false
-        resident.driver = null
-        resident.connections.clear()
-        driver.close(id)
+        const closed = await Promise.resolve(driver.close(id)).then(
+          () => true,
+          () => false
+        )
+        await this.revokeTools(id, id)
+        resident.opening = !closed
+        resident.driver = closed ? null : driver
+        if (closed) resident.connections.clear()
         resident.snapshot = {
           ...resident.snapshot,
           permissions: [],
           session: {
             ...resident.snapshot.session,
             status: "failed",
-            connection: "disconnected",
+            connection: closed ? "disconnected" : "connected",
             error: errorMessage({ error }),
           },
           requests: resident.snapshot.requests.map((request) =>
@@ -533,8 +672,14 @@ export class LiveConversations {
           ),
         }
         this.flush(resident)
-        if (options.resume) this.releaseHold(provider, options.resume, id)
+        if (closed && options.resume)
+          this.releaseHold(provider, options.resume, id)
       })
+    resident.openingOperation = openingOperation
+    void openingOperation.finally(() => {
+      if (resident.openingOperation === openingOperation)
+        resident.openingOperation = undefined
+    })
     return snapshot.session
   }
 
@@ -543,6 +688,494 @@ export class LiveConversations {
       this.dependencies.memory?.release(provider, nativeId, conversationId)
     } catch (error) {
       hostWarn("memory", "release failed", { harness: provider, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  private async revokeTools(
+    bindingId: string,
+    conversationId: string
+  ): Promise<void> {
+    try {
+      await this.dependencies.revokeTools?.(bindingId, conversationId)
+    } catch (error) {
+      hostWarn("residency", "control grant revocation failed", {
+        conversation: conversationId,
+        binding: bindingId,
+        error: errorMessage({ error }),
+      })
+    }
+  }
+
+  private driverEvents(
+    resident: Resident,
+    bindingId: string
+  ): (event: LiveDriverEvent) => void {
+    const bindingGeneration =
+      (resident.bindingGenerations.get(bindingId) ?? 0) + 1
+    const residentGeneration = resident.generation
+    resident.bindingGenerations.set(bindingId, bindingGeneration)
+    return (event) => {
+      if (
+        resident.generation === residentGeneration &&
+        resident.bindingGenerations.get(bindingId) === bindingGeneration
+      )
+        this.observe(event)
+    }
+  }
+
+  private activeBinding(resident: Resident): ProviderBinding | undefined {
+    const control = this.control(resident)
+    return control.bindings.find(
+      (binding) => binding.id === control.activeBindingId
+    )
+  }
+
+  private clearHibernationTimer(resident: Resident, clearSince = true): void {
+    if (resident.idleTimer) clearTimeout(resident.idleTimer)
+    resident.idleTimer = undefined
+    if (clearSince) resident.idleSince = undefined
+  }
+
+  private canHibernate(resident: Resident): boolean {
+    const native = resident.snapshot.nativeAgents?.agents ?? []
+    const children = this.control(resident).children
+    const binding = this.activeBinding(resident)
+    const driver = this.dependencies.driver(binding?.provider ?? "")
+    return Boolean(
+      resident.driver &&
+        driver?.canResume &&
+        resident.snapshot.session.connection === "connected" &&
+        resident.snapshot.session.status === "ready" &&
+        binding?.nativeId &&
+        binding.path &&
+        !resident.opening &&
+        !resident.closing &&
+        !resident.hibernating &&
+        !resident.waking &&
+        !resident.transferring &&
+        !resident.checkpointing &&
+        !resident.rewinding &&
+        !resident.autoContinue &&
+        !resident.snapshot.permissions.length &&
+        resident.snapshot.requests.some(
+          (request) =>
+            request.status === "completed" ||
+            request.status === "interrupted"
+        ) &&
+        !resident.snapshot.requests.some(
+          (request) =>
+            request.status === "queued" || request.status === "dispatching"
+        ) &&
+        !native.some(
+          (agent) =>
+            agent.state.kind === "working" || agent.state.kind === "waiting"
+        ) &&
+        !children.some(
+          (child) =>
+            child.status === "starting" ||
+            child.status === "working" ||
+            child.status === "needs-permission" ||
+            child.delivery === "pending" ||
+            child.delivery === "queued"
+        )
+    )
+  }
+
+  private scheduleHibernation(
+    resident: Resident,
+    enforceWarmLimit = true
+  ): void {
+    if (!this.canHibernate(resident)) {
+      this.clearHibernationTimer(resident)
+      return
+    }
+    const now = this.dependencies.now?.() ?? Date.now()
+    resident.idleSince ??= now
+    if (resident.retireWhenIdle) {
+      void this.hibernate(resident, "thread-archived")
+      return
+    }
+    if (resident.idleTimer) clearTimeout(resident.idleTimer)
+    const idleMs = this.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS
+    resident.idleTimer = setTimeout(() => {
+      resident.idleTimer = undefined
+      void this.hibernate(resident, "idle-timeout")
+    }, Math.max(0, idleMs - (now - resident.idleSince)))
+    resident.idleTimer.unref?.()
+    if (!enforceWarmLimit) return
+    const warmLimit =
+      this.dependencies.providerWarmLimit ?? PROVIDER_WARM_LIMIT
+    const warm = [...this.records.values()]
+      .filter((candidate) => this.canHibernate(candidate))
+      .sort(
+        (left, right) =>
+          (left.idleSince ?? Number.POSITIVE_INFINITY) -
+          (right.idleSince ?? Number.POSITIVE_INFINITY)
+      )
+    for (const candidate of warm.slice(
+      0,
+      Math.max(0, warm.length - warmLimit)
+    ))
+      void this.hibernate(candidate, "warm-pool-limit")
+  }
+
+  private async refreshIdleCheckpoint(
+    resident: Resident,
+    binding: ProviderBinding,
+    generation: number
+  ): Promise<boolean> {
+    if (!binding.path || !this.dependencies.checkpoint)
+      return Boolean(binding.path)
+    const checkpoint = await this.dependencies.checkpoint(
+      binding.path,
+      binding.provider
+    )
+    if (
+      !checkpoint ||
+      resident.generation !== generation ||
+      this.activeBinding(resident)?.id !== binding.id
+    )
+      return false
+    const control = this.control(resident)
+    resident.snapshot = {
+      ...resident.snapshot,
+      control: {
+        ...control,
+        bindings: control.bindings.map((candidate) =>
+          candidate.id === binding.id
+            ? {
+                ...candidate,
+                checkpoint,
+                coveredBlocks: resident.snapshot.blocks.length,
+              }
+            : candidate
+        ),
+      },
+    }
+    this.flush(resident)
+    return true
+  }
+
+  private hibernate(resident: Resident, reason: string): Promise<void> {
+    if (resident.hibernating) return resident.hibernating
+    const operation = this.hibernateNow(resident, reason)
+      .catch((error) => {
+        hostWarn("residency", "hibernate failed", {
+          conversation: resident.snapshot.session.id,
+          harness: resident.snapshot.session.harness,
+          error: errorMessage({ error }),
+        })
+      })
+      .finally(() => {
+        if (resident.hibernating === operation) {
+          resident.hibernating = undefined
+          if (this.canHibernate(resident))
+            this.scheduleHibernation(resident, false)
+        }
+      })
+    resident.hibernating = operation
+    return operation
+  }
+
+  private async hibernateNow(
+    resident: Resident,
+    reason: string
+  ): Promise<void> {
+    if (!this.canHibernate(resident)) return
+    const binding = this.activeBinding(resident)
+    if (!binding?.nativeId || !binding.path) return
+    const generation = resident.generation
+    this.clearHibernationTimer(resident)
+    const checkpointReady = await this.refreshIdleCheckpoint(
+      resident,
+      binding,
+      generation
+    )
+    if (
+      !checkpointReady ||
+      resident.generation !== generation ||
+      resident.snapshot.session.status !== "ready"
+    )
+      return
+    const retiringGeneration = ++resident.generation
+    const connectionIds = [...resident.connections.keys()]
+    try {
+      await Promise.all(
+        [...resident.connections].map(([bindingId, connection]) =>
+          connection.driver.close(bindingId)
+        )
+      )
+    } catch (error) {
+      if (resident.generation === retiringGeneration)
+        resident.generation = generation
+      throw error
+    }
+    if (resident.generation !== retiringGeneration) return
+    await Promise.all(
+      connectionIds.map((bindingId) =>
+        this.revokeTools(bindingId, resident.snapshot.session.id)
+      )
+    )
+    if (resident.generation !== retiringGeneration) return
+    resident.connections.clear()
+    resident.driver = null
+    resident.snapshot = {
+      ...resident.snapshot,
+      nativeAgents: disconnectNativeAgents(resident.snapshot.nativeAgents),
+      session: {
+        ...resident.snapshot.session,
+        connection: "hibernated",
+        status: "ready",
+        error: undefined,
+      },
+    }
+    this.flush(resident)
+    hostLog("residency", "provider hibernated", {
+      conversation: resident.snapshot.session.id,
+      harness: resident.snapshot.session.harness,
+      nativeId: binding.nativeId,
+      reason,
+    })
+  }
+
+  private wake(resident: Resident): Promise<void> {
+    if (resident.waking) return resident.waking
+    const hibernating = resident.hibernating
+    const operation = (async () => {
+      await hibernating
+      await this.wakeNow(resident)
+    })().finally(() => {
+      if (resident.waking === operation) {
+        resident.waking = undefined
+        this.drain(resident)
+      }
+    })
+    resident.waking = operation
+    return operation
+  }
+
+  private async wakeNow(resident: Resident): Promise<void> {
+    if (
+      resident.driver ||
+      resident.snapshot.session.connection !== "hibernated" ||
+      resident.snapshot.session.status === "closed"
+    )
+      return
+    const binding = this.activeBinding(resident)
+    const driver = this.dependencies.driver(binding?.provider ?? "")
+    if (
+      !binding?.nativeId ||
+      !binding.path ||
+      !driver?.canResume ||
+      !driver.available(this.dependencies.appPath)
+    ) {
+      const message =
+        "The hibernated provider has no resumable native session"
+      resident.snapshot = {
+        ...resident.snapshot,
+        session: {
+          ...resident.snapshot.session,
+          connection: "disconnected",
+          status: "failed",
+          error: message,
+        },
+        requests: resident.snapshot.requests.map((request) =>
+          request.status === "queued"
+            ? {
+                ...request,
+                status: "failed",
+                error: message,
+                failure: classifyStartFailure(message, true),
+              }
+            : request
+        ),
+      }
+      this.flush(resident)
+      return
+    }
+    const generation = ++resident.generation
+    resident.opening = true
+    resident.driver = driver
+    resident.snapshot = {
+      ...resident.snapshot,
+      session: {
+        ...resident.snapshot.session,
+        connection: "starting",
+        status: "starting",
+        error: undefined,
+      },
+    }
+    this.flush(resident)
+    let held = false
+    let startedSession: LiveSessionState | undefined
+    try {
+      const verdict = await this.dependencies.resumeVerdict?.(binding)
+      if (verdict && !resumable(verdict, "moved"))
+        throw new Error(reconnectRefusal(verdict))
+      this.dependencies.memory?.hold(
+        binding.provider,
+        binding.nativeId,
+        resident.snapshot.session.id
+      )
+      held = true
+      const modeId =
+        resident.snapshot.session.currentMode ?? binding.modeId
+      const tuning =
+        resident.snapshot.requests.find(
+          (request) => request.status === "queued"
+        )?.tuning ??
+        resident.snapshot.session.settings ??
+        binding.tuning
+      const session = await driver.start(resident.snapshot.session.cwd, {
+        conversationId: binding.id,
+        resume: binding.nativeId,
+        threadPath: binding.path,
+        title: resident.snapshot.session.title,
+        tuning,
+        modeId,
+        emit: this.driverEvents(resident, binding.id),
+        mcpSnapshot: this.dependencies.mcpSnapshot
+          ? () =>
+              this.dependencies.mcpSnapshot!(resident.snapshot.session.cwd)
+          : undefined,
+        conversationTools: this.dependencies.tools?.(
+          binding.id,
+          resident.snapshot.session.id
+        ),
+      })
+      startedSession = session
+      if (resident.generation !== generation) {
+        await driver.close(binding.id)
+        await this.revokeTools(binding.id, resident.snapshot.session.id)
+        if (held)
+          this.releaseHold(
+            binding.provider,
+            binding.nativeId,
+            resident.snapshot.session.id
+          )
+        return
+      }
+      if (
+        session.status !== "ready" ||
+        session.connection !== "connected"
+      )
+        throw new Error("The provider did not become ready while waking")
+      if (session.nativeId !== binding.nativeId)
+        throw new Error(
+          "The provider returned a different session while waking. The saved conversation was not replaced."
+        )
+      if (
+        modeId &&
+        modeId !== session.currentMode &&
+        !session.modes.some((mode) => mode.id === modeId)
+      )
+        throw new Error(
+          "The saved agent mode is no longer available after waking"
+        )
+      if (modeId && modeId !== session.currentMode)
+        await driver.setMode(binding.id, modeId)
+      if (resident.generation !== generation) {
+        await driver.close(binding.id)
+        await this.revokeTools(binding.id, resident.snapshot.session.id)
+        if (held)
+          this.releaseHold(
+            binding.provider,
+            binding.nativeId,
+            resident.snapshot.session.id
+          )
+        return
+      }
+      const connected = {
+        ...session,
+        id: resident.snapshot.session.id,
+        title: session.title ?? resident.snapshot.session.title,
+        currentMode: modeId ?? session.currentMode,
+      }
+      resident.connections.set(binding.id, {
+        driver,
+        session: { ...connected, id: binding.id },
+      })
+      resident.snapshot = { ...resident.snapshot, session: connected }
+      this.updateBinding(resident, connected)
+      const control = this.control(resident)
+      resident.snapshot = {
+        ...resident.snapshot,
+        control: {
+          ...control,
+          bindings: control.bindings.map((candidate) =>
+            candidate.id === binding.id
+              ? {
+                  ...candidate,
+                  tuning: connected.settings ?? tuning,
+                  modeId: connected.currentMode ?? modeId,
+                }
+              : candidate
+          ),
+        },
+      }
+      resident.opening = false
+      this.flush(resident)
+      hostLog("residency", "provider woke", {
+        conversation: resident.snapshot.session.id,
+        harness: binding.provider,
+        nativeId: binding.nativeId,
+      })
+      this.drain(resident)
+      this.scheduleHibernation(resident)
+    } catch (error) {
+      const closed = await Promise.resolve(driver.close(binding.id)).then(
+        () => true,
+        () => false
+      )
+      await this.revokeTools(binding.id, resident.snapshot.session.id)
+      if (closed && held)
+        this.releaseHold(
+          binding.provider,
+          binding.nativeId,
+          resident.snapshot.session.id
+        )
+      if (!closed) {
+        resident.driver = driver
+        resident.opening = true
+        if (startedSession)
+          resident.connections.set(binding.id, {
+            driver,
+            session: startedSession,
+          })
+      }
+      if (resident.generation !== generation) return
+      const message = errorMessage({ error })
+      if (closed) {
+        resident.driver = null
+        resident.connections.delete(binding.id)
+        resident.opening = false
+      }
+      resident.snapshot = {
+        ...resident.snapshot,
+        session: {
+          ...resident.snapshot.session,
+          connection: closed ? "disconnected" : "connected",
+          status: "failed",
+          error: message,
+        },
+        requests: resident.snapshot.requests.map((request) =>
+          request.status === "queued"
+            ? {
+                ...request,
+                status: "failed",
+                error: message,
+                failure: classifyStartFailure(message, true),
+              }
+            : request
+        ),
+      }
+      this.flush(resident)
+      hostWarn("residency", "provider wake failed", {
+        conversation: resident.snapshot.session.id,
+        harness: binding.provider,
+        nativeId: binding.nativeId,
+        error: message,
+      })
     }
   }
 
@@ -575,8 +1208,10 @@ export class LiveConversations {
       const connection = bound.connections.get(bindingId)
       if (connection && raw.type === "live-session") {
         connection.session = raw.session
-        if (raw.session.connection === "disconnected")
+        if (raw.session.connection === "disconnected") {
           bound.connections.delete(bindingId)
+          void this.revokeTools(bindingId, owner)
+        }
       }
       return
     }
@@ -630,6 +1265,7 @@ export class LiveConversations {
         }
         resident.driver = null
         resident.connections.delete(bindingId)
+        void this.revokeTools(bindingId, id)
       }
       if (previousStatus === "running" && event.session.status !== "running") {
         this.actions.settle(resident, bindingId)
@@ -714,6 +1350,14 @@ export class LiveConversations {
     if (event.type === "live-session" || event.type === "live-permission")
       this.flush(resident)
     else this.schedule(resident)
+    if (event.type === "live-session") {
+      if (
+        resident.snapshot.session.status === "ready" &&
+        resident.snapshot.session.connection === "connected"
+      )
+        this.scheduleHibernation(resident)
+      else this.clearHibernationTimer(resident)
+    }
     if (!resident.opening && resident.snapshot.session.status === "ready")
       this.drain(resident)
   }
@@ -768,6 +1412,17 @@ export class LiveConversations {
       throw new Error("A prompt cannot be empty")
     // The user's own message supersedes any continuation Mako was about to send.
     this.declineAutoContinue(resident)
+    this.clearHibernationTimer(resident)
+    if (
+      resident.hibernating ||
+      (!resident.driver &&
+        resident.snapshot.session.connection === "hibernated")
+    ) {
+      request.inputDigest = inputDigest
+      const accepted = this.admit(resident, request)
+      void this.wake(resident)
+      return accepted
+    }
     if (!resident.driver) {
       this.transfer(id, {
         id: requestId,
@@ -1173,6 +1828,7 @@ export class LiveConversations {
       journal,
       driver: null,
       connections: new Map(),
+      bindingGenerations: new Map(),
       transferring: false,
       generation: 0,
       opening: false,
@@ -1260,6 +1916,9 @@ export class LiveConversations {
                 ...binding,
                 nativeId: session.nativeId ?? binding.nativeId,
                 path: path ?? binding.path,
+                tuning: session.settings ?? binding.tuning,
+                modeId:
+                  session.currentMode ?? binding.modeId,
               }
             : binding
         ),
@@ -1275,6 +1934,7 @@ export class LiveConversations {
       if (!resident.snapshot.threadPath) continue
       this.flush(resident)
       this.checkpointIdle(resident)
+      this.scheduleHibernation(resident)
     }
   }
 
@@ -1590,6 +2250,29 @@ export class LiveConversations {
   }
   async setMode(id: string, modeId: string): Promise<void> {
     const resident = this.require(id)
+    if (
+      !resident.driver &&
+      resident.snapshot.session.connection === "hibernated"
+    ) {
+      if (
+        resident.snapshot.session.modes.length > 0 &&
+        !resident.snapshot.session.modes.some((mode) => mode.id === modeId)
+      )
+        throw new Error("That agent mode is unavailable")
+      resident.snapshot = {
+        ...resident.snapshot,
+        session: { ...resident.snapshot.session, currentMode: modeId },
+      }
+      this.flush(resident)
+      const nativeId = resident.snapshot.session.nativeId
+      if (nativeId)
+        this.dependencies.memory?.remember(
+          resident.snapshot.session.harness,
+          nativeId,
+          { modeId }
+        )
+      return
+    }
     if (!resident.driver) throw new Error("The provider is disconnected")
     await resident.driver.setMode(
       this.control(resident).activeBindingId,
@@ -1598,6 +2281,21 @@ export class LiveConversations {
   }
   async close(id: string): Promise<void> {
     const resident = this.require(id)
+    if (resident.closeOperation) return resident.closeOperation
+    const operation = this.closeResident(resident, id)
+    resident.closeOperation = operation
+    void operation.catch(() => {
+      if (resident.closeOperation === operation)
+        resident.closeOperation = undefined
+    })
+    return operation
+  }
+
+  private async closeResident(
+    resident: Resident,
+    id: string
+  ): Promise<void> {
+    this.clearHibernationTimer(resident)
     for (const child of this.control(resident).children)
       if (child.delivery === "pending" || child.delivery === "queued")
         this.children.cancelChild(id, child.id)
@@ -1615,19 +2313,47 @@ export class LiveConversations {
     const generation = resident.generation
     resident.closing = true
     this.declineAutoContinue(resident)
-    const closed = [...resident.connections].map(([bindingId, connection]) =>
-      connection.driver.close(bindingId)
+    const openingOperation = resident.openingOperation
+    if (openingOperation) await openingOperation
+    const hibernationOperation = resident.hibernating
+    if (hibernationOperation) await hibernationOperation
+    const wakeOperation = resident.waking
+    if (wakeOperation) await wakeOperation
+    const transferOperation = resident.transferOperation
+    if (transferOperation) await transferOperation
+    const bindingIds = [...resident.connections.keys()]
+    const activeBindingId = this.control(resident).activeBindingId
+    if (resident.opening && !bindingIds.includes(activeBindingId))
+      bindingIds.push(activeBindingId)
+    const closings = [...resident.connections].map(
+      ([bindingId, connection]) => ({
+        bindingId,
+        close: Promise.resolve().then(() =>
+          connection.driver.close(bindingId)
+        ),
+      })
     )
-    if (resident.opening && resident.driver && !resident.connections.has(this.control(resident).activeBindingId)) closed.push(resident.driver.close(this.control(resident).activeBindingId))
+    if (
+      resident.opening &&
+      resident.driver &&
+      !resident.connections.has(activeBindingId)
+    ) {
+      const openingDriver = resident.driver
+      closings.push({
+        bindingId: activeBindingId,
+        close: Promise.resolve().then(() =>
+          openingDriver.close(activeBindingId)
+        ),
+      })
+    }
     resident.opening = false
-    resident.connections.clear()
-    resident.driver = null
     resident.snapshot = {
       ...resident.snapshot,
       session: {
         ...resident.snapshot.session,
         status: "closed",
-        connection: "disconnected",
+        connection:
+          closings.length > 0 ? "connected" : "disconnected",
       },
       nativeAgents: disconnectNativeAgents(resident.snapshot.nativeAgents),
       permissions: [],
@@ -1642,12 +2368,68 @@ export class LiveConversations {
       ),
     }
     this.flush(resident)
-    // A session closed while still opening never reported its native id, so
-    // the hold taken before its start is let go through the binding.
-    for (const binding of this.control(resident).bindings)
-      if (binding.nativeId) this.releaseHold(binding.provider, binding.nativeId, id)
     try {
-      await Promise.all(closed)
+      await Promise.all(
+        bindingIds.map((bindingId) =>
+          this.revokeTools(bindingId, id)
+        )
+      )
+      const closeResults = await Promise.allSettled(
+        closings.map((closing) => closing.close)
+      )
+      const failedBindings = new Set(
+        closeResults.flatMap((result, index) => {
+          const closing = closings[index]
+          return result.status === "rejected" && closing
+            ? [closing.bindingId]
+            : []
+        })
+      )
+      for (const closing of closings)
+        if (!failedBindings.has(closing.bindingId))
+          resident.connections.delete(closing.bindingId)
+      const retainedConnection =
+        resident.connections.get(activeBindingId) ??
+        resident.connections.values().next().value
+      resident.driver = retainedConnection?.driver ?? null
+      // A session closed while still opening never reported its native id, so
+      // the hold taken before its start is let go through the binding. A
+      // binding whose process did not confirm exit keeps its hold.
+      for (const binding of this.control(resident).bindings)
+        if (binding.nativeId && !failedBindings.has(binding.id))
+          this.releaseHold(
+            binding.provider,
+            binding.nativeId,
+            id
+          )
+      const failures = closeResults.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      )
+      if (failures.length) {
+        resident.snapshot = {
+          ...resident.snapshot,
+          session: {
+            ...resident.snapshot.session,
+            connection: resident.connections.size
+              ? "connected"
+              : "disconnected",
+            error: "A provider process did not confirm that it closed",
+          },
+        }
+        this.flush(resident)
+        throw new AggregateError(
+          failures,
+          "One or more provider processes did not close"
+        )
+      }
+      resident.snapshot = {
+        ...resident.snapshot,
+        session: {
+          ...resident.snapshot.session,
+          connection: "disconnected",
+        },
+      }
+      this.flush(resident)
       if (
         idle &&
         this.dependencies.checkpoint &&
@@ -1710,18 +2492,55 @@ export class LiveConversations {
   }
 
   private closedLeaf(resident: Resident): boolean {
-    return resident.snapshot.session.status === "closed" && !resident.driver && !resident.connections.size && !resident.closing && !resident.opening && !resident.transferring && !resident.checkpointing && !resident.rewinding && !resident.snapshot.control?.children.length
+    return resident.snapshot.session.status === "closed" && !resident.driver && !resident.connections.size && !resident.closing && !resident.opening && !resident.hibernating && !resident.waking && !resident.transferring && !resident.checkpointing && !resident.rewinding && !resident.snapshot.control?.children.length
   }
 
   stop(): void {
     for (const resident of this.records.values()) {
+      this.clearHibernationTimer(resident)
       resident.generation += 1
       const driver = resident.driver
       resident.driver = null
-      for (const [bindingId, connection] of resident.connections)
-        connection.driver.close(bindingId)
-      if (resident.opening)
-        driver?.close(this.control(resident).activeBindingId)
+      for (const [bindingId, connection] of resident.connections) {
+        void Promise.resolve(connection.driver.close(bindingId)).then(
+          () => {
+            const binding = this.control(resident).bindings.find(
+              (candidate) => candidate.id === bindingId
+            )
+            if (binding?.nativeId)
+              this.releaseHold(
+                binding.provider,
+                binding.nativeId,
+                resident.snapshot.session.id
+              )
+          },
+          () => undefined
+        )
+        void this.revokeTools(bindingId, resident.snapshot.session.id)
+      }
+      if (
+        resident.opening &&
+        !resident.connections.has(
+          this.control(resident).activeBindingId
+        )
+      ) {
+        const bindingId = this.control(resident).activeBindingId
+        const binding = this.control(resident).bindings.find(
+          (candidate) => candidate.id === bindingId
+        )
+        void Promise.resolve(driver?.close(bindingId)).then(
+          () => {
+            if (binding?.nativeId)
+              this.releaseHold(
+                binding.provider,
+                binding.nativeId,
+                resident.snapshot.session.id
+              )
+          },
+          () => undefined
+        )
+        void this.revokeTools(bindingId, resident.snapshot.session.id)
+      }
       // A continuation this host was about to send goes with it; the next
       // host offers the button instead of promising a send it cannot make.
       this.declineAutoContinue(resident)
@@ -1744,7 +2563,6 @@ export class LiveConversations {
     }
     for (const resident of this.records.values()) resident.journal.close()
     this.records.clear()
-    this.dependencies.memory?.releaseAll()
   }
 
   /**
@@ -1791,10 +2609,17 @@ export class LiveConversations {
   private drain(resident: Resident): void {
     if (lifecycleBlocked()) return
     if (this.actions.blocks(resident)) return
-    if (resident.checkpointing || resident.rewinding || resident.closing) return
+    if (
+      resident.checkpointing ||
+      resident.rewinding ||
+      resident.closing ||
+      resident.hibernating ||
+      resident.waking
+    )
+      return
     this.children.deliver(resident)
     if (this.transfers.pending(resident)) {
-      void this.transfers.perform(resident)
+      this.transfers.start(resident)
       return
     }
     if (
@@ -2029,6 +2854,21 @@ export class LiveConversations {
       journal.close()
       return undefined
     }
+    const strandedTransfers = new Set(
+      previous.control?.transfers
+        .filter(
+          (transfer) =>
+            transfer.state.kind === "accepted" &&
+            previous.requests.some(
+              (request) =>
+                request.id === transfer.input.id &&
+                request.status === "queued"
+            )
+        )
+        .map((transfer) => transfer.input.id) ?? []
+    )
+    const restartError =
+      "The host restarted before the provider switch was activated. Submit a new switch to retry."
     const snapshot: LiveSnapshot = {
       ...previous,
       nativeAgents: disconnectNativeAgents(previous.nativeAgents),
@@ -2051,13 +2891,13 @@ export class LiveConversations {
             ),
             transfers: previous.control.transfers.map((transfer) =>
               transfer.state.kind === "preparing" ||
-              transfer.state.kind === "queued"
+              transfer.state.kind === "queued" ||
+              strandedTransfers.has(transfer.input.id)
                 ? {
                     ...transfer,
                     state: {
                       kind: "failed" as const,
-                      error:
-                        "The host restarted before the provider switch was activated. Submit a new switch to retry.",
+                      error: restartError,
                     },
                   }
                 : transfer
@@ -2087,12 +2927,23 @@ export class LiveConversations {
           previous.requests,
           "host-crashed",
           "Mako closed unexpectedly while this turn was running; whether the provider finished it is unknown"
+        ).map((request) =>
+          strandedTransfers.has(request.id) &&
+          request.status === "queued"
+            ? {
+                ...request,
+                status: "failed" as const,
+                error: restartError,
+                failure: "resume-failed" as const,
+              }
+            : request
         )
       ),
     }
     journal.commit(snapshot, previous)
     const resident: Resident = {
       connections: new Map(),
+      bindingGenerations: new Map(),
       transferring: false,
       snapshot,
       journal,

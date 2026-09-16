@@ -10,9 +10,14 @@ import type { ProviderMcpSource } from "./providers/mcp-source.js"
 import { backendConnectionCredentials } from "./backend-connection.js"
 import { cuaEmbeddedSocket } from "./cua-embedded.js"
 import { cuaDriverStatus } from "./cua-driver-version.js"
+import { headlessNodeExecutable } from "./headless-node.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
 import { projectedMcpServers } from "./contracts/mcp-reach.js"
+import {
+  migrateRetiredMakoMcpFile,
+  retiredMakoMcp,
+} from "./retired-mcp.js"
 import type {
   McpProvider,
   McpRegistryProviderStatus,
@@ -292,6 +297,10 @@ export function mergeMcpDefinitions(
   const namesByBody = new Map<string, Set<string>>()
   const bodiesByName = new Map<string, Set<string>>()
   for (const item of definitions) {
+    if (
+      retiredMakoMcp(item.definition.name, item.definition)
+    )
+      continue
     const safe = safeDefinition(item.definition)
     const body = bodyKey(safe)
     namesByBody.set(body, (namesByBody.get(body) ?? new Set()).add(safe.name))
@@ -383,7 +392,15 @@ async function readJsonDefinitions(
           route.provider,
           await readFile(file, "utf8")
         )
+        if (
+          parsed.some((definition) =>
+            retiredMakoMcp(definition.name, definition)
+          )
+        )
+          await migrateRetiredMakoMcpFile(file).catch(() => false)
         for (const definition of parsed) {
+          if (retiredMakoMcp(definition.name, definition))
+            continue
           definitions.push({
             definition,
             origin: {
@@ -417,22 +434,27 @@ async function readCliDefinitions(
       maxBuffer: MAX_CLI_OUTPUT,
       windowsHide: true,
     })
-    return parseProviderJson(route.provider, stdout).map((definition) => ({
-      definition,
-      origin: {
-        provider: route.provider,
-        account: route.account,
-        scope: "effective",
-        provenance: `${command} mcp list --json`,
-      },
-    }))
+    const parsed = parseProviderJson(route.provider, stdout)
+    return parsed
+      .filter(
+        (definition) =>
+          !retiredMakoMcp(definition.name, definition)
+      )
+      .map((definition) => ({
+        definition,
+        origin: {
+          provider: route.provider,
+          account: route.account,
+          scope: "effective",
+          provenance: `${command} mcp list --json`,
+        },
+      }))
   } catch {
     return []
   }
 }
 
 const MAKO_NODE_SERVERS = new Set(["mako-control"])
-
 export function isMakoNodeServer(name: string): boolean {
   return MAKO_NODE_SERVERS.has(name)
 }
@@ -455,6 +477,7 @@ export async function managedMcpDefinitions(
   env?: NodeJS.ProcessEnv
 ): Promise<McpDiscoveredDefinition[]> {
   const runtimeEnv = env ?? managedRuntimeEnvironment()
+  const nodeExecutable = headlessNodeExecutable(execPath)
   const commandEnv = { ...runtimeEnv }
   delete commandEnv.MAKO_BACKEND_TOKEN
   delete commandEnv.MAKO_CUA_SOCKET
@@ -474,7 +497,7 @@ export async function managedMcpDefinitions(
       args: [
         ...(process.platform === "win32"
           ? []
-          : ["ELECTRON_RUN_AS_NODE=1", execPath]),
+          : ["ELECTRON_RUN_AS_NODE=1", nodeExecutable]),
         join(appPath, "dist-electron", "computer-tools-main.js"),
         ...(cuaSocket && cuaPath
           ? ["--socket", cuaSocket, "--driver", cuaPath]

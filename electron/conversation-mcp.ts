@@ -12,6 +12,7 @@ interface Scope {
   conversationId: string
   bindingId: string
   expiresAt: number
+  revoked: boolean
 }
 const readAnnotations = {
   readOnlyHint: true,
@@ -31,8 +32,13 @@ function result(text: string) {
 
 function toolkit(owner: LiveConversations, scope: Scope): McpServer {
   const server = new McpServer({ name: "mako-conversations", version: "1.0.0" })
-  const authorize = (action: "read" | "delegate" = "read") =>
+  const authorize = (action: "read" | "delegate" = "read") => {
+    if (scope.revoked || scope.expiresAt < Date.now())
+      throw new Error(
+        "This Mako conversation grant is no longer active. Resume the task in Mako."
+      )
     owner.authorizeAgent(scope.conversationId, scope.bindingId, action)
+  }
   server.registerTool(
     "mako_conversation_capabilities",
     {
@@ -123,7 +129,7 @@ export async function startConversationMcp(owner: LiveConversations) {
     void (async () => {
       const token = request.headers.authorization?.replace(/^Bearer /, "")
       const scope = token ? scopes.get(token) : undefined
-      if (!scope || scope.expiresAt < Date.now()) {
+      if (!scope || scope.revoked || scope.expiresAt < Date.now()) {
         response.writeHead(401).end()
         return
       }
@@ -173,8 +179,19 @@ export async function startConversationMcp(owner: LiveConversations) {
         bindingId,
         conversationId,
         expiresAt: Date.now() + 24 * 60 * 60 * 1_000,
+        revoked: false,
       })
       return { url, token }
+    },
+    revoke(bindingId: string, conversationId: string): void {
+      for (const [token, scope] of scopes)
+        if (
+          scope.bindingId === bindingId &&
+          scope.conversationId === conversationId
+        ) {
+          scope.revoked = true
+          scopes.delete(token)
+        }
     },
     close() {
       scopes.clear()

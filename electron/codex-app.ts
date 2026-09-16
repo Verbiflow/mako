@@ -232,8 +232,7 @@ export async function codexAppStart(
     const message =
       error instanceof Error && error.message ? error.message : fallback
     failLive(live, message)
-    sessions.delete(id)
-    if (!child.killed) child.kill()
+    await codexAppClose(id)
     throw new Error(message, { cause: error })
   }
 }
@@ -359,17 +358,34 @@ export async function codexAppCompact(id: string): Promise<void> {
   await rpcRequest(live, "thread/compact/start", { threadId: live.threadId })
 }
 
-export function codexAppClose(id: string): void {
+const closingSessions = new Map<string, Promise<void>>()
+
+export async function codexAppClose(id: string): Promise<void> {
+  const closing = closingSessions.get(id)
+  if (closing) return closing
   const live = sessions.get(id)
   if (!live) return
-  updateState(live, { status: "closed" })
-  sessions.delete(id)
-  disposeLive(live, new Error("Codex session closed"))
-  if (!live.child.killed) live.child.kill()
+  const operation = (async () => {
+    updateState(live, { status: "closed" })
+    disposeLive(live, new Error("Codex session closed"))
+    if (!live.child.killed) live.child.kill()
+    if (live.child.exitCode === null && live.child.signalCode === null)
+      await new Promise<void>((resolve) => {
+        live.child.once("exit", () => resolve())
+      })
+    if (sessions.get(id) === live) sessions.delete(id)
+  })()
+  closingSessions.set(id, operation)
+  try {
+    await operation
+  } finally {
+    if (closingSessions.get(id) === operation)
+      closingSessions.delete(id)
+  }
 }
 
 export function stopCodexApps(): void {
-  for (const id of sessions.keys()) codexAppClose(id)
+  for (const id of sessions.keys()) void codexAppClose(id)
 }
 
 async function openThread(

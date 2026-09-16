@@ -1,11 +1,19 @@
-import type { ChildProcess } from "node:child_process"
-import { execFile } from "node:child_process"
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
-import { promisify } from "node:util"
+import { execFileSync, type ChildProcess } from "node:child_process"
+import {
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs"
+import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import { hostLog, hostWarn } from "./host-log.js"
-import { processIdentityMatches } from "./providers/process-liveness.js"
+import {
+  processExecutableMatches,
+  processIdentityMatches,
+} from "./providers/process-liveness.js"
 
 /**
  * Provider processes the host has spawned and would otherwise orphan.
@@ -22,15 +30,15 @@ import { processIdentityMatches } from "./providers/process-liveness.js"
 const RecordSchema = z.object({
   pid: z.number().int().positive(),
   startedAt: z.number(),
+  processStartedAt: z.number().optional(),
   executable: z.string(),
+  executableIdentity: z.string().optional(),
   kind: z.string(),
   owner: z.string(),
   host: z.number().int().positive(),
 })
 const RegistrySchema = z.object({ children: z.array(RecordSchema) })
 export type ProviderChildRecord = z.infer<typeof RecordSchema>
-
-const run = promisify(execFile)
 
 export class ProviderChildren {
   readonly path: string
@@ -82,13 +90,38 @@ export class ProviderChildren {
     const record: ProviderChildRecord = {
       pid: info.pid,
       startedAt: Date.now(),
+      processStartedAt: processStartedAt(info.pid),
       executable: info.executable,
+      executableIdentity: processExecutableIdentity(
+        info.pid,
+        info.executable
+      ),
       kind: info.kind,
       owner: info.owner,
       host: this.hostPid,
     }
     this.records = [...this.records.filter((entry) => entry.pid !== info.pid), record]
     this.write()
+    for (const delay of [250, 1_000, 5_000]) {
+      const timer = setTimeout(() => {
+        const current = this.records.find(
+          (entry) => entry.pid === info.pid
+        )
+        if (
+          !current ||
+          current.processStartedAt !== processStartedAt(info.pid)
+        )
+          return
+        const executableIdentity = processExecutableIdentity(
+          info.pid,
+          info.executable
+        )
+        if (current.executableIdentity === executableIdentity) return
+        current.executableIdentity = executableIdentity
+        this.write()
+      }, delay)
+      timer.unref()
+    }
   }
 
   untrackPid(pid: number): void {
@@ -130,12 +163,113 @@ export class ProviderChildren {
 
   private async identityHolds(entry: ProviderChildRecord, signal: AbortSignal): Promise<boolean> {
     try {
-      if (!(await processIdentityMatches({ pid: entry.pid, startedAt: entry.startedAt, signal }))) return false
-      const { stdout } = await run("ps", ["-p", String(entry.pid), "-o", "command="], { maxBuffer: 16_384, timeout: 1_500, signal })
-      return stdout.includes(entry.executable)
+      if (
+        !(await processIdentityMatches({
+          pid: entry.pid,
+          startedAt: entry.processStartedAt ?? entry.startedAt,
+          signal,
+          exact: entry.processStartedAt !== undefined,
+          toleranceMs:
+            entry.processStartedAt === undefined ? 1_500 : undefined,
+        }))
+      )
+        return false
+      return processExecutableMatches({
+        pid: entry.pid,
+        executable:
+          entry.executableIdentity ??
+          legacyShebangExecutable(entry.executable) ??
+          entry.executable,
+        signal,
+      })
     } catch {
       return false
     }
+  }
+}
+
+function legacyShebangExecutable(executable: string): string | undefined {
+  try {
+    const line = readFileSync(executable, {
+      encoding: "utf8",
+    }).split("\n", 1)[0]
+    if (!line?.startsWith("#!")) return undefined
+    const command = line.slice(2).trim().split(/\s+/)
+    if (basename(command[0] ?? "") !== "env") return command[0]
+    return command
+      .slice(1)
+      .find(
+        (argument) =>
+          !argument.startsWith("-") && !argument.includes("=")
+      )
+  } catch {
+    return undefined
+  }
+}
+
+function canonicalExecutable(executable: string): string {
+  try {
+    return realpathSync(executable)
+  } catch {
+    return executable
+  }
+}
+
+function processExecutableIdentity(pid: number, fallback: string): string {
+  let observed: string | undefined
+  for (let attempt = 0; attempt < 20; attempt++) {
+    observed = currentProcessExecutable(pid)
+    if (observed && basename(observed) !== "env")
+      return canonicalExecutable(observed)
+    Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)),
+      0,
+      0,
+      5
+    )
+  }
+  return canonicalExecutable(observed ?? fallback)
+}
+
+function currentProcessExecutable(pid: number): string | undefined {
+  try {
+    if (process.platform === "linux")
+      return readlinkSync(`/proc/${pid}/exe`)
+    if (process.platform === "darwin") {
+      const output = execFileSync(
+        "/usr/sbin/lsof",
+        ["-nP", "-a", "-p", String(pid), "-d", "txt", "-Fn"],
+        {
+          encoding: "utf8",
+          timeout: 1_500,
+          maxBuffer: 64_000,
+        }
+      )
+      const executable = output
+        .split("\n")
+        .find((line) => line.startsWith("n"))
+        ?.slice(1)
+      return executable
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+function processStartedAt(pid: number): number | undefined {
+  if (process.platform === "win32") return undefined
+  try {
+    const value = Date.parse(
+      execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
+        encoding: "utf8",
+        timeout: 1_500,
+        maxBuffer: 4_096,
+      }).trim()
+    )
+    return Number.isFinite(value) ? value : undefined
+  } catch {
+    return undefined
   }
 }
 

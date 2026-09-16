@@ -237,7 +237,12 @@ export class SessionMemory {
     this.db.exec("BEGIN IMMEDIATE")
     try {
       const row = this.readHold(provider, nativeId)
-      if (row && !this.ownHold(row) && this.holdLive(row)) throw new SessionHeldError(this.describe(row))
+      if (
+        row &&
+        (!this.ownHold(row) || row.conversation_id !== conversationId) &&
+        this.holdLive(row)
+      )
+        throw new SessionHeldError(this.describe(row))
       const since = row && this.ownHold(row) ? row.since : at
       this.db
         .prepare(

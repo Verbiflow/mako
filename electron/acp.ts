@@ -494,8 +494,6 @@ export async function liveStart(
     // timing line and the real cause was invisible.
     const died = child.exitCode !== null || child.signalCode !== null
     watch.dispose()
-    child.kill()
-    sessions.delete(id)
     const message =
       error instanceof Error ? errorMessage({ error }) : `The ${harness} agent failed to start`
     const surfaced = (died && stderrDetail(stderr)) || message
@@ -510,6 +508,7 @@ export async function liveStart(
       signal: child.signalCode,
       stderr: stderr.slice(-600),
     })
+    await liveClose(id)
     throw new Error(surfaced, { cause: error })
   }
 }
@@ -735,18 +734,35 @@ export async function liveCancel(id: string): Promise<void> {
   await live.connection.cancel({ sessionId: live.sessionId })
 }
 
-export function liveClose(id: string): void {
+const closingSessions = new Map<string, Promise<void>>()
+
+export async function liveClose(id: string): Promise<void> {
+  const closing = closingSessions.get(id)
+  if (closing) return closing
   const live = sessions.get(id)
   if (!live) return
-  update(live, { status: "closed" })
-  live.startup.abort()
-  engine.release(live)
-  live.child.kill()
-  sessions.delete(id)
+  const operation = (async () => {
+    update(live, { status: "closed" })
+    live.startup.abort()
+    engine.release(live)
+    live.child.kill()
+    if (live.child.exitCode === null && live.child.signalCode === null)
+      await new Promise<void>((resolve) => {
+        live.child.once("exit", () => resolve())
+      })
+    if (sessions.get(id) === live) sessions.delete(id)
+  })()
+  closingSessions.set(id, operation)
+  try {
+    await operation
+  } finally {
+    if (closingSessions.get(id) === operation)
+      closingSessions.delete(id)
+  }
 }
 
 export function stopAcp(): void {
-  for (const id of sessions.keys()) liveClose(id)
+  for (const id of sessions.keys()) void liveClose(id)
 }
 
 function update(live: Live, patch: Partial<LiveSessionState>): void {

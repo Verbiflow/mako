@@ -22,6 +22,7 @@ import { promisify } from "node:util"
 import { app } from "electron"
 import { DAEMON_NODE_ARGS } from "./daemon-command.js"
 import { buildTag } from "./build-identity.js"
+import { headlessNodeExecutable } from "./headless-node.js"
 
 const run = promisify(execFile)
 
@@ -52,7 +53,7 @@ function daemonPlist(script = daemonScript()): string {
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${process.execPath}</string>
+    <string>${headlessNodeExecutable()}</string>
 ${DAEMON_NODE_ARGS.map((argument) => `    <string>${argument}</string>`).join("\n")}
     <string>${script}</string>
   </array>

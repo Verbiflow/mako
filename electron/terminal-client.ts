@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { chmod, mkdir } from "node:fs/promises"
 import { createConnection, type Socket } from "node:net"
 import { join } from "node:path"
+import { headlessNodeExecutable } from "./headless-node.js"
 import type {
   TerminalCreateOptions,
   TerminalEvent,
@@ -282,7 +283,7 @@ export class TerminalDaemonClient {
     const arguments_ = [this.#daemonEntry, "--endpoint", this.#endpoint, "--state-dir", this.#stateDir]
     if (this.#build !== undefined) arguments_.push("--build", this.#build)
     const child = spawn(
-      process.execPath,
+      headlessNodeExecutable(),
       arguments_,
       {
         detached: true,

@@ -42,6 +42,8 @@ const cache = new Map<
 >()
 const loading = new Map<string, Promise<HarnessProfile>>()
 const launching = new Map<string, Promise<HarnessProfile>>()
+/** The workspace each cache key was asked for, so a provider can be re-discovered everywhere it was seen. */
+const scopes = new Map<string, string | undefined>()
 const listeners = new Set<(event: HarnessProfileEvent) => void>()
 const DISPLAY_TTL_MS = 30_000
 /**
@@ -66,6 +68,28 @@ export function harnessProfile(
   cwd?: string
 ): Promise<HarnessProfile> {
   return loadProfile(harness, cwd, force ? "refresh" : "display")
+}
+
+/**
+ * The provider's runtime changed under its catalog — an update Mako ran, or
+ * one the user ran in a terminal — so every workspace that listed its models
+ * lists them again. What is held answers until each discovery lands as an
+ * event; a picker never blanks, and a new CLI's models arrive without a
+ * restart. Before this, an updated Codex kept serving the old CLI's model
+ * list for the rest of the host's life.
+ */
+export async function refreshHarnessProfiles(harness: string): Promise<void> {
+  const prefix = `${harness}:`
+  const workspaces = new Set<string | undefined>()
+  for (const [key, cwd] of scopes) if (key.startsWith(prefix)) workspaces.add(cwd)
+  for (const [key, held] of cache)
+    if (key.startsWith(prefix)) cache.set(key, { ...held, staleAt: 0 })
+  if (!workspaces.size) workspaces.add(undefined)
+  await Promise.all(
+    [...workspaces].map((cwd) =>
+      loadProfile(harness, cwd, "refresh").catch(() => undefined)
+    )
+  )
 }
 
 /** Sending validates the selection already shown; discovery is not a per-turn tax. */
@@ -146,6 +170,7 @@ async function loadProfile(
   }
   const account = `${harness}:${accountKey}:`
   const key = `${account}${scope ?? ""}`
+  scopes.set(key, cwd)
   const held = cache.get(key)
   if (mode !== "refresh" && held) {
     const fresh = Date.now() < held.staleAt

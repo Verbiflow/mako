@@ -44,9 +44,29 @@ export async function startControlService(
 ) {
   const scopes = new Map<string, Scope>()
   const latestControlToken = new Map<string, string>()
+  const inFlight = new Map<string, Set<AbortController>>()
+  const refreshLatest = (bindingId: string): boolean => {
+    const remaining = [...scopes]
+      .reverse()
+      .find(([, scope]) => scope.bindingId === bindingId)
+    if (remaining) {
+      latestControlToken.set(bindingId, remaining[0])
+      return true
+    }
+    latestControlToken.delete(bindingId)
+    return false
+  }
+  const assertScope = (token: string, scope: Scope): void => {
+    if (scopes.get(token) !== scope || scope.expiresAt < Date.now())
+      throw new Error(
+        "This Mako control grant is no longer active. Resume the task in Mako."
+      )
+    authorize(scope.conversationId, scope.bindingId)
+  }
   const server = createServer((request, response) => {
     const abort = new AbortController()
     response.once("close", () => abort.abort())
+    let requestToken: string | undefined
     void (async () => {
       if (
         request.method !== "POST" ||
@@ -66,14 +86,18 @@ export async function startControlService(
         response.writeHead(401).end()
         return
       }
-      authorize(scope.conversationId, scope.bindingId)
+      requestToken = token
+      const running = inFlight.get(token) ?? new Set<AbortController>()
+      running.add(abort)
+      inFlight.set(token, running)
+      assertScope(token, scope)
       if (request.url === "/browser/release-owner") {
         const isLatest =
-          latestControlToken.get(scope.conversationId) === token
+          latestControlToken.get(scope.bindingId) === token
         scopes.delete(token)
-        if (isLatest) latestControlToken.delete(scope.conversationId)
-        const value = isLatest
-          ? await browser.releaseOwner(scope.conversationId)
+        const hasReplacement = refreshLatest(scope.bindingId)
+        const value = isLatest && !hasReplacement
+          ? await browser.releaseOwner(scope.bindingId)
           : { released: 0, closed: 0 }
         response
           .writeHead(200, { "content-type": "application/json" })
@@ -84,7 +108,7 @@ export async function startControlService(
         const observation = ComputerObservationSchema.parse(
           JSON.parse(await body(request, 9 * 1024 * 1024))
         )
-        authorize(scope.conversationId, scope.bindingId)
+        assertScope(token, scope)
         previews?.observe(
           {
             conversationId: scope.conversationId,
@@ -99,7 +123,7 @@ export async function startControlService(
           previews?.computerTarget(
             scope.conversationId,
             observation.window,
-            () => authorize(scope.conversationId, scope.bindingId)
+            () => assertScope(token, scope)
           )
         response
           .writeHead(200, { "content-type": "application/json" })
@@ -109,7 +133,7 @@ export async function startControlService(
       const command = BrowserCommandSchema.parse(
         JSON.parse(await body(request))
       )
-      authorize(scope.conversationId, scope.bindingId)
+      assertScope(token, scope)
       const target =
         "target" in command
           ? `${command.target.browser}:${command.target.tab}`
@@ -133,8 +157,8 @@ export async function startControlService(
           status: "running",
         })
       const value = await browser
-        .execute(scope.conversationId, command, abort.signal, () => {
-          authorize(scope.conversationId, scope.bindingId)
+        .execute(scope.bindingId, command, abort.signal, () => {
+          assertScope(token, scope)
         })
         .catch((error) => {
           if (tracksActivity)
@@ -166,29 +190,36 @@ export async function startControlService(
         )
         if (bound && command.action !== "close")
           previews?.browserTarget(scope.conversationId, bound, () =>
-            authorize(scope.conversationId, scope.bindingId)
+            assertScope(token, scope)
           )
       }
       response
         .writeHead(200, { "content-type": "application/json" })
         .end(JSON.stringify({ ok: true, value }))
-    })().catch((error) => {
-      if (response.destroyed) return
-      const fault =
-        error instanceof BrowserFault
-          ? error.detail
-          : {
-              code: "invalid-request",
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Control request failed",
-              outcome: "not-dispatched",
-            }
-      response
-        .writeHead(200, { "content-type": "application/json" })
-        .end(JSON.stringify({ ok: false, fault }))
-    })
+    })()
+      .catch((error) => {
+        if (response.destroyed) return
+        const fault =
+          error instanceof BrowserFault
+            ? error.detail
+            : {
+                code: "invalid-request",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Control request failed",
+                outcome: "not-dispatched",
+              }
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify({ ok: false, fault }))
+      })
+      .finally(() => {
+        if (!requestToken) return
+        const running = inFlight.get(requestToken)
+        running?.delete(abort)
+        if (!running?.size) inFlight.delete(requestToken)
+      })
   })
   server.requestTimeout = 70_000
   await new Promise<void>((resolve, reject) => {
@@ -201,8 +232,8 @@ export async function startControlService(
       for (const [token, scope] of scopes)
         if (scope.expiresAt < Date.now()) {
           scopes.delete(token)
-          if (latestControlToken.get(scope.conversationId) === token)
-            latestControlToken.delete(scope.conversationId)
+          if (latestControlToken.get(scope.bindingId) === token)
+            refreshLatest(scope.bindingId)
         }
       const token = randomBytes(32).toString("base64url")
       scopes.set(token, {
@@ -210,10 +241,32 @@ export async function startControlService(
         bindingId,
         expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       })
-      latestControlToken.set(conversationId, token)
+      latestControlToken.set(bindingId, token)
       return { url: `http://127.0.0.1:${port}/browser`, token }
     },
+    async revoke(conversationId: string, bindingId: string): Promise<void> {
+      let removedLatest = false
+      for (const [token, scope] of scopes) {
+        if (
+          scope.conversationId !== conversationId ||
+          scope.bindingId !== bindingId
+        )
+          continue
+        scopes.delete(token)
+        for (const controller of inFlight.get(token) ?? [])
+          controller.abort()
+        inFlight.delete(token)
+        if (latestControlToken.get(bindingId) === token)
+          removedLatest = true
+      }
+      const hasReplacement = refreshLatest(bindingId)
+      if (removedLatest && !hasReplacement)
+        await browser.releaseOwner(bindingId)
+    },
     close() {
+      for (const controllers of inFlight.values())
+        for (const controller of controllers) controller.abort()
+      inFlight.clear()
       scopes.clear()
       latestControlToken.clear()
       server.closeAllConnections()

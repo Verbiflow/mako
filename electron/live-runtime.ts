@@ -30,10 +30,13 @@ export interface ProviderConnection {
 
 export interface Resident {
   closing?: boolean
+  closeOperation?: Promise<void>
   checkpointing?: boolean
   rewinding?: boolean
   connections: Map<string, ProviderConnection>
+  bindingGenerations: Map<string, number>
   transferring: boolean
+  transferOperation?: Promise<void>
   snapshot: LiveSnapshot
   journalSnapshot?: LiveSnapshot
   journal: LiveJournal
@@ -41,10 +44,19 @@ export interface Resident {
   storageFault?: boolean
   generation: number
   opening: boolean
+  openingOperation?: Promise<void>
   pendingCharacters: number
   updates: LiveBatch["updates"]
   timer: ReturnType<typeof setTimeout> | null
   displayPrompt?: string
+  /** When this ready provider became eligible to leave the bounded warm pool. */
+  idleSince?: number
+  idleTimer?: ReturnType<typeof setTimeout>
+  /** Intentional transport teardown; prompts accepted during it wake afterwards. */
+  hibernating?: Promise<void>
+  /** One coalesced resume for every prompt that arrives while hibernated. */
+  waking?: Promise<void>
+  retireWhenIdle?: boolean
   /** The scheduled continuation of a turn that ended on a dropped connection, while it is pending. */
   autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }
 }
@@ -57,6 +69,7 @@ export interface Dependencies {
     bindingId: string,
     conversationId: string
   ): ConversationTools | undefined
+  revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   providers?(): string[]
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
@@ -74,6 +87,12 @@ export interface Dependencies {
   memory?: SessionMemory
   /** Test override for `AUTO_CONTINUE_DELAY_MS`, the wait before Mako continues a dropped turn itself. */
   autoContinueDelayMs?: number
+  /** Test override for ready provider residency. */
+  providerIdleMs?: number
+  /** Test override for the number of ready transports retained for fast reuse. */
+  providerWarmLimit?: number
+  /** Test clock for deterministic residency decisions. */
+  now?: () => number
 }
 
 export interface LiveAccess {
@@ -86,6 +105,11 @@ export interface LiveAccess {
   control(resident: Resident): ConversationControl
   flush(resident: Resident): void
   drain(resident: Resident): void
+  residencyChanged(resident: Resident): void
+  driverEvents(
+    resident: Resident,
+    bindingId: string
+  ): (event: LiveDriverEvent) => void
   close(id: string): Promise<void>
   pending(resident: Resident): ContextTransfer | undefined
   storageFailed(resident: Resident, boundary: FailureBoundary): void

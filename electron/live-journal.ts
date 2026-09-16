@@ -97,7 +97,12 @@ const MetadataSchema = z.object({
   nativeAgents: NativeAgentRosterSchema.optional(),
   control: ConversationControlSchema.optional(),
   session: z.object({
-    connection: z.enum(["starting", "connected", "disconnected"]),
+    connection: z.enum([
+      "starting",
+      "connected",
+      "hibernated",
+      "disconnected",
+    ]),
     id: z.string(),
     nativeId: z.string().optional(),
     harness: z.string(),

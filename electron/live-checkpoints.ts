@@ -39,9 +39,13 @@ export class LiveCheckpoints {
       ) {
         snapshots.abandonRun(request.id)
         this.host.drain(resident)
+        this.host.residencyChanged(resident)
         return
       }
       return run()
+    }).catch((error) => {
+      this.host.residencyChanged(resident)
+      throw error
     })
   }
 
@@ -136,7 +140,10 @@ export class LiveCheckpoints {
       .catch((error) => this.host.storageFailed(resident, { error }))
       .finally(() => {
         resident.checkpointing = false
-        if (generation === resident.generation) this.host.drain(resident)
+        if (generation === resident.generation) {
+          this.host.drain(resident)
+          this.host.residencyChanged(resident)
+        }
       })
   }
 

@@ -12,6 +12,7 @@ import {
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { z } from "zod"
+import { headlessNodeExecutable } from "./headless-node.js"
 
 export interface BrowserExtensionSetup {
   directory: string
@@ -128,9 +129,10 @@ export async function prepareBrowserExtension(
   await cp(source, directory, { recursive: true })
   const helper = join(bin, "mako-browser-host")
   const temporary = `${helper}.${process.pid}.tmp`
+  const nodeExecutable = headlessNodeExecutable(executable)
   await writeFile(
     temporary,
-    `#!/bin/sh\nexec /usr/bin/env ELECTRON_RUN_AS_NODE=1 ${quote(executable)} ${quote(join(appPath, "dist-electron", "browser-native-host-entry.js"))} "$@"\n`,
+    `#!/bin/sh\nexec /usr/bin/env ELECTRON_RUN_AS_NODE=1 ${quote(nodeExecutable)} ${quote(join(appPath, "dist-electron", "browser-native-host-entry.js"))} "$@"\n`,
     { mode: 0o700 }
   )
   await chmod(temporary, 0o700)
@@ -157,8 +159,10 @@ export async function prepareBrowserExtension(
     await rename(profileTemporary, profileHelper)
     const hosts = join(profile, "NativeMessagingHosts")
     await mkdir(hosts, { recursive: true })
+    const manifest = join(hosts, "dev.mako.browser.json")
+    const manifestTemporary = `${manifest}.${process.pid}.tmp`
     await writeFile(
-      join(hosts, "dev.mako.browser.json"),
+      manifestTemporary,
       JSON.stringify(
         {
           name: "dev.mako.browser",
@@ -172,6 +176,7 @@ export async function prepareBrowserExtension(
       ),
       { mode: 0o600 }
     )
+    await rename(manifestTemporary, manifest)
   }
   return { directory, extensionId }
 }
