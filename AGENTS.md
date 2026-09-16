@@ -976,6 +976,11 @@ next host reaps what an earlier host left, but only a pid that still runs the
 recorded executable and started when the record says (`provider-children.ts`),
 because a killed or replaced host never reaches `stopAcp()` and four idle
 cursor-agent processes from three earlier hosts were once found a day later.
+Mako-owned Node children use `headlessNodeExecutable` (`headless-node.ts`):
+on macOS it selects Electron's bundled Helper, whose `LSUIElement` policy
+keeps each Cursor SDK process, managed MCP server, browser native host and
+daemon out of the Dock. Never launch a headless script through the main
+Mako/Electron executable when the Helper is available.
 `test-acp-startup.ts`, `test-host-log.ts`, `test-provider-children.ts` and
 `test-composer-settings.ts` cover these.
 
@@ -1161,7 +1166,7 @@ settings it prepared, and the catalog's `annotate` overlays `settings`,
 the store win when it names a model, fills what it left out, and prefers the
 ledger only when its observation is newer than the store's write. A hold is
 a lease: taken before a resume spawns anything, kept alive every 30 s,
-released on close and on `stop`, stale after three minutes or when its pid is
+released on hibernate, close and `stop`, stale after three minutes or when its pid is
 gone, and another host's hold refuses the continuation plan by name and shows
 as `external-open` in the rail. The journal's `modes` keep `access` and
 `enforcement`, so Restart Mako no longer strips the tiers from the picker.
@@ -1171,6 +1176,16 @@ its own memory of the tier when a reply arrives without one. A host started
 after the ledger existed offers its own journals to it once (`backfill`,
 stamped with the journal's write time, never over a newer observation), so
 sessions from before the ledger are not "Model not recorded" forever.
+
+A ready provider process is a warm cache, not active work. `LiveConversations`
+keeps at most two warm bindings per host and hibernates either the oldest excess
+or any one idle for ten minutes. Hibernation closes the provider and its MCP
+children, revokes its control grants, releases its session hold, and keeps the
+journal and binding. The next prompt takes the hold, checks the resume verdict
+and starts that same native session once; concurrent prompts share the wake.
+Running or queued work, permissions, child delivery, transfers, checkpoints,
+rewinds and automatic continuation prevent hibernation. A retired driver's late
+events are fenced by the resident generation and cannot close its replacement.
 
 A saved binding's fate is a `ResumeVerdict`
 (`electron/contracts/conversation-control.ts`), not a boolean: `resumable`
@@ -1215,8 +1230,8 @@ and imports any `cursor-agent` store it is asked to continue; there is no
 ACP source, native runner or CLI model list for Cursor, and a new Cursor
 thread never waits on sign-in state to choose a transport.
 
-The SDK runs in a child (`child.ts`, spawned from the host's own executable
-with `ELECTRON_RUN_AS_NODE`) over an NDJSON wire (`wire.ts`) so a backend
+The SDK runs in a child (`child.ts`, spawned through the host's bundled
+`LSUIElement` Helper with `ELECTRON_RUN_AS_NODE`) over an NDJSON wire (`wire.ts`) so a backend
 stall or an SDK crash cannot take the host with it; `CursorSdkClient` bounds
 every request except `login`. Its store is `SqliteLocalAgentStore` under
 Mako's state root (`~/.mako/cursor-sdk`, per user like the session-memory
@@ -1611,6 +1626,48 @@ a session that has not reported its model yet is loading.
 A provider login is verified by a fresh `auth status` and model discovery,
 not by the browser or login command's success message. Never borrow IDE
 credentials or switch binaries to evade an authentication boundary.
+
+The runtime behind a provider is one declaration on its module
+(`host.updateSources.register`, `ProviderUpdateSource`): how to resolve the
+binary, the npm package that publishes it, its Homebrew formula or cask, its
+own updater with the install root that updater owns, and the path fragments
+that mean another app owns the copy. `electron/runtime-updates.ts` does the
+rest for every provider alike and no provider spawns `npm` or reads a
+version itself. The host reads every runtime five seconds after it starts,
+when a window asks and the reading is over ten minutes old, hourly for the
+public version, and after an update; each reading is pushed to every window
+as `runtime-updates` and kept in `~/.mako/runtime-updates.json` so the next
+host paints the last reading before its own lands. Settings > Agents
+therefore shows versions the moment it opens, and opening the model picker
+runs nothing. Before this the card was one IPC that spawned five CLIs and
+ran `npm view` for each on every open of Settings, read "No runtimes found"
+for the second that took, and stalled ten seconds offline.
+
+The installed reading is keyed by the binary's mtime and size (Omnigent's
+rule for its Codex catalog): a re-read spawns nothing until the file moves,
+and when it moves — Mako's update or the user's `npm i -g` in a terminal —
+`onRuntimeChanged` fires and `refreshHarnessProfiles` drops that provider's
+model catalog in every workspace and discovers again, so an updated Codex
+lists its new models without a restart (it once served the old CLI's list
+for the rest of the host's life). The public version is
+`registry.npmjs.org/<pkg>/latest` with a four-second deadline and a bounded
+body, held an hour, a failure ten minutes; it never blocks the installed
+reading and leaves it standing with `latestError` beside it. Versions are
+ordered by `compareVersions` in `electron/contracts/runtime-version.ts`, the
+same function on both sides, so `0.154.0-alpha.6.2` is behind `0.154.0`
+everywhere. The channel is read off the binary's real path in evidence
+order — another app's registry, an app bundle, the CLI's own install root,
+bun, pnpm, npm, Homebrew, else `manual` — and the plan follows: `npm install
+-g --allow-scripts=<pkg> <pkg>@latest` (npm 12 blocks install scripts and
+still exits 0, leaving Claude's native binary a stub), `bun add -g`, `pnpm
+add -g`, `brew upgrade [--cask]` only for a declared formula, or the
+resolved binary's own `update`. Updates run one per channel at a time and
+one per provider, under a five-minute deadline, and the receipt names
+`from`, `to` and the updater's last words on failure; the row reads
+"Updating…" in every window meanwhile and a runtime with no plan is refused
+by its owner's name. `scripts/test-runtime-updates.ts` covers the ladder,
+the signature cache, the registry TTL, persistence, the locks, the receipts
+and the row's words (`src/lib/runtime-updates.ts`).
 
 `test:message-queue` covers these boundaries with held discovery promises and real
 fixture subprocesses. ACP and app-server startup must consume the host-provided
