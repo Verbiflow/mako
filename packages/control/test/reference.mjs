@@ -85,7 +85,10 @@ assert.equal(
 
 const text = renderReference([click, state])
 assert.match(text, /^Helpers \(async, available in every program\):\n  view\(/)
-assert.match(text, /\n  act\(action, args, \{settle\?, wait\?, target\?\}\)/)
+assert.match(
+  text,
+  /\n  act\(action, args, \{settle\?, wait\?, target\?, postcondition\?\}\)/
+)
 assert.match(text, /\n  until\(/)
 assert.match(text, /\n  expect\(/)
 assert.match(text, /\n  windows\(pid\)/)

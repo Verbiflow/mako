@@ -102,6 +102,8 @@ assert.deepEqual(home, [
 assert.deepEqual(state.target, { pid: 42, window_id: 7 })
 assert.deepEqual(state.last, home)
 assert.deepEqual(state.lastTarget, { pid: 42, window_id: 7 })
+assert.equal(h.token(home[0]), "s0000000a:1")
+assert.throws(() => h.token('Button "Settings"'), /no element token/)
 assert.deepEqual(calls.at(-1)[1], {
   pid: 42,
   window_id: 7,
@@ -139,11 +141,20 @@ const still = await quiet.act("noop", {}, { settle: 10, wait: 120 })
 assert.ok(Date.now() - t1 >= 120 && Date.now() - t1 < 1000)
 assert.ok(noopReads >= 2, `re-read while nothing changed (${noopReads} reads)`)
 assert.deepEqual([still.added, still.removed], [[], []])
+assert.equal(still.postcondition, null)
 assert.equal(step.action, "click")
 assert.deepEqual(step.result, {
   route: "accessibility",
   delivery: { mode: "background" },
   effect: "unverifiable",
+})
+assert.deepEqual(step.receipt, {
+  action: "click",
+  target: { pid: 42, window_id: 7 },
+  route: "accessibility",
+  delivery: "background",
+  outcome: "unverifiable",
+  verification: { kind: "observation", status: "changed" },
 })
 assert.deepEqual(step.added, [
   's0000000b:1 Button "Back"',
@@ -152,6 +163,9 @@ assert.deepEqual(step.added, [
 ])
 assert.deepEqual(step.removed, ['Button "Settings"', 'StaticText "Dashboard"'])
 assert.equal(step.unchanged, 0)
+assert.deepEqual(step.target, { pid: 42, window_id: 7 })
+assert.deepEqual(step.opened, [])
+assert.deepEqual(step.closed, [])
 assert.deepEqual(calls.filter((c) => c[0] === "click")[0][1], {
   element_token: "s0000000a:1",
   pid: 42,
@@ -167,6 +181,44 @@ await assert.rejects(
 )
 await assert.rejects(() => h.act("nope", {}), /Unknown computer action "nope"/)
 await assert.rejects(() => h.act("refuse", {}, { settle: 0 }), /driver refused/)
+
+// An action reports a same-application document window that appeared while
+// the target itself stayed unchanged.
+{
+  let opened = false
+  const windowSteps = computerHelpers(
+    {
+      get_window_state: async () => ({
+        elements: [
+          { element_token: "s00000020:1", role: "AXButton", label: "Open" },
+        ],
+      }),
+      list_windows: async () => ({
+        windows: [
+          { window_id: 7, title: "Main", is_on_screen: true },
+          ...(opened
+            ? [{ window_id: 8, title: "Settings", is_on_screen: true }]
+            : []),
+        ],
+      }),
+      click: async () => {
+        opened = true
+        return { route: "accessibility" }
+      },
+    },
+    { target: { pid: 42, window_id: 7 } }
+  )
+  await windowSteps.view()
+  const result = await windowSteps.act(
+    "click",
+    { element_token: "s00000020:1" },
+    { settle: 0, wait: 0 }
+  )
+  assert.deepEqual(
+    result.opened.map((window) => window.window_id),
+    [8]
+  )
+}
 
 // A token-addressed act never reads before it dispatches, however old the
 // cached view: the driver honours tokens from the newest snapshot only, so a
@@ -207,8 +259,18 @@ await assert.rejects(() => h.act("refuse", {}, { settle: 0 }), /driver refused/)
   const acted = await tokenSteps.act(
     "click",
     { element_token: seen[0].split(" ")[0] },
-    { settle: 5, wait: 50 }
+    {
+      settle: 5,
+      wait: 50,
+      postcondition: (lines) => lines.some((line) => /"Close"/.test(line)),
+    }
   )
+  assert.equal(acted.postcondition, true)
+  assert.equal(acted.receipt.outcome, "confirmed")
+  assert.deepEqual(acted.receipt.verification, {
+    kind: "read-back",
+    status: "confirmed",
+  })
   assert.deepEqual(
     reads,
     ["s00000010", "s00000011"],
@@ -274,6 +336,8 @@ await h.view({ pid: 42, window_id: 7 })
 const filled = await h.fill("s0000000c:1", "hello there", { wait: 500 })
 assert.equal(filled.confirmed, true)
 assert.equal(filled.route, "set_value")
+assert.equal(filled.receipt.route, "accessibility")
+assert.equal(filled.receipt.outcome, "confirmed")
 assert.match(filled.line, /TextField "Proof" ="hello there"$/)
 assert.deepEqual(calls.filter((c) => c[0] === "set_value").at(-1)[1], {
   element_token: "s0000000c:1",
@@ -310,6 +374,7 @@ const submitted = await computerHelpers(confirmApi, {
   target: { pid: 42, window_id: 7 },
 }).submit("s0000000c:1")
 assert.equal(submitted.route, "press")
+assert.equal(submitted.receipt.route, "accessibility")
 assert.deepEqual(
   clicks.map((c) => c.action),
   ["confirm", "press"]
@@ -330,13 +395,18 @@ assert.equal(uncertainCalls, 1, "an unknown confirm outcome is never repeated")
 
 // routes: verdicts before a round trip, from the window list and the page routes.
 const verdicts = await h.routes({ pid: 42, window_id: 7 })
-assert.equal(verdicts.documents, 2)
-assert.match(verdicts.keyboard, /refused before dispatch: 2 document windows/)
-assert.match(
-  verdicts.page,
-  /browser\.<action>\(\{browser: "app:dev\.mako\.fixture"/
+assert.deepEqual(verdicts.target, { pid: 42, window_id: 7 })
+const keyboardRoute = verdicts.routes.find(
+  (route) => route.route === "pid-keyboard"
 )
-assert.match(verdicts.command, /script/)
+assert.equal(keyboardRoute.status, "unavailable")
+assert.match(keyboardRoute.reason, /2 document windows/)
+assert.equal(
+  verdicts.routes.find((route) => route.route === "page").browser,
+  "app:dev.mako.fixture"
+)
+assert.equal((await h.route("page")).capability.route, "page")
+assert.equal((await h.route("text")).capability.route, "accessibility")
 const single = computerHelpers(
   {
     ...api,
@@ -347,8 +417,16 @@ const single = computerHelpers(
   {}
 )
 const offScreen = await single.routes({ pid: 9, window_id: 7 })
-assert.equal(offScreen.documents, 1)
-assert.match(offScreen.keyboard, /minimized or hidden/)
-assert.match(offScreen.pointer, /refused while the window is off screen/)
-assert.match(offScreen.page, /none: launch_app/)
+assert.equal(
+  offScreen.routes.find((route) => route.route === "pid-keyboard").status,
+  "unavailable"
+)
+assert.equal(
+  offScreen.routes.find((route) => route.route === "window-pointer").status,
+  "unavailable"
+)
+assert.equal(
+  offScreen.routes.find((route) => route.route === "page").status,
+  "unavailable"
+)
 console.log("steps ok")

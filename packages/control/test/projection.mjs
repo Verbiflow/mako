@@ -5,6 +5,7 @@ import {
   elementLine,
   elementLines,
   lineIdentity,
+  lineToken,
   toolResultData,
   toolResultError,
   windowKind,
@@ -77,6 +78,8 @@ assert.deepEqual(
 
 // Identity ignores the token so the same element compares equal across snapshots.
 assert.equal(lineIdentity('s00000001:1 Button "Settings"'), 'Button "Settings"')
+assert.equal(lineToken('s00000001:1 Button "Settings"'), "s00000001:1")
+assert.throws(() => lineToken('Button "Settings"'), /no element token/)
 const delta = diffLines(
   ['s00000001:1 Button "Settings"', 's00000001:2 StaticText "Dashboard"'],
   ['s00000002:1 Button "Settings"', 's00000002:9 Link "General"']
