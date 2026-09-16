@@ -14,7 +14,7 @@ import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowUpIcon, CheckIcon, Settings2Icon, XIcon } from "lucide-react"
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
 import { ThinkingOrb } from "thinking-orbs"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import {
@@ -141,6 +141,9 @@ export function CommitBox({
     : total > 0 && staged === 0
       ? "Commit all"
       : "Commit"
+  // A message makes the button the row's one lit control, as typing lights
+  // the composer's send; empty, it is a quiet ghost with nothing to press.
+  const armed = message.trim().length > 0
 
   // ⌘↩ commits while the message field has focus.
   useEffect(() => {
@@ -226,7 +229,12 @@ export function CommitBox({
         ) : null}
         {/* One row, never wrapping. The model chip is the only thing that
             shrinks; Generate's word and the shortcut hint go before the
-            primary action does. */}
+            primary action does. Three weights, read left to right: Generate
+            is an action and takes the composer chips' `quiet` foreground,
+            the model chip is a setting and stays muted with the picker
+            chevron every other chooser in the desk wears, and Commit is
+            the one lit control. Before this Generate and the model sat in
+            the same muted grey and read as two labels. */}
         <div className="@container/commit flex items-center gap-2 px-2 pb-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             {drafting ? (
@@ -242,6 +250,7 @@ export function CommitBox({
             ) : hasModel && disconnected ? (
               <Action
                 size="xs"
+                tone="quiet"
                 aria-label="Reconnect commit model"
                 title={`${model}: ${connection.reason}`}
                 onClick={openModelSettings}
@@ -253,6 +262,7 @@ export function CommitBox({
               <>
                 <Action
                   size="xs"
+                  tone="quiet"
                   aria-label="Draft a message from the diff"
                   title={`Generate (${draftState.mode}) with ${model} · ${formatChord(draftKeys).join(" ")}`}
                   disabled={total === 0 || busy}
@@ -272,6 +282,7 @@ export function CommitBox({
             ) : (
               <Action
                 size="xs"
+                tone="quiet"
                 aria-label="Connect commit model"
                 onClick={openModelSettings}
               >
@@ -281,16 +292,23 @@ export function CommitBox({
             )}
           </div>
 
+          {/* The chord is part of the button, so it wears the button's
+              colours: on the lit fill the caps are a tint of that fill
+              (`inverted`), never the card's raised surface with its own
+              ring, which once punched two dark holes through the white
+              pill. The caps sit 3px from the top and bottom, so the right
+              edge is 4px, not the word's 8px; when the row is too narrow
+              for the chord the padding evens back out. */}
           <Action
-            tone={message.trim() ? "solid" : "ghost"}
+            tone={armed ? "solid" : "ghost"}
             size="xs"
-            disabled={!message.trim() || busy || drafting || total === 0}
+            disabled={!armed || busy || drafting || total === 0}
             onClick={() => void commit()}
-            className="gap-1.5 tabular"
+            className="gap-1.5 pl-2 pr-1 tabular @max-[26rem]/commit:pr-2"
           >
             {commitLabel}
             <span className="contents @max-[26rem]/commit:hidden">
-              <Keys keys={formatChord("mod+enter")} />
+              <Keys keys={formatChord("mod+enter")} inverted={armed} />
             </span>
           </Action>
         </div>
@@ -387,10 +405,13 @@ function GenerationSettings({
           aria-label={`Drafting model: ${model}. Generation settings`}
           title={model}
           size="xs"
-          className="min-w-20 shrink"
+          className="min-w-20 shrink gap-1 aria-expanded:bg-fill-selected aria-expanded:text-foreground"
         >
-          <Settings2Icon />
+          <Settings2Icon className="mr-0.5" />
           <span className="truncate">{shortName}</span>
+          {/* The picker's chevron, as on the composer's agent and model
+              chips; the first thing to go when the row is short of room. */}
+          <ChevronDownIcon className="size-3! text-faint/70 @max-[22rem]/commit:hidden" />
         </Action>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-64 gap-3 p-3" aria-label="Commit generation settings">
