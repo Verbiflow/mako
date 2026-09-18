@@ -138,7 +138,7 @@ threadsStore.set({
       live: true,
       canResume: true,
       canSteer: true,
-      canCompact: true,
+      recovery: { compaction: { kind: "supported" } },
       observesNativeAgents: true,
     },
     {
