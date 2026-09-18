@@ -364,6 +364,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
 
   return {
     provider: "cursor",
+    compaction: { kind: "unavailable", reason: "Cursor's SDK does not expose manual compaction. Start a new thread and carry over what matters." },
     canResume: true,
     checkpoint,
     resumeVerdict,
