@@ -4,10 +4,12 @@ import type { ProviderAcpSource } from "../acp-source.js"
 import { devinExecutable } from "./executable.js"
 import { devinPermissionTitle } from "./permissions.js"
 import { configureDevinEnvironment } from "./environment.js"
+import { devinCompaction } from "./compaction.js"
 
 export const devinAcpSource: ProviderAcpSource = {
   ...devinResumePolicy(),
   provider: "devin",
+  compaction: devinCompaction,
   canResume: true,
   steering: "concurrent-prompt",
   access: {
