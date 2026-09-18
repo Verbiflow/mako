@@ -34,6 +34,7 @@ function openCodePermission(access: AccessTier): string | undefined {
 
 export const openCodeAcpSource: ProviderAcpSource = {
   provider: "opencode",
+  compaction: { kind: "supported", command: "/compact", completion: { kind: "response" } },
   canResume: true,
   launchOptionIds: ["effort"],
   access: {
