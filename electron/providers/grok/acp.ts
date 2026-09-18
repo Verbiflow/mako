@@ -30,6 +30,7 @@ function grokPermissionMode(tier: AccessTier): string | undefined {
 
 export const grokAcpSource: ProviderAcpSource = {
   provider: "grok",
+  compaction: { kind: "unavailable", reason: "Grok's ACP connection does not provide verified compaction. Start a new thread and carry over what matters." },
   canResume: true,
   launchOptionIds: ["effort"],
   access: { launch: ["plan", "deny", "auto", "full"], default: "deny" },
