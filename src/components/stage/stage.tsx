@@ -5,7 +5,6 @@ import { ThreadViewer } from "@/components/viewer/thread-viewer"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { FileViewer } from "@/components/viewer/file-viewer"
 import { SearchView } from "@/components/search/search-view"
-import { ThreadStrip } from "@/components/stage/thread-strip"
 import { Divider } from "@/components/shell/divider"
 import { ErrorBoundary } from "@/components/shell/error-boundary"
 import { useSurfaces, type SurfaceDefinition } from "@/extend/surfaces"
@@ -228,7 +227,6 @@ export function Stage() {
 const AgentSurface = memo(function AgentSurface() {
   return (
     <main className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <ThreadStrip />
       <ConversationSurface />
       <Composer />
       <SearchView />

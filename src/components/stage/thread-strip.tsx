@@ -17,7 +17,9 @@ export const ThreadStrip = memo(function ThreadStrip() {
   const viewingPath = useThreads((state) => state.viewing?.ref.path)
   const liveThreadPath = useAcp((state) => activeAcp(state)?.threadPath)
   const activePath = viewingPath ?? liveThreadPath ?? null
-  if (tabs.length === 0) return null
+  // One open thread is already named by the workbench's own tab; a strip that
+  // repeats it reads as a second tab bar, not as somewhere to switch.
+  if (tabs.length < 2) return null
   return (
     <div
       role="tablist"
