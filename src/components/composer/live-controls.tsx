@@ -1,3 +1,4 @@
+import { CompactionControl } from "./compaction-control"
 import { AgentsToggle } from "@/components/inspector/agents-panel"
 import { useState } from "react"
 import { RadioGroup } from "radix-ui"
@@ -26,13 +27,7 @@ import { LiveActionStatus } from "@/components/viewer/live-action-status"
 import { CaptureNotice } from "@/components/viewer/capture-notice"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 
-export function LiveComposerControls({
-  canCompact,
-  compactEnabled,
-}: {
-  canCompact: boolean
-  compactEnabled: boolean
-}) {
+export function LiveComposerControls() {
   const connection = useAcp(
     (state) => activeLiveAcp(state)?.session.connection
   )
@@ -62,22 +57,7 @@ export function LiveComposerControls({
           className="max-h-[60vh] w-80 overflow-y-auto p-1"
         >
           {usage ? <ContextReading usage={usage} /> : null}
-          {canCompact ? (
-            <button
-              type="button"
-              disabled={!compactEnabled}
-              onClick={() => {
-                setOpen(false)
-                void acp.compact()
-              }}
-              className="pressable flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-hover disabled:opacity-40"
-            >
-              <span className="text-ui">Compact conversation</span>
-              <span className="text-label text-faint">
-                Summarize history to free context
-              </span>
-            </button>
-          ) : null}
+          <CompactionControl onStart={() => setOpen(false)} />
           <TransferStatus history />
           <LiveActionStatus history />
           {connection === "disconnected" ? <CaptureNotice /> : null}
