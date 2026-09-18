@@ -149,6 +149,7 @@ export interface LiveBatch {
 }
 
 export type LiveDriverEvent =
+  | { type: "live-action-result"; id: string; actionId: string; result: import("./live-actions.js").LiveActionResult }
   | { type: "live-agent"; id: string; agent: NativeAgentObservation }
   | { type: "live-session"; session: LiveSessionState }
   | { type: "live-update"; id: string; update: LiveUpdate }

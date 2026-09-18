@@ -9,9 +9,15 @@ export const LiveActionInputSchema = z.discriminatedUnion("kind", [
     text: z.string().min(1).max(1_000_000),
     attachments: z.array(PromptAttachmentSchema).max(100),
   }),
-  z.object({ kind: z.literal("compact"), id: z.string().uuid() }),
+  z.object({ kind: z.literal("compact"), id: z.string().uuid(), requestId: z.string().uuid().optional() }),
 ])
 export type LiveActionInput = z.infer<typeof LiveActionInputSchema>
+export const LiveActionResultSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("completed") }),
+  z.object({ kind: z.literal("failed"), reason: z.string() }),
+  z.object({ kind: z.literal("uncertain"), reason: z.string() }),
+])
+export type LiveActionResult = z.infer<typeof LiveActionResultSchema>
 export const LiveActionSchema = z.object({
   input: LiveActionInputSchema,
   digest: z.string(),
@@ -21,6 +27,7 @@ export const LiveActionSchema = z.object({
     z.object({ kind: z.literal("dispatching") }),
     z.object({ kind: z.literal("accepted") }),
     z.object({ kind: z.literal("completed") }),
+    z.object({ kind: z.literal("failed"), reason: z.string() }),
     z.object({ kind: z.literal("not-accepted"), reason: z.string() }),
     z.object({ kind: z.literal("uncertain"), reason: z.string() }),
     z.object({ kind: z.literal("acknowledged") }),

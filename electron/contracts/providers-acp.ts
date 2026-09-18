@@ -26,7 +26,7 @@ export interface HarnessDescriptor {
   observesNativeAgents?: boolean
   canSteer?: boolean
   steering?: LiveSteering
-  canCompact?: boolean
+  recovery?: import("./recovery.js").RecoveryCapabilities
   /**
    * The access ladder a new session with this provider offers, known before
    * any process starts so the desk can take the choice with the first prompt.

@@ -39,6 +39,12 @@ export const HarnessUpdateResultSchema = z.object({
 export type HarnessUpdateResult = z.infer<typeof HarnessUpdateResultSchema>
 
 export const HarnessUpdateInfoSchema = z.object({
+  provider: z.string().optional(),
+  label: z.string().optional(),
+  description: z.string().optional(),
+  primary: z.boolean().optional(),
+  /** Identity of the release feed; cached readings never cross feeds. */
+  releaseSource: z.string().optional(),
   /** The binary the provider would launch, resolved the way the driver does. */
   binary: z.string().optional(),
   installed: z.string().optional(),

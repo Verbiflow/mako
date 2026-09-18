@@ -49,7 +49,7 @@ function split(version: string): [number[], string[]] {
   const pre = dash === -1 ? "" : trimmed.slice(dash + 1)
   return [
     core.split(".").map((part) => Number.parseInt(part, 10) || 0),
-    pre ? pre.split(".") : [],
+    pre ? pre.split(/[.-]/) : [],
   ]
 }
 
