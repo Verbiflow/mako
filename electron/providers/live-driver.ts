@@ -12,6 +12,22 @@ import type {
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { ProviderCapability } from "./registry.js"
 import type { ControlCredentials } from "../control-service.js"
+import { UNAVAILABLE_RECOVERY, type RecoveryCapabilities } from "../contracts/recovery.js"
+
+/** Admission resolves separately from the correlated live-action-result event.
+ * A provider must confirm completion, failure, or cancellation; idle is not proof.
+ * An exception means delivery is unknown and must never cause an automatic replay.
+ */
+export type ProviderCompaction =
+  | { kind: "supported"; start(id: string, actionId: string): Promise<void> }
+  | { kind: "unavailable"; reason: string }
+
+export function recoveryCapabilities(driver: ProviderLiveDriver | undefined): RecoveryCapabilities {
+  const compaction = driver?.compaction
+  return compaction?.kind === "supported"
+    ? { compaction: { kind: "supported" } }
+    : compaction ? { compaction } : UNAVAILABLE_RECOVERY
+}
 
 export interface ConversationTools {
   url: string
@@ -36,7 +52,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
   modes?: readonly LiveSessionMode[]
   /** The mode a fresh session runs under when nothing was chosen — the level the chip reports before launch. */
   defaultMode?: string
-  compact?(id: string): Promise<void>
+  compaction?: ProviderCompaction
   forkPoint?: "run" | "checkpoint"
   canResume: boolean
   checkpoint?(path: string): Promise<string | undefined>

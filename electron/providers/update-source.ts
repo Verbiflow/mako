@@ -11,13 +11,26 @@ import type { ProviderCapability } from "./registry.js"
  * the update and tells discovery the binary changed. A provider never
  * spawns `npm` or reads a version itself.
  */
-export interface ProviderUpdateSource extends ProviderCapability {
+export interface RuntimeUpdateSource {
+  /** Stable installation key within this provider. */
+  id?: string
+  label?: string
+  description?: string
+  primary?: boolean
+  /** Require the verified release, including for package-manager updates. */
+  pinVersion?: boolean
+  /** Resolve release policy from the version the host read, never from a filename. */
+  release?(version: string, binary: string, real: string): RuntimeRelease
+
   /** Resolve the binary the driver actually launches. */
   binary(env: NodeJS.ProcessEnv): string | null | Promise<string | null>
   /** Arguments that print the installed version. Default `--version`. */
   versionArgs?: string[]
   /** The npm package, when the CLI publishes one: feeds `latest` and the npm, bun and pnpm plans. */
   npmPackage?: string
+  npmTag?: string
+  githubRelease?: string
+  acceptsLatest?(installed: string, latest: string): boolean
   /** The Homebrew formula or cask, when the CLI ships one. Without it a brew install is shown, never upgraded. */
   homebrew?: { name: string; cask?: boolean }
   /**
@@ -29,7 +42,20 @@ export interface ProviderUpdateSource extends ProviderCapability {
     label: string
     args: string[]
     ownsPath(path: string): boolean
+    /** Never run a moving channel target; require a verified public version. */
+    pinVersion?: boolean
   }
   /** Path fragments meaning another app owns this install, e.g. Zed's registry. */
   managedBy?: [needle: string, owner: string][]
+}
+
+export type RuntimeRelease = Omit<
+  RuntimeUpdateSource,
+  "id" | "binary" | "release"
+>
+
+export interface ProviderUpdateSource
+  extends ProviderCapability, RuntimeUpdateSource {
+  /** Other installations of the same provider, independently checked and updated. */
+  installations?: RuntimeUpdateSource[]
 }

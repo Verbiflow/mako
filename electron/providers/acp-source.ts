@@ -33,6 +33,7 @@ export interface AcpLaunch {
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
 export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict"> {
+  compaction?: import("../acp-compaction.js").AcpCompactionSpec
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
   /**

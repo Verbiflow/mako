@@ -7,6 +7,9 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
   return {
     provider: source.provider,
     canResume: source.canResume,
+    compaction: source.compaction?.kind === "supported"
+      ? { kind: "supported", start: async (id, actionId) => (await import("../acp.js")).liveCompact(id, actionId) }
+      : source.compaction,
     checkpoint: source.checkpoint,
     resumeVerdict: source.resumeVerdict,
     available: (appPath) => source.available(appPath),
