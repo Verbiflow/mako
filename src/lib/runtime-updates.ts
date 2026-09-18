@@ -39,6 +39,8 @@ export function runtimeRowView(info: HarnessUpdateInfo, now = Date.now()): Runti
   if (info.error)
     return { version: "—", detail: info.error, shimmer: false, tone: "negative", note }
   const version = info.installed ?? "—"
+  if (info.latestError && !info.latest)
+    return { version, detail: "Latest version unknown", shimmer: false, tone: "faint", note }
   const behind = versionBehind(info.installed, info.latest)
   const owner = ownerText(info)
   if (behind === true) {
