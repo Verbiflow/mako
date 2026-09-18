@@ -1,5 +1,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { isHostReconnectingError } from "../../electron/contracts/host-connection.ts"
+import { toast } from "sonner"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {
   threadContinuationActions,
@@ -200,6 +202,30 @@ export function applyThreads(list: ThreadRef[], loaded = true) {
 
 let focusRefetch = false
 
+// A host older than this window fails the descriptor call like every other
+// channel it predates — and a silent `[]` then routes every send down the
+// headless native path. A restart rides the reconnect banner instead.
+let staleHostWarned = false
+
+async function harnessDescriptors(): Promise<HarnessDescriptor[]> {
+  try {
+    return await getMako().harnessDescriptors()
+  } catch (error) {
+    if (
+      !staleHostWarned &&
+      error instanceof Error &&
+      /unknown mako host method|newer shared host/i.test(error.message) &&
+      !isHostReconnectingError(error)
+    ) {
+      staleHostWarned = true
+      toast.error(
+        "The connected Mako host is running an older build — restart it to pick up the current one."
+      )
+    }
+    return []
+  }
+}
+
 const threadCatalogActions = {
   /** Re-ask on window focus: cheap, and heals any missed push for good. */
   watchFocus() {
@@ -216,10 +242,7 @@ const threadCatalogActions = {
    */
   async refreshCapabilities() {
     if (!hasBridge()) return
-    const descriptors = await getMako()
-      .harnessDescriptors()
-      .catch((): HarnessDescriptor[] => [])
-    threadsStore.set({ descriptors })
+    threadsStore.set({ descriptors: await harnessDescriptors() })
   },
 
   async load() {
@@ -227,9 +250,7 @@ const threadCatalogActions = {
     const [raw, descriptors]: [ThreadCatalogResponse, HarnessDescriptor[]] =
       await Promise.all([
         getMako().threads().catch(unavailableThreadCatalog),
-        getMako()
-          .harnessDescriptors()
-          .catch((): HarnessDescriptor[] => []),
+        harnessDescriptors(),
       ])
     const nativeRequests = await getMako()
       .nativeRequests()

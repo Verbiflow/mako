@@ -131,13 +131,22 @@ export const acp = {
     })
   },
 
-  async compact(): Promise<boolean> {
+  async compact(requestId?: string): Promise<boolean> {
     const live = activeLiveAcp(acpStore.get())
     if (!live) return false
     return performLiveAction(live.key, {
       kind: "compact",
       id: crypto.randomUUID(),
+      requestId,
     })
+  },
+
+  async recoverFresh(conversationId: string, requestId: string): Promise<boolean> {
+    const current = acpStore.get().conversations[conversationId]
+    if (current?.kind !== "live") return false
+    const request = current.requests?.find((item) => item.id === requestId && item.status === "failed")
+    if (!request) return false
+    return acp.startFresh(current.harness, current.cwd, request.text, request.attachments)
   },
 
   activate(key: string): boolean {

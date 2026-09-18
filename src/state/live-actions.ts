@@ -10,7 +10,7 @@ export async function performLiveAction(
 ): Promise<boolean> {
   try {
     const result = await getMako().liveAction(id, input)
-    if (result.state.kind === "not-accepted") {
+    if (result.state.kind === "not-accepted" || result.state.kind === "failed") {
       toast.error(result.state.reason)
       return false
     }
