@@ -6,6 +6,8 @@ import { createServer } from "vite"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir, homedir } from "node:os"
 import { ensureRuntime, runtimeDataRoot } from "../dist-electron/runtime-service.js"
+import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
+import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
 import { holdHostLease } from "../dist-electron/host-idle.js"
 import { join } from "node:path"
 import { webHostProxy } from "./web-dev-proxy.mjs"
@@ -43,6 +45,40 @@ const appData = process.platform === "darwin" ? join(homedir(), "Library", "Appl
 const dataRoot = runtimeDataRoot(appData, { ...env, MAKO_PROFILE: profile })
 const runtime = await ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...env, MAKO_PROFILE: profile } })
 const socket = runtime.socket
+// The renderer hot-reloads; the host does not. A host started before this
+// checkout's host methods existed still answers "ready" — then fails every
+// newer call, which reads as a broken desk rather than an old process. When
+// the reused host cannot answer the current contract, ask it to restart onto
+// the build on disk before serving it a fresh window.
+const missingOn = (info) =>
+  Object.keys(hostCallInputs).filter((method) => !info.methods.includes(method))
+if (missingOn(runtime.info).length) {
+  const missing = missingOn(runtime.info)
+  console.warn(
+    `[mako-client] Host pid ${runtime.info.pid} is running an older build — it cannot answer ${missing.length} host methods this window calls (${missing.slice(0, 4).join(", ")}${missing.length > 4 ? ", …" : ""}). Asking it to restart onto the current build.`
+  )
+  try {
+    await invokeRuntime(socket, crypto.randomUUID(), "mako:relaunch", [])
+    // The restart waits for in-flight work to drain; give it a minute, then
+    // serve anyway — the window reconnects when the new host lands.
+    const deadline = Date.now() + 60_000
+    for (;;) {
+      const probe = await settleRuntime(socket).catch(() => null)
+      if (probe?.state === "ready" && !missingOn(probe.info).length) break
+      if (Date.now() >= deadline) {
+        console.warn(
+          `[mako-client] The older host is still running. The desk will misbehave until it restarts — "Restart Mako" in the desk or \`kill ${runtime.info.pid}\` finishes it.`
+        )
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  } catch (error) {
+    console.warn(
+      `[mako-client] The host refused the restart (${error instanceof Error ? error.message : error}). Stop it — \`kill ${runtime.info.pid}\` or "Restart Mako" in the desk — and run this again.`
+    )
+  }
+}
 // A profile host stops itself once nothing has used it for a while. This
 // launcher is a user, even between page loads, so it holds a lease keyed by
 // its own pid; a crashed launcher's lease expires with it.

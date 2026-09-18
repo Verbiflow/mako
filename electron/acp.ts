@@ -1,7 +1,9 @@
 import { z } from "zod"
+import { randomUUID } from "node:crypto"
 import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } from "./providers/live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
+import { AcpCompaction } from "./acp-compaction.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "./acp-access.js"
@@ -90,6 +92,7 @@ interface LegacySessionModelRequest {
 }
 
 interface Live {
+  compaction?: AcpCompaction
   id: string
   harness: string
   cwd: string
@@ -286,6 +289,7 @@ export async function liveStart(
     mcpServers: preparedServers.length,
   })
   child.on("exit", (code, signal) => {
+    live.compaction?.dispose()
     live.startup.abort()
     hostLog("acp", "exited", {
       harness,
@@ -342,6 +346,8 @@ export async function liveStart(
       return requestElicitation(live, params)
     },
     async sessionUpdate(params: SessionNotification) {
+      if (live.sessionId && params.sessionId !== live.sessionId) return
+      live.compaction?.observe(params.update)
       if (params.update.sessionUpdate === "config_option_update") live.configOptions = params.update.configOptions
       if (params.update.sessionUpdate === "current_mode_update") {
         acpObserveNativeMode(id, params.update.currentModeId)
@@ -614,6 +620,13 @@ export async function livePrompt(
     throw new Error("This interactive session is not running")
   if (live.state.status === "running")
     throw new Error("The agent is already working")
+  if (live.compaction)
+    throw new Error("Compaction is unconfirmed. End the live session before sending again.")
+  const compact = providerHost.acpSources.get(live.harness)?.compaction
+  if (compact?.kind === "supported" && text.trim() === compact.command && attachments.length === 0) {
+    await liveCompact(id, randomUUID())
+    return
+  }
   const connection = live.connection
   const sessionId = live.sessionId
   let applied: Awaited<ReturnType<typeof applyTuning>>
@@ -643,6 +656,28 @@ export async function livePrompt(
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
   void turn.send(() => connection.prompt({ sessionId, prompt })).catch(() => {})
   await Promise.resolve()
+}
+
+export async function liveCompact(id: string, actionId: string): Promise<void> {
+  const live = sessions.get(id)
+  const spec = live && providerHost.acpSources.get(live.harness)?.compaction
+  if (!live?.sessionId || !live.connection || spec?.kind !== "supported")
+    throw new Error("This connection does not support verified compaction")
+  if (live.state.status === "running" || live.compaction)
+    throw new Error("Wait for the current operation to finish")
+  const connection = live.connection
+  const sessionId = live.sessionId
+  const operation = new AcpCompaction(spec, (result) => {
+    if (live.compaction !== operation || live.state.connection !== "connected") return
+    if (result.kind !== "uncertain") live.compaction = undefined
+    update(live, { status: result.kind === "completed" ? "ready" : "failed",
+      lastStop: result.kind === "completed" ? "completed" : "failed",
+      error: result.kind === "completed" ? undefined : result.reason })
+    live.emit({ type: "live-action-result", id, actionId, result })
+  })
+  live.compaction = operation
+  update(live, { status: "running", nativeRunId: actionId, lastStop: undefined, error: undefined })
+  operation.start(() => connection.prompt({ sessionId, prompt: [{ type: "text", text: spec.command }] }))
 }
 
 export async function liveSteer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> {
@@ -742,6 +777,7 @@ export async function liveClose(id: string): Promise<void> {
   const live = sessions.get(id)
   if (!live) return
   const operation = (async () => {
+    live.compaction?.dispose()
     update(live, { status: "closed" })
     live.startup.abort()
     engine.release(live)
@@ -771,4 +807,3 @@ function update(live: Live, patch: Partial<LiveSessionState>): void {
   }
   engine.patch(live, patch)
 }
-

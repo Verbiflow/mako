@@ -1,14 +1,21 @@
 import { createHash } from "node:crypto"
 import {
   LiveActionInputSchema,
+  LiveActionResultSchema,
   type LiveAction,
   type LiveActionInput,
+  type LiveActionResult,
 } from "./contracts/live-actions.js"
+import {
+  compactionAvailable,
+  COMPACTION_CONFIRMATION_MS,
+} from "./contracts/recovery.js"
 import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"
 
 /** Durable command receipts. A retry returns its receipt and never repeats a provider write. */
 export class LiveActions {
   private readonly host: LiveAccess
+  private readonly deadlines = new Map<string, ReturnType<typeof setTimeout>>()
   constructor(host: LiveAccess) {
     this.host = host
   }
@@ -35,6 +42,11 @@ export class LiveActions {
     const action = control.actions?.find((item) => item.input.id === id)
     if (!action) throw new Error("This provider action is unavailable")
     const updated = { ...action, state }
+    if (state.kind !== "dispatching" && state.kind !== "accepted") {
+      const key = `${resident.snapshot.session.id}:${id}`
+      clearTimeout(this.deadlines.get(key))
+      this.deadlines.delete(key)
+    }
     resident.snapshot = {
       ...resident.snapshot,
       control: {
@@ -48,7 +60,47 @@ export class LiveActions {
     return updated
   }
 
+  result(
+    resident: Resident,
+    bindingId: string,
+    actionId: string,
+    raw: LiveActionResult
+  ): void {
+    const action = this.host
+      .control(resident)
+      .actions?.find((item) => item.input.id === actionId)
+    if (
+      !action ||
+      action.bindingId !== bindingId ||
+      action.input.kind !== "compact" ||
+      !["dispatching", "accepted", "uncertain"].includes(action.state.kind)
+    )
+      return
+    const result = LiveActionResultSchema.parse(raw)
+    if (result.kind === "failed") {
+      resident.snapshot = {
+        ...resident.snapshot,
+        requests: resident.snapshot.requests.map((request) =>
+          request.status === "queued" ? { ...request, status: "held" } : request
+        ),
+      }
+    }
+    this.state(resident, actionId, result)
+  }
+
+  stop(): void {
+    for (const timer of this.deadlines.values()) clearTimeout(timer)
+    this.deadlines.clear()
+  }
+
   settle(resident: Resident, bindingId: string): void {
+    // An idle session does not prove that a command has completed (Devin
+    // acknowledges /compact before doing the work). Only its result can.
+    if (
+      resident.snapshot.session.status === "ready" &&
+      resident.snapshot.session.connection === "connected"
+    )
+      return
     for (const action of this.host.control(resident).actions ?? []) {
       if (
         action.bindingId !== bindingId ||
@@ -56,17 +108,11 @@ export class LiveActions {
         !["dispatching", "accepted", "uncertain"].includes(action.state.kind)
       )
         continue
-      this.state(
-        resident,
-        action.input.id,
-        resident.snapshot.session.status === "ready"
-          ? { kind: "completed" }
-          : {
-              kind: "uncertain",
-              reason:
-                "Compaction ended without a confirmed completion. It will not be retried automatically.",
-            }
-      )
+      this.state(resident, action.input.id, {
+        kind: "uncertain",
+        reason:
+          "Compaction ended without a confirmed completion. It will not be retried automatically.",
+      })
     }
   }
 
@@ -166,21 +212,37 @@ export class LiveActions {
           attachments,
         })
     } else {
-      const compact = driver.compact
-      if (!compact)
-        throw new Error("This provider does not support manual compaction")
       if (
-        resident.snapshot.session.status !== "ready" ||
-        resident.snapshot.requests.some(
+        input.requestId &&
+        !resident.snapshot.requests.some(
           (request) =>
-            request.status === "queued" || request.status === "dispatching"
+            request.id === input.requestId && request.status === "failed"
+        )
+      )
+        throw new Error(
+          "The failed message is no longer available for recovery"
+        )
+      const compact = driver.compaction
+      if (!compact || compact.kind === "unavailable")
+        throw new Error(
+          compact?.reason ??
+            "This provider does not support verified compaction"
+        )
+      if (
+        !compactionAvailable(
+          resident.snapshot.session,
+          control.actions ?? [],
+          resident.snapshot.requests.some(
+            (request) =>
+              request.status === "queued" || request.status === "dispatching"
+          )
         )
       )
         throw new Error(
           "Wait for the conversation and queued messages to finish before compacting"
         )
       perform = async () => {
-        await compact(bindingId)
+        await compact.start(bindingId, input.id)
         return { kind: "accepted" }
       }
     }
@@ -203,6 +265,17 @@ export class LiveActions {
       throw error
     }
     let result: LiveAction["state"]
+    if (input.kind === "compact") {
+      const timer = setTimeout(() => {
+        this.state(resident, input.id, {
+          kind: "uncertain",
+          reason:
+            "The provider has not confirmed compaction after five minutes. It will not be repeated automatically.",
+        })
+      }, COMPACTION_CONFIRMATION_MS)
+      timer.unref?.()
+      this.deadlines.set(`${resident.snapshot.session.id}:${input.id}`, timer)
+    }
     try {
       result = await perform()
     } catch (error) {

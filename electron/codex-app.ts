@@ -58,6 +58,7 @@ import { trackProviderChild } from "./provider-children.js"
 import { createLiveEngine } from "./live-engine.js"
 
 type Live = {
+  compaction?: { actionId: string; turnId?: string; confirmed: boolean }
   id: string
   cwd: string
   emit(event: LiveDriverEvent): void
@@ -161,6 +162,7 @@ export async function codexAppStart(
     stderrBuffer: "",
     agents: new CodexAgents(),
     protocol: {
+      actionResult: (actionId, result) => emit({ type: "live-action-result", id: live.id, actionId, result }),
       handleFatal: (message) => protocolFatal(live, message),
       updateState: (patch) => updateState(live, patch),
       emitUpdate: (update) => emitUpdate(live, update),
@@ -345,10 +347,15 @@ export async function codexAppSteer(
   return { kind: "accepted" }
 }
 
-export async function codexAppCompact(id: string): Promise<void> {
+export async function codexAppCompact(id: string, actionId: string): Promise<void> {
   const live = sessions.get(id)
-  if (!live?.threadId || live.exited || live.state.status !== "ready")
+  if (
+    !live?.threadId ||
+    live.exited ||
+    (live.state.status !== "ready" && live.state.status !== "failed")
+  )
     throw new Error("Wait for Codex to become idle before compacting")
+  live.compaction = { actionId, confirmed: false }
   updateState(live, {
     status: "running",
     nativeRunId: undefined,

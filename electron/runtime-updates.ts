@@ -1,12 +1,18 @@
 import { spawn } from "node:child_process"
-import { mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import { basename, dirname } from "node:path"
 import { z } from "zod"
 import {
   HarnessUpdateCommandSchema,
   HarnessUpdateChannelSchema,
   HarnessUpdateResultSchema,
-  type HarnessUpdateChannel,
   type HarnessUpdateCommand,
   type HarnessUpdateInfo,
   type HarnessUpdates,
@@ -15,7 +21,10 @@ import { compareVersions, parseVersion } from "./contracts/runtime-version.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { withDiscoveryProcess } from "./providers/discovery-process.js"
-import type { ProviderUpdateSource } from "./providers/update-source.js"
+import type {
+  ProviderUpdateSource,
+  RuntimeUpdateSource,
+} from "./providers/update-source.js"
 
 /**
  * The runtimes behind every provider: what is installed, what is current,
@@ -43,6 +52,11 @@ import type { ProviderUpdateSource } from "./providers/update-source.js"
  */
 
 const persistedInfoSchema = z.object({
+  provider: z.string().optional(),
+  label: z.string().optional(),
+  description: z.string().optional(),
+  primary: z.boolean().optional(),
+  releaseSource: z.string().optional(),
   binary: z.string().optional(),
   installed: z.string().optional(),
   latest: z.string().optional(),
@@ -62,7 +76,7 @@ const signatureSchema = z.object({
   installed: z.string(),
 })
 const fileSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   updates: z.record(z.string(), persistedInfoSchema),
   signatures: z.record(z.string(), signatureSchema),
 })
@@ -84,8 +98,13 @@ export interface RuntimeUpdatesOptions {
   /** The installed reading moved: the binary is new, gone, or another version. */
   onRuntimeChanged?: (change: RuntimeChange) => void
   /** Probes and runners, injectable for tests. Defaults spawn real processes and read the npm registry. */
-  version?: (binary: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>
-  latest?: (npmPackage: string) => Promise<string>
+  version?: (
+    binary: string,
+    args: string[],
+    env: NodeJS.ProcessEnv
+  ) => Promise<string>
+  latest?: (npmPackage: string, tag?: string) => Promise<string>
+  githubLatest?: (repository: string) => Promise<string>
   run?: (
     command: string,
     args: string[],
@@ -150,11 +169,25 @@ export class RuntimeUpdates {
     this.options = { ...DEFAULTS, ...options }
   }
 
+  private sources() {
+    return this.options.sources().flatMap((source) =>
+      [source, ...(source.installations ?? [])].map((installation) => ({
+        ...installation,
+        provider: source.provider,
+        key: installation.id
+          ? `${source.provider}:${installation.id}`
+          : source.provider,
+      }))
+    )
+  }
+
   /** Reads the last host's readings so the first snapshot is never empty. */
   async load(): Promise<void> {
     this.loaded ??= (async () => {
       try {
-        const parsed: unknown = JSON.parse(await readFile(this.options.path, "utf8"))
+        const parsed: unknown = JSON.parse(
+          await readFile(this.options.path, "utf8")
+        )
         const result = fileSchema.safeParse(parsed)
         if (!result.success) return
         this.updates = result.data.updates
@@ -198,11 +231,14 @@ export class RuntimeUpdates {
   async read(refresh = false): Promise<HarnessUpdates> {
     await this.load()
     const now = this.options.now?.() ?? Date.now()
-    const stale = this.options.sources().some((source) => {
-      const held = this.updates[source.provider]
-      return !held?.checkedAt || now - held.checkedAt > this.options.installedTtlMs
+    const stale = this.sources().some((source) => {
+      const held = this.updates[source.key]
+      return (
+        !held?.checkedAt || now - held.checkedAt > this.options.installedTtlMs
+      )
     })
-    if (refresh || stale) void this.refresh({ latest: refresh }).catch(() => undefined)
+    if (refresh || stale)
+      void this.refresh({ latest: refresh }).catch(() => undefined)
     return this.snapshot()
   }
 
@@ -212,9 +248,9 @@ export class RuntimeUpdates {
     this.refreshing = (async () => {
       await this.load()
       await Promise.all(
-        this.options
-          .sources()
-          .map((source) => this.check(source.provider, options).catch(() => undefined))
+        this.sources().map((source) =>
+          this.check(source.key, options).catch(() => undefined)
+        )
       )
       return this.snapshot()
     })().finally(() => {
@@ -235,7 +271,8 @@ export class RuntimeUpdates {
     const active = this.checking.get(provider)
     if (active) return active
     const request = this.readRuntime(provider, options).finally(() => {
-      if (this.checking.get(provider) === request) this.checking.delete(provider)
+      if (this.checking.get(provider) === request)
+        this.checking.delete(provider)
     })
     this.checking.set(provider, request)
     return request
@@ -246,25 +283,49 @@ export class RuntimeUpdates {
     options: { force?: boolean; latest?: boolean }
   ): Promise<HarnessUpdateInfo> {
     await this.load()
-    const source = this.options.sources().find((entry) => entry.provider === provider)
+    const source = this.sources().find((entry) => entry.key === provider)
     if (!source) throw new Error(`${provider} has no runtime Mako can read`)
     const env = this.options.env?.() ?? process.env
     const previous = this.updates[provider]
-    this.publish(provider, { ...previous, phase: this.updating.has(provider) ? "updating" : "checking" })
-    const next: HarnessUpdateInfo = {}
-    if (previous?.latest) next.latest = previous.latest
-    if (previous?.latestCheckedAt) next.latestCheckedAt = previous.latestCheckedAt
-    if (previous?.latestError) next.latestError = previous.latestError
+    this.publish(provider, {
+      ...previous,
+      phase: this.updating.has(provider) ? "updating" : "checking",
+    })
+    const next: HarnessUpdateInfo = {
+      provider: source.provider,
+      label: source.label,
+      description: source.description,
+    }
+    let policy: RuntimeUpdateSource = source
     if (previous?.result) next.result = previous.result
     try {
       const binary = await source.binary(env)
       if (binary) {
         next.binary = binary
-        const installed = await this.installedVersion(provider, source, binary, env, options.force === true)
+        const installed = await this.installedVersion(
+          provider,
+          source,
+          binary,
+          env,
+          options.force === true
+        )
         if (installed.version) next.installed = installed.version
         else next.error = installed.error
-        const real = await (this.options.realpath ?? realpath)(binary).catch(() => binary)
-        Object.assign(next, resolveRuntimeChannel(source, binary, real))
+        const real = await (this.options.realpath ?? realpath)(binary).catch(
+          () => binary
+        )
+        if (installed.version && source.release) {
+          policy = {
+            ...source,
+            ...source.release(installed.version, binary, real),
+          }
+          next.label = policy.label
+          next.description = policy.description
+          next.primary = policy.primary
+        }
+        Object.assign(next, resolveRuntimeChannel(policy, binary, real))
+        // Never offer an update when its executable could not identify itself.
+        if (!installed.version) delete next.update
       } else {
         // Not installed: nothing to show and nothing to update. The row stays hidden.
         this.signatures.delete(provider)
@@ -272,18 +333,77 @@ export class RuntimeUpdates {
     } catch (error) {
       next.error = error instanceof Error ? error.message : String(error)
     }
+    next.releaseSource = policy.githubRelease
+      ? `github:${policy.githubRelease}`
+      : policy.npmPackage
+        ? `npm:${policy.npmPackage}:${policy.npmTag ?? "latest"}`
+        : undefined
+    if (
+      next.releaseSource &&
+      previous?.releaseSource === next.releaseSource &&
+      previous.binary === next.binary
+    ) {
+      next.latest = previous.latest
+      next.latestCheckedAt = previous.latestCheckedAt
+      next.latestError = previous.latestError
+    }
+    this.pinUpdate(next, policy)
     next.checkedAt = this.options.now?.() ?? Date.now()
-    this.publish(provider, this.updating.has(provider) ? { ...next, phase: "updating" } : next)
-    if (previous && (previous.installed !== next.installed || previous.binary !== next.binary)) {
-      hostLog("runtime", "runtime changed", { provider, from: previous.installed ?? null, to: next.installed ?? null, binary: next.binary ?? null })
-      this.options.onRuntimeChanged?.({ provider, from: previous.installed, to: next.installed })
+    this.publish(
+      provider,
+      this.updating.has(provider) ? { ...next, phase: "updating" } : next
+    )
+    if (
+      previous &&
+      (previous.installed !== next.installed || previous.binary !== next.binary)
+    ) {
+      hostLog("runtime", "runtime changed", {
+        provider,
+        from: previous.installed ?? null,
+        to: next.installed ?? null,
+        binary: next.binary ?? null,
+      })
+      this.options.onRuntimeChanged?.({
+        provider: source.provider,
+        from: previous.installed,
+        to: next.installed,
+      })
     }
     await this.persist()
-    if (source.npmPackage && this.latestDue(next, options.latest === true)) {
-      await this.readLatest(provider, source.npmPackage)
+    if (
+      next.installed &&
+      next.releaseSource &&
+      this.latestDue(next, options.latest === true)
+    ) {
+      await this.readLatest(provider, policy)
       await this.persist()
     }
     return this.updates[provider] ?? next
+  }
+
+  private pinUpdate(info: HarnessUpdateInfo, source: RuntimeUpdateSource) {
+    if (!source.pinVersion && !source.native?.pinVersion) return
+    if (!info.latest || info.latestError || !info.binary) {
+      delete info.update
+      return
+    }
+    if (info.channel === "self" && source.native) {
+      info.update = {
+        label: source.native.label,
+        command: info.binary,
+        args: [...source.native.args, info.latest],
+      }
+    } else if (
+      source.npmPackage &&
+      (info.channel === "npm" ||
+        info.channel === "bun" ||
+        info.channel === "pnpm")
+    ) {
+      info.update = packageUpdate(
+        info.channel,
+        `${source.npmPackage}@${info.latest}`
+      )
+    }
   }
 
   private latestDue(info: HarnessUpdateInfo, force: boolean): boolean {
@@ -291,21 +411,52 @@ export class RuntimeUpdates {
     const now = this.options.now?.() ?? Date.now()
     if (!info.latestCheckedAt) return true
     const age = now - info.latestCheckedAt
-    return age > (info.latestError ? this.options.latestRetryMs : this.options.latestTtlMs)
+    return (
+      age >
+      (info.latestError ? this.options.latestRetryMs : this.options.latestTtlMs)
+    )
   }
 
-  private async readLatest(provider: string, npmPackage: string): Promise<void> {
+  private async readLatest(
+    provider: string,
+    source: RuntimeUpdateSource
+  ): Promise<void> {
     const held = this.updates[provider]
     if (!held) return
     const at = this.options.now?.() ?? Date.now()
     try {
-      const latest = await (this.options.latest ?? npmRegistryLatest)(npmPackage)
+      const latest = source.githubRelease
+        ? await (this.options.githubLatest ?? githubLatest)(
+            source.githubRelease
+          )
+        : source.npmPackage
+          ? await (this.options.latest ?? npmRegistryLatest)(
+              source.npmPackage,
+              source.npmTag
+            )
+          : undefined
+      if (!latest) throw new Error("No release source is available")
+      if (
+        source.acceptsLatest &&
+        held.installed &&
+        !source.acceptsLatest(held.installed, latest)
+      )
+        throw new Error(
+          "The published release belongs to a different release channel."
+        )
       const next: HarnessUpdateInfo = { ...held, latest, latestCheckedAt: at }
       delete next.latestError
+      this.pinUpdate(next, source)
       this.publish(provider, next)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.publish(provider, { ...held, latestCheckedAt: at, latestError: message })
+      const next = { ...held, latestCheckedAt: at, latestError: message }
+      if (source.acceptsLatest) {
+        delete next.latest
+        delete next.update
+      }
+      this.pinUpdate(next, source)
+      this.publish(provider, next)
     }
   }
 
@@ -316,7 +467,9 @@ export class RuntimeUpdates {
     env: NodeJS.ProcessEnv,
     force: boolean
   ): Promise<{ version?: string; error?: string }> {
-    const signature = await (this.options.stat ?? stat)(binary).catch(() => null)
+    const signature = await (this.options.stat ?? stat)(binary).catch(
+      () => null
+    )
     const held = this.signatures.get(provider)
     if (
       !force &&
@@ -334,8 +487,14 @@ export class RuntimeUpdates {
         env
       )
       const version = parseVersion(output)
-      if (!version) return { error: `${basename(binary)} did not report a version` }
-      if (signature) this.signatures.set(provider, { binary, installed: version, ...signature })
+      if (!version)
+        return { error: `${basename(binary)} did not report a version` }
+      if (signature)
+        this.signatures.set(provider, {
+          binary,
+          installed: version,
+          ...signature,
+        })
       else this.signatures.delete(provider)
       return { version }
     } catch (error) {
@@ -352,13 +511,13 @@ export class RuntimeUpdates {
    */
   async update(provider: string): Promise<HarnessUpdateInfo> {
     await this.load()
-    const source = this.options.sources().find((entry) => entry.provider === provider)
+    const source = this.sources().find((entry) => entry.key === provider)
     if (!source) throw new Error(`${provider} does not update through Mako`)
-    if (this.updating.has(provider)) throw new Error(`${provider} is already updating`)
-    const current =
-      (await this.checking.get(provider)) ??
-      this.updates[provider] ??
-      (await this.check(provider))
+    if (this.updating.has(provider))
+      throw new Error(`${provider} is already updating`)
+    const current = await this.check(provider, { latest: true })
+    if (this.updating.has(provider))
+      throw new Error(`${provider} is already updating`)
     const plan = current.update
     if (!plan) {
       throw new Error(
@@ -368,16 +527,30 @@ export class RuntimeUpdates {
       )
     }
     const env = this.options.env?.() ?? process.env
-    const lockKey = current.channel === "self" ? provider : (current.channel ?? provider)
+    const lockKey =
+      current.channel === "self"
+        ? source.provider
+        : (current.channel ?? provider)
     this.updating.add(provider)
     this.publish(provider, { ...current, phase: "updating" })
     const startedAt = this.options.now?.() ?? Date.now()
     try {
-      const failure = await this.runUpdate(provider, current, plan, env, lockKey)
+      const failure = await this.runUpdate(
+        provider,
+        current,
+        plan,
+        env,
+        lockKey
+      )
       if (failure !== null) {
         const failed = withoutPhase({
           ...(this.updates[provider] ?? current),
-          result: { at: startedAt, outcome: "failed", from: current.installed, message: failure },
+          result: {
+            at: startedAt,
+            outcome: "failed",
+            from: current.installed,
+            message: failure,
+          },
         })
         this.updating.delete(provider)
         this.publish(provider, failed)
@@ -388,11 +561,20 @@ export class RuntimeUpdates {
       await this.checking.get(provider)?.catch(() => undefined)
       const after = await this.check(provider, { force: true, latest: true })
       const to = after.installed
+      if (!to || after.error)
+        throw new Error(
+          after.error ?? "The updated executable did not report a version"
+        )
       const outcome =
         to && current.installed && compareVersions(to, current.installed) === 0
           ? "unchanged"
           : "updated"
-      hostLog("runtime", "update finished", { provider, from: current.installed ?? null, to: to ?? null, outcome })
+      hostLog("runtime", "update finished", {
+        provider,
+        from: current.installed ?? null,
+        to: to ?? null,
+        outcome,
+      })
       const done = withoutPhase({
         ...after,
         result: { at: startedAt, outcome, from: current.installed, to },
@@ -431,8 +613,16 @@ export class RuntimeUpdates {
         this.options.updateTimeoutMs
       )
       if (outcome.code !== 0) {
-        const tail = outcome.output.trim().split("\n").filter(Boolean).slice(-3).join(" ").slice(-600)
-        throw new Error(tail || `${plan.command} exited with ${outcome.code ?? "a signal"}`)
+        const tail = outcome.output
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .slice(-3)
+          .join(" ")
+          .slice(-600)
+        throw new Error(
+          tail || `${plan.command} exited with ${outcome.code ?? "a signal"}`
+        )
       }
       return null
     } catch (error) {
@@ -474,19 +664,27 @@ export class RuntimeUpdates {
     for (const [provider, info] of Object.entries(this.updates))
       updates[provider] = withoutPhase(info)
     const file: PersistedFile = {
-      version: 1,
+      version: 2,
       updates,
       signatures: Object.fromEntries(this.signatures),
     }
     this.writes = this.writes
       .then(async () => {
         const temp = `${this.options.path}.${process.pid}.tmp`
-        await mkdir(dirname(this.options.path), { recursive: true, mode: 0o700 })
-        await writeFile(temp, JSON.stringify(file), { encoding: "utf8", mode: 0o600 })
+        await mkdir(dirname(this.options.path), {
+          recursive: true,
+          mode: 0o700,
+        })
+        await writeFile(temp, JSON.stringify(file), {
+          encoding: "utf8",
+          mode: 0o600,
+        })
         await rename(temp, this.options.path)
       })
       .catch((error) => {
-        hostWarn("runtime", "readings not saved", { error: error instanceof Error ? error.message : String(error) })
+        hostWarn("runtime", "readings not saved", {
+          error: error instanceof Error ? error.message : String(error),
+        })
       })
     return this.writes
   }
@@ -500,13 +698,15 @@ export class RuntimeUpdates {
  * a directory a manager also uses; among managers the real path decides.
  */
 export function resolveRuntimeChannel(
-  source: ProviderUpdateSource,
+  source: RuntimeUpdateSource,
   binary: string,
   real: string
 ): Pick<HarnessUpdateInfo, "channel" | "managedBy" | "update"> {
   const paths = [binary, real]
   const normalized = paths.map((path) => path.replaceAll("\\", "/"))
-  const managed = source.managedBy?.find(([needle]) => normalized.some((path) => path.includes(needle)))
+  const managed = source.managedBy?.find(([needle]) =>
+    normalized.some((path) => path.includes(needle))
+  )
   if (managed) return { channel: "managed", managedBy: managed[1] }
   for (const path of normalized) {
     const app = path.match(/\/([^/]+\.app)\/Contents\//)
@@ -519,20 +719,43 @@ export function resolveRuntimeChannel(
       update: { label: native.label, command: binary, args: native.args },
     }
   const lower = normalized.map((path) => path.toLowerCase())
-  const has = (...needles: string[]) => lower.some((path) => needles.some((needle) => path.includes(needle)))
+  const has = (...needles: string[]) =>
+    lower.some((path) => needles.some((needle) => path.includes(needle)))
   const pkg = source.npmPackage
+    ? `${source.npmPackage}@${source.npmTag ?? "latest"}`
+    : undefined
   if (has("/.bun/bin/", "/.bun/install/global/"))
-    return withPackage("bun", pkg, (name) => ({ label: "Update with bun", command: "bun", args: ["add", "-g", `${name}@latest`] }))
-  if (has("/.local/share/pnpm/", "/library/pnpm/", "/appdata/local/pnpm/", "/pnpm/global/"))
-    return withPackage("pnpm", pkg, (name) => ({ label: "Update with pnpm", command: "pnpm", args: ["add", "-g", `${name}@latest`] }))
+    return {
+      channel: "bun",
+      update: pkg ? packageUpdate("bun", pkg) : undefined,
+    }
+  if (
+    has(
+      "/.local/share/pnpm/",
+      "/library/pnpm/",
+      "/appdata/local/pnpm/",
+      "/pnpm/global/"
+    )
+  )
+    return {
+      channel: "pnpm",
+      update: pkg ? packageUpdate("pnpm", pkg) : undefined,
+    }
   if (has("/lib/node_modules/", "/node_modules/.bin/", "/npm/node_modules/"))
-    return withPackage("npm", pkg, npmUpdate)
+    return {
+      channel: "npm",
+      update: pkg ? packageUpdate("npm", pkg) : undefined,
+    }
   if (has("/cellar/", "/caskroom/")) {
     if (!source.homebrew) return { channel: "brew", managedBy: "Homebrew" }
     const { name, cask } = source.homebrew
     return {
       channel: "brew",
-      update: { label: "Update with Homebrew", command: "brew", args: cask ? ["upgrade", "--cask", name] : ["upgrade", name] },
+      update: {
+        label: "Update with Homebrew",
+        command: "brew",
+        args: cask ? ["upgrade", "--cask", name] : ["upgrade", name],
+      },
     }
   }
   return { channel: "manual" }
@@ -544,12 +767,16 @@ function withoutPhase(info: HarnessUpdateInfo): HarnessUpdateInfo {
   return copy
 }
 
-function withPackage(
-  channel: HarnessUpdateChannel,
-  pkg: string | undefined,
-  plan: (name: string) => HarnessUpdateCommand
-): Pick<HarnessUpdateInfo, "channel" | "managedBy" | "update"> {
-  return pkg ? { channel, update: plan(pkg) } : { channel }
+function packageUpdate(
+  channel: "npm" | "bun" | "pnpm",
+  pkg: string
+): HarnessUpdateCommand {
+  if (channel === "npm") return npmUpdate(pkg)
+  return {
+    label: `Update with ${channel}`,
+    command: channel,
+    args: ["add", "-g", pkg],
+  }
 }
 
 /**
@@ -562,7 +789,12 @@ function npmUpdate(name: string): HarnessUpdateCommand {
   return {
     label: "Update with npm",
     command: "npm",
-    args: ["install", "-g", `--allow-scripts=${name}`, `${name}@latest`],
+    args: [
+      "install",
+      "-g",
+      `--allow-scripts=${name.slice(0, name.lastIndexOf("@"))}`,
+      name,
+    ],
   }
 }
 
@@ -572,7 +804,13 @@ async function spawnVersion(
   env: NodeJS.ProcessEnv
 ): Promise<string> {
   return withDiscoveryProcess(
-    { command: binary, args, env, timeoutMs: DEFAULTS.versionTimeoutMs, priority: "background" },
+    {
+      command: binary,
+      args,
+      env,
+      timeoutMs: DEFAULTS.versionTimeoutMs,
+      priority: "background",
+    },
     async ({ child, exited }) => {
       const chunks: Buffer[] = []
       let bytes = 0
@@ -587,16 +825,21 @@ async function spawnVersion(
       const result = await exited
       const output = Buffer.concat(chunks).toString("utf8")
       if (result.code !== 0 && !parseVersion(output))
-        throw new Error(`${basename(binary)} --version exited with ${result.signal ?? result.code}`)
+        throw new Error(
+          `${basename(binary)} --version exited with ${result.signal ?? result.code}`
+        )
       return output
     }
   )
 }
 
 /** The npm registry's `latest` tag, read with a bounded body and a short deadline. */
-async function npmRegistryLatest(npmPackage: string): Promise<string> {
+async function npmRegistryLatest(
+  npmPackage: string,
+  tag = "latest"
+): Promise<string> {
   const response = await fetch(
-    `https://registry.npmjs.org/${npmPackage.replace("/", "%2F")}/latest`,
+    `https://registry.npmjs.org/${npmPackage.replace("/", "%2F")}/${encodeURIComponent(tag)}`,
     {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
@@ -604,12 +847,48 @@ async function npmRegistryLatest(npmPackage: string): Promise<string> {
   )
   if (!response.ok) throw new Error(`npm registry answered ${response.status}`)
   const length = Number(response.headers.get("content-length") ?? 0)
-  if (length > REGISTRY_BODY_LIMIT) throw new Error("npm registry answer too large")
+  if (length > REGISTRY_BODY_LIMIT)
+    throw new Error("npm registry answer too large")
   const text = await response.text()
-  if (text.length > REGISTRY_BODY_LIMIT) throw new Error("npm registry answer too large")
+  if (text.length > REGISTRY_BODY_LIMIT)
+    throw new Error("npm registry answer too large")
   const parsed = z.object({ version: z.string() }).safeParse(JSON.parse(text))
   if (!parsed.success) throw new Error("npm registry answer had no version")
   return parsed.data.version
+}
+
+async function githubLatest(repository: string): Promise<string> {
+  const response = await fetch(
+    `https://api.github.com/repos/${repository}/releases/latest`,
+    {
+      signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
+      headers: { Accept: "application/vnd.github+json" },
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Release server answered ${response.status}`)
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error("Release server returned no body")
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      bytes += value.length
+      if (bytes > REGISTRY_BODY_LIMIT)
+        throw new Error("Release response too large")
+      chunks.push(value)
+    }
+  } finally {
+    await reader.cancel()
+  }
+  const parsed = z
+    .object({ tag_name: z.string() })
+    .parse(JSON.parse(Buffer.concat(chunks).toString("utf8")))
+  const version = parseVersion(parsed.tag_name)
+  if (!version) throw new Error("Release server returned no version")
+  return version
 }
 
 /** Runs an updater to completion, keeping only the tail of what it printed. */
@@ -634,7 +913,11 @@ function spawnUpdate(
     const timer = setTimeout(() => {
       child.kill("SIGTERM")
       setTimeout(() => child.kill("SIGKILL"), 2_000).unref()
-      reject(new Error(`${basename(command)} did not finish within ${Math.round(timeoutMs / 60_000)} minutes`))
+      reject(
+        new Error(
+          `${basename(command)} did not finish within ${Math.round(timeoutMs / 60_000)} minutes`
+        )
+      )
     }, timeoutMs)
     child.once("error", (error) => {
       clearTimeout(timer)

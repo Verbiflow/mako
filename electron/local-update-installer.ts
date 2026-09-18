@@ -430,7 +430,7 @@ async function runInstaller(): Promise<void> {
         }),
         { mode: 0o600 }
       )
-      await execute("open", [target], {
+      await execute("open", ["-n", target], {
         timeout: 10_000,
         env: desktopLaunchEnvironment(process.env),
       }).catch(() => {})
@@ -457,7 +457,12 @@ async function runInstaller(): Promise<void> {
     },
     grants: (backup) => reconcileGrantIdentity(target, backup),
     launch: async () => {
-      await execute("open", [target], {
+      // `-n` matters: the bundle was just swapped under a path LaunchServices
+      // still associates with the killed instance, and a plain `open` can be
+      // routed as an activation of that dead registration — macOS then shows
+      // "The application "Mako" is not open anymore." Forcing a new instance
+      // never takes the activate-existing path.
+      await execute("open", ["-n", target], {
         timeout: 10_000,
         env: desktopLaunchEnvironment(process.env),
       })

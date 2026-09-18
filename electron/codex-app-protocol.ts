@@ -139,6 +139,8 @@ function handleNotification(
     return
   switch (notification.method) {
     case "turn/started":
+      if (context.compaction && !context.compaction.turnId)
+        context.compaction.turnId = notification.turnId
       context.currentTurnId = notification.turnId
       context.protocol.updateState({
         status: "running",
@@ -153,6 +155,9 @@ function handleNotification(
       handleItem(context, notification.turnId, notification.item, false)
       return
     case "item/completed":
+      if (context.compaction?.turnId === notification.turnId &&
+        notification.item.type === "unsupported" && notification.item.sourceType === "contextCompaction")
+        context.compaction.confirmed = true
       handleItem(context, notification.turnId, notification.item, true)
       return
     case "item/agentMessage/delta":
@@ -205,6 +210,8 @@ function handleNotification(
 }
 
 function completeTurn(context: ProtocolContext, turn: Turn): void {
+  const compaction = context.compaction?.turnId === turn.id ? context.compaction : undefined
+  if (compaction) context.compaction = undefined
   const error = turn.error?.message || undefined
   const stop = turn.status === "inProgress" ? "completed" : turn.status
   context.currentTurnId = null
@@ -217,6 +224,12 @@ function completeTurn(context: ProtocolContext, turn: Turn): void {
     lastStop: stop,
     error,
   })
+  if (compaction) context.protocol.actionResult?.(compaction.actionId,
+    error || stop !== "completed"
+      ? { kind: "failed", reason: error ?? "Compaction was interrupted" }
+      : compaction.confirmed
+        ? { kind: "completed" }
+        : { kind: "uncertain", reason: "The provider ended the turn without confirming compaction." })
 }
 
 function streamDelta(

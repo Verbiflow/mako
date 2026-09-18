@@ -1267,8 +1267,10 @@ export class LiveConversations {
         resident.connections.delete(bindingId)
         void this.revokeTools(bindingId, id)
       }
-      if (previousStatus === "running" && event.session.status !== "running") {
+      if ((previousStatus === "running" && event.session.status !== "running") ||
+        event.session.connection === "disconnected" || event.session.status === "closed")
         this.actions.settle(resident, bindingId)
+      if (previousStatus === "running" && event.session.status !== "running") {
         resident.snapshot = {
           ...resident.snapshot,
           permissions: [],
@@ -1282,6 +1284,8 @@ export class LiveConversations {
           this.checkpoints.settle(resident, finishedRequest.id)
         this.scheduleAutoContinue(resident)
       }
+    } else if (event.type === "live-action-result") {
+      this.actions.result(resident, bindingId, event.actionId, event.result)
     } else if (event.type === "live-agent") {
       const agent = NativeAgentObservationSchema.parse(event.agent)
       resident.snapshot = {
@@ -2496,6 +2500,7 @@ export class LiveConversations {
   }
 
   stop(): void {
+    this.actions.stop()
     for (const resident of this.records.values()) {
       this.clearHibernationTimer(resident)
       resident.generation += 1

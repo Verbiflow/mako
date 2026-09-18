@@ -158,6 +158,7 @@ export type ItemTracker = {
 }
 
 export interface ProtocolCallbacks {
+  actionResult?(actionId: string, result: import("./contracts/live-actions.js").LiveActionResult): void
   handleFatal(message: string): void
   updateState(patch: Partial<LiveSessionState>): void
   emitUpdate(update: LiveUpdate): void
@@ -168,6 +169,7 @@ export interface ProtocolCallbacks {
 }
 
 export interface ProtocolContext {
+  compaction?: { actionId: string; turnId?: string; confirmed: boolean }
   child: ChildProcessWithoutNullStreams
   threadId: string | null
   currentTurnId: string | null

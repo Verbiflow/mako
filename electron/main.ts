@@ -1,3 +1,4 @@
+import { recoveryCapabilities } from "./providers/live-driver.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
 import { handleQuit } from "./background-lifecycle.js"
 import { RUNTIME_PROTOCOL } from "./contracts/runtime.js"
@@ -590,14 +591,22 @@ function watchProfileHostIdle(hostDirectory: string): void {
 
 async function reopenWindow(): Promise<void> {
   if (webOnly && !rendererWindows.size) {
-    // A persistent host is the checked-in application, so the Dock, Finder,
-    // and `open` deliver reopen to it instead of launching a process. The
-    // default profile answers by starting a desktop client; a sandbox or
-    // test host owns another data root and stays headless.
+    // The default profile answers an activate/second-instance by starting a
+    // desktop client; a sandbox or test host owns another data root and stays
+    // headless. Packaged clients must come up through `open -n` — a process
+    // spawned outside LaunchServices checks in as a UIElement, which `open`
+    // can then resolve as the bundle's instance and fail to activate.
     if (
       persistentHost &&
       resolve(app.getPath("userData")) === resolve(defaultUserData)
     ) {
+      if (app.isPackaged) {
+        spawn("open", ["-n", resolve(dirname(app.getAppPath()), "../..")], {
+          detached: true,
+          stdio: "ignore",
+        }).unref()
+        return
+      }
       const env = { ...process.env }
       delete env.MAKO_HOST_ONLY
       delete env.MAKO_STANDALONE
@@ -605,7 +614,7 @@ async function reopenWindow(): Promise<void> {
       delete env.MAKO_WEB_SOCKET
       delete env.MAKO_DATA_ROOT
       delete env.MAKO_PROFILE
-      spawn(process.execPath, app.isPackaged ? [] : [app.getAppPath()], {
+      spawn(process.execPath, [app.getAppPath()], {
         detached: true,
         stdio: "ignore",
         env,
@@ -1338,7 +1347,7 @@ function bindIpc() {
         canResume: driver?.canResume ?? false,
         observesNativeAgents: driver?.observesNativeAgents === true,
         canSteer: Boolean(driver?.steer),
-        canCompact: Boolean(driver?.compact),
+        recovery: recoveryCapabilities(driver),
       }
       if (driver?.steering) descriptor.steering = driver.steering
       if (driver?.modes?.length) descriptor.modes = [...driver.modes]
@@ -1714,7 +1723,24 @@ app.whenReady().then(async () => {
   await providerChildren.reap().catch((error) => {
     hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
   })
-  if (persistentHost) app.dock?.hide()
+  if (persistentHost) {
+    // The host outlives every client, so it is often the only checked-in
+    // instance of the app. LaunchServices cannot activate a process whose
+    // registration is UIElement/hidden — `open`, the Dock, and launchers then
+    // answer "The application is not open anymore". The default-profile host
+    // keeps a regular, activatable presence while no client is attached and
+    // hands it back when one is; other profiles stay headless.
+    const ownsAppPresence =
+      resolve(app.getPath("userData")) === resolve(defaultUserData)
+    const syncActivation = () => {
+      if (!ownsAppPresence) return
+      if ((webHost?.clients().length ?? 0) > 0) app.dock?.hide()
+      else void app.dock?.show()
+    }
+    setInterval(syncActivation, 2_000).unref()
+    syncActivation()
+    if (!ownsAppPresence) app.dock?.hide()
+  }
   app.setAboutPanelOptions({
     applicationName: "Mako",
     applicationVersion: app.getVersion(),
