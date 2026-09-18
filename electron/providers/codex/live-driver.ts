@@ -12,8 +12,11 @@ export const codexLiveDriver: ProviderLiveDriver = {
   // Re-probed 2026-09-14 (app-server 0.147.0): after thread/compact/start a
   // resumed thread keeps the original turns' items and gains a
   // contextCompaction record — the earlier drop is fixed.
-  compact: async (id) =>
-    (await import("../../codex-app.js")).codexAppCompact(id),
+  compaction: {
+    kind: "supported",
+    start: async (id, actionId) =>
+      (await import("../../codex-app.js")).codexAppCompact(id, actionId),
+  },
   available: () => codexExecutableCandidates().length > 0,
   start: async (...args) =>
     (await import("../../codex-app.js")).codexAppStart(...args),
