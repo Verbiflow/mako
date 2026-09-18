@@ -300,6 +300,23 @@ for (const patch of [
 }
 assert.equal(state.nativeRunId, "turn-1")
 
+const compactResults: Array<{ actionId: string; result: unknown }> = []
+context.protocol.actionResult = (actionId, result) => compactResults.push({ actionId, result })
+const notify = (method: string, params: JsonObject) => consumeStdout(context, Buffer.from(`${JSON.stringify({ method, params })}\n`))
+for (const confirmed of [false, true]) {
+  context.compaction = { actionId: "compact-action", confirmed: false }
+  notify("turn/started", { threadId: "thread-1", turn: { id: "compact-turn" } })
+  notify("turn/completed", { threadId: "different-thread", turn: { id: "compact-turn", status: "completed", error: null, items: [] } })
+  assert.ok(context.compaction, "another thread cannot complete compaction")
+  if (confirmed) notify("item/completed", { threadId: "thread-1", turnId: "compact-turn", item: { type: "contextCompaction", id: "boundary" } })
+  notify("turn/completed", { threadId: "thread-1", turn: { id: "compact-turn", status: "completed", error: null, items: [] } })
+  assert.equal(compactResults.at(-1)?.actionId, "compact-action")
+  assert.deepEqual(compactResults.at(-1)?.result, confirmed ? { kind: "completed" } :
+    { kind: "uncertain", reason: "The provider ended the turn without confirming compaction." })
+  assert.equal(context.compaction, undefined)
+}
+console.log("PASS: Codex compaction requires the matching turn and native compaction boundary")
+
 child.kill("SIGTERM")
 console.log("Codex JSON-RPC parsing, framing, and streaming checks passed")
 

@@ -1,4 +1,5 @@
 import { ProposedPlanCard } from "../src/components/transcript/proposed-plan"
+import { CompactionControl } from "../src/components/composer/compaction-control"
 import { Exchange } from "../src/components/transcript/exchange"
 import { Prose } from "../src/components/transcript/markdown"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
@@ -91,7 +92,7 @@ conversation.session = { ...conversation.session, status: "ready", connection: "
 // The access picker shows one ladder: tier labels in tier order, the
 // provider's own name beside them, and who enforces a host-made tier.
 threadsStore.set({
-  descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, canResume: true, canSteer: true, steering: "step", canCompact: true }],
+  descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, canResume: true, canSteer: true, steering: "step", recovery: { compaction: { kind: "supported" } } }],
 })
 conversation.session = {
   ...conversation.session,
@@ -105,7 +106,7 @@ conversation.session = {
   ],
 }
 publish()
-const triggerMarkup = renderToStaticMarkup(<LiveComposerControls canCompact={false} compactEnabled={false} />)
+const triggerMarkup = renderToStaticMarkup(<LiveComposerControls />)
 assert.match(triggerMarkup, /aria-label="Access: Full access"/)
 // The steer/queue preference is a Settings row, not a checkbox in the composer's menu.
 assert.doesNotMatch(triggerMarkup, /steers/)
@@ -127,7 +128,7 @@ conversation.session = {
   modes: [{ id: "full-access", name: "Agent", access: "full", enforcement: "provider" }],
 }
 publish()
-const singleModeMarkup = renderToStaticMarkup(<LiveComposerControls canCompact={false} compactEnabled={false} />)
+const singleModeMarkup = renderToStaticMarkup(<LiveComposerControls />)
 assert.match(singleModeMarkup, /aria-label="Access: Full access"/)
 assert.doesNotMatch(singleModeMarkup, /<button[^>]*aria-label="Access:/)
 threadsStore.set({
@@ -186,7 +187,7 @@ assert.match(
 )
 control.actions[0]!.state = { kind: "accepted" }
 publish()
-assert.match(renderToStaticMarkup(<LiveActionStatus />), /Compaction accepted/)
+assert.match(renderToStaticMarkup(<LiveActionStatus />), /Compaction in progress/)
 control.actions[0]!.state = {
   kind: "uncertain",
   reason: "Connection lost after dispatch",
@@ -501,6 +502,30 @@ assert.match(classified, /encrypted_content was not issued/, "the provider's own
 assert.match(classified, /Interrupted when Mako quit\. Review saved message/)
 assert.equal((classified.match(/Send again/g) ?? []).length, 1, "only the retriable failure offers Send again")
 conversation.requests.splice(-2, 2)
+publish()
+const savedDescriptors = threadsStore.get().descriptors
+threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, canResume: true,
+  recovery: { compaction: { kind: "supported" } } }] })
+const savedSession = conversation.session
+const savedActions = control.actions
+conversation.session = { ...conversation.session, status: "failed", connection: "connected" }
+control.actions = []
+publish()
+assert.doesNotMatch(renderToStaticMarkup(<CompactionControl requestId="failed" />), /disabled=""/)
+control.actions = [{ input: { kind: "compact", id, requestId: "failed" }, digest: "fixture", bindingId: id, createdAt: 1, state: { kind: "accepted" } }]
+publish()
+assert.match(renderToStaticMarkup(<CompactionControl requestId="failed" />), /disabled=""/)
+control.actions[0].state = { kind: "completed" }
+publish()
+assert.match(renderToStaticMarkup(<RetainedRequests />), /Compaction completed\. You can send/)
+threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true, canResume: true,
+  recovery: { compaction: { kind: "unavailable", reason: "Fixture cannot compact" } } }] })
+assert.match(renderToStaticMarkup(<RetainedRequests />), /Fixture cannot compact/)
+assert.match(renderToStaticMarkup(<RetainedRequests />), /Start new thread with saved message/)
+assert.doesNotMatch(renderToStaticMarkup(<CompactionControl />), /<button/)
+threadsStore.set({ descriptors: savedDescriptors })
+conversation.session = savedSession
+control.actions = savedActions
 publish()
 for (const size of ["label", "ui", "title", "prose", "welcome"]) assert.equal(cn(`text-${size}`, "text-foreground"), `text-${size} text-foreground`)
 assert.equal(cn("text-ui", "text-prose", "text-transparent"), "text-prose text-transparent")

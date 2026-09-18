@@ -134,6 +134,7 @@ interface Fake {
   fetched: string[]
   ran: Array<{ command: string; args: string[] }>
   runResult: { code: number | null; output: string }
+  onRun?: () => void
   clock: number
   emitted: HarnessUpdates[]
   changed: Array<{ provider: string; from?: string; to?: string }>
@@ -197,6 +198,7 @@ function service(world: Fake, path: string, options: { startDelayMs?: number } =
     },
     run: async (command, args) => {
       world.ran.push({ command, args })
+      world.onRun?.()
       return world.runResult
     },
     stat: async (path) => {
@@ -316,11 +318,12 @@ try {
   next.runResult = { code: 0, output: "\nchanged 2 packages in 3s\n" }
   const codexBinary = "/Users/me/.nvm/versions/node/v24.19.0/bin/codex"
   next.emitted.length = 0
-  const update = second.update("codex")
-  // The updater replaced the file.
-  next.stats[codexBinary] = { mtimeMs: 9_000, size: 13 }
-  next.versions[codexBinary] = "codex-cli 0.155.0"
-  const done = await update
+  next.onRun = () => {
+    next.stats[codexBinary] = { mtimeMs: 9_000, size: 13 }
+    next.versions[codexBinary] = "codex-cli 0.155.0"
+  }
+  const done = await second.update("codex")
+  delete next.onRun
   await settle()
   assert.ok(
     next.emitted.some((batch) => batch.codex?.phase === "updating"),

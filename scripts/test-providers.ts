@@ -351,8 +351,12 @@ assert.deepEqual(
 assert.equal(providerHost.nativeRunners.get("claude")?.fastMode, "supported")
 assert.equal(providerHost.profiles.get("claude")?.transport, "sdk")
 assert.ok(providerHost.liveDrivers.get("claude")?.steer)
-assert.ok(providerHost.liveDrivers.get("claude")?.compact)
-assert.equal(providerHost.liveDrivers.get("codex")?.compact, undefined, "Do not expose compaction until native history retention passes")
+assert.equal(providerHost.liveDrivers.get("claude")?.compaction?.kind, "supported")
+assert.equal(providerHost.liveDrivers.get("codex")?.compaction?.kind, "supported")
+assert.equal(providerHost.liveDrivers.get("devin")?.compaction?.kind, "supported")
+assert.equal(providerHost.liveDrivers.get("opencode")?.compaction?.kind, "supported")
+assert.equal(providerHost.liveDrivers.get("grok")?.compaction?.kind, "unavailable")
+assert.equal(providerHost.liveDrivers.get("cursor")?.compaction?.kind, "unavailable")
 assert.deepEqual(
   providerHost.accountCapabilities
     .list()

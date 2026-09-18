@@ -64,6 +64,7 @@ Object.assign(globalThis, {
       },
       daemonStatus: async () => null,
       harnessProfiles: async () => [],
+      harnessUpdates: async () => ({}),
       harnessTuning: async (id: string) => ({ id, label: id, available: true, transport: "acp", models: [], capabilities: [] }),
       boot: async () => {
         throw new Error("Fixture stops boot after subscribing")

@@ -197,6 +197,41 @@ console.log(
 )
 
 const projection = new ClaudeProjection()
+for (const confirmed of [true, false]) {
+  const messages = new Messages()
+  const compactEvents: LiveDriverEvent[] = []
+  const compactDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  } })
+  await compactDriver.start("/disposable", { conversationId: "compact-fixture", emit: (event) => compactEvents.push(event) })
+  assert.ok(compactDriver.compaction?.kind === "supported")
+  await compactDriver.compaction.start("compact-fixture", "compact-action")
+  const command = await input?.next()
+  assert.ok(command && !command.done)
+  assert.equal(command.value.message.content, "/compact")
+  assert.equal(compactEvents.some((event) => event.type === "live-action-result"), false)
+  if (confirmed) messages.send({ type: "system", subtype: "compact_boundary", uuid: randomUUID(), session_id: "compact-fixture", compact_metadata: { trigger: "manual", pre_tokens: 1000 } })
+  const result = {
+    type: "result", subtype: "success", uuid: randomUUID(), session_id: "compact-fixture",
+    duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "", stop_reason: "end_turn", total_cost_usd: 0,
+    modelUsage: {}, permission_denials: [], user_message_uuid: command.value.uuid,
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+      cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+      fallback_credit: { status: { type: "redeemed" } }, inference_geo: "", iterations: [], output_tokens_details: { thinking_tokens: 0 },
+      server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" },
+  } satisfies SDKMessage
+  messages.send({ ...result, user_message_uuid: "earlier-prompt" })
+  await delay(0)
+  assert.equal(compactEvents.some((event) => event.type === "live-action-result"), false, "an earlier turn cannot complete this action")
+  messages.send(result)
+  await delay(0)
+  const final = compactEvents.findLast((event) => event.type === "live-action-result")
+  assert.ok(final?.type === "live-action-result")
+  assert.equal(final.actionId, "compact-action")
+  assert.equal(final.result.kind, confirmed ? "completed" : "uncertain")
+  compactDriver.close("compact-fixture")
+}
+console.log("PASS: Claude compaction requires a manual boundary and the matching SDK result")
 const assistant: SDKAssistantMessage = {
   type: "assistant",
   parent_tool_use_id: null,

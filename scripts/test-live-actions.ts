@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
+import { setTimeout as delay } from "node:timers/promises"
 import { nativeCheckpoint } from "../electron/native-continuation.ts"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
@@ -20,12 +21,14 @@ const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 let steeringCalls = 0
 let compactionCalls = 0
+let compactionId: string | undefined
 let answer: () => Promise<ProviderSteerResult> = async () => ({
   kind: "accepted",
 })
 const driver: ProviderLiveDriver = {
   provider: "fixture",
   canResume: true,
+  steering: "step",
   available: () => true,
   async start(cwd, options) {
     const state: LiveSessionState = {
@@ -59,8 +62,9 @@ const driver: ProviderLiveDriver = {
     assert.equal(input.expectedRunId, states.get(id)?.nativeRunId)
     return answer()
   },
-  async compact(id) {
+  compaction: { kind: "supported", async start(id, actionId) {
     compactionCalls++
+    compactionId = actionId
     const state = states.get(id)
     assert.ok(state)
     const running: LiveSessionState = {
@@ -70,7 +74,7 @@ const driver: ProviderLiveDriver = {
     }
     states.set(id, running)
     owner.observe({ type: "live-session", session: running })
-  },
+  } },
   async permission() {},
   async cancel() {},
   async setMode() {},
@@ -85,6 +89,13 @@ const dependencies = {
 }
 let owner = new LiveConversations(dependencies)
 const id = randomUUID()
+async function connected(conversationId: string) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (owner.snapshot(conversationId)?.session.connection === "connected") return
+    await delay(10)
+  }
+  assert.fail("Fixture provider did not connect")
+}
 function finish() {
   const state = states.get(id)
   assert.ok(state)
@@ -103,6 +114,7 @@ function steering(requestId: string): LiveActionInput {
 }
 try {
   await owner.start("fixture", root, { conversationId: id })
+  await connected(id)
   const first = randomUUID()
   owner.submit(id, first, "first")
   const receipt = Promise.withResolvers<ProviderSteerResult>()
@@ -174,12 +186,37 @@ try {
   owner.stop()
   owner = compactOwner
   await owner.start("fixture", root, { conversationId: id })
+  await connected(id)
+  const failedRequest = randomUUID()
+  owner.submit(id, failedRequest, "Exceeds the context window")
+  await assert.rejects(
+    owner.act(id, { kind: "compact", id: randomUUID() }),
+    /Wait for the conversation/
+  )
+  const failedState = states.get(id)
+  assert.ok(failedState)
+  const contextFailure: LiveSessionState = {
+    ...failedState,
+    status: "failed",
+    error: "Context window exceeded",
+  }
+  states.set(id, contextFailure)
+  owner.observe({ type: "live-session", session: contextFailure })
+  assert.equal(
+    owner.snapshot(id)?.requests.find((request) => request.id === failedRequest)?.status,
+    "failed"
+  )
   const compact: LiveActionInput = { kind: "compact", id: randomUUID() }
   assert.equal((await owner.act(id, compact)).state.kind, "accepted")
   const before = sent.length
   owner.submit(id, randomUUID(), "after compaction")
   assert.equal(sent.length, before)
   finish()
+  assert.equal(sent.length, before, "idle is not evidence that compaction finished")
+  owner.observe({ type: "live-action-result", id, actionId: randomUUID(), result: { kind: "completed" } })
+  assert.equal(sent.length, before, "an unrelated action cannot release the queue")
+  assert.ok(compactionId)
+  owner.observe({ type: "live-action-result", id, actionId: compactionId, result: { kind: "completed" } })
   assert.equal(
     owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind,
     "completed"
@@ -188,8 +225,27 @@ try {
   assert.equal((await owner.act(id, compact)).state.kind, "completed")
   assert.equal(compactionCalls, 1)
   console.log(
-    "PASS: compaction waits for provider completion before draining and never repeats on retry"
+    "PASS: compaction recovers a failed session, waits for completion before draining, and never repeats on retry"
   )
+  finish()
+  const failedCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
+  await owner.act(id, failedCompact)
+  const heldRequest = randomUUID()
+  owner.submit(id, heldRequest, "Do not run after failed compaction")
+  const compactState = states.get(id)
+  assert.ok(compactState)
+  owner.observe({ type: "live-session", session: { ...compactState, status: "failed", error: "Compaction failed" } })
+  owner.observe({ type: "live-action-result", id, actionId: failedCompact.id, result: { kind: "failed", reason: "Compaction failed" } })
+  assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === heldRequest)?.status, "held")
+  assert.equal(owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind, "failed")
+  const interruptedCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
+  await owner.act(id, interruptedCompact)
+  const dispatched = compactionCalls
+  owner.stop()
+  owner = new LiveConversations({ ...dependencies, root: join(root, "compact-journals") })
+  assert.equal((await owner.act(id, interruptedCompact)).state.kind, "uncertain")
+  assert.equal(compactionCalls, dispatched, "restart cannot repeat compaction")
+  console.log("PASS: failed compaction holds queued work; restart preserves an unknown outcome without replay")
 
   const blocks = reduceLiveUpdates(
     [],
@@ -251,6 +307,7 @@ try {
   })
   const closingId = randomUUID()
   await owner.start("fixture", root, { conversationId: closingId })
+  await connected(closingId)
   assert.equal(owner.snapshot(closingId)?.threadPath, undefined)
   discoveredPath = nativePath
   owner.discoverNativePaths()

@@ -147,6 +147,22 @@ try {
     assert.equal(call.dispatched.resume, undefined)
     assert.equal(call.dispatched.initialRequest?.text, "Fresh prompt")
     assert.deepEqual(call.dispatched.initialRequest?.attachments, [])
+    const sourceId = acpStore.get().activeKey
+    assert.ok(sourceId)
+    const source = acpStore.get().conversations[sourceId]
+    assert.ok(source?.kind === "live")
+    const savedRequest = {
+      id: randomUUID(), text: "Recover this saved message", status: "failed" as const,
+      attachments: [{ name: "saved.txt", mimeType: "text/plain", size: 1, path: "/retained/saved.txt" }],
+    }
+    const failedSource = { ...source, requests: [savedRequest] }
+    acpStore.set({ conversations: { ...acpStore.get().conversations, [sourceId]: failedSource } })
+    assert.equal(await acp.recoverFresh(sourceId, savedRequest.id), true)
+    assert.notEqual(last(provider).dispatched.conversationId, sourceId)
+    assert.equal(last(provider).dispatched.resume, undefined)
+    assert.equal(last(provider).dispatched.initialRequest?.text, savedRequest.text)
+    assert.deepEqual(last(provider).dispatched.initialRequest?.attachments, savedRequest.attachments)
+    assert.equal(acpStore.get().conversations[sourceId], failedSource, "fresh recovery preserves the original conversation")
     reset()
     const empty = beginStart({
       harness: provider,
