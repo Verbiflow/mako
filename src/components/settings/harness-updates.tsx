@@ -1,159 +1,137 @@
 import { useState } from "react"
-import { ListCard, ListCardRow } from "@/components/ui/kit"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Action } from "@/components/ui/kit"
 import { harnessLabel } from "@/lib/harness-label"
-import { formatRelative } from "@/lib/format"
-import {
-  runtimeBusy,
-  runtimeCheckedAt,
-  runtimeRowView,
-  runtimeRows,
-} from "@/lib/runtime-updates"
+import { runtimeRowView } from "@/lib/runtime-updates"
 import { providers, useProviders } from "@/state/providers"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { toast } from "sonner"
-import { RefreshCwIcon } from "lucide-react"
 import type { HarnessUpdateInfo } from "../../../electron/contracts/harness-updates"
 
-/**
- * The CLI runtimes behind each provider — what is installed, what is current,
- * and who applies the update.
- *
- * Nothing here waits: the host has been reading versions since it started
- * and pushes each change, so the card paints from the store the moment it
- * mounts and a row's words follow the host's reading (`runtimeRowView`).
- * The refresh control asks the host to read everything again; the rows keep
- * their versions while it does. Mako runs an update only when the install
- * channel offers one it can own; app- and registry-managed runtimes name
- * their owner instead.
- */
-export function HarnessUpdates() {
-  const updates = useProviders((state) => state.runtimeUpdates)
-  const rows = runtimeRows(updates)
-  const busy = runtimeBusy(updates)
-  const checkedAt = runtimeCheckedAt(updates)
-  const [pending, setPending] = useState<string | null>(null)
-
-  const runUpdate = async (provider: string) => {
-    const label = harnessLabel(provider)
-    setPending(provider)
+/** An installation's version and update action stay beside its provider's account. */
+export function RuntimeRow({
+  runtimeId,
+  provider,
+  info,
+}: {
+  runtimeId: string
+  provider: string
+  info: HarnessUpdateInfo
+}) {
+  const [pending, setPending] = useState(false)
+  const updating = useProviders((state) =>
+    Object.values(state.runtimeUpdates ?? {}).some(
+      (runtime) => runtime.phase === "updating"
+    )
+  )
+  const view = runtimeRowView(info)
+  const runUpdate = async () => {
+    const label = info.label ?? harnessLabel(provider)
+    setPending(true)
     try {
-      const next = await providers.runRuntimeUpdate(provider)
+      const next = await providers.runRuntimeUpdate(runtimeId)
       const result = next.result
       if (!result || result.outcome === "failed")
         toast.error(`${label} was not updated`, {
           description: result?.message ?? "The updater did not finish.",
           duration: ACTION_TOAST_MS,
-          action: { label: "Try again", onClick: () => void runUpdate(provider) },
+          action: { label: "Try again", onClick: () => void runUpdate() },
         })
       else if (result.outcome === "updated")
         toast.success(`${label} is now ${result.to ?? "updated"}`, {
-          description: "New sessions run on it. Its models were read again.",
+          description: "The installation was updated and its models refreshed.",
         })
-      else toast(`${label} is already ${result.to ?? next.installed ?? "current"}`)
+      else
+        toast(`${label} is already ${result.to ?? next.installed ?? "current"}`)
     } catch (error) {
       toast.error(`${label} was not updated`, {
         description: error instanceof Error ? error.message : String(error),
         duration: ACTION_TOAST_MS,
-        action: { label: "Try again", onClick: () => void runUpdate(provider) },
+        action: { label: "Try again", onClick: () => void runUpdate() },
       })
     } finally {
-      setPending(null)
+      setPending(false)
     }
   }
 
   return (
-    <div className="mb-3">
-      <div className="flex items-center justify-between px-1 pb-1.5">
-        <span className="text-label text-faint">Runtime versions</span>
-        <span className="flex items-center gap-1.5">
-          {checkedAt !== undefined && !busy ? (
-            <span className="text-label text-faint">
-              checked {formatRelative(checkedAt) === "now" ? "just now" : `${formatRelative(checkedAt)} ago`}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            aria-label="Check runtime versions again"
-            disabled={busy}
-            onClick={() => void providers.loadRuntimeUpdates(true)}
-            className="pressable flex size-6 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
-          >
-            <RefreshCwIcon className={cn("size-3", busy && "animate-spin")} />
-          </button>
+    <div
+      aria-label={info.label ?? `${harnessLabel(provider)} installation`}
+      aria-busy={pending || info.phase === "updating"}
+    >
+      {info.label ? (
+        <span className="mb-0.5 block text-label font-medium">
+          {info.label}
         </span>
-      </div>
-      <ListCard>
-        {rows.map(([provider, info]) => (
-          <RuntimeRow
-            key={provider}
-            provider={provider}
-            info={info}
-            disabled={pending !== null || info.phase === "updating"}
-            onUpdate={() => void runUpdate(provider)}
-          />
-        ))}
-        {rows.length === 0 ? (
-          <ListCardRow className="py-2.5 text-ui text-faint">
-            {updates === null || busy
-              ? "Reading runtime versions…"
-              : "No runtimes found on this machine."}
-          </ListCardRow>
-        ) : null}
-      </ListCard>
-    </div>
-  )
-}
-
-function RuntimeRow({
-  provider,
-  info,
-  disabled,
-  onUpdate,
-}: {
-  provider: string
-  info: HarnessUpdateInfo
-  disabled: boolean
-  onUpdate(): void
-}) {
-  const view = runtimeRowView(info)
-  return (
-    <ListCardRow className="flex flex-col gap-1 py-2.5">
-      <div className="flex items-center gap-3">
-        <HarnessIcon harness={provider} className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1">
-          <span className="block text-ui font-medium">{harnessLabel(provider)}</span>
-          <span
-            className="block truncate text-label text-faint"
-            title={info.binary}
-          >
-            <span className={cn("tabular", view.shimmer && "shimmer")}>{view.version}</span>
-            <span
-              className={cn(
-                view.tone === "negative" && "text-removed",
-                view.tone === "muted" && "text-muted-foreground"
-              )}
-            >
-              {" · "}
-              {view.detail}
-            </span>
-          </span>
-        </span>
-        {view.action ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onUpdate}
-            className="pressable shrink-0 rounded-md px-2 py-1 text-ui text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
-          >
-            {view.action.label}
-          </button>
-        ) : null}
-      </div>
-      {view.note ? (
-        <p className="pl-7 text-label text-removed">{view.note}</p>
       ) : null}
-    </ListCardRow>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {info.binary ? (
+          <details className="min-w-0 text-label">
+            <summary
+              aria-label={`${info.label ?? harnessLabel(provider)} installation details`}
+              className="pressable w-fit cursor-pointer rounded-sm text-foreground marker:text-faint"
+            >
+              <span className={cn("tabular", view.shimmer && "shimmer")}>
+                {view.version}
+              </span>
+            </summary>
+            <p className="mt-1 font-mono text-code break-all text-faint">
+              {info.binary}
+            </p>
+            {info.channel ? (
+              <p className="mt-1 text-faint">
+                {info.channel === "self"
+                  ? "Provider installer"
+                  : `Installed via ${info.channel}`}
+              </p>
+            ) : null}
+            {info.latestError ? (
+              <p className="mt-1 break-words text-faint">{info.latestError}</p>
+            ) : null}
+          </details>
+        ) : (
+          <span className={cn("tabular text-label", view.shimmer && "shimmer")}>
+            {view.version}
+          </span>
+        )}
+        {view.action ? (
+          <Action
+            size="xs"
+            tone="outline"
+            disabled={pending || updating}
+            aria-label={`${view.action.label} ${info.label ?? harnessLabel(provider)}`}
+            onClick={() => void runUpdate()}
+          >
+            {pending
+              ? "Updating…"
+              : info.result?.outcome === "failed"
+                ? "Retry"
+                : view.action.label === "Check for updates"
+                  ? "Check for updates"
+                  : "Update"}
+          </Action>
+        ) : null}
+      </div>
+      <span
+        role="status"
+        className={cn(
+          "mt-0.5 block text-label break-words text-faint",
+          view.tone === "negative" && "text-removed",
+          view.tone === "muted" && "text-muted-foreground"
+        )}
+      >
+        {view.detail}
+      </span>
+      {info.description ? (
+        <span className="mt-0.5 block text-label text-faint">
+          {info.description}
+        </span>
+      ) : null}
+      {view.note ? (
+        <p role="alert" className="mt-1 text-label text-removed">
+          {view.note}
+        </p>
+      ) : null}
+    </div>
   )
 }

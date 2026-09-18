@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react"
+import { ExternalLinkIcon } from "lucide-react"
 import { Action } from "@/components/ui/kit"
 import { desktop } from "@/state/desktop"
 import { providerConnections, useProviderConnections } from "@/state/provider-connections"
@@ -10,27 +10,7 @@ import type { ProviderConnection, ProviderConnectionAction } from "@/lib/types"
 const inputClass =
   "h-8 w-full rounded-md bg-raised px-2.5 font-mono text-code text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-ui placeholder:text-faint focus:outline-none focus-visible:ring-border"
 
-/**
- * A transport's own sign-in, rendered onto that provider's row in the Agents
- * list rather than into a section beneath it.
- *
- * These were a separate "Connections" card once, which put the single fact
- * that decides whether Cursor runs — does it hold a key — a screen below the
- * row that was meanwhile reporting a confident "Installed". "Installed"
- * answers whether the CLI exists on this machine, and that stops being worth
- * a column the moment it is true; whether the provider can actually answer a
- * prompt is what someone opens this page to find out. So the status slot
- * carries the connection when there is one, and the controls that change it
- * sit on the row they describe.
- *
- * Nothing here is Cursor's by name. Cursor's SDK is the only registered
- * connection today; any provider that registers one is rendered the same way
- * and the rest keep their availability text, which is the same footing the
- * rest of the provider registries are on.
- *
- * The pieces are separate exports because they land in three different places
- * on the row — the status slot, the control cluster, and the area under both.
- */
+/** Account status in the provider row; sign-in controls and forms in its expanded area. */
 
 /** A provider is between states; the row says which rather than going blank. */
 function workingAction(
@@ -96,12 +76,7 @@ export function ConnectionStatus({ connection }: { connection: ProviderConnectio
   )
 }
 
-/**
- * Refresh, sign out, and the two ways in. A settled connection keeps them
- * folded away until the row is pointed at or tabbed into — the width is
- * reserved either way, so revealing them moves nothing — while a row with
- * something to answer shows them without being asked.
- */
+/** Sign-in controls stay visible inside the provider's expanded account area. */
 export function ConnectionControls({
   connection,
   keyOpen,
@@ -112,7 +87,6 @@ export function ConnectionControls({
   onPasteKey: () => void
 }) {
   const busy = useProviderConnections((state) => state.busy)
-  const working = workingAction(connection, busy)
   const anyBusy = Boolean(busy)
   const signedIn = connection.state.status === "signed-in"
   const canStore = connection.secureStorage
@@ -121,26 +95,7 @@ export function ConnectionControls({
     providerConnections.act(connection.provider, action)
 
   return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center gap-1 [transition:opacity_120ms_var(--ease-out)]",
-        signedIn &&
-          !keyOpen &&
-          "opacity-0 focus-within:opacity-100 group-hover/harness:opacity-100"
-      )}
-    >
-      {/* Sized to the row's text rather than to a form control: an inventory
-          line should not grow 8px taller than its neighbours to hold a button
-          nobody is looking at. */}
-      <button
-        type="button"
-        aria-label={`Check ${connection.label} sign-in`}
-        disabled={anyBusy}
-        onClick={() => void act({ kind: "refresh" })}
-        className="pressable flex size-6 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-60"
-      >
-        <RefreshCwIcon className={cn("size-3.5", working === "refresh" && "animate-spin")} />
-      </button>
+    <span className="flex flex-wrap items-center gap-1">
       {ownsCredential(connection) ? (
         <Action
           tone="ghost"
