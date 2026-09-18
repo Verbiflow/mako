@@ -51,6 +51,7 @@ interface Receipt {
   timer: ReturnType<typeof setTimeout>
 }
 interface Live {
+  compaction?: { actionId: string; runId: string; confirmed: boolean }
   state: LiveSessionState
   query: ClaudeQuery
   input: ClaudeInput
@@ -116,6 +117,9 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (live.closed) return
       acknowledge(live, message)
       live.transcript.observe(message)
+      if (message.type === "system" && message.subtype === "compact_boundary" &&
+        message.compact_metadata.trigger === "manual" && live.compaction)
+        live.compaction.confirmed = true
       const agent = live.agents.project(message)
       if (agent) engine.emitAgent(live, agent)
       const updates = live.projection.project(message)
@@ -141,6 +145,9 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         })
       }
       if (message.type !== "result" || live.state.status !== "running") continue
+      if (live.compaction && message.user_message_uuid &&
+        message.user_message_uuid !== live.compaction.runId &&
+        !message.user_message_uuids?.includes(live.compaction.runId)) continue
       if (live.steered && message.terminal_reason === "aborted_streaming")
         continue
       if ((message.queued_turn_count ?? 0) > 0) continue
@@ -162,6 +169,15 @@ async function pump(engine: Engine, live: Live): Promise<void> {
             : message.errors.join("\n").slice(0, 2000),
       })
       live.finishing = false
+      if (live.compaction) {
+        const compact = live.compaction
+        live.compaction = undefined
+        live.emit({ type: "live-action-result", id: live.state.id, actionId: compact.actionId,
+          result: message.is_error
+            ? { kind: "failed", reason: message.subtype === "success" ? "Compaction failed" : message.errors.join("\n").slice(0, 2000) }
+            : compact.confirmed ? { kind: "completed" }
+              : { kind: "uncertain", reason: "The provider ended the turn without confirming compaction." } })
+      }
     }
     if (!live.closed) throw new Error("Claude Code closed its SDK stream")
   } catch (error) {
@@ -405,11 +421,12 @@ export function createClaudeSdkDriver(
       }
       return receipt
     },
-    async compact(id) {
+    compaction: { kind: "supported", async start(id, actionId) {
       const live = requireLive(id)
       if (live.state.status === "running")
         throw new Error("Wait for Claude to finish before compacting")
       const uuid = randomUUID()
+      live.compaction = { actionId, runId: uuid, confirmed: false }
       engine.patch(live, {
         status: "running",
         nativeRunId: uuid,
@@ -423,7 +440,7 @@ export function createClaudeSdkDriver(
         parent_tool_use_id: null,
         message: { role: "user", content: "/compact" },
       })
-    },
+    } },
     async permission(id, requestId, response) {
       requireLive(id).permissions.respond(requestId, response)
     },
