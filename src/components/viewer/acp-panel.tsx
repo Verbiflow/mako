@@ -2,6 +2,8 @@ import { promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, 
 import { agentActivity } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { useCopy } from "@/components/ui/use-copy"
+import { CompactionControl } from "@/components/composer/compaction-control"
+import { compactionAvailable } from "../../../electron/contracts/recovery"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { TransferStatus } from "./transfer-status"
 import { LiveActionStatus } from "./live-action-status"
@@ -401,6 +403,13 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
   const conversationId = useAcp((state) => activeLiveAcp(state)?.key ?? null)
   const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
   const [resent, setResent] = useState<"sending" | "sent" | null>(null)
+  const recovered = useAcp((state) => activeLiveAcp(state)?.control?.actions?.some((action) =>
+    action.input.kind === "compact" && action.input.requestId === request.id && action.state.kind === "completed") ?? false)
+  const idle = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return Boolean(live && compactionAvailable(live.session, live.control?.actions ?? [],
+      live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false))
+  })
   // The host classified the provider's text once; the panel says what the
   // kind means for this provider and offers Send again only when it can work.
   const failure =
@@ -416,7 +425,7 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
         : request.status === "interrupted"
           ? "Stopped message"
           : "Message failed"
-  const retriable = request.status === "failed" && (failure?.retriable ?? true)
+  const retriable = request.status === "failed" && ((failure?.retriable ?? true) || recovered)
   // A failed request is re-sent as a new request carrying the same text and
   // attachments; the failed record stays, so nothing is replayed silently.
   const resend = async () => {
@@ -431,14 +440,24 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
       {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
       {request.error ? <p className={cn("mt-2", failure && "text-faint")}>{request.error}</p> : null}
       <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
+      {request.status === "failed" ? <CompactionControl requestId={request.id} /> : null}
+      {recovered ? <p className="mt-2">Compaction completed. You can send the saved message again.</p> : null}
       <div className="mt-2 flex items-center gap-3">
         {retriable && conversationId ? (
-          <button type="button" onClick={() => void resend()} disabled={resent !== null} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
+          <button type="button" onClick={() => void resend()} disabled={resent !== null || !idle} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
             {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : "Send again"}
           </button>
         ) : null}
+        {request.status === "failed" && conversationId ? (
+          <button type="button" disabled={resent !== null} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50"
+            onClick={() => {
+              setResent("sending")
+              void acp.recoverFresh(conversationId, request.id).then((accepted) => setResent(accepted ? "sent" : null))
+            }}>Start new thread with saved message</button>
+        ) : null}
         <button type="button" onClick={() => void copy()} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
       </div>
+      {request.status === "failed" ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
     </details>
   )
 }

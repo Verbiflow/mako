@@ -21,16 +21,16 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
     state.kind === "dispatching"
       ? "awaiting confirmation"
       : state.kind === "accepted"
-        ? "accepted"
+        ? action.input.kind === "compact" ? "in progress" : "accepted"
         : state.kind === "completed"
           ? "completed"
           : state.kind === "not-accepted"
             ? "not accepted"
-            : "delivery uncertain"
+            : state.kind === "failed" ? "failed" : "outcome unknown"
   return (
     <details
       className="shrink-0 border-t border-hairline px-3.5 py-2 text-label text-muted-foreground"
-      open={state.kind === "uncertain" || state.kind === "not-accepted"}
+      open={state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed"}
     >
       <summary className="pressable cursor-pointer">
         {label} {status}
@@ -38,7 +38,7 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
       {action.input.kind === "steer" ? (
         <p className="mt-2 whitespace-pre-wrap">{action.input.text}</p>
       ) : null}
-      {state.kind === "uncertain" || state.kind === "not-accepted" ? (
+      {state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed" ? (
         <p className="mt-2">{state.reason}</p>
       ) : null}
       {state.kind === "uncertain" ? (
