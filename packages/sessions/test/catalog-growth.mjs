@@ -87,6 +87,11 @@ try {
   assert.equal(events.at(-1)?.ref.bytes, (await stat(resumed)).size)
   await catalog.reconcileActive()
   assert.equal(events.length, before + 1, "an unchanged active file is not refreshed again")
+  const cachedHistory = await catalog.page(resumed)
+  await appendFile(resumed, line("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "External continuation without a watcher event" }] }))
+  const freshHistory = await catalog.page(resumed)
+  assert.ok(freshHistory.total > cachedHistory.total, "opening a cached thread validates native bytes before watcher refresh")
+  assert.equal(freshHistory.entries.at(-1).text, "External continuation without a watcher event")
   await catalog.stop()
 
   // Claude writes its own title later in the same file.

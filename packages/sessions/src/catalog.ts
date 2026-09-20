@@ -363,7 +363,10 @@ export class SessionCatalog {
 
   /** Full translation of one session, via whichever store owns its path. */
   async open(path: string, trackForFollow = true): Promise<Thread | null> {
-    const stamp = this.byPath.get(path)
+    const provider = this.ownerOf(path)
+    // Opening a conversation must see external writes even before the watcher
+    // catches up. Validate only this store, using provider-owned revision facts.
+    const stamp = provider ? await nativeFileOf(provider, path) : null
     const held = this.threadCache.get(path)
     const cached =
       held &&
@@ -374,7 +377,6 @@ export class SessionCatalog {
         ? held.thread
         : null
     if (held && !cached) this.threadCache.delete(path)
-    const provider = this.ownerOf(path)
     const native =
       cached ??
       withThreadWorkspace(
