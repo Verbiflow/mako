@@ -21,6 +21,7 @@ import {
 } from "../electron/codex-app-parse.ts"
 import {
   consumeStdout,
+  rpcRequest,
   MAX_STDOUT_BUFFER,
   type ProtocolContext,
 } from "../electron/codex-app-protocol.ts"
@@ -158,7 +159,22 @@ assert.equal(
   null
 )
 
-const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10_000)"], {
+// A native resume/fork without excludeTurns returns a history frame larger
+// than Mako's bound. Exercise the production request builder and framing.
+const child = spawn(process.execPath, ["-e", `
+  const readline = require("node:readline");
+  readline.createInterface({ input: process.stdin }).on("line", line => {
+    const request = JSON.parse(line);
+    const turns = request.params.excludeTurns === true ? [] : [{
+      id: "old-turn", status: "completed", items: [{
+        id: "old-answer", type: "agentMessage", text: "x".repeat(9 * 1024 * 1024)
+      }]
+    }];
+    process.stdout.write(JSON.stringify({ id: request.id, result: {
+      thread: { id: request.params.threadId, turns }, model: "fixture-model"
+    }}) + "\\n");
+  });
+`], {
   stdio: ["pipe", "pipe", "pipe"],
 })
 const state: LiveSessionState = {
@@ -317,7 +333,23 @@ for (const confirmed of [false, true]) {
 }
 console.log("PASS: Codex compaction requires the matching turn and native compaction boundary")
 
+assert.throws(() => consumeStdout({
+  ...context,
+  stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
+}, Buffer.alloc(MAX_STDOUT_BUFFER + 1, 120)), /oversized JSON-RPC/)
+child.stdout.on("data", (chunk: Buffer) => consumeStdout(context, chunk))
+for (const method of ["thread/resume", "thread/fork"] as const) {
+  const reopened = await rpcRequest(context, method, {
+    threadId: "large-history-thread",
+    lastTurnId: "old-turn",
+    cwd: "/tmp/project",
+  })
+  assert.equal(reopened.thread.id, "large-history-thread")
+  assert.deepEqual(reopened.thread.turns, [])
+  assert.equal(reopened.model, "fixture-model")
+}
 child.kill("SIGTERM")
+console.log("PASS: resume and fork omit oversized history without changing native identity")
 console.log("Codex JSON-RPC parsing, framing, and streaming checks passed")
 
 for (const notification of [

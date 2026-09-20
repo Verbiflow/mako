@@ -290,3 +290,46 @@ Reflect.deleteProperty(globalThis, "window")
 console.log(
   "Production send reaches the host before display discovery completes and reconciles the acknowledged message without duplicates"
 )
+
+// A resumed submission can be represented by a transfer rather than a prompt
+// request. Its receipt (including refusal) must retire only its optimistic row.
+for (const kind of ["queued", "preparing", "failed", "uncertain"] as const) {
+  const control = {
+    activeBindingId: id, bindings: [], children: [], merges: [], transfers: [{
+      input: { id: request.id, provider: "codex", text: request.text, attachments: [] },
+      createdAt: 1,
+      state: kind === "failed" || kind === "uncertain"
+        ? { kind, error: "Session is held" } : { kind },
+    }],
+  }
+  for (const viaBatch of [false, true]) {
+    applyLiveSnapshot({ ...snapshot, revision: 1000, epoch: `${kind}-${viaBatch}`, control: undefined })
+    stagePrompt(id, request)
+    const other = { ...request, id: "33333333-3333-4333-8333-333333333333" }
+    stagePrompt(id, other)
+    if (viaBatch) applyLiveBatch({ id, revision: 1001, epoch: `${kind}-${viaBatch}`, updates: [], control })
+    else applyLiveSnapshot({ ...snapshot, revision: 1001, epoch: `${kind}-${viaBatch}`, control })
+    assert.deepEqual(current().pendingPrompts?.map((prompt) => prompt.id), [other.id])
+    assert.equal(current().control?.transfers[0]?.state.kind, kind)
+    assert.ok(!current().projection?.messages.some((message) => message.id === request.id))
+  }
+}
+console.log("PASS: transfer receipts clear Sending via snapshots and control-only batches without losing other drafts")
+
+// Native history can cover retained local blocks. Snapshot and batch paths
+// must agree, including when only coverage changes without a new live block.
+acpStore.set({ activeKey: id, conversations: {} })
+const coveredHistory = {
+  ...snapshot, revision: 1,
+  blocks: [{ type: "user" as const, requestId: "prior", text: "Old prompt" }],
+  base: { ref: { path: "fixture", nativeId: "native", harness: "codex" }, start: 0, total: 2, hasEarlier: false,
+    entries: [{ kind: "user" as const, text: "Old prompt" }, { kind: "user" as const, text: "Latest external prompt" }] },
+}
+applyLiveSnapshot(coveredHistory)
+assert.equal(current().projection?.messages.length, 3)
+applyLiveBatch({ id, revision: 2, updates: [], baseCoveredBlocks: 1 })
+assert.equal(current().baseCoveredBlocks, 1)
+assert.equal(current().projection?.messages.length, 2)
+applyLiveSnapshot({ ...coveredHistory, revision: 3, baseCoveredBlocks: 1 })
+assert.equal(current().projection?.messages.length, 2)
+console.log("PASS: native coverage reaches renderer through snapshot and coverage-only batches")

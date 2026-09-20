@@ -37,6 +37,7 @@ const cases: [string, string][] = [
   ["RetriableError: Connection stalled", "network"],
   ["RetriableError: [unavailable] Error", "provider-unavailable"],
   ["[unauthenticated] Backend rejected authentication. Verify this is a User API Key for the same endpoint/environment", "auth"],
+  ["Codex app-server sent an oversized JSON-RPC message", "transport-limit"],
   ["Session not found", "resume-failed"],
   ["The saved native session cannot be resumed. The session store is missing or unreadable. No replacement session was started.", "resume-failed"],
   [heldReason("Mako (dev)"), "resume-failed"],
@@ -78,3 +79,6 @@ assert.equal(classifyStartFailure(reconnectRefusal({ kind: "held", by: "Mako (de
 assert.equal(classifyStartFailure(reconnectRefusal(undefined), true), "resume-failed")
 
 console.log(`Provider failure classification: ${cases.length} texts, priority, retriability and start failures passed`)
+
+assert.equal(classifyStartFailure("Codex app-server sent an oversized JSON-RPC message", true), "transport-limit")
+assert.doesNotMatch(describeProviderFailure("resume-failed").guidance, /process.*open/)
