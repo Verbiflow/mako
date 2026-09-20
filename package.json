@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "npm run web",
     "dev:hot": "npm run build:electron && node electron/start.mjs --web --hot",
-    "test:dev-updates": "node scripts/test-dev-updates.mjs",
+    "test:dev-updates": "node scripts/test-dev-updates.mjs && tsx scripts/test-dev-host-build.ts",
     "test:background-lifecycle": "npm run build:electron && node scripts/test-background-lifecycle.mjs",
     "test:desktop-continuity": "npm run build:electron && node scripts/test-desktop-continuity.mjs",
     "test:shared-runtime": "npm run build && node scripts/test-shared-runtime.mjs",
