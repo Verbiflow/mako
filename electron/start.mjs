@@ -10,6 +10,7 @@ import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connectio
 import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
 import { holdHostLease } from "../dist-electron/host-idle.js"
 import { join } from "node:path"
+import { devHostBuild } from "../dist-electron/dev-host-build.js"
 import { webHostProxy } from "./web-dev-proxy.mjs"
 import { manualDevUpdates } from "./dev-updates.mjs"
 import { buildPreload } from "../scripts/build-preload.mjs"
@@ -43,40 +44,29 @@ if (!shared && env.MAKO_HOST_ONLY === "1") {
 const profile = env.MAKO_PROFILE || (process.argv.includes("--sandbox") ? `sandbox-${createHash("sha256").update(root).digest("hex").slice(0, 8)}` : shared ? undefined : "dev")
 const appData = process.platform === "darwin" ? join(homedir(), "Library", "Application Support") : process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming") : process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
 const dataRoot = runtimeDataRoot(appData, { ...env, MAKO_PROFILE: profile })
-const runtime = await ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...env, MAKO_PROFILE: profile } })
+let runtime = await ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...env, MAKO_PROFILE: profile } })
 const socket = runtime.socket
-// The renderer hot-reloads; the host does not. A host started before this
-// checkout's host methods existed still answers "ready" — then fails every
-// newer call, which reads as a broken desk rather than an old process. When
-// the reused host cannot answer the current contract, ask it to restart onto
-// the build on disk before serving it a fresh window.
+// The host survives the launcher. Method names alone cannot detect a changed
+// implementation, so compare executable content before serving the renderer.
+const expectedBuild = shared ? undefined : devHostBuild(root)
 const missingOn = (info) =>
   Object.keys(hostCallInputs).filter((method) => !info.methods.includes(method))
-if (missingOn(runtime.info).length) {
-  const missing = missingOn(runtime.info)
-  console.warn(
-    `[mako-client] Host pid ${runtime.info.pid} is running an older build — it cannot answer ${missing.length} host methods this window calls (${missing.slice(0, 4).join(", ")}${missing.length > 4 ? ", …" : ""}). Asking it to restart onto the current build.`
-  )
-  try {
-    await invokeRuntime(socket, crypto.randomUUID(), "mako:relaunch", [])
-    // The restart waits for in-flight work to drain; give it a minute, then
-    // serve anyway — the window reconnects when the new host lands.
-    const deadline = Date.now() + 60_000
-    for (;;) {
-      const probe = await settleRuntime(socket).catch(() => null)
-      if (probe?.state === "ready" && !missingOn(probe.info).length) break
-      if (Date.now() >= deadline) {
-        console.warn(
-          `[mako-client] The older host is still running. The desk will misbehave until it restarts — "Restart Mako" in the desk or \`kill ${runtime.info.pid}\` finishes it.`
-        )
-        break
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250))
+const needsRestart = (info) => missingOn(info).length > 0 ||
+  (expectedBuild !== undefined && info.devBuild !== expectedBuild)
+if (needsRestart(runtime.info)) {
+  console.warn(`[mako-client] Host pid ${runtime.info.pid} has an older build. Restarting through Mako's lifecycle; running work is allowed to finish.`)
+  await invokeRuntime(socket, crypto.randomUUID(), "mako:relaunch", [])
+  const deadline = Date.now() + 60_000
+  for (;;) {
+    const probe = await settleRuntime(socket).catch(() => null)
+    if (probe?.state === "ready" && !needsRestart(probe.info)) {
+      runtime = { ...runtime, info: probe.info }
+      break
     }
-  } catch (error) {
-    console.warn(
-      `[mako-client] The host refused the restart (${error instanceof Error ? error.message : error}). Stop it — \`kill ${runtime.info.pid}\` or "Restart Mako" in the desk — and run this again.`
-    )
+    if (Date.now() >= deadline) {
+      throw new Error("The previous host has not finished restarting. No new web client was started against the old build. Let its running work finish, then run this command again.")
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
   }
 }
 // A profile host stops itself once nothing has used it for a while. This

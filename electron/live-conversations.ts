@@ -313,6 +313,56 @@ export class LiveConversations {
     return this.stamp(resident.snapshot)
   }
 
+  /** Observe native history independently of whether another client owns execution.
+   * A single binding records which retained live blocks its native store covers. */
+  async refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
+    const resident = this.load(id)
+    if (!resident) return null
+    this.flush(resident)
+    const base = resident.snapshot.base
+    const bindings = resident.snapshot.control?.bindings ?? []
+    const binding = bindings.length === 1 ? bindings[0] : undefined
+    const path = binding?.path ?? base?.ref.path
+    const nativeId = binding?.nativeId ?? base?.ref.nativeId
+    const provider = binding?.provider ?? base?.ref.harness
+    const covered = binding?.coveredBlocks ?? 0
+    if (!path || !nativeId || resident.opening || resident.transferring ||
+        resident.snapshot.session.status === "running" ||
+        resident.snapshot.requests.some((request) => request.status === "dispatching") ||
+        (resident.snapshot.blocks.length > 0 &&
+          (!binding?.includesBase || covered !== resident.snapshot.blocks.length)))
+      return this.snapshot(id)
+    const key = `refresh:${id}`
+    const pending = this.captures.get(key)
+    if (pending) return pending
+    const before = resident.snapshot
+    const generation = resident.generation
+    const work = (async (): Promise<LiveSnapshot> => {
+      try {
+        const latest = await this.dependencies.history(path)
+        if (!latest || latest.ref.nativeId !== nativeId || latest.ref.harness !== provider)
+          return this.stamp(resident.snapshot)
+        const sameRevision = base && (resident.snapshot.baseCoveredBlocks ?? 0) === covered && latest.checkpoint !== undefined && latest.checkpoint === base.checkpoint &&
+          latest.ref.bytes === base.ref.bytes && latest.ref.revision === base.ref.revision &&
+          latest.ref.updatedAt === base.ref.updatedAt && latest.total === base.total
+        if (sameRevision) return this.stamp(resident.snapshot)
+        const refreshed = await captureNativeHistory(path, (path, before) =>
+          before === undefined ? Promise.resolve(latest) : this.dependencies.history(path, before))
+        if (refreshed && resident.snapshot === before && resident.generation === generation &&
+            !resident.opening && !resident.transferring) {
+          resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered }
+          this.flush(resident)
+        }
+      } catch (error) {
+        hostLog("live", "native history refresh deferred", { conversation: id, error: errorMessage({ error }) })
+      }
+      return this.stamp(resident.snapshot)
+    })()
+    this.captures.set(key, work)
+    void work.finally(() => this.captures.delete(key)).catch(() => {})
+    return work
+  }
+
   hibernateIfIdle(id: string, reason = "explicit"): boolean {
     const resident = this.load(id)
     if (!resident || !this.canHibernate(resident)) return false
@@ -1724,11 +1774,13 @@ export class LiveConversations {
         (block, index) =>
           index > start && block.type === "user" && !block.steeringFor
       )
+      if (start < (source.baseCoveredBlocks ?? 0))
+        throw new Error("The transcript was refreshed. Choose the answer again from its current history.")
       entries = [
         ...entries,
         ...liveEntries(
           source.blocks.slice(
-            0,
+            source.baseCoveredBlocks ?? 0,
             command.point.kind === "before-run"
               ? start
               : next < 0
@@ -2801,6 +2853,8 @@ export class LiveConversations {
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
         base: previous.base !== snapshot.base ? snapshot.base : undefined,
+        baseCoveredBlocks: previous.baseCoveredBlocks !== snapshot.baseCoveredBlocks
+          ? (snapshot.baseCoveredBlocks ?? 0) : undefined,
         threadPath:
           previous.threadPath !== snapshot.threadPath
             ? (snapshot.threadPath ?? null)

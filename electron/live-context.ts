@@ -94,7 +94,7 @@ export async function prepareLiveContext(
     },
     entries: [
       ...(includesBase ? (snapshot.base?.entries ?? []) : []),
-      ...liveEntries(snapshot.blocks.slice(fromBlock)),
+      ...liveEntries(snapshot.blocks.slice(includesBase ? Math.max(fromBlock, snapshot.baseCoveredBlocks ?? 0) : fromBlock)),
     ],
   }
   const retained = await persistThreadAttachments(

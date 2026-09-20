@@ -94,6 +94,7 @@ export const LiveRequestSchema = z.object({
     .optional(),
 })
 const MetadataSchema = z.object({
+  baseCoveredBlocks: z.number().int().nonnegative().optional(),
   nativeAgents: NativeAgentRosterSchema.optional(),
   control: ConversationControlSchema.optional(),
   session: z.object({

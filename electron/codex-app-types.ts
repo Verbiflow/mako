@@ -98,6 +98,7 @@ export type RpcParams = {
     config?: JsonObject
   }
   "thread/fork": {
+    excludeTurns?: boolean
     threadId: string
     lastTurnId: string
     cwd: string
@@ -106,6 +107,7 @@ export type RpcParams = {
     config?: JsonObject
   }
   "thread/resume": {
+    excludeTurns?: boolean
     threadId: string
     cwd: string
     model?: string

@@ -1,6 +1,7 @@
 import { recoveryCapabilities } from "./providers/live-driver.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
 import { handleQuit } from "./background-lifecycle.js"
+import { devHostBuild } from "./dev-host-build.js"
 import { RUNTIME_PROTOCOL } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo } from "./runtime-connection.js"
@@ -243,6 +244,7 @@ const rendererBundle = join(__dirname, "../dist")
  */
 const PRELOAD = join(__dirname, "preload.cjs")
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
+const loadedDevBuild = isDev ? devHostBuild(app.getAppPath()) : undefined
 const configuredDevServerUrl = isDev
   ? process.env.VITE_DEV_SERVER_URL ?? null
   : null
@@ -1473,7 +1475,7 @@ function bindIpc() {
     ).read(path)
   })
   handle("mako:live-snapshot", (_event, id: string) =>
-    liveConversations.snapshot(id)
+    liveConversations.refreshedSnapshot(id)
   )
   handle(
     "mako:live-state",
@@ -1940,6 +1942,7 @@ app.whenReady().then(async () => {
         instanceId: crypto.randomUUID(),
         pid: process.pid,
         version: app.getVersion(),
+        devBuild: loadedDevBuild,
         methods: Object.keys(hostCallInputs),
       }
     )

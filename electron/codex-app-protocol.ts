@@ -515,9 +515,13 @@ export function rpcRequest(
     case "initialize":
       return beginRpcRequest(context, method, params, parseObjectResult)
     case "thread/start":
+      return beginRpcRequest(context, method, params, parseThreadResponse)
     case "thread/fork":
     case "thread/resume":
-      return beginRpcRequest(context, method, params, parseThreadResponse)
+      // The catalog/base already supplies paged native history. Reopening must
+      // not hydrate it again as one unbounded JSON-RPC frame. This only omits
+      // response turns; Codex still restores its full native model context.
+      return beginRpcRequest(context, method, { ...params, excludeTurns: true }, parseThreadResponse)
     case "turn/start":
       return beginRpcRequest(context, method, params, parseTurnResponse)
     case "turn/steer":
