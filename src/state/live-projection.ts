@@ -15,7 +15,7 @@ export interface LiveProjection {
   plan: AcpPlanEntry[]
   files: TouchedFile[]
 }
-type ProjectionInput = Pick<LiveSnapshot, "blocks" | "base"> & {
+type ProjectionInput = Pick<LiveSnapshot, "blocks" | "base" | "baseCoveredBlocks"> & {
   session: Pick<LiveSnapshot["session"], "status" | "harness">
   requests?: LiveSnapshot["requests"]
 }
@@ -100,7 +100,8 @@ export function projectLive(
   const live = acpBlocksToMessages(
     blocks,
     snapshot.session.status === "running",
-    snapshot.session.harness
+    snapshot.session.harness,
+    { start: snapshot.baseCoveredBlocks ?? 0, turn: 0, plan: [] }
   )
   const base = snapshot.base
     ? threadToMessages(
@@ -132,6 +133,7 @@ function canProjectTail(
     held.starting ||
     held.pending !== pending ||
     held.input.base !== input.base ||
+    held.input.baseCoveredBlocks !== input.baseCoveredBlocks ||
     held.input.requests !== input.requests ||
     held.input.session.status !== input.session.status ||
     held.input.session.harness !== input.session.harness ||
@@ -157,14 +159,14 @@ function remember(
   previous?: ProjectionCache
 ): void {
   const start = Math.max(
-    0,
+    input.baseCoveredBlocks ?? 0,
     input.blocks.findLastIndex(
       (block) => block.type === "user" && !block.steeringFor
     )
   )
   let turn = previous?.cursor.turn ?? 0
   let plan = previous?.cursor.plan ?? []
-  for (let index = previous?.cursor.start ?? 0; index < start; index++) {
+  for (let index = previous?.cursor.start ?? input.baseCoveredBlocks ?? 0; index < start; index++) {
     const block = input.blocks[index]
     if (block?.type === "user" && !block.steeringFor) turn++
     if (block?.type === "plan") plan = block.entries
@@ -184,7 +186,7 @@ function remember(
           0,
           result.messages.findIndex((message) => message.id === id)
         )
-      : 0
+      : start >= input.blocks.length ? result.messages.length : 0
   cache.set(result, {
     input: { ...input, session: { ...input.session } },
     pending,
@@ -199,7 +201,7 @@ function remember(
             0,
             result.exchanges.findIndex((exchange) => exchange.id === id)
           )
-        : 0,
+        : start >= input.blocks.length ? result.exchanges.length : 0,
   })
 }
 
@@ -218,6 +220,7 @@ export function projectAcp(conversation: AcpConversation): LiveProjection {
     {
       blocks: conversation.blocks,
       base: conversation.base ?? null,
+      baseCoveredBlocks: conversation.baseCoveredBlocks,
       requests: conversation.requests,
       session:
         conversation.kind === "live"

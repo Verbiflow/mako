@@ -27,7 +27,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
   const existing = acpStore.get().conversations[id]
   if (existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision) return
   const pendingPrompts = existing?.pendingPrompts?.filter(
-    (prompt) => !snapshot.requests.some((request) => request.id === prompt.id)
+    (prompt) => !snapshot.requests.some((request) => request.id === prompt.id) &&
+      !snapshot.control?.transfers.some((transfer) => transfer.input.id === prompt.id)
   )
   replaceAcpConversation(id, {
     key: id,
@@ -48,6 +49,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
     requests: snapshot.requests,
     pendingPrompts,
     base: snapshot.base,
+    baseCoveredBlocks: snapshot.baseCoveredBlocks,
     blocks: snapshot.blocks,
     revision: snapshot.revision,
     epoch: snapshot.epoch ?? existing?.epoch,
@@ -167,10 +169,12 @@ export function applyLiveBatch(batch: LiveBatch): void {
   const session = batch.session ?? current.session
   const blocks = reduceLiveUpdates(current.blocks, batch.updates)
   const base = batch.base === undefined ? (current.base ?? null) : batch.base
+  const baseCoveredBlocks = batch.baseCoveredBlocks ?? current.baseCoveredBlocks
   const requests = batch.requests ?? current.requests
-  const pendingPrompts = batch.requests
+  const pendingPrompts = batch.requests || batch.control
     ? current.pendingPrompts?.filter(
-        (prompt) => !batch.requests?.some((request) => request.id === prompt.id)
+        (prompt) => !requests?.some((request) => request.id === prompt.id) &&
+          !(batch.control ?? current.control)?.transfers.some((transfer) => transfer.input.id === prompt.id)
       )
     : current.pendingPrompts
   replaceAcpConversation(batch.id, {
@@ -190,11 +194,13 @@ export function applyLiveBatch(batch: LiveBatch): void {
     revision: batch.revision,
     epoch: batch.epoch ?? current.epoch,
     base,
+    baseCoveredBlocks,
     threadPath:
       batch.threadPath === undefined
         ? current.threadPath
         : (batch.threadPath ?? undefined),
-    sending: batch.session ? false : current.sending,
+    sending: batch.session || (pendingPrompts?.length ?? 0) < (current.pendingPrompts?.length ?? 0)
+      ? false : current.sending,
     canceling: session.status === "running" ? current.canceling : false,
     permission: batch.permissions
       ? (batch.permissions[0] ?? null)
@@ -209,12 +215,13 @@ export function applyLiveBatch(batch: LiveBatch): void {
       pendingPrompts === current.pendingPrompts &&
       blocks === current.blocks &&
       base === current.base &&
+      baseCoveredBlocks === current.baseCoveredBlocks &&
       session.status === current.session.status &&
       session.harness === current.session.harness
         ? current.projection
         : acpStore.get().activeKey === batch.id
           ? projectLive(
-              { blocks, base, session, requests },
+              { blocks, base, baseCoveredBlocks, session, requests },
               current.projection,
               pendingPrompts
             )

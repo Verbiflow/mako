@@ -158,7 +158,7 @@ export const acp = {
         projection: projectAcp(conversation),
       })
     acpStore.set({ activeKey: key })
-    if (conversation.kind === "live" && !conversation.hydrated)
+    if (conversation.kind === "live")
       void hydrateLive(key)
     threadsStore.set({ composerHarness: conversation.harness })
     // Opening the conversation acknowledges its failure, the way opening a
@@ -193,6 +193,13 @@ export const acp = {
 
   bindThreads(refs: ThreadRef[]): void {
     const state = acpStore.get()
+    const active = activeLiveAcp(state)
+    if (active && active.session.status !== "running") {
+      const ref = refs.find((candidate) => candidate.path === (active.threadPath ?? active.base?.ref.path))
+      if (ref && (!active.base || ref.revision !== active.base.ref.revision ||
+          ref.bytes !== active.base.ref.bytes || ref.updatedAt !== active.base.ref.updatedAt))
+        void hydrateLive(active.key)
+    }
     const claimedPaths = new Set(
       liveAcpConversations(state)
         .map((conversation) => conversation.threadPath)
