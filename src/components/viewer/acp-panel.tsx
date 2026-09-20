@@ -440,7 +440,7 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
       {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
       {request.error ? <p className={cn("mt-2", failure && "text-faint")}>{request.error}</p> : null}
       <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
-      {request.status === "failed" ? <CompactionControl requestId={request.id} /> : null}
+      {request.status === "failed" && request.failure === "context-exhausted" ? <CompactionControl requestId={request.id} /> : null}
       {recovered ? <p className="mt-2">Compaction completed. You can send the saved message again.</p> : null}
       <div className="mt-2 flex items-center gap-3">
         {retriable && conversationId ? (
@@ -448,7 +448,7 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
             {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : "Send again"}
           </button>
         ) : null}
-        {request.status === "failed" && conversationId ? (
+        {request.status === "failed" && request.failure !== "transport-limit" && conversationId ? (
           <button type="button" disabled={resent !== null} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50"
             onClick={() => {
               setResent("sending")
@@ -457,7 +457,7 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
         ) : null}
         <button type="button" onClick={() => void copy()} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
       </div>
-      {request.status === "failed" ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
+      {request.status === "failed" && request.failure !== "transport-limit" ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
     </details>
   )
 }
