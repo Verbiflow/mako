@@ -129,6 +129,8 @@ export interface LiveSnapshot extends LiveSummary {
   control?: ConversationControl
   blocks: LiveBlock[]
   base: ThreadPage | null
+  /** Prefix of retained live blocks already represented by the native base. */
+  baseCoveredBlocks?: number
   permissions: LivePermissionRequest[]
   requests: LiveRequest[]
 }
@@ -137,6 +139,7 @@ export interface LiveBatch {
   nativeAgents?: NativeAgentRoster
   control?: ConversationControl
   base?: ThreadPage | null
+  baseCoveredBlocks?: number
   threadPath?: string | null
   id: string
   revision: number

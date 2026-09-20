@@ -17,6 +17,8 @@ export const RuntimeInfoSchema = z.object({
   instanceId: z.string().uuid(),
   pid: z.number().int().positive(),
   version: z.string(),
+  /** Executable content loaded by a development host; absent on older/packaged hosts. */
+  devBuild: z.string().optional(),
   methods: z.array(z.string()),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>

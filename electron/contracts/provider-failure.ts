@@ -26,6 +26,8 @@ export const PROVIDER_FAILURE_KINDS = [
   "network",
   /** Mako could not reopen the native session; the transcript is intact, the session is not. */
   "resume-failed",
+  /** A provider response exceeded the local transport bound, not model context. */
+  "transport-limit",
   /** The prompt itself was refused before it ran (empty, too large, an unsupported attachment). */
   "rejected-input",
   "unknown",
@@ -53,6 +55,10 @@ interface Rule {
  * tokens) precede the broad HTTP families they could also trip.
  */
 const rules: Rule[] = [
+  {
+    kind: "transport-limit",
+    match: /oversized JSON-RPC message/i,
+  },
   {
     kind: "transcript-rejected",
     match:
@@ -163,12 +169,19 @@ export function describeProviderFailure(
         title: `The connection to ${providerLabel} dropped`,
         guidance: "Send the message again; the session itself is intact.",
       }
+    case "transport-limit":
+      return {
+        kind,
+        retriable: false,
+        title: `Mako could not read a large response from ${providerLabel}`,
+        guidance: "Your saved message is still here. This is a connection response-size limit, not a model context limit. Reopen the session after updating Mako.",
+      }
     case "resume-failed":
       return {
         kind,
         retriable: false,
         title: `Mako could not reopen this ${providerLabel} session`,
-        guidance: "The transcript is saved. Continue it as a new thread, or wait for the process that has it open to finish.",
+        guidance: "The transcript and your message are saved. Review the error below before retrying.",
       }
     case "rejected-input":
       return {
