@@ -129,6 +129,19 @@ async function launch() {
   child.once("error", (error) => {
     launchError = error
   })
+  if (launchServices) {
+    child.clientPid = await until(async () => {
+      if (!alive(child)) throw new Error("LaunchServices failed to launch the client")
+      const { stdout } = await run("ps", ["-axo", "pid=,ppid=,comm="])
+      const processes = stdout.split("\n").flatMap((line) => {
+        const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line)
+        return match && match[3] === executable ? [{ pid: Number(match[1]), parent: Number(match[2]) }] : []
+      })
+      const roots = processes.filter((process) => process.pid !== host?.pid && !processes.some((parent) => parent.pid === process.parent))
+      assert.ok(roots.length <= 1, "Only one test desktop client may run")
+      return roots[0]?.pid
+    }, "LaunchServices did not create a desktop process")
+  } else child.clientPid = child.pid
   const current = await until(async () => {
     if (launchError) throw launchError
     if (!alive(child))
@@ -144,15 +157,8 @@ async function launch() {
       "Reopening a client must reuse the existing host"
     )
   host = current
-  if (launchServices) {
-    const { stdout } = await run("ps", ["-axo", "pid=,comm="])
-    const pids = stdout.split("\n").flatMap((line) => {
-      const match = /^\s*(\d+)\s+(.+)$/.exec(line)
-      return match && match[2] === executable && Number(match[1]) !== host.pid ? [Number(match[1])] : []
-    })
-    assert.equal(pids.length, 1, "Exactly one desktop client must belong to the tested bundle")
-    child.clientPid = pids[0]
-  } else child.clientPid = child.pid
+  const { stdout: presence } = await run("/usr/bin/lsappinfo", ["info", "-only", "ApplicationType", String(host.pid)])
+  assert.match(presence, /UIElement|BackgroundOnly/, "An isolated test host must never claim a Dock icon")
   assert.notEqual(
     host.pid,
     child.clientPid,
@@ -285,7 +291,10 @@ try {
       if (child.clientPid && processAlive(child.clientPid)) process.kill(child.clientPid, "SIGTERM")
       else child.kill("SIGTERM")
       await until(() => !alive(child), "owned test client cleanup", 5000).catch(
-        () => child.kill("SIGKILL")
+        () => {
+          if (child.clientPid && processAlive(child.clientPid)) process.kill(child.clientPid, "SIGKILL")
+          if (alive(child)) child.kill("SIGKILL")
+        }
       )
     }
   const current = await runtimeInfo(socket)

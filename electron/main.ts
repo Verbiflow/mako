@@ -184,7 +184,7 @@ import {
 import { TerminalDaemonClient } from "./terminal-client.js"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "./cua-embedded.js"
 import { cuaDriverStatus, updateCuaDriver } from "./cua-driver-version.js"
-import { MAKO_BUNDLE_ID } from "./local-update-installer.js"
+import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "./local-update-installer.js"
 import { bindAcp, stopAcp } from "./acp.js"
 import { bindCodexApp, stopCodexApps } from "./codex-app.js"
 import {
@@ -592,6 +592,7 @@ function watchProfileHostIdle(hostDirectory: string): void {
 }
 
 async function reopenWindow(): Promise<void> {
+  if (shuttingDown || relaunching) return
   if (webOnly && !rendererWindows.size) {
     // The default profile answers an activate/second-instance by starting a
     // desktop client; a sandbox or test host owns another data root and stays
@@ -602,20 +603,15 @@ async function reopenWindow(): Promise<void> {
       persistentHost &&
       resolve(app.getPath("userData")) === resolve(defaultUserData)
     ) {
+      const env = desktopLaunchEnvironment(process.env)
       if (app.isPackaged) {
         spawn("open", ["-n", resolve(dirname(app.getAppPath()), "../..")], {
           detached: true,
           stdio: "ignore",
+          env,
         }).unref()
         return
       }
-      const env = { ...process.env }
-      delete env.MAKO_HOST_ONLY
-      delete env.MAKO_STANDALONE
-      delete env.MAKO_WEB_ONLY
-      delete env.MAKO_WEB_SOCKET
-      delete env.MAKO_DATA_ROOT
-      delete env.MAKO_PROFILE
       spawn(process.execPath, [app.getAppPath()], {
         detached: true,
         stdio: "ignore",
