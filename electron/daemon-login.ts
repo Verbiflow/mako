@@ -1,5 +1,5 @@
 /**
- * Start the sync daemon at login — opt-in, and honest about the mechanism.
+ * Start the sync daemon at login by default, unless explicitly disabled.
  *
  * A LaunchAgent plist under the user's own ~/Library/LaunchAgents, running
  * the app's binary in Node mode against the daemon script. Nothing is
@@ -78,22 +78,15 @@ function optOutPath(): string {
 }
 
 /**
- * Session sync runs inside the app by default. An existing login job is an
- * explicit always-on choice and is refreshed when its command changes.
+ * Install the default login job on first packaged launch; preserve explicit
+ * opt-outs and refresh existing jobs when their command changes.
  */
 export async function refreshDaemonLoginJob(): Promise<void> {
   if (process.platform !== "darwin" || !daemonLoginOwner()) return
   try {
-    const current = await readFile(plistPath(), "utf8").catch(() => null)
-    if (!current) {
-      // launchd still running a job whose definition is gone: a leftover from
-      // another build that nothing manages any more. Stop it before it serves
-      // this app stale data forever.
-      if ((await daemonLoginJob()).loaded) await stopDaemonLoginJob()
-      return
-    }
     if (existsSync(optOutPath())) return
-    if (current === daemonPlist()) return
+    const current = await readFile(plistPath(), "utf8").catch(() => null)
+    if (current === daemonPlist() && (await daemonLoginJob()).loaded) return
     await setDaemonLogin(true)
   } catch {
     // A failed install stays quiet; the settings toggle still works.

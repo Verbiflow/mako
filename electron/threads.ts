@@ -276,7 +276,7 @@ export function installThreads(send: (event: HostEvent) => void): void {
   void (async () => {
     try {
       await loadLineage()
-      // Watch locally unless the user chose to keep syncing while Mako is closed.
+      // The installed app enables login capture by default; explicit opt-outs stay local.
       await refreshDaemonLoginJob()
       if (!(await daemonLoginEnabled())) {
         await runLocalCatalog()
