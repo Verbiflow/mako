@@ -27,6 +27,7 @@ import {
   reconcileGrantIdentity,
   replacePreparedApplication,
   runningBundleProcesses,
+  stopBundleBrowserHosts,
   type LocalInstallReceipt,
 } from "../electron/local-update-installer.js"
 
@@ -41,6 +42,14 @@ async function fixture(name: string) {
   return { staging, target, ready: async () => {} }
 }
 try {
+  const stopped: number[] = []
+  await stopBundleBrowserHosts("/Applications/Mako.app", async (command, args) => ({
+    stdout: command === "lsof"
+      ? `p${args[2]}\nftxt\nn${args[2] === "51" ? "/Applications/Mako.app" : "/other/Mako.app"}/Contents/Frameworks/Mako Helper.app/Contents/MacOS/Mako Helper\n`
+      : args.includes("-axo") ? "51 mako-browser-host\n52 mako-browser-host\n53 Mako\n" : "mako-browser-host\n",
+    stderr: "",
+  }), (pid) => { stopped.push(pid) })
+  assert.deepEqual(stopped, [51], "only a browser helper executing from the target bundle may be stopped")
   const success = await fixture("success")
   const backup = await replacePreparedApplication({
     ...success,
@@ -178,6 +187,28 @@ try {
   )
   assert.equal(receipts.at(-1)?.ok, true)
   assert.match(receipts.at(-1)?.message ?? "", /installed.*could not reopen/)
+  receipts.length = 0
+  let prunedUnverified = false
+  await assert.rejects(completeLocalInstall({
+    replace: async () => "/retained/old.app",
+    save: async (receipt) => { receipts.push(receipt) },
+    launch: async () => {}, // macOS accepted open, but the app never started.
+    verifyStarted: async () => { throw new Error("The host reported a different build.") },
+    prune: async () => { prunedUnverified = true },
+  }), /different build/)
+  assert.deepEqual(receipts[0], { ok: true, backup: "/retained/old.app", startup: "pending" })
+  assert.equal(receipts.at(-1)?.ok && receipts.at(-1)?.startup, "failed")
+  assert.equal(prunedUnverified, false)
+  receipts.length = 0
+  const order: string[] = []
+  await completeLocalInstall({
+    replace: async () => "/retained/old.app",
+    save: async (receipt) => { receipts.push(receipt); order.push(receipt.ok ? receipt.startup ?? "installed" : "failed") },
+    launch: async () => { order.push("open") },
+    verifyStarted: async () => { order.push("probe") },
+    prune: async () => { order.push("prune") },
+  })
+  assert.deepEqual(order, ["pending", "open", "probe", "verified", "prune"])
   receipts.length = 0
   await assert.rejects(
     completeLocalInstall({
