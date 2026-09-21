@@ -1,3 +1,5 @@
+import { relative } from "node:path"
+import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
 import type { Comparison, RepoPath, KiriRepository, KiriClient, ResultValue } from "@kiri/client"
 import type { GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "./shared.js"
 import { withKiriRepository } from "./kiri-engine.js"
@@ -28,6 +30,7 @@ function expected<T extends ResultValue["kind"]>(result: ResultValue, tag: T): E
 
 export class WorkspaceGit {
   private cwdValue: string
+  private discovery: { cwd: string; expires: number; value: Promise<RepositoryDiscovery> } | undefined
   private version = 0
   private statusRead: Promise<GitStatus> | null = null
   private readonly paths = new Map<string, RepoPath>()
@@ -69,7 +72,26 @@ export class WorkspaceGit {
   private async readStatus(): Promise<GitStatus> {
     const cwd = this.cwdValue
     const result = await withKiriRepository(cwd, async (repo, client): Promise<GitStatus> => {
-      if (!repo) return { cwd, ahead: 0, behind: 0, files: [] }
+      if (!repo) {
+        if (!this.discovery || this.discovery.cwd !== cwd || this.discovery.expires < Date.now()) {
+          this.discovery = { cwd, expires: Date.now() + 5000, value: discoverRepositories(cwd) }
+        }
+        const discovery = await this.discovery.value
+        const repositories: NonNullable<GitStatus["repositories"]> = []
+        // Bound sidecar admission and avoid hydrating patches for child repos.
+        for (let offset = 0; offset < discovery.roots.length; offset += 4) {
+          repositories.push(...await Promise.all(discovery.roots.slice(offset, offset + 4).map(async (root) => {
+            try {
+              return await withKiriRepository(root, async (child) => {
+                if (!child) return { root, label: relative(cwd, root), unavailable: true }
+                const { status } = await child.status()
+                return { root: child.root, label: relative(cwd, root), branch: status.branch, changes: status.files.length }
+              })
+            } catch { return { root, label: relative(cwd, root), unavailable: true } }
+          })))
+        }
+        return { cwd, ahead: 0, behind: 0, files: [], repositories, discoveryLimited: discovery.limited }
+      }
       const [snapshot, operation] = await Promise.all([repo.status(true), client.request({ method: "operation", repo: repo.id })])
       const status = snapshot.status
       const files: GitFile[] = status.files.map((file) => ({ path: this.path(file.path), oldName: file.original_path ? this.path(file.original_path) : undefined, status: file.staged === "renamed" || file.worktree === "renamed" ? "renamed" : kind(file.worktree ?? file.staged ?? "modified"), staged: file.staged != null, insertions: null, deletions: null, binary: false }))

@@ -13,6 +13,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { verifyLocalCandidate } from "./local-updates.js"
 import { resolveExecutable } from "./executable.js"
+import { runtimeLocation } from "./runtime-service.js"
 import {
   desktopLaunchEnvironment,
   unregisterBundle,
@@ -38,12 +39,13 @@ export async function prepareLocalInstall(
     verbatimSymlinks: true,
     mode: constants.COPYFILE_FICLONE,
   })
-  await verifyLocalCandidate(app, candidate.identity)
+  const build = await verifyLocalCandidate(app, candidate.identity)
   const script = join(staging, "installer.mjs")
   await writeFile(script, await readFile(join(dirname(fileURLToPath(import.meta.url)), "local-update-installer.js")), { mode: 0o600 })
+  await writeFile(join(staging, "local-update-startup.mjs"), await readFile(join(dirname(fileURLToPath(import.meta.url)), "local-update-startup.mjs")), { mode: 0o600 })
   const child = fork(
     script,
-    [staging, candidate.identity, String(process.pid), receipt],
+    [staging, candidate.identity, String(process.pid), receipt, build.id, runtimeLocation(dirname(dirname(receipt))).socket],
     {
       execPath: node,
       env: desktopLaunchEnvironment(process.env),

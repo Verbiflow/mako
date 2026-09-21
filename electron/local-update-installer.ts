@@ -169,8 +169,29 @@ export async function runningBundleProcesses(
   ].filter((pid) => !daemons.has(pid))
 }
 
+/** Browser-owned native messaging survives host Quit. Its extension reconnects. */
+export async function stopBundleBrowserHosts(
+  bundle: string,
+  run: Run = defaultRun,
+  signal: (pid: number) => void = (pid) => { process.kill(pid, "SIGTERM") }
+): Promise<void> {
+  const { stdout } = await run("ps", ["-axo", "pid=,comm="])
+  for (const process of processLines(stdout)) {
+    if (process.command !== "mako-browser-host") continue
+    const executable = join(bundle, "Contents/Frameworks/Mako Helper.app/Contents/MacOS/Mako Helper")
+    const files = await run("lsof", ["-a", "-p", String(process.pid), "-d", "txt", "-Fn"]).catch(() => null)
+    if (!files?.stdout.split("\n").includes(`n${executable}`)) continue
+    // Recheck the title after inspecting the executable, before signalling.
+    const current = await run("ps", ["-p", String(process.pid), "-o", "comm="]).catch(() => null)
+    if (current?.stdout.trim() !== "mako-browser-host") continue
+    try { signal(process.pid) } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error
+    }
+  }
+}
+
 const RETAINED_STAGING = /^\.mako-(update|local-install)-[A-Za-z0-9]+$/
-const RETAINED_CONTENTS = new Set(["Previous Mako.app", "installer.mjs"])
+const RETAINED_CONTENTS = new Set(["Previous Mako.app", "installer.mjs", "local-update-startup.mjs"])
 
 /**
  * Remove older retained applications once a new install has been verified
@@ -238,7 +259,7 @@ export function desktopLaunchEnvironment(
 }
 
 export type LocalInstallReceipt =
-  | { ok: true; backup: string | null; message?: string }
+  | { ok: true; backup: string | null; message?: string; startup?: "pending" | "verified" | "failed" }
   | { ok: false; message: string }
 
 export const MAKO_BUNDLE_ID = "dev.mako.app"
@@ -299,6 +320,7 @@ interface InstallCompletion {
   replace(): Promise<string | null>
   save(receipt: LocalInstallReceipt): Promise<void>
   launch(): Promise<void>
+  verifyStarted?(): Promise<void>
   /** Drops TCC rows a changed signing identity orphaned; true when it did. */
   grants?(backup: string | null): Promise<boolean>
   /** Housekeeping after a verified, launched install; never affects the receipt. */
@@ -324,23 +346,28 @@ export async function completeLocalInstall(
   }
   const reset = await input.grants?.(backup).catch(() => false)
   const notice = reset ? { message: GRANTS_RESET_MESSAGE } : {}
-  await input.save({ ok: true, backup, ...notice })
+  const installed: LocalInstallReceipt = { ok: true, backup, ...notice }
+  if (input.verifyStarted) installed.startup = "pending"
+  await input.save(installed)
   try {
     await input.launch()
+    await input.verifyStarted?.()
   } catch (error) {
     await input.save({
       ok: true,
       backup,
+      startup: "failed",
       message:
-        "The update was installed, but Mako could not reopen. Open Mako from Applications.",
+        `The update was installed, but Mako could not reopen or confirm startup. The previous app is retained${backup ? ` at ${backup}` : ""}. ${error instanceof Error ? error.message : "Open Mako from Applications."}`,
     })
     throw error
   }
+  if (input.verifyStarted) await input.save({ ok: true, backup, ...notice, startup: "verified" })
   await input.prune?.(backup).catch(() => undefined)
 }
 
 async function runInstaller(): Promise<void> {
-  const [staging, identity, pidText, receipt] = process.argv.slice(2)
+  const [staging, identity, pidText, receipt, build, socket] = process.argv.slice(2)
   if (
     !staging ||
     !/^\/Applications\/\.mako-update-[a-zA-Z0-9]+$/.test(staging) ||
@@ -348,7 +375,7 @@ async function runInstaller(): Promise<void> {
     !/^[a-fA-F0-9]{40}$/.test(identity) ||
     !pidText ||
     !/^\d+$/.test(pidText) ||
-    !receipt
+    !receipt || !build || !/^[a-f0-9]{12,64}$/.test(build) || !socket
   )
     throw new Error("Invalid local installer arguments")
   const target = "/Applications/Mako.app"
@@ -408,6 +435,7 @@ async function runInstaller(): Promise<void> {
           hostAlive = false
         else throw error
       }
+      if (!hostAlive) await stopBundleBrowserHosts(target)
       const pids = await runningBundleProcesses(target)
       if (!hostAlive && !pids.length) break
       if (Date.now() >= deadline)
@@ -456,6 +484,11 @@ async function runInstaller(): Promise<void> {
       await writeFile(receipt, JSON.stringify(result), { mode: 0o600 })
     },
     grants: (backup) => reconcileGrantIdentity(target, backup),
+    verifyStarted: async () => {
+      // SAFETY: preparation copies our bundled local-update-startup module into this private directory.
+      const { verifyLocalStartup } = await import(pathToFileURL(join(staging, "local-update-startup.mjs")).href) as typeof import("./local-update-startup.js")
+      await verifyLocalStartup({ socket, build, previousPid: hostPid })
+    },
     launch: async () => {
       // `-n` matters: the bundle was just swapped under a path LaunchServices
       // still associates with the killed instance, and a plain `open` can be
