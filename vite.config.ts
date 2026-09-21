@@ -44,5 +44,8 @@ export default defineConfig({
   optimizeDeps: {
     entries: ["index.html", "src/**/*.{ts,tsx}"],
   },
+  // Desktop assets are read locally; gzip size reporting compresses every chunk
+  // only to print a number and does not change the shipped files.
+  build: { reportCompressedSize: false },
   base: "./",
 })
