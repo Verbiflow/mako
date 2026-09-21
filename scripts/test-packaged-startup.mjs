@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -13,6 +14,8 @@ import {
 } from "../dist-electron/runtime-connection.js"
 
 assert.ok(process.argv[2], "Pass the packaged Mako.app to test")
+const launchServices = process.argv.includes("--launch-services")
+const run = promisify(execFile)
 const app = await realpath(resolve(process.argv[2]))
 const root = await realpath(
   await mkdtemp(join(tmpdir(), "mako-packaged-startup-"))
@@ -28,6 +31,7 @@ const env = {
   MAKO_CLIENT_ID: "package-startup",
   MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp",
   MAKO_BACKEND_TOKEN: "",
+  MAKO_RELAY: "0",
 }
 for (const key of [
   "ELECTRON_RUN_AS_NODE",
@@ -47,7 +51,7 @@ let sequence = 0
 const pending = new Map()
 const report = {
   app,
-  mode: "packaged-shared-client",
+  mode: launchServices ? "launch-services-shared-client" : "packaged-shared-client",
   outcome: "running",
   root,
   phases: [],
@@ -108,15 +112,18 @@ function detach() {
   debuggerSocket = undefined
 }
 async function launch() {
-  const child = spawn(
-    join(app, "Contents/MacOS/Mako"),
-    [
-      "--background",
-      "--remote-debugging-port=0",
-      "--remote-debugging-address=127.0.0.1",
-    ],
-    { cwd: workspace, env, stdio: "ignore" }
-  )
+  const started = performance.now()
+  const executable = join(app, "Contents/MacOS/Mako")
+  const flags = ["--background", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1"]
+  // Finder/Dock launch through LaunchServices. Direct exec alone misses -600
+  // from stale or hidden registrations. -W tracks the client's whole lifetime.
+  const child = launchServices
+    ? spawn("/usr/bin/open", ["-W", "-n", "-g", "-a", app,
+        ...Object.entries(env).filter(([key]) => key.startsWith("MAKO_")).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+        "--args", ...flags], { env, stdio: "ignore" })
+    : spawn(executable, flags, { cwd: workspace, env, stdio: ["ignore", "pipe", "pipe"] })
+  child.stdout?.on("data", (chunk) => process.stdout.write(chunk))
+  child.stderr?.on("data", (chunk) => process.stderr.write(chunk))
   clients.push(child)
   let launchError
   child.once("error", (error) => {
@@ -137,9 +144,18 @@ async function launch() {
       "Reopening a client must reuse the existing host"
     )
   host = current
+  if (launchServices) {
+    const { stdout } = await run("ps", ["-axo", "pid=,comm="])
+    const pids = stdout.split("\n").flatMap((line) => {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line)
+      return match && match[2] === executable && Number(match[1]) !== host.pid ? [Number(match[1])] : []
+    })
+    assert.equal(pids.length, 1, "Exactly one desktop client must belong to the tested bundle")
+    child.clientPid = pids[0]
+  } else child.clientPid = child.pid
   assert.notEqual(
     host.pid,
-    child.pid,
+    child.clientPid,
     "The test must exercise the separate packaged host, not standalone mode"
   )
   const target = await until(async () => {
@@ -187,16 +203,22 @@ async function launch() {
   const cwd = await evaluate(
     "window.mako.boot().then(boot => boot.tabs.find(tab => tab.id === boot.activeTabId).session.meta.cwd)"
   )
-  assert.equal(
+  if (!launchServices) assert.equal(
     await realpath(cwd),
     workspace,
     "Packaged startup must preserve the real launch working directory, not use app.asar or Resources"
   )
   report.phases.push({
     phase: "desktop-ready",
-    clientPid: child.pid,
+    elapsedMs: Math.round(performance.now() - started),
+    clientPid: child.clientPid,
     hostPid: host.pid,
   })
+  if (launchServices) {
+    await run("/usr/bin/open", ["-g", app])
+    assert.ok(processAlive(child.clientPid), "Finder reopen must retain a live desktop client")
+    report.phases.push({ phase: "finder-reopen", passed: true })
+  }
   return child
 }
 
@@ -249,9 +271,19 @@ try {
   console.error(error.message)
 } finally {
   detach()
+  // A host stuck before binding its socket is still ours to clean up. Record
+  // its parent before terminating the client, which would reparent it to pid 1.
+  const { stdout: processes } = await run("ps", ["-axo", "pid=,ppid=,comm="])
+  const clientPids = new Set(clients.map((child) => child.clientPid ?? child.pid))
+  const unreadyHosts = processes.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line)
+    return match && clientPids.has(Number(match[2])) && match[3] === join(app, "Contents/MacOS/Mako")
+      ? [Number(match[1])] : []
+  })
   for (const child of clients)
     if (alive(child)) {
-      child.kill("SIGTERM")
+      if (child.clientPid && processAlive(child.clientPid)) process.kill(child.clientPid, "SIGTERM")
+      else child.kill("SIGTERM")
       await until(() => !alive(child), "owned test client cleanup", 5000).catch(
         () => child.kill("SIGKILL")
       )
@@ -287,6 +319,14 @@ try {
         }
       }
     }
+  }
+  for (const pid of unreadyHosts) {
+    if (!processAlive(pid)) continue
+    process.kill(pid, "SIGTERM")
+    await until(() => !processAlive(pid), "unready test host cleanup", 5000).catch(() => process.kill(pid, "SIGKILL"))
+    report.forcedHostCleanup = true
+    report.outcome = "failed"
+    process.exitCode = 1
   }
   await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2))
   console.log(`Packaged startup evidence: ${root}`)

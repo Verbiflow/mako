@@ -43,6 +43,8 @@ const inputs = [
   "packages/sessions/dist",
   "packages/relay/package.json",
   "packages/relay/dist",
+  "packages/control/package.json",
+  "packages/control/dist",
   "mako-icons/_masters/desktop-light.png",
   "mako-icons/_masters/desktop-dark.png",
   "build/Mako.icns",
@@ -89,13 +91,13 @@ try {
   // electron/notification-authorization.ts for why it must live there.
   execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   const before = await manifest(project)
-  for (const path of inputs) {
+  await Promise.all(inputs.map(async (path) => {
     await mkdir(dirname(join(stage, path)), { recursive: true })
     await cp(join(project, path), join(stage, path), {
       recursive: true,
       mode: constants.COPYFILE_FICLONE,
     })
-  }
+  }))
   assert.deepEqual(
     await manifest(stage),
     before,
@@ -145,7 +147,7 @@ try {
             "!**/*.map",
           ],
         },
-        ...["sessions", "relay"].map((name) => ({
+        ...["sessions", "relay", "control"].map((name) => ({
           from: join(stage, "packages", name),
           to: `node_modules/@mako/${name}`,
           filter: ["package.json", "dist/**", "!**/*.map"],
@@ -199,7 +201,7 @@ try {
     )
       continue
     const target = file.path.replace(
-      /^packages\/(sessions|relay)\//,
+      /^packages\/(sessions|relay|control)\//,
       "node_modules/@mako/$1/"
     )
     assert.equal(
@@ -212,6 +214,7 @@ try {
   const imports = assertPackagedImports(app)
   const signature = localIdentity ? await verifyLocalSignature(app, localIdentity) : null
   execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app], { cwd: project, stdio: "inherit", timeout: 180_000 })
+  execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app, "--launch-services"], { cwd: project, stdio: "inherit", timeout: 180_000 })
   await writeFile(
     join(output, "package-inputs.json"),
     JSON.stringify({ app, imports, signature, files: verified }, null, 2)
