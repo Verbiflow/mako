@@ -278,6 +278,33 @@ function WorkspaceChanges() {
 
   const toggleStage = useCallback((file: GitFile) => stagePaths([file.path], !(requestedStages.current.get(file.path) ?? file.staged)), [stagePaths])
 
+  if (!git?.root && (git?.repositories?.length || git?.discoveryLimited)) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex items-center justify-between border-b border-hairline px-3 py-2 text-label text-faint">
+          <span>Repositories · {git.repositories?.length ?? 0}</span>
+          <Action onClick={() => void actions.refreshGit()}>Refresh</Action>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-2">
+          {git.repositories?.map((repository) => (
+            <button key={repository.root} type="button"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left hover:bg-foreground/5"
+              onClick={() => void actions.openWorkspace(repository.root)}
+              title={`Open ${repository.root}`}>
+              <FolderIcon className="size-4 shrink-0 text-faint" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-ui">{repository.label}</span>
+                <span className="block truncate text-label text-faint">{repository.unavailable ? "Could not read repository" : `${repository.branch ?? "Detached HEAD"} · ${repository.changes === 0 ? "Clean" : `${repository.changes} changes`}`}</span>
+              </span>
+              <ChevronRightIcon className="size-4 shrink-0 text-faint" />
+            </button>
+          ))}
+          {git.discoveryLimited ? <p className="px-3 py-2 text-label text-faint">Some folders could not be scanned. Open a more specific folder to find additional repositories.</p> : null}
+        </div>
+      </div>
+    )
+  }
+
   if (files.length === 0) {
     return (
       <div className="flex h-full min-h-0 flex-col">
