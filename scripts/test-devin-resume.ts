@@ -21,7 +21,7 @@ try {
   assert.ok(checkpoint)
   const binding: ProviderBinding = {id:"binding",provider:"devin",nativeId:"one",path,checkpoint,coveredBlocks:2,includesBase:true}
   assert.equal(await policy.canResumeBinding(binding), true)
-  assert.equal(await policy.canResumeBinding({...binding,checkpoint:undefined}), true, "Legacy records can load an existing unlocked native session")
+  assert.deepEqual(await policy.resumeVerdict({...binding,checkpoint:undefined}), { kind: "resumable", record: "unknown" }, "Legacy records can load an existing unlocked native session")
   db.prepare("UPDATE sessions SET main_chain_id = 99 WHERE id = ?").run("two")
   assert.equal(await policy.checkpoint(path), checkpoint, "Another session cannot invalidate this session's checkpoint")
   assert.equal(await policy.canResumeBinding({...binding,nativeId:"two"}), false)
@@ -38,6 +38,8 @@ try {
   })
   try {
     assert.equal(await policy.canResumeBinding(binding), true)
+    assert.deepEqual(await policy.resumeVerdict({ ...binding, checkpoint: undefined }), { kind: "resumable", record: "unknown" })
+    assert.equal(await policy.canResumeBinding({ ...binding, checkpoint: undefined }), false, "missing baseline cannot prove unchanged history")
     db.prepare("UPDATE sessions SET main_chain_id = 13 WHERE id = ?").run("one")
     assert.equal(await policy.canResumeBinding(binding), false, "Native history changes require a new checkpoint before a binding is reused for a switch")
     assert.deepEqual(await policy.resumeVerdict(binding), { kind: "resumable", record: "moved" }, "but the unlocked session itself still reconnects")

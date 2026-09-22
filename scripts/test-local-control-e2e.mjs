@@ -1,3 +1,4 @@
+import { cocoaFixtureSource as cocoaSource } from "./lib/cocoa-fixture.mjs"
 import { Appshots } from "../dist-electron/appshots.js"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
@@ -61,43 +62,7 @@ const fixture = mainFixture.process
 // A Cocoa fixture, built here: one window, a text field and a button, its
 // state written to a file, shown without activating. The pid keyboard was
 // designed for this application kind, so its verdicts are measured on it.
-const cocoaSource = `
-import AppKit
-final class Handler: NSObject {
-  let field: NSTextField
-  let output: NSTextField
-  init(field: NSTextField, output: NSTextField) { self.field = field; self.output = output }
-  @objc func verify(_ sender: Any?) { output.stringValue = field.stringValue }
-}
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
-let window = NSWindow(contentRect: NSRect(x: 240, y: 240, width: 480, height: 200), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-window.title = "Mako cocoa fixture"
-let field = NSTextField(frame: NSRect(x: 20, y: 130, width: 300, height: 24))
-field.setAccessibilityLabel("Proof")
-let button = NSButton(title: "Verify proof", target: nil, action: nil)
-button.frame = NSRect(x: 330, y: 128, width: 130, height: 28)
-let output = NSTextField(labelWithString: "")
-output.frame = NSRect(x: 20, y: 70, width: 440, height: 24)
-output.setAccessibilityLabel("Result")
-let handler = Handler(field: field, output: output)
-button.target = handler
-button.action = #selector(Handler.verify(_:))
-window.contentView?.addSubview(field)
-window.contentView?.addSubview(button)
-window.contentView?.addSubview(output)
-window.orderFrontRegardless()
-let statusPath = CommandLine.arguments[1]
-Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-  let selection = field.currentEditor()?.selectedRange.length ?? 0
-  let state: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "input": field.stringValue, "selection": selection, "value": output.stringValue]
-  if let data = try? JSONSerialization.data(withJSONObject: state) {
-    try? data.write(to: URL(fileURLWithPath: statusPath + ".next"))
-    rename(statusPath + ".next", statusPath)
-  }
-}
-app.run()
-`
+
 const cocoaStatusFile = join(root, "cocoa-status.json")
 const cocoaBinary = join(root, "mako-cocoa-fixture")
 let cocoa = null
@@ -600,6 +565,7 @@ try {
      await browser.type({target, text: ${JSON.stringify(proof)}, clear: true, submit: true});
      const shot = await browser.screenshot({target, format: 'png'});
      emitImage(shot);
+     await browser.release({target});
      const verdicts = await routes({pid: state.page.pid, window_id: state.page.windows.find(w => w.kind === 'document').window_id});
      return {found: true, clickMs, clicked: clicked.outcome ?? clicked, image: shot.data.length, verdicts}`
   )
@@ -643,10 +609,6 @@ try {
     [...seenDuringPage.keys()],
     [frontmostBefore],
     `only the user's app was frontmost during the page route (${[...seenDuringPage.keys()].join(", ")})`
-  )
-  await exec(
-    "kill-page-fixture",
-    `return await computer.shell({command: 'kill ${launched.pid}'})`
   )
 
   // The Cocoa fixture: the pid keyboard on the application kind it was
@@ -778,46 +740,67 @@ try {
         {
           name: "mako_control_exec",
           arguments: {
-            source: `const target={kind:'window',pid:${fixtureStatus.pid},window_id:${target.window_id}};
-const observed=await control.observe({target,interactive:true});
-const ref=observed.lines.find(line=>/TextField "Proof"/.test(line)).split(' ')[0];
-return control.act({target,operation:{kind:'set-text',ref,text:${JSON.stringify(routedText)}}});`,
+            source: `const tabs=await control.tabs(${JSON.stringify(launched.page_route.browser)});
+const selected=tabs.pages.find(tab=>tab.selectable && tab.title==='Mako page fixture');
+if(!selected) throw Error('Fixture tab missing');
+const tab=await control.claimTab({browser:${JSON.stringify(launched.page_route.browser)},tab:selected.targetId});
+const observed=await tab.observe();
+const ref=observed.get({role:'textbox',name:'Proof'}).ref;
+const receipt=await tab.setValue(ref,${JSON.stringify(routedText)});
+const proof=await tab.expect({role:'textbox',name:'Proof',value:${JSON.stringify(routedText)}});
+return {receipt,proof,observation:await tab.observe()};`,
           },
         },
         undefined,
         { timeout: 70_000 }
       )
     let result = await setRouted()
-    assert.ok(!result.isError, JSON.stringify(result))
-    let value = JSON.parse(
-      result.content.filter((block) => block.type === "text").at(-1).text
-    )
-    const firstOutcome = value.receipt.outcome
-    if (firstOutcome !== "confirmed") {
-      result = await setRouted()
-      assert.ok(!result.isError, JSON.stringify(result))
-      value = JSON.parse(
-        result.content.filter((block) => block.type === "text").at(-1).text
+    // Resume a yielded cell; never replay its source.
+    for (;;) {
+      const text = result.content.find((block) => block.type === "text")
+      const receipt = text ? JSON.parse(text.text) : null
+      if (receipt?.status !== "running" || !Number.isInteger(receipt.cell))
+        break
+      result = await routedClient.callTool(
+        { name: "mako_control_exec", arguments: { cell: receipt.cell } },
+        undefined,
+        { timeout: 70_000 }
       )
     }
-    assert.equal(value.plan.route, "accessibility")
-    assert.equal(value.receipt.outcome, "confirmed", JSON.stringify(value))
+    assert.ok(!result.isError, JSON.stringify(result))
+    const value = JSON.parse(
+      result.content.filter((block) => block.type === "text").at(-1).text
+    )
+    assert.ok(value.receipt, JSON.stringify(value))
+    assert.equal(value.receipt.route, "page")
+    assert.equal(
+      value.receipt.verification,
+      "not-requested",
+      JSON.stringify(value)
+    )
+    assert.equal(value.proof.status, "matched")
     assert.equal(value.receipt.delivery, "background")
-    assert.equal(value.guard.status, "settled")
+    assert.equal(value.receipt.guard.status, "settled")
     await until(
-      async () => (await fixtureState()).input === routedText,
+      async () =>
+        JSON.parse(await readFile(pageStatusFile, "utf8")).input === routedText,
       "routed set-text reached the renderer"
     )
     routed = {
       milliseconds: Math.round(performance.now() - started),
       responseBytes: Buffer.byteLength(JSON.stringify(result.content)),
       lines: value.observation.lines.length,
-      route: value.plan.route,
-      attempts: firstOutcome === "confirmed" ? 1 : 2,
+      route: value.receipt.route,
+      attempts: 1,
     }
   } finally {
     await routedClient.close()
   }
+
+  await exec(
+    "kill-page-fixture",
+    `return await computer.shell({command: 'kill ${launched.pid}'})`
+  )
 
   const frontmostAfter = await frontmostPid()
   assert.notEqual(frontmostAfter, target.pid, "Fixture stays in the background")

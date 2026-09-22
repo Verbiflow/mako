@@ -110,20 +110,6 @@ async function review() {
       ...point,
     })
   }
-  const key = async (key, code, modifiers = 0) => {
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key,
-      windowsVirtualKeyCode: code,
-      modifiers,
-    })
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key,
-      windowsVirtualKeyCode: code,
-      modifiers,
-    })
-  }
   const watchdog = setTimeout(() => app.exit(1), 120_000)
   await window.loadURL(
     `${process.env.MAKO_PROVIDER_TEST_URL}scripts/provider-review.html`

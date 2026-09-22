@@ -235,6 +235,15 @@ consumeStdout(
 )
 assert.equal(context.currentTurnId, "turn-1")
 assert.equal(state.status, "running")
+const childTurns: string[] = []
+context.protocol.observeAgentTurn = (nativeId) => childTurns.push(nativeId)
+consumeStdout(context, Buffer.from(JSON.stringify({ method: "turn/completed", params: {
+  threadId: "child-thread", turn: { id: "child-turn", status: "completed", error: null, items: [] },
+} }) + "\n"))
+assert.deepEqual(childTurns, ["child-thread"])
+assert.equal(context.currentTurnId, "turn-1", "Child turn events never settle the parent")
+assert.equal(state.status, "running")
+
 
 consumeStdout(
   context,

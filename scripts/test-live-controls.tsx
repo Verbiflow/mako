@@ -508,6 +508,9 @@ threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code
   recovery: { compaction: { kind: "supported" } } }] })
 const savedSession = conversation.session
 const savedActions = control.actions
+const compactionRequest = conversation.requests.find((request) => request.id === "failed")!
+const savedFailure = compactionRequest.failure
+compactionRequest.failure = "context-exhausted"
 conversation.session = { ...conversation.session, status: "failed", connection: "connected" }
 control.actions = []
 publish()
@@ -518,6 +521,9 @@ assert.match(renderToStaticMarkup(<CompactionControl requestId="failed" />), /di
 control.actions[0].state = { kind: "completed" }
 publish()
 assert.match(renderToStaticMarkup(<RetainedRequests />), /Compaction completed\. You can send/)
+// The unsupported-provider case must not inherit the completed compaction above.
+control.actions = []
+publish()
 threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true, canResume: true,
   recovery: { compaction: { kind: "unavailable", reason: "Fixture cannot compact" } } }] })
 assert.match(renderToStaticMarkup(<RetainedRequests />), /Fixture cannot compact/)
@@ -526,6 +532,7 @@ assert.doesNotMatch(renderToStaticMarkup(<CompactionControl />), /<button/)
 threadsStore.set({ descriptors: savedDescriptors })
 conversation.session = savedSession
 control.actions = savedActions
+compactionRequest.failure = savedFailure
 publish()
 for (const size of ["label", "ui", "title", "prose", "welcome"]) assert.equal(cn(`text-${size}`, "text-foreground"), `text-${size} text-foreground`)
 assert.equal(cn("text-ui", "text-prose", "text-transparent"), "text-prose text-transparent")

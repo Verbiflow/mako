@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import type { ThreadRef } from "@mako/sessions"
 import { planContinuation } from "../electron/contracts/thread-continuation.js"
 import { heldReason } from "../electron/contracts/session-hold.js"
@@ -21,6 +22,39 @@ import type { ResumeVerdict, TransferInput } from "../electron/contracts/convers
 const root = mkdtempSync(join(tmpdir(), "mako-session-memory-"))
 const ledger = join(root, "session-memory.sqlite")
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+function upgradeLegacyRoutes(): void {
+  const path = join(root, "legacy.sqlite")
+  const legacy = new DatabaseSync(path)
+  legacy.exec(`CREATE TABLE conversation_routes (
+    conversation_id TEXT PRIMARY KEY, provider TEXT NOT NULL, native_id TEXT NOT NULL, socket TEXT NOT NULL);
+    INSERT INTO conversation_routes VALUES ('old-conversation', 'cursor', 'old-native', '/old.sock');`)
+  legacy.close()
+  const host = { pid: 300, startedAt: 3, label: "upgraded host", socket: "/new.sock" }
+  const upgraded = new SessionMemory(path, host, { now: () => 100, alive: () => true })
+  try {
+    assert.equal(upgraded.routeForSession("cursor", "old-native")?.conversationId, "old-conversation", "upgrade preserves existing routes")
+    upgraded.hold("cursor", "old-native", "new-conversation")
+    upgraded.release("cursor", "old-native", "new-conversation")
+    assert.equal(upgraded.routeForSession("cursor", "old-native"), null, "the new local route takes precedence after release")
+    const oldWriter = new DatabaseSync(path)
+    try {
+      oldWriter.prepare("INSERT INTO conversation_routes (conversation_id, provider, native_id, socket) VALUES (?, ?, ?, ?)")
+        .run("legacy-writer", "cursor", "legacy-native", "/old.sock")
+    } finally {
+      oldWriter.close()
+    }
+  } finally {
+    upgraded.close()
+  }
+  const reopened = new SessionMemory(path, { ...host, socket: "/observer.sock" })
+  try {
+    assert.equal(reopened.routeForSession("cursor", "old-native")?.conversationId, "new-conversation", "reopening preserves route timestamps")
+    assert.equal(reopened.routeForSession("cursor", "legacy-native")?.conversationId, "legacy-writer", "older hosts can still write routes")
+  } finally {
+    reopened.close()
+  }
+}
 async function until(condition: () => boolean, what: string): Promise<void> {
   for (let attempt = 0; attempt < 2_000; attempt += 1) {
     if (condition()) return
@@ -171,6 +205,7 @@ const installed = new SessionMemory(ledger, { pid: 100, startedAt: 1, label: "th
 const dev = new SessionMemory(ledger, { pid: 200, startedAt: 2, label: "Mako's dev host" }, clock)
 
 try {
+  upgradeLegacyRoutes()
   // --- Facts: settings and mode are remembered independently -----------------
   installed.remember("cursor", "agent-1", { settings: { model: "claude-fable-5-1", options: { effort: "high" } } })
   installed.remember("cursor", "agent-1", { modeId: "access:full" })
@@ -381,6 +416,14 @@ async function liveConversationsRoundTrip() {
     assert.deepEqual(recalled?.settings, { model: "claude-fable-5-1", options: { effort: "high" } }, "the connected session's settings reach the ledger")
     assert.equal(recalled?.modeId, "access:full")
     assert.equal(dev.heldBy("cursor", "agent-live")?.hostLabel, "the installed Mako app", "the live session is held by the host running it")
+    installed.release("cursor", "agent-live", id)
+    assert.equal(dev.heldBy("cursor", "agent-live"), null)
+    assert.equal(first.connectedSession("cursor", "agent-live"), id, "local attachment finds the real driver without a ledger entry")
+    assert.equal(dev.heldBy("cursor", "agent-live")?.conversationId, id, "lookup repairs the missing ownership record")
+    installed.release("cursor", "agent-live", id)
+    events({ type: "live-session", session: state(id) })
+    first.snapshot(id)
+    assert.equal(dev.heldBy("cursor", "agent-live")?.conversationId, id, "unchanged session observations retry a missing hold")
 
     // A second host is refused before its driver starts anything.
     await assert.rejects(

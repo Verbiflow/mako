@@ -377,6 +377,138 @@ try {
     ref: observation.nodes[0].ref,
     text: "bounded ref remains usable",
   })
+  fixture.axNodes.splice(
+    0,
+    fixture.axNodes.length,
+    {
+      nodeId: "shipping",
+      ignored: false,
+      backendDOMNodeId: 501,
+      role: { value: "form" },
+      name: { value: "Shipping" },
+    },
+    {
+      nodeId: "billing",
+      ignored: false,
+      backendDOMNodeId: 502,
+      role: { value: "form" },
+      name: { value: "Billing" },
+    },
+    {
+      nodeId: "ship-email",
+      parentId: "shipping",
+      ignored: false,
+      backendDOMNodeId: 503,
+      role: { value: "textbox" },
+      name: { value: "Email" },
+    },
+    {
+      nodeId: "bill-email",
+      parentId: "billing",
+      ignored: false,
+      backendDOMNodeId: 504,
+      role: { value: "textbox" },
+      name: { value: "Email" },
+      value: { value: "untouched" },
+    }
+  )
+  const scopedStart = fixture.calls.length
+  const scopedResult = z
+    .object({
+      nodes: z.array(z.object({ name: z.string(), value: z.string() })),
+      omitted: z.number(),
+    })
+    .parse(
+      await run("task-a", {
+        action: "observe",
+        target: a,
+        within: [{ role: "form", name: "Shipping" }],
+        match: { role: "textbox", name: "Email" },
+        maxNodes: 2,
+      })
+    )
+  assert.deepEqual(
+    scopedResult.nodes.map((node) => [node.name, node.value]),
+    [["Email", ""]]
+  )
+  assert.equal(scopedResult.omitted, 0)
+  assert.ok(
+    !fixture.calls
+      .slice(scopedStart)
+      .some((call) =>
+        [
+          "Accessibility.getFullAXTree",
+          "Page.getLayoutMetrics",
+          "Page.captureScreenshot",
+        ].includes(call.method)
+      ),
+    "targeted read does not fetch the whole tree, layout, or screenshot"
+  )
+  const subtree = z
+    .object({ nodes: z.array(z.object({ role: z.string() })) })
+    .parse(
+      await run("task-a", {
+        action: "observe",
+        target: a,
+        within: [{ role: "form", name: "Shipping" }],
+      })
+    )
+  assert.deepEqual(
+    subtree.nodes.map((node) => node.role),
+    ["textbox"],
+    "within returns descendants, matching local and native scope semantics"
+  )
+
+  fixture.page.hidden = true
+  const hiddenStart = fixture.calls.length
+  const hiddenResult = z
+    .object({ nodes: z.array(z.object({ value: z.string() })) })
+    .parse(
+      await run("task-a", {
+        action: "observe",
+        target: a,
+        within: [{ role: "form", name: "Shipping" }],
+        match: { role: "textbox", name: "Email" },
+      })
+    )
+  assert.deepEqual(
+    hiddenResult.nodes.map((node) => node.value),
+    [""]
+  )
+  assert.ok(
+    fixture.calls
+      .slice(hiddenStart)
+      .some((call) => call.method === "Accessibility.getFullAXTree")
+  )
+  assert.ok(
+    !fixture.calls
+      .slice(hiddenStart)
+      .some((call) =>
+        [
+          "Accessibility.queryAXTree",
+          "Page.captureScreenshot",
+          "Target.activateTarget",
+          "Emulation.setFocusEmulationEnabled",
+        ].includes(call.method)
+      ),
+    "hidden scoped read neither waits for painting nor changes focus"
+  )
+  fixture.page.hidden = false
+  fixture.axNodes.push({
+    nodeId: "duplicate",
+    ignored: false,
+    backendDOMNodeId: 505,
+    role: { value: "form" },
+    name: { value: "Shipping" },
+  })
+  await assert.rejects(
+    run("task-a", {
+      action: "observe",
+      target: a,
+      within: [{ role: "form", name: "Shipping" }],
+    }),
+    /found 2/
+  )
   fixture.axNodes.splice(0, fixture.axNodes.length, ...originalNodes)
   await run("task-a", { action: "observe", target: a })
   await assert.rejects(
@@ -457,10 +589,7 @@ try {
     MAKO_CONTROL_URL: failedDestinationCredentials.url,
     MAKO_CONTROL_TOKEN: failedDestinationCredentials.token,
   })
-  await failedDestination(
-    { action: "status" },
-    new AbortController().signal
-  )
+  await failedDestination({ action: "status" }, new AbortController().signal)
   const failedDestinationTarget = BrowserTargetSchema.parse(
     await failedDestination(
       { action: "open", browser: "fixture" },
@@ -756,7 +885,7 @@ try {
   assert.equal(wheel?.params.type, "mouseWheel")
   assert.equal(wheel?.params.deltaY, 300)
 
-  // Type: refuses a non-editable target, clears with select-all + Backspace, submits with Enter.
+  // Type: refuses a non-editable target, replaces the selected value with one edit, submits with Enter.
   fixture.page.editable = false
   await assert.rejects(
     run("task-c", { action: "type", target: c, ref: checkboxRef, text: "x" }),
@@ -797,8 +926,6 @@ try {
   assert.deepEqual(keys, [
     'rawKeyDown:a:["selectAll"]',
     "keyUp:a",
-    "rawKeyDown:Backspace",
-    "keyUp:Backspace",
     "keyDown:Enter",
     "keyUp:Enter",
   ])
@@ -1298,9 +1425,8 @@ try {
     })
   )
   assert.equal(
-    fixture.calls
-      .filter((call) => call.method === "Target.createTarget")
-      .at(-1)?.params.newWindow,
+    fixture.calls.filter((call) => call.method === "Target.createTarget").at(-1)
+      ?.params.newWindow,
     true
   )
   await run("lifecycle-owner", {
@@ -1384,10 +1510,7 @@ try {
     closed: 1,
   })
   assert.equal(fixture.targets.has(isolated.tab), false)
-  assert.equal(
-    fixture.calls.at(-1)?.method,
-    "Target.disposeBrowserContext"
-  )
+  assert.equal(fixture.calls.at(-1)?.method, "Target.disposeBrowserContext")
 
   // With no browser discovered the message says what to install.
   const empty = new BrowserService([])

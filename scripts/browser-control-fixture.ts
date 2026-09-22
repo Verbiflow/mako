@@ -1,6 +1,6 @@
 import { WebSocketServer, type WebSocket } from "ws"
 import { z } from "zod"
-import type { JsonObject } from "../electron/codex-app-json.js"
+import type { JsonObject, JsonValue } from "../electron/codex-app-json.js"
 
 const commandSchema = z.object({
   id: z.number(),
@@ -169,7 +169,9 @@ export async function browserFixture() {
           break
         case "Runtime.evaluate": {
           const expression = z.string().parse(command.params.expression)
-          if (expression === "window.devicePixelRatio")
+          if (expression === "document.visibilityState")
+            reply({ result: { value: page.hidden ? "hidden" : "visible" } })
+          else if (expression === "window.devicePixelRatio")
             reply({ result: { value: 2 } })
           else if (expression.includes("window.scrollX"))
             reply({ result: { value: { x: page.scroll.x, y: page.scroll.y } } })
@@ -199,7 +201,21 @@ export async function browserFixture() {
           break
         case "Runtime.callFunctionOn": {
           const source = z.string().parse(command.params.functionDeclaration)
-          if (source.includes("this.options")) {
+          if (source.includes("typeof this.value")) {
+            const backendId = Number(
+              String(command.params.objectId).replace("object-", "")
+            )
+            const node = axNodes.find(
+              (node) => node.backendDOMNodeId === backendId
+            )
+            reply({
+              result: {
+                value: node?.value
+                  ? z.object({ value: z.string() }).parse(node.value).value
+                  : "",
+              },
+            })
+          } else if (source.includes("this.options")) {
             if (source.includes('"missing"'))
               reply({
                 exceptionDetails: {
@@ -250,6 +266,34 @@ export async function browserFixture() {
               })
             else reply({ result: { value: { tag: "input", length: 3 } } })
           } else reply({ result: { value: null } })
+          break
+        }
+        case "DOM.getDocument":
+          reply({ root: { backendNodeId: 9999 } })
+          break
+        case "Accessibility.queryAXTree": {
+          const root = axNodes.find(
+            (node) => node.backendDOMNodeId === command.params.backendNodeId
+          )
+          const descendants = new Set<JsonValue>(
+            root ? [root.nodeId] : axNodes.map((node) => node.nodeId)
+          )
+          if (root)
+            for (let pass = 0; pass < axNodes.length; pass++)
+              for (const node of axNodes)
+                if (descendants.has(node.parentId ?? null))
+                  descendants.add(node.nodeId)
+          const nodes = axNodes.filter(
+            (node) =>
+              descendants.has(node.nodeId) &&
+              (command.params.role === undefined ||
+                z.object({ value: z.string() }).parse(node.role).value ===
+                  command.params.role) &&
+              (command.params.accessibleName === undefined ||
+                z.object({ value: z.string() }).parse(node.name).value ===
+                  command.params.accessibleName)
+          )
+          reply({ nodes })
           break
         }
         case "Accessibility.getFullAXTree":

@@ -1,5 +1,22 @@
 import assert from "node:assert/strict"
 import { devinPermissionTitle } from "../electron/providers/devin/permissions.ts"
+import { devinToolName } from "../electron/providers/devin/tool-name.ts"
+import { forward } from "../electron/acp-notifications.ts"
+
+const tool = {
+  sessionUpdate: "tool_call", toolCallId: "child-call", title: "Task", kind: "other",
+  _meta: { "cognition.ai/inferenceToolName": "run_subagent" },
+} satisfies Parameters<typeof devinToolName>[0]
+assert.equal(devinToolName(tool), "run_subagent")
+assert.equal(devinToolName({ ...tool, _meta: { "cognition.ai/inferenceToolName": 17 } }), undefined)
+assert.equal(devinToolName({ ...tool, _meta: undefined }), undefined)
+const kinds: (string | null | undefined)[] = []
+for (const name of [devinToolName(tool), undefined]) {
+  forward({ id: "fixture" }, { sessionId: "fixture", update: tool }, event => {
+    if (event.type === "live-update" && event.update.kind === "tool") kinds.push(event.update.toolKind)
+  }, () => {}, undefined, name)
+}
+assert.deepEqual(kinds, ["run_subagent", "other"], "Shared ACP uses only the provider-contributed native tool name")
 
 const request = {
   sessionId: "fixture",

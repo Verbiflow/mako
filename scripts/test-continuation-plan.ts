@@ -49,3 +49,7 @@ await assert.rejects(planner.assertLive(ref.path, "cursor", "agent-1"), /open in
 await assert.rejects(planner.assertNative(ref.path), /open in another app/)
 await assert.rejects(planner.assertNative("/missing"), /no longer in the catalog/)
 console.log("Continuation plan: live, native, handoff and refusal rules; host refuses a transport its plan did not choose")
+
+for (const provider of ["codex", "claude", "cursor", "grok", "devin", "opencode"]) {
+  assert.deepEqual(planContinuation({ ...ref, harness: provider, heldBy: "Mako's dev3 host" }, { ...inputs, attached: "existing-conversation" }), { transport: "attached", provider, conversationId: "existing-conversation" })
+}

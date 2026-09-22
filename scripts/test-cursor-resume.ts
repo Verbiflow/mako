@@ -169,7 +169,7 @@ try {
   const sdkBinding: ProviderBinding = { id: "b1", provider: "cursor", nativeId: agentId, path: sdkStorePath, checkpoint: sdkSecond, coveredBlocks: 1, includesBase: true }
   assert.deepEqual(await driver.resumeVerdict(sdkBinding), { kind: "resumable", record: "same" })
   assert.deepEqual(await driver.resumeVerdict({ ...sdkBinding, checkpoint: sdkFirst }), { kind: "resumable", record: "moved" })
-  assert.deepEqual(await driver.resumeVerdict({ ...sdkBinding, checkpoint: undefined }), { kind: "resumable", record: "same" }, "a binding without a checkpoint reopens the store")
+  assert.deepEqual(await driver.resumeVerdict({ ...sdkBinding, checkpoint: undefined }), { kind: "resumable", record: "unknown" }, "a binding without a checkpoint reopens without claiming unchanged history")
   assert.equal(await driver.checkpoint(sdkStorePath), sdkSecond, "the catalog path reads the same head")
 
   const acpBinding: ProviderBinding = { id: "b2", provider: "cursor", nativeId: legacyId, path: acpPath, checkpoint: second, coveredBlocks: 1, includesBase: true }

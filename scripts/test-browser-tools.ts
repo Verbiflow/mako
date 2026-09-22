@@ -33,7 +33,7 @@ try {
   // The API reference in the instructions is generated from the contract,
   // so a program can be written from the instructions alone.
   assert.match(instructions, /browser\.click\(\{target, at, button\?, /)
-  assert.match(instructions, /browser\.observe\(\{target, /)
+  assert.match(instructions, /browser\.observe\(\{within\?, match\?, target, /)
   assert.match(instructions, /never cut/i)
   const tools = (await client.listTools()).tools
   assert.deepEqual(

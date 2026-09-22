@@ -17,6 +17,56 @@ const textOf = (block: ControlProgramOutput | undefined) =>
 
 const artifacts = await mkdtemp(join(tmpdir(), "mako-control-artifacts-"))
 process.env.MAKO_CONTROL_ARTIFACTS = artifacts
+// Bound handles use the executing async cell, never the cell that constructed them.
+const boundCalls: string[] = []
+const bound = new ControlProgramRuntime({
+  namespace: "control",
+  actions: ["events"],
+  artifacts,
+  call: async () => {
+    boundCalls.push("events")
+    return { events: [] }
+  },
+  image: () => [],
+  fault: (detail) => new Error(detail.message),
+})
+try {
+  const signal = new AbortController().signal
+  await bound.run(
+    "state.window=control.window({pid:42,window_id:7}); return 1",
+    signal
+  )
+  await bound.run("return await state.window.events()", signal)
+  await assert.rejects(
+    bound.run("throw new Error('ordinary')", signal),
+    /ordinary/
+  )
+  await bound.run("return await state.window.events()", signal)
+  assert.equal(boundCalls.length, 2)
+  await bound.run(
+    `setTimeout(async () => { try { await state.window.events() } catch(e) { state.late=e.message } },30); return 1`,
+    signal
+  )
+  const late = await bound.run(
+    "await new Promise(r=>setTimeout(r,80)); return state.late",
+    signal
+  )
+  assert.match(textOf(late[0]), /already finished/)
+  assert.equal(
+    boundCalls.length,
+    2,
+    "a late callback cannot borrow the next cell"
+  )
+  const abort = new AbortController()
+  const running = bound.run("while(true) {}", abort.signal)
+  setTimeout(() => abort.abort(), 30)
+  await assert.rejects(running, /cancelled/)
+  const reset = await bound.run("return typeof state.window", signal)
+  assert.equal(textOf(reset[0]), '"undefined"')
+} finally {
+  await bound.close()
+}
+
 const calls: string[] = []
 const first = new BrowserToolsRuntime(async (command) => {
   calls.push(command.action)
@@ -253,13 +303,8 @@ try {
       yielding.run("return 'unsafe overlap'", new AbortController().signal),
       /must be collected/
     )
-    const resumed = await yielding.wait(
-      cell.cell,
-      new AbortController().signal
-    )
-    assert.deepEqual(resumed, [
-      { type: "text", text: '{"done":true}' },
-    ])
+    const resumed = await yielding.wait(cell.cell, new AbortController().signal)
+    assert.deepEqual(resumed, [{ type: "text", text: '{"done":true}' }])
     await assert.rejects(
       yielding.wait(cell.cell, new AbortController().signal),
       /not retained/

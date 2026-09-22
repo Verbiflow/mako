@@ -30,6 +30,12 @@ try {
     probe: async () => ({ kind: "available", sessions: [] }),
   }
   assert.equal(await canResumeBinding(binding, idle), true)
+  const legacy = { ...binding, checkpoint: undefined }
+  const legacyVerdict = await resumeVerdict(legacy, idle)
+  assert.deepEqual(legacyVerdict, { kind: "resumable", record: "unknown" }, "an existing native file without an old checkpoint can reconnect")
+  assert.equal(await canResumeBinding(legacy, idle), false, "unknown comparison does not permit unchanged-history reuse")
+  assert.equal((await resumeVerdict(legacy, undefined)).kind, "unavailable", "legacy bindings still require ownership evidence")
+
   assert.equal(await canResumeBinding(binding, undefined), false)
   assert.equal(
     await canResumeBinding(binding, {
@@ -55,6 +61,7 @@ try {
         sessions: [{ ...session, status: "active" }],
       }),
     }
+    assert.equal((await resumeVerdict(legacy, busy)).kind, "held", "missing checkpoint cannot bypass active ownership")
     assert.equal(await canResumeBinding(binding, busy), false)
     assert.deepEqual(await resumeVerdict(binding, busy), { kind: "held", by: "another fixture process" })
   }

@@ -443,29 +443,26 @@ async function benchmarkUnifiedControl(): Promise<SurfaceReport> {
     const exactTarget = { kind: "window", pid: 42, window_id: 7 }
     report.single.program = await lane(1, async () => [
       await exec(
-        `return control.observe({target:${JSON.stringify(exactTarget)},interactive:true})`
+        `return control.window(${JSON.stringify(exactTarget)}).observe({interactive:true})`
       ),
     ])
     report.single.program.hostActions = 1
     const workflow = `const target=${JSON.stringify(exactTarget)};
-const first=await control.observe({target,interactive:true});
-const ref=control.ref(first.lines[0]);
-const action=await control.act({target,operation:{kind:"activate",ref}});
-return {snapshot:first.observation,controls:first.lines.length,route:action.plan.route,observed:action.observation.lines.length}`
+const window=control.window(target);
+const first=await window.observe({interactive:true});
+const action=await window.activate(first.nodes[0].ref);
+const after=await window.observe();
+return {snapshot:first.observation,controls:first.lines.length,route:action.route,observed:after.lines.length}`
     const value = programValue(await exec(workflow))
     if (
       JSON.stringify(value) !==
       '{"snapshot":"s0000000a","controls":180,"route":"accessibility","observed":180}'
     )
       throw new Error(`unified workflow returned ${JSON.stringify(value)}`)
-    report.workflow.program = await lane(1, async () => [
-      await exec(workflow),
-    ])
+    report.workflow.program = await lane(1, async () => [await exec(workflow)])
     report.workflow.program.hostActions = 3
     report.oversize.program = oversizeVerdict(
-      await exec(
-        `return control.advanced({backend:"native",name:"get_accessibility_tree",args:{pid:42}})`
-      )
+      await exec(`return control.native("get_accessibility_tree",{pid:42})`)
     )
     return report
   } finally {
@@ -493,20 +490,21 @@ async function benchmarkUnifiedPage(): Promise<SurfaceReport> {
     const pageTarget = { kind: "page", ...target }
     report.single.program = await lane(1, async () => [
       await exec(
-        `return control.observe({target:${JSON.stringify(pageTarget)},interactive:true})`
+        `return control.tab(${JSON.stringify(pageTarget)}).observe({interactive:true})`
       ),
     ])
     const workflow = `const target=${JSON.stringify(pageTarget)};
-const first=await control.observe({target,interactive:true});
-const ref=control.ref(first.lines[0]);
-const action=await control.act({target,operation:{kind:"set-text",ref,text:"updated"}});
-return {controls:first.lines.length,route:action.plan.route,outcome:action.receipt.outcome,value:action.observation.lines[0]}`
+const tab=control.tab(target);
+const first=await tab.observe({interactive:true});
+const action=await tab.setValue(first.nodes[0].ref,"updated");
+const after=await tab.observe();
+return {controls:first.lines.length,route:action.route,outcome:action.verification,value:after.lines[0]}`
     const rawValue = programValue(await exec(workflow))
     const parsedValue = z
       .object({
         controls: z.literal(180),
         route: z.literal("page"),
-        outcome: z.literal("confirmed"),
+        outcome: z.literal("not-requested"),
         value: z.string(),
       })
       .safeParse(rawValue)
@@ -517,16 +515,14 @@ return {controls:first.lines.length,route:action.plan.route,outcome:action.recei
     const value = parsedValue.data
     if (!value.value.includes('="updated"'))
       throw new Error(`unified page workflow returned ${JSON.stringify(value)}`)
-    report.workflow.program = await lane(1, async () => [
-      await exec(workflow),
-    ])
+    report.workflow.program = await lane(1, async () => [await exec(workflow)])
     const fullObservation = await exec(
-      `return page.observe(${JSON.stringify(pageTarget)})`
+      `return (await control.tab(${JSON.stringify(pageTarget)}).observe()).nodes`
     )
     const selectedObservation = await exec(
-      `const observed=await page.observe(${JSON.stringify(pageTarget)});
-const selected=page.select(observed,{roles:["textbox"],text:"Control 0",includeAncestors:false});
-return {summary:{matched:selected.matched,returned:selected.returned,omitted:selected.omitted},lines:page.lines(selected)}`
+      `const observed=await control.tab(${JSON.stringify(pageTarget)}).observe();
+const selected=observed.select({roles:["textbox"],text:"Control 0",includeAncestors:false});
+return {summary:{matched:selected.matched,returned:selected.returned,omitted:selected.omitted},lines:selected.lines}`
     )
     const fullResponseBytes = resultBytes(fullObservation)
     const selectedResponseBytes = resultBytes(selectedObservation)
@@ -540,7 +536,7 @@ return {summary:{matched:selected.matched,returned:selected.returned,omitted:sel
     }
     report.oversize.program = oversizeVerdict(
       await exec(
-        `return control.advanced({backend:"page",name:"evaluate",args:{target:${JSON.stringify(target)},expression:"document.body.innerText"}})`
+        `return control.tab(${JSON.stringify(pageTarget)}).raw("evaluate",{expression:"document.body.innerText"})`
       )
     )
     return report

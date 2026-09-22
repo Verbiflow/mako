@@ -121,6 +121,7 @@ const drivers = new Map(
     driver(provider),
   ])
 )
+let recordComparison: "same" | "moved" | "unknown" = "same"
 function createOwner() {
   return new LiveConversations({
     root,
@@ -131,7 +132,7 @@ function createOwner() {
         "Transfers must use captured history, not lagging native files"
       )
     },
-    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+    resumeVerdict: async () => ({ kind: "resumable", record: recordComparison }),
     memory,
     emit: (event) => events.push(event),
   })
@@ -558,6 +559,23 @@ try {
     assert.equal(reconnectTransfer.state.manifest.includesBase, false)
     finish(reconnectTransfer.state.bindingId, "Reconnected")
   }
+  const activeBinding = owner.snapshot(id)!.control!.activeBindingId
+  const activeSession = sessions.get(activeBinding)!
+  owner.observe({ type: "live-session", session: { ...activeSession, connection: "disconnected", status: "failed" } })
+  recordComparison = "unknown"
+  const legacyRequest = randomUUID()
+  const beforeLegacy = opened.length
+  owner.submit(id, legacyRequest, "Reconnect without a historical checkpoint")
+  await until(() => sent.at(-1)?.text.includes("Reconnect without a historical checkpoint") === true)
+  const legacyTransfer = owner.snapshot(id)!.control!.transfers.at(-1)!
+  assert.equal(legacyTransfer.state.kind, "accepted")
+  assert.equal(opened.length, beforeLegacy + 1)
+  if (legacyTransfer.state.kind === "accepted") {
+    assert.equal(legacyTransfer.state.bindingId, activeBinding, "unknown baseline reconnects the same binding")
+    assert.equal(legacyTransfer.state.manifest.includesBase, false, "native history is not replayed as a new prompt")
+    finish(activeBinding, "Legacy reconnect complete")
+  }
+  recordComparison = "same"
   const closingId = randomUUID()
   await owner.start("alpha", root, { conversationId: closingId })
   owner.transfer(closingId, command("slow", "Must never dispatch after close"))

@@ -55,14 +55,14 @@ server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
   {name:'get_config',description:'Config.',inputSchema:{type:'object',properties:{}}}
 ]}));
 const cursorCalls=[];
-let clicks=0; let fieldValue=''; let captures=0; let newest='';
+let clicks=0; let fieldValue=''; let captures=0; let images=0; let newest='';
 // Like the driver: every capture is a new snapshot and only the newest
 // snapshot's tokens are honoured.
 const stale=(token)=>typeof token==='string'&&token!=='refuse'&&!token.startsWith(newest+':');
 server.setRequestHandler(CallToolRequestSchema,async request=>{
   const args=request.params.arguments;
   if(request.params.name==='get_window_state'){
-    captures+=1; newest='s'+(10+captures).toString(16).padStart(8,'0');
+    captures+=1; if(args.include_screenshot!==false) images+=1; newest='s'+(10+captures).toString(16).padStart(8,'0');
     const elements=[{element_token:newest+':0',role:'AXButton',label:'Go'},{element_token:newest+':1',role:'AXMenuItem',label:'About'},...(clicks?[{element_token:newest+':2',role:'AXStaticText',label:'Done',value:'Done'}]:[]),{element_token:newest+':3',role:'AXTextField',label:'Name',value:fieldValue}];
     const value={snapshot_id:newest,pid:args.pid,window_id:args.window_id,max_elements:args.max_elements,screenshot_scale:2,tree_markdown:'- [0] AXWindow',_note:'prefer elements',elements,returned_element_count:elements.length,screenshot_file_path:args.screenshot_out_file,screenshot_mime_type:'image/png'};
     return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
@@ -71,8 +71,8 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   if(request.params.name==='click'){ if(args.element_token==='refuse') return {isError:true,content:[{type:'text',text:'no such element in this snapshot'}]}; clicks+=1; const value={route:'accessibility',effect:'unverifiable',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_agent_cursor_motion'){ cursorCalls.push({session:args.session,glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms}); const value={motion:{glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms},session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_agent_cursor_enabled'){ cursorCalls.push({session:args.session,enabled:args.enabled}); const value={enabled:args.enabled,session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
-  if(request.params.name==='get_config'){ const value={cursorCalls}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
-  if(request.params.name==='set_value'){ fieldValue=args.value; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='get_config'){ const value={cursorCalls,captures,images}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='set_value'){ fieldValue=args.value; if(args.value==='unknown-outcome-fixture') return {isError:true,content:[{type:'text',text:'connection lost after possible write'}]}; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='invoke_menu'){ const value={effect:'invoked',path:args.path,forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='zoom') return {content:[{type:'image',mimeType:'image/png',data:'aW1hZ2U='}],structuredContent:{pid:args.pid,window_id:args.window_id,screenshot_scale:4}};
   if(request.params.name==='hotkey'){ const dropped=args.keys.includes('x'); const value={effect:'unverifiable',keys:args.keys,delivery:{mode:args.delivery_mode??'background'},pid:args.pid,...(dropped?{escalation:{reason:'delivery_failed',target:'foreground'},route:'synthetic_events'}:{})}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
@@ -287,9 +287,7 @@ try {
         browserOwnerReleases++
         response
           .writeHead(200, { "content-type": "application/json" })
-          .end(
-            JSON.stringify({ ok: true, value: { released: 0, closed: 0 } })
-          )
+          .end(JSON.stringify({ ok: true, value: { released: 0, closed: 0 } }))
         return
       }
       const parsed = z.json().parse(JSON.parse(body))
@@ -1032,13 +1030,15 @@ const unifiedServer = createComputerToolsServer(
           matched: 1,
           nextOffset: null,
           omitted: 0,
+          truncatedTextFields: 0,
         }
       if (command.action === "type") {
         unifiedPageValue = command.text
         return { typed: true }
       }
-      if (command.action === "cdp")
-        return { result: { value: command.method } }
+      if (command.action === "screenshot")
+        return { data: "aW1hZ2U=", mimeType: "image/png", view: "fixture-view" }
+      if (command.action === "cdp") return { result: { value: command.method } }
       return { echo: command }
     },
   }
@@ -1049,12 +1049,16 @@ const [unifiedClientTransport, unifiedServerTransport] =
 try {
   await unifiedServer.connect(unifiedServerTransport)
   await unifiedClient.connect(unifiedClientTransport)
-  assert.match(unifiedClient.getInstructions() ?? "", /provider-neutral code API/)
-  const tools = await unifiedClient.listTools()
-  assert.deepEqual(
-    tools.tools.map((tool) => tool.name).sort(),
-    ["mako_control_exec", "mako_control_help", "mako_control_status"]
+  assert.match(
+    unifiedClient.getInstructions() ?? "",
+    /provider-neutral code API/
   )
+  const tools = await unifiedClient.listTools()
+  assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
+    "mako_control_exec",
+    "mako_control_help",
+    "mako_control_status",
+  ])
   const help = JSON.parse(
     firstText(
       (
@@ -1065,12 +1069,11 @@ try {
       ).content
     )
   )
-  assert.deepEqual(
-    z
-      .object({ actions: z.array(z.object({ action: z.string() })) })
-      .parse(help)
-      .actions.map((action) => action.action),
-    ["targets", "observe", "act", "wait", "events", "advanced"]
+  assert.equal(help.version, 2)
+  assert.match(help.handles, /control.window/)
+  assert.ok(
+    !JSON.stringify(tools).includes("get_accessibility_tree"),
+    "native tool catalog is lazy"
   )
   const protocolHelp = JSON.parse(
     firstText(
@@ -1086,39 +1089,48 @@ try {
   const routed = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
-      source: `const target = {kind: 'window', pid: 42, window_id: 7};
-const before = await control.observe({target, interactive: true});
-const ref = control.ref(before.lines.find(line => /TextField "Name"/.test(line)));
-return control.act({target, operation: {kind: 'set-text', ref, text: 'unified'}});`,
+      source: `state.window = control.window({pid:42,window_id:7});
+const before = await state.window.observe();
+state.oldRef = before.get({role:'TextField',name:'Name'}).ref;
+const receipt = await state.window.setValue(state.oldRef, 'unified');
+return {receipt, proof: await state.window.expect({role:'TextField',name:'Name',value:'unified'})};`,
     },
   })
   assert.ok(!routed.isError, JSON.stringify(routed))
-  const result = z
-    .object({
-      dispatched: z.literal(true),
-      plan: z.object({
-        route: z.literal("accessibility"),
-        topology: z.literal("none"),
-      }),
-      receipt: z.object({
-        outcome: z.literal("confirmed"),
-        verification: z.object({ status: z.literal("confirmed") }),
-      }),
-      observation: z.object({
-        target: z.object({ kind: z.literal("window") }).loose(),
-        lines: z.array(z.string()),
-      }),
-    })
-    .parse(JSON.parse(firstText(routed.content)))
-  assert.ok(
-    result.observation.lines.some((line) => line.includes('="unified"'))
-  )
+  const result = JSON.parse(firstText(routed.content))
+  assert.equal(result.receipt.status, "dispatched")
+  assert.equal(result.receipt.verification, "not-requested")
+  assert.equal(result.receipt.route, "accessibility")
+  assert.equal(result.receipt.observation, undefined)
+  assert.equal(result.proof.status, "matched")
+  assert.equal(result.proof.evidence.value, "unified")
+  const reuse = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `let stale; try { await state.window.setValue(state.oldRef,'bad') } catch(e) { stale=e.message }; return {stale,view:await state.window.observe()}`,
+    },
+  })
+  assert.ok(!reuse.isError, JSON.stringify(reuse))
+  assert.match(firstText(reuse.content), /latest observation/)
+  const removed = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source:
+        "return {act:typeof control.act, page:typeof page, observe:typeof control.observe, advanced:typeof control.advanced}",
+    },
+  })
+  assert.deepEqual(JSON.parse(firstText(removed.content)), {
+    act: "undefined",
+    page: "undefined",
+    observe: "undefined",
+    advanced: "undefined",
+  })
   const crossTarget = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
-      source: `const observed = await control.observe({target:{kind:'window',pid:42,window_id:7},interactive:true});
-const ref = control.ref(observed.lines[0]);
-return control.act({target:{kind:'window',pid:42,window_id:9},operation:{kind:'activate',ref}});`,
+      source: `const observed = await control.window({pid:42,window_id:7}).observe();
+const ref = observed.get({role:'Button',name:'Go'}).ref;
+return control.window({pid:42,window_id:9}).activate(ref);`,
     },
   })
   assert.equal(crossTarget.isError, true)
@@ -1126,36 +1138,72 @@ return control.act({target:{kind:'window',pid:42,window_id:9},operation:{kind:'a
     String(crossTarget.structuredContent?.message),
     /not from this target's latest observation/
   )
+  assert.equal(crossTarget.structuredContent?.code, "stale-reference")
+  assert.equal(crossTarget.structuredContent?.outcome, "not-dispatched")
+  const dispatchOnly = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const initial=await control.native('get_config');
+const view=await state.window.observe(); const ref=view.get({role:'TextField',name:'Name'}).ref;
+await state.window.setValue(ref,'dispatch-only');
+let stale; try {await state.window.setValue(ref,'must-not-run')} catch(e) {stale={code:e.code,outcome:e.outcome}};
+const final=await control.native('get_config'); return {reads:final.captures-initial.captures,images:final.images-initial.images,stale};`,
+    },
+  })
+  assert.ok(!dispatchOnly.isError, JSON.stringify(dispatchOnly))
+  assert.deepEqual(JSON.parse(firstText(dispatchOnly.content)), {
+    reads: 1,
+    images: 0,
+    stale: { code: "stale-reference", outcome: "not-dispatched" },
+  })
+  const unknown = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const view=await state.window.observe(); const faults=[];
+try {await state.window.setValue(view.get({role:'TextField',name:'Name'}).ref,'unknown-outcome-fixture')} catch(e) {faults.push(e.outcome)};
+try {await state.window.pressKey('Enter')} catch(e) {faults.push(e.code)};
+try {await state.window.raw('press_key',{key:'Enter'})} catch(e) {faults.push(e.code)};
+const proof=await state.window.expect({role:'TextField',name:'Name',value:'unknown-outcome-fixture'}); return {faults,status:proof.status};`,
+    },
+  })
+  assert.ok(!unknown.isError, JSON.stringify(unknown))
+  assert.deepEqual(JSON.parse(firstText(unknown.content)), {
+    faults: ["unknown", "observation-required", "observation-required"],
+    status: "matched",
+  })
   const pageRun = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
       source: `const target={kind:'page',...${JSON.stringify(unifiedPageTarget)}};
-const observed=await control.observe({target,interactive:true});
-const ref=control.ref(observed.lines.find(line=>line.includes('Page proof')));
-return control.act({target,operation:{kind:'set-text',ref,text:'page value'}});`,
+const tab=control.tab(target);
+const observed=await tab.observe();
+const ref=observed.get({role:'textbox',name:'Page proof'}).ref;
+const receipt=await tab.setValue(ref,'page value');
+return {receipt,proof:await tab.expect({role:'textbox',name:'Page proof',value:'page value'}),observation:await tab.observe()};`,
     },
   })
   assert.ok(!pageRun.isError, JSON.stringify(pageRun))
   const pageResult = z
     .object({
-      plan: z.object({ route: z.literal("page") }),
-      receipt: z.object({ outcome: z.literal("confirmed") }),
+      receipt: z.object({
+        route: z.literal("page"),
+        verification: z.literal("not-requested"),
+      }),
+      proof: z.object({ status: z.literal("matched") }),
       observation: z.object({ lines: z.array(z.string()) }),
     })
     .parse(JSON.parse(firstText(pageRun.content)))
   assert.ok(
-    pageResult.observation.lines.some((line) =>
-      line.includes('="page value"')
-    )
+    pageResult.observation.lines.some((line) => line.includes('="page value"'))
   )
   const pageHelpersRun = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
-      source: `const target=await page.open({browser:'fixture-browser'});
-const observed=await page.observe(target);
-const selected=page.select(observed,{roles:['textbox'],text:'proof'});
-const protocol=await page.cdp(target,'Runtime.evaluate',{expression:'document.title'});
-return {target,lines:page.lines(selected),selection:{matched:selected.matched,context:selected.context},protocol};`,
+      source: `const tab=await control.openTab({browser:'fixture-browser'});
+const observed=await tab.observe();
+const selected=observed.select({roles:['textbox'],text:'proof'});
+const protocol=await tab.cdp('Runtime.evaluate',{expression:'document.title'});
+return {target:tab.target,lines:selected.lines,selection:{matched:selected.matched,context:selected.context},protocol};`,
     },
   })
   assert.ok(!pageHelpersRun.isError, JSON.stringify(pageHelpersRun))
@@ -1173,18 +1221,32 @@ return {target,lines:page.lines(selected),selection:{matched:selected.matched,co
     })
     .parse(JSON.parse(firstText(pageHelpersRun.content)))
   assert.match(pageHelpersResult.lines.at(-1) ?? "", /textbox "Page proof"/)
+  const visual = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
+const shot=await tab.screenshot(); const at={x:2,y:2,view:shot.view};
+const receipt=await tab.click(at); let stale; try {await tab.click(at)} catch(e) {stale={code:e.code,outcome:e.outcome}}; return {status:receipt.status,stale};`,
+    },
+  })
+  assert.ok(!visual.isError, JSON.stringify(visual))
+  assert.deepEqual(JSON.parse(firstText(visual.content)), {
+    status: "dispatched",
+    stale: { code: "stale-view", outcome: "not-dispatched" },
+  })
   const backgroundRefusals = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
-      source: `const hidden=await control.act({target:{kind:'window',pid:42,window_id:8},operation:{kind:'pointer',at:{x:2,y:2}}});
-const chord=await control.act({target:{kind:'window',pid:42,window_id:7},operation:{kind:'press-key',key:'a',modifiers:['Meta']}});
-return {hidden:hidden.plan.status,chord:chord.plan.status};`,
+      source: `let hidden,chord;
+try { await control.window({pid:42,window_id:8}).click({x:2,y:2,view:'missing'}) } catch(e) { hidden=e.message }
+try { await control.window({pid:42,window_id:7}).pressKey('a',{modifiers:['Meta']}) } catch(e) { chord=e.message }
+return {hidden,chord};`,
     },
   })
-  assert.deepEqual(JSON.parse(firstText(backgroundRefusals.content)), {
-    hidden: "foreground-required",
-    chord: "foreground-required",
-  })
+  assert.ok(!backgroundRefusals.isError, JSON.stringify(backgroundRefusals))
+  const refusals = JSON.parse(firstText(backgroundRefusals.content))
+  assert.match(refusals.hidden, /Nothing was dispatched/)
+  assert.match(refusals.chord, /foreground-required/)
 } finally {
   await unifiedClient.close()
   await unifiedServer.close()
@@ -1239,9 +1301,10 @@ try {
     name: "mako_control_exec",
     arguments: {
       source: `const target={kind:'window',pid:42,window_id:7};
-const observed=await control.observe({target,interactive:true});
-const ref=control.ref(observed.lines[0]);
-return control.act({target,operation:{kind:'activate',ref}});`,
+const window=control.window(target);
+const observed=await window.observe();
+const ref=observed.get({role:'Button',name:'Open later'}).ref;
+return window.activate(ref);`,
     },
   })
   const actedValue = z
@@ -1256,8 +1319,7 @@ return control.act({target,operation:{kind:'activate',ref}});`,
   const events = await guardClient.callTool({
     name: "mako_control_exec",
     arguments: {
-      source:
-        "return control.events({target:{kind:'window',pid:42,window_id:7},after:0})",
+      source: "return control.window({pid:42,window_id:7}).events({after:0})",
     },
   })
   const eventValue = z
@@ -1287,6 +1349,38 @@ return control.act({target,operation:{kind:'activate',ref}});`,
   await guardServer.close()
   if (previousGuard === undefined) delete process.env.MAKO_CONTROL_ASYNC_GUARD
   else process.env.MAKO_CONTROL_ASYNC_GUARD = previousGuard
+}
+// No native process may be started by discovery of the public contract or page execution.
+const pageOnly = createComputerToolsServer(
+  { command: "/nonexistent/mako-driver" },
+  "page-only",
+  undefined,
+  { surface: "control", browserCall: async () => [] }
+)
+const pageOnlyClient = new Client({ name: "page-only", version: "1" })
+const [pageOnlyTransport, pageOnlyServerTransport] =
+  InMemoryTransport.createLinkedPair()
+try {
+  await pageOnly.connect(pageOnlyServerTransport)
+  await pageOnlyClient.connect(pageOnlyTransport)
+  await pageOnlyClient.listTools()
+  for (const name of ["mako_control_status", "mako_control_help"]) {
+    const result = await pageOnlyClient.callTool({ name, arguments: {} })
+    assert.ok(!result.isError, JSON.stringify(result))
+  }
+  const result = await pageOnlyClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: "return await control.browsers()" },
+  })
+  assert.ok(!result.isError, JSON.stringify(result))
+  assert.deepEqual(JSON.parse(firstText(result.content)), {
+    kind: "browsers",
+    available: true,
+    browsers: [],
+  })
+} finally {
+  await pageOnlyClient.close()
+  await pageOnly.close()
 }
 console.log(
   "Computer MCP: driver-adapter regression and unified three-tool program surfaces, host-routed closed operations with receipts, results as data, target-bound refs, compact observations, background policy, browser lending, artifact receipts, previews and clean driver schemas verified"

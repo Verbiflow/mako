@@ -5,6 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { ClaudeAgents } from "../electron/providers/claude/sdk-agents.ts"
+import { CursorAgents } from "../electron/providers/cursor/sdk/agents.ts"
+import type { SdkMessage } from "../electron/providers/cursor/sdk/wire.ts"
 import { ClaudeProjection } from "../electron/providers/claude/sdk-projection.ts"
 import {
   CodexAgents,
@@ -17,12 +19,37 @@ import {
   type NativeAgent,
   type NativeAgentRoster,
 } from "../electron/contracts/native-agents.ts"
+import { ApplicationLifecycle } from "../electron/application-lifecycle.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { LiveJournal } from "../electron/live-journal.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import type { HostEvent, LiveSessionState } from "../electron/shared.ts"
 
 const claude = new ClaudeAgents()
+{
+  const cursor = new CursorAgents()
+  const task = {
+    type: "tool_call", agent_id: "parent", run_id: "parent-run", name: "task",
+    call_id: "native-invocation-1", status: "running",
+    args: { agentId: "native-child", description: "Sleep then reply", subagentType: { kind: "unspecified" } },
+  } satisfies SdkMessage
+  const result = { status: "success", value: { agentId: "native-child", isBackground: false } }
+  assert.equal(cursor.project({ type: "task", agent_id: "parent", run_id: "parent-run", status: "completed" }), undefined)
+  assert.equal(cursor.project({ ...task, name: "shell" }), undefined)
+  assert.equal(cursor.project(task)?.state.kind, "working")
+  assert.equal(cursor.project({ ...task, status: "completed", result: { status: "success", value: { isBackground: true } } })?.state.kind, "working")
+  assert.equal(cursor.project({ ...task, status: "completed", result })?.state.kind, "completed")
+  assert.equal(cursor.project(task), undefined, "Duplicate start cannot revive completed invocation")
+  const next = { ...task, call_id: "native-invocation-2" }
+  assert.equal(cursor.project(next)?.nativeRunId, next.call_id)
+  assert.equal(cursor.project({ ...task, status: "completed", result }), undefined, "Old completion cannot settle reused child")
+  assert.equal(cursor.project(task), undefined, "Old invocation progress cannot displace newer invocation")
+  assert.equal(cursor.project({ ...next, status: "completed", result: {} }), undefined)
+  assert.equal(cursor.project({ ...next, status: "error" }), undefined, "Transport failure is not child completion")
+  assert.equal(cursor.project({ ...next, status: "completed", result, truncated: { result: true } }), undefined)
+  assert.equal(cursor.project({ ...next, status: "completed", result: { status: "success", value: { agentId: "other", isBackground: false } } }), undefined)
+  assert.equal(cursor.project({ ...next, args: undefined, status: "completed", result })?.state.kind, "completed")
+}
 const common = { uuid: randomUUID(), session_id: "parent", task_id: "agent-1" }
 const started = {
   ...common,
@@ -87,6 +114,15 @@ assert.equal(
   "working",
   "A new start explicitly resumes work"
 )
+assert.equal(claude.project({ ...completed, tool_use_id: "old-tool" }), undefined,
+  "A terminal notification from another invocation cannot settle the current child")
+claude.project(completed)
+assert.equal(claude.project({ ...common, type: "system", subtype: "task_updated", patch: { status: "running" } }), undefined,
+  "Late task updates cannot revive a terminal child without a new start")
+assert.equal(claude.project({ ...started, tool_use_id: "new-tool" })?.state.kind, "working")
+assert.equal(claude.project({ ...completed, tool_use_id: "tool-1" }), undefined,
+  "Old invocation completion cannot settle a newly started invocation")
+assert.equal(claude.project({ ...completed, tool_use_id: "new-tool" })?.state.kind, "completed")
 const projection = new ClaudeProjection()
 assert.deepEqual(
   projection.project({
@@ -267,6 +303,46 @@ try {
     agent: { ...agent, nativeId: "stale" },
   })
   assert.equal(owner.snapshot(id)?.nativeAgents?.agents.length, 1)
+  owner.observe({ type: "live-session", session: { ...session, status: "ready", lastStop: "completed" } })
+  const deadline = Date.now() + 5000
+  while (owner.lifecycleWork().some((work) => work.status === "finishing") && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  // Exercise the actual roster → restart barrier, with no prompt or native process.
+  assert.equal(owner.snapshot(id)?.requests.length, 0)
+  assert.equal(owner.snapshot(id)?.session.status, "ready")
+  assert.equal(owner.lifecycleWork()[0]?.status, "running",
+    "A working child is running work, not a nonexistent queued prompt")
+  let applied = 0
+  const lifecycle = new ApplicationLifecycle({
+    work: () => owner.lifecycleWork(),
+    ready() {},
+    stop: async () => { throw new Error("This regression must not stop agents") },
+    apply: async () => { applied += 1 },
+    changed() {},
+  })
+  await lifecycle.command({ kind: "wait", action: "restart" })
+  assert.equal(applied, 0, "A ready parent does not settle its working child")
+  owner.observe({ type: "live-agent", id, agent: { ...agent, state: { kind: "waiting", reason: "Approval" } } })
+  assert.equal(owner.lifecycleWork()[0]?.status, "waiting")
+  await lifecycle.tick()
+  assert.equal(applied, 0)
+  owner.observe({ type: "live-agent", id, agent: { ...agent, nativeId: "second-child", state: { kind: "working" } } })
+  owner.observe({ type: "live-agent", id, agent: { ...agent, state: { kind: "completed", summary: "Done" } } })
+  await lifecycle.tick()
+  assert.equal(applied, 0, "Completing one child cannot settle another")
+  owner.observe({ type: "live-agent", id, agent: { ...agent, nativeId: "second-child", state: { kind: "canceled" } } })
+  assert.deepEqual(owner.lifecycleWork(), [])
+  await lifecycle.tick()
+  assert.equal(applied, 1, "A terminal child observation releases the restart barrier")
+  await lifecycle.tick()
+  assert.equal(applied, 1, "Restart applies once")
+  owner.observe({ type: "live-agent", id, agent: { ...agent, state: { kind: "working" } } })
+  assert.equal(owner.lifecycleWork()[0]?.status, "running", "A new child run blocks again")
+  const oldRevision = lifecycle.snapshot().revision
+  owner.observe({ type: "live-agent", id, agent: { ...agent, nativeRunId: "new-child-run", state: { kind: "working" } } })
+  assert.notEqual(lifecycle.snapshot().revision, oldRevision,
+    "A new native run invalidates an old Stop confirmation even when its status stays running")
+
   owner.stop()
   const recovered = new LiveConversations(dependencies)
   try {
