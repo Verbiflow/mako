@@ -419,6 +419,20 @@ try {
         ),
         false
       )
+      const cancelTarget = BrowserTargetSchema.parse(await run({ action: "open", browser: value.id }))
+      const cancellation = new AbortController()
+      const timer = setTimeout(() => cancellation.abort(), 150)
+      try {
+        await assert.rejects(service.execute("extension-e2e", BrowserCommandSchema.parse({
+          action: "evaluate", target: cancelTarget,
+          expression: "window.makoCancellationCount=(window.makoCancellationCount||0)+1;new Promise(resolve=>setTimeout(()=>resolve(window.makoCancellationCount),1500))",
+        }), cancellation.signal), error => error.detail?.outcome === "unknown")
+      } finally { clearTimeout(timer) }
+      await assert.rejects(run({ action: "evaluate", target: cancelTarget, expression: "window.makoCancellationCount" }), error => error.detail?.outcome === "not-dispatched")
+      await run({ action: "observe", target: cancelTarget })
+      const count = await run({ action: "evaluate", target: cancelTarget, expression: "window.makoCancellationCount" })
+      assert.equal(count.result.value, 1, "Cancellation never replays the dispatched operation")
+      await run({ action: "close", target: cancelTarget })
       const ephemeral = BrowserTargetSchema.parse(await run({ action: "open", browser: value.id, lifetime: "task" }))
       const persistent = BrowserTargetSchema.parse(await run({ action: "open", browser: value.id, lifetime: "persistent" }))
       service.disconnect(value.id)
@@ -435,7 +449,7 @@ try {
       const reclaimed = BrowserTargetSchema.parse(await run({ action: "select", browser: value.id, tab: persistent.tab }))
       await run({ action: "close", target: reclaimed })
       console.log(
-        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership, disconnect/reconnect lifetime cleanup and stale-handle refusal passed`
+        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership, disconnect/reconnect lifetime cleanup, cancellation without replay and stale-handle refusal passed`
       )
     } finally {
       await service.close()
