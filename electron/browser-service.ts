@@ -1051,6 +1051,8 @@ export class BrowserService {
           background: command.background,
           newWindow: command.disposition === "window",
         }
+        if (this.entry(browser).definition.transport === "extension")
+          targetParameters.makoTaskLifetime = command.lifetime === "task"
         if (browserContextId)
           targetParameters.browserContextId = browserContextId
         targetId = z

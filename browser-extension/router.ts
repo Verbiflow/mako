@@ -18,6 +18,7 @@ interface AttachedTarget {
   target: chrome.debugger.TargetInfo
 }
 interface CreatedTarget {
+  closeOnDisconnect: boolean
   client: string
   tabId: number
 }
@@ -137,7 +138,7 @@ export class ExtensionRouter {
             await this.api.tabs.remove(tabId)
             throw new Error("Browser client disconnected")
           }
-          this.creating.set(target.id, { client, tabId })
+          this.creating.set(target.id, { client, tabId, closeOnDisconnect: command.params.makoTaskLifetime === true })
           return { targetId: target.id }
         }
         await new Promise((resolve) => setTimeout(resolve, 50))
@@ -270,8 +271,12 @@ export class ExtensionRouter {
       this.creating.delete(target)
       await this.api.tabs.remove(created.tabId).catch(() => {})
     }
-    for (const [target, created] of this.created)
-      if (created.client === client) this.created.delete(target)
+    for (const [target, created] of this.created) {
+      if (created.client !== client) continue
+      this.created.delete(target)
+      if (created.closeOnDisconnect)
+        await this.api.tabs.remove(created.tabId).catch(() => {})
+    }
   }
 
   async close(): Promise<void> {
