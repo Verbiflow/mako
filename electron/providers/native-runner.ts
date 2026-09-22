@@ -34,6 +34,8 @@ export interface PreparedRun {
 }
 
 export interface NativeRunner extends ProviderCapability {
+  /** Installation presence only; command preparation validates runtime compatibility. */
+  available(): boolean
   fastMode: "supported" | "unsupported"
   /**
    * Option ids this command line expresses. A selection may carry more —
@@ -57,9 +59,10 @@ export interface NativeRunner extends ProviderCapability {
   resume(
     id: string,
     prompt: string,
-    options?: NativeRunOptions
-  ): NativeCommand
-  fresh(prompt: string, options: NativeRunOptions): NativeCommand
+    options?: NativeRunOptions,
+    env?: NodeJS.ProcessEnv
+  ): NativeCommand | Promise<NativeCommand>
+  fresh(prompt: string, options: NativeRunOptions, env?: NodeJS.ProcessEnv): NativeCommand | Promise<NativeCommand>
   /**
    * The settings a built command states, read back from its arguments
    * against the provider's catalog: a runner whose command line folds

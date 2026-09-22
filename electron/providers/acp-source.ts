@@ -19,6 +19,8 @@ export interface AcpLaunchOptions {
   appPath: string
   execPath: string
   resume?: string
+  nativePath?: string
+  env?: NodeJS.ProcessEnv
   tuning?: AcpTuning
   /** The access tier selected before launch, for providers that read it from flags or environment. */
   access?: AccessTier
