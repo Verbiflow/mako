@@ -131,12 +131,28 @@ try {
       stderr: "pipe",
     })
   )
+  const fullHelp = await client.callTool({
+    name: "mako_control_help",
+    arguments: {},
+  })
+  const focusedHelp = await client.callTool({
+    name: "mako_control_help",
+    arguments: { topic: "target" },
+  })
+  const fullBytes = Buffer.byteLength(JSON.stringify(fullHelp))
+  const focusedBytes = Buffer.byteLength(JSON.stringify(focusedHelp))
+  assert.ok(
+    focusedBytes < fullBytes / 2,
+    "Focused help avoids resending unrelated API sections"
+  )
+  evidence.help = { fullBytes, focusedBytes }
   const baseline = await frontmostPid()
   samples = sampleFrontmost()
   const nativeProof =
     await cell(`const windows=await control.app({pid:${nativeState.pid}}).windows();
 const selected=windows.windows.find(w=>w.title==='Mako cocoa fixture'); if(!selected) throw new Error('Fixture window missing');
 state.window=control.window({pid:${nativeState.pid},window_id:selected.window_id});
+state.nativeCapabilities=await state.window.capabilities();
 const view=await state.window.observe(); const receipt=await state.window.setValue(view.get({role:'TextField',name:'Proof'}).ref,'native-v2');
 return {receipt,proof:await state.window.expect({role:'TextField',name:'Proof',value:'native-v2'})};`)
   assert.equal(nativeProof.receipt.verification, "not-requested")
@@ -151,7 +167,7 @@ return {receipt,proof:await state.window.expect({role:'TextField',name:'Proof',v
     const exact = await cell(`const view=await state.window.observe();
 await state.window.setValue(view.get({role:'TextField',name:'Proof'}).ref,${JSON.stringify(value)});
 const proof=await state.window.expect({role:'TextField',name:'Proof',value:${JSON.stringify(value)}});
-let negative=false;try {await state.window.expect({role:'TextField',name:'Proof',value:${JSON.stringify(value + ' ')}},{timeoutMs:0})} catch {negative=true}
+let negative=false;try {await state.window.expect({role:'TextField',name:'Proof',value:${JSON.stringify(value + " ")}},{timeoutMs:0})} catch {negative=true}
 return {proof,negative};`)
     assert.equal(exact.proof.evidence.value, value)
     assert.equal(exact.negative, true)
@@ -202,7 +218,7 @@ const proof=await state.tab.expect({role:'textbox',name:'Proof',value:'page-v2'}
     "long-" + "x".repeat(1300) + "-end",
   ]) {
     await cell(
-      `const within=[{role:'form',name:'Shipping'}];const view=await state.tab.observe({within});await state.tab.setValue(view.get({role:'textbox',name:'Email'}).ref,${JSON.stringify(value)});const proof=await state.tab.expect({role:'textbox',name:'Email',within,value:${JSON.stringify(value)}});const after=await state.tab.observe({within});await state.tab.click(after.get({role:'button',name:'Save'}).ref);return {matched:proof.status};`
+      `const form=state.tab.locator({role:'form',name:'Shipping'});await form.locator({role:'textbox',name:'Email'}).setValue(${JSON.stringify(value)});const proof=await form.locator({role:'textbox',name:'Email'}).expect({value:${JSON.stringify(value)}});await form.locator({role:'button',name:'Save'}).click();return {matched:proof.status};`
     )
     const submitted = await until(async () => {
       const state = await read(page.status)

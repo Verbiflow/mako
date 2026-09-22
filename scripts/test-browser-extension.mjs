@@ -54,6 +54,7 @@ assert.throws(() => new NativeMessageDecoder(1).push(bytes), /size limit/)
 assert.equal(
   ExtensionMessageSchema.safeParse({
     kind: "hello",
+    protocol: 1,
     profileId: "cd033952-8c01-4b96-a1b6-8295f595cdec",
     browser: "chrome",
     label: "Old profile",
@@ -70,7 +71,10 @@ await mkdir(join(support, "Aside"), { recursive: true })
 await mkdir(join(support, "Vendor", "NewBrowser"), { recursive: true })
 await mkdir(join(support, "ElectronApp"), { recursive: true })
 await writeFile(join(support, "Aside", "Local State"), browserState)
-await writeFile(join(support, "Vendor", "NewBrowser", "Local State"), browserState)
+await writeFile(
+  join(support, "Vendor", "NewBrowser", "Local State"),
+  browserState
+)
 await writeFile(
   join(support, "ElectronApp", "Local State"),
   JSON.stringify({ profile: { info_cache: { Default: {} } } })
@@ -107,10 +111,38 @@ await assert.rejects(
   stat(join(support, "ElectronApp", "NativeMessagingHosts")),
   { code: "ENOENT" }
 )
+for (const protocol of [undefined, 0, 2]) {
+  const wrongInput = new PassThrough()
+  const wrongOutput = new PassThrough()
+  const mismatchMessages = []
+  const mismatchDecoder = new NativeMessageDecoder(1024 * 1024)
+  wrongOutput.on("data", (chunk) =>
+    mismatchMessages.push(...mismatchDecoder.push(chunk).map(JSON.parse))
+  )
+  const rejected = startBrowserNativeHost(root, wrongInput, wrongOutput)
+  wrongInput.write(
+    frame({
+      kind: "hello",
+      protocol,
+      profileId: "cd033952-8c01-4b96-a1b6-8295f595cdec",
+      family: "chromium",
+      product: "Aside",
+      label: "Aside",
+    })
+  )
+  await assert.rejects(rejected, /disconnected/)
+  assert.equal(mismatchMessages[0].kind, "incompatible")
+  assert.equal(
+    (await extensionBrowsers(root)).length,
+    0,
+    "Mismatched protocol never publishes a controllable endpoint"
+  )
+}
 const starting = startBrowserNativeHost(root, input, output)
 input.write(
   frame({
     kind: "hello",
+    protocol: 1,
     profileId: "cd033952-8c01-4b96-a1b6-8295f595cdec",
     family: "chromium",
     product: "Aside",
@@ -132,9 +164,13 @@ try {
     1,
     "old product-specific registration names are ignored"
   )
-  input.write(frame({kind:"profile-name",profileName:"Work"}))
-  await until(async () => JSON.parse(await readFile(host.registration,"utf8")).profileName === "Work")
-  assert.equal((await extensionBrowsers(root))[0].name,"Aside · Work")
+  input.write(frame({ kind: "profile-name", profileName: "Work" }))
+  await until(
+    async () =>
+      JSON.parse(await readFile(host.registration, "utf8")).profileName ===
+      "Work"
+  )
+  assert.equal((await extensionBrowsers(root))[0].name, "Aside · Work")
   assert.equal((await stat(root)).mode & 0o777, 0o700)
   assert.equal((await stat(host.registration)).mode & 0o777, 0o600)
   for (const options of [

@@ -146,8 +146,18 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
     .strict(),
   z.object({ action: z.literal("tabs"), browser }).strict(),
   z
+    .object({ action: z.literal("capabilities"), target: BrowserTargetSchema })
+    .strict(),
+  z
     .object({
       action: z.literal("open"),
+      name: z
+        .string()
+        .trim()
+        .min(1)
+        .max(60)
+        .optional()
+        .describe("Short task name shown on the browser tab group."),
       browser: browser
         .optional()
         .describe(
@@ -196,6 +206,24 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
         .describe(
           "Transfer an idle tab bound to another task. Default false: refuse a tab another task owns."
         ),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("downloadStatus"),
+      target: BrowserTargetSchema,
+      id: z.number().int().nonnegative(),
+      timeoutMs: z.number().int().min(0).max(300000).default(0),
+    })
+    .strict(),
+  z
+    .object({ action: z.literal("children"), target: BrowserTargetSchema })
+    .strict(),
+  z
+    .object({
+      action: z.literal("retain"),
+      target: BrowserTargetSchema,
+      name: z.string().trim().min(1).max(60),
     })
     .strict(),
   z

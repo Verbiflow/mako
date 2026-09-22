@@ -1,5 +1,8 @@
 import { z } from "zod"
 
+/** Wire compatibility, independent of release and registration file versions. */
+export const BROWSER_EXTENSION_PROTOCOL = 1
+
 export const ExtensionFieldsSchema = z.record(z.string(), z.json())
 const fields = ExtensionFieldsSchema
 export const ExtensionCommandSchema = z.object({
@@ -9,14 +12,27 @@ export const ExtensionCommandSchema = z.object({
   sessionId: z.string().max(200).optional(),
 })
 export const ExtensionHostMessageSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("ready"), profileName: z.string().max(100).optional() }),
-  z.object({ kind: z.literal("request"), client: z.string(), command: ExtensionCommandSchema }),
+  z.object({ kind: z.literal("incompatible"), message: z.string().max(400) }),
+  z.object({
+    kind: z.literal("ready"),
+    protocol: z.number().int().optional(),
+    profileName: z.string().max(100).optional(),
+  }),
+  z.object({
+    kind: z.literal("request"),
+    client: z.string(),
+    command: ExtensionCommandSchema,
+  }),
   z.object({ kind: z.literal("disconnect"), client: z.string() }),
 ])
 export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("profile-name"), profileName: z.string().trim().min(1).max(100) }),
+  z.object({
+    kind: z.literal("profile-name"),
+    profileName: z.string().trim().min(1).max(100),
+  }),
   z.object({
     kind: z.literal("hello"),
+    protocol: z.number().int().optional(),
     extensionVersion: z.string().max(40).optional(),
     profileId: z.string().uuid(),
     profileName: z.string().trim().min(1).max(100).optional(),
@@ -24,9 +40,25 @@ export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
     family: z.literal("chromium"),
     product: z.string().min(1).max(80),
   }),
-  z.object({ kind: z.literal("response"), client: z.string(), id: z.number().int(), result: fields }),
-  z.object({ kind: z.literal("error"), client: z.string(), id: z.number().int(), message: z.string().max(4000) }),
-  z.object({ kind: z.literal("event"), client: z.string(), sessionId: z.string().optional(), method: z.string().max(200), params: fields }),
+  z.object({
+    kind: z.literal("response"),
+    client: z.string(),
+    id: z.number().int(),
+    result: fields,
+  }),
+  z.object({
+    kind: z.literal("error"),
+    client: z.string(),
+    id: z.number().int(),
+    message: z.string().max(4000),
+  }),
+  z.object({
+    kind: z.literal("event"),
+    client: z.string(),
+    sessionId: z.string().optional(),
+    method: z.string().max(200),
+    params: fields,
+  }),
 ])
 export const ExtensionRegistrationSchema = z.object({
   version: z.literal(1),
@@ -51,7 +83,9 @@ export class NativeMessageDecoder {
   private body: Uint8Array | null = null
   private bodySize = 0
   private readonly limit: number
-  constructor(limit: number) { this.limit = limit }
+  constructor(limit: number) {
+    this.limit = limit
+  }
   push(chunk: Uint8Array): string[] {
     const frames: string[] = []
     let offset = 0
@@ -63,11 +97,15 @@ export class NativeMessageDecoder {
         offset += count
         if (this.headerSize < 4) continue
         const size = new DataView(this.header.buffer).getUint32(0, true)
-        if (size < 1 || size > this.limit) throw new Error("Native message exceeds its size limit")
+        if (size < 1 || size > this.limit)
+          throw new Error("Native message exceeds its size limit")
         this.body = new Uint8Array(size)
         this.bodySize = 0
       }
-      const count = Math.min(this.body.byteLength - this.bodySize, chunk.byteLength - offset)
+      const count = Math.min(
+        this.body.byteLength - this.bodySize,
+        chunk.byteLength - offset
+      )
       this.body.set(chunk.subarray(offset, offset + count), this.bodySize)
       this.bodySize += count
       offset += count
