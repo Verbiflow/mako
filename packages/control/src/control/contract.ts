@@ -1,3 +1,4 @@
+import { ControlReadScopeSchema } from "./scope.js"
 import { z } from "zod"
 import {
   ControlCapabilitiesSchema,
@@ -42,9 +43,7 @@ const activateOperationSchema = z
   .object({
     kind: z.literal("activate"),
     ref: z.string().min(1),
-    action: z
-      .enum(["press", "confirm", "pick", "open"])
-      .default("press"),
+    action: z.enum(["press", "confirm", "pick", "open"]).default("press"),
   })
   .strict()
 const pressKeyOperationSchema = z
@@ -119,45 +118,31 @@ export const ControlTargetsRequestSchema = z.discriminatedUnion("kind", [
     .object({ kind: z.literal("windows"), pid: z.number().int().positive() })
     .strict(),
   z.object({ kind: z.literal("browsers") }).strict(),
-  z
-    .object({ kind: z.literal("pages"), browser: z.string().min(1) })
-    .strict(),
+  z.object({ kind: z.literal("pages"), browser: z.string().min(1) }).strict(),
 ])
-export type ControlTargetsRequest = z.infer<
-  typeof ControlTargetsRequestSchema
->
+export type ControlTargetsRequest = z.infer<typeof ControlTargetsRequestSchema>
 
 export const ControlObserveRequestSchema = z
   .object({
+    // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Zod schema composition API.
+    ...ControlReadScopeSchema.shape,
     target: ControlTargetSchema,
     query: z.string().max(200).optional(),
     interactive: z.boolean().default(false),
     max: z.number().int().min(1).max(1000).default(250),
   })
   .strict()
-export type ControlObserveRequest = z.infer<
-  typeof ControlObserveRequestSchema
->
+export type ControlObserveRequest = z.infer<typeof ControlObserveRequestSchema>
 
-export const ControlActRequestSchema = z
+export const ControlDispatchRequestSchema = z
   .object({
     target: ControlTargetSchema.optional(),
     operation: ControlOperationSchema,
   })
   .strict()
-export type ControlActRequest = z.infer<typeof ControlActRequestSchema>
-
-export const ControlWaitRequestSchema = z
-  .object({
-    target: ControlTargetSchema,
-    contains: z.string().min(1).max(2000),
-    hidden: z.boolean().default(false),
-    timeout_ms: z.number().int().min(100).max(60_000).default(10_000),
-    every_ms: z.number().int().min(20).max(2000).default(200),
-    interactive: z.boolean().default(false),
-  })
-  .strict()
-export type ControlWaitRequest = z.infer<typeof ControlWaitRequestSchema>
+export type ControlDispatchRequest = z.infer<
+  typeof ControlDispatchRequestSchema
+>
 
 export const ControlEventsRequestSchema = z
   .object({
@@ -168,16 +153,14 @@ export const ControlEventsRequestSchema = z
   .strict()
 export type ControlEventsRequest = z.infer<typeof ControlEventsRequestSchema>
 
-export const ControlAdvancedRequestSchema = z
+export const ControlRawRequestSchema = z
   .object({
-    backend: z.enum(["native", "page", "system"]),
+    backend: z.enum(["native", "page"]),
     name: z.string().min(1),
     args: z.record(z.string(), z.json()),
   })
   .strict()
-export type ControlAdvancedRequest = z.infer<
-  typeof ControlAdvancedRequestSchema
->
+export type ControlRawRequest = z.infer<typeof ControlRawRequestSchema>
 
 export const TopologyRiskSchema = z.enum(["none", "bounded", "surface"])
 export type TopologyRisk = z.infer<typeof TopologyRiskSchema>
@@ -332,7 +315,12 @@ export function planControlOperation(
       status: "unsupported",
       reasons: ["Window capabilities have not been observed."],
     }
-  const selected = routeFromCapabilities(policy.routes, capabilities)
+  // A native snapshot ref has no proven identity in a page, even when this
+  // process also owns a registered browser endpoint.
+  const selected = routeFromCapabilities(
+    policy.routes.filter((route) => route !== "page"),
+    capabilities
+  )
   if (selected.status !== "selected") return selected
   return {
     ...selected,
