@@ -9,7 +9,14 @@
     <h1>Mako Browser</h1>
     <p role="status">Connecting to Mako…</p>
     <p>Agents work in their own tabs. You can keep using the browser.</p>
-    <button type="button">Pause browser access</button>
+    <button type="button" data-access>Pause browser access</button>
+    <form>
+      <label for="profile-name">Profile name</label>
+      <p class="detail">Use the name shown in your browser, such as Work or Personal.</p>
+      <input id="profile-name" name="profileName" maxlength="100" required placeholder="Profile name">
+      <button type="submit">Save name</button>
+      <p data-name-status role="status"></p>
+    </form>
     <p class="detail">Chrome may show a debugging banner while a tab is controlled. Closing that banner releases the tab.</p>
     <script type="module" src="popup.js"></script>
   </body>

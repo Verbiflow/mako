@@ -4,3 +4,8 @@ h1 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
 p { margin: 8px 0; }
 button { font: inherit; padding: 6px 10px; cursor: pointer; }
 .detail { margin-top: 14px; font-size: 11px; }
+
+form { margin-top: 16px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent); }
+label { font-weight: 600; }
+input { box-sizing: border-box; width: 100%; font: inherit; padding: 7px 9px; margin: 4px 0 10px; }
+form .detail { margin-top: 4px; }

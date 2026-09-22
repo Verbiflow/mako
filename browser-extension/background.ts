@@ -5,6 +5,7 @@ import { ExtensionRouter } from "./router.js"
 const settingsSchema = z.object({
   enabled: z.boolean().default(true),
   profileId: z.string().uuid().optional(),
+  profileName: z.string().trim().min(1).max(100).optional(),
 })
 const toggleSchema = z.object({
   kind: z.literal("set-enabled"),
@@ -13,6 +14,7 @@ const toggleSchema = z.object({
 let port: chrome.runtime.Port | null = null
 let router: ExtensionRouter | null = null
 let connecting = false
+let ready = false
 
 const userAgentDataSchema = z.object({
   brands: z.array(z.object({ brand: z.string(), version: z.string() })),
@@ -42,8 +44,7 @@ function browserProduct(): string {
     browserNavigator.userAgentData?.brands.map(({ brand }) => brand) ?? []
   const product = brands.find(
     (brand) =>
-      !/^(?:Chromium|Not.?A.?Brand)$/i.test(brand) &&
-      brand !== "Google Chrome"
+      !/^(?:Chromium|Not.?A.?Brand)$/i.test(brand) && brand !== "Google Chrome"
   )
   if (product) return product
   if (brands.includes("Google Chrome") || /Chrome\//.test(userAgent))
@@ -60,7 +61,7 @@ async function connect(): Promise<void> {
   connecting = true
   try {
     const settings = settingsSchema.parse(
-      await chrome.storage.local.get(["enabled", "profileId"])
+      await chrome.storage.local.get(["enabled", "profileId", "profileName"])
     )
     if (!settings.enabled) return
     const profileId = settings.profileId ?? crypto.randomUUID()
@@ -79,8 +80,13 @@ async function connect(): Promise<void> {
         return
       }
       const message = parsed.data
-      if (message.kind === "ready") void status("Connected to Mako")
-      else if (message.kind === "request")
+      if (message.kind === "ready") {
+        ready = true
+        void chrome.storage.local.set({
+          resolvedProfileName: message.profileName ?? "",
+        })
+        void status("Connected to Mako")
+      } else if (message.kind === "request")
         void activeRouter.request(message.client, message.command)
       else void activeRouter.disconnect(message.client)
     })
@@ -88,6 +94,7 @@ async function connect(): Promise<void> {
       const failed = Boolean(chrome.runtime.lastError)
       if (port !== next) return
       port = null
+      ready = false
       router = null
       void activeRouter.close()
       void status(
@@ -101,9 +108,10 @@ async function connect(): Promise<void> {
     next.postMessage({
       kind: "hello",
       profileId,
+      profileName: settings.profileName,
       family: "chromium",
       product,
-      label: `${product} profile ${profileId.slice(0, 6)}`,
+      label: product,
     })
   } catch {
     await status("Browser connection could not start. Reconnect to try again.")
@@ -126,6 +134,25 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 })
 chrome.runtime.onMessage.addListener((value, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return
+  const naming = z
+    .object({
+      kind: z.literal("set-profile-name"),
+      profileName: z.string().trim().min(1).max(100),
+    })
+    .safeParse(value)
+  if (naming.success) {
+    void chrome.storage.local
+      .set({ profileName: naming.data.profileName })
+      .then(() => {
+        if (ready && port)
+          port.postMessage({
+            kind: "profile-name",
+            profileName: naming.data.profileName,
+          })
+        respond({ ok: true })
+      })
+    return true
+  }
   const parsed = toggleSchema.safeParse(value)
   if (!parsed.success) return
   void (async () => {
