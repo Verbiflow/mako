@@ -49,7 +49,7 @@ async function fixture(protocol) {
       onUpdateAvailable: event(),
     },
     storage: {
-      local: { get: async () => ({}), set: async () => {} },
+      local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
       session: {
         get: async () => journal,
         set: async (v) => {

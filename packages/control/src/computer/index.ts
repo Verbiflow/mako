@@ -42,6 +42,7 @@ export {
   PASSIVE_ROLES,
   WindowRecordSchema,
   diffLines,
+  nativeRole,
   elementLine,
   elementLines,
   indexSnapshot,

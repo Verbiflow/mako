@@ -12,9 +12,17 @@ const taskSchema = z.object({
 type TaskTab = z.infer<typeof taskSchema>
 const journalSchema = z.array(taskSchema).max(512)
 const journalKey = "makoTaskTabs"
+const epochKey = "makoTaskEpoch"
+const durableKey = "makoTaskJournal"
+const durableSchema = z.object({
+  version: z.literal(1),
+  epoch: z.string().uuid(),
+  tabs: journalSchema,
+})
 
 /** Tab ownership survives worker suspension; old sessions never resume input. */
 export class ExtensionTasks {
+  private epoch: string | undefined
   private readonly tabs = new Map<number, TaskTab>()
   private readonly groups = new Map<
     number,
@@ -38,28 +46,49 @@ export class ExtensionTasks {
     return this.tabs.get(tabId)
   }
   private save() {
+    if (!this.epoch) throw new Error("Browser recovery must finish before accepting a task")
     const value = [...this.tabs.values()].map((tab) => ({ ...tab }))
+    const epoch = this.epoch
     const write = this.writes.then(() =>
-      this.api.storage.session.set({ [journalKey]: value })
+      this.api.storage.local.set({ [durableKey]: { version: 1, epoch, tabs: value } })
     )
     this.writes = write.catch(() => {})
     return write
   }
   async recover() {
-    const stored = await this.api.storage.session.get(journalKey)
-    const previous = journalSchema.parse(stored[journalKey] ?? [])
+    const stored = await this.api.storage.session.get([epochKey, journalKey])
+    const durable = await this.api.storage.local.get(durableKey)
+    const previousEpoch = z.string().uuid().optional().parse(stored[epochKey])
+    const journal = durableSchema.optional().parse(durable[durableKey])
+    const previous = journal?.tabs ?? journalSchema.parse(stored[journalKey] ?? [])
+    const sameSession = !journal || journal.epoch === previousEpoch
+    this.epoch = previousEpoch ?? crypto.randomUUID()
+    await this.api.storage.session.set({ [epochKey]: this.epoch })
     const targets = await this.api.debugger.getTargets()
     let interrupted = 0
     for (const tab of previous) {
-      if (!targets.some((t) => t.id === tab.targetId && t.tabId === tab.tabId))
+      if (!sameSession || !targets.some((t) => t.id === tab.targetId && t.tabId === tab.tabId))
         continue
       await this.api.debugger.detach({ targetId: tab.targetId }).catch(() => {})
       await this.unmute(tab)
       // Preserve pages after interruption for inspection. Never resume a lease.
       interrupted++
     }
+    if (previous.length) {
+      // Across reload/update/browser restart we cannot attest browser identity.
+      // Keep the interruption evidence, but never act on possibly reused IDs.
+      await this.api.storage.local.set({
+        lastRecovery: {
+          at: Date.now(), tabs: previous.length, reconciled: interrupted,
+          needsInspection: previous.length - interrupted,
+          outcome: "unknown",
+          targets: previous.map(({ targetId, tabId, owner }) => ({ targetId, tabId, owner })),
+        },
+      })
+    }
+    await this.api.storage.local.remove(durableKey)
     await this.api.storage.session.remove(journalKey)
-    return interrupted
+    return previous.length
   }
   async track(tab: Omit<TaskTab, "muted">) {
     const previous = this.tabs.get(tab.tabId)
@@ -74,6 +103,14 @@ export class ExtensionTasks {
       return
     this.tabs.set(tab.tabId, { ...tab, muted: previous?.muted ?? false })
     await this.save()
+    if (tab.lifetime === "claimed" && !previous) {
+      const current = await this.api.tabs.get(tab.tabId)
+      if (current.mutedInfo?.muted && current.mutedInfo.extensionId === this.api.runtime.id) {
+        const claimed = this.tabs.get(tab.tabId)!
+        claimed.muted = true
+        await this.unmute(claimed)
+      }
+    }
     if (
       tab.lifetime !== "claimed" &&
       (!previous ||

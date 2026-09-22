@@ -1,6 +1,7 @@
 import { z } from "zod"
 
 const stateSchema = z.object({
+  lastRecovery: z.object({ at: z.number(), tabs: z.number() }).optional(),
   enabled: z.boolean().default(true),
   status: z.string().default("Connecting to Mako…"),
 })
@@ -9,8 +10,10 @@ const button = document.querySelector("[data-access]")
 let enabled = true
 async function render() {
   const state = stateSchema.parse(
-    await chrome.storage.local.get(["enabled", "status"])
+    await chrome.storage.local.get(["enabled", "status", "lastRecovery"])
   )
+  const recovery = document.querySelector<HTMLElement>("[data-recovery]")
+  if (recovery) recovery.hidden = !state.lastRecovery?.tabs
   enabled = state.enabled
   if (statusElement) statusElement.textContent = state.status
   if (button)
@@ -48,4 +51,8 @@ document.querySelector("form")?.addEventListener("submit", (event) => {
       if (message)
         message.textContent = "Name saved. Refresh profiles in Mako Settings."
     })
+})
+
+document.querySelector("[data-dismiss-recovery]")?.addEventListener("click", () => {
+  void chrome.storage.local.remove("lastRecovery").then(render)
 })

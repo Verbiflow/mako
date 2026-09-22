@@ -324,6 +324,7 @@ export function computerHelpers(
       : undefined
     const page = pages?.success ? pages.data[String(selected.pid)] : undefined
     return windowCapabilities({
+      platform: process.platform,
       target: selected,
       documentWindows: documents.length,
       onScreen: current?.is_on_screen ?? null,

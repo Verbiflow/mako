@@ -165,6 +165,16 @@ try {
     false,
     "an unattached temporary window closes when its client disappears"
   )
+  // A task may claim an existing page and then open a child through that page.
+  await request("claim-owner", "Target.attachToTarget", { targetId: "page" })
+  targets.push({ id: "claimed-child", tabId: 40, type: "page", title: "Child", url: "about:blank" })
+  await router.child({ id: 40, openerTabId: 1 })
+  await router.child({ id: 40, openerTabId: 1 })
+  assert.equal(messages.filter(m => m.kind === "event" && m.method === "Target.targetCreated" && m.params.targetInfo.targetId === "claimed-child").length, 1)
+  assert.equal((await request("foreign", "Target.attachToTarget", {targetId: "claimed-child"})).kind, "error")
+  await router.disconnect("claim-owner")
+  assert.ok(targets.some(t => t.id === "page"), "Claimed parent belongs to the user")
+  assert.ok(!targets.some(t => t.id === "claimed-child"), "Child belongs to the task")
   let releaseAttach
   let beganAttach
   const began = new Promise((resolve) => {

@@ -53,21 +53,40 @@ try {
   }
   const target = { pid: 7, window_id: 70 }
   const signal = AbortSignal.timeout(5000)
-  await verifyForegroundInput(driver, target, signal)
+  await verifyForegroundInput(driver, target, signal, "darwin")
   activePid = 8
   const previousReads = windowReads
   await assert.rejects(
-    verifyForegroundInput(driver, target, signal),
+    verifyForegroundInput(driver, target, signal, "darwin"),
     /application is not frontmost/
   )
   assert.equal(windowReads, previousReads)
   activePid = 7
   frontWindow = 71
   await assert.rejects(
-    verifyForegroundInput(driver, target, signal),
+    verifyForegroundInput(driver, target, signal, "darwin"),
     /window is not frontmost/
   )
-  await assert.rejects(verifyForegroundInput(driver, { pid: 7 }, signal))
+  await assert.rejects(verifyForegroundInput(driver, { pid: 7 }, signal, "darwin"))
+  let linuxFocused: boolean | null = true
+  let backend = "x11"
+  const linuxDriver = {
+    callTool: async (name: string) => {
+      assert.equal(name, "list_windows")
+      return { content: [], structuredContent: {
+        platform: "linux", backend,
+        windows: [{ ...target, is_on_screen: true, focused: linuxFocused }],
+      } }
+    },
+  }
+  await verifyForegroundInput(linuxDriver, target, signal, "linux")
+  for (const focus of [false, null]) {
+    linuxFocused = focus
+    await assert.rejects(verifyForegroundInput(linuxDriver, target, signal, "linux"), /could not verify keyboard focus/)
+  }
+  linuxFocused = true
+  backend = "wayland"
+  await assert.rejects(verifyForegroundInput(linuxDriver, target, signal, "linux"), /could not verify keyboard focus/)
   console.log(
     "Foreground guard: accepts matching target; refuses another app, another window, and incomplete identity"
   )

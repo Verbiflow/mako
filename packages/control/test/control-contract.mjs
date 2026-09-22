@@ -7,6 +7,7 @@ import {
 
 const target = { pid: 42, window_id: 7 }
 const page = windowCapabilities({
+  platform: "darwin",
   target,
   documentWindows: 1,
   onScreen: true,
@@ -20,6 +21,7 @@ assert.equal(
 )
 
 const ambiguous = windowCapabilities({
+  platform: "darwin",
   target,
   documentWindows: 2,
   onScreen: true,
@@ -32,6 +34,7 @@ assert.match(keyboard.reason, /2 document windows/)
 assert.equal(selectRoute("page", ambiguous).capability.route, "accessibility")
 
 const hidden = windowCapabilities({
+  platform: "darwin",
   target,
   documentWindows: 1,
   onScreen: false,
@@ -105,3 +108,9 @@ assert.deepEqual(
 )
 
 console.log("control contract ok")
+
+for (const platform of ["linux", "win32", undefined]) {
+  const capabilities = windowCapabilities({ target: { pid: 7, window_id: 70 }, platform, documentWindows: 1, onScreen: true })
+  for (const route of ["window-pointer", "pid-keyboard", "menu"])
+    assert.equal(capabilities.routes.find((entry) => entry.route === route).status, "unavailable")
+}

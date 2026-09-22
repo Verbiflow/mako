@@ -28,8 +28,21 @@ import {
   replacePreparedApplication,
   runningBundleProcesses,
   stopBundleBrowserHosts,
+  stopOrphanedBundleCrashReporters,
   type LocalInstallReceipt,
 } from "../electron/local-update-installer.js"
+
+const crashpad = "/Applications/Mako.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler"
+const reaped: number[] = []
+await stopOrphanedBundleCrashReporters("/Applications/Mako.app", async (command, args) => {
+  if (command === "lsof") return {stdout:`n${args.includes("14") ? "/other/crashpad" : crashpad}\n`, stderr:""}
+  if (args.includes("-axo")) return {stdout:[
+    `11 1 501 ${crashpad}`, `12 400 501 ${crashpad}`, `13 1 502 ${crashpad}`,
+    `14 1 501 ${crashpad}`, `15 1 501 /Applications/Other.app/crashpad`, `16 1 501 ${crashpad}`,
+  ].join("\n"), stderr:""}
+  return {stdout:args.includes("16") ? `16 222 501 ${crashpad}` : `11 1 501 ${crashpad}`, stderr:""}
+}, pid => reaped.push(pid), 501)
+assert.deepEqual(reaped, [11], "Only the unchanged, owned, exact-bundle orphan is signalled")
 
 const root = await mkdtemp(join(tmpdir(), "mako-install-test-"))
 async function fixture(name: string) {

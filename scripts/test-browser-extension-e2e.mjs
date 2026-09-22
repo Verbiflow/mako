@@ -1,3 +1,4 @@
+import { reloadExtensionFixture } from "./extension-reload-fixture.mjs"
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import { spawn, execFile } from "node:child_process"
@@ -187,8 +188,8 @@ async function stop() {
   await exited
   clearTimeout(deadline)
 }
-async function registration() {
-  for (let n = 0; n < 200; n++) {
+async function registration(attempts = 200) {
+  for (let n = 0; n < attempts; n++) {
     const names = (await readdir(registrations).catch(() => [])).filter(
       (name) => name.endsWith(".json")
     )
@@ -233,9 +234,11 @@ try {
   for (let round = 0; round < 2; round++) {
     const browserArgs = [
       `--user-data-dir=${join(root, "profile")}`,
+      ...(process.argv.includes("--recovery") ? ["--remote-debugging-port=0"] : []),
       `--load-extension=${extension},${companion}`,
       `--disable-extensions-except=${extension},${companion}`,
       ...(windowed ? [] : ["--headless=new"]),
+      ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : []),
       "--no-first-run",
       "--no-default-browser-check",
       process.argv.includes("--local-update")
@@ -288,7 +291,9 @@ try {
         "Fixture Developer mode was not enabled"
       )
       const before = value.endpoint
-      const newer = { ...manifest, version: "0.3.1" }
+      const parts = manifest.version.split(".").map(Number)
+      parts[parts.length - 1]++
+      const newer = { ...manifest, version: parts.join(".") }
       await writeFile(join(extension, "manifest.json"), JSON.stringify(newer))
       const deadline = Date.now() + 90000
       while (Date.now() < deadline) {
@@ -304,14 +309,14 @@ try {
         before,
         "Local file update reloads the idle unpacked extension"
       )
-      assert.equal(value.extensionVersion, "0.3.1")
+      assert.equal(value.extensionVersion, newer.version)
       console.log(
         "PASS: unpacked extension detects new local files and reloads while idle without a browser restart"
       )
     }
     assert.equal(
       value.applicationPath,
-      dirname(dirname(dirname(executable))),
+      process.platform === "darwin" ? dirname(dirname(dirname(executable))) : executable,
       "Native messaging resolves actual browser application without a debugging port"
     )
     if (process.argv.includes("--profile-metadata")) {
@@ -733,6 +738,22 @@ try {
         await run({ action: "select", browser: value.id, tab: persistent.tab })
       )
       await run({ action: "close", target: reclaimed })
+      if (process.argv.includes("--recovery") && round === 0) {
+        const interrupted = BrowserTargetSchema.parse(await run({action:"open", browser:value.id, background:true}))
+        await run({action:"navigate",target:interrupted,url:`http://127.0.0.1:${page.address().port}`})
+        await run({action:"click",target:interrupted,at:{x:40,y:20}})
+        await run({action:"type",target:interrupted,text:"before-reload"})
+        const proof=await reloadExtensionFixture(join(root,"profile"),extensionId,()=>registration(1),value.endpoint)
+        value=proof.registration
+        await assert.rejects(run({action:"type",target:interrupted,text:"must-not-replay"}))
+        await run({action:"connect",browser:value.id})
+        const fresh=BrowserTargetSchema.parse(await run({action:"select",browser:value.id,tab:interrupted.tab}))
+        const inspected=await run({action:"evaluate",target:fresh,expression:'document.querySelector("input").value'})
+        assert.equal(inspected.result.value,"before-reload")
+        await run({action:"close",target:fresh})
+        await writeFile(join(root,"forced-reload.json"),JSON.stringify(proof.recovery,null,2))
+        console.log("Forced extension reload: durable interruption, preserved page, stale lease refusal and fresh inspection without replay passed")
+      }
       console.log(
         `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership, disconnect/reconnect lifetime cleanup, cancellation without replay and stale-handle refusal passed`
       )

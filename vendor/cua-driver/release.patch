@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..ad07619 100644
+index a91f724..910276d 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..ad07619 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..ad07619 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..69bb420 100644
+index 351b086..c2cf379 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,10 +128,24 @@ index 351b086..69bb420 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.1"
++version = "0.28.2+mako.3"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/windows.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/windows.rs
+index 49dea44..6e79342 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/windows.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/windows.rs
+@@ -200,7 +200,8 @@ pub struct ElementFrame {
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
+ pub struct WindowElement {
+-    pub element_index: u64,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub element_index: Option<u64>,
+     pub role: String,
+     pub depth: u32,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
 index cfd35d2..c8dec05 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
@@ -192,6 +206,1104 @@ index cfd35d2..c8dec05 100644
      /// Regression for the proven same-PID wrong-target case: target window A
      /// requested while sibling window B is the process's focused/eligible
      /// window. Process-scoped keyboard must refuse before dispatch — an
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs b/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
+index 2695747..1bb1383 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
+@@ -1,26 +1,43 @@
+ use super::AtspiNode;
+ use cua_driver_core::element_cache::{ElementCacheCore, SnapshotPayload};
+ 
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct RetainedElement {
++    pub index: usize,
++    pub identity: Option<super::NodeIdentity>,
++}
++
+ pub struct CachedSnapshot {
+-    elements: Vec<usize>,
++    elements: Vec<RetainedElement>,
+ }
+ 
+ impl CachedSnapshot {
+     pub fn from_nodes(nodes: &[AtspiNode]) -> Self {
+-        let mut elements: Vec<_> = nodes.iter().filter_map(|node| node.element_index).collect();
+-        elements.sort_unstable();
+-        elements.dedup();
++        let mut elements: Vec<_> = nodes
++            .iter()
++            .filter_map(|node| {
++                node.element_index.map(|index| RetainedElement {
++                    index,
++                    identity: node.identity.clone(),
++                })
++            })
++            .collect();
++        elements.sort_unstable_by_key(|element| element.index);
++        elements.dedup_by_key(|element| element.index);
+         Self { elements }
+     }
+ }
+ 
+ impl SnapshotPayload for CachedSnapshot {
+-    type Element = usize;
++    type Element = RetainedElement;
+     fn len(&self) -> usize {
+         self.elements.len()
+     }
+-    fn retain(&self, index: usize) -> Option<usize> {
+-        self.elements.binary_search(&index).ok().map(|_| index)
++    fn retain(&self, index: usize) -> Option<RetainedElement> {
++        self.elements
++            .binary_search_by_key(&index, |element| element.index)
++            .ok()
++            .map(|position| self.elements[position].clone())
+     }
+ }
+ 
+@@ -33,10 +50,15 @@ mod tests {
+ 
+     fn node(index: usize) -> AtspiNode {
+         AtspiNode {
++            identity: None,
+             element_index: Some(index),
+             role: "button".into(),
+             name: None,
+             value: None,
++            value_exact: false,
++            text_truncated: false,
++            focused: false,
++            editable: false,
+             checked: None,
+             enabled: None,
+             selected: None,
+@@ -58,7 +80,7 @@ mod tests {
+                 .resolve_element_args(42, None, Some(&token_for(id, index)), None, None, "click")
+                 .unwrap();
+             assert!(
+-                matches!(resolved, ResolvedElement::Element { element, .. } if element == index)
++                matches!(resolved, ResolvedElement::Element { element, .. } if element.index == index)
+             );
+         }
+         for index in [0, 1, 8, 999] {
+@@ -74,8 +96,8 @@ mod tests {
+         unindexed.element_index = None;
+         let payload = CachedSnapshot::from_nodes(&[node(11), unindexed, node(7), node(11)]);
+         assert_eq!(payload.len(), 2);
+-        assert_eq!(payload.retain(7), Some(7));
+-        assert_eq!(payload.retain(11), Some(11));
++        assert_eq!(payload.retain(7).map(|e| e.index), Some(7));
++        assert_eq!(payload.retain(11).map(|e| e.index), Some(11));
+         assert_eq!(payload.retain(8), None);
+         assert_eq!(payload.retain(0), None);
+     }
+@@ -111,7 +133,7 @@ mod tests {
+             target,
+             ResolvedElement::Element {
+                 window_id: Some(7),
+-                element: 3,
++                element: RetainedElement { index: 3, .. },
+                 ..
+             }
+         ));
+@@ -134,7 +156,7 @@ mod tests {
+             )
+             .unwrap();
+         assert!(
+-            matches!(target, ResolvedElement::Element { window_id: Some(id), element: 11, .. } if id == window)
++            matches!(target, ResolvedElement::Element { window_id: Some(id), element: RetainedElement {index: 11, ..}, .. } if id == window)
+         );
+         assert!(cache
+             .resolve_element_args(42, None, Some(&token_for(high, 11)), None, Some(7), "click")
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/atspi/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/atspi/mod.rs
+index 2d534d1..e2ea8ed 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/atspi/mod.rs
+@@ -14,14 +14,27 @@ use anyhow::Result;
+ pub mod cache;
+ pub mod native;
+ pub use cache::ElementCache;
+-pub use native::ensure_listener_active;
++pub use native::{ensure_listener_active, perform_action_retained, set_value_retained};
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct NodeIdentity {
++    pub bus: String,
++    pub path: String,
++    pub window_bus: String,
++    pub window_path: String,
++}
+ 
+ #[derive(Clone, Debug)]
+ pub struct AtspiNode {
++    pub identity: Option<NodeIdentity>,
+     pub element_index: Option<usize>,
+     pub role: String,
+     pub name: Option<String>,
+     pub value: Option<String>,
++    pub value_exact: bool,
++    pub text_truncated: bool,
++    pub focused: bool,
++    pub editable: bool,
+     /// Checked state when the accessibility backend exposes one for a toggle.
+     pub checked: Option<bool>,
+     /// Enabled state when the accessibility backend returned a state set.
+@@ -45,6 +58,7 @@ pub struct AtspiNode {
+ }
+ 
+ pub struct AtspiTreeResult {
++    pub complete: bool,
+     pub tree_markdown: String,
+     pub nodes: Vec<AtspiNode>,
+     pub bounds: Vec<(usize, i32, i32, u32, u32)>,
+@@ -87,6 +101,7 @@ pub(crate) fn walk_tree_for_recording(
+                 nodes: walked.nodes,
+                 bounds: walked.bounds,
+                 trusted: true,
++                complete: walked.complete,
+                 degraded_reason: None,
+                 window_scoped: walked.window_scoped,
+             };
+@@ -135,6 +150,7 @@ pub fn walk_tree_bounded(
+                         nodes: walked.nodes,
+                         bounds: walked.bounds,
+                         trusted: true,
++                        complete: walked.complete,
+                         degraded_reason: None,
+                         window_scoped: walked.window_scoped,
+                     };
+@@ -276,6 +292,7 @@ fn walk_via_x11_properties(xid: u64, query: Option<&str>) -> AtspiTreeResult {
+                 nodes: vec![],
+                 bounds: vec![],
+                 trusted: false,
++                complete: false,
+                 degraded_reason: None,
+                 window_scoped: false,
+             }
+@@ -294,6 +311,7 @@ fn walk_via_x11_properties(xid: u64, query: Option<&str>) -> AtspiTreeResult {
+     let mut nodes = vec![];
+ 
+     let root_node = AtspiNode {
++        identity: None,
+         element_index: Some(0),
+         role: "window".into(),
+         name: if title.is_empty() {
+@@ -302,6 +320,10 @@ fn walk_via_x11_properties(xid: u64, query: Option<&str>) -> AtspiTreeResult {
+             Some(title.clone())
+         },
+         value: None,
++        value_exact: false,
++        text_truncated: false,
++        focused: false,
++        editable: false,
+         checked: None,
+         enabled: None,
+         selected: None,
+@@ -334,6 +356,7 @@ fn walk_via_x11_properties(xid: u64, query: Option<&str>) -> AtspiTreeResult {
+         nodes,
+         bounds: vec![],
+         trusted: false,
++        complete: false,
+         // Built by reading this exact window's X11 properties, so it describes
+         // one window by construction — but `trusted: false` still bars it from
+         // proving anything a caller acts on.
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs b/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
+index 1e48de5..f097a76 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
+@@ -21,7 +21,7 @@ use atspi::proxy::accessible::AccessibleProxy;
+ use atspi::proxy::proxy_ext::ProxyExt;
+ use atspi::{CoordType, Interface, State, StateSet};
+ 
+-use super::AtspiNode;
++use super::{AtspiNode, NodeIdentity};
+ 
+ /// Per-call D-Bus timeout: a single unresponsive accessible (common in large,
+ /// lazily-built trees like Chromium's) must not stall the whole walk.
+@@ -228,12 +228,16 @@ mod listener_startup_tests {
+ /// A node discovered during the pre-order walk, with its proxy retained so the
+ /// per-index operations can act on it without re-walking the tree.
+ struct Visited<'a> {
++    modal: bool,
++    object: RawObjectRef,
+     depth: usize,
+     role: String,
+     /// Display text: the accessible `name`, or — for editable/text widgets that
+     /// expose no name — the Text-interface content (where typed text lives).
+     name: String,
+     value: Option<String>,
++    value_exact: bool,
++    text_truncated: bool,
+     checked: Option<bool>,
+     enabled: Option<bool>,
+     selected: Option<bool>,
+@@ -531,7 +535,7 @@ async fn collect_visited<'a>(
+ ) -> Result<Option<Vec<Visited<'a>>>> {
+     collect_visited_bounded(conn, pid, 0, None, None)
+         .await
+-        .map(|walked| walked.map(|(visited, _)| visited))
++        .map(|walked| walked.map(|(visited, _, _)| visited))
+ }
+ 
+ /// Screen-space distance between an AT-SPI frame's extents and a native
+@@ -689,7 +693,7 @@ async fn collect_visited_bounded<'a>(
+     xid: u64,
+     max_elements: Option<usize>,
+     max_depth: Option<usize>,
+-) -> Result<Option<(Vec<Visited<'a>>, Option<usize>)>> {
++) -> Result<Option<(Vec<Visited<'a>>, Option<usize>, bool)>> {
+     let app = match app_for_pid(conn, pid).await? {
+         Some(a) => a,
+         None => return Ok(None),
+@@ -703,12 +707,16 @@ async fn collect_visited_bounded<'a>(
+     // chrome. `frame_ordinal` is the seed's position in `get_children()` order
+     // and is likewise inherited, so every node carries the identity of the
+     // top-level window it belongs to.
++    let mut complete = true;
+     let seeds: Vec<RawObjectRef> = match call(app.get_children()).await {
+         Some(Ok(children)) => children
+             .into_iter()
+             .filter_map(|child| RawObjectRef::from_atspi(&child))
+             .collect(),
+-        _ => Vec::new(),
++        _ => {
++            complete = false;
++            Vec::new()
++        }
+     };
+ 
+     // Resolve which seed is the caller's window before walking, from the same
+@@ -751,10 +759,12 @@ async fn collect_visited_bounded<'a>(
+     while let Some((oref, depth, inherited_web_doc, frame_ordinal)) = stack.pop() {
+         if budget == 0 {
+             dlog!("node budget exhausted; truncating walk");
++            complete = false;
+             break;
+         }
+         if std::time::Instant::now() >= deadline {
+             dlog!("collect_visited time budget exhausted; returning partial walk");
++            complete = false;
+             break;
+         }
+         budget -= 1;
+@@ -774,6 +784,7 @@ async fn collect_visited_bounded<'a>(
+             Some(Ok(a)) => a,
+             Some(Err(error)) => {
+                 dlog!("  accessible_for failed: {error:#}");
++                complete = false;
+                 continue;
+             }
+             None => {
+@@ -783,8 +794,10 @@ async fn collect_visited_bounded<'a>(
+                         "{} consecutive AT-SPI timeouts (accessible_for); app unresponsive, bailing walk",
+                         consecutive_timeouts
+                     );
++                    complete = false;
+                     break;
+                 }
++                complete = false;
+                 continue;
+             }
+         };
+@@ -799,6 +812,7 @@ async fn collect_visited_bounded<'a>(
+             // A completed-but-errored call is node-specific; keep walking.
+             Some(Err(error)) => {
+                 dlog!("  get_interfaces failed: {error:#}");
++                complete = false;
+                 continue;
+             }
+             // A timeout means the app didn't answer in CALL_TIMEOUT. A run of
+@@ -810,8 +824,10 @@ async fn collect_visited_bounded<'a>(
+                         "{} consecutive AT-SPI timeouts; app unresponsive, bailing walk",
+                         consecutive_timeouts
+                     );
++                    complete = false;
+                     break;
+                 }
++                complete = false;
+                 continue;
+             }
+         };
+@@ -830,6 +846,12 @@ async fn collect_visited_bounded<'a>(
+             call(acc.get_state()),
+             call(raw_children(zconn, &oref)),
+         );
++        if !matches!(&role_r, Some(Ok(_)))
++            || !matches!(&name_r, Some(Ok(_)))
++            || !matches!(&state_r, Some(Ok(_)))
++        {
++            complete = false;
++        }
+         let role = match role_r {
+             Some(Ok(r)) => r,
+             _ => String::new(),
+@@ -876,6 +898,8 @@ async fn collect_visited_bounded<'a>(
+         // and drop the borrow before `acc` moves into `visited`.
+         let mut actions: Vec<String> = Vec::new();
+         let mut value: Option<String> = None;
++        let mut value_exact = false;
++        let mut text_truncated = has_text;
+         let mut text_content = String::new();
+         if has_action || has_value || has_text {
+             if let Some(Ok(proxies)) = call(acc.proxies()).await {
+@@ -909,15 +933,22 @@ async fn collect_visited_bounded<'a>(
+                 // lives; `name` is usually empty for such widgets.
+                 if has_text {
+                     if let Some(Ok(tp)) = call(proxies.text()).await {
+-                        let count = call(tp.character_count())
+-                            .await
+-                            .and_then(|r| r.ok())
+-                            .unwrap_or(0);
+-                        if count > 0 {
+-                            let end = count.min(4096);
+-                            if let Some(Ok(t)) = call(tp.get_text(0, end)).await {
+-                                text_content = t;
++                        if let Some(Ok(count)) = call(tp.character_count()).await {
++                            let end = count.clamp(0, 100_000);
++                            if let Some(Ok(text)) = call(tp.get_text(0, end)).await {
++                                text_truncated =
++                                    count > end || text.chars().count() != end as usize;
++                                text_content = text.clone();
++                                if has_editable {
++                                    value = Some(text);
++                                    value_exact =
++                                        !text_truncated && !role_lower.contains("password");
++                                }
++                            } else {
++                                text_truncated = true;
+                             }
++                        } else {
++                            text_truncated = true;
+                         }
+                     }
+                 }
+@@ -925,7 +956,7 @@ async fn collect_visited_bounded<'a>(
+         }
+ 
+         // Surface Text content as the display name when the widget has no name.
+-        if name.trim().is_empty() && !text_content.trim().is_empty() {
++        if !has_editable && name.trim().is_empty() && !text_content.trim().is_empty() {
+             name = text_content;
+         }
+ 
+@@ -936,6 +967,9 @@ async fn collect_visited_bounded<'a>(
+         // Honor max_depth (#22865): skip enqueueing descendants whose depth
+         // would exceed the cap.
+         let descend = max_depth.map(|d| depth + 1 <= d).unwrap_or(true);
++        if !descend && !matches!(&children_r, Some(Ok(children)) if children.is_empty()) {
++            complete = false;
++        }
+         if descend {
+             match children_r {
+                 Some(Ok(children)) => {
+@@ -943,16 +977,26 @@ async fn collect_visited_bounded<'a>(
+                         stack.push((c, depth + 1, child_in_web_doc, frame_ordinal));
+                     }
+                 }
+-                Some(Err(error)) => dlog!("  get_children failed: {error:#}"),
+-                None => dlog!("  get_children timed out"),
++                Some(Err(error)) => {
++                    complete = false;
++                    dlog!("  get_children failed: {error:#}");
++                }
++                None => {
++                    complete = false;
++                    dlog!("  get_children timed out");
++                }
+             }
+         }
+ 
+         visited.push(Visited {
++            modal: matches!(state_r.as_ref(), Some(Ok(state)) if state.contains(State::Modal)),
++            object: oref.clone(),
+             depth,
+             role,
+             name,
+             value,
++            value_exact,
++            text_truncated,
+             checked,
+             enabled,
+             selected,
+@@ -970,7 +1014,7 @@ async fn collect_visited_bounded<'a>(
+     }
+ 
+     dlog!("walked pid {pid}: {} node(s)", visited.len());
+-    Ok(Some((visited, scoped_frame)))
++    Ok(Some((visited, scoped_frame, complete)))
+ }
+ 
+ /// Render visited nodes into the markdown + node list `walk_tree` returns.
+@@ -1036,6 +1080,15 @@ fn render(visited: &[Visited<'_>], only_frame: Option<usize>) -> (String, Vec<At
+                 name = v.name,
+             ));
+             nodes.push(AtspiNode {
++                identity: visited
++                    .iter()
++                    .find(|root| root.depth == 0 && root.frame_ordinal == v.frame_ordinal)
++                    .map(|root| NodeIdentity {
++                        bus: v.object.name.clone(),
++                        path: v.object.path.clone(),
++                        window_bus: root.object.name.clone(),
++                        window_path: root.object.path.clone(),
++                    }),
+                 element_index: Some(idx),
+                 role: v.role.clone(),
+                 name: if v.name.is_empty() {
+@@ -1043,7 +1096,11 @@ fn render(visited: &[Visited<'_>], only_frame: Option<usize>) -> (String, Vec<At
+                 } else {
+                     Some(v.name.clone())
+                 },
+-                value: v.value.clone().filter(|s| !s.is_empty()),
++                value: v.value.clone(),
++                value_exact: v.value_exact,
++                text_truncated: v.text_truncated,
++                focused: v.focused,
++                editable: v.has_editable,
+                 checked: v.checked,
+                 enabled: v.enabled,
+                 selected: v.selected,
+@@ -1064,12 +1121,38 @@ fn render(visited: &[Visited<'_>], only_frame: Option<usize>) -> (String, Vec<At
+                 parent_at_depth[deeper] = None;
+             }
+             idx += 1;
+-        } else if emit && !v.name.is_empty() {
+-            md.push_str(&format!(
+-                "{indent}- {role} = \"{name}\"\n",
+-                role = v.role,
+-                name = v.name,
+-            ));
++        } else if emit {
++            if !v.name.is_empty() {
++                md.push_str(&format!("{indent}- {} = {:?}\n", v.role, v.name));
++            }
++            nodes.push(AtspiNode {
++                identity: visited
++                    .iter()
++                    .find(|root| root.depth == 0 && root.frame_ordinal == v.frame_ordinal)
++                    .map(|root| NodeIdentity {
++                        bus: v.object.name.clone(),
++                        path: v.object.path.clone(),
++                        window_bus: root.object.name.clone(),
++                        window_path: root.object.path.clone(),
++                    }),
++                element_index: None,
++                role: v.role.clone(),
++                name: Some(v.name.clone()),
++                value: v.value.clone(),
++                value_exact: v.value_exact,
++                text_truncated: v.text_truncated,
++                focused: v.focused,
++                editable: v.has_editable,
++                checked: v.checked,
++                enabled: v.enabled,
++                selected: v.selected,
++                description: None,
++                actions: v.actions.clone(),
++                element_key: 0,
++                depth: v.depth,
++                parent_element_index,
++                in_web_content: v.in_web_doc,
++            });
+         }
+     }
+ 
+@@ -1152,6 +1235,7 @@ pub fn walk_tree(pid: u32) -> Result<Option<(String, Vec<AtspiNode>)>> {
+ /// One accessibility snapshot, plus whether it was provably narrowed to the
+ /// caller's window.
+ pub struct WalkedTree {
++    pub complete: bool,
+     pub markdown: String,
+     pub nodes: Vec<AtspiNode>,
+     pub bounds: Vec<(usize, i32, i32, u32, u32)>,
+@@ -1197,7 +1281,7 @@ pub(super) fn walk_tree_bounded_with_timeout(
+                 return Ok(None);
+             }
+         };
+-        let Some((visited, scoped_frame)) = walked else {
++        let Some((visited, scoped_frame, complete)) = walked else {
+             return Ok(None);
+         };
+         let walk_elapsed = walk_started.elapsed();
+@@ -1235,6 +1319,7 @@ pub(super) fn walk_tree_bounded_with_timeout(
+             bounds
+         };
+         Ok(Some(WalkedTree {
++            complete,
+             markdown,
+             nodes,
+             bounds,
+@@ -1891,17 +1976,74 @@ pub fn invoke_menu_path(pid: u32, path: &[String]) -> Result<()> {
+     )
+ }
+ 
++/// A snapshot's bus/path and owning window survive sibling reordering. A
++/// destroyed or moved object is refused; labels and ordinal positions cannot
++/// retarget a mutation.
++fn retained_target<'a, 'b>(
++    visited: &'b [Visited<'a>],
++    idx: usize,
++    identity: Option<&NodeIdentity>,
++) -> Result<&'b Visited<'a>> {
++    if let Some(identity) = identity {
++        let target = visited
++            .iter()
++            .find(|v| v.object.name == identity.bus && v.object.path == identity.path)
++            .ok_or_else(|| {
++                anyhow!("stale_element_identity: observed accessibility object no longer exists")
++            })?;
++        let root = visited
++            .iter()
++            .find(|v| v.depth == 0 && v.frame_ordinal == target.frame_ordinal)
++            .ok_or_else(|| anyhow!("stale_element_identity: owning window is unavailable"))?;
++        if root.object.name != identity.window_bus
++            || root.object.path != identity.window_path
++            || !is_indexable(target)
++        {
++            return Err(anyhow!(
++                "stale_element_identity: observed control moved or is no longer operable"
++            ));
++        }
++        if visited
++            .iter()
++            .any(|node| node.depth == 0 && node.modal && node.frame_ordinal != target.frame_ordinal)
++        {
++            return Err(anyhow!("modal_window_blocks_target: inspect the application's modal window before changing its parent"));
++        }
++        return Ok(target);
++    }
++    visited
++        .iter()
++        .filter(|v| is_indexable(v))
++        .nth(idx)
++        .ok_or_else(|| anyhow!("element {idx} not found"))
++}
++
+ pub fn perform_action(pid: u32, idx: usize) -> Result<(String, bool)> {
++    perform_action_resolved(pid, idx, None)
++}
++
++pub fn perform_action_retained(pid: u32, identity: &NodeIdentity) -> Result<(String, bool)> {
++    perform_action_resolved(pid, 0, Some(identity))
++}
++
++fn perform_action_resolved(
++    pid: u32,
++    idx: usize,
++    identity: Option<&NodeIdentity>,
++) -> Result<(String, bool)> {
+     bounded(
+         async {
+             let conn = shared_connection().await?;
+-            let visited = collect_visited(conn, pid)
+-                .await?
+-                .ok_or_else(|| anyhow!("no AT-SPI application for pid {pid}"))?;
+-            let action_nodes: Vec<&Visited> = visited.iter().filter(|v| is_indexable(v)).collect();
+-            let target = action_nodes.get(idx).ok_or_else(|| {
+-                anyhow!("element {idx} not found (total: {})", action_nodes.len())
+-            })?;
++            let (visited, _, complete) =
++                collect_visited_bounded(conn, pid, 0, None, None)
++                    .await?
++                    .ok_or_else(|| anyhow!("no AT-SPI application for pid {pid}"))?;
++            if identity.is_some() && !complete {
++                return Err(anyhow!(
++                    "incomplete_accessibility_context: no semantic action sent"
++                ));
++            }
++            let target = retained_target(&visited, idx, identity)?;
+ 
+             // Suspected no-op: actuating `do_action(0)` on a passive display role
+             // (a `label`/`static`/`image` indexed only for its Value interface) or a
+@@ -2645,7 +2787,7 @@ pub fn perform_action_at_screen_point(
+     bounded(
+         async {
+             let conn = shared_connection().await?;
+-            let (visited, scoped_frame) =
++            let (visited, scoped_frame, _) =
+                 match collect_visited_bounded(conn, pid, xid, None, None).await? {
+                     Some(walked) => walked,
+                     None => return Ok(None),
+@@ -2730,16 +2872,32 @@ fn select_click_target(
+ }
+ 
+ pub fn set_value(pid: u32, idx: usize, value: &str) -> Result<()> {
++    set_value_resolved(pid, idx, None, value)
++}
++
++pub fn set_value_retained(pid: u32, identity: &NodeIdentity, value: &str) -> Result<()> {
++    set_value_resolved(pid, 0, Some(identity), value)
++}
++
++fn set_value_resolved(
++    pid: u32,
++    idx: usize,
++    identity: Option<&NodeIdentity>,
++    value: &str,
++) -> Result<()> {
+     bounded(
+         async {
+             let conn = shared_connection().await?;
+-            let visited = collect_visited(conn, pid)
+-                .await?
+-                .ok_or_else(|| anyhow!("no AT-SPI application for pid {pid}"))?;
+-            let action_nodes: Vec<&Visited> = visited.iter().filter(|v| is_indexable(v)).collect();
+-            let target = action_nodes.get(idx).ok_or_else(|| {
+-                anyhow!("element {idx} not found (total: {})", action_nodes.len())
+-            })?;
++            let (visited, _, complete) =
++                collect_visited_bounded(conn, pid, 0, None, None)
++                    .await?
++                    .ok_or_else(|| anyhow!("no AT-SPI application for pid {pid}"))?;
++            if identity.is_some() && !complete {
++                return Err(anyhow!(
++                    "incomplete_accessibility_context: no semantic action sent"
++                ));
++            }
++            let target = retained_target(&visited, idx, identity)?;
+ 
+             let proxies = target
+                 .acc
+@@ -2758,16 +2916,11 @@ pub fn set_value(pid: u32, idx: usize, value: &str) -> Result<()> {
+                 if et.set_text_contents(value).await.unwrap_or(false) {
+                     return Ok(());
+                 }
+-                // Some toolkits reject SetTextContents but accept an insert at the
+-                // caret offset; clear-then-insert as a fallback.
+-                let off = match proxies.text().await {
+-                    Ok(tp) => tp.caret_offset().await.unwrap_or(0),
+-                    Err(_) => 0,
+-                };
+-                let len = value.chars().count() as i32;
+-                if et.insert_text(off, value, len).await.unwrap_or(false) {
+-                    return Ok(());
+-                }
++                // A rejected replacement must not turn into an insertion: the
++                // first call may have partially changed the field. Reobserve.
++                return Err(anyhow!(
++                    "EditableText replacement was not confirmed; no fallback input sent"
++                ));
+             }
+             if target.has_value {
+                 let v: f64 = value
+@@ -2873,7 +3026,7 @@ pub fn get_element_bounds_for_window(
+     bounded(
+         async {
+             let conn = shared_connection().await?;
+-            let (visited, scoped_frame) = collect_visited_bounded(conn, pid, xid, None, None)
++            let (visited, scoped_frame, _) = collect_visited_bounded(conn, pid, xid, None, None)
+                 .await?
+                 .context("no AT-SPI application")?;
+             let scope =
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/browser_consent_ui.rs b/libs/cua-driver/rust/crates/platform-linux/src/browser_consent_ui.rs
+index 64ec8ab..b7fa27d 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/browser_consent_ui.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/browser_consent_ui.rs
+@@ -355,10 +355,15 @@ mod tests {
+ 
+     fn node(role: &str, name: &str, actions: &[&str]) -> AtspiNode {
+         AtspiNode {
++            identity: None,
+             element_index: (!actions.is_empty()).then_some(7),
+             role: role.to_owned(),
+             name: Some(name.to_owned()),
+             value: None,
++            value_exact: false,
++            text_truncated: false,
++            focused: false,
++            editable: false,
+             checked: None,
+             enabled: None,
+             selected: None,
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/browser_setup_ui.rs b/libs/cua-driver/rust/crates/platform-linux/src/browser_setup_ui.rs
+index 7f1d815..8d3d748 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/browser_setup_ui.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/browser_setup_ui.rs
+@@ -675,10 +675,15 @@ mod tests {
+ 
+     fn node(role: &str, name: &str, value: Option<&str>, actions: &[&str]) -> AtspiNode {
+         AtspiNode {
++            identity: None,
+             element_index: (!actions.is_empty()).then_some(0),
+             role: role.to_owned(),
+             name: Some(name.to_owned()),
+             value: value.map(str::to_owned),
++            value_exact: false,
++            text_truncated: false,
++            focused: false,
++            editable: false,
+             checked: None,
+             enabled: None,
+             selected: None,
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
+index 29a4d2d..c4ac2f7 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
+@@ -1119,6 +1119,16 @@ pub fn with_x11_foreground<T>(
+     settle_ms: u64,
+     body: impl FnOnce() -> Result<T>,
+ ) -> Result<T> {
++    // Embedded Mako requires pre-existing exact focus. Do not activate/restore
++    // behind the caller's back if a user moved focus after host validation.
++    if std::env::var_os("CUA_DRIVER_REQUIRE_FOCUSED_TARGET").as_deref()
++        == Some(std::ffi::OsStr::new("1"))
++    {
++        if crate::x11::focused_window(xid) != Some(true) {
++            bail!("foreground_unavailable: exact X11 target is not focused; no input sent");
++        }
++        return body();
++    }
+     let display = unsafe { x11::xlib::XOpenDisplay(ptr::null()) };
+     if display.is_null() {
+         bail!("foreground_unavailable: cannot open DISPLAY to verify exact X11 input focus");
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
+index d835bf1..82d4896 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
+@@ -460,8 +460,7 @@ impl Tool for ListWindowsTool {
+                 w.xid, w.pid, w.title, w.width, w.height, w.x, w.y
+             ));
+         }
+-        let structured =
+-            json!({ "windows": windows.iter().map(window_record_json).collect::<Vec<_>>() });
++        let structured = json!({ "platform": "linux", "backend": if crate::wayland::is_wayland() { "wayland" } else { "x11" }, "windows": windows.iter().map(window_record_json).collect::<Vec<_>>() });
+         ToolResult::text(lines.join("\n")).with_structured(structured)
+     }
+ }
+@@ -477,6 +476,7 @@ impl Tool for ListWindowsTool {
+ ///
+ fn window_record_json(w: &crate::x11::WindowInfo) -> Value {
+     json!({
++        "focused": if crate::wayland::is_wayland() { None } else { crate::x11::focused_window(w.xid) },
+         "window_id": w.xid,
+         "pid": w.pid,
+         "app_name": w.app_name,
+@@ -576,13 +576,12 @@ fn fold_max_dimension(ceiling: u32, per_call: Option<u32>) -> u32 {
+ }
+ 
+ /// Build a single structured element entry for `get_window_state`.
+-/// Returns `None` when the node has no `element_index` (non-actionable rows).
++/// Non-actionable containers remain readable without receiving action tokens.
+ fn build_element_entry(
+     n: &crate::atspi::AtspiNode,
+     snapshot_id: Option<u32>,
+     bounds: Option<(i32, i32, u32, u32)>,
+ ) -> Option<serde_json::Value> {
+-    let idx = n.element_index?;
+     // `label` mirrors what a human reading the markdown row would call this
+     // element: name first, then value, then description.
+     let label = n
+@@ -591,12 +590,15 @@ fn build_element_entry(
+         .or_else(|| n.value.clone())
+         .or_else(|| n.description.clone());
+     let mut entry = json!({
+-        "element_index": idx,
+         "role": n.role,
+         "depth": n.depth,
+     });
+-    if let Some(snapshot_id) = snapshot_id {
+-        entry["element_token"] = json!(cua_driver_core::element_token::token_for(snapshot_id, idx));
++    if let Some(idx) = n.element_index {
++        entry["element_index"] = json!(idx);
++        if let Some(snapshot_id) = snapshot_id {
++            entry["element_token"] =
++                json!(cua_driver_core::element_token::token_for(snapshot_id, idx));
++        }
+     }
+     if n.in_web_content {
+         entry["in_web_content"] = json!(true);
+@@ -609,9 +611,13 @@ fn build_element_entry(
+     // otherwise hide the text from a caller reading the structured side,
+     // leaving it only in tree_markdown. See the macOS get_window_state builder
+     // for the rationale.
+-    if let Some(value) = n.value.clone().filter(|v| !v.is_empty()) {
++    if let Some(value) = n.value.clone() {
+         entry["value"] = json!(value);
+     }
++    entry["value_exact"] = json!(n.value_exact);
++    entry["text_truncated"] = json!(n.text_truncated);
++    entry["focused"] = json!(n.focused);
++    entry["editable"] = json!(n.editable);
+     if let Some(enabled) = n.enabled {
+         entry["enabled"] = json!(enabled);
+     }
+@@ -878,19 +884,16 @@ impl Tool for GetWindowStateTool {
+                 if let Some(tr) = tree_opt {
+                     let source_trusted = tr.trusted;
+                     let source_degraded_reason = tr.degraded_reason.clone();
+-                    let count = tr
+-                        .nodes
+-                        .iter()
+-                        .filter(|n| n.element_index.is_some())
+-                        .count();
++                    let count = tr.nodes.len();
+                     let header = format!("window_id={xid} pid={pid} elements={count}\n\n");
+                     content.push(cua_driver_core::protocol::Content::text(
+                         header + &tr.tree_markdown,
+                     ));
+                     structured["element_count"] = json!(count);
+-                    // AT-SPI's current bounded walker does not surface an
+-                    // exhaustive-walk proof. Keep negative existence unknown.
+-                    structured["elements_complete"] = json!(false);
++                    // Only a completed walk of the exact window proves coverage.
++                    structured["elements_complete"] =
++                        json!(tr.complete && tr.window_scoped && query.is_none());
++                    structured["truncated"] = json!(tr.nodes.iter().any(|n| n.text_truncated));
+                     structured["tree_markdown"] = json!(tr.tree_markdown);
+ 
+                     let target_scoped = !(crate::wayland::is_wayland()
+@@ -926,7 +929,8 @@ impl Tool for GetWindowStateTool {
+                             build_element_entry(
+                                 n,
+                                 snapshot_id,
+-                                bounds_by_idx.get(&n.element_index?).copied(),
++                                n.element_index
++                                    .and_then(|idx| bounds_by_idx.get(&idx).copied()),
+                             )
+                         })
+                         .collect();
+@@ -1110,10 +1114,15 @@ mod get_window_state_actions_tests {
+ 
+     fn node(actions: Vec<String>) -> AtspiNode {
+         AtspiNode {
++            identity: None,
+             element_index: Some(1),
+             role: "button".to_owned(),
+             name: Some("ok".to_owned()),
+             value: None,
++            value_exact: false,
++            text_truncated: false,
++            focused: false,
++            editable: false,
+             checked: None,
+             enabled: Some(true),
+             selected: None,
+@@ -3402,6 +3411,9 @@ impl Tool for ClickTool {
+             Ok(v) => v,
+             Err(e) => return e,
+         };
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+         let count = args.u64_or("count", 1) as usize;
+         let isolated_background = isolated_hyprland_background(delivery);
+@@ -3450,6 +3462,23 @@ impl Tool for ClickTool {
+             cua_driver_core::element_token::ResolvedElement::None => window_id_arg,
+         };
+ 
++        if element_click_prefers_ax(false, button, count, !modifiers.is_empty()) {
++            if let cua_driver_core::element_token::ResolvedElement::Element { element, .. } =
++                &resolved
++            {
++                let Some(identity) = element.identity.clone() else {
++                    return ToolResult::error("click requires a retained accessibility object; observe the exact window again");
++                };
++                return match tokio::task::spawn_blocking(move || crate::atspi::perform_action_retained(pid, &identity)).await {
++                    Ok(Ok((action, suspected_noop))) => ToolResult::text(format!("Performed accessibility action {action}")).with_structured(
++                        json!({"path":"ax", "verified":false, "effect":if suspected_noop {"suspected_noop"} else {"unverifiable"}})
++                    ),
++                    Ok(Err(error)) => ToolResult::error(format!("Accessibility click was not confirmed; no fallback input sent: {error}")),
++                    Err(error) => ToolResult::error(format!("Accessibility click outcome unknown: {error}")),
++                };
++            }
++        }
++
+         if let Some(idx) = elem_idx_resolved {
+             let xid_hint = window_id_resolved;
+             // Resolve the element's screen center + its window FIRST, so the
+@@ -3981,6 +4010,49 @@ async fn focus_nested_inject_target(
+ 
+ // ── type_text ─────────────────────────────────────────────────────────────────
+ 
++/// The embedding host can require an already-focused exact window. Check
++/// before AT-SPI, pixel focus, clipboard, or keyboard routes can mutate state.
++fn require_focused_delivery(state: &ToolState, args: &Value) -> Option<ToolResult> {
++    use cua_driver_core::tool_args::ArgsExt;
++    if std::env::var_os("CUA_DRIVER_REQUIRE_FOCUSED_TARGET").as_deref()
++        != Some(std::ffi::OsStr::new("1"))
++        || !crate::input::delivery::DeliveryMode::from_args(args).is_foreground()
++    {
++        return None;
++    }
++    let pid = match args.require_u32("pid") {
++        Ok(pid) => pid,
++        Err(error) => return Some(error),
++    };
++    let mut window = args.opt_u64("window_id");
++    if window.is_none() {
++        match state.element_cache.resolve_element_args(
++            pid as i32,
++            args.opt_u64("element_index").map(|v| v as usize),
++            args.opt_str("element_token").as_deref(),
++            args.opt_str("snapshot_id").as_deref(),
++            None,
++            "foreground input",
++        ) {
++            Ok(cua_driver_core::element_token::ResolvedElement::Element { window_id, .. }) => {
++                window = window_id
++            }
++            Err(error) => return Some(error),
++            _ => {}
++        }
++    }
++    let verified = !crate::wayland::is_wayland()
++        && window.is_some_and(|xid| {
++            crate::x11::list_windows(Some(pid))
++                .iter()
++                .any(|w| w.xid == xid && w.is_on_screen)
++                && crate::x11::focused_window(xid) == Some(true)
++        });
++    (!verified).then(|| {
++        ToolResult::error("foreground_unavailable: exact target is not focused; no input sent")
++    })
++}
++
+ pub struct TypeTextTool {
+     state: Arc<ToolState>,
+ }
+@@ -4093,6 +4165,9 @@ impl Tool for TypeTextTool {
+                 }
+             }
+         };
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+         if isolated_hyprland_background(delivery)
+             && resolved_elem_idx.is_none()
+@@ -4824,6 +4899,9 @@ impl Tool for PressKeyTool {
+         // Reuses click's translation + delivery_mode; after it, deliver via the plain
+         // background path (the focus-click already handled fronting when fg). Pass x,y
+         // (no element_index) for Chromium/Electron surfaces the AX path can't focus.
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+         if isolated_hyprland_background(delivery) {
+             if xid_opt.is_none() {
+@@ -5222,6 +5300,9 @@ impl Tool for HotkeyTool {
+         let key_display = format!("{}+{}", mods.join("+"), key);
+         let key_for_wayland = key.clone();
+         let mods_for_wayland = mods.clone();
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+ 
+         if isolated_hyprland_background(delivery) {
+@@ -5524,6 +5605,15 @@ impl Tool for SetValueTool {
+                 "set_value requires element_index or element_token to address the target element.",
+             ),
+         };
++        let identity = match &resolved {
++            cua_driver_core::element_token::ResolvedElement::Element { element, .. } => {
++                element.identity.clone()
++            }
++            _ => None,
++        };
++        let Some(identity) = identity else {
++            return ToolResult::error("set_value requires a retained accessibility object; observe the exact window again");
++        };
+         let value_for_task = value.clone();
+         let xid = args
+             .opt_u64("window_id")
+@@ -5531,9 +5621,10 @@ impl Tool for SetValueTool {
+             .unwrap_or(0);
+         position_named_session_keyboard_cursor(&self.state, &args, pid, xid, Some(idx), None, true)
+             .await;
+-        let result =
+-            tokio::task::spawn_blocking(move || crate::atspi::set_value(pid, idx, &value_for_task))
+-                .await;
++        let result = tokio::task::spawn_blocking(move || {
++            crate::atspi::set_value_retained(pid, &identity, &value_for_task)
++        })
++        .await;
+         match result {
+             Ok(Ok(())) => ToolResult::text(format!("Set value of element [{idx}] to '{value}'.")),
+             Ok(Err(e)) => ToolResult::error(e.to_string()),
+@@ -5808,6 +5899,9 @@ impl Tool for ScrollTool {
+             }
+         }
+ 
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+         let isolated_background = isolated_hyprland_background(delivery);
+         if !isolated_background {
+@@ -6174,6 +6268,9 @@ impl Tool for DoubleClickTool {
+             Ok(v) => v,
+             Err(e) => return e,
+         };
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+         if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
+             return refusal;
+@@ -6413,6 +6510,9 @@ impl Tool for RightClickTool {
+             Ok(v) => v,
+             Err(e) => return e,
+         };
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+         if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
+             return refusal;
+@@ -6728,6 +6828,9 @@ impl Tool for DragTool {
+             Some(v) => v,
+             None => return ToolResult::error("window_id is required on Linux."),
+         };
++        if let Some(refusal) = require_focused_delivery(&self.state, &args) {
++            return refusal;
++        }
+         let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
+         let isolated_background = isolated_hyprland_background(delivery);
+         if !isolated_background {
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs
+index 11f3b83..06d3cc0 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs
+@@ -357,3 +357,37 @@ mod tests {
+         assert_eq!(flags & !0x0fff, 0);
+     }
+ }
++
++/// Attest both WM activation and actual keyboard focus, including child widgets.
++/// None means the server could not establish identity; stacking order is not focus.
++pub fn focused_window(xid: u64) -> Option<bool> {
++    let xid = u32::try_from(xid).ok()?;
++    let (conn, screen) = RustConnection::connect(None).ok()?;
++    let root = conn.setup().roots[screen].root;
++    let atom = get_atom(&conn, "_NET_ACTIVE_WINDOW").ok()?;
++    let active = conn
++        .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
++        .ok()?
++        .reply()
++        .ok()?
++        .value32()?
++        .next()?;
++    if active != xid {
++        return Some(false);
++    }
++    let mut focused = conn.get_input_focus().ok()?.reply().ok()?.focus;
++    for _ in 0..64 {
++        if focused == xid {
++            return Some(true);
++        }
++        if focused <= 1 || focused == root {
++            return Some(false);
++        }
++        let parent = conn.query_tree(focused).ok()?.reply().ok()?.parent;
++        if parent == focused {
++            return None;
++        }
++        focused = parent;
++    }
++    None
++}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 index 02ba09c..0ebbfb7 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs

@@ -190,6 +190,32 @@ export async function stopBundleBrowserHosts(
   }
 }
 
+/** Reap only orphaned crash reporters after the authorized host has exited. */
+export async function stopOrphanedBundleCrashReporters(
+  bundle: string,
+  run: Run = defaultRun,
+  signal: (pid: number) => void = (pid) => { process.kill(pid, "SIGTERM") },
+  uid = process.getuid?.()
+): Promise<void> {
+  if (uid === undefined) return
+  const executable = join(bundle, "Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler")
+  const parse = (output: string) => output.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/.exec(line)
+    return match && Number(match[2]) === 1 && Number(match[3]) === uid && match[4]!.trim() === executable
+      ? [Number(match[1])] : []
+  })
+  const { stdout } = await run("ps", ["-axo", "pid=,ppid=,uid=,comm="])
+  for (const pid of parse(stdout)) {
+    const files = await run("lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"]).catch(() => null)
+    if (!files?.stdout.split("\n").includes(`n${executable}`)) continue
+    const current = await run("ps", ["-p", String(pid), "-o", "pid=,ppid=,uid=,comm="]).catch(() => null)
+    if (!current || !parse(current.stdout).includes(pid)) continue
+    try { signal(pid) } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error
+    }
+  }
+}
+
 const RETAINED_STAGING = /^\.mako-(update|local-install)-[A-Za-z0-9]+$/
 const RETAINED_CONTENTS = new Set(["Previous Mako.app", "installer.mjs", "local-update-startup.mjs"])
 
@@ -435,7 +461,10 @@ async function runInstaller(): Promise<void> {
           hostAlive = false
         else throw error
       }
-      if (!hostAlive) await stopBundleBrowserHosts(target)
+      if (!hostAlive) {
+        await stopBundleBrowserHosts(target)
+        await stopOrphanedBundleCrashReporters(target)
+      }
       const pids = await runningBundleProcesses(target)
       if (!hostAlive && !pids.length) break
       if (Date.now() >= deadline)

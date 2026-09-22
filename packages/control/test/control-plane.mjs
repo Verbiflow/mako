@@ -8,6 +8,7 @@ import { windowCapabilities } from "../dist/computer/index.js"
 
 const window = { kind: "window", pid: 42, window_id: 7 }
 const capabilities = windowCapabilities({
+  platform: "darwin",
   target: window,
   documentWindows: 1,
   onScreen: true,
@@ -113,6 +114,7 @@ assert.throws(() => controlLineRef('Button "Save"'), /no control ref/)
 console.log("control plane ok")
 
 const nativeWithPage = windowCapabilities({
+  platform: "darwin",
   target: window,
   documentWindows: 1,
   onScreen: true,

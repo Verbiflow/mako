@@ -32,6 +32,23 @@ export const PASSIVE_ROLES: ReadonlySet<string> = new Set([
   "AXUnknown",
 ])
 
+const nativeRoles = new Map([
+  ["entry", "TextField"], ["text", "TextArea"], ["password text", "TextField"],
+  ["push button", "Button"], ["toggle button", "Button"], ["check box", "CheckBox"],
+  ["radio button", "RadioButton"], ["combo box", "ComboBox"], ["label", "StaticText"],
+  ["panel", "Group"], ["filler", "Group"], ["frame", "Window"], ["window", "Window"], ["dialog", "Dialog"],
+  ["document web", "WebArea"], ["document frame", "WebArea"], ["heading", "Heading"],
+  ["menu bar", "MenuBar"], ["menu", "Menu"], ["menu item", "MenuItem"],
+  ["page tab", "Tab"], ["page tab list", "TabGroup"], ["list item", "ListItem"],
+  ["list", "List"], ["table", "Table"], ["table cell", "Cell"], ["scroll pane", "ScrollArea"],
+  ["scroll bar", "ScrollBar"], ["separator", "Separator"], ["image", "Image"], ["link", "Link"],
+])
+
+/** AT-SPI and AX names projected into the same agent-facing vocabulary. */
+export function nativeRole(role: string): string {
+  return nativeRoles.get(role.toLowerCase()) ?? role.replace(/^AX/, "")
+}
+
 const VALUE_LENGTH = 80
 
 export const ElementSchema = z.looseObject({
@@ -41,6 +58,8 @@ export const ElementSchema = z.looseObject({
   label: z.string().nullable().optional(),
   value: z.union([z.string(), z.number(), z.boolean()]).nullable().optional(),
   enabled: z.boolean().optional(),
+  focused: z.boolean().optional(),
+  editable: z.boolean().optional(),
   selected: z.boolean().optional(),
   frame: z
     .object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
@@ -64,7 +83,7 @@ export function elementLine(
 ): string {
   const parts: string[] = []
   if (element.element_token) parts.push(element.element_token)
-  parts.push(element.role.replace(/^AX/, ""))
+  parts.push(nativeRole(element.role))
   if (element.label) parts.push(JSON.stringify(element.label))
   if (element.value !== undefined && element.value !== null) {
     const text = String(element.value)
@@ -93,8 +112,8 @@ export function elementLines(
     const parsed = ElementSchema.safeParse(raw)
     if (!parsed.success) continue
     const element = parsed.data
-    if (MENU_ROLES.has(element.role)) continue
-    if (options.interactive && PASSIVE_ROLES.has(element.role)) continue
+    if (MENU_ROLES.has(`AX${nativeRole(element.role)}`)) continue
+    if (options.interactive && PASSIVE_ROLES.has(`AX${nativeRole(element.role)}`)) continue
     if (
       query &&
       !(element.label ?? "").toLowerCase().includes(query) &&
@@ -202,7 +221,7 @@ export function withoutMenuBar(structuredContent: JsonObject): JsonObject {
   if (!state.success) return structuredContent
   const kept = state.data.elements.filter((raw) => {
     const element = ElementSchema.safeParse(raw)
-    return !element.success || !MENU_ROLES.has(element.data.role)
+    return !element.success || !MENU_ROLES.has(`AX${nativeRole(element.data.role)}`)
   })
   const omitted = state.data.elements.length - kept.length
   if (omitted === 0) return structuredContent

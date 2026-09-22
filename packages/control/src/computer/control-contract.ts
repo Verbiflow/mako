@@ -102,6 +102,7 @@ const ROUTES_BY_INTENT = {
 
 export interface WindowCapabilityFacts {
   target: WindowTarget
+  platform?: string
   documentWindows: number
   onScreen: boolean | null
   pageBrowser?: string
@@ -195,6 +196,16 @@ export function windowCapabilities(
         "Raw input is global and requires the exact target to be frontmost plus an explicit foreground declaration.",
     },
   ]
+  if (facts.platform !== "darwin") {
+    for (const route of ["window-pointer", "pid-keyboard", "menu"] as const) {
+      const index = routes.findIndex((capability) => capability.route === route)
+      routes[index] = {
+        route,
+        status: "unavailable",
+        reason: `Background ${route} delivery has not been verified for this ${facts.platform ?? "unknown"} target. Use an observed accessibility action or an exact browser page.`,
+      }
+    }
+  }
   return ControlCapabilitiesSchema.parse({ target: facts.target, routes })
 }
 

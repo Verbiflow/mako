@@ -8,6 +8,11 @@ const execute = promisify(execFile)
 export async function nativeBrowserApplication(
   parent = process.ppid
 ): Promise<string | undefined> {
+  if (process.platform === "linux") {
+    // /proc resolves the running executable even for Chromium forks launched
+    // through shell wrappers or alternatives symlinks.
+    return realpath(`/proc/${String(parent)}/exe`).catch(() => undefined)
+  }
   if (process.platform !== "darwin") return undefined
   try {
     const { stdout } = await execute(

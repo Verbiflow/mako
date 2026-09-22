@@ -27,9 +27,33 @@ const windows = z.object({
 export async function verifyForegroundInput(
   client: Pick<ComputerDriverClient, "callTool">,
   value: Parameters<typeof target.parse>[0],
-  signal: AbortSignal
+  signal: AbortSignal,
+  platform: NodeJS.Platform = process.platform
 ): Promise<void> {
   const expected = target.parse(value)
+  if (platform === "linux") {
+    const result = z.object({
+      structuredContent: z.object({
+        platform: z.literal("linux"),
+        backend: z.enum(["x11", "wayland"]),
+        windows: z.array(z.object({
+          pid: z.number().int(),
+          window_id: z.number().int(),
+          is_on_screen: z.boolean(),
+          focused: z.boolean().nullable(),
+        })),
+      }),
+    }).safeParse(await client.callTool(
+      "list_windows", { pid: expected.pid, on_screen_only: true },
+      { signal, timeout: 5000 }
+    ))
+    if (!result.success || result.data.structuredContent.backend !== "x11" ||
+      !result.data.structuredContent.windows.some((window) =>
+        window.pid === expected.pid && window.window_id === expected.window_id &&
+        window.is_on_screen && window.focused === true))
+      throw new Error("Foreground input was not sent: the Linux driver could not verify keyboard focus on the exact target window.")
+    return
+  }
   const active = apps
     .parse(
       await client.callTool("list_apps", {}, {

@@ -16,6 +16,7 @@ const { ExtensionCursor } = await module("browser-extension/cursor.ts")
 const { ExtensionTasks } = await module("browser-extension/tasks.ts")
 const calls = []
 let records = {}
+let localRecords = {}
 let tab = {
   id: 1,
   windowId: 1,
@@ -65,13 +66,18 @@ const api = {
     },
   },
   storage: {
+    local: {
+      get: async () => localRecords,
+      set: async value => { Object.assign(localRecords, structuredClone(value)) },
+      remove: async key => { delete localRecords[key] },
+    },
     session: {
       get: async () => records,
       set: async (value) => {
-        records = structuredClone(value)
+        Object.assign(records, structuredClone(value))
       },
-      remove: async () => {
-        records = {}
+      remove: async key => {
+        delete records[key]
       },
     },
   },
@@ -113,7 +119,7 @@ await tasks.track({
 await tasks.retained(1, "Invoice PDF")
 await tasks.presented()
 assert.equal(tab.mutedInfo.muted, false)
-assert.equal(records.makoTaskTabs[0].lifetime, "persistent")
+assert.equal(localRecords.makoTaskJournal.tabs[0].lifetime, "persistent")
 assert.equal(
   calls.filter((c) => c[0] === "group-title").at(-1)[1].title,
   "Invoice PDF · Saved"
@@ -122,8 +128,22 @@ assert.equal(
 const recovered = new ExtensionTasks(api)
 assert.equal(await recovered.recover(), 1)
 assert.equal(recovered.size, 0)
-assert.deepEqual(records, {})
+assert.ok(records.makoTaskEpoch)
+assert.equal(localRecords.lastRecovery.reconciled, 1)
 assert.ok(calls.some((c) => c[0] === "detach"))
+
+// Reload clears session storage, while durable ownership must remain diagnostic.
+await recovered.track({targetId:"target",tabId:1,owner:"reload-task",name:"Task",lifetime:"task"})
+await recovered.presented()
+records = {}
+calls.length = 0
+const reload = new ExtensionTasks(api)
+assert.equal(await reload.recover(), 1)
+assert.equal(calls.length, 0, "No detach/unmute after session identity is lost")
+assert.equal(localRecords.lastRecovery.needsInspection, 1)
+assert.equal(localRecords.lastRecovery.outcome, "unknown")
+assert.equal(localRecords.lastRecovery.targets[0].owner, "reload-task")
+assert.equal(reload.size, 0, "Old ownership never resumes")
 
 const cursor = new ExtensionCursor(api)
 await cursor.refresh()

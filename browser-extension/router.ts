@@ -422,20 +422,36 @@ export class ExtensionRouter {
 
   async child(tab: chrome.tabs.Tab) {
     if (tab.id === undefined || tab.openerTabId === undefined) return
-    const parent = [...this.created.entries(), ...this.creating.entries()].find(
+    const createdParent = [...this.created.entries(), ...this.creating.entries()].find(
       ([, t]) => t.tabId === tab.openerTabId
     )
+    const attachedParent = [...this.attached.values()].find(
+      (entry) => entry.target.tabId === tab.openerTabId
+    )
+    const tracked = this.activity?.tasks.get(tab.openerTabId)
+    const parent = createdParent ?? (attachedParent
+      ? [attachedParent.target.id, {
+          client: attachedParent.client,
+          tabId: tab.openerTabId,
+          owner: tracked?.owner ?? attachedParent.client,
+          name: tracked?.name ?? "Mako",
+          closeOnDisconnect: true,
+        }] as const
+      : undefined)
     if (!parent) return
     const tabId = tab.id
     this.running++
     try {
       await this.serial(async () => {
+        if (!createdParent && attachedParent && !this.attached.has(attachedParent.sessionId)) return
         if (this.created.size + this.creating.size >= 512) return
         for (let attempt = 0; attempt < 20; attempt++) {
           const target = (await this.api.debugger.getTargets()).find(
             (t) => t.tabId === tabId
           )
           if (target) {
+            // onCreated and navigation attribution can describe the same child.
+            if (this.created.has(target.id) || this.creating.has(target.id)) return
             const child = { ...parent[1], tabId, parent: parent[0] }
             if (!this.clients.has(child.client)) return
             this.created.set(target.id, child)

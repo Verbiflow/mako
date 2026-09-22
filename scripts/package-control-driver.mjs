@@ -44,7 +44,7 @@ await run("cargo", ["build", "--release", "--locked", "-p", "cua-driver"], {
   env: {
     ...process.env,
     CARGO_BUILD_JOBS: "2",
-    CUA_DRIVER_SOURCE_SHA: manifest.base + "-mako.1",
+    CUA_DRIVER_SOURCE_SHA: manifest.base + "-" + manifest.version,
   },
 })
 const binary = join(workspace, "target/release/cua-driver")

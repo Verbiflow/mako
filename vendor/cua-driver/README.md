@@ -1,24 +1,32 @@
 # Local Control shared driver
 
-## Active local release
+## Current source release
 
-`release.json` pins the upstream 0.28.2 release and the complete `release.patch`.
-The local version is `0.28.2+mako.1`. Build and certificate-sign the exact patched
-checkout with `node scripts/package-control-driver.mjs <checkout>` from Mako.
-The script verifies the base commit, patch, final signature and reported version,
-and records hashes beside the app. It does not install or replace a running driver.
+`release.json` pins upstream 0.28.2 and the complete `release.patch` for
+`0.28.2+mako.3`. Mac lossless values and keyboard changes are retained. Linux adds
+exact values and coverage, retained accessibility objects for semantic input,
+modal refusal and focus checks before foreground input. Non-actionable rows can
+omit `element_index`; Mako's shared host handles them as readable containers.
 
-`scripts/install-control-driver.mjs` installs the verified package separately as
-`/Applications/CuaDriverLocal.app` and atomically selects it for new launches via
-`~/.local/bin/cua-driver`. It preserves the upstream app, records rollback, and
-leaves active daemons running. This local installation has been completed and
-verified on this machine. It is not a notarized public release.
+Use `node scripts/package-control-driver-linux.mjs <checkout>` with the image in
+[scripts/linux-control](../../scripts/linux-control/README.md) to build Linux.
+The package records the source, patch, image and binary hashes and keeps Cua's
+MIT license. It does not install or replace a running driver. Linux ARM64/X11 is
+the tested platform; x64 and Wayland need separate acceptance.
 
-The installed executable passed six complete jobs across two native windows, with
-exactly one Save per job, independent state checks, and refusal of parent-window
-input during a popup plus minimized, hidden and closed targets. Public Command
-restrictions remain until controlled foreground typing acceptance. See the
-[release evidence](../../docs/audits/2026-09-22/background-control-release/README.md).
+For Mac, `node scripts/package-control-driver.mjs <checkout>` certificate-signs
+the exact pinned source and verifies the final binary/version. The installed Mac
+driver remains `0.28.2+mako.1`, with the earlier six-job and 995-key evidence.
+This iteration does not claim a new Mac driver installation or notarized release.
+The common contract and Mac native unit suites passed after the contract change.
+
+The earlier installer selects `/Applications/CuaDriverLocal.app` atomically for
+new launches and preserves active daemons. It currently verifies an existing
+installation against the candidate; it is not an automatic in-place version
+upgrader. Do not run it against the older installed app and assume an upgrade.
+
+See the [implementation evidence](../../docs/audits/2026-09-22/linux-control-implementation/README.md)
+and [earlier Mac release evidence](../../docs/audits/2026-09-22/background-control-release/README.md).
 
 ## Historical prototype
 

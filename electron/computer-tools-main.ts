@@ -18,6 +18,7 @@ import {
   ElementSchema,
   BACKGROUND_INPUT_LADDER,
   elementLines,
+  nativeRole,
   KEYBOARD_TOOLS,
   KEY_ROUTE_ADVICE,
   MAKO_ACTIONS,
@@ -1277,6 +1278,7 @@ export function createComputerToolsServer(
       (window) => window.window_id === target.window_id
     )
     return windowCapabilities({
+      platform: process.platform,
       target,
       documentWindows: windows.filter((window) => window.kind === "document")
         .length,
@@ -1431,10 +1433,11 @@ export function createComputerToolsServer(
       const parsed = nativeElementSchema.safeParse(raw)
       if (!parsed.success) return []
       const element = parsed.data
-      if (element.role.startsWith("AXMenu")) return []
+      if (nativeRole(element.role).startsWith("Menu")) return []
       const node: z.infer<typeof ControlObservationSchema>["nodes"][number] = {
         depth: element.depth,
-        role: element.role.replace(/^AX/, ""),
+        role: nativeRole(element.role),
+        nativeRole: element.role,
         name: element.label ?? "",
       }
       if (element.element_token) node.ref = element.element_token
@@ -1442,9 +1445,10 @@ export function createComputerToolsServer(
         ancestors.pop()
       const web =
         element.in_web_content === true ||
-        ancestors.some((ancestor) => ancestor.role === "AXWebArea")
+        ancestors.some((ancestor) => nativeRole(ancestor.role) === "WebArea")
       ancestors.push({ depth: node.depth, role: element.role })
       if (
+        element.editable !== false &&
         ["TextField", "TextArea", "SearchField", "ComboBox"].includes(
           node.role ?? ""
         )
@@ -1457,6 +1461,8 @@ export function createComputerToolsServer(
         // Older drivers normalize whitespace and substitute placeholders.
         node.valueExact = element.value_exact === true
       }
+      if (element.focused !== undefined) node.focused = element.focused
+      if (element.editable !== undefined) node.editable = element.editable
       if (element.enabled !== undefined) node.disabled = !element.enabled
       if (element.selected !== undefined) node.selected = element.selected
       return [node]
@@ -1467,25 +1473,16 @@ export function createComputerToolsServer(
         visibleRefs.has(node.ref ?? "")
     )
     const nodes = scoped.slice(0, request.max)
-    const returnedRefs = new Set(nodes.map((node) => node.ref))
     const webRefs = new Set(
       nodes.filter((node) => node.inputRoute === "page").map((node) => node.ref)
     )
-    const lossyRefs = new Set(
-      nodes.filter((node) => node.valueExact === false).map((node) => node.ref)
+    const lines = nodes.flatMap((node) =>
+      pageElementLines([node]).map((line) => {
+        if (node.inputRoute === "page") line += " [text input: page route]"
+        if (node.valueExact === false) line += " [value is display-only]"
+        return line
+      })
     )
-    const lines = availableLines
-      .filter((line) => returnedRefs.has(controlLineRef(line)))
-      .map((line) =>
-        webRefs.has(controlLineRef(line))
-          ? `${line} [text input: page route]`
-          : line
-      )
-      .map((line) =>
-        lossyRefs.has(controlLineRef(line))
-          ? `${line} [value is display-only]`
-          : line
-      )
     controlViews.set(key, { observation: state.snapshot_id, lines })
     rememberControlRefs(request.target, state.snapshot_id, lines)
     for (const ref of webRefs) {
@@ -1804,6 +1801,7 @@ export function createComputerToolsServer(
           request.operation.kind === "activate" ||
           request.operation.kind === "select-option"
           ? windowCapabilities({
+              platform: process.platform,
               target: request.target,
               documentWindows: 1,
               onScreen: null,
@@ -2379,6 +2377,7 @@ export async function startComputerToolsServer(): Promise<void> {
           env: {
             ...getDefaultEnvironment(),
             CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
+            CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
           },
         }
       : undefined

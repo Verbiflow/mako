@@ -1,5 +1,42 @@
 # Local Control refactor wayfinder
 
+## Linux implementation and durable browser recovery
+
+2026-09-22: source work is in `/Users/kashyab/mako-control-rollout`; native source
+is `/private/tmp/mako-control-driver-platform` on the pinned upstream base.
+[Implementation and evidence](audits/2026-09-22/linux-control-implementation/README.md).
+
+Implemented: exact Linux values and walk coverage; passive scope containers;
+canonical roles and input state; retained accessibility objects for semantic
+click/replacement; modal and destroyed-object refusals; no uncertain insertion or
+pixel fallback; X11 focus attestation before host and driver input dispatch.
+Linux help no longer advertises unverified background pointer/keyboard routes.
+A late raw-driver focus check was caught by a negative test and moved before all
+foreground input routes in candidate `0.28.2+mako.3`.
+
+The candidate passed 30 GTK fill → exact read-back → Save jobs through public MCP,
+all 400 uniquely tagged keys in the other window (388 during the final job loop), reordered and
+destroyed controls, modal parent refusal, bounded walks, oversized value proof
+refusal and text-only reads without screenshots. The host and raw driver both
+refused foreground input to the background target. Release `+mako.3` packaging and its final
+release-binary rerun passed; complete-job median/p95 were 127/139 ms. Linux units: 448 passed/5 ignored; common
+contract: 45 passed; Mac native units: 368 passed/2 ignored. These are isolated
+ARM64 X11 results; Wayland and x64 are not certified by them.
+
+Extension 0.3.1 passed 12 complete saved workflows on each of macOS and Linux
+Chromium, then forced-reload recovery on both. Reload preserved the page and
+value, kept durable interruption evidence, rejected the old lease and allowed
+fresh inspection without replay. Recovery never treats reused tab IDs as a
+browser-incarnation proof. A popup notice makes interruptions visible. Claimed
+parents now own their child tabs, and Linux identifies the real browser process.
+
+The previous signed app handoff **failed** on orphaned crashpad processes 76176
+and 76183. The installer now verifies and reaps that exact orphaned executable
+after authorized host exit. Tests preserve unrelated, parented and changed
+processes. Full app packaging/installation remains in progress; the installed
+Mac driver is still `+mako.1`. Regular Aside controlled typing, native popup focus,
+Wayland and wider app coverage remain open. No ChatGPT parity claim is made.
+
 ## Mac/Linux accuracy and background audit
 
 2026-09-22: [comparison and implementation order](audits/2026-09-22/native-platform-comparison/README.md)

@@ -155,6 +155,7 @@ async function start(
     // Mako's process and reports nothing about the user's computer use to a
     // third party; the user's own CLI keeps its own preference.
     CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
+    CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
   }
   // Cua's documented daemon API disables the overlay at construction. Hiding
   // a session cursor after startup still left the installed 0.28.0 build

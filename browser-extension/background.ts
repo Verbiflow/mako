@@ -91,11 +91,7 @@ async function connect(): Promise<void> {
   connecting = true
   try {
     await cleanup
-    const interrupted = await recovered
-    if (interrupted)
-      await chrome.storage.local.set({
-        lastRecovery: { at: Date.now(), tabs: interrupted },
-      })
+    await recovered
     incompatible = false
     await cursor.refresh()
     const settings = settingsSchema.parse(
