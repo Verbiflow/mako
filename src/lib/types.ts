@@ -61,6 +61,9 @@ export type {
   GitFileStatus,
   GitStatus,
   GitPushInput,
+  GitRemoteAction,
+  GitRemoteInput,
+  GitRemoteResult,
   GitHubStatus,
   CheckSummary,
   PullRequest,
@@ -148,7 +151,7 @@ export type {
 } from "../../electron/shared"
 
 export type { NativeRequest, NativeRequestInput } from "../../electron/shared"
-export type { ContinuationPlan } from "../../electron/shared"
+export type { ContinuationPlan, ContinuationResolution } from "../../electron/shared"
 
 export type { AccessEnforcement, AccessTier } from "../../electron/contracts/access"
 export type { Interruption, InterruptionReason, TurnContinuation } from "../../electron/contracts/live-conversations"
