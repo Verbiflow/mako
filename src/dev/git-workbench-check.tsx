@@ -19,7 +19,7 @@ const switches = new Map<string, (snapshot: TabSnapshot) => void>()
 const projects = new Map<string, GitStatus>()
 const histories = new Map<string, Array<(commits: GitCommitEntry[]) => void>>()
 const pushes = new Map<string, { resolve: () => void; reject: (error: Error) => void }>()
-export const calls = { pushes: 0, stages: 0, commits: 0, diffs: 0 }
+export const calls = { selections: 0, pushes: 0, stages: 0, commits: 0, diffs: 0 }
 let cwd = "/fixture/large"
 
 function project(path: string, count: number): GitStatus {
@@ -33,6 +33,17 @@ export function selectProject(path: string, count = 13_000) {
   store.set({ phase: "ready", meta: { ...META, cwd: path }, git: snapshot })
   workspaceTransitionStore.set({ kind: "ready" })
   githubStore.set({ root: path, statusRoot: path, branch: "main", loading: false, pull: null, status: { installed: true, authenticated: true, repo: "fixture/project", defaultBranch: "main" } })
+}
+
+export function selectMultiRepositoryProject() {
+  selectProject("/fixture/mono", 12)
+  const current = projects.get(cwd)!
+  const snapshot = { ...current, root: `${cwd}/app`, repositories: [
+    { root: `${cwd}/app`, label: "app", branch: "main", changes: 12 },
+    { root: `${cwd}/backend`, label: "backend", branch: "main", changes: 1 },
+  ] }
+  projects.set(cwd, snapshot)
+  store.set({ git: snapshot })
 }
 
 export function startSwitch(path: string) {
@@ -79,6 +90,15 @@ async function stagePaths(paths: string[], staged: boolean) {
 window.mako = {
   ...bridge,
   setCwd: async (path) => new Promise<TabSnapshot>((resolve) => switches.set(path, resolve)),
+  selectGitRepository: async (workspace, root) => {
+    calls.selections += 1
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const current = projects.get(workspace)
+    if (!current || workspace !== cwd) throw new Error("Workspace changed")
+    const selected = { ...project(root, root.endsWith("backend") ? 1 : 12), cwd: workspace, repositories: current.repositories }
+    projects.set(workspace, selected)
+    return selected
+  },
   gitStatus: async () => { const value = projects.get(cwd); if (!value) throw new Error("Missing fixture project"); return value },
   gitLog: async () => { const target = cwd; return new Promise((resolve) => histories.set(target, [...histories.get(target) ?? [], resolve])) },
   gitStage: (paths) => stagePaths(paths, true),

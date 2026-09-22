@@ -523,6 +523,7 @@ export function installMockBridge() {
     }),
     applySkillSync: async () => SKILLS,
 
+    selectGitRepository: async () => GIT,
     gitStatus: async () => GIT,
     gitDiff: async (path: string) => ({
       path,
@@ -1433,6 +1434,7 @@ export function installMockBridge() {
       binary: false,
       truncated: false,
     }),
+    liveAttach: async () => null,
     liveSnapshot: async (id: string) => liveSnapshots.get(id) ?? null,
     livePrompt: async (
       id: string,
