@@ -63,7 +63,7 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   const args=request.params.arguments;
   if(request.params.name==='get_window_state'){
     captures+=1; if(args.include_screenshot!==false) images+=1; newest='s'+(10+captures).toString(16).padStart(8,'0');
-    const elements=[{element_token:newest+':0',role:'AXButton',label:'Go'},{element_token:newest+':1',role:'AXMenuItem',label:'About'},...(clicks?[{element_token:newest+':2',role:'AXStaticText',label:'Done',value:'Done'}]:[]),{element_token:newest+':3',role:'AXTextField',label:'Name',value:fieldValue}];
+    const elements=[{element_token:newest+':0',role:'AXButton',label:'Go'},{element_token:newest+':1',role:'AXMenuItem',label:'About'},...(clicks?[{element_token:newest+':2',role:'AXStaticText',label:'Done',value:'Done'}]:[]),{element_token:newest+':3',role:'AXTextField',label:'Name',value:fieldValue,value_exact:fieldValue!=='legacy-normalized'}];
     const value={snapshot_id:newest,pid:args.pid,window_id:args.window_id,max_elements:args.max_elements,screenshot_scale:2,tree_markdown:'- [0] AXWindow',_note:'prefer elements',elements,returned_element_count:elements.length,screenshot_file_path:args.screenshot_out_file,screenshot_mime_type:'image/png'};
     return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
   }
@@ -732,7 +732,7 @@ try {
     )
     assert.match(
       String(JSON.parse(firstText(chord.content))),
-      /menu key equivalent.*Nothing was posted/
+      /Background Command.*Nothing was posted/
     )
     const forced = await exec(
       client,
@@ -1059,6 +1059,38 @@ try {
     "mako_control_help",
     "mako_control_status",
   ])
+  const execSchema = tools.tools.find(
+    (tool) => tool.name === "mako_control_exec"
+  )!.inputSchema
+  assert.deepEqual(execSchema.oneOf, [
+    { required: ["source"] },
+    { required: ["cell"] },
+  ])
+  for (const args of [
+    {
+      source: "return await control.browsers();",
+      cell: "claude-timeout-hosts",
+    },
+    { source: "return await control.browsers();", cell: 1 },
+    { code: "return await control.browsers()" },
+    { cell: "1" },
+    { cell: "return await control.browsers()" },
+    {},
+    { source: "return 1", cell: 1 },
+  ]) {
+    const failed = await unifiedClient.callTool({
+      name: "mako_control_exec",
+      arguments: args,
+    })
+    assert.equal(failed.isError, true)
+    assert.equal(failed.structuredContent?.code, "invalid-request")
+    assert.equal(failed.structuredContent?.outcome, "not-dispatched")
+    assert.match(String(failed.structuredContent?.recovery), /numeric cell/)
+    assert.doesNotMatch(
+      String(failed.structuredContent?.recovery),
+      /Read the exact target/
+    )
+  }
   const help = JSON.parse(
     firstText(
       (
@@ -1104,6 +1136,15 @@ return {receipt, proof: await state.window.expect({role:'TextField',name:'Name',
   assert.equal(result.receipt.observation, undefined)
   assert.equal(result.proof.status, "matched")
   assert.equal(result.proof.evidence.value, "unified")
+  const lossy = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const view=await state.window.observe();
+await state.window.setValue(view.get({role:'TextField',name:'Name'}).ref,'legacy-normalized');
+try {await state.window.expect({role:'TextField',name:'Name',value:'legacy-normalized'},{timeoutMs:0});return 'false positive'} catch(e) {return e.message}`,
+    },
+  })
+  assert.match(firstText(lossy.content), /Exact value unavailable/)
   const reuse = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
@@ -1378,6 +1419,41 @@ try {
     available: true,
     browsers: [],
   })
+  // The public tool must preserve a yielded program across a malformed resume.
+  const yielded = await pageOnlyClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source:
+        "state.resumeProof=(state.resumeProof??0)+1; await new Promise(resolve=>setTimeout(resolve,10050)); return state.resumeProof",
+    },
+  })
+  const receipt = z
+    .object({
+      status: z.literal("running"),
+      cell: z.number(),
+      wait: z.string(),
+    })
+    .parse(JSON.parse(firstText(yielded.content)))
+  assert.ok(receipt.wait.includes(JSON.stringify({ cell: receipt.cell })))
+  const malformed = await pageOnlyClient.callTool({
+    name: "mako_control_exec",
+    arguments: { cell: String(receipt.cell) },
+  })
+  assert.equal(malformed.structuredContent?.outcome, "not-dispatched")
+  const collected = await pageOnlyClient.callTool({
+    name: "mako_control_exec",
+    arguments: { cell: receipt.cell },
+  })
+  assert.equal(JSON.parse(firstText(collected.content)), 1)
+  const count = await pageOnlyClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: "return state.resumeProof" },
+  })
+  assert.equal(
+    JSON.parse(firstText(count.content)),
+    1,
+    "resume never reruns source"
+  )
 } finally {
   await pageOnlyClient.close()
   await pageOnly.close()

@@ -103,6 +103,13 @@ try {
   const saved = await store.connect(input)
   assert.equal(requests.length, 1)
   assert.doesNotMatch(JSON.stringify(saved), new RegExp(apiKey))
+  const asynchronous = new UtilityModelStore(join(root, "connections"), {
+    available: async () => encryption.available(),
+    encrypt: async (value) => encryption.encrypt(value),
+    decrypt: async (value) => encryption.decrypt(value),
+  })
+  assert.equal((await asynchronous.load(input.provider))?.apiKey, apiKey)
+  assert.equal((await asynchronous.settings()).secureStorage, true)
   const snapshot = await store.settings()
   assert.equal(snapshot.connections.length, 1)
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(apiKey))

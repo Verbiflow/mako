@@ -11,7 +11,7 @@ import { acpObservedSettings } from "../electron/acp-config.ts"
 import { withDiscoveryProcess } from "../electron/providers/discovery-process.ts"
 import { runDiscovery } from "../electron/providers/profile-transport.ts"
 import { openCodeProfileLoader } from "../electron/providers/opencode/profile.ts"
-import { openCodeInstallation } from "../electron/providers/opencode/installation.ts"
+import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
 
 const variants = { low: {}, medium: {}, high: {} }
 for (const defaultVariant of ["low", "high"]) {
@@ -39,7 +39,7 @@ console.log(
 )
 
 if (process.argv.includes("--live")) {
-  const installation = openCodeInstallation()
+  const installation = await resolveOpenCodeInstallation()
   assert.ok(installation)
   const profile = await openCodeProfileLoader.load(process.env, process.cwd())
   const expected = resolveSessionSettings({

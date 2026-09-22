@@ -88,7 +88,7 @@ for (const subject of subjects) {
     assert.ok(settings?.model, `${subject.runner.provider}: ${JSON.stringify(selection)} resolves`)
     const label = `${subject.runner.provider} ${JSON.stringify(settings)}`
     const prepared = await subject.runner.prepare!(withCatalogDefaults(profile, settings), {})
-    const command = subject.runner.resume("session", "hello", prepared.options)
+    const command = await subject.runner.resume("session", "hello", prepared.options)
     const back = subject.runner.describe(command, profile.models)
     assert.equal(back.model, settings.model, `${label}: the command names the selected model`)
     for (const [id, value] of Object.entries(settings.options ?? {})) {

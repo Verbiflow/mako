@@ -715,6 +715,45 @@ try {
     "durable transfer bytes"
   )
 
+  const exactId = randomUUID()
+  await owner.start("alpha", root, { conversationId: exactId })
+  await until(() => owner.snapshot(exactId)?.session.status === "ready")
+  const firstBinding = owner.snapshot(exactId)!.control!.activeBindingId
+  const exactRequest = randomUUID()
+  owner.continueBinding(exactId, firstBinding, exactRequest, "Exact native message")
+  owner.continueBinding(exactId, firstBinding, exactRequest, "Exact native message")
+  await until(() => sent.some((item) => item.text === "Exact native message"))
+  assert.equal(sent.filter((item) => item.text === "Exact native message").length, 1)
+  finish(firstBinding, "Exact message complete")
+  owner.transfer(exactId, command("beta", "Switch away"))
+  await until(() => owner.snapshot(exactId)?.session.harness === "beta" && owner.snapshot(exactId)?.session.status === "running")
+  finish(owner.snapshot(exactId)!.control!.activeBindingId, "Switched away")
+  recordComparison = "moved"
+  owner.transfer(exactId, command("alpha", "Make another alpha session"))
+  await until(() => owner.snapshot(exactId)?.session.harness === "alpha" && owner.snapshot(exactId)?.session.status === "running")
+  const secondBinding = owner.snapshot(exactId)!.control!.activeBindingId
+  assert.notEqual(firstBinding, secondBinding)
+  finish(secondBinding, "Second alpha complete")
+  owner.stop()
+  owner = createOwner()
+  const historicalRequest = randomUUID()
+  owner.continueBinding(exactId, firstBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" })
+  owner.continueBinding(exactId, firstBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" })
+  await until(() => sent.at(-1)?.text.includes("Continue the first alpha") === true)
+  assert.equal(owner.snapshot(exactId)!.control!.activeBindingId, firstBinding, "cold continuation selects the exact historical binding of the same provider")
+  assert.equal(sent.filter((item) => item.text.includes("Continue the first alpha")).length, 1)
+  owner.continueBinding(exactId, firstBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" })
+  assert.throws(() => owner.continueBinding(exactId, secondBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" }), /different content/)
+  finish(firstBinding, "Historical continuation complete")
+  owner.stop()
+  owner = createOwner()
+  const coldRequest = randomUUID()
+  owner.continueBinding(exactId, firstBinding, coldRequest, "Cold current binding")
+  owner.continueBinding(exactId, firstBinding, coldRequest, "Cold current binding")
+  await until(() => sent.at(-1)?.text.includes("Cold current binding") === true)
+  owner.continueBinding(exactId, firstBinding, coldRequest, "Cold current binding")
+  assert.equal(sent.filter((item) => item.text.includes("Cold current binding")).length, 1, "cold current-binding retries retain their command fingerprint")
+
   console.log(
     "Transfers verified: stable identity, exact attachments, A→B→A delta, duplicate receipts, late events, busy ordering, startup refusal, close-during-start, lazy forks, merge-back, child permission/delivery/cancel, real MCP authorization, and restart recovery"
   )

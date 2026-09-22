@@ -123,6 +123,7 @@ const parsedThread = parseThreadResponse({
   thread: {
     id: "thread-1",
     cwd: "/tmp/project",
+    path: "/custom/codex-home/sessions/native.jsonl",
     turns: [
       {
         id: "turn-1",
@@ -144,6 +145,7 @@ const parsedThread = parseThreadResponse({
 })
 assert.equal(parsedThread.valid, true)
 if (parsedThread.valid) {
+  assert.equal(parsedThread.value.thread.path, "/custom/codex-home/sessions/native.jsonl", "retain the provider-owned locator instead of waiting for catalog discovery")
   assert.deepEqual(parsedThread.value.thread.turns?.[0]?.items.at(-1), {
     type: "unsupported",
     id: "compact-1",
@@ -154,6 +156,9 @@ assert.equal(
   parseThreadResponse({ thread: { cwd: "/tmp/project" } }).valid,
   false
 )
+assert.equal(parseThreadResponse({ thread: { id: "ephemeral", path: null } }).valid, true)
+assert.equal(parseThreadResponse({ thread: { id: "legacy" } }).valid, true)
+assert.equal(parseThreadResponse({ thread: { id: "invalid", path: 3 } }).valid, false)
 assert.equal(
   parseNotification("item/agentMessage/delta", { threadId: "thread-1" }),
   null

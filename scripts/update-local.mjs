@@ -160,7 +160,7 @@ async function run(command, args, env, signal) {
   })
 }
 
-async function prepareToClose() {
+export async function prepareToClose() {
   const { socket, host } = await localRuntime()
   if (!host?.methods.includes("mako:lifecycle-command")) return
   const { invokeRuntime, RuntimeDisconnectedError } =
@@ -240,7 +240,7 @@ async function prepareToClose() {
   }
 }
 
-async function verifyStarted(candidate) {
+export async function verifyStarted(candidate) {
   const expected = z
     .object({ makoBuild: z.object({ id: z.string() }) })
     .parse(

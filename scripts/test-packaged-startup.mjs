@@ -28,6 +28,7 @@ const { socket } = runtimeLocation(dataRoot)
 const env = {
   ...process.env,
   MAKO_DATA_ROOT: dataRoot,
+  MAKO_CURSOR_SDK_ROOT: join(root, "cursor"),
   MAKO_CLIENT_ID: "package-startup",
   MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp",
   MAKO_BACKEND_TOKEN: "",

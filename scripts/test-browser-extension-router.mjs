@@ -138,8 +138,17 @@ try {
   const attachedNew = await request("b", "Target.attachToTarget", {
     targetId: "new-page",
   })
+  assert.equal(attachedNew.kind, "response")
+  // target_closed can mean restricted extension content, not a closed tab.
+  router.detached({ targetId: "new-page" }, "target_closed")
+  assert.equal(messages.at(-1).params.reason, "target_closed")
+  assert.equal((await request("a", "Target.closeTarget", { targetId: "new-page" })).kind, "error")
+  assert.equal((await request("b", "Target.closeTarget", { targetId: "new-page" })).kind, "response")
+  router.removed(2)
+  await request("b", "Target.createTarget", { url: "about:blank" })
+  const replacement = await request("b", "Target.attachToTarget", { targetId: "new-page" })
   await request("b", "Target.detachFromTarget", {
-    sessionId: attachedNew.result.sessionId,
+    sessionId: replacement.result.sessionId,
   })
   await request("b", "Target.closeTarget", { targetId: "new-page" })
   assert.equal(targets.length, 1)

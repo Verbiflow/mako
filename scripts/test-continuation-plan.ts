@@ -51,5 +51,26 @@ await assert.rejects(planner.assertNative("/missing"), /no longer in the catalog
 console.log("Continuation plan: live, native, handoff and refusal rules; host refuses a transport its plan did not choose")
 
 for (const provider of ["codex", "claude", "cursor", "grok", "devin", "opencode"]) {
-  assert.deepEqual(planContinuation({ ...ref, harness: provider, heldBy: "Mako's dev3 host" }, { ...inputs, attached: "existing-conversation" }), { transport: "attached", provider, conversationId: "existing-conversation" })
+  const attached = createContinuationPlanner({
+    ref: async () => ({ ...ref, harness: provider, heldBy: "Mako dev3", locked: true }),
+    resolveOwner: async () => ({ kind: "attached", provider, conversationId: "existing", snapshot: { fixture: true } }),
+    live: () => null, nativeInstalled: () => false, running: () => false, external: () => "open",
+  })
+  assert.deepEqual(await attached.resolve(ref.path), { transport: "attached", provider, conversationId: "existing", snapshot: { fixture: true }, bindingId: undefined })
 }
+
+const owned = createContinuationPlanner({
+  ref: async () => ({ ...ref, heldBy: "old cached host", locked: true }),
+  resolveOwner: async () => ({ kind: "unowned" }),
+  assessResume: async () => ({ kind: "resumable", record: "unknown" }),
+  live: () => ({ available: true, canResume: true }),
+  nativeInstalled: () => true, running: () => false, external: () => "open",
+})
+assert.equal((await owned.resolve(ref.path)).transport, "live", "fresh ownership and provider assessment override stale catalog annotations")
+const unavailable = createContinuationPlanner({
+  ref: async () => ref,
+  resolveOwner: async () => ({ kind: "unavailable", reason: "owner disconnected" }),
+  live: () => ({ available: true, canResume: true }),
+  nativeInstalled: () => true, running: () => false, external: () => null,
+})
+assert.deepEqual(await unavailable.resolve(ref.path), { transport: "unavailable", reason: "owner disconnected" }, "a transport failure never grants permission to start another writer")

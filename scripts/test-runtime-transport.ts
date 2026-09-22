@@ -175,3 +175,63 @@ try {
     await rm(dir, { recursive: true, force: true })
   }
 }
+
+// Typed delivery uncertainty survives both hops, including an RPC timeout.
+{
+  const dir = await mkdtemp(join(tmpdir(), "mako-wire-peer-"))
+  const peerSocket = join(dir, "peer.sock")
+  const receiverSocket = join(dir, "receiver.sock")
+  const conversationId = randomUUID()
+  const finishes: (() => void)[] = []
+  const peer = await startWebHost(peerSocket, async (channel) => {
+    if (channel === "mako:timeout") await new Promise<void>((resolve) => { finishes.push(resolve) })
+    throw new RuntimeDisconnectedError(channel !== "mako:refused")
+  }, async () => new Response(""))
+  const receiver = await startWebHost(receiverSocket, async (channel) => {
+    try { await invokeRuntime(peerSocket, a, channel, [], 1, { timeoutMs: 20 }) }
+    catch (error) {
+      if (error instanceof RuntimeDisconnectedError) throw new RuntimeDisconnectedError(error.unconfirmed, conversationId)
+      throw error
+    }
+    return JSON.stringify({ ok: true })
+  }, async () => new Response(""))
+  try {
+    for (const [channel, uncertain] of [["mako:refused", false], ["mako:dropped", true], ["mako:timeout", true]] as const) {
+      const error = await rejection(invokeRuntime(receiverSocket, b, channel, []))
+      assert.ok(error instanceof RuntimeDisconnectedError)
+      assert.equal(error.unconfirmed, uncertain)
+      assert.equal(error.conversationId, conversationId)
+    }
+  } finally {
+    for (const finish of finishes) finish()
+    receiver.close(); peer.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+  console.log("Two-hop transport: refused, uncertain and timed-out owner calls retain delivery state and conversation identity")
+}
+
+// A post-dispatch unreadable reply says nothing about acceptance.
+{
+  const dir = await mkdtemp(join(tmpdir(), "mako-wire-unreadable-"))
+  const path = join(dir, "host.sock")
+  let accepted = 0
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume the dispatched request */ }
+    accepted++
+    response.writeHead(200, { "content-type": "application/json" })
+    response.end(accepted === 1 ? JSON.stringify({ ok: true, value: "x".repeat(32 * 1024 * 1024 + 1) }) : '{"ok":true,')
+  })
+  await new Promise<void>((resolve) => server.listen(path, resolve))
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const error = await rejection(invokeRuntime(path, randomUUID(), "mako:live-prompt", [randomUUID(), randomUUID(), "fixture"]))
+      assert.ok(error instanceof RuntimeDisconnectedError && error.unconfirmed, "oversized and malformed replies preserve uncertainty")
+    }
+    assert.equal(accepted, 2)
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await rm(dir, { recursive: true, force: true })
+  }
+  console.log("Desktop transport: oversized and malformed accepted replies remain unconfirmed")
+}

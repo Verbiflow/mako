@@ -36,11 +36,22 @@ function upgradeLegacyRoutes(): void {
     assert.equal(upgraded.routeForSession("cursor", "old-native")?.conversationId, "old-conversation", "upgrade preserves existing routes")
     upgraded.hold("cursor", "old-native", "new-conversation")
     upgraded.release("cursor", "old-native", "new-conversation")
-    assert.equal(upgraded.routeForSession("cursor", "old-native"), null, "the new local route takes precedence after release")
+    assert.equal(upgraded.routeForSession("cursor", "old-native")?.conversationId, "new-conversation", "the new local route takes precedence after release")
     const oldWriter = new DatabaseSync(path)
     try {
       oldWriter.prepare("INSERT INTO conversation_routes (conversation_id, provider, native_id, socket) VALUES (?, ?, ?, ?)")
         .run("legacy-writer", "cursor", "legacy-native", "/old.sock")
+      oldWriter.prepare("UPDATE conversation_routes SET provider = ?, native_id = ? WHERE conversation_id = ?")
+        .run("codex", "second-native", "legacy-writer")
+      assert.equal(upgraded.routeForSession("cursor", "legacy-native")?.conversationId, "legacy-writer", "older writers cannot erase previous bindings")
+      assert.equal(upgraded.routeForSession("codex", "second-native")?.conversationId, "legacy-writer")
+      upgraded.rememberBindings("recovered-journal", [{ provider: "claude", nativeId: "metadata-native" }], 50)
+      assert.equal(upgraded.routeForSession("claude", "metadata-native")?.conversationId, "recovered-journal")
+      oldWriter.prepare("INSERT INTO conversation_routes (conversation_id, provider, native_id, socket) VALUES (?, ?, ?, ?)")
+        .run("older-host-new-conversation", "cursor", "old-native", "/old.sock")
+      assert.equal(upgraded.routeForSession("cursor", "old-native")?.conversationId, "older-host-new-conversation", "writes from old schemas get a real timestamp and outrank older bindings")
+      const query = oldWriter.prepare("EXPLAIN QUERY PLAN SELECT conversation_id FROM conversation_bindings WHERE provider = ? AND native_id = ? ORDER BY updated_at DESC LIMIT 1").all("cursor", "legacy-native")
+      assert.match(JSON.stringify(query), /conversation_bindings_lookup/, "native lookup uses its index")
     } finally {
       oldWriter.close()
     }
@@ -49,7 +60,7 @@ function upgradeLegacyRoutes(): void {
   }
   const reopened = new SessionMemory(path, { ...host, socket: "/observer.sock" })
   try {
-    assert.equal(reopened.routeForSession("cursor", "old-native")?.conversationId, "new-conversation", "reopening preserves route timestamps")
+    assert.equal(reopened.routeForSession("cursor", "old-native")?.conversationId, "older-host-new-conversation", "reopening preserves route timestamps")
     assert.equal(reopened.routeForSession("cursor", "legacy-native")?.conversationId, "legacy-writer", "older hosts can still write routes")
   } finally {
     reopened.close()
@@ -206,6 +217,14 @@ const dev = new SessionMemory(ledger, { pid: 200, startedAt: 2, label: "Mako's d
 
 try {
   upgradeLegacyRoutes()
+  installed.hold("codex", "route-race", "first-owner")
+  const firstHold = dev.heldBy("codex", "route-race")!
+  installed.release("codex", "route-race", "first-owner")
+  installed.hold("codex", "route-race", "second-owner")
+  assert.equal(dev.rememberRoute({ provider: "codex", nativeId: "route-race", conversationId: "first-owner", socket: "/stale.sock" }, firstHold), false, "a raced discovery returns stale instead of throwing or writing an obsolete route")
+  assert.equal(dev.routeForConversation("first-owner"), null)
+  installed.release("codex", "route-race", "second-owner")
+
   // --- Facts: settings and mode are remembered independently -----------------
   installed.remember("cursor", "agent-1", { settings: { model: "claude-fable-5-1", options: { effort: "high" } } })
   installed.remember("cursor", "agent-1", { modeId: "access:full" })
@@ -271,7 +290,7 @@ try {
   dev.release("cursor", "agent-1")
   installed.release("cursor", "agent-1")
 
-  // A crashed host's hold is taken over; a stale heartbeat is treated the same.
+  // A crashed host is replaced; suspension alone never permits another writer.
   installed.hold("cursor", "agent-2", "conv-c")
   alive.delete(100)
   assert.equal(dev.heldBy("cursor", "agent-2"), null, "a dead host holds nothing")
@@ -279,7 +298,8 @@ try {
   alive.add(100)
   assert.equal(installed.heldBy("cursor", "agent-2")?.hostLabel, "Mako's dev host", "the takeover is the live hold now")
   now += HOLD_STALE_MS + 1
-  assert.equal(installed.heldBy("cursor", "agent-2"), null, "a hold without a heartbeat expires even while the pid lives")
+  assert.ok(installed.heldBy("cursor", "agent-2"), "a suspended live host retains ownership despite a stale heartbeat")
+  assert.throws(() => installed.hold("cursor", "agent-2", "another-writer"), SessionHeldError)
   dev.hold("cursor", "agent-3", "conv-e")
   now += HOLD_STALE_MS - 1
   dev.heartbeat()

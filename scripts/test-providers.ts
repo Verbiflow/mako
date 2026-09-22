@@ -374,7 +374,7 @@ assert.equal(accountCapability.mode, "selectable")
 
 const claude = providerHost.nativeRunners.get("claude")!
 assert.deepEqual(
-  claude.resume("session", "continue", {
+  await claude.resume("session", "continue", {
     model: "opus",
     options: { effort: "high" },
   }),
@@ -396,7 +396,7 @@ assert.deepEqual(
 
 const codex = providerHost.nativeRunners.get("codex")!
 assert.deepEqual(
-  codex.resume("session", "continue", {
+  await codex.resume("session", "continue", {
     model: "gpt-5",
     options: { effort: "high", serviceTier: "fast" },
   }),
@@ -421,7 +421,7 @@ assert.deepEqual(
 )
 
 const grok = providerHost.nativeRunners.get("grok")!
-assert.deepEqual(grok.resume("session", "continue", { options: { effort: "high" } }), {
+assert.deepEqual(await grok.resume("session", "continue", { options: { effort: "high" } }), {
   command: "grok",
   args: [
     "-p",
@@ -435,7 +435,7 @@ assert.deepEqual(grok.resume("session", "continue", { options: { effort: "high" 
 })
 
 const devin = providerHost.nativeRunners.get("devin")!
-assert.deepEqual(devin.fresh("start", { model: "adaptive" }).args, [
+assert.deepEqual((await devin.fresh("start", { model: "adaptive" })).args, [
   "-p",
   "start",
   "--permission-mode",
@@ -447,7 +447,7 @@ assert.deepEqual(devin.fresh("start", { model: "adaptive" }).args, [
 ])
 
 const openCode = providerHost.nativeRunners.get("opencode")!
-const openCodeFresh = openCode.fresh("start", { model: "openai/gpt" })
+const openCodeFresh = await openCode.fresh("start", { model: "openai/gpt" })
 assert.equal(openCodeFresh.args[0], "run")
 assert.equal(openCodeFresh.args.at(-1), "start")
 assert.ok(openCodeFresh.args.includes("openai/gpt"))
@@ -484,6 +484,7 @@ if (openCodeSource.available(process.cwd())) {
 const registry = new ProviderRegistry<NativeRunner>()
 const runner: NativeRunner = {
   provider: "fixture",
+  available: () => true,
   fastMode: "supported",
   resume: () => ({ command: "fixture", args: [] }),
   fresh: () => ({ command: "fixture", args: [] }),

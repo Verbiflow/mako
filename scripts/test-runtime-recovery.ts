@@ -127,3 +127,23 @@ assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION - 1, script }, script),
 assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION + 1, script }, script), true)
 
 console.log("Runtime recovery: reads and id-settled mutations repeat after reconnect as attempt 2, other mutations never do, refused and dropped calls are told apart, and foreign daemons are recognised")
+
+{
+  const { value, calls } = link(10)
+  const error = await rejection(invokeWithRecovery("mako:live-continue", async () => {
+    throw new RuntimeDisconnectedError(true, "peer-conversation")
+  }, value))
+  assert.ok(error instanceof RuntimeDisconnectedError && error.conversationId === "peer-conversation")
+  assert.deepEqual(calls, [], "a peer outage does not disconnect the receiving desktop host")
+}
+
+{
+  const { value } = link(1)
+  let attempts = 0
+  const error = await rejection(invokeWithRecovery("mako:live-prompt", async () => {
+    if (++attempts === 1) throw new RuntimeDisconnectedError(true)
+    throw new Error("Owner lookup failed after reconnect")
+  }, value))
+  assert.ok(error instanceof RuntimeDisconnectedError && error.unconfirmed,
+    "a generic retry failure preserves the first mutation's unknown outcome")
+}

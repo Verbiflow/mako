@@ -102,6 +102,7 @@ async function runElectron() {
           providerHost.processProbes.get(binding.provider)
         )
   }
+  const { nativeSessionPath } = await import("../dist-electron/native-source.js")
   const catalog = defaultCatalog()
   const { BrowserService } = await import("../dist-electron/browser-service.js")
   const { startControlService } =
@@ -141,14 +142,7 @@ async function runElectron() {
     },
     history: (path, before) => catalog.page(path, before),
     checkpoint: (path, provider) => checkpoint(provider, path),
-    nativePath: (session) =>
-      catalog
-        .list()
-        .find(
-          (ref) =>
-            ref.harness === session.harness &&
-            ref.nativeId === session.nativeId
-        )?.path,
+    nativePath: (session) => nativeSessionPath(session, catalog.list()),
     resumeVerdict,
     providerIdleMs: process.argv.includes("--hibernate") ? 500 : undefined,
     providerWarmLimit: process.argv.includes("--hibernate") ? 0 : undefined,
@@ -507,7 +501,13 @@ async function runElectron() {
             throw new Error(
               "Hibernation woke a different native provider session"
             )
+          const wakeInput = completed.blocks.findIndex(
+            (block) => block.type === "user" && block.requestId === wakeRequest
+          )
+          if (wakeInput < 0)
+            throw new Error("The resumed request has no matching user block")
           const wakeResponse = completed.blocks
+            .slice(wakeInput + 1)
             .filter((block) => block.type === "text")
             .map((block) => block.text)
             .join("\n")
@@ -516,6 +516,8 @@ async function runElectron() {
               "The provider lost conversation context while waking from hibernation"
             )
           result.wakeMs = performance.now() - wakeBegan
+          result.wakeContextVerified = true
+          result.wakeRequestId = wakeRequest
         }
         if (process.argv.includes("--steer")) {
           if (!driver.steer)

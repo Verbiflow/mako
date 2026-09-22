@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { AcpStartupWatch, exitDescription, stderrDetail } from "../electron/acp-startup.ts"
+import { ProviderStartupWatch, exitDescription, stderrDetail } from "../electron/provider-startup.ts"
 import { errorMessage } from "../electron/live-runtime.ts"
 
 class FakeProcess extends EventEmitter {
@@ -20,7 +20,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // A step that answers within the silence window finishes and is reported.
 {
   const child = new FakeProcess()
-  const watch = new AcpStartupWatch(child, { harness: "grok", silenceMs: 200, totalMs: 2_000 })
+  const watch = new ProviderStartupWatch(child, { harness: "grok", silenceMs: 200, totalMs: 2_000 })
   const value = await watch.step("initialize", Promise.resolve("ok"))
   assert.equal(value, "ok")
   assert.equal(watch.steps[0]?.name, "initialize")
@@ -33,7 +33,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // that the process is still alive: the reader can tell "retry" from "broken".
 {
   const child = new FakeProcess()
-  const watch = new AcpStartupWatch(child, { harness: "grok", silenceMs: 120, totalMs: 5_000 })
+  const watch = new ProviderStartupWatch(child, { harness: "grok", silenceMs: 120, totalMs: 5_000 })
   await watch.step("initialize", Promise.resolve(undefined))
   const never = new Promise<never>(() => {})
   await assert.rejects(
@@ -49,7 +49,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // connecting MCP servers one notification at a time is not a stalled one.
 {
   const child = new FakeProcess()
-  const watch = new AcpStartupWatch(child, { harness: "grok", silenceMs: 150, totalMs: 5_000 })
+  const watch = new ProviderStartupWatch(child, { harness: "grok", silenceMs: 150, totalMs: 5_000 })
   const answer = Promise.withResolvers<string>()
   const pending = watch.step("session/new", answer.promise)
   const ticker = setInterval(() => child.stderr.emit("data", Buffer.from("mcp init 1/7\n")), 40)
@@ -65,7 +65,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // The hard cap still bounds a process that never answers but never goes quiet.
 {
   const child = new FakeProcess()
-  const watch = new AcpStartupWatch(child, { harness: "cursor", silenceMs: 200, totalMs: 300 })
+  const watch = new ProviderStartupWatch(child, { harness: "cursor", silenceMs: 200, totalMs: 300 })
   const ticker = setInterval(() => child.stdout.emit("data", Buffer.from("{}\n")), 30)
   await assert.rejects(
     watch.step("session/new", new Promise<never>(() => {})),
@@ -83,7 +83,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString()
   })
-  const watch = new AcpStartupWatch(child, { harness: "devin", silenceMs: 5_000, totalMs: 10_000, stderr: () => stderr })
+  const watch = new ProviderStartupWatch(child, { harness: "devin", silenceMs: 5_000, totalMs: 10_000, stderr: () => stderr })
   const pending = watch.step("initialize", new Promise<never>(() => {}))
   child.stderr.emit("data", Buffer.from("2026-09-11T21:13:42.000Z INFO booting\nError: no credentials found\n"))
   child.exit(1)
@@ -97,13 +97,13 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // A work rejection is passed through unchanged, and steps do not overlap.
 {
   const child = new FakeProcess()
-  const watch = new AcpStartupWatch(child, { harness: "opencode", silenceMs: 500, totalMs: 1_000 })
+  const watch = new ProviderStartupWatch(child, { harness: "opencode", silenceMs: 500, totalMs: 1_000 })
   const held = watch.step("initialize", new Promise<never>(() => {}))
   await assert.rejects(watch.step("session/new", Promise.resolve(1)), /startup step initialize is still pending/)
   watch.dispose()
   await assert.rejects(held, /opencode startup was abandoned during initialize$/)
   await assert.rejects(watch.step("session/new", Promise.resolve(1)), /disposed before session\/new/)
-  const fresh = new AcpStartupWatch(new FakeProcess(), { harness: "opencode", silenceMs: 500, totalMs: 1_000 })
+  const fresh = new ProviderStartupWatch(new FakeProcess(), { harness: "opencode", silenceMs: 500, totalMs: 1_000 })
   await assert.rejects(fresh.step("initialize", Promise.reject(new Error("auth_required"))), /^Error: auth_required$/)
   assert.equal(fresh.steps[0]?.outcome, "failed")
   fresh.dispose()
@@ -131,3 +131,22 @@ assert.equal(stderrDetail("2026-09-11T21:13:42Z INFO started\n[31mfatal: bad[0
 console.log(
   "ACP startup: silence, not a fixed budget, fails a step; output extends it; a hard cap and process exit still end it; JSON-RPC error data reaches the message"
 )
+
+// Every process-backed adapter receives the same progress and cleanup behavior.
+for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+  const child = new FakeProcess()
+  const watch = new ProviderStartupWatch(child, { harness, silenceMs: 80, totalMs: 1_000 })
+  await watch.step("initialize", Promise.resolve(undefined))
+  const answer = Promise.withResolvers<string>()
+  const ticker = setInterval(() => child.stdout.emit("data", "progress"), 20)
+  const work = watch.step("load existing session", answer.promise)
+  await sleep(160)
+  answer.resolve("same-session")
+  assert.equal(await work, "same-session")
+  clearInterval(ticker)
+  watch.dispose()
+  assert.equal(child.stdout.listenerCount("data"), 0)
+  assert.equal(child.stderr.listenerCount("data"), 0)
+  assert.equal(child.listenerCount("exit"), 0)
+}
+console.log("Provider startup contract: six profiles, progress beyond the silence window, same-session result and listener cleanup")

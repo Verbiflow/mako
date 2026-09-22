@@ -143,6 +143,7 @@ async function startPackage() {
     MAKO_BACKEND_TOKEN: "",
     MAKO_STANDALONE: "1",
     MAKO_DATA_ROOT: join(root, "profile"),
+    MAKO_CURSOR_SDK_ROOT: join(root, "cursor"),
   }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.VITE_DEV_SERVER_URL

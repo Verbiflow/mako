@@ -74,8 +74,9 @@ let outcome
 try {
   const a = await clientFor("a"),
     b = await clientFor("b")
-  const id = browser.status().find((item) => item.id === "chrome")?.id
-  assert.ok(id, "Installed Chrome must be discoverable")
+  const candidates = browser.status().filter((item) => item.kind === "chromium")
+  const id = process.env.MAKO_TEST_BROWSER ?? (candidates.length === 1 ? candidates[0].id : undefined)
+  assert.ok(id, "Choose MAKO_TEST_BROWSER from registered Chromium profiles when more than one is available")
   await call(a, "connect", { browser: id })
   const generation = browser.status().find((item) => item.id === id)
     .connection.generation

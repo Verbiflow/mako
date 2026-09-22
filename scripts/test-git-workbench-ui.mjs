@@ -69,11 +69,12 @@ async function check() {
     evaluate(
       `import('/src/dev/git-workbench-check.tsx').then(m => { ${code} })`
     )
-  const capture = async (name) => {
+  const capture = async (name, sidebar = false) => {
     await evaluate(
       "document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))"
     )
-    await writeFile(join(root, name), (await page.capturePage()).toPNG())
+    const rectangle = sidebar ? await evaluate("(() => { const aside=document.querySelector('aside'); const r=aside.getBoundingClientRect(); const last=aside.querySelector('fieldset')?.getBoundingClientRect(); return {x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(Math.min(r.height,(last?.bottom ?? r.bottom)-r.y+8))} })()") : undefined
+    await writeFile(join(root, name), (await page.capturePage(rectangle)).toPNG())
   }
   const until = async (code) => {
     const end = Date.now() + 15000
@@ -86,6 +87,7 @@ async function check() {
     }
   }
   const click = async (selector) => {
+    await evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
     const point = await evaluate(
       `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if(!el)throw new Error('Missing target'); const r=el.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2} })()`
     )
@@ -137,7 +139,7 @@ async function check() {
     )
     assert.equal(
       await evaluate(
-        "document.querySelectorAll('[data-push-control] button').length"
+        "document.querySelectorAll('[data-push-control] button[aria-label=\"Push to main\"]').length"
       ),
       1
     )
@@ -203,9 +205,19 @@ async function check() {
     await fixture("m.finishPush('/fixture/second', false)")
     await fixture("m.selectProject('/fixture/second', 4)")
     await until(
-      "document.querySelector('[data-push-control]')?.textContent.includes('Retry push')"
+      "document.querySelector('[data-push-control]')?.textContent.includes('Push 2')"
     )
     await capture("push-failed.png")
+    assert.equal(await evaluate("document.body.textContent.includes('Retry push')"), false)
+    await fixture("m.incoming('/fixture/second')")
+    await until("Boolean(document.querySelector('[aria-label=\"Pull and merge 3 incoming commits\"]'))")
+    assert.equal(await evaluate("document.querySelector('[aria-label=\"Push to main\"]').disabled"), true)
+    window.setContentSize(1200, 400)
+    await capture("pull-before-push.png", true)
+    window.setContentSize(1200, 900)
+    await click('[aria-label="Pull and merge 3 incoming commits"]')
+    await until("document.querySelector('[data-push-control]')?.textContent.includes('Push 3')")
+    await capture("merged-ready-to-push.png", true)
     await click('[aria-label="Push to main"]')
     await until("Boolean(document.querySelector('[data-push-state=pushing]'))")
     await page.debugger.sendCommand("Emulation.setEmulatedMedia", {
@@ -245,27 +257,37 @@ async function check() {
     )
     assert.equal(await fixture("return m.calls.commits"), 1)
     await capture("committed.png")
+    window.setContentSize(1200, 360)
+    await fixture("m.incoming('/fixture/commit', true)")
+    await until("document.body.textContent.includes('Continue merge')")
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Continue merge').disabled"), true)
+    await capture("merge-conflicts.png", true)
+    window.setContentSize(1200, 560)
     await fixture("m.selectMultiRepositoryProject()")
     await until("document.querySelectorAll('section > button[aria-expanded]').length === 2")
     assert.equal(await evaluate("document.body.textContent.includes('Repositories')"), false)
-    assert.equal(await evaluate("document.querySelector('[aria-label=\"Changes in app\"] [data-change-list]')?.dataset.rowCount"), "12")
-    await click('button[aria-label="app"]')
-    await until("!document.querySelector('[data-change-list]')")
-    await click('button[aria-label="app"]')
+    assert.equal(await evaluate("document.querySelector('[aria-label=\"Changes in mako\"] [data-change-list]')?.dataset.rowCount"), "12")
+    assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)
+    assert.ok(await evaluate("document.querySelector('button[aria-label=mako-backend]').getBoundingClientRect().top < 650"), "The next repository follows content instead of being pushed to the panel bottom")
+    await capture("repositories-app.png", true)
+    await click('button[aria-label="mako"]')
+    await until("document.querySelector('button[aria-label=mako]').getAttribute('aria-expanded') === 'false'")
+    assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)
+    await click('button[aria-label="mako"]')
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '12'")
-    await capture("repositories-app.png")
-    await click('button[aria-label="backend"]')
+    await click('button[aria-label="mako-backend"]')
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '1'")
     assert.equal(await fixture("return m.calls.selections"), 1)
     assert.equal(await evaluate("import('/src/state/session.ts').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
-    assert.equal(await evaluate("document.querySelector('button[aria-label=backend]').getAttribute('aria-expanded') === 'true'"), true)
-    await capture("repositories-backend.png")
-    await click('button[aria-label="app"]')
+    assert.equal(await evaluate("document.querySelector('button[aria-label=mako-backend]').getAttribute('aria-expanded') === 'true'"), true)
+    assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)
+    await capture("repositories-backend.png", true)
+    await click('button[aria-label="mako"]')
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '12'")
     assert.equal(await evaluate("import('/src/state/session.ts').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
-    console.log("Repository sections: collapse and expand inline, switch both ways, keeps the workspace, and displays the selected repository's files")
+    console.log("Repository selection: switches both ways, keeps the workspace, and shows one shared commit box")
     console.log(
-      "Git UI: 13,000 files with bounded DOM, last-file staging, frame responsiveness, one Push control, pending/success/failure/retry, project isolation, history skeletons, commit feedback and reduced motion passed; fixture transport only, no remote pushes"
+      "Git UI: 13,000 files with bounded DOM, last-file staging, frame responsiveness, one Push control, pending/success/failure with counts, pull/merge/conflicts, project isolation, history skeletons, commit feedback and reduced motion passed; fixture transport only, no remote pushes"
     )
     if (process.env.MAKO_GIT_REAL_URL && process.env.MAKO_GIT_REAL_CWD) {
       await window.loadURL(process.env.MAKO_GIT_REAL_URL)
@@ -300,6 +322,19 @@ async function check() {
         )
       )
       await capture("real-project-last-files.png")
+      const repositories = await evaluate("import('/src/state/session.ts').then(m => m.store.get().git?.repositories ?? [])")
+      for (const repository of [...repositories].reverse()) {
+        const selector = `button[aria-label=${JSON.stringify(repository.label)}]`
+        await click(selector)
+        await until(`import('/src/state/session.ts').then(m => m.store.get().git?.root === ${JSON.stringify(repository.root)} && Boolean(document.querySelector('[data-change-list]')))`)
+        const selected = await evaluate("import('/src/state/session.ts').then(m => ({cwd:m.store.get().git?.cwd,root:m.store.get().git?.root,files:m.store.get().git?.files.length}))")
+        assert.equal(selected.root, repository.root)
+        assert.equal(selected.cwd, process.env.MAKO_GIT_REAL_CWD)
+        assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)
+        assert.equal(await evaluate("document.body.textContent.includes('Choose a repository in the current workspace')"), false)
+        await capture(`real-repository-${repository.label}.png`)
+        console.log(JSON.stringify({realRepository: repository.label, ...selected}))
+      }
       console.log(
         "Real project inspected read-only: no staging, committing or pushing"
       )

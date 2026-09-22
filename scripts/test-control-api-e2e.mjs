@@ -147,6 +147,16 @@ return {receipt,proof:await state.window.expect({role:'TextField',name:'Proof',v
     true
   )
   await until(async () => (await read(status)).value === "native-v2")
+  for (const value of ["", "  ", "  東京 🐟  ", "00123", "\tline\n"]) {
+    const exact = await cell(`const view=await state.window.observe();
+await state.window.setValue(view.get({role:'TextField',name:'Proof'}).ref,${JSON.stringify(value)});
+const proof=await state.window.expect({role:'TextField',name:'Proof',value:${JSON.stringify(value)}});
+let negative=false;try {await state.window.expect({role:'TextField',name:'Proof',value:${JSON.stringify(value + ' ')}},{timeoutMs:0})} catch {negative=true}
+return {proof,negative};`)
+    assert.equal(exact.proof.evidence.value, value)
+    assert.equal(exact.negative, true)
+    await until(async () => (await read(status)).input === value)
+  }
   const launched = await cell(
     `return await control.native('launch_app',{app_path:${JSON.stringify(resolve("node_modules/electron/dist/Electron.app"))},additional_arguments:[${JSON.stringify(page.main)}],page_route:true});`
   )

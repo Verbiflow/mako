@@ -42,17 +42,14 @@ import {
   getDefaultEnvironment,
 } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { z } from "zod"
-import {
-  ControlProgramRequestSchema,
-  type ControlProgramRequest,
-} from "@mako/control/program"
+import { type ControlProgramRequest } from "@mako/control/program"
 import {
   cuaEmbeddedPid,
   ensureCuaEmbedded,
   stopCuaEmbedded,
 } from "../electron/cua-embedded.js"
 import { resolveExecutable } from "../electron/executable.js"
-import type { JsonValue } from "../electron/codex-app-json.js"
+import type { JsonObject, JsonValue } from "../electron/codex-app-json.js"
 import {
   frontmostPid,
   sampleFrontmost,
@@ -466,8 +463,14 @@ const toolResultSchema = z.object({
 
 interface Surface {
   instructions: string
-  tool: ChatTool
-  exec(request: string | ControlProgramRequest): Promise<z.infer<typeof toolResultSchema>>
+  tools: ChatTool[]
+  call(
+    name: string,
+    args: JsonObject
+  ): Promise<z.infer<typeof toolResultSchema>>
+  exec(
+    request: string | ControlProgramRequest
+  ): Promise<z.infer<typeof toolResultSchema>>
   close(): Promise<void>
 }
 
@@ -496,7 +499,7 @@ async function openSurface(
       socket,
       "--driver",
       resolveExecutable("cua-driver"),
-      ...(surface === "computer" ? ["--driver-test"] : []),
+      ...(surface === "legacy" ? ["--driver-test"] : []),
     ],
     env: {
       ...getDefaultEnvironment(),
@@ -515,16 +518,23 @@ async function openSurface(
     surface === "unified" ? "mako_control_exec" : "mako_computer_exec"
   const exec = tools.find((tool) => tool.name === execName)
   if (!exec) throw new Error(`the server offers no ${execName}`)
+  const call = async (name: string, args: JsonObject) =>
+    toolResultSchema.parse(
+      await client.callTool({ name, arguments: args }, undefined, {
+        timeout: 90_000,
+      })
+    )
   return {
     instructions: client.getInstructions() ?? "",
-    tool: {
-      type: "function",
+    tools: tools.map((tool) => ({
+      type: "function" as const,
       function: {
-        name: exec.name,
-        description: exec.description ?? "",
-        parameters: exec.inputSchema,
+        name: tool.name,
+        description: tool.description ?? "",
+        parameters: tool.inputSchema,
       },
-    },
+    })),
+    call,
     exec: async (request) => {
       const source = z.string().safeParse(request)
       return toolResultSchema.parse(
@@ -564,6 +574,8 @@ interface TurnRecord {
 }
 
 interface ToolRecord {
+  tool: string
+  arguments: string
   ms: number
   bytes: number
   imageBytes: number
@@ -633,7 +645,7 @@ async function attempt(
   try {
     while (turns < maxTurns) {
       turns++
-      const { message, usage, ms } = await model.chat(messages, [surface.tool])
+      const { message, usage, ms } = await model.chat(messages, surface.tools)
       modelMs += ms
       perTurn.push({
         ms,
@@ -656,18 +668,14 @@ async function attempt(
       > = []
       for (const call of message.tool_calls) {
         calls++
-        const parsedArguments = ControlProgramRequestSchema.safeParse(
-          JSON.parse(call.function.arguments || "{}")
-        )
-        const request = parsedArguments.success
-          ? parsedArguments.data
-          : { source: "" }
-        const source =
-          request.source ?? `wait for control cell ${String(request.cell)}`
+        // Preserve the actual request. Replacing malformed arguments with
+        // {source:""} concealed precisely the contract failures being measured.
+        const source = call.function.arguments || "{}"
         const callStarted = performance.now()
         let result: z.infer<typeof toolResultSchema>
         try {
-          result = await surface.exec(request)
+          const args = z.record(z.string(), z.json()).parse(JSON.parse(source))
+          result = await surface.call(call.function.name, args)
         } catch (failure) {
           result = {
             isError: true,
@@ -703,6 +711,8 @@ async function attempt(
             .length,
           isError: result.isError === true,
           source: source.slice(0, 400),
+          tool: call.function.name,
+          arguments: source,
         }
         if (record.isError) record.error = text.slice(0, 300)
         toolLog.push(record)
@@ -1098,12 +1108,7 @@ function selfCheck(taskFile: TaskFile | undefined) {
     )
   )
     throw new Error("jsonObjectArrays should read a final fenced object")
-  if (
-    replySatisfies(
-      '{"pages":["General"],"observations":["one"]}',
-      audit
-    )
-  )
+  if (replySatisfies('{"pages":["General"],"observations":["one"]}', audit))
     throw new Error("jsonObjectArrays should enforce members and minimums")
   console.log(
     `Agent benchmark self-check: reply checkers hold${taskFile ? `; ${taskFile.tasks.length} task(s) on ${taskFile.target.bundle_id} parse` : ""}. Run with --live to measure.`
@@ -1148,7 +1153,7 @@ if (!options.live) {
     )
     if (!selected.length) throw new Error("no task selected")
     console.log(
-      `Model ${model.name}; surface ${options.surface}; transport ${options.transport}; images ${options.images ? "forwarded" : "withheld"}; ${selected.length} task(s) × ${options.runs} run(s); tool description ${Buffer.byteLength(surface.tool.function.description)} bytes, instructions ${Buffer.byteLength(surface.instructions)} bytes; rows → ${out}`
+      `Model ${model.name}; surface ${options.surface}; transport ${options.transport}; images ${options.images ? "forwarded" : "withheld"}; ${selected.length} task(s) × ${options.runs} run(s); tool description ${Buffer.byteLength(JSON.stringify(surface.tools))} bytes, instructions ${Buffer.byteLength(surface.instructions)} bytes; rows → ${out}`
     )
     const rows: Row[] = []
     for (const task of selected) {

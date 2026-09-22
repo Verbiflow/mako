@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import { spawn } from "node:child_process"
-import { createHash } from "node:crypto"
+import { createHash, generateKeyPairSync } from "node:crypto"
 import {
   mkdtemp,
   mkdir,
@@ -19,9 +19,9 @@ import {
   BrowserTargetSchema,
 } from "../dist-electron/contracts/browser-control.js"
 
-const executable = process.env.MAKO_TEST_CHROME
+const executable = process.env.MAKO_TEST_BROWSER_EXECUTABLE
 if (!executable)
-  throw new Error("Set MAKO_TEST_CHROME to a Chrome for Testing executable")
+  throw new Error("Set MAKO_TEST_BROWSER_EXECUTABLE to a Chromium executable that supports loading unpacked extensions")
 const root = await mkdtemp(join(tmpdir(), "mako-extension-e2e-"))
 const registrations = join(root, "registrations")
 const extension = resolve("dist-browser-extension")
@@ -35,6 +35,14 @@ const extensionId = createHash("sha256")
   .replace(/[0-9a-f]/g, (value) =>
     String.fromCharCode(97 + parseInt(value, 16))
   )
+// A second extension exposes a frame, reproducing Chromium's debugger
+// security detach without modifying any extension in the user's profile.
+const companion = join(root, "frame-extension")
+await mkdir(companion)
+const frameKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({ type: "spki", format: "der" })
+const frameId = createHash("sha256").update(frameKey).digest("hex").slice(0, 32).replace(/[0-9a-f]/g, x => String.fromCharCode(97 + parseInt(x, 16)))
+await writeFile(join(companion, "manifest.json"), JSON.stringify({manifest_version:3,name:"Mako restricted frame fixture",version:"1.0",key:frameKey.toString("base64"),web_accessible_resources:[{resources:["frame.html"],matches:["http://127.0.0.1/*"]}]}))
+await writeFile(join(companion, "frame.html"), "<p>Isolated extension frame fixture</p>")
 const hosts = join(root, "profile", "NativeMessagingHosts")
 const registrationPath = join(hosts, "dev.mako.browser.json")
 await mkdir(hosts, { recursive: true })
@@ -110,8 +118,8 @@ try {
       executable,
       [
         `--user-data-dir=${join(root, "profile")}`,
-        `--load-extension=${extension}`,
-        `--disable-extensions-except=${extension}`,
+        `--load-extension=${extension},${companion}`,
+        `--disable-extensions-except=${extension},${companion}`,
         "--headless=new",
         "--remote-debugging-port=0",
         "--no-first-run",
@@ -158,7 +166,7 @@ try {
     try {
       await run({ action: "connect", browser: value.id })
       const target = BrowserTargetSchema.parse(
-        await run({ action: "open", browser: value.id })
+        await run({ action: "open", browser: value.id, disposition: "window" })
       )
       await run({
         action: "navigate",
@@ -177,6 +185,14 @@ try {
         value: `round-${round}`,
         trusted: true,
       })
+      // Complete repeated replacements on the same external-browser tab.
+      for (const text of ["00123", "  東京 🐟  ", "mako-background-3", "", "  ", "again"]) {
+        const view = await run({action:"observe", target})
+        const ref = view.nodes.find(node => node.role === "textbox").ref
+        await run({action:"type", target, ref, text, clear:true})
+        const actual = await run({action:"evaluate",target,expression:'document.querySelector("input").value'})
+        assert.equal(actual.result.value, text)
+      }
       const other = new BrowserService([
         {
           id: value.id,
@@ -206,6 +222,7 @@ try {
       } finally {
         other.close()
       }
+      if (!process.argv.includes("--background-input")) {
       const screenshot = await run({ action: "screenshot", target })
       assert.ok(
         screenshot.coordinates.imageWidth > 0 &&
@@ -215,6 +232,7 @@ try {
         Buffer.from(screenshot.data, "base64").subarray(0, 2).toString("hex"),
         "ffd8"
       )
+      }
       await assert.rejects(
         run({
           action: "open",
@@ -243,8 +261,16 @@ try {
         ),
         false
       )
+      const restricted = BrowserTargetSchema.parse(await run({action:"open",browser:value.id,disposition:"window"}))
+      await run({action:"navigate",target:restricted,url:`http://127.0.0.1:${page.address().port}`})
+      await assert.rejects(run({action:"cdp",target:restricted,method:"Runtime.evaluate",params:{
+        expression:`new Promise(resolve=>{const frame=document.createElement('iframe');frame.src='chrome-extension://${frameId}/frame.html';document.body.appendChild(frame);setTimeout(resolve,1000)})`,awaitPromise:true
+      }}), error => error.detail?.outcome === "unknown")
+      const detachedCleanup = await service.releaseOwner("extension-e2e")
+      assert.equal(detachedCleanup.closed, 1, "security detach must not lose ownership of the still-open tab")
+      assert.equal((await run({action:"tabs",browser:value.id})).some(entry=>entry.targetId===restricted.tab),false)
       console.log(
-        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, screenshot, temporary tab/window ownership and cleanup passed`
+        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, repeated replacement, restricted-frame detach, temporary tab/window ownership and cleanup passed`
       )
     } finally {
       await service.close()

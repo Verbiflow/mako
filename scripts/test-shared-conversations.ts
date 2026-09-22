@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
+import { createServer } from "node:http"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -11,7 +12,6 @@ import { startWebHost } from "../electron/web-host.js"
 import { invokeRuntime, subscribeRuntime, probeRuntime } from "../electron/runtime-connection.js"
 import { runtimeLocation } from "../electron/runtime-service.js"
 import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
-import { planContinuation } from "../electron/contracts/thread-continuation.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import type { HostEvent, LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
 
@@ -60,20 +60,23 @@ const router = new SharedConversations(desktopMemory, (event) => { events.push(e
 let desktopHost: Awaited<ReturnType<typeof startWebHost>>
 const info = (pid: number) => ({ protocol: 1 as const, instanceId: randomUUID(), pid, version: "fixture", methods: Object.keys(hostCallInputs) })
 const absentFile = async () => new Response(null, { status: 404 })
-let snapshotIdentityCase: "normal" | "missing" | "conflicting" | "inactive" = "normal"
+let snapshotIdentityCase: "normal" | "missing" | "conflicting" | "inactive" | "transient" = "normal"
 async function ownerCall(channel: string, args: unknown[]) {
   let value
   switch (channel) {
     case "mako:live-snapshot": {
       const [id] = hostCallInputs[channel].parse(args)
       const snapshot = await owner.refreshedSnapshot(id)
-      value = snapshot && snapshotIdentityCase !== "normal" ? {
+      const observedCase = snapshotIdentityCase
+      if (snapshotIdentityCase === "transient") snapshotIdentityCase = "normal"
+      value = snapshot && observedCase !== "normal" ? {
         ...snapshot,
-        session: { ...snapshot.session, nativeId: snapshotIdentityCase === "conflicting" ? "different-native" : undefined },
-        control: snapshot.control && { ...snapshot.control, activeBindingId: snapshotIdentityCase === "inactive" ? "different-binding" : snapshot.control.activeBindingId },
+        session: { ...snapshot.session, nativeId: (observedCase === "conflicting" || observedCase === "transient") ? "different-native" : undefined },
+        control: snapshot.control && { ...snapshot.control, activeBindingId: observedCase === "inactive" ? "different-binding" : snapshot.control.activeBindingId },
       } : snapshot
       break
     }
+    case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallInputs[channel].parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
     case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallInputs[channel].parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
     case "mako:live-permission": { const [id, requestId, response] = hostCallInputs[channel].parse(args); value = await owner.permission(id, requestId, response); break }
     case "mako:live-cancel": { const [id] = hostCallInputs[channel].parse(args); value = await owner.cancel(id); break }
@@ -82,6 +85,12 @@ async function ownerCall(channel: string, args: unknown[]) {
     default: throw new Error(`Unexpected method ${channel}`)
   }
   return JSON.stringify({ ok: true, value })
+}
+async function attach(router: SharedConversations, provider: string, nativeId: string) {
+  const resolved = await router.resolve(provider, nativeId)
+  assert.equal(resolved.kind, "attached")
+  if (resolved.kind !== "attached") throw new Error("Owner did not attach")
+  return resolved.snapshot
 }
 async function until(predicate: () => boolean, reason: string) {
   const deadline = Date.now() + 5_000
@@ -107,19 +116,19 @@ try {
     const id = randomUUID()
     await owner.start(provider, root, { conversationId: id })
     await until(() => owner.snapshot(id)?.session.connection === "connected", `${provider} connects`)
-    assert.deepEqual(planContinuation({ path: `/fixture/${provider}`, harness: provider, nativeId: `${provider}-native`, cwd: root, locked: true }, {
-      attached: owner.connectedSession(provider, `${provider}-native`), live: { available: true, canResume: true }, nativeInstalled: true, running: false, external: "open",
-    }), { transport: "attached", provider, conversationId: id }, "a local connected owner wins over an external-process probe for every provider")
-    assert.equal(await router.attachment(provider, `${provider}-native`), id)
-    const [a, b] = await Promise.all([router.attach(provider, `${provider}-native`), router.attach(provider, `${provider}-native`)])
+    assert.equal(owner.connectedSession(provider, `${provider}-native`), id)
+    assert.equal((await router.resolve(provider, `${provider}-native`)).kind, "attached")
+    const [a, b] = await Promise.all([attach(router, provider, `${provider}-native`), attach(router, provider, `${provider}-native`)])
     assert.equal(wireSnapshot.parse(a).session.id, id)
     assert.equal(wireSnapshot.parse(b).session.id, id, "two windows attach to the same conversation")
+    snapshotIdentityCase = "transient"
+    assert.equal(wireSnapshot.parse(await attach(router, provider, `${provider}-native`)).session.id, id, "one stale attachment snapshot is refreshed without a new executor")
     snapshotIdentityCase = "missing"
-    assert.equal(wireSnapshot.parse(await router.attach(provider, `${provider}-native`)).session.id, id, "durable active binding identifies a disconnected summary")
+    assert.equal(wireSnapshot.parse(await attach(router, provider, `${provider}-native`)).session.id, id, "durable active binding identifies a disconnected summary")
     snapshotIdentityCase = "conflicting"
-    await assert.rejects(router.attach(provider, `${provider}-native`), /owner changed/, "conflicting native identity remains refused")
+    assert.equal((await router.resolve(provider, `${provider}-native`)).kind, "attached", "durable bindings remain addressable after another native session becomes current")
     snapshotIdentityCase = "inactive"
-    await assert.rejects(router.attach(provider, `${provider}-native`), /owner changed/, "an inactive binding cannot attest current ownership")
+    assert.equal((await router.resolve(provider, `${provider}-native`)).kind, "attached", "historical bindings resolve to the original journal")
     snapshotIdentityCase = "normal"
 
     assert.equal(desktopMemory.heldBy(provider, `${provider}-native`)?.conversationId, id)
@@ -150,9 +159,9 @@ try {
     assert.equal(owner.hibernateIfIdle(id), true)
     await until(() => owner.snapshot(id)?.session.connection === "hibernated", "owner hibernates")
     assert.equal(desktopMemory.heldBy(provider, `${provider}-native`), null)
-    assert.equal(await router.attachment(provider, `${provider}-native`), id, "hibernation keeps the journal reachable")
+    assert.equal((await router.resolve(provider, `${provider}-native`)).kind, "attached", "hibernation keeps the journal reachable")
     const reloadedRouter = new SharedConversations(desktopMemory, () => {})
-    assert.equal(wireSnapshot.parse(await reloadedRouter.attach(provider, `${provider}-native`)).session.id, id, "a new desktop connection finds the sleeping owner")
+    assert.equal(wireSnapshot.parse(await attach(reloadedRouter, provider, `${provider}-native`)).session.id, id, "a new desktop connection finds the sleeping owner")
     reloadedRouter.dispose()
     const wakingId = randomUUID()
     await invokeRuntime(desktopSocket, client, "mako:live-prompt", [id, wakingId, `${provider} wake`])
@@ -187,7 +196,7 @@ try {
 
   const missingLocation = runtimeLocation(join(root, "missing-ledger"))
   mkdirSync(missingLocation.directory, { recursive: true, mode: 0o700 })
-  const missingMemory = new SessionMemory(db, { pid: 505, startedAt: 5, label: "Mako with a missed ledger write", socket: missingLocation.socket }, { alive: () => true })
+  const missingMemory = new SessionMemory(db, { pid: 505, startedAt: 5, label: "Mako with a missed ledger write", socket: missingLocation.socket, launch: { dataRoot: join(root, "missing-ledger"), executable: process.execPath, cwd: root, profile: "fixture", args: [] } }, { alive: () => true })
   const missingId = randomUUID()
   const missingHost = await startWebHost(missingLocation.socket, async (channel, args) => {
     if (channel === "mako:live-locate") {
@@ -201,7 +210,7 @@ try {
   }, absentFile, undefined, info(505))
   try {
     assert.equal(desktopMemory.heldBy("fixture", "missing-native"), null)
-    assert.equal(wireSnapshot.parse(await router.attach("fixture", "missing-native")).session.id, missingId, "discovery repairs a missing ledger entry through the connected owner")
+    assert.equal(wireSnapshot.parse(await attach(router, "fixture", "missing-native")).session.id, missingId, "discovery repairs a missing ledger entry through the connected owner")
     assert.equal(desktopMemory.heldBy("fixture", "missing-native")?.conversationId, missingId)
   } finally {
     missingHost.close()
@@ -216,6 +225,7 @@ try {
   mkdirSync(legacyLocation.directory, { recursive: true, mode: 0o700 })
   const legacyMemory = new SessionMemory(db, { pid: 303, startedAt: 3, label: "Mako's older dev host" }, { alive: () => true })
   const legacyId = randomUUID()
+  const legacyHistorical = randomUUID()
   legacyMemory.hold("fixture", "legacy-native", legacyId)
   let legacyAcknowledgments = 0
   const legacyShutdownId = randomUUID()
@@ -231,10 +241,22 @@ try {
     }
     return JSON.stringify({ ok: true, value: {
     session: { id: legacyId, harness: "fixture", nativeId: "legacy-native" }, requests: [],
+    control: { activeBindingId: legacyId, bindings: [
+      { id: legacyId, provider: "fixture", nativeId: "legacy-native" },
+      { id: legacyHistorical, provider: "fixture", nativeId: "legacy-historical" },
+    ] },
   } })
   }, absentFile, undefined, { ...info(303), methods: ["mako:live-snapshot", "mako:shutdown-ack"] })
   try {
-    assert.equal(wireSnapshot.parse(await router.attach("fixture", "legacy-native")).session.id, legacyId)
+    const legacyWithoutHint = await router.resolve("fixture", "legacy-native", false)
+    assert.equal(legacyWithoutHint.kind, "attached", "a live ledger hold repairs its route even before the catalog annotation catches up")
+    assert.equal(wireSnapshot.parse(await attach(router, "fixture", "legacy-native")).session.id, legacyId)
+    const legacyResolution = await router.resolve("fixture", "legacy-native")
+    assert.ok(legacyResolution.kind === "attached")
+    assert.equal(legacyResolution.bindingId, undefined, "active older owners use their existing prompt method")
+    legacyMemory.hold("fixture", "legacy-historical", legacyId)
+    assert.equal((await router.resolve("fixture", "legacy-historical")).kind, "unavailable", "older owners cannot silently redirect an exact historical send")
+    legacyMemory.release("fixture", "legacy-historical", legacyId)
     assert.equal(desktopMemory.routeForConversation(legacyId)?.socket, legacyLocation.socket)
     const legacyForkId = randomUUID()
     await router.route("mako:live-fork", [legacyId, { id: legacyForkId, provider: "fixture", point: { kind: "before-run", requestId: randomUUID() } }])
@@ -263,7 +285,7 @@ try {
   registration.close()
   let restartedPid: number | undefined
   try {
-    assert.equal(wireSnapshot.parse(await router.attach("fixture", "restart-native")).session.id, restartId)
+    assert.equal(wireSnapshot.parse(await attach(router, "fixture", "restart-native")).session.id, restartId)
     const probe = await probeRuntime(restartLocation.socket)
     assert.equal(probe.state, "ready")
     if (probe.state === "ready") restartedPid = probe.info.pid
@@ -300,4 +322,35 @@ try {
   ownerMemory.close()
   desktopMemory.close()
   rmSync(root, { recursive: true, force: true })
+}
+
+// Accumulated unresponsive registrations must not make discovery wait per host forever.
+{
+  const directory = mkdtempSync("/tmp/mako-discovery-bound-")
+  const memory = new SessionMemory(join(directory, "memory.sqlite"), { pid: process.pid, startedAt: 1, label: "fixture", socket: join(directory, "self.sock") })
+  const servers: ReturnType<typeof createServer>[] = []
+  const sockets: string[] = []
+  const discovery = new SharedConversations(memory, () => {})
+  let probes = 0
+  try {
+    for (let index = 0; index < 48; index++) {
+      const socket = join(directory, `${index}.sock`)
+      const server = createServer(() => { probes++ })
+      servers.push(server)
+      sockets.push(socket)
+      await new Promise<void>((resolve) => server.listen(socket, resolve))
+    }
+    memory.hostSockets = () => sockets
+    const began = Date.now()
+    const result = await discovery.resolve("codex", "missing-owner")
+    assert.equal(result.kind, "unavailable", "an incomplete scan never authorizes another writer")
+    assert.ok(Date.now() - began < 5_000, "discovery has a total budget, not a budget per registered host")
+    assert.ok(probes < sockets.length, "stop before probing the entire slow registry")
+    console.log("Owner discovery: bounded total wait and no false unowned result after deadline")
+  } finally {
+    discovery.dispose()
+    for (const server of servers) { server.closeAllConnections(); server.close() }
+    memory.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
 }

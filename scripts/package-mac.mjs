@@ -190,6 +190,10 @@ try {
         const schema = JSON.parse(execFileSync(target, ["--schema"], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }))
         const expected = JSON.parse(await readFile(join(stage, "vendor/kiri/darwin-arm64/manifest.json"), "utf8"))
         assert.equal(schema.version, expected.protocol, "Packaged Kiri protocol differs from the client build")
+        assert.equal(schema.schema_hash, expected.schema, "Packaged Kiri schema differs from the prepared engine")
+        const clientSchema = JSON.parse(extractFile(archive, "node_modules/@kiri/client/dist/schema.json").toString("utf8"))
+        assert.equal(schema.version, clientSchema.version, "Packaged Kiri protocol differs from the packaged SDK")
+        assert.equal(schema.schema_hash, clientSchema.schema_hash, "Packaged Kiri schema differs from the packaged SDK")
       } else assert.equal(await digest(target), file.sha256, `Packaged Kiri resource differs: ${file.path}`)
       verified.push({ path: target, sha256: await digest(target) })
       continue
