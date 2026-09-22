@@ -48,9 +48,8 @@ export const installCursor: ProviderModule = (host) => {
       },
     })
   )
-  // Settings and the composer read the remembered answer; ask once at
-  // startup so the first paint already knows whose key Cursor runs under.
-  void auth.status().catch(() => undefined)
+  // Resolve credentials when Cursor is used. A locked keychain must not
+  // prevent the shared host from starting for every other provider.
   host.processProbes.register(cursorProcessProbe)
   host.mcpSources.register(cursorMcpSource)
   host.skillSources.register(cursorSkillSource)

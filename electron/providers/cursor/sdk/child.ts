@@ -469,14 +469,19 @@ function main(): void {
     void handle(line)
   })
   lines.on("close", () => {
+    // The host is gone; SDK cancellation or store disposal must not retain us.
+    const deadline = setTimeout(() => process.exit(1), 5_000)
+    deadline.unref()
     void close().finally(() => process.exit(0))
   })
-  process.on("uncaughtException", (error) => {
-    log("warn", `uncaught: ${error.message}`)
-  })
-  process.on("unhandledRejection", (cause) => {
-    log("warn", `unhandled: ${wireError(cause).message}`)
-  })
+  // Never report a broken protocol pipe through that same pipe: doing so from
+  // uncaughtException produces an endless EPIPE/error/log loop after host exit.
+  // Request-level errors are handled above; an uncaught failure is fatal.
+  process.stdin.on("error", () => process.exit(1))
+  process.stdout.on("error", () => process.exit(1))
+  process.stderr.on("error", () => process.exit(1))
+  process.on("uncaughtException", () => process.exit(1))
+  process.on("unhandledRejection", () => process.exit(1))
 }
 
 main()

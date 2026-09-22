@@ -1,8 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { ProviderStartupWatch, type StartupWatchOptions } from "../../../provider-startup.js"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
-import { hostWarn } from "../../../host-log.js"
+import { hostLog, hostWarn } from "../../../host-log.js"
 import { trackProviderChild } from "../../../provider-children.js"
 import { headlessNodeExecutable } from "../../../headless-node.js"
 import {
@@ -51,6 +52,8 @@ export interface CursorSdkClientOptions {
   entry?: string
   execPath?: string
   requestTimeoutMs?: number
+  /** Test hook for the shared startup policy; runtime requests keep their own deadline. */
+  startupTimeouts?: Pick<StartupWatchOptions, "silenceMs" | "totalMs">
 }
 
 interface Pending {
@@ -73,6 +76,7 @@ type Params<Method extends SdkMethod> = Extract<SdkRequest, { method: Method }> 
 
 /** Requests that legitimately outlast the ordinary deadline: a browser sign-in, and a steer — the run holds its acknowledgement until the agent takes the text or the turn ends, so a request timeout would kill a steer the child was still legitimately holding. */
 const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login", "steer"])
+const STARTUP_METHODS: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["hello", "authStatus", "models", "open"])
 
 export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
@@ -87,7 +91,7 @@ export function cursorSdkChildEntry(): string {
  */
 export class CursorSdkClient {
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
-  private readonly child: ChildProcess
+  private readonly child: ChildProcessWithoutNullStreams
   private readonly pending = new Map<number, Pending>()
   private readonly lines = new LineAssembler(CURSOR_SDK_MAX_LINE_BYTES)
   private readonly options: CursorSdkClientOptions
@@ -142,6 +146,24 @@ export class CursorSdkClient {
   }
 
   request<Method extends SdkMethod>(method: Method, params: Params<Method>): Promise<SdkResult<Method>> {
+    if (!STARTUP_METHODS.has(method)) return this.sendRequest(method, params, true)
+    const watch = new ProviderStartupWatch(this.child, {
+      harness: "Cursor", ...this.options.startupTimeouts,
+    })
+    return watch.step(method, this.sendRequest(method, params, false))
+      .catch((error: Error) => {
+        // An SDK method can return a normal typed refusal (e.g. signed out).
+        // Preserve that usable client; a lost/uncertain startup must be closed.
+        if (!(error instanceof CursorSdkError)) this.kill()
+        throw error
+      })
+      .finally(() => {
+        hostLog("cursor-sdk", "startup step", { owner: this.options.owner, steps: watch.summary() })
+        watch.dispose()
+      })
+  }
+
+  private sendRequest<Method extends SdkMethod>(method: Method, params: Params<Method>, bounded: boolean): Promise<SdkResult<Method>> {
     if (!this.alive) return Promise.reject(new CursorSdkDisconnectedError())
     const id = this.nextId++
     // SAFETY: `Params<Method>` is `undefined` exactly for the methods whose request carries no `params`, and otherwise the `params` type of the request whose `method` is `Method`.
@@ -149,7 +171,7 @@ export class CursorSdkClient {
     const schema = SdkResultSchemas[method]
     return new Promise<SdkResult<Method>>((resolve, reject) => {
       const timeout = this.options.requestTimeoutMs ?? 60_000
-      const timer = UNBOUNDED.has(method)
+      const timer = !bounded || UNBOUNDED.has(method)
         ? undefined
         : setTimeout(() => {
             this.pending.delete(id)
@@ -185,9 +207,9 @@ export class CursorSdkClient {
       await this.exited
       return
     }
-    await this.request("close", undefined).catch(() => undefined)
     const timer = setTimeout(() => this.child.kill("SIGKILL"), graceMs)
     try {
+      await this.request("close", undefined).catch(() => undefined)
       await this.exited
     } finally {
       clearTimeout(timer)

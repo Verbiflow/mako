@@ -142,16 +142,19 @@ export function electronKeyEncryption(): CursorKeyEncryption {
   return {
     async available() {
       const { safeStorage } = await electron
+      if (process.platform === "darwin") return safeStorage.isAsyncEncryptionAvailable()
       return (
         safeStorage.isEncryptionAvailable() &&
         (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")
       )
     },
     async encrypt(value) {
-      return (await electron).safeStorage.encryptString(value)
+      const { safeStorage } = await electron
+      return process.platform === "darwin" ? safeStorage.encryptStringAsync(value) : safeStorage.encryptString(value)
     },
     async decrypt(value) {
-      return (await electron).safeStorage.decryptString(value)
+      const { safeStorage } = await electron
+      return process.platform === "darwin" ? (await safeStorage.decryptStringAsync(value)).result : safeStorage.decryptString(value)
     },
   }
 }
