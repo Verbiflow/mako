@@ -1,0 +1,90 @@
+[
+  {
+    "path": "/Users/kashyab/makomono/codex-cu-layers-3-4-deep-dive.md",
+    "sha256": "ed9921a4fca9752cc64269e3ccd5c3266a3799ffa3726b6c9ea2e66f16f8fa63"
+  },
+  {
+    "path": "/Users/kashyab/makomono/chrome-chatgpt.md",
+    "sha256": "9afe2c44a6e5e130cc0d41db21ebc1c03b69da99f71a0f930ebe8783b94b1575"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/packages/control/src/control/client.ts",
+    "sha256": "0653cec7d576d8c013b02dc7da8dbb70a8d3feee8fb2770b4c8374b47d3df637"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/packages/control/src/computer/control-contract.ts",
+    "sha256": "f118c28f313e446ed0b32465ecfdb794f52194f53055b41fc3b1a95a2f393ef6"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/electron/computer-input-target.ts",
+    "sha256": "969f1e63bc3fbdc5060d55d53028eac05b2b738ebc4b035a3a43bbe65352fe89"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/electron/computer-tools-main.ts",
+    "sha256": "809239f35786bfaee2946efba51923f12632a05f5c4a05d9de2ea48ce31015cc"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/browser-extension/tasks.ts",
+    "sha256": "90363aa9bc307025cb55622e157beb164bda77549cd5bdde6791a83321110a2f"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/browser-extension/router.ts",
+    "sha256": "17b228690fff21de5bc58e218e5b4d4e475b74ce9237df71d670b075778b929f"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/vendor/cua-driver/release.json",
+    "sha256": "2a713038718d67cb5d5cb0cb7c0d3801385f0b251d4963a38a12b1c3d067fd9f"
+  },
+  {
+    "path": "/Users/kashyab/makomono/mako/.github/workflows/release.yml",
+    "sha256": "38e0f813ea3f872c65266181d80964d817a0e22a62a014a098504815447706fa"
+  },
+  {
+    "path": "/private/tmp/mako-control-driver-release/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs",
+    "sha256": "756a1d61af076fc98f88e013779bada875ef20c22bf98a64972525aef5900cab"
+  },
+  {
+    "path": "/private/tmp/mako-control-driver-release/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs",
+    "sha256": "de702ccbd43e6338bb7a73bddb2e5cafef0f8f0de994f0666f14ecc373922a10"
+  },
+  {
+    "path": "/private/tmp/mako-control-driver-release/libs/cua-driver/rust/crates/platform-linux/src/input/delivery.rs",
+    "sha256": "f5a539bea8046c8d52921bd0f479c8b4f0efe0d9c73ce51ea551a0922ecb74e6"
+  },
+  {
+    "path": "/private/tmp/mako-control-driver-release/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs",
+    "sha256": "e4f1c228e0dc73bd20e563239ea954db8ec800d589c47151b2e96fd4613e30b4"
+  },
+  {
+    "path": "/private/tmp/mako-control-driver-release/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs",
+    "sha256": "e47aa1b14415bafcd86b53655f240e8204602d896794408432cdb7bdbcba5328"
+  },
+  {
+    "path": "/private/tmp/mako-control-driver-release/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs",
+    "sha256": "6d587a4ce1be74362b192ff8c5fd21dd88fb0dde8dbb38eb39fe90d14ce64690"
+  },
+  {
+    "path": "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/docs/sky-full-desktop-api.md",
+    "sha256": "82fcb54d90f603c8209a4ac15dbb69b8bc3e05c9d9c90e4f20695b27c842f6da"
+  },
+  {
+    "path": "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/cua/docs/tinysky-alt-core-cua-repl.md",
+    "sha256": "416ed1677ab06745ec6e6d8aa781a9e29e6f339c569f3202c49d267c029e6426"
+  },
+  {
+    "path": "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/dist/project/cua/sky_js/src/targets/linux/action_settler.js",
+    "sha256": "1341a4cc821347b9323800e597c0c754e2e6aa4e8d7c036b47163b6d43a57591"
+  },
+  {
+    "path": "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/dist/project/cua/sky_js/src/targets/linux/element_ids.js",
+    "sha256": "cb69a5924a3655a56722d071d4224f79aec5aa37360fc87da031293c5fd51f35"
+  },
+  {
+    "path": "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/dist/project/cua/sky_js/src/targets/linux/sky_linux.js",
+    "sha256": "598bc7a0135a39a327399ae06d28ff15f2ed2bb994b66a78c0eff2c615c9b286"
+  },
+  {
+    "path": "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/dist/project/cua/sky_js/src/targets/mac/get_app_state.js",
+    "sha256": "7b7fe2af461c7cd348c07535b1deae9ea14837dbdac9985ba479eb2e53e5248d"
+  }
+]

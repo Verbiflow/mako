@@ -1,0 +1,32 @@
+{
+  "kind": "source-derived protocol fixture; no native input",
+  "checks": [
+    {
+      "name": "Linux strict locator refuses incomplete observation",
+      "result": "reproduced",
+      "message": "Locator coverage is incomplete. Narrow its scope; nothing was dispatched."
+    },
+    {
+      "name": "Linux exact value assertion lacks driver guarantee",
+      "result": "reproduced",
+      "message": "Exact value unavailable: this native driver returned display-normalized text. An exact-value-capable driver is required; no input was replayed."
+    },
+    {
+      "name": "Linux active:false makes current foreground guard refuse",
+      "result": "reproduced",
+      "message": "Foreground input was not sent: the selected application is not frontmost. Use a background route, or explicitly focus the intended window before foreground input."
+    },
+    {
+      "name": "Capabilities claim background pointer availability without platform/backend evidence",
+      "result": "reproduced",
+      "capability": {
+        "route": "window-pointer",
+        "status": "available",
+        "background": true,
+        "verification": "observation",
+        "detail": "Window-local pixel input is best effort and must be verified from a later observation."
+      }
+    }
+  ],
+  "dispatches": 0
+}
