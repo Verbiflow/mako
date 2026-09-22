@@ -245,6 +245,8 @@ try {
       {
         id: value.id,
         name: value.name,
+        kind: "chromium",
+        transport: "extension",
         requiresApproval: false,
         endpoint: async () => value.endpoint,
       },
@@ -417,8 +419,23 @@ try {
         ),
         false
       )
+      const ephemeral = BrowserTargetSchema.parse(await run({ action: "open", browser: value.id, lifetime: "task" }))
+      const persistent = BrowserTargetSchema.parse(await run({ action: "open", browser: value.id, lifetime: "persistent" }))
+      service.disconnect(value.id)
+      await run({ action: "connect", browser: value.id })
+      await assert.rejects(run({ action: "observe", target: persistent }), error => error.detail?.outcome === "not-dispatched")
+      let remainingAfterDisconnect
+      for (let n = 0; n < 100; n++) {
+        remainingAfterDisconnect = await run({ action: "tabs", browser: value.id })
+        if (!remainingAfterDisconnect.some(t => t.targetId === ephemeral.tab)) break
+        await new Promise(resolve => setTimeout(resolve, 30))
+      }
+      assert.ok(!remainingAfterDisconnect.some(t => t.targetId === ephemeral.tab), "Disconnected client closes task tab")
+      assert.ok(remainingAfterDisconnect.some(t => t.targetId === persistent.tab), "Disconnected client preserves persistent tab")
+      const reclaimed = BrowserTargetSchema.parse(await run({ action: "select", browser: value.id, tab: persistent.tab }))
+      await run({ action: "close", target: reclaimed })
       console.log(
-        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership and cleanup passed`
+        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership, disconnect/reconnect lifetime cleanup and stale-handle refusal passed`
       )
     } finally {
       await service.close()
