@@ -15,9 +15,3 @@ export type {
   CdpCommandResult,
   TypedCdpCall,
 } from "./protocol.js"
-export {
-  pageHelpers,
-  type PageActionCall,
-  type PageHelpers,
-  type PageObserveOptions,
-} from "./steps.js"
