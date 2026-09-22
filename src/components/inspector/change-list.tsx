@@ -8,10 +8,12 @@ const OVERSCAN = 8
 export function ChangeList({
   rows,
   compact,
+  fitContent = false,
   renderRow,
 }: {
   rows: TreeRow[]
   compact: boolean
+  fitContent?: boolean
   renderRow: (row: TreeRow) => ReactNode
 }) {
   const scroller = useRef<HTMLDivElement>(null)
@@ -55,8 +57,9 @@ export function ChangeList({
       onScroll={measure}
       className={cn(
         "min-h-0 overflow-y-auto overscroll-contain px-1 py-1",
-        compact ? "max-h-[34%] shrink-0" : "flex-1"
+        compact ? "max-h-[34%] shrink-0" : fitContent ? "shrink" : "flex-1"
       )}
+      style={fitContent ? { flexBasis: rows.length * ROW_HEIGHT + 8 } : undefined}
       onKeyDown={(event) => {
         if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return
         const target = event.target

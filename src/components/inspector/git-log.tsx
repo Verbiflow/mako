@@ -29,6 +29,7 @@ const GLYPH = {
   modified: { glyph: "M", tone: "text-caution" },
   deleted: { glyph: "D", tone: "text-removed" },
   renamed: { glyph: "R", tone: "text-foreground/70" },
+  conflicted: { glyph: "!", tone: "text-removed" },
   untracked: { glyph: "U", tone: "text-added" },
 } satisfies Record<GitFileStatus, StatusGlyph>
 

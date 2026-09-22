@@ -4,7 +4,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { MultiFileDiff, Virtualizer } from "@pierre/diffs/react"
 import { Action, Blank, IconAction } from "@/components/ui/kit"
 import { useWorkspaceTransition } from "@/state/workspace-transition"
-import { CommitBox, PushControl } from "@/components/inspector/commit-box"
+import { CommitBox, PushControl, GitRemoteNotice } from "@/components/inspector/commit-box"
 import { Annotation, GutterAdd, ReviewBar } from "@/components/inspector/review"
 import { review, useReview } from "@/state/review"
 import { PullRequestCard } from "@/components/inspector/pull-request"
@@ -62,6 +62,7 @@ interface StatusMark {
 }
 
 const MARK = {
+  conflicted: { glyph: "!", tone: "text-removed", title: "Merge conflict" },
   added: { glyph: "A", tone: "text-added", title: "Added" },
   untracked: { glyph: "U", tone: "text-added", title: "Untracked" },
   modified: { glyph: "M", tone: "text-caution", title: "Modified" },
@@ -102,36 +103,42 @@ function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
   const activeRoot = pending ?? snapshot.root
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {snapshot.repositories.map((repository) => {
-        const expanded = activeRoot === repository.root && !collapsed
-        return (
-          <section key={repository.root} className={cn("flex min-h-0 flex-col", expanded ? "flex-1" : "shrink-0")}>
-            <button type="button" aria-label={repository.label} aria-expanded={expanded}
-              disabled={Boolean(pending)} title={repository.root}
-              className="pressable flex h-7 w-full shrink-0 items-center gap-1.5 border-b border-hairline px-2 text-left text-label hover:bg-foreground/5 disabled:cursor-wait"
-              onClick={() => {
-                if (repository.root === snapshot.root) setCollapsed(!collapsed)
-                else void select(repository.root)
-              }}>
-              <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint", expanded && "rotate-90")} />
-              <span className="min-w-0 flex-1 truncate font-medium">{repository.label}</span>
-              <span className="truncate text-faint">{repository.unavailable ? "Unavailable" : repository.branch ?? "Detached HEAD"}</span>
-            </button>
-            {expanded ? (
-              <div role="region" aria-label={`Changes in ${repository.label}`} className="min-h-0 flex-1">
-                {pending ? <GitLoading label={`Reading changes in ${repository.label}`} /> : <WorkspaceChanges key={snapshot.root} />}
-              </div>
-            ) : null}
-          </section>
-        )
-      })}
-      {snapshot.discoveryLimited ? <p className="px-2.5 py-2 text-label text-faint">Some folders could not be scanned. Open a more specific folder to find additional repositories.</p> : null}
-      {error ? <p role="alert" className="px-2.5 py-2 text-label text-removed">{error}</p> : null}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {snapshot.repositories.map((repository) => {
+          const expanded = activeRoot === repository.root && !collapsed
+          return (
+            <section key={repository.root} className={cn("flex min-h-0 flex-col", expanded ? "shrink" : "shrink-0")}>
+              <button type="button" aria-label={repository.label} aria-expanded={expanded}
+                disabled={Boolean(pending)} title={repository.root}
+                className="pressable flex h-7 w-full shrink-0 items-center gap-1.5 border-b border-hairline px-2 text-left text-label hover:bg-foreground/5 disabled:cursor-wait"
+                onClick={() => {
+                  if (repository.root === snapshot.root) setCollapsed((value) => !value)
+                  else void select(repository.root)
+                }}>
+                <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint", expanded && "rotate-90")} />
+                <span className="min-w-0 flex-1 truncate font-medium">{repository.label}</span>
+                <span className="truncate text-faint">{repository.unavailable ? "Unavailable" : repository.branch ?? "Detached HEAD"}</span>
+              </button>
+              {expanded ? (
+                <div role="region" aria-label={`Changes in ${repository.label}`} className="flex min-h-0 shrink flex-col">
+                  {pending ? <GitLoading label={`Reading changes in ${repository.label}`} /> : <WorkspaceChanges key={snapshot.root} inline />}
+                </div>
+              ) : null}
+            </section>
+          )
+        })}
+        {snapshot.discoveryLimited ? <p className="px-2.5 py-2 text-label text-faint">Some folders could not be scanned. Open a more specific folder to find additional repositories.</p> : null}
+        {error ? <p role="alert" className="px-2.5 py-2 text-label text-removed">{error}</p> : null}
+      </div>
+      <fieldset disabled={Boolean(pending)} className="min-w-0 shrink-0 border-0 p-0">
+        <CommitBox key={snapshot.root} staged={snapshot.files.filter((file) => file.staged).length} total={snapshot.files.length} />
+        <PullRequestCard />
+      </fieldset>
     </div>
   )
 }
 
-function WorkspaceChanges() {
+function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   const git = useSession((state) => state.git)
   const workspace = git?.root ?? git?.cwd ?? ""
   const collapsed = usePrefs((prefs) => prefs.collapsedDirs)
@@ -330,7 +337,7 @@ function WorkspaceChanges() {
 
   if (files.length === 0) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
+      <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
         <div className="min-h-0 flex-1">
           <Blank
             icon={<CheckCircle2Icon />}
@@ -346,14 +353,14 @@ function WorkspaceChanges() {
         <CommitsSection onPickFile={pickCommitFile} onPickCommit={pickCommit} defaultOpen />
         {/* Still here on a clean tree — a branch you have finished committing
             is exactly when you want to open the pull request. */}
-        {git?.root ? <CommitBox staged={0} total={0} /> : null}
-        <PullRequestCard />
+        {!inline && git?.root ? <CommitBox staged={0} total={0} /> : null}
+        {!inline ? <PullRequestCard /> : null}
       </div>
     )
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline px-2.5 text-label text-faint">
         {/* The counts already project pending checkbox intent, so a stage
             write in flight only marks the reading busy; swapping the whole
@@ -397,7 +404,7 @@ function WorkspaceChanges() {
         </div>
       </div>
 
-      <ChangeList rows={rows} compact={showDiff} renderRow={(row) => row.kind === "dir" ? (
+      <ChangeList rows={rows} compact={showDiff} fitContent={inline && !showDiff} renderRow={(row) => row.kind === "dir" ? (
         <DirRow row={row} busy={row.paths.some((path) => stageOverrides.has(path))} onToggle={toggleDir} onStage={stagePaths} />
       ) : (
         <FileRow row={row} busy={stageOverrides.has(row.file.path)} active={selected === row.file.path} onSelect={selectFile} onToggleStage={toggleStage} />
@@ -503,8 +510,8 @@ function WorkspaceChanges() {
 
       <CommitsSection onPickFile={pickCommitFile} onPickCommit={pickCommit} />
       <ReviewBar workspace={workspace} />
-      <CommitBox staged={staged} total={files.length} />
-      <PullRequestCard />
+      {!inline ? <CommitBox staged={staged} total={files.length} /> : null}
+      {!inline ? <PullRequestCard /> : null}
     </div>
   )
 }
@@ -536,22 +543,23 @@ function CommitsSection({
   if (!hasRepo) return null
   return (
     <div className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline", open && "max-h-[38%]")}>
-      {/* The branch names the history, so it titles this row; Push publishes
-          that history, so it sits here and only while there is something
-          to publish or report. */}
-      <div className="flex h-7 shrink-0 items-center pr-1.5">
+      <div className="flex h-8 shrink-0 items-center px-1.5">
         <button
           type="button"
+          aria-expanded={open}
+          aria-label={branch ? `History on ${branch}` : "History"}
           onClick={() => setOpen((value) => !value)}
-          className="flex h-7 min-w-0 flex-1 items-center gap-1.5 px-2.5 text-label text-faint transition-colors hover:text-muted-foreground"
+          className="flex h-6 min-w-0 items-center gap-1.5 rounded px-1 text-label text-faint transition-colors hover:bg-foreground/5 hover:text-foreground"
         >
           <ChevronRightIcon
             className={cn("size-3 shrink-0 transition-transform duration-200 ease-out", open && "rotate-90")}
           />
-          <span className="truncate">{branch ? `Commits on ${branch}` : "Commits"}</span>
+          <span className="truncate">History</span>
         </button>
+        <span className="flex-1" />
         {head && branch ? <PushControl cwd={cwd} branch={branch} ahead={ahead} upstream={upstream} /> : null}
       </div>
+      {branch ? <GitRemoteNotice cwd={cwd} branch={branch} /> : null}
       {open ? (
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <GitLog onPickFile={onPickFile} onPickCommit={onPickCommit} />

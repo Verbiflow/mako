@@ -1,7 +1,9 @@
+import { desktop } from "@/state/desktop"
 import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -14,7 +16,7 @@ import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowUpIcon, CheckIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
 import { ThinkingOrb } from "thinking-orbs"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import {
@@ -67,6 +69,9 @@ export function CommitBox({
 
   const branch = useSession((state) => state.git?.branch)
   const pushState = useGitPush(cwd, branch ?? "")
+  const operation = useSession((state) => state.git?.operation)
+  const files = useSession((state) => state.git?.files)
+  const conflicts = useMemo(() => files?.filter((file) => file.status === "conflicted") ?? [], [files])
 
   useLayoutEffect(() => {
     const node = field.current
@@ -100,7 +105,7 @@ export function CommitBox({
 
   const commit = useCallback(
     async function commitChanges() {
-      if (!message.trim() || committing.current || busy || drafting) return
+      if (operation || conflicts.length || pushState.kind === "syncing" || !message.trim() || committing.current || busy || drafting) return
       committing.current = true
       setBusy(true)
       try {
@@ -118,7 +123,7 @@ export function CommitBox({
         setBusy(false)
       }
     },
-    [busy, message, drafting, cwd, draftState.revision]
+    [busy, message, drafting, cwd, draftState.revision, operation, conflicts.length, pushState.kind]
   )
 
   // The button says only what changes the commit's meaning. With something
@@ -161,6 +166,12 @@ export function CommitBox({
 
   const openModelSettings = () =>
     window.dispatchEvent(new CustomEvent("mako:settings", { detail: "commits" }))
+
+  if (operation || conflicts.length) return <div data-commit-box className="shrink-0 border-t border-hairline p-3 text-label">
+    <p className="font-medium">{conflicts.length ? `${conflicts.length} conflicted ${conflicts.length === 1 ? "file" : "files"}` : `Ready to continue ${operation}`}</p>
+    <p className="mt-1 text-muted-foreground">{conflicts.length ? "Resolve the conflicts in your editor, then stage each file above." : "The conflicts are staged. Continue to finish the operation."}</p>
+    <div className="mt-2 flex max-h-24 flex-col overflow-auto">{conflicts.map(file => <button key={file.path} className="truncate py-1 text-left text-foreground hover:underline" onClick={() => void desktop.openInEditor(`${cwd}/${file.path}`)}>{file.path}</button>)}</div>
+  </div>
 
   return (
     <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} className="shrink-0 border-t border-hairline p-3">
@@ -452,22 +463,35 @@ function GenerationSettings({
  */
 export function PushControl({ cwd, branch, ahead, upstream }: { cwd: string; branch: string; ahead: number; upstream?: string }) {
   const state = useGitPush(cwd, branch)
-  if (state.kind === "idle" && upstream && ahead === 0) return null
-  const pending = state.kind === "pushing"
-  const pushed = state.kind === "pushed"
-  const label = pending
-    ? "Pushing..."
-    : pushed
-      ? "Pushed"
-      : state.kind === "failed"
-        ? "Retry push"
-        : upstream
-          ? `Push ${ahead} ${ahead === 1 ? "commit" : "commits"}`
-          : "Publish branch"
-  return <span data-push-control className="flex shrink-0 items-center">
-    <Action tone={pending ? "outline" : "ghost"} size="xs" className="tabular disabled:opacity-100" data-push-state={state.kind} aria-label={`Push to ${branch}`} aria-busy={pending} disabled={pending || pushed} title={state.kind === "failed" ? state.message : upstream ? `Push to ${upstream}` : `Publish ${branch} to origin`} onClick={() => void git.push()}>
-      {pushed ? <CheckIcon /> : <ArrowUpIcon />}
-      <span role="status" className="git-action-label" key={state.kind}>{label}</span>
-    </Action>
+  const behind = useSession(s => s.git?.behind ?? 0)
+  const operation = useSession(s => s.git?.operation)
+  const conflicts = useSession(s => s.git?.files.some(file => file.status === "conflicted") ?? false)
+  const pending = state.kind === "pushing" || state.kind === "syncing"
+  const style = "h-6 gap-1 px-1.5 text-label font-normal tabular text-faint hover:text-foreground disabled:opacity-50 [&_svg]:size-3"
+  if (operation) return <span data-push-control className="flex shrink-0 items-center gap-1">
+    <Action size="xs" className={style} disabled={pending} onClick={() => void git.remote("abort")}>Abort {operation}</Action>
+    <Action size="xs" className={style} disabled={pending || conflicts} onClick={() => void git.remote("continue")}>{state.kind === "syncing" ? "Working…" : `Continue ${operation}`}</Action>
   </span>
+  return <span data-push-control className="flex shrink-0 items-center gap-1">
+    <IconAction size="xs" label="Fetch remote changes" disabled={pending} onClick={() => void git.remote("fetch")}><RefreshCwIcon className={state.kind === "syncing" && state.action === "fetch" ? "animate-spin motion-reduce:animate-none" : ""} /></IconAction>
+    {behind > 0 ? <Action size="xs" className={style} disabled={pending || conflicts} aria-label={ahead > 0 ? `Pull and merge ${behind} incoming commits` : `Pull ${behind} incoming commits`} title={ahead > 0 ? "Merge incoming commits into this branch, preserving both histories" : "Pull incoming commits"} onClick={() => void git.remote(ahead > 0 ? "merge" : "pull")}>
+      <ArrowDownIcon />{state.kind === "syncing" ? "Pulling…" : ahead > 0 ? `Pull & merge ${behind}` : `Pull ${behind}`}
+    </Action> : null}
+    {ahead > 0 || !upstream || state.kind === "pushed" || state.kind === "pushing" ? <Action size="xs" className={style} data-push-state={state.kind} aria-label={`Push to ${branch}`} aria-busy={state.kind === "pushing"} disabled={pending || state.kind === "pushed" || behind > 0 || conflicts} title={behind > 0 ? "Pull incoming commits before pushing" : upstream ? `Push ${ahead} commits to ${upstream}` : `Publish ${branch} to origin`} onClick={() => void git.push()}>
+      {state.kind === "pushed" ? <CheckIcon /> : <ArrowUpIcon />}
+      <span role="status" className="git-action-label" key={state.kind}>{state.kind === "pushing" ? `Pushing ${ahead}…` : state.kind === "pushed" ? "Pushed" : upstream ? `Push ${ahead}` : "Publish branch"}</span>
+    </Action> : null}
+  </span>
+}
+
+export function GitRemoteNotice({ cwd, branch }: { cwd: string; branch: string }) {
+  const state = useGitPush(cwd, branch)
+  const behind = useSession(s => s.git?.behind ?? 0)
+  const conflicts = useSession(s => s.git?.files.some(file => file.status === "conflicted") ?? false)
+  if (state.kind !== "failed") return null
+  if (state.reason === "incoming" && behind === 0 || state.reason === "conflicts" && !conflicts) return null
+  return <div role="status" className="px-2.5 pb-2 text-label text-muted-foreground">
+    <p>{state.message}</p>
+    {state.detail ? <details className="mt-1"><summary className="cursor-pointer">Git details</summary><pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-label">{state.detail}</pre></details> : null}
+  </div>
 }
