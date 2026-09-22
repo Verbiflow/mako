@@ -10,7 +10,7 @@ type PushState =
   | { kind: "syncing"; branch: string; action: GitRemoteAction }
   | { kind: "pushing"; branch: string }
   | { kind: "pushed"; branch: string; at: number }
-  | { kind: "failed"; branch: string; message: string; detail?: string; reason?: "incoming" | "conflicts" | "dirty" | "failed" }
+  | { kind: "failed"; branch: string; message: string; detail?: string; reason?: "incoming" | "conflicts" | "dirty" | "untracked" | "failed" }
 
 const idle: PushState = { kind: "idle" }
 const pushStore = createStore<{ branches: Map<string, PushState> }>({
@@ -22,6 +22,11 @@ const keyOf = (cwd: string, branch: string) => JSON.stringify([cwd, branch])
 
 export function useGitPush(cwd: string, branch: string) {
   return usePushStore((state) => state.branches.get(keyOf(cwd, branch)) ?? idle)
+}
+
+export function gitUntrackedBlocker(cwd: string, branch: string) {
+  const state = pushStore.get().branches.get(keyOf(cwd, branch))
+  return state?.kind === "failed" && state.reason === "untracked" ? { message: state.message, detail: state.detail } : undefined
 }
 
 function update(key: string, state: PushState) {

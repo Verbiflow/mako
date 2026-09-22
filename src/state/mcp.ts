@@ -21,6 +21,7 @@ interface McpState {
   browserSetup?: Awaited<
     ReturnType<ReturnType<typeof getMako>["prepareBrowserExtension"]>
   >
+  selectingBrowser: boolean
   preparingBrowser: boolean
 }
 
@@ -29,6 +30,7 @@ export const mcpStore = createStore<McpState>({
   snapshot: null,
   previews: {},
   browsers: [],
+  selectingBrowser: false,
   preparingBrowser: false,
   updatingDriver: false,
 })
@@ -94,6 +96,22 @@ export const mcp = {
     }
   },
 
+  async preferBrowser(browser: string | null) {
+    if (mcpStore.get().selectingBrowser) return
+    mcpStore.set({ selectingBrowser: true, error: undefined })
+    try {
+      mcpStore.set({ browsers: await getMako().preferBrowser(browser) })
+    } catch (error) {
+      mcpStore.set({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Browser preference could not be saved",
+      })
+    } finally {
+      mcpStore.set({ selectingBrowser: false })
+    }
+  },
   async connectBrowser(browser: string) {
     try {
       mcpStore.set({

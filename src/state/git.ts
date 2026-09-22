@@ -1,3 +1,4 @@
+import { copyGitConflictContext } from "@/state/git-conflicts"
 import { getMako } from "@/lib/bridge"
 import { pushCurrentBranch, runGitRemote } from "@/state/git-push"
 import type {
@@ -55,6 +56,8 @@ export const git = {
   },
 
   remote: runGitRemote,
+
+  copyConflictContext: copyGitConflictContext,
 
   push(): Promise<void> {
     return pushCurrentBranch()

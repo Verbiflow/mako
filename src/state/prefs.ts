@@ -88,6 +88,8 @@ export interface Prefs {
   conversionMode: "native" | "transcript"
   /** Your names for threads, by path — native stores don't take renames. */
   titleOverrides: PreferenceStringMap
+  /** Dismissed saved-message occurrences; presentation only, never delivery state. */
+  dismissedRecoveryRequests: PreferenceStringMap
   /** Your names for persistent terminal sessions, by daemon id. */
   terminalTitles: PreferenceStringMap
   /** Overrides the host's default commit-drafting prompt. */
@@ -144,6 +146,7 @@ const defaults: Prefs = {
   terminalOptionAsMeta: "auto",
   titleOverrides: {},
   terminalTitles: {},
+  dismissedRecoveryRequests: {},
   conversionMode: "transcript",
   notifyDesktop: true,
   notifyReady: true,
@@ -378,6 +381,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     ),
     titleOverrides: readStringRecord(value.titleOverrides),
     terminalTitles: readStringRecord(value.terminalTitles),
+    dismissedRecoveryRequests: readStringRecord(value.dismissedRecoveryRequests),
     commitPrompt: readOptionalString(value.commitPrompt),
     commitModel: readOptionalString(value.commitModel),
     externalEditor: readOptionalString(value.externalEditor),
@@ -420,7 +424,7 @@ globalThis.window?.addEventListener?.("storage", (event) => {
     const next = parsePrefs(value)
     if (!next) return
     receiving = true
-    prefsStore.set({ providerModes: next.providerModes, providerSettings: next.providerSettings, settingsOverrides: next.settingsOverrides })
+    prefsStore.set({ providerModes: next.providerModes, providerSettings: next.providerSettings, settingsOverrides: next.settingsOverrides, dismissedRecoveryRequests: next.dismissedRecoveryRequests })
   } catch {
     return
   } finally {
