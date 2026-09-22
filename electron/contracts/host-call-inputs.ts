@@ -19,6 +19,7 @@ export const hostCallInputs = {
   "mako:boot": z.tuple([]),
   "mako:browser-control-connect": z.tuple([z.string()]),
   "mako:browser-control-disconnect": z.tuple([z.string()]),
+  "mako:browser-control-prefer": z.tuple([z.union([z.null(), z.string()])]),
   "mako:browser-control-status": z.tuple([]),
   "mako:browser-extension-setup": z.tuple([]),
   "mako:build-update": z.tuple([]),
@@ -81,11 +82,12 @@ export const hostCallInputs = {
     z.object({
       head: z.string().optional(),
       action: z.union([
-        z.literal("merge"),
         z.literal("abort"),
+        z.literal("merge"),
         z.literal("fetch"),
         z.literal("pull"),
         z.literal("continue"),
+        z.literal("merge_autostash"),
       ]),
       cwd: z.string(),
       branch: z.string(),

@@ -12,6 +12,12 @@ export type BrowserConnectionState = z.infer<typeof BrowserStateSchema>
 export interface BrowserControlStatus {
   id: string
   name: string
+  product?: string
+  profileName?: string
+  preferred?: boolean
+  transport?: "extension" | "direct"
+  guidance?: string
+  lastInterruption?: { tab: string; message: string }
   kind?: "chromium" | "desk"
   profile?: string
   origin?: string
@@ -142,7 +148,11 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("open"),
-      browser,
+      browser: browser
+        .optional()
+        .describe(
+          "Explicit browser ID, or omit to use the profile selected in Settings. Never falls back to another profile."
+        ),
       url: z
         .string()
         .default("about:blank")

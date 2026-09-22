@@ -21,14 +21,14 @@ export interface GitPushInput {
   branch: string
 }
 
-export type GitRemoteAction = "fetch" | "pull" | "merge" | "continue" | "abort"
+export type GitRemoteAction = "fetch" | "pull" | "merge" | "merge_autostash" | "continue" | "abort"
 export interface GitRemoteInput extends GitPushInput {
   head?: string
   action: GitRemoteAction
 }
 export interface GitRemoteResult {
   status: GitStatus
-  problem?: { kind: "incoming" | "conflicts" | "dirty" | "failed"; message: string; detail?: string }
+  problem?: { kind: "incoming" | "conflicts" | "dirty" | "untracked" | "failed"; message: string; detail?: string }
 }
 
 export interface GitRepositorySummary {

@@ -408,6 +408,11 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(
         "mako:browser-control-status"
       ),
+    preferBrowser: (browser: string | null) =>
+      invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(
+        "mako:browser-control-prefer",
+        browser
+      ),
     connectBrowser: (browser: string) =>
       invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(
         "mako:browser-control-connect",
