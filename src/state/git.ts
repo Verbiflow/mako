@@ -1,5 +1,5 @@
 import { getMako } from "@/lib/bridge"
-import { pushCurrentBranch } from "@/state/git-push"
+import { pushCurrentBranch, runGitRemote } from "@/state/git-push"
 import type {
   CommitGenerationInput,
   GitCommitEntry,
@@ -53,6 +53,8 @@ export const git = {
   commit(message: string, options?: { amend?: boolean }): Promise<void> {
     return getMako().gitCommit(message, options)
   },
+
+  remote: runGitRemote,
 
   push(): Promise<void> {
     return pushCurrentBranch()

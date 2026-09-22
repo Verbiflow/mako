@@ -1,4 +1,3 @@
-import { applyLiveSnapshot } from "@/state/live-recovery"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
   BlockAddress,
@@ -201,16 +200,18 @@ export const threadViewingActions = {
     if (!hasBridge()) return
     const generation = ++viewingGeneration
     const { acp, acpStore, activeAcp } = await import("@/state/acp")
+    const { applyLiveSnapshot } = await import("@/state/live-recovery")
     if (generation !== viewingGeneration) return
-    if (mode === "conversation" && ref.heldBy) {
+    if (mode === "conversation") {
       try {
-        const snapshot = await getMako().liveAttach(ref.path)
+        const resolved = await getMako().resolveContinuation(ref.path)
+        const snapshot = resolved.transport === "attached" ? resolved.snapshot : null
         if (generation !== viewingGeneration) return
         if (snapshot) {
-          applyLiveSnapshot(snapshot)
-          acp.activate(snapshot.session.id)
+          applyLiveSnapshot(snapshot, resolved.transport === "attached" ? resolved.bindingId ?? null : null)
+          acp.activate(snapshot.session.id, false)
           openThreadTab(ref.path)
-          leaveViewerForLive(snapshot.session.harness)
+          leaveViewerForLive(resolved.transport === "attached" ? resolved.provider : snapshot.session.harness)
           return
         }
       } catch (error) {

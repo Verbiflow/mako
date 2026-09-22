@@ -2,7 +2,7 @@ import { continueTurnPrompt, type PendingPrompt } from "@/state/prompt-delivery"
 import type { InterruptionReason } from "@/lib/types"
 import type { QueuedPromptEdit } from "../../electron/contracts/live-queue"
 import { threadsStore } from "@/state/thread-store"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
 import { stagePrompt, removePendingPrompt } from "@/state/acp-pending"
 import { liveSettingsTarget, settingsForSend } from "@/state/composer-settings"
 import { noteFolderUse } from "@/state/prefs"
@@ -16,6 +16,7 @@ import {
 import { projectAcp } from "@/state/live-projection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import { toast } from "sonner"
+import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage } from "@/state/message-outbox"
 
 function updateLive(
   id: string,
@@ -27,29 +28,62 @@ function updateLive(
   return next?.kind === "live" ? next : null
 }
 
-export async function sendTo(
+const deliveries = new Map<string, Promise<boolean>>()
+const retries = new Map<string, ReturnType<typeof setTimeout>>()
+const retryDelays = new Map<string, number>()
+
+function scheduleRecovery(id: string): void {
+  if (retries.has(id)) return
+  const delay = retryDelays.get(id) ?? 1_000
+  retries.set(id, setTimeout(() => {
+    retries.delete(id)
+    void replayUnconfirmedPrompts([id])
+  }, delay))
+  retryDelays.set(id, Math.min(delay * 2, 30_000))
+}
+
+export function sendTo(
+  id: string, text: string, attachments: PromptAttachment[] = [],
+  requestId: string = crypto.randomUUID(), bindingId?: string
+): Promise<boolean> {
+  const existing = deliveries.get(requestId)
+  if (existing) return existing
+  const delivery = attemptSend(id, text, attachments, requestId, bindingId)
+    .finally(() => deliveries.delete(requestId))
+  deliveries.set(requestId, delivery)
+  return delivery
+}
+
+async function attemptSend(
   id: string,
   text: string,
   attachments: PromptAttachment[] = [],
-  requestId: string = crypto.randomUUID()
+  requestId: string = crypto.randomUUID(),
+  bindingId?: string
 ): Promise<boolean> {
   const current = acpStore.get().conversations[id]
   if (!current || current.kind !== "live" || !hasBridge()) return false
+  attachments = durableAttachments(attachments)
   noteFolderUse(current.session.cwd)
-  stagePrompt(id, { id: requestId, text, attachments })
+  stagePrompt(id, { id: requestId, text, attachments, bindingId })
   updateLive(id, (conversation) => ({
     ...conversation,
     sending: true,
     updatedAt: Date.now(),
   }))
+  const alreadyUnconfirmed = current.pendingPrompts?.some((prompt) => prompt.id === requestId && prompt.unconfirmed) ?? false
   try {
-    await getMako().livePrompt(
-      id,
-      requestId,
-      text,
-      attachments,
-      await settingsForSend(liveSettingsTarget(current))
-    )
+    const staged = acpStore.get().conversations[id]?.pendingPrompts?.find((prompt) => prompt.id === requestId)
+    const tuning = staged?.delivery ? staged.delivery.tuning
+      : await settingsForSend(liveSettingsTarget({ ...current, replyBindingId: bindingId ?? current.replyBindingId }))
+    updateAcpConversation(id, (conversation) => ({ ...conversation,
+      pendingPrompts: conversation.pendingPrompts?.map((prompt) => prompt.id === requestId ? { ...prompt, delivery: { tuning } } : prompt),
+    }))
+    saveMessage({ kind: "prompt", conversationId: id, requestId, text, attachments, bindingId, tuning })
+    if (bindingId) await getMako().liveContinue(id, bindingId, requestId, text, attachments, tuning)
+    else await getMako().livePrompt(id, requestId, text, attachments, tuning)
+    settleMessage(requestId)
+    updateAcpConversation(id, (conversation) => ({ ...conversation, pendingPrompts: conversation.pendingPrompts?.map((prompt) => prompt.id === requestId ? { ...prompt, unconfirmed: false } : prompt) }))
     return true
   } catch (error) {
     const snapshot = await getMako()
@@ -62,12 +96,12 @@ export async function sendTo(
       )
     ) {
       if (snapshot) applyLiveSnapshot(snapshot)
+      settleMessage(requestId)
       return true
     }
-    if (error instanceof Error && isHostReconnectingError(error)) {
-      // The transport already waited for the host once. The paragraph stays
-      // staged under its id; `replayUnconfirmedPrompts` re-issues it when the
-      // host is back and the reconnect banner says so meanwhile.
+    if (alreadyUnconfirmed || (error instanceof Error && isHostReconnectingError(error))) {
+      // RPC and event connections fail independently. Recover this command
+      // even if no stream disconnect/reconnect event ever arrives.
       updateAcpConversation(id, (current) => {
         const next = {
           ...current,
@@ -82,8 +116,10 @@ export async function sendTo(
         sending: false,
         updatedAt: Date.now(),
       }))
+      scheduleRecovery(id)
       return true
     }
+    settleMessage(requestId)
     removePendingPrompt(id, requestId)
     updateLive(id, (conversation) => ({
       ...conversation,
@@ -111,21 +147,72 @@ export function continueTurn(id: string, reason: InterruptionReason = "host-quit
  * back as that acceptance and one it never saw is accepted now; nothing is
  * delivered twice. Called from the reconnect, after the summaries are known.
  */
-export async function replayUnconfirmedPrompts(ids?: string[]): Promise<void> {
+export async function replayUnconfirmedPrompts(ids?: string[], hydrated: ReadonlySet<string> = new Set()): Promise<void> {
   const conversations = Object.values(acpStore.get().conversations)
   for (const conversation of conversations) {
     if (conversation.kind !== "live" || (ids && !ids.includes(conversation.key))) continue
-    const unconfirmed = conversation.pendingPrompts?.filter((prompt) => prompt.unconfirmed) ?? []
-    for (const prompt of unconfirmed) {
-      updateAcpConversation(conversation.key, (current) => ({
-        ...current,
-        pendingPrompts: current.pendingPrompts?.map((item) =>
-          item.id === prompt.id ? { ...item, unconfirmed: false } : item
-        ),
-      }))
-      await sendTo(conversation.key, prompt.text, prompt.attachments, prompt.id)
+    if (!conversation.pendingPrompts?.some((prompt) => prompt.unconfirmed)) continue
+    if (!hydrated.has(conversation.key) && !await hydrateLive(conversation.key, true)) {
+      scheduleRecovery(conversation.key)
+      continue
+    }
+    const unconfirmed = acpStore.get().conversations[conversation.key]?.pendingPrompts?.filter((prompt) => prompt.unconfirmed) ?? []
+    for (const prompt of unconfirmed)
+      await sendTo(conversation.key, prompt.text, prompt.attachments, prompt.id, prompt.bindingId)
+    if (acpStore.get().conversations[conversation.key]?.pendingPrompts?.some((prompt) => prompt.unconfirmed)) scheduleRecovery(conversation.key)
+    else {
+      clearTimeout(retries.get(conversation.key))
+      retries.delete(conversation.key)
+      retryDelays.delete(conversation.key)
     }
   }
+}
+
+/** Recover commands before their host receipt was acknowledged, including after reload. */
+let restoring: Promise<void> | undefined
+let restoreAgain = false
+export function restorePendingMessages(): Promise<void> {
+  restoreAgain = true
+  if (!restoring) restoring = (async () => {
+    do {
+      restoreAgain = false
+      await restoreMessages()
+    } while (restoreAgain)
+  })().finally(() => { restoring = undefined })
+  return restoring
+}
+async function restoreMessages(): Promise<void> {
+  for (let command of pendingMessages()) {
+    if (command.kind === "start") {
+      const { restorePendingStart } = await import("@/state/acp-start")
+      await restorePendingStart(command)
+      continue
+    }
+    if (command.kind === "queued") {
+      const resolved = pendingMessages().find((entry) => entry.kind === "prompt" && entry.requestId === commandId(command))
+      if (!resolved || resolved.kind !== "prompt") { scheduleOutboxRecovery(); continue }
+      command = resolved
+    }
+    const { conversationId: id, requestId, text, attachments, bindingId, tuning } = command
+    if (!await hydrateLive(id, true)) {
+      // Keep the durable command even while no live summary is available.
+      scheduleOutboxRecovery()
+      continue
+    }
+    const current = acpStore.get().conversations[id]
+    if (current?.requests?.some((request) => request.id === requestId) ||
+        current?.control?.transfers.some((transfer) => transfer.input.id === requestId)) {
+      settleMessage(requestId)
+      continue
+    }
+    stagePrompt(id, { id: requestId, text, attachments, bindingId, delivery: { tuning }, unconfirmed: true })
+    await sendTo(id, text, attachments, requestId, bindingId)
+  }
+}
+let outboxRetry: ReturnType<typeof setTimeout> | undefined
+function scheduleOutboxRecovery(): void {
+  if (outboxRetry) return
+  outboxRetry = setTimeout(() => { outboxRetry = undefined; void restorePendingMessages() }, 10_000)
 }
 
 export type QueueTarget =

@@ -2,14 +2,15 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, carriedFailureSeen, replaceAcpConversation } from "@/state/acp-state"
+import { acpStore, carriedFailureSeen, replaceAcpConversation, updateAcpConversation } from "@/state/acp-state"
 import { syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "../../electron/contracts/live-content"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
+import { settleMessage } from "@/state/message-outbox"
 
-const fetching = new Map<string, Promise<void>>()
+const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, LiveBatch[]>()
 
 /**
@@ -22,16 +23,22 @@ function sameEpoch(held: { epoch?: string } | undefined, incoming: { epoch?: str
   return held?.epoch === undefined || incoming.epoch === undefined || held.epoch === incoming.epoch
 }
 
-export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
+export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null): void {
+  for (const request of snapshot.requests) settleMessage(request.id, true)
+  for (const transfer of snapshot.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   const id = snapshot.session.id
   const existing = acpStore.get().conversations[id]
-  if (existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision) return
+  if (existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision) {
+    if (replyBindingId !== undefined) updateAcpConversation(id, (current) => ({ ...current, replyBindingId: replyBindingId ?? undefined }))
+    return
+  }
   const pendingPrompts = existing?.pendingPrompts?.filter(
     (prompt) => !snapshot.requests.some((request) => request.id === prompt.id) &&
       !snapshot.control?.transfers.some((transfer) => transfer.input.id === prompt.id)
   )
   replaceAcpConversation(id, {
     key: id,
+    replyBindingId: replyBindingId === undefined ? existing?.replyBindingId : replyBindingId ?? undefined,
     draftKey: existing?.draftKey ?? id,
     harness: snapshot.session.harness,
     cwd: snapshot.session.cwd,
@@ -81,8 +88,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot): void {
   for (const batch of buffered) applyLiveBatch(batch)
 }
 
-export async function hydrateLive(id: string): Promise<void> {
-  if (!hasBridge()) return
+export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
+  if (!hasBridge()) return false
   const existing = fetching.get(id)
   if (existing) return existing
   let restored = false
@@ -92,11 +99,13 @@ export async function hydrateLive(id: string): Promise<void> {
       restored = true
       if (snapshot) applyLiveSnapshot(snapshot)
       else pending.delete(id)
+      return snapshot !== null
     })
     .catch((error) => {
-      toast.error("The live conversation could not be restored", {
+      if (!quiet) toast.error("The live conversation could not be restored", {
         description: error instanceof Error ? error.message : String(error),
       })
+      return false
     })
     .finally(() => {
       fetching.delete(id)
@@ -110,6 +119,8 @@ export async function hydrateLive(id: string): Promise<void> {
 }
 
 export function applyLiveBatch(batch: LiveBatch): void {
+  for (const request of batch.requests ?? []) settleMessage(request.id, true)
+  for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   const current = acpStore.get().conversations[batch.id]
   if (
     current?.kind === "live" &&

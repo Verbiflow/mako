@@ -1,3 +1,4 @@
+import type { SessionSettings } from "@mako/sessions/settings"
 import type {
   InterruptionReason,
   LiveRequest,
@@ -90,6 +91,8 @@ export function turnStopLabel(reason: InterruptionReason, provider: string): str
 }
 
 export interface PendingPrompt {
+  bindingId?: string
+  delivery?: { tuning?: SessionSettings }
   id: string
   text: string
   attachments: PromptAttachment[]

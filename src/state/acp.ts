@@ -1,3 +1,4 @@
+import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
 import { stagePrompt } from "@/state/acp-pending"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { projectAcp } from "@/state/live-projection"
@@ -19,6 +20,7 @@ import { performLiveAction } from "@/state/live-actions"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
+  ContinuationResolution,
   PromptAttachment,
   ThreadRef,
   TransferInput,
@@ -45,6 +47,7 @@ import {
   liveAcpForThread,
   removeAcpConversation,
   replaceAcpConversation,
+  updateAcpConversation,
   useAcp,
   type AcpConversation,
   type AcpQueuedPrompt,
@@ -149,7 +152,7 @@ export const acp = {
     return acp.startFresh(current.harness, current.cwd, request.text, request.attachments)
   },
 
-  activate(key: string): boolean {
+  activate(key: string, refresh = true): boolean {
     const conversation = acpStore.get().conversations[key]
     if (!conversation) return false
     if (conversation.hydrated && !conversation.projection)
@@ -158,9 +161,9 @@ export const acp = {
         projection: projectAcp(conversation),
       })
     acpStore.set({ activeKey: key })
-    if (conversation.kind === "live")
+    if (conversation.kind === "live" && refresh)
       void hydrateLive(key)
-    threadsStore.set({ composerHarness: conversation.harness })
+    threadsStore.set({ composerHarness: conversation.control?.bindings.find((binding) => binding.id === conversation.replyBindingId)?.provider ?? conversation.harness })
     // Opening the conversation acknowledges its failure, the way opening a
     // thread acknowledges an unread answer; the rail row and its folder's
     // chip go back to showing time.
@@ -255,28 +258,15 @@ export const acp = {
 
   async openInteractive(ref: ThreadRef): Promise<boolean> {
     if (!hasBridge()) return false
-    const existing = acpForThread(acpStore.get(), ref)
-    if (existing && !ref.heldBy) return acp.activate(existing.key)
-    // The host says whether this store reopens live; anything else opens as a
-    // handoff on the composer's provider, the way it always has.
     let canResume: boolean
     try {
-      const attached = await getMako().liveAttach(ref.path)
-      if (attached) {
-        applyLiveSnapshot(attached)
-        return acp.activate(attached.session.id)
+      const resolved = await getMako().resolveContinuation(ref.path)
+      if (resolved.transport === "attached") {
+        applyLiveSnapshot(resolved.snapshot, resolved.bindingId ?? null)
+        return acp.activate(resolved.conversationId, false)
       }
-      const plan = await getMako().continuationPlan(ref.path)
-      if (plan.transport === "refused") throw new Error(plan.reason)
-      if (plan.transport === "attached") {
-        // An owner can appear between the first attach and planning. Repeat
-        // only the read; never turn this race into a second native launch.
-        const current = await getMako().liveAttach(ref.path)
-        if (!current) throw new Error("The session owner is reconnecting. Your saved conversation has not been replaced. Try opening it again.")
-        applyLiveSnapshot(current)
-        return acp.activate(current.session.id)
-      }
-      canResume = plan.transport === "live"
+      if (resolved.transport === "refused" || resolved.transport === "unavailable") throw new Error(resolved.reason)
+      canResume = resolved.transport === "live"
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return false
@@ -325,28 +315,24 @@ export const acp = {
   async resumeAndSend(
     ref: ThreadRef,
     prompt: string,
-    attachments: PromptAttachment[] = []
+    attachments: PromptAttachment[] = [],
+    resolution?: ContinuationResolution
   ): Promise<boolean> {
     if (!hasBridge()) return false
     try {
-      const attached = await getMako().liveAttach(ref.path)
-      if (attached) {
-        applyLiveSnapshot(attached)
-        acp.activate(attached.session.id)
-        return sendTo(attached.session.id, prompt, attachments)
+      const resolved = resolution ?? await getMako().resolveContinuation(ref.path)
+      if (resolved.transport === "attached") {
+        applyLiveSnapshot(resolved.snapshot, resolved.bindingId ?? null)
+        acp.activate(resolved.conversationId, false)
+        return sendTo(resolved.conversationId, prompt, attachments, undefined, resolved.bindingId)
+      }
+      if (resolved.transport !== "live") {
+        if (resolved.transport === "refused" || resolved.transport === "unavailable") throw new Error(resolved.reason)
+        return false
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return false
-    }
-    const existing = acpForThread(acpStore.get(), ref)
-    if (existing) {
-      acp.activate(existing.key)
-      if (existing.kind === "live")
-        return sendTo(existing.key, prompt, attachments)
-      return (await waitForPromotion(existing.draftKey))
-        ? sendTo(existing.key, prompt, attachments)
-        : false
     }
     setThreadRunning(ref.path, true)
     const starting = beginStart({
@@ -535,7 +521,7 @@ export const acp = {
       }
       if (modeId) input.modeId = modeId
       const snapshot = await getMako().liveTransfer(current.key, input)
-      applyLiveSnapshot(snapshot)
+      applyLiveSnapshot(snapshot, null)
       leaveViewerForLive(harness)
       return true
     } catch (error) {
@@ -555,17 +541,33 @@ export const acp = {
     }
   },
 
-  send(text: string, attachments: PromptAttachment[] = []): Promise<boolean> {
+  async send(text: string, attachments: PromptAttachment[] = []): Promise<boolean> {
     const current = activeAcp(acpStore.get())
     if (!current) return Promise.resolve(false)
     if (current.kind === "starting") {
       const requestId = crypto.randomUUID()
-      stagePrompt(current.key, { id: requestId, text, attachments })
-      return waitForPromotion(current.draftKey).then((ready) =>
-        ready ? sendTo(current.key, text, attachments, requestId) : false
-      )
+      attachments = durableAttachments(attachments)
+      const tuning = await settingsForSend(current.settingsTarget)
+      const deliver = (promoted: LiveAcpConversation) => {
+        updateAcpConversation(promoted.key, (conversation) => ({ ...conversation,
+          pendingPrompts: conversation.pendingPrompts?.filter((prompt) => prompt.id !== requestId),
+        }))
+        stagePrompt(promoted.key, { id: requestId, text, attachments,
+          bindingId: promoted.replyBindingId, delivery: { tuning } })
+        return sendTo(promoted.key, text, attachments, requestId, promoted.replyBindingId)
+      }
+      const promoted = Object.values(acpStore.get().conversations).find((item) => item.draftKey === current.draftKey && item.kind === "live")
+      if (promoted?.kind === "live") return deliver(promoted)
+      if (!acpStore.get().conversations[current.key]) return false
+      saveMessage({ kind: "queued", startId: current.key, requestId, text, attachments, tuning })
+      stagePrompt(current.key, { id: requestId, text, attachments, delivery: { tuning } })
+      return waitForPromotion(current.draftKey).then((ready) => {
+        const promoted = Object.values(acpStore.get().conversations).find((item) => item.draftKey === current.draftKey && item.kind === "live")
+        if (!ready || promoted?.kind !== "live") { settleMessage(requestId); return false }
+        return deliver(promoted)
+      })
     }
-    return sendTo(current.key, text, attachments)
+    return sendTo(current.key, text, attachments, undefined, current.replyBindingId)
   },
 
   async cancel(): Promise<boolean> {

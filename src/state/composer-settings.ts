@@ -50,17 +50,20 @@ export function threadSettingsTarget(ref: ThreadRef): ComposerTarget {
 export function liveSettingsTarget(
   conversation: AcpConversation
 ): ComposerTarget {
-  return conversation.threadPath
+  const binding = conversation.control?.bindings.find((item) => item.id === conversation.replyBindingId)
+  const path = binding?.path ?? conversation.threadPath
+  const harness = binding?.provider ?? conversation.harness
+  return path
     ? {
         kind: "thread",
-        path: conversation.threadPath,
-        harness: conversation.harness,
+        path,
+        harness,
         cwd: conversation.cwd,
       }
     : {
         kind: "live",
         id: conversation.key,
-        harness: conversation.harness,
+        harness,
         cwd: conversation.cwd,
       }
 }
@@ -73,6 +76,7 @@ export function currentSettingsTarget(
   const live = ref
     ? acpForThread(acpStore.get(), ref)
     : activeAcp(acpStore.get())
+  if (live?.replyBindingId && liveSettingsTarget(live).harness === harness) return liveSettingsTarget(live)
   return resolveSettingsTarget({
     harness,
     ref,
@@ -162,9 +166,12 @@ export function settingsSession(
               entry.nativeId === conversation.session.nativeId
           )
         : undefined
+  const binding = conversation?.control?.bindings.find((item) => item.provider === target.harness &&
+    (target.kind === "thread" ? item.path === target.path : item.id === conversation.replyBindingId))
   return observedSessionSettings(
     ref,
-    conversation?.kind === "live" ? conversation.session.settings : undefined,
+    binding && binding.id !== conversation?.control?.activeBindingId ? binding.tuning
+      : conversation?.kind === "live" && conversation.harness === target.harness ? conversation.session.settings : undefined,
     providerStore.get().contexts[providerProfileKey(target.harness, target.cwd)]
       ?.models
   )
@@ -258,7 +265,7 @@ function composerSettingsInput(target: ComposerTarget, profile?: HarnessProfile)
     preference: prefs.providerSettings[target.harness],
     session: settingsSession(target),
     live:
-      conversation?.kind === "live"
+      conversation?.kind === "live" && conversation.harness === target.harness
         ? { options: conversation.session.configOptions }
         : undefined,
   })
@@ -280,7 +287,7 @@ export async function settingsForSend(
   const session = settingsSession(target)
   const conversation = settingsConversation(target)
   const live =
-    conversation?.kind === "live"
+    conversation?.kind === "live" && conversation.harness === target.harness
       ? { options: conversation.session.configOptions }
       : undefined
   const cached =

@@ -1,6 +1,6 @@
 import type { PendingPrompt } from "@/state/prompt-delivery"
 import type { ComposerTarget } from "@/state/composer-settings"
-import type { LiveSnapshot, ThreadRef } from "@/lib/types"
+import type { LiveSnapshot, LiveStartOptions, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import type {
@@ -16,6 +16,7 @@ export interface AcpQueuedPrompt {
 }
 
 interface AcpConversationBase {
+  replyBindingId?: string
   pendingPrompts?: PendingPrompt[]
   nativeAgents?: LiveSnapshot["nativeAgents"]
   key: string
@@ -42,6 +43,7 @@ interface AcpConversationBase {
 }
 
 export interface StartingAcpConversation extends AcpConversationBase {
+  unconfirmedStart?: LiveStartOptions
   settingsTarget: ComposerTarget
   kind: "starting"
 }

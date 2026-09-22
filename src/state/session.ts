@@ -10,7 +10,8 @@ import { isHostReconnectingError } from "../../electron/contracts/host-connectio
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, markLiveOwnerDisconnected } from "@/state/live-recovery"
-import { replayUnconfirmedPrompts } from "@/state/acp-queue"
+import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
+import { watchPendingMessages } from "@/state/message-outbox"
 import { createHook, createStore, shallowEqual } from "@/state/store"
 import type {
   Capabilities,
@@ -180,7 +181,10 @@ function noteTabTurn(id: string, before: SessionMeta | undefined, cache: TabCach
 function apply(event: HostEvent) {
   if (event.type === "live-owner-connection") {
     if (event.connected) {
-      void Promise.all(event.ids.map((id) => hydrateLive(id))).then(() => replayUnconfirmedPrompts(event.ids))
+      void Promise.all(event.ids.map(async (id) => await hydrateLive(id) ? id : null)).then((ids) => {
+        const restored = ids.filter((id): id is string => id !== null)
+        return replayUnconfirmedPrompts(restored, new Set(restored))
+      })
     } else markLiveOwnerDisconnected(event.ids)
     return
   }
@@ -517,12 +521,15 @@ function adoptSnapshot(next: TabSnapshot) {
   void actions.refreshGit()
 }
 
+let stopOutboxWatch: (() => void) | undefined
 function adoptBoot(boot: BootPayload) {
   const active = boot.tabs.find((tab) => tab.id === boot.activeTabId) ?? boot.tabs[0]
   if (!active) throw new Error("The host started without a conversation")
   hydrate(boot.tabs, boot.activeTabId)
   if (boot.archives) applyThreadArchives(boot.archives)
   hydrateLiveSummaries(boot.live)
+  stopOutboxWatch ??= watchPendingMessages(() => { void restorePendingMessages() })
+  void restorePendingMessages()
   store.set({
     phase: "ready",
     fault: undefined,
@@ -566,6 +573,7 @@ export const actions = {
       // A send the outage swallowed goes out now, under the id the host
       // settles it by; one it had already accepted comes back as that receipt.
       void replayUnconfirmedPrompts()
+      void restorePendingMessages()
       if (store.get().meta?.cwd === cwd) {
         hydrate(boot.tabs, boot.activeTabId)
         const active = boot.tabs.find((tab) => tab.id === boot.activeTabId)

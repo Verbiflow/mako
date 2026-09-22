@@ -1,9 +1,8 @@
 import { settingsForSend, threadSettingsTarget, currentSettingsTarget } from "@/state/composer-settings"
 import { applyLiveSnapshot } from "@/state/live-recovery"
-import { acpForThread, acpStore } from "@/state/acp-state"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
-  ContinuationPlan,
+  ContinuationResolution,
   MessageAnchor,
   NativeRequest,
   PromptAttachment,
@@ -14,7 +13,6 @@ import {
   appendOptimisticReply,
   removeOptimisticReply,
 } from "@/state/thread-queue"
-import { threadStatus } from "@/state/thread-status"
 import { leaveViewerForLive, viewedThread } from "@/state/thread-viewing"
 import { threadsStore } from "@/state/thread-store"
 import { descriptorFor } from "@/state/descriptors"
@@ -62,32 +60,21 @@ export const threadContinuationActions = {
     attachments: PromptAttachment[] = []
   ): Promise<boolean> {
     if (!hasBridge()) return false
-    if (acpForThread(acpStore.get(), ref))
-      return (await import("@/state/acp")).acp.resumeAndSend(ref, prompt, attachments)
-    // A file that moved moments ago may still be mid-turn under a process the
-    // host cannot see; that is a renderer heuristic, not a transport choice.
-    if (threadStatus(ref).kind === "observed") {
-      toast("Live activity detected", {
-        description:
-          "Wait for this turn to settle, or choose another agent to continue in a new thread.",
-      })
-      return false
-    }
     noteFolderUse(ref.cwd)
     // Paint the message NOW. The plan, provider startup, session translation,
     // and the native tail all happen after the send is already visible.
     const echoed = appendOptimisticReply(ref, prompt)
     // The host decides the transport from what only it knows; a refusal
     // carries its reason, and a handoff names the provider it lands on.
-    let plan: ContinuationPlan
+    let plan: ContinuationResolution
     try {
-      plan = await getMako().continuationPlan(ref.path)
+      plan = await getMako().resolveContinuation(ref.path)
     } catch (error) {
       if (echoed) removeOptimisticReply(ref, prompt)
       toast.error(error instanceof Error ? error.message : String(error))
       return false
     }
-    if (plan.transport === "refused") {
+    if (plan.transport === "refused" || plan.transport === "unavailable") {
       if (echoed) removeOptimisticReply(ref, prompt)
       toast.error(plan.reason)
       return false
@@ -100,7 +87,7 @@ export const threadContinuationActions = {
     if (plan.transport === "live" || plan.transport === "attached") {
       const resumed = await (
         await import("@/state/acp")
-      ).acp.resumeAndSend(ref, prompt, attachments)
+      ).acp.resumeAndSend(ref, prompt, attachments, plan)
       if (!resumed && echoed) removeOptimisticReply(ref, prompt)
       return resumed
     }
