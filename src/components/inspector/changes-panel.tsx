@@ -19,7 +19,7 @@ import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
 import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { viewer } from "@/state/viewer"
-import type { GitDiff, GitFile } from "@/lib/types"
+import type { GitDiff, GitFile, GitStatus } from "@/lib/types"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import {
   CheckCircle2Icon,
@@ -78,7 +78,57 @@ export function ChangesPanel() {
     const cwd = transition.kind === "loading" ? transition.cwd : focus.cwd
     return <GitLoading label={`Reading changes${cwd ? ` in ${cwd.split(/[\\/]/).filter(Boolean).at(-1)}` : ""}`} />
   }
-  return <WorkspaceChanges key={`${focus.identity}:${snapshot.cwd}`} />
+  return <RepositoryChanges key={`${focus.identity}:${snapshot.cwd}`} snapshot={snapshot} />
+}
+
+function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const [pending, setPending] = useState<string>()
+  const [error, setError] = useState<string>()
+  const select = async (root: string) => {
+    setCollapsed(false)
+    setPending(root)
+    setError(undefined)
+    try { await actions.selectGitRepository(root) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not read this repository.") }
+    finally { setPending(undefined) }
+  }
+  if (!snapshot.repositories?.length) return (
+    <div className="flex h-full min-h-0 flex-col">
+      {snapshot.discoveryLimited ? <p className="px-2.5 py-2 text-label text-faint">Some folders could not be scanned. Open a more specific folder to find additional repositories.</p> : null}
+      <div className="min-h-0 flex-1"><WorkspaceChanges key={snapshot.root ?? snapshot.cwd} /></div>
+    </div>
+  )
+  const activeRoot = pending ?? snapshot.root
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {snapshot.repositories.map((repository) => {
+        const expanded = activeRoot === repository.root && !collapsed
+        return (
+          <section key={repository.root} className={cn("flex min-h-0 flex-col", expanded ? "flex-1" : "shrink-0")}>
+            <button type="button" aria-label={repository.label} aria-expanded={expanded}
+              disabled={Boolean(pending)} title={repository.root}
+              className="pressable flex h-7 w-full shrink-0 items-center gap-1.5 border-b border-hairline px-2 text-left text-label hover:bg-foreground/5 disabled:cursor-wait"
+              onClick={() => {
+                if (repository.root === snapshot.root) setCollapsed(!collapsed)
+                else void select(repository.root)
+              }}>
+              <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint", expanded && "rotate-90")} />
+              <span className="min-w-0 flex-1 truncate font-medium">{repository.label}</span>
+              <span className="truncate text-faint">{repository.unavailable ? "Unavailable" : repository.branch ?? "Detached HEAD"}</span>
+            </button>
+            {expanded ? (
+              <div role="region" aria-label={`Changes in ${repository.label}`} className="min-h-0 flex-1">
+                {pending ? <GitLoading label={`Reading changes in ${repository.label}`} /> : <WorkspaceChanges key={snapshot.root} />}
+              </div>
+            ) : null}
+          </section>
+        )
+      })}
+      {snapshot.discoveryLimited ? <p className="px-2.5 py-2 text-label text-faint">Some folders could not be scanned. Open a more specific folder to find additional repositories.</p> : null}
+      {error ? <p role="alert" className="px-2.5 py-2 text-label text-removed">{error}</p> : null}
+    </div>
+  )
 }
 
 function WorkspaceChanges() {
@@ -309,7 +359,7 @@ function WorkspaceChanges() {
             write in flight only marks the reading busy; swapping the whole
             sentence for "Updating..." and back made every click blink. */}
         <span role="status" aria-busy={staging || undefined} className="min-w-0 flex-1 truncate tabular">
-          {`${files.length} files changed${staged > 0 ? ` · ${staged} staged` : ""}`}
+          {`${files.length} ${files.length === 1 ? "file" : "files"} changed${staged > 0 ? ` · ${staged} staged` : ""}`}
         </span>
         {/* Line totals are deferred for large changesets; an unknown total
             shows nothing rather than a label explaining its absence. */}
@@ -478,7 +528,7 @@ function CommitsSection({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasRepo = useSession((state) => Boolean(state.git?.root))
-  const cwd = useSession((state) => state.git?.cwd ?? "")
+  const cwd = useSession((state) => state.git?.root ?? state.git?.cwd ?? "")
   const branch = useSession((state) => state.git?.branch)
   const head = useSession((state) => state.git?.head)
   const ahead = useSession((state) => state.git?.ahead ?? 0)

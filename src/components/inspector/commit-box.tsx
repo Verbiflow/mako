@@ -50,7 +50,7 @@ export function CommitBox({
   staged: number
   total: number
 }) {
-  const cwd = useSession((state) => state.git?.cwd ?? state.meta?.cwd ?? "")
+  const cwd = useSession((state) => state.git?.root ?? state.git?.cwd ?? state.meta?.cwd ?? "")
   const draftState = useCommitDraft(cwd)
   const message = draftState.text
   const drafting = draftState.requestId !== null
