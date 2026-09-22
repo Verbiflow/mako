@@ -21,24 +21,30 @@ export function HighlightedCode({source, language, streaming}: {source: string; 
 }
 
 export function DiagramPreview({source}: {source: string}) {
-  const {ref, visible} = useVisible()
   const [result, setResult] = useState<{source: string; url: string} | {source: string; error: string}>()
   useEffect(() => {
-    if (!visible || source.length > 50_000) return
+    if (source.length > 50_000) return
     let canceled = false
     let url: string | undefined
-    void import("@/lib/render-diagram").then((module) => module.renderDiagram(source)).then(
-      (svg) => {
+    // A mounted diagram must start without waiting for an intersection event.
+    // CodeBlock mounts this preview only once the source has settled.
+    async function render() {
+      try {
+        const module = await import("@/lib/render-diagram")
+        if (canceled) return
+        const svg = await module.renderDiagram(source)
         if (canceled) return
         url = URL.createObjectURL(new Blob([svg], {type: "image/svg+xml"}))
         setResult({source, url})
-      },
-      () => { if (!canceled) setResult({source, error: "Diagram could not render. The source is available above."}) }
-    )
+      } catch {
+        if (!canceled) setResult({source, error: "Diagram could not render. The source is available above."})
+      }
+    }
+    void render()
     return () => { canceled = true; if (url) URL.revokeObjectURL(url) }
-  }, [visible, source])
+  }, [source])
   const current = result?.source === source ? result : undefined
-  return <div ref={ref} className="min-h-12 p-3">
+  return <div className="min-h-12 p-3">
     {current && "url" in current
       ? <MediaContent name="Diagram" url={current.url} mimeType="image/svg+xml" onError={() => setResult({source, error: "Diagram preview unavailable"})} />
       : <p className="text-ui text-faint">{current && "error" in current ? current.error : source.length > 50_000 ? "Diagram is too large to preview. View its source." : "Rendering diagram…"}</p>}
