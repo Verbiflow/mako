@@ -1,7 +1,7 @@
 # Run your own Mako Slack bot
 
 Mako does not require the project’s Slack app. You can create a Slack app in
-your workspace, deploy the open-source backend, and point the desktop app at
+your workspace, deploy the backend from this repository, and point the desktop app at
 that deployment.
 
 ```text
