@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Columns2Icon, TerminalSquareIcon, XIcon } from "lucide-react"
+import { TerminalSquareIcon, XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { prefsStore, setPref } from "@/state/prefs"
 import type { TerminalSession } from "@/lib/types"
@@ -8,13 +8,11 @@ export function SessionTab({
   session,
   title,
   active,
-  paneCount = 1,
   onSelect,
   onClose,
 }: {
   session: TerminalSession
   title: string
-  paneCount?: number
   active: boolean
   onSelect: () => void
   onClose: () => void
@@ -36,7 +34,6 @@ export function SessionTab({
     setPref("terminalTitles", titles)
     setEditing(false)
   }
-  const Icon = paneCount > 1 ? Columns2Icon : TerminalSquareIcon
   return (
     <div
       className={cn(
@@ -46,7 +43,7 @@ export function SessionTab({
           : "text-faint hover:bg-fill-hover hover:text-muted-foreground"
       )}
     >
-      <Icon
+      <TerminalSquareIcon
         className={cn(
           "size-3.5 shrink-0",
           session.status === "interrupted" ? "text-caution" : "text-faint"
@@ -76,7 +73,7 @@ export function SessionTab({
           role="tab"
           aria-selected={active}
           tabIndex={active ? 0 : -1}
-          title={`${title}${paneCount > 1 ? ` · ${paneCount} panes` : ""} · ${session.cwd} · Double-click to rename`}
+          title={`${title} · ${session.cwd} · Double-click to rename`}
           onClick={onSelect}
           onDoubleClick={(event) => {
             event.stopPropagation()
