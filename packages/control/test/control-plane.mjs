@@ -111,3 +111,19 @@ assert.equal(controlLineRef('s00000001:2 Button "Save"'), "s00000001:2")
 assert.throws(() => controlLineRef('Button "Save"'), /no control ref/)
 
 console.log("control plane ok")
+
+const nativeWithPage = windowCapabilities({
+  target: window,
+  documentWindows: 1,
+  onScreen: true,
+  pageBrowser: "app:fixture",
+})
+assert.equal(
+  planControlOperation(
+    window,
+    { kind: "set-text", ref: "s00000001:2", text: "00123" },
+    nativeWithPage
+  ).route,
+  "accessibility",
+  "a native ref must not claim page delivery"
+)
