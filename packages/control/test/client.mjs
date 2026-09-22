@@ -184,3 +184,12 @@ assert.throws(
     }),
   /found 0/
 )
+
+// A lossy native display value can never prove exact equality.
+current = observation([{ ...field("Name", "東京 🐟"), valueExact: false }])
+await assert.rejects(window.expect({ role: "TextField", name: "Name", value: "東京 🐟" }, { timeoutMs: 0 }), /Exact value unavailable/)
+for (const value of ["", "  ", "  東京 🐟  ", "00123", "\tline\n"]) {
+  current = observation([{ ...field("Name", value), valueExact: true }])
+  assert.equal((await window.expect({ role: "TextField", name: "Name", value }, { timeoutMs: 0 })).evidence.value, value)
+  await assert.rejects(window.expect({ role: "TextField", name: "Name", value: value + " " }, { timeoutMs: 0 }), /not established/)
+}
