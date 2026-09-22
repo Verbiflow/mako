@@ -15,11 +15,11 @@ A late raw-driver focus check was caught by a negative test and moved before all
 foreground input routes in candidate `0.28.2+mako.3`.
 
 The candidate passed 30 GTK fill → exact read-back → Save jobs through public MCP,
-all 400 uniquely tagged keys in the other window (388 during the final job loop), reordered and
+all 400 uniquely tagged keys in the other window (385 during the final job loop), reordered and
 destroyed controls, modal parent refusal, bounded walks, oversized value proof
 refusal and text-only reads without screenshots. The host and raw driver both
 refused foreground input to the background target. Release `+mako.3` packaging and its final
-release-binary rerun passed; complete-job median/p95 were 127/139 ms. Linux units: 448 passed/5 ignored; common
+release-binary rerun passed; complete-job median/p95 were 128/140 ms. Linux units: 448 passed/5 ignored; common
 contract: 45 passed; Mac native units: 368 passed/2 ignored. These are isolated
 ARM64 X11 results; Wayland and x64 are not certified by them.
 
@@ -33,11 +33,20 @@ parents now own their child tabs, and Linux identifies the real browser process.
 The previous signed app handoff **failed** on orphaned crashpad processes 76176
 and 76183. The installer now verifies and reaps that exact orphaned executable
 after authorized host exit. Tests preserve unrelated, parented and changed
-processes. Full app packaging/installation remains in progress; the installed
-Mac driver is still `+mako.1`. Regular Aside controlled typing, native popup focus,
-Wayland and wider app coverage remain open. No ChatGPT parity claim is made.
+processes. The implementation is integrated into main at `7b6fc7e`. Signed app
+`f3562d64e9ea18dc` contains extension 0.3.1 and the updated host/installer; packaged
+bytes and its signature were verified. Installation is queued, waiting for active
+sessions to finish. A detached handoff waits for authorized host exit and checks
+the replacement host's actual build. See the [live installation receipt](audits/2026-09-22/linux-control-implementation/installation.json)
+and [signed build receipt](audits/2026-09-22/linux-control-implementation/signed-app.json).
+The running host remains `1f2c6af3acd5149e`; the installed Mac driver remains
+`+mako.1`. The Linux ARM64 `+mako.3` release is packaged separately. Regular Aside
+extension upgrade and controlled typing, native popup focus, Wayland, Linux x64
+and wider app coverage remain open. No ChatGPT parity claim is made.
 
 ## Mac/Linux accuracy and background audit
+
+Historical audit; the implementation and current release status are recorded above.
 
 2026-09-22: [comparison and implementation order](audits/2026-09-22/native-platform-comparison/README.md)
 checks the supplied Layers 3–4 report against installed reference SDK/docs and
@@ -61,6 +70,10 @@ Cloud Linux should isolate desktops per job so popup focus stays within the job.
 These are audited next steps, not implemented or deployed changes.
 
 ## Extension workflow validation and release
+
+Historical 0.3.0 release record. Candidate `89c04a9f9814da4b` is superseded by
+`f3562d64e9ea18dc` above; disposable-profile forced reload is now proven on both
+platforms. Regular Aside upgrade and concurrent typing remain unproven.
 
 2026-09-22: implementation is in `/Users/kashyab/mako-control-rollout`.
 The public API now has strict semantic locators and target-specific capabilities;
