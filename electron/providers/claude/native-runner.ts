@@ -1,3 +1,4 @@
+import { resolveExecutable } from "../../executable.js"
 import { z } from "zod"
 import {
   argumentAfter,
@@ -24,6 +25,7 @@ function withEnv(command: NativeCommand, env: Record<string, string> | undefined
 
 export const claudeNativeRunner: NativeRunner = {
   provider: "claude",
+  available: () => resolveExecutable("claude") !== null,
   fastMode: "supported",
   carries: CARRIES,
   prepare: async (options) => dropUncarried(options, CARRIES),

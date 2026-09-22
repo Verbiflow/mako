@@ -24,6 +24,8 @@ import { ClaudeProjection } from "./sdk-projection.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
+import { ProviderStartupWatch, STARTUP_TOTAL_MS } from "../../provider-startup.js"
+import { hostLog, hostWarn } from "../../host-log.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
 const CLAUDE_MODES: LiveSessionMode[] = [
@@ -115,6 +117,11 @@ async function pump(engine: Engine, live: Live): Promise<void> {
   try {
     for await (const message of live.query) {
       if (live.closed) return
+      if (live.state.status === "starting" && message.type === "system" &&
+        (message.subtype === "hook_started" || message.subtype === "hook_response"))
+        hostLog("claude-sdk", "startup event", {
+          conversation: live.state.id, event: message.subtype,
+        })
       acknowledge(live, message)
       live.transcript.observe(message)
       if (message.type === "system" && message.subtype === "compact_boundary" &&
@@ -265,6 +272,14 @@ export function createClaudeSdkDriver(
         options.emit
       )
       let exited = Promise.resolve()
+      const startedAt = Date.now()
+      let startupFinished = false
+      let startupWatch: ProviderStartupWatch | undefined
+      let observeSpawn: (watch: ProviderStartupWatch) => void = () => undefined
+      const spawned = new Promise<ProviderStartupWatch>((resolve) => {
+        observeSpawn = resolve
+      })
+      hostLog("claude-sdk", "initializing", { conversation: conversationId })
       const query = dependencies.query({
         prompt: input,
         options: {
@@ -279,8 +294,21 @@ export function createClaudeSdkDriver(
           },
           spawnClaudeCodeProcess: (options) => {
             const child = spawnClaudeProcess(options, conversationId)
+            if (!startupFinished) {
+              startupWatch = new ProviderStartupWatch(child, { harness: "Claude" })
+              observeSpawn(startupWatch)
+              hostLog("claude-sdk", "process spawned", {
+                conversation: conversationId, pid: child.pid, ms: Date.now() - startedAt,
+              })
+            }
             exited = new Promise<void>((resolve) => {
-              child.once("exit", () => resolve())
+              child.once("exit", (code, signal) => {
+                hostLog("claude-sdk", "process exited", {
+                  conversation: conversationId, pid: child.pid, code, signal,
+                  ms: Date.now() - startedAt,
+                })
+                resolve()
+              })
               child.once("error", () => resolve())
             })
             return child
@@ -322,12 +350,14 @@ export function createClaudeSdkDriver(
       void pump(engine, live)
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
+        const initialization = query.initializationResult()
         await Promise.race([
-          query.initializationResult(),
+          initialization,
+          spawned.then((watch) => watch.step("SDK initialization", initialization)),
           new Promise<never>((_, reject) => {
             timer = setTimeout(
-              () => reject(new Error("Claude SDK initialization timed out")),
-              20_000
+              () => reject(new Error("Claude SDK initialization exceeded the startup limit")),
+              STARTUP_TOTAL_MS
             )
           }),
         ])
@@ -338,12 +368,22 @@ export function createClaudeSdkDriver(
           connection: "connected",
           nativePath: transcript.path,
         })
+        hostLog("claude-sdk", "initialized", {
+          conversation: conversationId, ms: Date.now() - startedAt,
+          steps: startupWatch?.summary(),
+        })
         return live.state
       } catch (error) {
+        hostWarn("claude-sdk", "initialization failed", {
+          conversation: conversationId, ms: Date.now() - startedAt,
+          spawned: startupWatch !== undefined, steps: startupWatch?.summary(),
+        })
         stop(live)
         throw error
       } finally {
+        startupFinished = true
         clearTimeout(timer)
+        startupWatch?.dispose()
       }
     },
     async prompt(id, text, attachments, settings) {
