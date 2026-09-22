@@ -1,3 +1,4 @@
+import { resolveExecutable } from "../../executable.js"
 import { devinExecutable } from "./executable.js"
 import {
   argumentAfter,
@@ -11,6 +12,7 @@ const CARRIES: readonly string[] = []
 
 export const devinNativeRunner: NativeRunner = {
   provider: "devin",
+  available: () => resolveExecutable(devinExecutable() ?? "devin") !== null,
   fastMode: "supported",
   carries: CARRIES,
   prepare: async (options) => dropUncarried(options, CARRIES),
