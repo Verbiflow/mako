@@ -403,9 +403,15 @@ const deskBrowser = new DeskBrowser({
 })
 let removeDeskBrowserRegistration: (() => void) | undefined
 let stopDevRendererWatch: (() => void) | undefined
+let defaultBrowserApplication: Promise<string | undefined> | undefined
 const browserControl = new BrowserService(
   async () => [...(await localBrowsers()), deskBrowser.definition],
-  { preferencePath: join(app.getPath("userData"), "browser-preference.json") }
+  {
+    preferencePath: join(app.getPath("userData"), "browser-preference.json"),
+    defaultApplication: () => (defaultBrowserApplication ??= app.whenReady()
+      .then(() => app.getApplicationInfoForProtocol("https://example.com"))
+      .then(info => info.path).catch(() => undefined)),
+  }
 )
 let devRendererGeneration = 0
 async function configureDevRenderer(

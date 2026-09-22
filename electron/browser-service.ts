@@ -264,6 +264,7 @@ interface OwnedTarget {
 export type BrowserFocusPolicy = "lease" | "action" | "off"
 export interface BrowserServiceOptions {
   preferencePath?: string
+  defaultApplication?: () => Promise<string | undefined>
   focusPolicy?: BrowserFocusPolicy
 }
 const FOCUS_INPUT_ACTIONS: ReadonlySet<BrowserCommand["action"]> = new Set([
@@ -330,6 +331,7 @@ export class BrowserService {
     (statuses: BrowserControlStatus[]) => void
   >()
   private readonly preference: BrowserPreferences
+  private readonly defaultApplication?: () => Promise<string | undefined>
   private closing = false
   private readonly discover: () => Promise<LocalBrowser[]>
   private refreshing: Promise<BrowserControlStatus[]> | undefined
@@ -357,6 +359,7 @@ export class BrowserService {
       ...this.attached.values(),
     ]
     this.preference = new BrowserPreferences(options.preferencePath)
+    this.defaultApplication = options.defaultApplication
     this.focusPolicy = options.focusPolicy ?? "action"
     this.browsers = new Map(
       (Array.isArray(definitions) ? definitions : []).map((definition) => [
@@ -443,6 +446,19 @@ export class BrowserService {
             status: "disconnected",
           }),
         })
+        changed = true
+      }
+    }
+    if (!this.preference.hasSavedChoice && this.defaultApplication) {
+      const applicationPath = await this.defaultApplication()
+      // Several profiles in the same browser are ambiguous. Never pick the first.
+      const candidates = applicationPath ? definitions.filter(definition =>
+        definition.transport === "extension" && definition.applicationPath === applicationPath
+      ) : []
+      if (!this.closing && !this.preference.hasSavedChoice && candidates.length === 1) {
+        const browser = candidates[0]!
+        await this.preference.set({ id: browser.id, name: browser.name, product: browser.product,
+          profileName: browser.profileName, transport: browser.transport })
         changed = true
       }
     }
@@ -614,7 +630,7 @@ export class BrowserService {
             ...entry.status,
             lastInterruption: {
               tab: binding.target.tab,
-              message: tabInterruption(binding.events, event.params.reason),
+              message: tabInterruption(binding.events, z.string().safeParse(event.params.reason).data),
             },
           }
           this.changed()

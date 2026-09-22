@@ -8,14 +8,15 @@ assert.ok(
   process.argv.includes("--allow-foreground"),
   "This test activates a disposable typing window. Run with --allow-foreground only when that foreground test has been authorized."
 )
+const browserJob = process.argv.includes("--browser")
 assert.ok(
-  process.env.MAKO_TEST_DRIVER,
+  browserJob || process.env.MAKO_TEST_DRIVER,
   "Set MAKO_TEST_DRIVER to the signed candidate executable"
 )
 const root = await mkdtemp("/private/tmp/mako-typing-job-"),
   run = promisify(execFile)
 // Compile before taking the foreground; build latency is outside the typing run.
-await run(
+if (!browserJob) await run(
   "xcrun",
   [
     "swiftc",
@@ -58,22 +59,24 @@ async function until(check) {
 const deadline = setTimeout(() => {
   evidence.deadlineExceeded = true
   fixture.kill()
-}, 45000)
+}, browserJob ? 90000 : 45000)
 try {
   evidence.before = await until((s) => s.started && s.received >= 10)
   const job = await run(
     process.execPath,
-    ["scripts/test-background-native-job.mjs"],
+    [browserJob ? "scripts/test-background-browser-job.mjs" : "scripts/test-background-native-job.mjs"],
     {
       env: {
         ...process.env,
+        MAKO_TEST_EXTENSION_ONLY: browserJob ? "1" : undefined,
+        MAKO_TEST_BROWSER_ROUNDS: browserJob ? "24" : undefined,
         MAKO_TEST_NATIVE_FIXTURE: join(root, "background"),
       },
       timeout: 180000,
       maxBuffer: 4 * 1024 * 1024,
     }
   )
-  await writeFile(join(root, "native-job.log"), job.stdout + job.stderr)
+  await writeFile(join(root, browserJob ? "browser-job.log" : "native-job.log"), job.stdout + job.stderr)
   await writeFile(statePath + ".stop", "stop")
   evidence.after = await until((s) => s.stopped && s.sent === s.received)
   assert.ok(
@@ -91,7 +94,7 @@ try {
   )
   evidence.status = "passed"
   console.log(
-    "PASS: complete native jobs during independently counted foreground typing; all tagged keys received"
+    `PASS: complete ${browserJob ? "extension browser" : "native"} jobs during independently counted foreground typing; all tagged keys received`
   )
 } catch (error) {
   evidence.status = "failed"

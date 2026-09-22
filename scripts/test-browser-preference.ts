@@ -38,7 +38,7 @@ const definitions = [
 ]
 const preferencePath = join(root, "browser.json")
 const service = new BrowserService(definitions, { preferencePath })
-const run = (input: unknown) =>
+const run = (input: z.input<typeof BrowserCommandSchema>) =>
   service.execute(
     "owner",
     BrowserCommandSchema.parse(input),

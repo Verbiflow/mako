@@ -60,6 +60,7 @@ export async function extensionBrowsers(
         : registration.profileName
       browsers.push({
         id: registration.id,
+        applicationPath: registration.applicationPath,
         name: (profileName && product
           ? `${product} · ${profileName}`
           : (product ?? registration.name)

@@ -164,10 +164,6 @@ async function registration() {
       throw new Error("Chromium exited before connecting")
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  const port = (
-    await readFile(join(root, "profile", "DevToolsActivePort"), "utf8")
-  ).split("\n")[0]
-  console.log(await (await fetch(`http://127.0.0.1:${port}/json/list`)).text())
   throw new Error(`Extension did not connect. Logs: ${root}/chrome.log`)
 }
 const fixtureSaves = []
@@ -196,7 +192,6 @@ try {
       `--load-extension=${extension},${companion}`,
       `--disable-extensions-except=${extension},${companion}`,
       ...(windowed ? [] : ["--headless=new"]),
-      "--remote-debugging-port=0",
       "--no-first-run",
       "--no-default-browser-check",
       "about:blank",
@@ -218,6 +213,7 @@ try {
     )
     child.stderr.on("data", (chunk) => logs.push(chunk.toString()))
     const value = await registration()
+    assert.equal(value.applicationPath, dirname(dirname(dirname(executable))), "Native messaging resolves actual browser application without a debugging port")
     if (process.argv.includes("--profile-metadata")) {
       assert.ok(value.profileDirectory?.startsWith(join(root, "profile") + "/"), "A unique browser profile is resolved")
       assert.ok(value.profileName?.length, "Actual profile display name is available")

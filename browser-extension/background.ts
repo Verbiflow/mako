@@ -107,6 +107,7 @@ async function connect(): Promise<void> {
     const product = browserProduct()
     next.postMessage({
       kind: "hello",
+      extensionVersion: chrome.runtime.getManifest().version,
       profileId,
       profileName: settings.profileName,
       family: "chromium",

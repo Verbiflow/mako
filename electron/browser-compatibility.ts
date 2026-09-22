@@ -1,3 +1,4 @@
+import { z } from "zod"
 import type { BrowserProtocolEvent } from "./browser-connection.js"
 
 export const asideSelectionGuidance =
@@ -6,18 +7,19 @@ export const asideSelectionGuidance =
 /** Diagnose only retained events from this exact tab. No browser queries. */
 export function tabInterruption(
   events: readonly BrowserProtocolEvent[],
-  reason: unknown
+  reason: string | undefined
 ): string {
   const extensionIds = new Set<string>()
   for (const event of events) {
-    let url: unknown
-    if (event.method === "Page.frameStartedNavigating") url = event.params.url
-    if (event.method === "Page.frameNavigated") {
-      const frame = event.params.frame
-      if (frame && typeof frame === "object" && !Array.isArray(frame))
-        url = frame.url
-    }
-    if (typeof url !== "string") continue
+    const url =
+      event.method === "Page.frameStartedNavigating"
+        ? z.object({ url: z.string() }).safeParse(event.params).data?.url
+        : event.method === "Page.frameNavigated"
+          ? z
+              .object({ frame: z.object({ url: z.string() }) })
+              .safeParse(event.params).data?.frame.url
+          : undefined
+    if (!url) continue
     const match = /^chrome-extension:\/\/([a-p]{32})\//.exec(url)
     if (match) extensionIds.add(match[1]!)
   }
