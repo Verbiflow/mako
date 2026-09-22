@@ -41,6 +41,8 @@ const reads = [
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
+  "mako:live-attach",
+  "mako:live-locate",
   "mako:live-state",
   "mako:harness-availability",
   /** Answers from the host's readings; a re-read it starts behind the answer is idempotent. */

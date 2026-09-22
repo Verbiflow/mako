@@ -16,12 +16,15 @@ import { heldReason } from "./session-hold.js"
  * rejected the model).
  */
 export type ContinuationPlan =
+  | { transport: "attached"; provider: string; conversationId: string }
   | { transport: "live"; provider: string; nativeId: string }
   | { transport: "native"; provider: string }
   | { transport: "handoff"; provider: string; reason: string }
   | { transport: "refused"; reason: string }
 
 export interface ContinuationInputs {
+  /** An existing conversation reachable through its Mako host. */
+  attached?: string | null
   /** The provider's live driver, if one is registered. */
   live: { available: boolean; canResume: boolean } | null
   /** The provider's headless CLI is installed. */
@@ -43,6 +46,8 @@ export function planContinuation(
       provider,
       reason: "This history lives only in Mako's archive; its CLI no longer has the session.",
     }
+  if (inputs.attached)
+    return { transport: "attached", provider, conversationId: inputs.attached }
   if (ref.resumeUnavailable)
     return { transport: "handoff", provider, reason: ref.resumeUnavailable }
   // Another Mako host has this session live. The installed app and a

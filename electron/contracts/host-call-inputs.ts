@@ -77,6 +77,7 @@ export const hostCallInputs = {
   ]),
   "mako:git-log": z.tuple([z.number().optional()]),
   "mako:git-push": z.tuple([z.object({ cwd: z.string(), branch: z.string() })]),
+  "mako:git-select-repository": z.tuple([z.string(), z.string()]),
   "mako:git-stage": z.tuple([z.array(z.string())]),
   "mako:git-stage-all": z.tuple([]),
   "mako:git-status": z.tuple([]),
@@ -157,10 +158,15 @@ export const hostCallInputs = {
           })
         ),
       }),
-      z.object({ kind: z.literal("compact"), id: z.string() }),
+      z.object({
+        kind: z.literal("compact"),
+        id: z.string(),
+        requestId: z.string().optional(),
+      }),
     ]),
   ]),
   "mako:live-action-acknowledge": z.tuple([z.string(), z.string()]),
+  "mako:live-attach": z.tuple([z.string()]),
   "mako:live-bind": z.tuple([z.string(), z.string()]),
   "mako:live-cancel": z.tuple([z.string()]),
   "mako:live-capture": z.tuple([z.string(), z.string()]),
@@ -208,6 +214,7 @@ export const hostCallInputs = {
       ]),
     }),
   ]),
+  "mako:live-locate": z.tuple([z.string(), z.string()]),
   "mako:live-merge-fork": z.tuple([z.string(), z.string()]),
   "mako:live-mode": z.tuple([z.string(), z.string()]),
   "mako:live-permission": z.tuple([

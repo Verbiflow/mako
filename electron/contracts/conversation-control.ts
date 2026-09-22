@@ -38,10 +38,15 @@ export type ProviderBinding = z.infer<typeof ProviderBindingSchema>
  * binding insists on `same`, because it sends context from that point.
  */
 export type ResumeVerdict =
-  | { kind: "resumable"; record: "same" | "moved" }
+  | { kind: "resumable"; record: "same" | "moved" | "unknown" }
   /** Something else has the session open; `by` names it for the user. */
   | { kind: "held"; by: string }
   | { kind: "unavailable"; reason: string }
+
+/** An absent baseline permits no claim that native history is unchanged. */
+export function compareNativeCheckpoint(previous: string | undefined, current: string): "same" | "moved" | "unknown" {
+  return previous === undefined ? "unknown" : previous === current ? "same" : "moved"
+}
 
 export function resumable(verdict: ResumeVerdict, record: "same" | "moved" = "moved"): boolean {
   return verdict.kind === "resumable" && (record === "moved" || verdict.record === "same")

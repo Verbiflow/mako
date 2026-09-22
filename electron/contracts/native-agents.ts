@@ -12,6 +12,7 @@ export const NativeAgentStateSchema = z.discriminatedUnion("kind", [
 ])
 export const NativeAgentObservationSchema = z.object({
   nativeId: z.string().min(1).max(512),
+  nativeRunId: z.string().min(1).max(512).optional(),
   title: z.string().max(512),
   parentNativeId: z.string().max(512).optional(),
   toolId: z.string().max(512).optional(),
@@ -29,6 +30,9 @@ export const NativeAgentObservationSchema = z.object({
 export type NativeAgentObservation = z.infer<
   typeof NativeAgentObservationSchema
 >
+export function isActiveNativeAgent(agent: NativeAgentObservation): boolean {
+  return agent.state.kind === "working" || agent.state.kind === "waiting"
+}
 export const NativeAgentSchema = NativeAgentObservationSchema.extend({
   bindingId: z.string(),
   provider: z.string(),

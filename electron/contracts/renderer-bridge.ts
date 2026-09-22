@@ -301,6 +301,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-bind", id, path),
     readLiveFile: (id: string, path: string) =>
       invokeTrustedHost<FileContents>("mako:read-live-file", id, path),
+    liveAttach: (path: string) =>
+      invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-snapshot", id),
     livePrompt: (
@@ -532,6 +534,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     search: (query: string, options?: SearchOptions) =>
       invokeTrustedHost<SearchResults>("mako:search", query, options),
 
+    selectGitRepository: (cwd: string, root: string) => invokeTrustedHost<GitStatus>("mako:git-select-repository", cwd, root),
     gitStatus: () => invokeTrustedHost<GitStatus>("mako:git-status"),
     gitDiff: (path: string) =>
       invokeTrustedHost<GitDiff>("mako:git-diff", path),

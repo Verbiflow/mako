@@ -57,6 +57,7 @@ export type HostEventBody =
   | { type: "host-reconnected" }
   | { type: "thread-archives"; snapshot: ThreadArchiveSnapshot }
   | { type: "live-batch"; batch: LiveBatch }
+  | { type: "live-owner-connection"; ids: string[]; connected: boolean }
   | { type: "session"; session: SessionState }
   | { type: "meta"; meta: SessionMeta }
   | { type: "messages"; messages: ChatMessage[] }
@@ -120,7 +121,8 @@ export type HostEvent = HostEventBody & { tabId?: string }
 export interface TabSnapshot {
   id: string
   session: SessionState
-  git: GitStatus
+  /** Absent at boot while Git is still loading. */
+  git?: GitStatus
   capabilities: Capabilities
 }
 

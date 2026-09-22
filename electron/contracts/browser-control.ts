@@ -1,3 +1,4 @@
+import { ControlReadScopeSchema } from "@mako/control/control/scope"
 import { z } from "zod"
 
 export const BrowserStateSchema = z.discriminatedUnion("status", [
@@ -193,6 +194,8 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("observe"),
+      // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Zod schema composition API.
+      ...ControlReadScopeSchema.shape,
       target: BrowserTargetSchema,
       maxNodes: z
         .number()

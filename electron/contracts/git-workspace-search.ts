@@ -21,7 +21,17 @@ export interface GitPushInput {
   branch: string
 }
 
+export interface GitRepositorySummary {
+  label: string
+  root: string
+  branch?: string
+  changes?: number
+  unavailable?: boolean
+}
+
 export interface GitStatus {
+  repositories?: GitRepositorySummary[]
+  discoveryLimited?: boolean
   cwd: string
   root?: string
   branch?: string
