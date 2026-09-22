@@ -24,6 +24,8 @@ export class ClaudeAgents {
     if (message.subtype === "task_progress") {
       const previous = this.agents.get(message.task_id)
       if (!previous && !message.subagent_type) return undefined
+      if (message.tool_use_id && previous?.toolId && message.tool_use_id !== previous.toolId)
+        return undefined
       if (previous && !["working", "waiting"].includes(previous.state.kind))
         return undefined
       return this.remember({
@@ -46,6 +48,8 @@ export class ClaudeAgents {
     if (message.subtype === "task_notification") {
       const previous = this.agents.get(message.task_id)
       if (!previous || message.ambient) return undefined
+      if (message.tool_use_id && previous.toolId && message.tool_use_id !== previous.toolId)
+        return undefined
       return this.remember({
         ...previous,
         state:
@@ -67,6 +71,9 @@ export class ClaudeAgents {
       const previous = this.agents.get(message.task_id)
       if (!previous) return undefined
       const patch = message.patch
+      if (!["working", "waiting"].includes(previous.state.kind) &&
+        (patch.status === "pending" || patch.status === "running" || patch.status === "paused"))
+        return undefined
       let state = previous.state
       switch (patch.status) {
         case "pending":
