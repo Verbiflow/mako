@@ -53,7 +53,9 @@ export class BrowserConnection {
           value.error
             ? new BrowserFault({
                 code: "protocol-error",
-                message: value.error.message,
+                message: /detached while handling command/i.test(value.error.message)
+                  ? `${value.error.message} Read browser status for interruption details, and check the exact page before repeating this action.`
+                  : value.error.message,
                 // A debugger can detach after input has reached the renderer.
                 // The protocol error is not proof that dispatch was rejected.
                 outcome: /detached while handling command/i.test(value.error.message)

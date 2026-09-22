@@ -152,7 +152,7 @@ export async function prepareBrowserExtension(
     const profileTemporary = `${profileHelper}.${process.pid}.tmp`
     await writeFile(
       profileTemporary,
-      `#!/bin/sh\nexport MAKO_BROWSER_PRODUCT=${quote(product)}\nexec ${quote(helper)} "$@"\n`,
+      `#!/bin/sh\nexport MAKO_BROWSER_PRODUCT=${quote(product)}\nexport MAKO_BROWSER_ROOT=${quote(profile)}\nexec ${quote(helper)} "$@"\n`,
       { mode: 0o700 }
     )
     await chmod(profileTemporary, 0o700)

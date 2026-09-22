@@ -403,10 +403,10 @@ const deskBrowser = new DeskBrowser({
 })
 let removeDeskBrowserRegistration: (() => void) | undefined
 let stopDevRendererWatch: (() => void) | undefined
-const browserControl = new BrowserService(() => [
-  ...localBrowsers(),
-  deskBrowser.definition,
-])
+const browserControl = new BrowserService(
+  async () => [...(await localBrowsers()), deskBrowser.definition],
+  { preferencePath: join(app.getPath("userData"), "browser-preference.json") }
+)
 let devRendererGeneration = 0
 async function configureDevRenderer(
   registration: {
@@ -420,7 +420,7 @@ async function configureDevRenderer(
   removeDeskBrowserRegistration?.()
   removeDeskBrowserRegistration = undefined
   if (!registration) {
-    browserControl.refresh()
+    await browserControl.refresh()
     return
   }
   try {
@@ -437,7 +437,7 @@ async function configureDevRenderer(
       error: error instanceof Error ? error.message : String(error),
     })
   }
-  browserControl.refresh()
+  await browserControl.refresh()
 }
 const controlPreviews = new ControlPreviews(
   browserControl,
@@ -1205,6 +1205,9 @@ function bindIpc() {
     }
   )
   handle("mako:browser-control-status", () => browserControl.refresh())
+  handle("mako:browser-control-prefer", (_event, browser: string | null) =>
+    browserControl.prefer(browser)
+  )
   handle("mako:browser-extension-setup", () =>
     prepareBrowserExtension(app.getAppPath(), process.execPath)
   )

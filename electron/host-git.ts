@@ -1,3 +1,4 @@
+import { KiriError } from "@kiri/client"
 import { relative } from "node:path"
 import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
 import type { Comparison, RepoPath, KiriRepository, KiriClient, ResultValue } from "@kiri/client"
@@ -168,17 +169,19 @@ export class WorkspaceGit {
         if (input.action === "fetch" || input.action === "pull") {
           await client.request({ method: "sync", repo: repo.id, action: input.action, target: expected })
         } else {
-          if (input.action === "merge") await client.request({ method: "sync", repo: repo.id, action: "fetch", target: null })
+          if (input.action === "merge" || input.action === "merge_autostash") await client.request({ method: "sync", repo: repo.id, action: "fetch", target: null })
           await client.request({ method: "integrate", repo: repo.id, action: input.action, target: expected })
         }
       })
     } catch (error) { failure = error }
     const status = await target.status()
+    const detail = failure instanceof Error ? failure.message : failure ? String(failure) : undefined
+    if (status.files.some(file => file.status === "conflicted")) return { status, problem: { kind: "conflicts", message: status.operation ? "Resolve and stage the conflicted files, then continue." : input.action === "merge_autostash" && !failure ? "Incoming commits are merged, but restoring your edits caused conflicts. Git kept a stash backup. Resolve and stage the files before committing." : "Resolve and stage the remaining conflicts before committing.", detail } }
     if (!failure) return { status }
-    if (status.files.some(file => file.status === "conflicted")) return { status, problem: { kind: "conflicts", message: "Resolve and stage the conflicted files, then continue." } }
-    if ((input.action === "pull" || input.action === "merge") && status.files.some(file => file.status !== "untracked")) return { status, problem: { kind: "dirty", message: "Commit or stash your changes before pulling. Your edits are still here." } }
-    if (input.action === "pull" && status.ahead > 0 && status.behind > 0) return { status, problem: { kind: "incoming", message: "Both branches have new commits. Pull & merge to combine them, then push." } }
-    return { status, problem: { kind: "failed", message: `Could not ${input.action === "merge" ? "merge incoming changes" : input.action}. Review the Git details before trying again.`, detail: failure instanceof Error ? failure.message : String(failure) } }
+    if (failure instanceof KiriError && failure.code === "untracked_files") return { status, problem: { kind: "untracked", message: "A local file conflicts with incoming changes.", detail } }
+    if (failure instanceof KiriError && failure.code === "local_changes" && (input.action === "pull" || input.action === "merge")) return { status, problem: { kind: "dirty", message: "Git needs your local edits set aside before merging. Temporarily stash and restore them to pull without committing. Restoring may cause conflicts; staged edits return unstaged.", detail } }
+    if (input.action === "pull" && status.ahead > 0 && status.behind > 0 && /Both branches have new commits|Not possible to fast-forward/.test(detail ?? "")) return { status, problem: { kind: "incoming", message: "Both branches have new commits. Pull & merge to combine them, then push.", detail } }
+    return { status, problem: { kind: "failed", message: `Could not ${input.action === "merge" || input.action === "merge_autostash" ? "merge incoming changes" : input.action}. Review the Git details before trying again.`, detail } }
   }
   async push(branch?: string): Promise<{ branch: string; output: string }> {
     return this.withRepo(async (repo, client) => {

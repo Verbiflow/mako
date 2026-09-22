@@ -1,3 +1,7 @@
+import {
+  singleBrowserProfile,
+  browserProfileName,
+} from "./browser-profile-name.js"
 import { z } from "zod"
 import type { IncomingMessage } from "node:http"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -7,6 +11,7 @@ import type { Readable, Writable } from "node:stream"
 import { WebSocketServer, type WebSocket } from "ws"
 import {
   ExtensionCommandSchema,
+  ExtensionRegistrationSchema,
   ExtensionMessageSchema,
   NativeMessageDecoder,
   type ExtensionHostMessage,
@@ -31,6 +36,8 @@ export async function startBrowserNativeHost(
   let endpoint: string | undefined
   let stopping = false
   let greeted = false
+  let updateProfile: ((name: string) => Promise<void>) | undefined
+  let profileUpdates: Promise<void> = Promise.resolve()
   let resolveHello: (
     hello: Extract<ExtensionMessage, { kind: "hello" }>
   ) => void = () => {}
@@ -71,6 +78,7 @@ export async function startBrowserNativeHost(
     for (const client of clients.values()) client.socket.terminate()
     clients.clear()
     server?.close()
+    await profileUpdates
     if (registration) {
       const value = await readFile(registration, "utf8").catch(() => "")
       if (endpoint && value.includes(endpoint))
@@ -89,6 +97,16 @@ export async function startBrowserNativeHost(
           continue
         }
         if (!greeted) throw new Error("Missing browser registration")
+        if (message.kind === "profile-name") {
+          profileUpdates = profileUpdates
+            .then(async () => {
+              if (!stopping) await updateProfile?.(message.profileName)
+            })
+            .catch(() => {
+              void close()
+            })
+          continue
+        }
         const client = clients.get(message.client)
         if (!client) continue
         if (client.socket.bufferedAmount > 32 * 1024 * 1024) {
@@ -178,15 +196,27 @@ export async function startBrowserNativeHost(
       .min(1)
       .max(80)
       .safeParse(process.env.MAKO_BROWSER_PRODUCT)
-    const name = product.success
-      ? `${product.data} profile ${profile.profileId.slice(0, 6)}`
-      : profile.label
+    const browserProduct = product.success ? product.data : profile.product
+    const profileDirectory = process.env.MAKO_BROWSER_ROOT
+      ? await singleBrowserProfile(process.env.MAKO_BROWSER_ROOT)
+      : undefined
+    const profileName =
+      profile.profileName ??
+      (profileDirectory
+        ? await browserProfileName(profileDirectory)
+        : undefined)
+    const name = (
+      profileName ? `${browserProduct} · ${profileName}` : browserProduct
+    ).slice(0, 100)
     registration = join(root, `${profile.family}-${profile.profileId}.json`)
     const temporary = `${registration}.${process.pid}.tmp`
     await writeFile(
       temporary,
       JSON.stringify({
         version: 1,
+        product: browserProduct,
+        profileDirectory: profile.profileName ? undefined : profileDirectory,
+        profileName,
         id,
         name,
         endpoint,
@@ -196,7 +226,30 @@ export async function startBrowserNativeHost(
     )
     await rename(temporary, registration)
     if (stopping) throw new Error("Browser extension disconnected")
-    send({ kind: "ready" })
+    const registrationPath = registration
+    updateProfile = async (profileName) => {
+      const metadata = ExtensionRegistrationSchema.parse(
+        JSON.parse(await readFile(registrationPath, "utf8"))
+      )
+      const temporary = `${registrationPath}.${randomUUID()}.tmp`
+      try {
+        await writeFile(
+          temporary,
+          JSON.stringify({
+            ...metadata,
+            profileName,
+            profileDirectory: undefined,
+            name: `${browserProduct} · ${profileName}`.slice(0, 100),
+          }),
+          { mode: 0o600, flag: "wx" }
+        )
+        await rename(temporary, registrationPath)
+        send({ kind: "ready", profileName })
+      } finally {
+        await rm(temporary, { force: true })
+      }
+    }
+    send({ kind: "ready", profileName })
     return { close, registration }
   } catch (error) {
     await close()

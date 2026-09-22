@@ -27,13 +27,15 @@ const defaultRunner: CommandRunner = async (command, args, timeoutMs) =>
   })
 
 export function parseCuaDriverVersion(output: string): string | null {
-  const match = /cua-driver\s+v?(\d+\.\d+\.\d+)/.exec(output)
+  const match = /cua-driver\s+v?(\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?)/.exec(
+    output
+  )
   return match ? match[1] : null
 }
 
 export function compareVersions(left: string, right: string): number {
-  const a = left.split(".").map(Number)
-  const b = right.split(".").map(Number)
+  const a = left.split("+")[0].split(".").map(Number)
+  const b = right.split("+")[0].split(".").map(Number)
   for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
     const difference = (a[index] ?? 0) - (b[index] ?? 0)
     if (difference !== 0) return difference
@@ -113,6 +115,12 @@ export async function updateCuaDriver(
   executable: string,
   run: CommandRunner = defaultRunner
 ): Promise<{ output: string }> {
+  const { stdout: installed } = await run(executable, ["--version"], 8_000)
+  if (parseCuaDriverVersion(installed)?.includes("+mako.")) {
+    throw new Error(
+      "This Mako driver build must be updated with its signed Mako driver package."
+    )
+  }
   // Host calls time out after five minutes; the updater gets the rest.
   const { stdout, stderr } = await run(
     executable,

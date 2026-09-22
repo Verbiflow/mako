@@ -1,3 +1,8 @@
+import { BrowserPreferences } from "./browser-preference.js"
+import {
+  asideSelectionGuidance,
+  tabInterruption,
+} from "./browser-compatibility.js"
 import { createHash, randomUUID } from "node:crypto"
 import { stat, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join } from "node:path"
@@ -228,6 +233,7 @@ interface Binding {
   connection: BrowserConnection
   sessionId: string
   focusEmulated: boolean
+  intentionalDetach?: boolean
   uncertain: boolean
   running: number
   tail: Promise<void>
@@ -257,6 +263,7 @@ interface OwnedTarget {
 }
 export type BrowserFocusPolicy = "lease" | "action" | "off"
 export interface BrowserServiceOptions {
+  preferencePath?: string
   focusPolicy?: BrowserFocusPolicy
 }
 const FOCUS_INPUT_ACTIONS: ReadonlySet<BrowserCommand["action"]> = new Set([
@@ -302,6 +309,11 @@ function browserStatus(
     name: definition.name,
     connection,
   }
+  if (definition.product) status.product = definition.product
+  if (definition.profileName) status.profileName = definition.profileName
+  if (definition.transport) status.transport = definition.transport
+  if (definition.transport === "extension" && definition.product === "Aside")
+    status.guidance = asideSelectionGuidance
   if (definition.kind) status.kind = definition.kind
   if (definition.profile) status.profile = definition.profile
   if (definition.origin) status.origin = definition.origin
@@ -317,8 +329,10 @@ export class BrowserService {
   private readonly listeners = new Set<
     (statuses: BrowserControlStatus[]) => void
   >()
+  private readonly preference: BrowserPreferences
   private closing = false
-  private readonly discover: () => LocalBrowser[]
+  private readonly discover: () => Promise<LocalBrowser[]>
+  private refreshing: Promise<BrowserControlStatus[]> | undefined
   private readonly focusPolicy: BrowserFocusPolicy
   /**
    * Applications attached at run time (`attach`): an Electron or Chromium
@@ -328,7 +342,8 @@ export class BrowserService {
   private readonly attached = new Map<string, LocalBrowser>()
 
   constructor(
-    definitions?: LocalBrowser[] | (() => LocalBrowser[]),
+    definitions?:
+      LocalBrowser[] | (() => LocalBrowser[] | Promise<LocalBrowser[]>),
     options: BrowserServiceOptions = {}
   ) {
     const discover =
@@ -337,10 +352,14 @@ export class BrowserService {
         : Array.isArray(definitions)
           ? () => definitions
           : definitions
-    this.discover = () => [...discover(), ...this.attached.values()]
+    this.discover = async () => [
+      ...(await discover()),
+      ...this.attached.values(),
+    ]
+    this.preference = new BrowserPreferences(options.preferencePath)
     this.focusPolicy = options.focusPolicy ?? "action"
     this.browsers = new Map(
-      this.discover().map((definition) => [
+      (Array.isArray(definitions) ? definitions : []).map((definition) => [
         definition.id,
         {
           definition,
@@ -354,10 +373,38 @@ export class BrowserService {
   }
 
   status(): BrowserControlStatus[] {
-    return Array.from(this.browsers.values(), (entry) => entry.status)
+    const selected = this.preference.value
+    const statuses = Array.from(this.browsers.values(), (entry) => ({
+      ...entry.status,
+      preferred: entry.definition.id === selected?.id,
+    }))
+    if (selected && !this.browsers.has(selected.id))
+      statuses.push({
+        ...selected,
+        kind: "chromium",
+        preferred: true,
+        connection: {
+          status: "unavailable",
+          reason:
+            selected.transport === "direct"
+              ? "This preferred direct connection is not available. Open its browser or choose another profile."
+              : "This preferred profile is not available. Open its browser and enable Mako Browser, or choose another profile.",
+        },
+      })
+    return statuses
   }
-  refresh(): BrowserControlStatus[] {
-    const definitions = this.discover()
+  refresh(): Promise<BrowserControlStatus[]> {
+    this.refreshing ??= this.refreshCatalog().finally(() => {
+      this.refreshing = undefined
+    })
+    return this.refreshing
+  }
+  private async refreshCatalog(): Promise<BrowserControlStatus[]> {
+    const [definitions] = await Promise.all([
+      this.discover(),
+      this.preference.load(),
+    ])
+    if (this.closing) return this.status()
     const available = new Set(definitions.map((definition) => definition.id))
     let changed = false
     for (const [id, entry] of this.browsers) {
@@ -371,13 +418,21 @@ export class BrowserService {
       if (entry) {
         entry.definition = definition
         if (
+          entry.status.product !== definition.product ||
+          entry.status.profileName !== definition.profileName ||
+          entry.status.transport !== definition.transport ||
+          entry.status.guidance !==
+            browserStatus(definition, entry.status.connection).guidance ||
           entry.status.name !== definition.name ||
           entry.status.kind !== definition.kind ||
           entry.status.profile !== definition.profile ||
           entry.status.origin !== definition.origin ||
           entry.status.sourceRoot !== definition.sourceRoot
         ) {
-          entry.status = browserStatus(definition, entry.status.connection)
+          entry.status = {
+            ...browserStatus(definition, entry.status.connection),
+            lastInterruption: entry.status.lastInterruption,
+          }
           changed = true
         }
       } else {
@@ -409,12 +464,31 @@ export class BrowserService {
     if (this.browsers.size === 0)
       fault(
         "unavailable",
-        "No browser is connected to Mako. Install the Mako Browser extension and connect a profile in Settings > MCP > Browser connections, then call status again."
+        "No browser is connected to Mako. Install the Mako Browser extension and connect a profile in Settings > MCP > Browser use, then call status again."
       )
     return fault(
       "invalid-request",
       `Unknown browser "${id}". Choose a browser ID returned by status: ${[...this.browsers.keys()].join(", ")}.`
     )
+  }
+
+  async prefer(id: string | null): Promise<BrowserControlStatus[]> {
+    await this.refresh()
+    if (id === null) await this.preference.set(null)
+    else {
+      const entry = this.entry(id)
+      if (entry.definition.kind !== "chromium")
+        fault("invalid-request", "Choose an external browser profile.")
+      await this.preference.set({
+        id,
+        name: entry.definition.name,
+        product: entry.definition.product,
+        profileName: entry.definition.profileName,
+        transport: entry.definition.transport,
+      })
+    }
+    this.changed()
+    return this.status()
   }
 
   connect(id: string): Promise<BrowserConnection> {
@@ -514,7 +588,10 @@ export class BrowserService {
     if (event.method === "Target.targetDestroyed") {
       // Destruction can arrive after detach already removed the binding.
       for (const [key, target] of this.ownedTargets)
-        if (target.connection === connection && target.tab === event.params.targetId)
+        if (
+          target.connection === connection &&
+          target.tab === event.params.targetId
+        )
           this.ownedTargets.delete(key)
     }
     for (const [key, binding] of this.bindings) {
@@ -531,6 +608,17 @@ export class BrowserService {
         event.method === "Target.detachedFromTarget" &&
         event.params.sessionId === binding.sessionId
       ) {
+        const entry = this.browsers.get(binding.target.browser)
+        if (entry && !binding.intentionalDetach) {
+          entry.status = {
+            ...entry.status,
+            lastInterruption: {
+              tab: binding.target.tab,
+              message: tabInterruption(binding.events, event.params.reason),
+            },
+          }
+          this.changed()
+        }
         this.bindings.delete(key)
         continue
       }
@@ -710,11 +798,16 @@ export class BrowserService {
           signal,
           existing.sessionId
         )
-      await connection.send(
-        "Target.detachFromTarget",
-        { sessionId: existing.sessionId },
-        signal
-      )
+      existing.intentionalDetach = true
+      try {
+        await connection.send(
+          "Target.detachFromTarget",
+          { sessionId: existing.sessionId },
+          signal
+        )
+      } finally {
+        existing.intentionalDetach = false
+      }
       this.bindings.delete(key)
     }
     const { sessionId } = sessionResult.parse(
@@ -811,11 +904,12 @@ export class BrowserService {
     authorize()
     signal.throwIfAborted()
     if (command.action === "status")
-      return this.refresh().map((status) => ({
+      return (await this.refresh()).map((status) => ({
         ...status,
         connection: { ...status.connection },
       }))
     if (command.action === "connect") {
+      if (!this.browsers.has(command.browser)) await this.refresh()
       await this.connect(command.browser)
       return { ...this.entry(command.browser).status.connection }
     }
@@ -838,7 +932,7 @@ export class BrowserService {
         requiresApproval: false,
         endpoint: async () => endpoint.href,
       })
-      this.refresh()
+      await this.refresh()
       try {
         await this.connect(command.id)
       } catch (error) {
@@ -900,8 +994,15 @@ export class BrowserService {
           "invalid-request",
           "Close unused temporary targets before opening more pages."
         )
+      await this.preference.load()
+      const browser = command.browser ?? this.preference.value?.id
+      if (!browser)
+        fault(
+          "invalid-request",
+          "Choose a preferred browser in Settings, or pass an explicit browser ID."
+        )
       const url = pageUrl(command.url)
-      const connection = this.connection(command.browser)
+      const connection = this.connection(browser)
       if (command.context === "isolated" && command.lifetime === "persistent")
         fault(
           "invalid-request",
@@ -958,13 +1059,7 @@ export class BrowserService {
       }
       let target: BrowserTarget
       try {
-        target = await this.select(
-          owner,
-          command.browser,
-          targetId,
-          false,
-          signal
-        )
+        target = await this.select(owner, browser, targetId, false, signal)
       } catch (error) {
         if (browserContextId)
           await connection
@@ -1088,6 +1183,7 @@ export class BrowserService {
         }
         throw error
       } finally {
+        binding.intentionalDetach = false
         binding.running--
       }
     }
@@ -1508,6 +1604,7 @@ export class BrowserService {
           command.timeoutMs
         )
       case "close": {
+        binding.intentionalDetach = true
         const key = this.key(binding.target)
         const owned = this.ownedTargets.get(key)
         const result = owned?.browserContextId
@@ -1522,6 +1619,7 @@ export class BrowserService {
         return result
       }
       case "release": {
+        binding.intentionalDetach = true
         if (binding.focusEmulated)
           await send("Emulation.setFocusEmulationEnabled", { enabled: false })
         const result = await root("Target.detachFromTarget", {
@@ -2283,6 +2381,7 @@ export class BrowserService {
             binding.sessionId
           )
           .catch(() => {})
+      binding.intentionalDetach = true
       await binding.connection
         .send(
           "Target.detachFromTarget",

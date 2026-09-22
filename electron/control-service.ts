@@ -138,7 +138,7 @@ export async function startControlService(
         "target" in command
           ? `${command.target.browser}:${command.target.tab}`
           : "browser" in command
-            ? command.browser
+            ? command.browser ?? "Preferred browser"
             : "Browser"
       const tracksActivity = ![
         "status",

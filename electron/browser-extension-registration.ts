@@ -1,3 +1,4 @@
+import { browserProfileName } from "./browser-profile-name.js"
 import { closeSync, openSync, readSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -34,9 +35,9 @@ function readRegistration(path: string) {
   }
 }
 
-export function extensionBrowsers(
+export async function extensionBrowsers(
   root = browserExtensionRoot()
-): LocalBrowser[] {
+): Promise<LocalBrowser[]> {
   let names: string[]
   try {
     names = readdirSync(root)
@@ -51,9 +52,21 @@ export function extensionBrowsers(
     const path = join(root, name)
     try {
       const registration = readRegistration(path)
+      const product =
+        registration.product ??
+        /^(.*?) profile [a-f0-9]{6}$/.exec(registration.name)?.[1]
+      const profileName = registration.profileDirectory
+        ? await browserProfileName(registration.profileDirectory)
+        : registration.profileName
       browsers.push({
         id: registration.id,
-        name: registration.name,
+        name: (profileName && product
+          ? `${product} · ${profileName}`
+          : (product ?? registration.name)
+        ).slice(0, 100),
+        product,
+        profileName,
+        transport: "extension",
         requiresApproval: false,
         kind: "chromium",
         endpoint: async () => readRegistration(path).endpoint,

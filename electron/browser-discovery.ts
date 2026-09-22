@@ -1,3 +1,4 @@
+import { regularDebuggingBrowsers } from "./browser-debugging-profiles.js"
 import { extensionBrowsers } from "./browser-extension-registration.js"
 import { registeredDeskBrowsers } from "./desk-browser-registration.js"
 
@@ -6,15 +7,19 @@ export interface LocalBrowser {
   name: string
   endpoint: () => Promise<string>
   requiresApproval?: boolean
+  product?: string
+  profileName?: string
+  transport?: "extension" | "direct"
   kind?: "chromium" | "desk"
   profile?: string
   origin?: string
   sourceRoot?: string
 }
 
-export function localBrowsers(): LocalBrowser[] {
+export async function localBrowsers(): Promise<LocalBrowser[]> {
   return [
-    ...extensionBrowsers(),
+    ...(await extensionBrowsers()),
+    ...(await regularDebuggingBrowsers()),
     ...registeredDeskBrowsers(),
   ]
 }

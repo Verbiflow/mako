@@ -9,14 +9,16 @@ export const ExtensionCommandSchema = z.object({
   sessionId: z.string().max(200).optional(),
 })
 export const ExtensionHostMessageSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("ready") }),
+  z.object({ kind: z.literal("ready"), profileName: z.string().max(100).optional() }),
   z.object({ kind: z.literal("request"), client: z.string(), command: ExtensionCommandSchema }),
   z.object({ kind: z.literal("disconnect"), client: z.string() }),
 ])
 export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("profile-name"), profileName: z.string().trim().min(1).max(100) }),
   z.object({
     kind: z.literal("hello"),
     profileId: z.string().uuid(),
+    profileName: z.string().trim().min(1).max(100).optional(),
     label: z.string().min(1).max(80),
     family: z.literal("chromium"),
     product: z.string().min(1).max(80),
@@ -27,6 +29,9 @@ export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
 ])
 export const ExtensionRegistrationSchema = z.object({
   version: z.literal(1),
+  profileDirectory: z.string().max(4096).optional(),
+  profileName: z.string().min(1).max(100).optional(),
+  product: z.string().min(1).max(80).optional(),
   id: z.string().max(100),
   name: z.string().max(100),
   endpoint: z.string().url(),
