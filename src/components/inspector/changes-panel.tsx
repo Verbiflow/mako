@@ -4,7 +4,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { MultiFileDiff, Virtualizer } from "@pierre/diffs/react"
 import { Action, Blank, IconAction } from "@/components/ui/kit"
 import { useWorkspaceTransition } from "@/state/workspace-transition"
-import { CommitBox, PushControl, GitRemoteNotice } from "@/components/inspector/commit-box"
+import { CommitBox } from "@/components/inspector/commit-box"
 import { Annotation, GutterAdd, ReviewBar } from "@/components/inspector/review"
 import { review, useReview } from "@/state/review"
 import { PullRequestCard } from "@/components/inspector/pull-request"
@@ -535,11 +535,7 @@ function CommitsSection({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasRepo = useSession((state) => Boolean(state.git?.root))
-  const cwd = useSession((state) => state.git?.root ?? state.git?.cwd ?? "")
   const branch = useSession((state) => state.git?.branch)
-  const head = useSession((state) => state.git?.head)
-  const ahead = useSession((state) => state.git?.ahead ?? 0)
-  const upstream = useSession((state) => state.git?.upstream)
   if (!hasRepo) return null
   return (
     <div className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline", open && "max-h-[38%]")}>
@@ -557,9 +553,7 @@ function CommitsSection({
           <span className="truncate">History</span>
         </button>
         <span className="flex-1" />
-        {head && branch ? <PushControl cwd={cwd} branch={branch} ahead={ahead} upstream={upstream} /> : null}
       </div>
-      {branch ? <GitRemoteNotice cwd={cwd} branch={branch} /> : null}
       {open ? (
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <GitLog onPickFile={onPickFile} onPickCommit={onPickCommit} />
