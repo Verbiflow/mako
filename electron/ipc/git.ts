@@ -14,6 +14,7 @@ import { hostLog, hostWarn } from "../host-log.js"
 import type {
   CommitGenerationInput,
   GitPushInput,
+  GitRemoteInput,
   UtilityCatalogInput,
   UtilityConnectionInput,
   UtilityProvider,
@@ -63,6 +64,10 @@ export function installGitIpc(context: GitIpcContext): void {
     if (host.gitWorkspace !== input.cwd) throw new Error("The project changed before pushing. Select the intended project and try again.")
     return host.gitPush(input.branch)
   }))
+  registerIpc("mako:git-remote", (_event, input: GitRemoteInput) => withHost(async (host) => {
+    if (host.gitWorkspace !== input.cwd) throw new Error("Select this repository before continuing.")
+    return host.gitRemote(input)
+  }))
   registerIpc("mako:git-log", (_event, limit?: number) =>
     withHost((host) => host.gitLog(limit))
   )
@@ -105,12 +110,12 @@ export function installGitIpc(context: GitIpcContext): void {
   const models = new UtilityModelStore(
     directory,
     {
-      available: () =>
+      available: () => process.platform === "darwin" ? safeStorage.isAsyncEncryptionAvailable() :
         safeStorage.isEncryptionAvailable() &&
         (process.platform !== "linux" ||
           safeStorage.getSelectedStorageBackend() !== "basic_text"),
-      encrypt: (value) => safeStorage.encryptString(value),
-      decrypt: (value) => safeStorage.decryptString(value),
+      encrypt: (value) => process.platform === "darwin" ? safeStorage.encryptStringAsync(value) : safeStorage.encryptString(value),
+      decrypt: async (value) => process.platform === "darwin" ? (await safeStorage.decryptStringAsync(value)).result : safeStorage.decryptString(value),
     },
     { ready: migration }
   )
