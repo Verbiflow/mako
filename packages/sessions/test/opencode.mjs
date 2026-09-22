@@ -7,6 +7,13 @@ import { DatabaseSync } from "node:sqlite"
 
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
 
+// A caller-supplied home isolates fixtures from the user's native configuration.
+const configuredHome = join(tmpdir(), "opencode-configured-root-test")
+assert.deepEqual(new OpenCodeProvider(configuredHome).roots(), [join(configuredHome, ".local", "share", "opencode")])
+assert.deepEqual(new OpenCodeProvider(configuredHome, { XDG_DATA_HOME: "/custom/data" }).roots(), ["/custom/data/opencode"])
+assert.deepEqual(new OpenCodeProvider(configuredHome, { OPENCODE_DB: "/custom/exact.db" }).roots(), ["/custom"])
+assert.deepEqual(new OpenCodeProvider(configuredHome, { OPENCODE_DB: ":memory:" }).roots(), [])
+
 const home = mkdtempSync(join(tmpdir(), "sessions-opencode-"))
 const root = join(home, ".local", "share", "opencode")
 const legacyPath = join(root, "opencode.db")
