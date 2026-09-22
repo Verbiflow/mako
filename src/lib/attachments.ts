@@ -32,13 +32,15 @@ import {
  * with an appendix that points to their staged contents.
  */
 
-export type AttachmentInput = File | { file: File; context: string }
+export type AttachmentInput = File | { file: File; context?: string; contextLabel?: string }
 
 export type AttachmentKind = "image" | "text" | "binary"
 
 export interface Attachment {
   id: string
   reference?: string
+  /** Compact, named context instead of a media/file thumbnail. */
+  contextLabel?: string
   /** 1-based, matching the `[Attachment N]` marker in the draft. */
   index: number
   name: string
@@ -212,6 +214,7 @@ export function useAttachments(key = "default") {
       for (const input of files) {
         const file = input instanceof File ? input : input.file
         const context = input instanceof File ? undefined : input.context
+        const contextLabel = input instanceof File ? undefined : input.contextLabel
         if (file.size > MAX_BYTES) {
           toast.error(`${file.name} is larger than 256 MB`)
           continue
@@ -229,7 +232,8 @@ export function useAttachments(key = "default") {
             id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
             index,
             name: file.name,
-            reference: namedAttachmentReference(file.name, index, [
+            contextLabel,
+            reference: namedAttachmentReference(contextLabel ?? file.name, index, [
               ...(live.current.get(key) ?? []).map(attachmentReference),
               ...(removed.current.get(key) ?? []).map(attachmentReference),
               ...accepted.map((entry) => attachmentReference(entry.attachment)),

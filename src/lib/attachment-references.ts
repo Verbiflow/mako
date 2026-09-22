@@ -4,11 +4,11 @@ import type { AttachmentContent } from "@mako/sessions"
 import { mediaTypeForPath } from "./transcript-media"
 
 export function attachmentReference(
-  item: Pick<Attachment, "index" | "reference" | "name">
+  item: Pick<Attachment, "index" | "reference" | "name" | "contextLabel">
 ): string {
   return (
     item.reference ??
-    `[${item.name}${item.index > 1 ? ` (${item.index})` : ""}]`
+    `[${item.contextLabel ?? item.name}${item.index > 1 ? ` (${item.index})` : ""}]`
   )
 }
 
@@ -200,7 +200,7 @@ export function mergeAttachmentDraft(
     const index = indices.has(item.index) ? nextIndex++ : item.index
     const original = attachmentReference(item)
     const reference = references.includes(original)
-      ? namedAttachmentReference(item.name, index, references)
+      ? namedAttachmentReference(item.contextLabel ?? item.name, index, references)
       : original
     indices.add(index)
     references.push(reference)
@@ -216,7 +216,7 @@ export function pasteAttachmentDraft(text: string, incoming: readonly Attachment
   const replacements = new Map<string, Attachment>()
   const attachments = incoming.map(item => {
     const index = nextIndex++
-    const reference = namedAttachmentReference(item.name, index, used)
+    const reference = namedAttachmentReference(item.contextLabel ?? item.name, index, used)
     used.push(reference)
     const pasted = { ...item, id: crypto.randomUUID(), index, reference, preview: undefined }
     replacements.set(item.id, pasted)

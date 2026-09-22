@@ -7,6 +7,7 @@ export const SavedAttachmentSchema = z.object({
   index: z.number(),
   name: z.string(),
   reference: z.string().optional(),
+  contextLabel: z.string().optional(),
   mimeType: z.string(),
   size: z.number(),
   kind: z.enum(["image", "text", "binary"]),
