@@ -102,7 +102,7 @@ try {
         ...process.env,
         MAKO_TEST_BROWSER: "fixture-cdp",
         MAKO_TEST_BROWSER_ENDPOINT: endpoint,
-        ...(frameUrl ? { MAKO_TEST_RESTRICTED_FRAME_URL: frameUrl } : {}),
+        MAKO_TEST_RESTRICTED_FRAME_URL: frameUrl,
       },
     }
   )

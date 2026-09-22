@@ -15,6 +15,7 @@ export type BrowserPreference = z.infer<typeof choice>
 /** One host owns this profile file. Failed writes never publish a new choice. */
 export class BrowserPreferences {
   value: BrowserPreference | null = null
+  hasSavedChoice = false
   private loaded?: Promise<void>
   private writes: Promise<void> = Promise.resolve()
   private readonly path?: string
@@ -32,6 +33,7 @@ export class BrowserPreferences {
       this.value = choice
         .nullable()
         .parse(JSON.parse(await readFile(this.path, "utf8")))
+      this.hasSavedChoice = true
     } catch (error) {
       if (!(
         error instanceof Error &&
@@ -59,6 +61,7 @@ export class BrowserPreferences {
         }
       }
       this.value = validated
+      this.hasSavedChoice = true
     })
     this.writes = next.catch(() => {})
     return next

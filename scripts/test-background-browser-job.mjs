@@ -9,6 +9,8 @@ import { BrowserCommandSchema } from "../dist-electron/contracts/browser-control
 // Uses an already connected browser, opens only task-owned local fixture tabs,
 // and checks persisted saves at the server, independently of page observations.
 const root = await mkdtemp("/private/tmp/mako-browser-job-")
+const rounds = Number(process.env.MAKO_TEST_BROWSER_ROUNDS ?? 6)
+assert.ok(Number.isInteger(rounds) && rounds >= 6 && rounds <= 100)
 const saved = []
 const page = createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/save") {
@@ -66,6 +68,8 @@ try {
     browser,
     "Set MAKO_TEST_BROWSER to an exact registered browser ID when more than one is available"
   )
+  if (process.env.MAKO_TEST_EXTENSION_ONLY === "1")
+    assert.equal(browsers.find(b => b.id === browser)?.transport, "extension", "Acceptance requires the extension, never a direct fallback")
   await run({ action: "connect", browser })
   evidence.browser = browser
   samples = sampleFrontmost()
@@ -89,7 +93,7 @@ try {
     targets.push({ browser: browserId, tab, generation, lease })
     evidence.targets.push({ browser: browserId, tab })
   }
-  for (let round = 0; round < 6; round++) {
+  for (let round = 0; round < rounds; round++) {
     const target = targets[round % 2],
       value = `saved-${round}-東京`
     const view = await run({ action: "observe", target })
@@ -178,7 +182,7 @@ try {
       evidence.restrictedFrame = frame
     }
 
-    if (round === 0 || round === 5) {
+    if (round === 0 || round === rounds - 1) {
       const started = Date.now(),
         image = await run({
           action: "screenshot",
@@ -210,10 +214,10 @@ try {
     })
   )
   evidence.refusals.push("closed target refused")
-  assert.equal(saved.length, 6)
+  assert.equal(saved.length, rounds)
   evidence.status = "passed"
   console.log(
-    "PASS: six saved browser jobs across two background tabs, canceled confirmations, screenshots and closed-target refusal"
+    `PASS: ${rounds} saved browser jobs across two background tabs, canceled confirmations, screenshots and closed-target refusal`
   )
 } catch (error) {
   evidence.status = "failed"

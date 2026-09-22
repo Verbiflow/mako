@@ -1,3 +1,4 @@
+import { nativeBrowserApplication } from "./browser-application.js"
 import {
   singleBrowserProfile,
   browserProfileName,
@@ -214,6 +215,8 @@ export async function startBrowserNativeHost(
       temporary,
       JSON.stringify({
         version: 1,
+        extensionVersion: profile.extensionVersion,
+        applicationPath: await nativeBrowserApplication(),
         product: browserProduct,
         profileDirectory: profile.profileName ? undefined : profileDirectory,
         profileName,

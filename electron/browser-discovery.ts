@@ -7,6 +7,7 @@ export interface LocalBrowser {
   name: string
   endpoint: () => Promise<string>
   requiresApproval?: boolean
+  applicationPath?: string
   product?: string
   profileName?: string
   transport?: "extension" | "direct"

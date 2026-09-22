@@ -17,6 +17,7 @@ export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("profile-name"), profileName: z.string().trim().min(1).max(100) }),
   z.object({
     kind: z.literal("hello"),
+    extensionVersion: z.string().max(40).optional(),
     profileId: z.string().uuid(),
     profileName: z.string().trim().min(1).max(100).optional(),
     label: z.string().min(1).max(80),
@@ -29,6 +30,8 @@ export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
 ])
 export const ExtensionRegistrationSchema = z.object({
   version: z.literal(1),
+  extensionVersion: z.string().max(40).optional(),
+  applicationPath: z.string().max(4096).optional(),
   profileDirectory: z.string().max(4096).optional(),
   profileName: z.string().min(1).max(100).optional(),
   product: z.string().min(1).max(80).optional(),
