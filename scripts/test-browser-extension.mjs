@@ -40,7 +40,7 @@ function frame(value) {
 }
 async function until(predicate) {
   for (let n = 0; n < 200; n++) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   throw new Error("Timed out waiting for bridge message")
@@ -128,10 +128,13 @@ try {
     JSON.stringify(registration)
   )
   assert.equal(
-    extensionBrowsers(root).length,
+    (await extensionBrowsers(root)).length,
     1,
     "old product-specific registration names are ignored"
   )
+  input.write(frame({kind:"profile-name",profileName:"Work"}))
+  await until(async () => JSON.parse(await readFile(host.registration,"utf8")).profileName === "Work")
+  assert.equal((await extensionBrowsers(root))[0].name,"Aside · Work")
   assert.equal((await stat(root)).mode & 0o777, 0o700)
   assert.equal((await stat(host.registration)).mode & 0o777, 0o600)
   for (const options of [

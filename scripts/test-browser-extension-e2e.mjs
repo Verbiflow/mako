@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
-import { spawn } from "node:child_process"
+import { spawn, execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { createHash, generateKeyPairSync } from "node:crypto"
 import {
   mkdtemp,
@@ -11,7 +12,7 @@ import {
   readdir,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { once } from "node:events"
 import { BrowserService } from "../dist-electron/browser-service.js"
 import {
@@ -21,7 +22,9 @@ import {
 
 const executable = process.env.MAKO_TEST_BROWSER_EXECUTABLE
 if (!executable)
-  throw new Error("Set MAKO_TEST_BROWSER_EXECUTABLE to a Chromium executable that supports loading unpacked extensions")
+  throw new Error(
+    "Set MAKO_TEST_BROWSER_EXECUTABLE to a Chromium executable that supports loading unpacked extensions"
+  )
 const root = await mkdtemp(join(tmpdir(), "mako-extension-e2e-"))
 const registrations = join(root, "registrations")
 const extension = resolve("dist-browser-extension")
@@ -39,10 +42,30 @@ const extensionId = createHash("sha256")
 // security detach without modifying any extension in the user's profile.
 const companion = join(root, "frame-extension")
 await mkdir(companion)
-const frameKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({ type: "spki", format: "der" })
-const frameId = createHash("sha256").update(frameKey).digest("hex").slice(0, 32).replace(/[0-9a-f]/g, x => String.fromCharCode(97 + parseInt(x, 16)))
-await writeFile(join(companion, "manifest.json"), JSON.stringify({manifest_version:3,name:"Mako restricted frame fixture",version:"1.0",key:frameKey.toString("base64"),web_accessible_resources:[{resources:["frame.html"],matches:["http://127.0.0.1/*"]}]}))
-await writeFile(join(companion, "frame.html"), "<p>Isolated extension frame fixture</p>")
+const frameKey = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+}).publicKey.export({ type: "spki", format: "der" })
+const frameId = createHash("sha256")
+  .update(frameKey)
+  .digest("hex")
+  .slice(0, 32)
+  .replace(/[0-9a-f]/g, (x) => String.fromCharCode(97 + parseInt(x, 16)))
+await writeFile(
+  join(companion, "manifest.json"),
+  JSON.stringify({
+    manifest_version: 3,
+    name: "Mako restricted frame fixture",
+    version: "1.0",
+    key: frameKey.toString("base64"),
+    web_accessible_resources: [
+      { resources: ["frame.html"], matches: ["http://127.0.0.1/*"] },
+    ],
+  })
+)
+await writeFile(
+  join(companion, "frame.html"),
+  "<p>Isolated extension frame fixture</p>"
+)
 const hosts = join(root, "profile", "NativeMessagingHosts")
 const registrationPath = join(hosts, "dev.mako.browser.json")
 await mkdir(hosts, { recursive: true })
@@ -61,7 +84,7 @@ function quote(value) {
 const launcher = join(root, "host")
 await writeFile(
   launcher,
-  `#!/bin/sh\n${process.env.MAKO_EXPECT_BROWSER_PRODUCT ? `export MAKO_BROWSER_PRODUCT=${quote(process.env.MAKO_EXPECT_BROWSER_PRODUCT)}\n` : ""}exec ${quote(process.execPath)} ${quote(entry)} "$@"\n`,
+  `#!/bin/sh\nexport MAKO_BROWSER_ROOT=${quote(join(root,"profile"))}\n${process.env.MAKO_EXPECT_BROWSER_PRODUCT ? `export MAKO_BROWSER_PRODUCT=${quote(process.env.MAKO_EXPECT_BROWSER_PRODUCT)}\n` : ""}exec ${quote(process.execPath)} ${quote(entry)} "$@"\n`,
   { mode: 0o700 }
 )
 await writeFile(
@@ -75,9 +98,55 @@ await writeFile(
   }),
   { mode: 0o600 }
 )
+if (process.argv.includes("--profile-metadata")) {
+  await mkdir(join(root,"profile","Default"),{recursive:true})
+  await writeFile(join(root,"profile","Local State"),JSON.stringify({profile:{info_cache:{Default:{name:"Work fixture"}}}}))
+  await writeFile(join(root,"profile","Default","Preferences"),JSON.stringify({profile:{name:"Work fixture"}}))
+}
+const windowed = process.argv.includes("--windowed")
 let child
 async function stop() {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  if (!child) return
+  if (windowed) {
+    // LaunchServices owns this child: the open wrapper may already have exited.
+    // Match the root executable AND our unique disposable profile every time.
+    const owned = async () => {
+      const { stdout } = await promisify(execFile)(
+        "/bin/ps",
+        ["-axo", "pid=,command="],
+        { maxBuffer: 4 * 1024 * 1024 }
+      )
+      const profile = `--user-data-dir=${join(root, "profile")} `
+      return stdout.split("\n").flatMap((line) => {
+        const match = /^\s*(\d+)\s+(.+)$/.exec(line)
+        return match &&
+          match[2].startsWith(executable + " ") &&
+          match[2].includes(profile)
+          ? [Number(match[1])]
+          : []
+      })
+    }
+    for (const pid of await owned()) {
+      try {
+        process.kill(pid, "SIGTERM")
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error
+      }
+    }
+    for (let n = 0; n < 30; n++) {
+      if ((await owned()).length === 0) return
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    for (const pid of await owned()) {
+      try {
+        process.kill(pid, "SIGKILL")
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error
+      }
+    }
+    return
+  }
+  if (child.exitCode !== null || child.signalCode !== null) return
   const exited = once(child, "exit")
   child.kill("SIGTERM")
   const deadline = setTimeout(() => child.kill("SIGKILL"), 3000)
@@ -91,8 +160,8 @@ async function registration() {
     )
     if (names.length)
       return JSON.parse(await readFile(join(registrations, names[0]), "utf8"))
-    if (child.exitCode !== null)
-      throw new Error("Chrome exited before connecting")
+    if (!windowed && child.exitCode !== null)
+      throw new Error("Chromium exited before connecting")
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   const port = (
@@ -101,35 +170,62 @@ async function registration() {
   console.log(await (await fetch(`http://127.0.0.1:${port}/json/list`)).text())
   throw new Error(`Extension did not connect. Logs: ${root}/chrome.log`)
 }
-const page = createServer((_req, res) =>
-  res
-    .writeHead(200, { "content-type": "text/html" })
-    .end(
-      '<input aria-label="Proof" style="position:absolute;left:0;top:0;width:200px;height:40px"><script>window.trusted=false;document.querySelector("input").oninput=e=>window.trusted=e.isTrusted</script>'
-    )
-)
+const fixtureSaves = []
+const page = createServer(async (req, res) => {
+  if (req.method === "POST" && req.url === "/save") {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    fixtureSaves.push(JSON.parse(Buffer.concat(chunks).toString()))
+    res.end("ok")
+    return
+  }
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`
+    <input aria-label="Proof" style="position:absolute;left:0;top:0;width:200px;height:40px">
+    <button style="position:absolute;left:0;top:60px">Save</button>
+    <script>window.trusted=false;document.querySelector('input').oninput=e=>window.trusted=e.isTrusted;
+    document.querySelector('button').onclick=()=>{if(confirm('Save this value?'))fetch('/save',{method:'POST',body:JSON.stringify({value:document.querySelector('input').value})})}</script>`)
+})
 await new Promise((resolve) => page.listen(0, "127.0.0.1", resolve))
 const logs = []
 try {
   let previousId
   let previousEndpoint
   for (let round = 0; round < 2; round++) {
+    const browserArgs = [
+      `--user-data-dir=${join(root, "profile")}`,
+      `--load-extension=${extension},${companion}`,
+      `--disable-extensions-except=${extension},${companion}`,
+      ...(windowed ? [] : ["--headless=new"]),
+      "--remote-debugging-port=0",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "about:blank",
+    ]
     child = spawn(
-      executable,
-      [
-        `--user-data-dir=${join(root, "profile")}`,
-        `--load-extension=${extension},${companion}`,
-        `--disable-extensions-except=${extension},${companion}`,
-        "--headless=new",
-        "--remote-debugging-port=0",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "about:blank",
-      ],
+      windowed ? "/usr/bin/open" : executable,
+      windowed
+        ? [
+            "-g",
+            "-n",
+            "-W",
+            "-a",
+            dirname(dirname(dirname(executable))),
+            "--args",
+            ...browserArgs,
+          ]
+        : browserArgs,
       { stdio: ["ignore", "ignore", "pipe"] }
     )
     child.stderr.on("data", (chunk) => logs.push(chunk.toString()))
     const value = await registration()
+    if (process.argv.includes("--profile-metadata")) {
+      assert.ok(value.profileDirectory?.startsWith(join(root, "profile") + "/"), "A unique browser profile is resolved")
+      assert.ok(value.profileName?.length, "Actual profile display name is available")
+      assert.equal(value.profileName, "Work fixture")
+      console.log(JSON.stringify({ name: value.name, profileName: value.profileName, exactProfile: true }))
+      console.log("PASS: unique browser profile resolves its actual display name")
+      break
+    }
     if (process.env.MAKO_EXPECT_BROWSER_PRODUCT)
       assert.match(
         value.name,
@@ -186,12 +282,44 @@ try {
         trusted: true,
       })
       // Complete repeated replacements on the same external-browser tab.
-      for (const text of ["00123", "  東京 🐟  ", "mako-background-3", "", "  ", "again"]) {
-        const view = await run({action:"observe", target})
-        const ref = view.nodes.find(node => node.role === "textbox").ref
-        await run({action:"type", target, ref, text, clear:true})
-        const actual = await run({action:"evaluate",target,expression:'document.querySelector("input").value'})
+      for (const text of [
+        "00123",
+        "  東京 🐟  ",
+        "mako-background-3",
+        "",
+        "  ",
+        "again",
+      ]) {
+        const view = await run({ action: "observe", target })
+        const ref = view.nodes.find((node) => node.role === "textbox").ref
+        await run({ action: "type", target, ref, text, clear: true })
+        const actual = await run({
+          action: "evaluate",
+          target,
+          expression: 'document.querySelector("input").value',
+        })
         assert.equal(actual.result.value, text)
+        const save = view.nodes.find(
+          (node) => node.role === "button" && node.name === "Save"
+        ).ref
+        const count = fixtureSaves.length
+        await run({ action: "dialog", target, auto: "dismiss" })
+        await run({ action: "click", target, at: { ref: save } })
+        assert.equal(
+          fixtureSaves.length,
+          count,
+          "Canceled confirmation must not save"
+        )
+        await run({ action: "dialog", target, auto: "accept" })
+        await run({ action: "click", target, at: { ref: save } })
+        for (let n = 0; n < 100 && fixtureSaves.length === count; n++)
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        assert.equal(
+          fixtureSaves.length,
+          count + 1,
+          "Exactly one server-confirmed save per complete job"
+        )
+        assert.deepEqual(fixtureSaves.at(-1), { value: text })
       }
       const other = new BrowserService([
         {
@@ -223,15 +351,15 @@ try {
         other.close()
       }
       if (!process.argv.includes("--background-input")) {
-      const screenshot = await run({ action: "screenshot", target })
-      assert.ok(
-        screenshot.coordinates.imageWidth > 0 &&
-          screenshot.coordinates.imageHeight > 0
-      )
-      assert.equal(
-        Buffer.from(screenshot.data, "base64").subarray(0, 2).toString("hex"),
-        "ffd8"
-      )
+        const screenshot = await run({ action: "screenshot", target })
+        assert.ok(
+          screenshot.coordinates.imageWidth > 0 &&
+            screenshot.coordinates.imageHeight > 0
+        )
+        assert.equal(
+          Buffer.from(screenshot.data, "base64").subarray(0, 2).toString("hex"),
+          "ffd8"
+        )
       }
       await assert.rejects(
         run({
@@ -261,16 +389,40 @@ try {
         ),
         false
       )
-      const restricted = BrowserTargetSchema.parse(await run({action:"open",browser:value.id,disposition:"window"}))
-      await run({action:"navigate",target:restricted,url:`http://127.0.0.1:${page.address().port}`})
-      await assert.rejects(run({action:"cdp",target:restricted,method:"Runtime.evaluate",params:{
-        expression:`new Promise(resolve=>{const frame=document.createElement('iframe');frame.src='chrome-extension://${frameId}/frame.html';document.body.appendChild(frame);setTimeout(resolve,1000)})`,awaitPromise:true
-      }}), error => error.detail?.outcome === "unknown")
+      const restricted = BrowserTargetSchema.parse(
+        await run({ action: "open", browser: value.id, disposition: "window" })
+      )
+      await run({
+        action: "navigate",
+        target: restricted,
+        url: `http://127.0.0.1:${page.address().port}`,
+      })
+      await assert.rejects(
+        run({
+          action: "cdp",
+          target: restricted,
+          method: "Runtime.evaluate",
+          params: {
+            expression: `new Promise(resolve=>{const frame=document.createElement('iframe');frame.src='chrome-extension://${frameId}/frame.html';document.body.appendChild(frame);setTimeout(resolve,1000)})`,
+            awaitPromise: true,
+          },
+        }),
+        (error) => error.detail?.outcome === "unknown"
+      )
       const detachedCleanup = await service.releaseOwner("extension-e2e")
-      assert.equal(detachedCleanup.closed, 1, "security detach must not lose ownership of the still-open tab")
-      assert.equal((await run({action:"tabs",browser:value.id})).some(entry=>entry.targetId===restricted.tab),false)
+      assert.equal(
+        detachedCleanup.closed,
+        1,
+        "security detach must not lose ownership of the still-open tab"
+      )
+      assert.equal(
+        (await run({ action: "tabs", browser: value.id })).some(
+          (entry) => entry.targetId === restricted.tab
+        ),
+        false
+      )
       console.log(
-        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, repeated replacement, restricted-frame detach, temporary tab/window ownership and cleanup passed`
+        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership and cleanup passed`
       )
     } finally {
       await service.close()
@@ -313,6 +465,10 @@ try {
   await stop()
   await new Promise((resolve) => page.close(resolve))
   await writeFile(join(root, "chrome.log"), logs.join(""))
+  await writeFile(
+    join(root, "job-results.json"),
+    JSON.stringify({ saves: fixtureSaves }, null, 2)
+  )
   if (previous) await writeFile(registrationPath, previous)
   else await rm(registrationPath, { force: true })
   console.log(`Extension integration evidence: ${root}`)

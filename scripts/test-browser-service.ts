@@ -22,15 +22,46 @@ let catalogUpdates = 0
 catalog.subscribe(() => {
   catalogUpdates++
 })
-assert.equal(catalog.refresh().length, 1)
+assert.equal((await catalog.refresh()).length, 1)
 assert.equal(catalogUpdates, 0)
 discovered[0] = { ...discovered[0], name: "Renamed profile" }
-assert.equal(catalog.refresh()[0].name, "Renamed profile")
+assert.equal((await catalog.refresh())[0].name, "Renamed profile")
 assert.equal(catalogUpdates, 1)
 discovered.splice(0)
-assert.deepEqual(catalog.refresh(), [])
+assert.deepEqual(await catalog.refresh(), [])
 assert.equal(catalogUpdates, 2)
 catalog.close()
+
+let releaseDiscovery: (() => void) | undefined
+let discoveryCalls = 0
+const slowCatalog = new BrowserService(async () => {
+  discoveryCalls++
+  await new Promise<void>((resolve) => {
+    releaseDiscovery = resolve
+  })
+  return [
+    {
+      id: "late",
+      name: "Late profile",
+      endpoint: async () => "ws://127.0.0.1:1",
+    },
+  ]
+})
+const firstRefresh = slowCatalog.refresh()
+const secondRefresh = slowCatalog.refresh()
+assert.equal(
+  discoveryCalls,
+  1,
+  "Concurrent status reads share filesystem discovery"
+)
+slowCatalog.close()
+releaseDiscovery?.()
+await Promise.all([firstRefresh, secondRefresh])
+assert.deepEqual(
+  slowCatalog.status(),
+  [],
+  "Discovery finishing after shutdown must not resurrect a catalog"
+)
 
 const fixture = await browserFixture()
 const attachedFixture = await browserFixture()

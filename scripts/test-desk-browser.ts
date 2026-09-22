@@ -368,7 +368,7 @@ try {
     () => registeredDeskBrowsers(registrationRoot)
   )
   try {
-    const [remoteStatus] = remoteService.refresh()
+    const [remoteStatus] = await remoteService.refresh()
     assert.equal(remoteStatus?.kind, "desk")
     assert.equal(remoteStatus?.origin, "http://127.0.0.1:5173")
     const remoteRun = (

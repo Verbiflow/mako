@@ -14,6 +14,8 @@ import {
 assert.equal(parseCuaDriverVersion("cua-driver 0.19.3\n"), "0.19.3")
 assert.equal(parseCuaDriverVersion("cua-driver v0.28.0 — driver"), "0.28.0")
 assert.equal(parseCuaDriverVersion("nothing here"), null)
+assert.equal(parseCuaDriverVersion("cua-driver 0.28.2+mako.1"), "0.28.2+mako.1")
+assert.equal(compareVersions("0.28.2+mako.1", "0.28.2"), 0)
 assert.ok(compareVersions("0.19.3", "0.28.0") < 0)
 assert.ok(compareVersions("0.28.0", "0.28.0") === 0)
 assert.ok(compareVersions("1.0.0", "0.99.9") > 0)
@@ -67,6 +69,18 @@ try {
   assert.equal(failed.outdated, false)
   assert.match(failed.detail, /EACCES/)
 
+  version = "0.28.2+mako.1"
+  const beforeLocalUpdate = calls.length
+  await assert.rejects(
+    updateCuaDriver(executable, run),
+    /signed Mako driver package/
+  )
+  assert.deepEqual(
+    calls.slice(beforeLocalUpdate),
+    [["--version"]],
+    "Local packages must never run the upstream updater"
+  )
+  version = "9.9.9"
   const updated = await updateCuaDriver(executable, run)
   assert.deepEqual(calls.at(-1), ["update", "--apply"])
   assert.match(updated.output, /cua-driver 9\.9\.9/)

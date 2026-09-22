@@ -1,3 +1,4 @@
+import { gitConflictContext } from "../src/lib/git-conflict-context.ts"
 import assert from "node:assert/strict"
 import { clipboardSelection, parsePromptClipboard, promptClipboard } from "../src/lib/prompt-clipboard.ts"
 import { attachmentRanges, attachmentReference, pasteAttachmentDraft } from "../src/lib/attachment-references.ts"
@@ -63,3 +64,32 @@ assert.ok(!repeatedPlain.text.includes("[Attachment "))
 assert.ok(buildForeignPrompt(pasted.text, pasted.attachments).includes(image.contextPath!))
 assert.ok(buildForeignPrompt(pasted.text, pasted.attachments).includes(image.stagedPath!))
 console.log("PASS: clipboard metadata, plain-text fallback, window context, atomic selection, collision remapping, malformed input, and pending-file rejection")
+
+const conflictStatus = { cwd: "/work/mono", root: "/work/mono/backend", branch: "main", head: "abc123", ahead: 0, behind: 0, operation: "merge", files: [{ path: "src/café.ts", status: "conflicted" as const, staged: false, insertions: null, deletions: null, binary: false }] }
+const context = gitConflictContext(conflictStatus, "2026-09-22T10:00:00Z")
+assert.ok(context)
+assert.ok(context.text.includes('"repository": "/work/mono/backend"'))
+assert.ok(context.text.includes('"head": "abc123"'))
+assert.ok(context.text.includes('src/café.ts'))
+const conflictAttachment: Attachment = { id: "conflict", index: 1, name: context.name, contextLabel: context.label, mimeType: "text/markdown", size: context.text.length, kind: "text", stagedPath: "/retained/conflicts.md" }
+const conflictClipboard = promptClipboard(attachmentReference(conflictAttachment), [conflictAttachment])
+for (const html of [conflictClipboard.html, ""]) {
+  const pasted = parsePromptClipboard(conflictClipboard.text, html)
+  assert.ok(pasted)
+  assert.equal(pasted.attachments[0]?.stagedPath, "/retained/conflicts.md")
+  assert.ok(buildForeignPrompt(`Resolve ${pasted.text}`, pasted.attachments).includes('/retained/conflicts.md'))
+}
+assert.equal(gitConflictContext({ ...conflictStatus, files: [] }), null)
+assert.equal(gitConflictContext({ ...conflictStatus, root: undefined }), null)
+console.log("Git conflict context stays repository-bound across rich and plain clipboard round trips")
+
+const richConflict = parsePromptClipboard(conflictClipboard.text, conflictClipboard.html)!
+assert.equal(richConflict.attachments[0]?.contextLabel, "Git conflicts · backend")
+assert.equal(pasteAttachmentDraft(richConflict.text, richConflict.attachments, []).text, "[Git conflicts · backend]")
+
+const blocked = gitConflictContext({ ...conflictStatus, files: [], operation: undefined }, "2026-09-22T11:34:14Z", { message: "A local file conflicts with incoming changes.", detail: "Untracked file report.md would be overwritten" })
+assert.ok(blocked)
+assert.equal(blocked.label, "Git conflicts · backend")
+assert.ok(blocked.text.includes('report.md'))
+assert.ok(blocked.text.includes('"operation": null'))
+assert.ok(blocked.text.includes('recoverable copy'))

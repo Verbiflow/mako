@@ -159,10 +159,14 @@ export async function browserFixture() {
           reply({ sessionId })
           break
         }
-        case "Target.detachFromTarget":
-          sessions.delete(z.string().parse(command.params.sessionId))
+        case "Target.detachFromTarget": {
+          const sessionId = z.string().parse(command.params.sessionId)
+          const targetId = sessions.get(sessionId)
+          socket.send(JSON.stringify({ method: "Target.detachedFromTarget", params: { sessionId, targetId, reason: "target_closed" } }))
+          sessions.delete(sessionId)
           reply({})
           break
+        }
         case "Target.closeTarget":
           targets.delete(z.string().parse(command.params.targetId))
           reply({ success: true })

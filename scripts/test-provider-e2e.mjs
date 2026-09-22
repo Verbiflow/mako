@@ -111,7 +111,7 @@ async function runElectron() {
     await import("../dist-electron/browser-extension-registration.js")
   const browser = new BrowserService(
     process.env.MAKO_E2E_BROWSER_REGISTRATION_ROOT
-      ? extensionBrowsers(process.env.MAKO_E2E_BROWSER_REGISTRATION_ROOT)
+      ? await extensionBrowsers(process.env.MAKO_E2E_BROWSER_REGISTRATION_ROOT)
       : undefined
   )
   const browserOperations = []
