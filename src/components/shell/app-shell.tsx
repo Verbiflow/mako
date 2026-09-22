@@ -123,7 +123,7 @@ export function AppShell() {
               <main className="card relative m-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 <Blank
                   icon={<PlugZapIcon />}
-                  title="No agent attached"
+                  title="Couldn’t load this window"
                   body={
                     fault ??
                     "Launch the desktop app so the agent runtime can connect."
