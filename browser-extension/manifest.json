@@ -1,14 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Mako Browser",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Connect this browser profile to Mako. Tasks control their own tabs without moving your pointer.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtVG82MylDaQcxt48FeAzAGL/rsTZXRg+N4ugXpQgnoMo4fxBisx6u3aD+yCYTNBy9DD/GRy1nCbYnz38HaYR7hKrG6Vy2eVNyDqmFJ8Iw3VEM0urK6wLNOTrC2RlibKbJXHL28lJ8Vg4aMpqkxL8WW0ne9nm/BJLta461KHNcE9KuYABJJrzBvpyrVeIzRSUgfQUnz3H87FqeE73gYbgjeXHptfnEcOMmsSi/ndTBn1BfokNfi9RuFQL4Q4FFOTHWtPwPRJiMmIFy5GoVuOlu1snNzwdhHWN8bmKALqDqLYVXUjDzz1mmmCreAaxhl4eDO73bE7Gh28/bcUM2VI7NQIDAQAB",
   "permissions": [
     "debugger",
     "nativeMessaging",
     "storage",
-    "alarms"
+    "alarms",
+    "tabGroups",
+    "downloads"
   ],
   "background": {
     "service_worker": "background.js",

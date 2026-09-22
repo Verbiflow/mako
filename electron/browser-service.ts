@@ -4,8 +4,8 @@ import {
   tabInterruption,
 } from "./browser-compatibility.js"
 import { createHash, randomUUID } from "node:crypto"
-import { stat, writeFile } from "node:fs/promises"
-import { dirname, isAbsolute, join } from "node:path"
+import { copyFile, mkdtemp, stat, writeFile } from "node:fs/promises"
+import { basename, dirname, isAbsolute, join } from "node:path"
 import { z } from "zod"
 import { imageSize } from "image-size"
 import {
@@ -35,6 +35,9 @@ import {
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
 
 const targetInfo = z.object({
+  openerId: z.string().optional(),
+  makoOwner: z.string().optional(),
+  makoTaskLifetime: z.boolean().optional(),
   targetId: z.string(),
   type: z.string(),
   title: z.string(),
@@ -73,6 +76,15 @@ const dialogOpening = z.object({
   url: z.string().optional(),
 })
 const requestEvent = z.object({ requestId: z.string() })
+const extensionDownloadSchema = z.object({
+  id: z.number(),
+  state: z.enum(["completed", "canceled", "inProgress"]),
+  url: z.string(),
+  path: z.string().nullable(),
+  bytes: z.number(),
+  error: z.string().nullable(),
+})
+
 const downloadBegin = z.object({
   guid: z.string(),
   url: z.string().optional(),
@@ -244,6 +256,7 @@ interface Binding {
   dialog: DialogState | null
   dialogPolicy: "ask" | "accept" | "dismiss"
   network: { enabled: boolean; inflight: Set<string> }
+  downloadExports: Map<number, { directory: string; path?: string }>
   downloads: Map<string, DownloadState>
 }
 interface BrowserEntry {
@@ -452,13 +465,26 @@ export class BrowserService {
     if (!this.preference.hasSavedChoice && this.defaultApplication) {
       const applicationPath = await this.defaultApplication()
       // Several profiles in the same browser are ambiguous. Never pick the first.
-      const candidates = applicationPath ? definitions.filter(definition =>
-        definition.transport === "extension" && definition.applicationPath === applicationPath
-      ) : []
-      if (!this.closing && !this.preference.hasSavedChoice && candidates.length === 1) {
+      const candidates = applicationPath
+        ? definitions.filter(
+            (definition) =>
+              definition.transport === "extension" &&
+              definition.applicationPath === applicationPath
+          )
+        : []
+      if (
+        !this.closing &&
+        !this.preference.hasSavedChoice &&
+        candidates.length === 1
+      ) {
         const browser = candidates[0]!
-        await this.preference.set({ id: browser.id, name: browser.name, product: browser.product,
-          profileName: browser.profileName, transport: browser.transport })
+        await this.preference.set({
+          id: browser.id,
+          name: browser.name,
+          product: browser.product,
+          profileName: browser.profileName,
+          transport: browser.transport,
+        })
         changed = true
       }
     }
@@ -554,8 +580,15 @@ export class BrowserService {
           ...entry.status,
           connection: { status: "disconnected" },
         }
-        for (const [key, binding] of this.bindings)
-          if (binding.connection === connection) this.bindings.delete(key)
+        for (const [key, binding] of this.bindings) {
+          if (binding.connection !== connection) continue
+          entry.status.lastInterruption = {
+            tab: binding.target.tab,
+            message:
+              "The browser connection ended. An in-flight action may have completed. Reconnect, claim the exact tab and observe before deciding what to do; no action was replayed.",
+          }
+          this.bindings.delete(key)
+        }
         for (const [key, target] of this.ownedTargets)
           if (target.connection === connection) this.ownedTargets.delete(key)
         // An attached application that closed its endpoint has exited; its
@@ -601,6 +634,23 @@ export class BrowserService {
     connection: BrowserConnection,
     event: BrowserProtocolEvent
   ): void {
+    if (event.method === "Target.targetCreated") {
+      const child = z.object({ targetInfo }).safeParse(event.params)
+      if (child.success && child.data.targetInfo.makoTaskLifetime) {
+        const info = child.data.targetInfo
+        const parent = [...this.ownedTargets.values()].find(
+          (t) =>
+            t.connection === connection &&
+            t.tab === info.openerId &&
+            t.owner === info.makoOwner
+        )
+        if (parent)
+          this.ownedTargets.set(
+            this.key({ browser: parent.browser, tab: info.targetId }),
+            { ...parent, tab: info.targetId }
+          )
+      }
+    }
     if (event.method === "Target.targetDestroyed") {
       // Destruction can arrive after detach already removed the binding.
       for (const [key, target] of this.ownedTargets)
@@ -630,7 +680,10 @@ export class BrowserService {
             ...entry.status,
             lastInterruption: {
               tab: binding.target.tab,
-              message: tabInterruption(binding.events, z.string().safeParse(event.params.reason).data),
+              message: tabInterruption(
+                binding.events,
+                z.string().safeParse(event.params.reason).data
+              ),
             },
           }
           this.changed()
@@ -800,6 +853,15 @@ export class BrowserService {
       .parse(
         await connection.send("Target.getTargetInfo", { targetId: tab }, signal)
       )
+    if (
+      info.targetInfo.makoOwner &&
+      info.targetInfo.makoOwner !== owner &&
+      !takeover
+    )
+      fault(
+        "target-busy",
+        "Another task owns this child tab. Claim it only after an explicit takeover."
+      )
     const page = PAGE_TARGET_TYPES.has(info.targetInfo.type)
     if (!page)
       fault(
@@ -826,12 +888,11 @@ export class BrowserService {
       }
       this.bindings.delete(key)
     }
+    const attachParameters: JsonObject = { targetId: tab, flatten: true }
+    if (this.entry(browser).definition.transport === "extension")
+      attachParameters.makoOwner = owner
     const { sessionId } = sessionResult.parse(
-      await connection.send(
-        "Target.attachToTarget",
-        { targetId: tab, flatten: true },
-        signal
-      )
+      await connection.send("Target.attachToTarget", attachParameters, signal)
     )
     try {
       await connection.send("Page.enable", {}, signal, sessionId)
@@ -858,6 +919,7 @@ export class BrowserService {
         dialogPolicy: "ask",
         network: { enabled: false, inflight: new Set() },
         downloads: new Map(),
+        downloadExports: new Map(),
       })
       if (owned) owned.owner = owner
     } catch (error) {
@@ -1051,8 +1113,11 @@ export class BrowserService {
           background: command.background,
           newWindow: command.disposition === "window",
         }
-        if (this.entry(browser).definition.transport === "extension")
+        if (this.entry(browser).definition.transport === "extension") {
           targetParameters.makoTaskLifetime = command.lifetime === "task"
+          targetParameters.makoOwner = owner
+          targetParameters.makoTaskName = command.name ?? "Mako"
+        }
         if (browserContextId)
           targetParameters.browserContextId = browserContextId
         targetId = z
@@ -1126,6 +1191,9 @@ export class BrowserService {
         "observe",
         "screenshot",
         "events",
+        "children",
+        "capabilities",
+        "downloadStatus",
         "release",
       ].includes(command.action)
       const view = visualView(command)
@@ -1170,9 +1238,16 @@ export class BrowserService {
         if (command.action === "observe" || command.action === "screenshot")
           binding.uncertain = false
         if (
-          !["observe", "screenshot", "events", "frames", "wait"].includes(
-            command.action
-          )
+          ![
+            "observe",
+            "screenshot",
+            "events",
+            "frames",
+            "wait",
+            "capabilities",
+            "children",
+            "downloadStatus",
+          ].includes(command.action)
         )
           binding.view = undefined
         return value
@@ -1317,6 +1392,64 @@ export class BrowserService {
     const root = (method: string, params: JsonObject) =>
       binding.connection.send(method, params, signal)
     switch (command.action) {
+      case "capabilities": {
+        const transport =
+          this.entry(binding.target.browser).definition.transport ?? "direct"
+        const extension = transport === "extension"
+        return {
+          target: binding.target,
+          transport,
+          scopedObservation: true,
+          semanticLocators: true,
+          dialogs: true,
+          children: true,
+          retainedResults: !this.ownedTargets.get(this.key(binding.target))
+            ?.browserContextId,
+          downloads: extension
+            ? {
+                url: true,
+                ref: false,
+                completion: "browser-download-id",
+                continuation: "downloadStatus(id)",
+              }
+            : { url: true, ref: true, completion: "protocol-events" },
+          cursor: extension,
+          taskGroups: extension,
+          isolatedContexts: !extension,
+        }
+      }
+      case "children": {
+        const result = targetsResult.parse(await root("Target.getTargets", {}))
+        return {
+          children: result.targetInfos
+            .filter((t) => t.openerId === binding.target.tab)
+            .map((t) => ({
+              browser: binding.target.browser,
+              tab: t.targetId,
+              title: t.title,
+              url: t.url,
+            })),
+          note: "Claim the exact child tab before acting. A page-created popup may activate a browser window.",
+        }
+      }
+      case "retain": {
+        const key = this.key(binding.target)
+        const owned = this.ownedTargets.get(key)
+        if (!owned || owned.owner !== binding.owner)
+          fault("invalid-request", "Only a task-owned tab can be retained.")
+        if (owned.browserContextId)
+          fault(
+            "invalid-request",
+            "An isolated-context tab cannot outlive its task."
+          )
+        if (
+          this.entry(binding.target.browser).definition.transport ===
+          "extension"
+        )
+          await send("Mako.retainTarget", { name: command.name })
+        this.ownedTargets.delete(key)
+        return { retained: true, name: command.name, target: binding.target }
+      }
       case "observe": {
         const info = await root("Target.getTargetInfo", {
           targetId: binding.target.tab,
@@ -1803,6 +1936,25 @@ export class BrowserService {
           auto: binding.dialogPolicy,
         }
       }
+      case "downloadStatus": {
+        if (
+          this.entry(binding.target.browser).definition.transport !==
+          "extension"
+        )
+          fault(
+            "unavailable",
+            "Download IDs are available through the browser extension."
+          )
+        return this.exportDownload(
+          binding,
+          extensionDownloadSchema.parse(
+            await send("Mako.downloadStatus", {
+              id: command.id,
+              timeoutMs: command.timeoutMs,
+            })
+          )
+        )
+      }
       case "download": {
         if (!isAbsolute(command.directory))
           fault("invalid-request", "directory must be an absolute local path.")
@@ -1814,6 +1966,32 @@ export class BrowserService {
           )
         if (!command.at && !command.url)
           fault("invalid-request", "Pass at (an element to click) or url.")
+        if (
+          this.entry(binding.target.browser).definition.transport ===
+          "extension"
+        ) {
+          if (!command.url || command.at)
+            fault(
+              "invalid-request",
+              "Extension downloads require an explicit http(s) URL. No click was dispatched. Page-triggered downloads can be inspected in the browser; their IDs cannot safely be inferred from a filename."
+            )
+          const result = extensionDownloadSchema.parse(
+            await send("Mako.download", {
+              url: command.url,
+              timeoutMs: command.timeoutMs,
+            })
+          )
+          if (binding.downloadExports.size >= 128) {
+            const completed = [...binding.downloadExports].find(
+              ([, entry]) => entry.path
+            )
+            if (completed) binding.downloadExports.delete(completed[0])
+          }
+          binding.downloadExports.set(result.id, {
+            directory: command.directory,
+          })
+          return this.exportDownload(binding, result)
+        }
         const known = new Set(binding.downloads.keys())
         await send("Page.setDownloadBehavior", {
           behavior: "allow",
@@ -2373,6 +2551,32 @@ export class BrowserService {
       x: metrics.cssVisualViewport.clientWidth / 2,
       y: metrics.cssVisualViewport.clientHeight / 2,
     }
+  }
+
+  private async exportDownload(
+    binding: Binding,
+    result: z.infer<typeof extensionDownloadSchema>
+  ): Promise<JsonValue> {
+    const destination = binding.downloadExports.get(result.id)
+    if (result.state !== "completed" || !result.path)
+      return {
+        ...result,
+        note: "Use downloadStatus(id) to inspect this download; do not start it again.",
+      }
+    if (!destination) return result
+    if (destination.path)
+      return { ...result, path: destination.path, browserPath: result.path }
+    const original = await stat(result.path)
+    if (!original.isFile())
+      fault(
+        "unavailable",
+        "The browser's completed download is not a regular file."
+      )
+    const folder = await mkdtemp(join(destination.directory, "mako-download-"))
+    const path = join(folder, basename(result.path))
+    await copyFile(result.path, path)
+    destination.path = path
+    return { ...result, path, browserPath: result.path, bytes: original.size }
   }
 
   /** End one task's leases and close every task-lifetime target it created. */

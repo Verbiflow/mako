@@ -96,7 +96,7 @@ export class ControlObservation {
     })
     if (matches.length !== 1)
       throw new Error(
-        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. Observe a narrower scope or disambiguate; nothing was dispatched.`
+        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. Candidates: ${JSON.stringify(matches.slice(0, 5).map((node) => ({ ref: node.ref, role: node.role, name: node.name?.slice(0, 120), depth: node.depth })))}. Observe a narrower scope or disambiguate; nothing was dispatched.`
       )
     return matches[0]!
   }
@@ -179,10 +179,16 @@ export class ControlHandle {
   ) {
     this.target = Object.freeze(ControlTargetSchema.parse(target))
   }
+  locator(selector: ElementSelector) {
+    return new ControlLocator(this, selectorSchema.parse(selector))
+  }
   async observe(options: ObserveOptions = {}) {
     return new ControlObservation(
       await this.call("observe", { ...options, target: this.target })
     )
+  }
+  capabilities() {
+    return this.call("capabilities", { target: this.target })
   }
   protected async perform(
     operation: z.input<typeof ControlOperationSchema>
@@ -260,9 +266,13 @@ export class ControlHandle {
           `Assertion ambiguous: ${matches.length} observed ${wanted.role} ${JSON.stringify(wanted.name)}`
         )
       const node = matches[0]
-      if (node?.valueExact === false &&
-          (wanted.value !== undefined || wanted.states?.value !== undefined))
-        throw new Error("Exact value unavailable: this native driver returned display-normalized text. An exact-value-capable driver is required; no input was replayed.")
+      if (
+        node?.valueExact === false &&
+        (wanted.value !== undefined || wanted.states?.value !== undefined)
+      )
+        throw new Error(
+          "Exact value unavailable: this native driver returned display-normalized text. An exact-value-capable driver is required; no input was replayed."
+        )
       const matched = wanted.absent
         ? !node && view.coverage.complete && view.coverage.textComplete
         : node !== undefined &&
@@ -290,6 +300,78 @@ export class ControlHandle {
   }
   toJSON() {
     return this.target
+  }
+}
+
+/** Keeps semantic intent, never an expiring reference. Each action reads once,
+ * resolves strictly and dispatches once; failures are never retried. */
+export class ControlLocator {
+  constructor(
+    private readonly handle: ControlHandle,
+    private readonly selector: ElementSelector
+  ) {}
+  locator(selector: ElementSelector) {
+    const next = selectorSchema.parse(selector)
+    return new ControlLocator(this.handle, {
+      ...next,
+      within: [
+        ...(this.selector.within ?? []),
+        { role: this.selector.role, name: this.selector.name },
+        ...(next.within ?? []),
+      ],
+    })
+  }
+  read(options: { max?: number } = {}) {
+    return this.handle.observe({
+      ...options,
+      within: [
+        ...(this.selector.within ?? []),
+        { role: this.selector.role, name: this.selector.name },
+      ],
+    })
+  }
+  private async resolve() {
+    const view = await this.handle.observe({
+      within: this.selector.within,
+      match: { role: this.selector.role, name: this.selector.name },
+      max: 6,
+    })
+    if (!view.coverage.complete || !view.coverage.textComplete)
+      throw new Error(
+        "Locator coverage is incomplete. Narrow its scope; nothing was dispatched."
+      )
+    const node = view.get({
+      role: this.selector.role,
+      name: this.selector.name,
+    })
+    if (!node.ref)
+      throw new Error(
+        "The matched element has no actionable reference; nothing was dispatched."
+      )
+    return node.ref
+  }
+  async click(
+    options: { button?: "left" | "right" | "middle"; count?: number } = {}
+  ) {
+    return this.handle.click(await this.resolve(), options)
+  }
+  async setValue(value: string) {
+    return this.handle.setValue(await this.resolve(), value)
+  }
+  async pressKey(key: string, options: { modifiers?: string[] } = {}) {
+    return this.handle.pressKey(key, { ...options, ref: await this.resolve() })
+  }
+  async selectOption(option: { value: string } | { label: string }) {
+    return this.handle.selectOption(await this.resolve(), option)
+  }
+  expect(
+    expectation: Omit<ElementExpectation, "role" | "name" | "within">,
+    options: { timeoutMs?: number; everyMs?: number } = {}
+  ) {
+    return this.handle.expect({ ...expectation, ...this.selector }, options)
+  }
+  toJSON() {
+    return { target: this.handle.target, selector: this.selector }
   }
 }
 
@@ -334,6 +416,47 @@ export class TabHandle extends ControlHandle {
   }
   upload(ref: string, files: string[]) {
     return this.raw("upload", { ref, files })
+  }
+  dialog(
+    options: {
+      auto?: "ask" | "accept" | "dismiss"
+      respond?: "accept" | "dismiss"
+      promptText?: string
+    } = {}
+  ) {
+    return this.raw("dialog", options)
+  }
+  async children() {
+    return z
+      .object({
+        children: z.array(
+          z.object({
+            browser: z.string(),
+            tab: z.string(),
+            title: z.string(),
+            url: z.string(),
+          })
+        ),
+        note: z.string(),
+      })
+      .parse(await this.raw("children"))
+  }
+  retain(name: string) {
+    return this.raw("retain", { name })
+  }
+  downloadStatus(id: number, options: { timeoutMs?: number } = {}) {
+    return this.raw("downloadStatus", { id, ...options })
+  }
+  download(options: {
+    directory: string
+    ref?: string
+    url?: string
+    timeoutMs?: number
+  }) {
+    const { ref, ...rest } = options
+    const args: JsonObject = { ...rest }
+    if (ref) args.at = { ref }
+    return this.raw("download", args)
   }
   release() {
     return this.raw("release")
@@ -382,6 +505,7 @@ export class AppHandle {
 
 export type OpenTabOptions = {
   browser?: string
+  name?: string
   url?: string
   background?: boolean
   disposition?: "tab" | "window"
@@ -415,8 +539,11 @@ export function controlClient(call: ControlCall) {
       browser: string
       tab: string
       takeover?: boolean
-    }) =>
-      bindPage(await call("page", { name: "select", args: { ...options } })),
+    }) => {
+      const args: JsonObject = { browser: options.browser, tab: options.tab }
+      if (options.takeover !== undefined) args.takeover = options.takeover
+      return bindPage(await call("page", { name: "select", args }))
+    },
     apps: () => call("targets", { kind: "apps" }),
     windows: (pid: number) => call("targets", { kind: "windows", pid }),
     browsers: () => call("targets", { kind: "browsers" }),

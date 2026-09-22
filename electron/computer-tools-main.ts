@@ -154,6 +154,18 @@ export const COMPUTER_TOOL_INPUTS = {
 }
 const controlHelpInputSchema = z
   .object({
+    topic: z
+      .enum([
+        "discovery",
+        "target",
+        "observations",
+        "assertions",
+        "page",
+        "native",
+        "output",
+      ])
+      .optional()
+      .describe("Return only the relevant API section."),
     tool: z
       .string()
       .optional()
@@ -1428,7 +1440,9 @@ export function createComputerToolsServer(
       if (element.element_token) node.ref = element.element_token
       while (ancestors.length && ancestors.at(-1)!.depth >= node.depth)
         ancestors.pop()
-      const web = element.in_web_content === true || ancestors.some((ancestor) => ancestor.role === "AXWebArea")
+      const web =
+        element.in_web_content === true ||
+        ancestors.some((ancestor) => ancestor.role === "AXWebArea")
       ancestors.push({ depth: node.depth, role: element.role })
       if (
         ["TextField", "TextArea", "SearchField", "ComboBox"].includes(
@@ -1457,7 +1471,9 @@ export function createComputerToolsServer(
     const webRefs = new Set(
       nodes.filter((node) => node.inputRoute === "page").map((node) => node.ref)
     )
-    const lossyRefs = new Set(nodes.filter((node) => node.valueExact === false).map((node) => node.ref))
+    const lossyRefs = new Set(
+      nodes.filter((node) => node.valueExact === false).map((node) => node.ref)
+    )
     const lines = availableLines
       .filter((line) => returnedRefs.has(controlLineRef(line)))
       .map((line) =>
@@ -1465,7 +1481,11 @@ export function createComputerToolsServer(
           ? `${line} [text input: page route]`
           : line
       )
-      .map((line) => lossyRefs.has(controlLineRef(line)) ? `${line} [value is display-only]` : line)
+      .map((line) =>
+        lossyRefs.has(controlLineRef(line))
+          ? `${line} [value is display-only]`
+          : line
+      )
     controlViews.set(key, { observation: state.snapshot_id, lines })
     rememberControlRefs(request.target, state.snapshot_id, lines)
     for (const ref of webRefs) {
@@ -2001,6 +2021,7 @@ export function createComputerToolsServer(
     throw new Error("The native driver returned no screenshot")
   }
   const CONTROL_ACTIONS = [
+    "capabilities",
     "targets",
     "observe",
     "dispatch",
@@ -2024,20 +2045,20 @@ export function createComputerToolsServer(
         ],
       }
     }
-    return {
+    const reference = {
       version: 2,
       execution: `Start ${execTool} with {"source":"return await control.browsers()"}. A running receipt returns a numeric cell; collect it through the same tool with {"cell":1}. Copy the receipt's actual ID. Supply exactly one field; cell never contains source code.`,
       discovery:
         "control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,preferred,transport,guidance?,lastInterruption?,connection,...}]}; control.tabs(browser) -> {kind:'pages',browser,pages:[{targetId,title,url,selectable,...}]}. These methods return objects, not arrays.",
       handles:
-        "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across cells. App windows are selected explicitly; no implicit first window.",
+        "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across cells. App windows are selected explicitly; no implicit first window.",
       target:
-        "await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard}; refs expire after mutation or observation.",
+        "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard}; refs expire after mutation or observation.",
       observations:
         "Observation has nodes, lines, coverage, get({role,name,within?}) for exactly one observed node, select({text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. No app-specific instructions are assumed.",
       assertions:
         "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial.",
-      page: "tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot(options?), upload(ref,files), close(), release(), cdp(method,params?). tab.raw(name,args?) is the explicit page escape hatch; call help({domain,method}) for pinned CDP schemas. Profile/task/background defaults; isolated contexts require direct CDP.",
+      page: "tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot(options?), upload(ref,files), dialog({auto?,respond?,promptText?}), children(), retain(name), download({directory,ref?|url?,timeoutMs?}), downloadStatus(id,{timeoutMs?}), close(), release(), cdp(method,params?). tab.raw(name,args?) is the explicit page escape hatch; call help({domain,method}) for pinned CDP schemas. Profile/task/background defaults. name labels the task group; retain(name) keeps a result after task cleanup. children() returns {children:[{browser,tab,title,url}],note}; pass a child to control.claimTab(child). Extension downloads accept an explicit http(s) URL, await the browser-issued ID, and copy the completed file into a unique subdirectory of directory; browserPath retains the original. In-progress results have an id for downloadStatus, never repeat the start. Ref-triggered download routing and isolated contexts require direct CDP.",
       native:
         "window.screenshot({screenshot_out_file?}) returns a view token; coordinates require {x,y,view}, window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
       command:
@@ -2045,6 +2066,9 @@ export function createComputerToolsServer(
       output:
         "return value or console.log(value); emitImage(await handle.screenshot()) emits images through existing budgets. state retains handles across cells, checkpoint/recall retain bounded JSON facts; cancellation resets the worker. Await every action. Old cell callbacks cannot use a newer cell.",
     }
+    return args.topic
+      ? { version: reference.version, [args.topic]: reference[args.topic] }
+      : reference
   }
   let controlTail: Promise<unknown> = Promise.resolve()
   const runControl = async (
@@ -2056,6 +2080,28 @@ export function createComputerToolsServer(
     delete args.action
     const invoke = async () => {
       signal.throwIfAborted()
+      if (action === "capabilities") {
+        const target = z
+          .object({ target: ControlTargetSchema })
+          .strict()
+          .parse(args).target
+        if (target.kind === "window") return nativeCapabilities(target, signal)
+        if (!browserCall)
+          throw new Error("Page control is unavailable outside a Mako task")
+        const pageTarget = {
+          browser: target.browser,
+          tab: target.tab,
+          generation: target.generation,
+          lease: target.lease,
+        }
+        return browserCall(
+          BrowserCommandSchema.parse({
+            action: "capabilities",
+            target: pageTarget,
+          }),
+          signal
+        )
+      }
       if (action === "targets") return controlTargets(args, signal)
       if (action === "observe") return controlObserve(args, signal)
       if (action === "dispatch") return controlDispatch(args, signal)
@@ -2285,8 +2331,12 @@ ${await reference()}`,
         status: "error",
       })
       const detail = {
-        code: controlFaultData(error)?.code ?? (dispatched ? "computer-control-error" : "invalid-request"),
-        outcome: controlFaultData(error)?.outcome ?? (dispatched ? "unknown" : "not-dispatched"),
+        code:
+          controlFaultData(error)?.code ??
+          (dispatched ? "computer-control-error" : "invalid-request"),
+        outcome:
+          controlFaultData(error)?.outcome ??
+          (dispatched ? "unknown" : "not-dispatched"),
         message:
           error instanceof z.ZodError
             ? `Invalid arguments for ${request.params.name}. ${z.prettifyError(error).replace(/\s+/g, " ").trim()}`
@@ -2297,7 +2347,8 @@ ${await reference()}`,
           ? request.params.name === execTool
             ? `No program was started or resumed by this call. To start, use {"source":"<async JavaScript>"}; to collect, copy the numeric cell from the running receipt, for example {"cell":1}. Correct the arguments; do not resubmit a running program's source.`
             : "Correct the tool arguments and call again; no control action was dispatched."
-          : controlFaultData(error)?.code === "cell-pending" || controlFaultData(error)?.code === "cell-not-found"
+          : controlFaultData(error)?.code === "cell-pending" ||
+              controlFaultData(error)?.code === "cell-not-found"
             ? "Follow the cell instructions in the message. Do not start another program to recover a pending result."
             : "Read the exact target again before deciding whether to repeat an action.",
       }

@@ -1,3 +1,4 @@
+import { BROWSER_EXTENSION_PROTOCOL } from "./browser-extension-protocol.js"
 import { nativeBrowserApplication } from "./browser-application.js"
 import {
   singleBrowserProfile,
@@ -93,6 +94,14 @@ export async function startBrowserNativeHost(
         const message = ExtensionMessageSchema.parse(JSON.parse(frame))
         if (message.kind === "hello") {
           if (greeted) throw new Error("Duplicate browser registration")
+          if (message.protocol !== BROWSER_EXTENSION_PROTOCOL) {
+            send({
+              kind: "incompatible",
+              message:
+                "Mako and its browser extension need matching updates. Update both, then reconnect; no browser actions were accepted.",
+            })
+            throw new Error("Incompatible browser extension protocol")
+          }
           greeted = true
           resolveHello(message)
           continue
@@ -247,12 +256,16 @@ export async function startBrowserNativeHost(
           { mode: 0o600, flag: "wx" }
         )
         await rename(temporary, registrationPath)
-        send({ kind: "ready", profileName })
+        send({
+          kind: "ready",
+          protocol: BROWSER_EXTENSION_PROTOCOL,
+          profileName,
+        })
       } finally {
         await rm(temporary, { force: true })
       }
     }
-    send({ kind: "ready", profileName })
+    send({ kind: "ready", protocol: BROWSER_EXTENSION_PROTOCOL, profileName })
     return { close, registration }
   } catch (error) {
     await close()
