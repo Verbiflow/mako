@@ -274,6 +274,10 @@ or registry snapshots.
 
 ## Browser and computer control
 
+For the Local Control API refactor, migration and validation progress, read
+[`docs/local-control-map.md`](docs/local-control-map.md). It records accepted decisions, completion evidence and remaining limitations.
+The public API examples live in [`docs/local-control-api.md`](docs/local-control-api.md).
+
 `@mako/control` (`packages/control`) is the pure layer under the control
 server, like `@mako/sessions` under the catalog: no Electron, no MCP
 transport, testable against a fake driver. `program/` is the runtime that
@@ -295,40 +299,40 @@ not a managed or runtime-recognized server.
 `packages/control/test` covers the pure layer; `docs/audits/2026-09-14/`
 holds the measurements the design rests on.
 
-Every provider receives one managed `mako-control` MCP server through the
-same projection path; no harness gets a privileged control surface. It has
-three tools (`mako_control_status`, `mako_control_help`,
-`mako_control_exec`), and `exec` exposes one `control` object. Closed
-operations (`set-text`, `activate`, `press-key`, `pointer`, `scroll`,
-`select-option`, `command`) name intent, not a backend: the host planner
-selects page control for an exact page target and a capability-proven
-background route for a native window. Every action returns the plan,
-receipt, compact post-action observation and delta. `advanced` is the
-explicit escape hatch for lifecycle or driver actions the closed contract
-does not express. Do not add another model-facing browser or native server;
-only `mako-control` receives control credentials or runtime treatment.
+Every provider receives the same managed `mako-control` MCP server, with
+`mako_control_status`, `mako_control_help` and `mako_control_exec`. Local Control
+v2 programs use `control.app({pid})`, `control.window({pid,window_id})`,
+`control.tab(target)`, `control.openTab` and `control.claimTab`. The bound client
+in `packages/control/src/control/client.ts` owns API composition; the host owns
+routing, target validation, driver sessions and foreground checks. Public
+`control.act/observe/advanced/wait` and the separate `page` helper are retired.
+The older computer/browser program servers remain private regression harnesses,
+not managed provider APIs.
 
-A single action is a one-line program and a workflow is several awaited
-calls with plain JavaScript between them, so intermediate observations the
-model does not need never enter its context. Route refs are bound to their
-exact page/window and latest observation. The host owns validation,
-foreground refusal, paths, driver sessions and post-action verification;
-the worker cannot bypass them. Long values spill whole to artifacts and
-long exploratory programs yield as resumable cells with bounded
-`checkpoint`/`recall` memory. Only an idempotent `set-text` with a
-`suspected-noop` receipt may be reobserved and retried once; pointer,
-activation and unknown outcomes are never replayed.
+Keep handles in `state` across cells. The worker's AsyncLocalStorage associates
+calls with their executing cell; a timer from a finished cell cannot borrow a
+new run. Ordinary script errors preserve state; timeout, cancellation and worker
+faults reset it. Programs are trusted local JavaScript, not an OS sandbox.
 
-Unified programs also receive a `page` helper. `open` and `claim` mint exact
-page targets, `observe` retains structured AX nodes inside the worker,
-`select` filters them by text, role and state with bounded ancestor context,
-`lines` returns only that working set, and `cdp` is typed from Mako's pinned
-`devtools-protocol`; protocol schemas are fetched through help only when
-needed, never loaded into every prompt. These helpers call the same host
-actions as `control.advanced` and add no authority. Hidden-tab input enables
-`Emulation.setFocusEmulationEnabled` only around the input action and disables
-it in `finally`; an idle lease no longer tells the page it is focused, and no
-failure or timeout may call `Target.activateTarget`.
+Actions return small dispatch receipts, never implied task confirmation. Read
+with `handle.observe()` and select structured nodes with `view.get({role,name})`
+or `view.select(...)`. `handle.expect(...)` polls exact structured evidence
+without replaying input. Duplicate observed matches fail; absence requires
+complete coverage. Positive assertions describe the observed match and its
+coverage, not global uniqueness. Truncated text cannot establish exact equality.
+Returning a view emits compact lines once; `.nodes` exposes structured data and
+`.diff(previous)` returns changes without carrying old refs. Images are explicit.
+
+Refs belong to the exact target's latest observation and expire on mutation.
+Coordinates require that target's latest screenshot `view` token. Reobserve
+before the next ref-based action; never carry tokens by label or position.
+Unknown outcomes require observation and are never automatically replayed.
+Native background/foreground routing remains host-owned. Page leases,
+generations and action-scoped focus emulation remain BrowserService-owned.
+Raw driver/page access is explicit through `control.native`, `window.raw` or
+`tab.raw/cdp`; raw calls retire unified refs. Basic help and browser-only
+execution do not require native driver startup. Protocol/native schemas load
+through help only when needed. Long outputs spill whole to artifacts.
 
 A computer action resolves to the driver's data, not the MCP result: every
 model measured lost a turn to `result.structuredContent.apps` before it
@@ -420,24 +424,6 @@ background with a private DevTools port and registers it as browser
 `app:<bundle_id>`, and the `browser` object is available inside every
 computer program, so keyboard, pointer and DOM reads that never touch
 focus reach the one kind of window the pid keyboard cannot.
-
-A token from an earlier snapshot is carried, not refused. `fill`'s
-read-back and `act`'s delta each take a new snapshot, so the token a
-program read for its next control was stale by the time it used it (every
-second step of every program). The host indexes each snapshot by
-`role|label#nth` (`indexSnapshot`, `carryToken` in
-`packages/control/src/computer/projection.ts`) and, when a token's snapshot
-is older than the window's newest, addresses the same control in the
-newest one, reporting `carried_token: {given, used}`; a control that is
-gone is refused by the driver as before, and a token never carries across
-windows. An action addressed by `element_token` is dispatched before `act`
-reads anything, so `act` itself never makes the model's token stale. A
-program's own error keeps the worker and its `state` (only a timeout or
-cancellation ends it): a refused action once cost the next program its
-target as well as the step. `windows(pid)` puts the on-screen titled
-document windows first, largest first: Conductor lists an off-screen
-untitled 500×500 window before its main one and a caller that took the
-first row viewed an empty window.
 
 The driver's agent cursor is quieted per session. It glides an overlay
 along a Dubins path to every new target and awaits the arrival before
@@ -983,7 +969,7 @@ line; `console.warn`/`console.error` are mirrored; crash reports add a summary
 line; Settings > Diagnostics reveals the file. Fields are explicit and stderr
 tails are scrubbed of bearer tokens: never log an environment, a header list or
 a request body. ACP startup is bounded by silence, not a fixed budget
-(`electron/acp-startup.ts`): a step fails after 20 s without any stdout or
+(`electron/provider-startup.ts`): a step fails after 20 s without any stdout or
 stderr from the process, after 120 s regardless, or at once when the process
 exits, and the error names the step, what had already finished and whether the
 process is alive. Grok once answered `initialize` in 150 ms and then sat silent
@@ -1006,7 +992,7 @@ on macOS it selects Electron's bundled Helper, whose `LSUIElement` policy
 keeps each Cursor SDK process, managed MCP server, browser native host and
 daemon out of the Dock. Never launch a headless script through the main
 Mako/Electron executable when the Helper is available.
-`test-acp-startup.ts`, `test-host-log.ts`, `test-provider-children.ts` and
+`test-provider-startup.ts`, `test-host-log.ts`, `test-provider-children.ts` and
 `test-composer-settings.ts` cover these.
 
 When the host closes for a restart, install or quit it answers every pending
