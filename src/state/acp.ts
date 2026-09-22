@@ -256,12 +256,27 @@ export const acp = {
   async openInteractive(ref: ThreadRef): Promise<boolean> {
     if (!hasBridge()) return false
     const existing = acpForThread(acpStore.get(), ref)
-    if (existing) return acp.activate(existing.key)
+    if (existing && !ref.heldBy) return acp.activate(existing.key)
     // The host says whether this store reopens live; anything else opens as a
     // handoff on the composer's provider, the way it always has.
     let canResume: boolean
     try {
-      canResume = (await getMako().continuationPlan(ref.path)).transport === "live"
+      const attached = await getMako().liveAttach(ref.path)
+      if (attached) {
+        applyLiveSnapshot(attached)
+        return acp.activate(attached.session.id)
+      }
+      const plan = await getMako().continuationPlan(ref.path)
+      if (plan.transport === "refused") throw new Error(plan.reason)
+      if (plan.transport === "attached") {
+        // An owner can appear between the first attach and planning. Repeat
+        // only the read; never turn this race into a second native launch.
+        const current = await getMako().liveAttach(ref.path)
+        if (!current) throw new Error("The session owner is reconnecting. Your saved conversation has not been replaced. Try opening it again.")
+        applyLiveSnapshot(current)
+        return acp.activate(current.session.id)
+      }
+      canResume = plan.transport === "live"
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return false
@@ -313,6 +328,17 @@ export const acp = {
     attachments: PromptAttachment[] = []
   ): Promise<boolean> {
     if (!hasBridge()) return false
+    try {
+      const attached = await getMako().liveAttach(ref.path)
+      if (attached) {
+        applyLiveSnapshot(attached)
+        acp.activate(attached.session.id)
+        return sendTo(attached.session.id, prompt, attachments)
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
     const existing = acpForThread(acpStore.get(), ref)
     if (existing) {
       acp.activate(existing.key)

@@ -111,11 +111,14 @@ export function threadStatus(
   // A turn another Mako host runs is named by its holder; a process the
   // probe saw is "another app" until the provider says more.
   if (external?.status === "active")
-    return ref.heldBy ? { kind: "external-active", app: ref.heldBy } : EXTERNAL_ACTIVE_STATUS
-  if (ref.active === true && !external) return EXTERNAL_ACTIVE_STATUS
+    return ref.heldBy ? { kind: "working", since: external.since } : EXTERNAL_ACTIVE_STATUS
+  if (ref.active === true && !external)
+    return ref.heldBy ? { kind: "working", since: 0 } : EXTERNAL_ACTIVE_STATUS
   if (attention) return attention
+  // A warm agent in another Mako host is still this app. Only external
+  // applications get the hollow open-elsewhere ring.
+  if (ref.heldBy) return IDLE_STATUS
   if (external?.status === "open") return { kind: "external-open", app: external.provider }
-  if (ref.heldBy) return { kind: "external-open", app: ref.heldBy }
   if (ref.locked) return { kind: "external-open", app: ref.harness }
   if (ref.active === false) return IDLE_STATUS
   return state.observed[ref.path] ? OBSERVED_STATUS : IDLE_STATUS

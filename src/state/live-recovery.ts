@@ -318,6 +318,18 @@ export function hydrateLiveSummaries(
     "mako:reload-conversation"
   )
   globalThis.sessionStorage?.removeItem("mako:reload-conversation")
+  if (requested && requested !== "new" && !summaries.some((summary) => summary.session.id === requested) && !acpStore.get().activeKey) {
+    // The selected conversation may belong to another host and therefore be
+    // absent from this host's boot list. Its persisted route can restore it.
+    acpStore.set({ activeKey: requested })
+    void hydrateLive(requested).then(() => {
+      if (acpStore.get().activeKey !== requested) return
+      const restored = acpStore.get().conversations[requested]
+      if (restored) threadsStore.set({ composerHarness: restored.harness })
+      else acpStore.set({ activeKey: null })
+    })
+    return
+  }
   const selected =
     summaries.find((summary) => summary.session.id === requested) ??
     summaries.toSorted((a, b) => b.createdAt - a.createdAt)[0]
@@ -331,4 +343,16 @@ export function hydrateLiveSummaries(
 export async function loadEarlierLive(id: string): Promise<void> {
   const snapshot = await getMako().liveEarlier(id)
   applyLiveSnapshot(snapshot)
+}
+
+/** Losing a peer host affects only the conversations that it owns. */
+export function markLiveOwnerDisconnected(ids: string[]): void {
+  for (const id of ids) {
+    const current = acpStore.get().conversations[id]
+    if (current?.kind !== "live") continue
+    replaceAcpConversation(id, {
+      ...current,
+      session: { ...current.session, connection: "disconnected" },
+    })
+  }
 }

@@ -97,7 +97,7 @@ export const threadContinuationActions = {
       if (echoed) removeOptimisticReply(ref, prompt)
       return threadContinuationActions.moveAndSend(ref, plan.provider, prompt, attachments)
     }
-    if (plan.transport === "live") {
+    if (plan.transport === "live" || plan.transport === "attached") {
       const resumed = await (
         await import("@/state/acp")
       ).acp.resumeAndSend(ref, prompt, attachments)

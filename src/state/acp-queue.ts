@@ -111,10 +111,10 @@ export function continueTurn(id: string, reason: InterruptionReason = "host-quit
  * back as that acceptance and one it never saw is accepted now; nothing is
  * delivered twice. Called from the reconnect, after the summaries are known.
  */
-export async function replayUnconfirmedPrompts(): Promise<void> {
+export async function replayUnconfirmedPrompts(ids?: string[]): Promise<void> {
   const conversations = Object.values(acpStore.get().conversations)
   for (const conversation of conversations) {
-    if (conversation.kind !== "live") continue
+    if (conversation.kind !== "live" || (ids && !ids.includes(conversation.key))) continue
     const unconfirmed = conversation.pendingPrompts?.filter((prompt) => prompt.unconfirmed) ?? []
     for (const prompt of unconfirmed) {
       updateAcpConversation(conversation.key, (current) => ({

@@ -43,7 +43,7 @@ export function pushCurrentBranch(): Promise<void> {
     })
     return Promise.resolve()
   }
-  return pushBranch({ cwd: snapshot.cwd, branch: snapshot.branch })
+  return pushBranch({ cwd: snapshot.root, branch: snapshot.branch })
 }
 
 export function pushBranch(target: GitPushInput): Promise<void> {
@@ -60,12 +60,12 @@ export function pushBranch(target: GitPushInput): Promise<void> {
 async function performPush(target: GitPushInput, key: string) {
   try {
     const current = store.get().git
-    if (current?.cwd !== target.cwd || current.branch !== target.branch)
+    if ((current?.root ?? current?.cwd) !== target.cwd || current?.branch !== target.branch)
       throw new Error(
         "Select this project and branch before retrying the push."
       )
     await getMako().gitPush(target)
-    if (store.get().git?.cwd === target.cwd) await actions.refreshGit()
+    if ((store.get().git?.root ?? store.get().git?.cwd) === target.cwd) await actions.refreshGit()
     const at = Date.now()
     update(key, { kind: "pushed", branch: target.branch, at })
     setTimeout(() => {

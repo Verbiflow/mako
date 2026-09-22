@@ -1,3 +1,4 @@
+import { applyLiveSnapshot } from "@/state/live-recovery"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
   BlockAddress,
@@ -198,7 +199,25 @@ export const threadViewingActions = {
   /** Open a foreign session read-only, translated to the canonical shape. */
   async view(ref: ThreadRef, mode: "conversation" | "native" = "conversation") {
     if (!hasBridge()) return
+    const generation = ++viewingGeneration
     const { acp, acpStore, activeAcp } = await import("@/state/acp")
+    if (generation !== viewingGeneration) return
+    if (mode === "conversation" && ref.heldBy) {
+      try {
+        const snapshot = await getMako().liveAttach(ref.path)
+        if (generation !== viewingGeneration) return
+        if (snapshot) {
+          applyLiveSnapshot(snapshot)
+          acp.activate(snapshot.session.id)
+          openThreadTab(ref.path)
+          leaveViewerForLive(snapshot.session.harness)
+          return
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error))
+      }
+    }
+    if (generation !== viewingGeneration) return
     const activated = mode === "conversation" && acp.activateThread(ref)
     if (!activated) acp.deactivate()
     const liveHarness = activated
@@ -212,7 +231,6 @@ export const threadViewingActions = {
     if (harnessBeforeViewing === null)
       harnessBeforeViewing = threadsStore.get().composerHarness
     threadsStore.set({ composerHarness: liveHarness })
-    const generation = ++viewingGeneration
     markThreadReviewed(ref.path)
     const cached = threadCache.get(ref.path)
     if (cached) {

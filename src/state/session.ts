@@ -9,11 +9,12 @@ import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
-import { applyLiveBatch, hydrateLiveSummaries, hydrateLive } from "@/state/live-recovery"
+import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, markLiveOwnerDisconnected } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts } from "@/state/acp-queue"
 import { createHook, createStore, shallowEqual } from "@/state/store"
 import type {
   Capabilities,
+  BootPayload,
   GitStatus,
   HostEvent,
   ModelInfo,
@@ -177,6 +178,12 @@ function noteTabTurn(id: string, before: SessionMeta | undefined, cache: TabCach
 }
 
 function apply(event: HostEvent) {
+  if (event.type === "live-owner-connection") {
+    if (event.connected) {
+      void Promise.all(event.ids.map((id) => hydrateLive(id))).then(() => replayUnconfirmedPrompts(event.ids))
+    } else markLiveOwnerDisconnected(event.ids)
+    return
+  }
   if (event.type === "notification-activated") {
     openSubjectId(event.subject)
     return
@@ -507,6 +514,35 @@ function adoptSnapshot(next: TabSnapshot) {
     capabilities: next.capabilities,
   })
   refresh(next.id, cacheOf(next.id), { unread: false })
+  void actions.refreshGit()
+}
+
+function adoptBoot(boot: BootPayload) {
+  const active = boot.tabs.find((tab) => tab.id === boot.activeTabId) ?? boot.tabs[0]
+  if (!active) throw new Error("The host started without a conversation")
+  hydrate(boot.tabs, boot.activeTabId)
+  if (boot.archives) applyThreadArchives(boot.archives)
+  hydrateLiveSummaries(boot.live)
+  store.set({
+    phase: "ready",
+    fault: undefined,
+    meta: active.session.meta,
+    messages: active.session.messages,
+    tree: active.session.tree,
+    git: active.git,
+    models: boot.models,
+    capabilities: active.capabilities,
+    platform: boot.platform,
+    sourceRoot: boot.sourceRoot,
+  })
+  hostConnectionStore.set({ kind: "connected" })
+  void actions.refreshGit()
+  void updates.load()
+  void application.load()
+  void automations.load()
+  void threads.load()
+  if (!boot.archives) void threadLifecycle.load()
+  threads.watchFocus()
 }
 
 export const actions = {
@@ -518,6 +554,10 @@ export const actions = {
       if (cwd) await bridge.setCwd(cwd)
       const boot = await bridge.boot()
       if (epoch !== connectionEpoch) return
+      if (store.get().phase !== "ready") {
+        adoptBoot(boot)
+        return
+      }
       if (boot.archives) applyThreadArchives(boot.archives)
       hydrateLiveSummaries(boot.live, true)
       const conversation = acpStore.get().activeKey
@@ -532,6 +572,7 @@ export const actions = {
         if (active) store.set({ meta: active.session.meta, git: active.git, capabilities: active.capabilities, models: boot.models })
       }
       hostConnectionStore.set({ kind: "connected" })
+      void actions.refreshGit()
       void providers.loadAll()
       void providers.loadRuntimeUpdates()
       void threads.load()
@@ -563,46 +604,30 @@ export const actions = {
       return () => {}
     }
     const unsubscribe = bridge.onEvent(apply)
+    const epoch = ++connectionEpoch
     void providers.loadAll()
     // Settings paints versions the moment it opens; the host has been reading them since it started.
     void providers.loadRuntimeUpdates()
     try {
-      const boot = await withTimeout(
-        bridge.boot(),
+      await withTimeout(
+        bridge.boot().then((boot) => {
+          // A timeout is a warning, not cancellation. Accept a late answer
+          // unless a newer connection attempt has superseded this one.
+          if (epoch === connectionEpoch) adoptBoot(boot)
+        }),
         45_000,
-        "The agent host did not answer within 45 seconds. Check the terminal it was launched from, then restart."
+        "Mako is still waiting for the agent host after 45 seconds. This window will recover when it answers. You can also retry."
       )
-      hydrate(boot.tabs, boot.activeTabId)
-      if (boot.archives) applyThreadArchives(boot.archives)
-      hydrateLiveSummaries(boot.live)
-      const active =
-        boot.tabs.find((tab) => tab.id === boot.activeTabId) ?? boot.tabs[0]
-      if (!active) throw new Error("The host started without a conversation")
-      hostConnectionStore.set({ kind: "connected" })
-      store.set({
-        phase: "ready",
-        meta: active.session.meta,
-        messages: active.session.messages,
-        tree: active.session.tree,
-        git: active.git,
-        models: boot.models,
-        capabilities: active.capabilities,
-        platform: boot.platform,
-        sourceRoot: boot.sourceRoot,
-      })
-      void updates.load()
-      void application.load()
-      void automations.load()
-      void threads.load()
-      if (!boot.archives) void threadLifecycle.load()
-      threads.watchFocus()
     } catch (error) {
-      store.set({
+      if (epoch === connectionEpoch) store.set({
         phase: "detached",
         fault: error instanceof Error ? error.message : String(error),
       })
     }
-    return unsubscribe
+    return () => {
+      if (epoch === connectionEpoch) connectionEpoch++
+      unsubscribe()
+    }
   },
 
   /* ---------------------------------------------------------------- tabs */
@@ -685,6 +710,7 @@ export const actions = {
       git: tab.git,
       capabilities: tab.capabilities,
     })
+    void actions.refreshGit()
     return true
   },
 
@@ -930,11 +956,24 @@ export const actions = {
     return guard(() => getMako().runCommand(name, args))
   },
 
+  async selectGitRepository(root: string) {
+    const snapshot = store.get().git
+    if (!snapshot) return
+    const tabId = tabsStore.get().activeId
+    const generation = ++gitRefreshGeneration
+    const git = await getMako().selectGitRepository(snapshot.cwd, root)
+    if (generation === gitRefreshGeneration && tabsStore.get().activeId === tabId && store.get().meta?.cwd === snapshot.cwd) {
+      store.set({ git })
+      viewer.close()
+    }
+  },
+
   async refreshGit() {
+    const tabId = tabsStore.get().activeId
     const generation = ++gitRefreshGeneration
     const workspace = store.get().meta?.cwd
     const git = await guard(() => getMako().gitStatus())
-    if (git && generation === gitRefreshGeneration && store.get().meta?.cwd === workspace) store.set({ git })
+    if (git && generation === gitRefreshGeneration && tabsStore.get().activeId === tabId && store.get().meta?.cwd === workspace) store.set({ git })
   },
 
   async copy(
