@@ -403,6 +403,11 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
   const conversationId = useAcp((state) => activeLiveAcp(state)?.key ?? null)
   const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
   const [resent, setResent] = useState<"sending" | "sent" | null>(null)
+  const continued = useAcp((state) => {
+    const requests = activeLiveAcp(state)?.requests ?? []
+    const index = requests.findIndex((item) => item.id === request.id)
+    return index >= 0 && requests.slice(index + 1).some((item) => item.status === "completed")
+  })
   const recovered = useAcp((state) => activeLiveAcp(state)?.control?.actions?.some((action) =>
     action.input.kind === "compact" && action.input.requestId === request.id && action.state.kind === "completed") ?? false)
   const idle = useAcp((state) => {
@@ -436,7 +441,7 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
   }
   return (
     <details className="py-2" data-request-recovery={request.id} data-failure={request.failure}>
-      <summary className="pressable cursor-pointer">{label}. Review saved message</summary>
+      <summary className="pressable cursor-pointer">{continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message</summary>
       {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
       {request.error ? <p className={cn("mt-2", failure && "text-faint")}>{request.error}</p> : null}
       <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
