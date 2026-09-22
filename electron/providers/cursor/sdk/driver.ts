@@ -10,7 +10,7 @@ import {
   normalizeCursorSdkModels,
 } from "@mako/sessions"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
-import type { ProviderBinding, ResumeVerdict } from "../../../contracts/conversation-control.js"
+import { compareNativeCheckpoint, type ProviderBinding, type ResumeVerdict } from "../../../contracts/conversation-control.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
 import {
   CONNECTION_LOST_STOP,
@@ -28,6 +28,7 @@ import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from 
 import { CursorSdkClient, CursorSdkError } from "./client.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
 import { CursorSdkProjection } from "./projection.js"
+import { CursorAgents } from "./agents.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
 import { migrateRetiredMakoMcpFile } from "../../../retired-mcp.js"
 import type {
@@ -67,6 +68,7 @@ interface Live {
   models: SessionModel[]
   turn: string | null
   projection: CursorSdkProjection | null
+  agents: CursorAgents
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
   closed: boolean
 }
@@ -233,6 +235,8 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
         }
       }
       engine.emitUpdates(live, live.projection.message(event.message))
+      const agent = live.agents.project(event.message)
+      if (agent) engine.emitAgent(live, agent)
       return
     }
     case "delta": {
@@ -359,11 +363,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     const current = await checkpoint(binding.path)
     if (current === undefined)
       return { kind: "unavailable", reason: "The Cursor session store is missing or unreadable." }
-    return { kind: "resumable", record: binding.checkpoint === undefined || current === binding.checkpoint ? "same" : "moved" }
+    return { kind: "resumable", record: compareNativeCheckpoint(binding.checkpoint, current) }
   }
 
   return {
     provider: "cursor",
+    observesNativeAgents: true,
     compaction: { kind: "unavailable", reason: "Cursor's SDK does not expose manual compaction. Start a new thread and carry over what matters." },
     canResume: true,
     checkpoint,
@@ -399,6 +404,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         models: [],
         turn: null,
         projection: null,
+        agents: new CursorAgents(),
         pendingPermissions: new Map(),
         closed: false,
         state: {
