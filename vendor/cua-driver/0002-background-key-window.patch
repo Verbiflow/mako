@@ -1,0 +1,123 @@
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
+index 2b9baf8..c1e83f1 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
+@@ -30,6 +30,27 @@ pub fn is_screen_sharing_pid(pid: i32) -> bool {
+         .is_some_and(is_screen_sharing_bundle_id)
+ }
+ 
++/// Exact-window background key delivery. The tool owns the target-validation
++/// lease; this function owns responder preparation and the shared event route.
++pub fn press_key_in_window(
++    pid: i32,
++    window_id: u32,
++    key: &str,
++    modifiers: &[&str],
++) -> anyhow::Result<()> {
++    super::skylight::make_background_window_key(pid, window_id)?;
++    if modifiers.iter().any(|modifier| {
++        ["cmd", "command", "meta", "super"]
++            .iter()
++            .any(|name| modifier.eq_ignore_ascii_case(name))
++    }) {
++        // NSMenu key equivalents use the regular AppKit event path.
++        press_key_no_auth(pid, key, modifiers)
++    } else {
++        press_key(pid, key, modifiers)
++    }
++}
++
+ /// Press and release a single key, delivered to `pid` without stealing focus.
+ pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+     // Handle "+" / "plus" → Shift+= (US keyboard layout).
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
+index a657ced..88370b1 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
+@@ -625,6 +625,49 @@ fn make_key_window_record(window_id: u32, event_kind: u8) -> [u8; 0xF8] {
+     record
+ }
+ 
++/// Prepare the already-validated exact background window's responder chain.
++/// Posts only to the target process. In particular, never defocus the user's
++/// process and never call SetFrontProcess or raise a window.
++/// The caller must hold the background exact-window mutation lease.
++pub fn make_background_window_key(pid: libc::pid_t, wid: u32) -> anyhow::Result<()> {
++    let post = post_event_record_to_fn()
++        .ok_or_else(|| anyhow::anyhow!("Local key-window events unavailable"))?;
++    let front = get_front_process_fn()
++        .ok_or_else(|| anyhow::anyhow!("Cannot verify WindowServer front process"))?;
++    let mut before = [0u8; 8];
++    if unsafe { front(before.as_mut_ptr() as *mut c_void) } != 0 {
++        anyhow::bail!("Cannot read WindowServer front process");
++    }
++    let mut target = [0u8; 8];
++    if !get_process_psn_for_window(wid, pid, &mut target) {
++        anyhow::bail!("Exact target process unavailable");
++    }
++    // The local AppKit activation record establishes an active responder chain,
++    // without changing WindowServer's front process or the user's active app.
++    let mut activation = [0u8; 0xF8];
++    activation[0x04] = 0xF8;
++    activation[0x08] = 0x0D;
++    activation[0x8A] = 0x01;
++    activation[0x3C..0x40].copy_from_slice(&wid.to_le_bytes());
++    for record in [
++        activation,
++        make_key_window_record(wid, 0x01),
++        make_key_window_record(wid, 0x02),
++    ] {
++        if unsafe { post(target.as_ptr() as *const c_void, record.as_ptr()) } != 0 {
++            anyhow::bail!("Local key-window event was not accepted");
++        }
++    }
++    if !await_window_focused(pid, wid) {
++        anyhow::bail!("Exact background window did not acquire local focus; no key posted");
++    }
++    let mut after = [0u8; 8];
++    if unsafe { front(after.as_mut_ptr() as *mut c_void) } != 0 || after != before {
++        anyhow::bail!("Foreground changed during preparation; no key posted");
++    }
++    Ok(())
++}
++
+ /// Make one exact application window native-key and frontmost.
+ ///
+ /// Accessibility's `AXFocusedWindow` can change without AppKit making the
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/hotkey.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/hotkey.rs
+index 699a8e8..b474f57 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/hotkey.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/hotkey.rs
+@@ -467,9 +467,11 @@ impl Tool for HotkeyTool {
+                         }
+                         // background (default): auth-envelope post to the pid, no
+                         // raise — even when window_id was supplied for targeting.
+-                        (false, false, _, Some(ptr)) => {
+-                            focus_hotkey_element(pid, ptr)?;
+-                            crate::input::keyboard::hotkey(pid, &key, &m)
++                        (false, false, Some(wid), ptr) => {
++                            if let Some(ptr) = ptr {
++                                focus_hotkey_element(pid, ptr)?;
++                            }
++                            crate::input::keyboard::press_key_in_window(pid, wid, &key, &m)
+                         }
+                         _ => crate::input::keyboard::hotkey(pid, &key, &m),
+                     }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
+index 8378796..71b1eb9 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
+@@ -462,8 +462,11 @@ impl Tool for PressKeyTool {
+                         });
+                     }
+                     // background (default): auth-envelope post, no raise.
+-                    dispatch_with_ax_oracle(pid, window_id, pre_focus_ptr, || {
+-                        crate::input::keyboard::press_key(pid, &key, &m)
++                    dispatch_with_ax_oracle(pid, window_id, pre_focus_ptr, || match window_id {
++                        Some(wid) => {
++                            crate::input::keyboard::press_key_in_window(pid, wid, &key, &m)
++                        }
++                        None => crate::input::keyboard::press_key(pid, &key, &m),
+                     })
+                 })
+                 .await

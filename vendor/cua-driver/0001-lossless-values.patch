@@ -1,0 +1,130 @@
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
+index f50f240..638c8e0 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
+@@ -254,12 +254,14 @@ unsafe fn coerce_stringish_value(value: CFTypeRef) -> Option<StringishAttrValue>
+     }
+     if type_id == CFNumber::type_id() {
+         let n = CFNumber::wrap_under_get_rule(value as _);
+-        let f = n.to_f64()?;
+-        let state_value = if f == f.trunc() && f.abs() < 1e15 {
+-            format!("{}", f as i64)
+-        } else {
+-            format!("{f}")
+-        };
++        // Preserve integer CFNumbers without rounding through f64 (notably
++        // values above 2^53). Float formatting round-trips the native f64.
++        let state_value =
++            if core_foundation::number::CFNumberIsFloatType(n.as_concrete_TypeRef()) != 0 {
++                n.to_f64()?.to_string()
++            } else {
++                n.to_i64()?.to_string()
++            };
+         return Some(StringishAttrValue {
+             string_value: None,
+             state_value,
+@@ -724,6 +726,21 @@ mod tests {
+     use super::*;
+     use core_foundation::{boolean::CFBoolean, number::CFNumber};
+ 
++    #[test]
++    fn stringish_values_are_lossless() {
++        for value in ["", "  ", "  東京 🐟  ", "00123", "\tline\n"] {
++            let string = CFStr::new(value);
++            let result = unsafe { coerce_stringish_value(string.as_CFTypeRef()) }.unwrap();
++            assert_eq!(result.state_value, value);
++            assert_eq!(result.string_value.as_deref(), Some(value));
++        }
++        for value in [i64::MIN, 9_007_199_254_740_993, i64::MAX] {
++            let number = CFNumber::from(value);
++            let result = unsafe { coerce_stringish_value(number.as_CFTypeRef()) }.unwrap();
++            assert_eq!(result.state_value, value.to_string());
++        }
++    }
++
+     #[test]
+     fn stringish_value_coerces_cfstring_cfnumber_and_cfboolean() {
+         let string = CFStr::new("Search");
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
+index ee1f5d3..59e747b 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
+@@ -468,12 +468,7 @@ unsafe fn walk_element(
+     // Structured `elements` only contains actionable nodes. Keep all new AX
+     // round-trips behind that same gate so display-only rows pay no cost.
+     let control_state = read_control_state_if_actionable(is_actionable, || ControlState {
+-        value_state: copied_value
+-            .map(|copied| copied.state_value)
+-            .filter(|v| !v.trim().is_empty())
+-            .or_else(|| value.clone())
+-            .map(|v| v.trim().to_owned())
+-            .filter(|v| !v.is_empty()),
++        value_state: copied_value.map(|copied| copied.state_value),
+         value_description: copy_string_attr(element, "AXValueDescription")
+             .map(|v| v.trim().to_owned())
+             .filter(|v| !v.is_empty()),
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
+index 378023c..dcd9f1e 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
+@@ -810,15 +810,12 @@ pub(crate) fn build_elements_array_with_token(
+             // `value_state` widens the string-only AXValue read to all CF
+             // types (CFNumber sliders → "8", CFBoolean checkboxes/radios →
+             // "1"/"0") — controls whose state was previously invisible here.
+-            // Falls back to `value` so the field never regresses for
+-            // string-valued elements.
+-            if let Some(value) = node
+-                .value_state
+-                .clone()
+-                .or_else(|| node.value.clone())
+-                .filter(|v| !v.is_empty())
+-            {
++            // Only the raw AXValue is evidence. The display value can contain
++            // placeholder text and whitespace normalization. Empty is a value;
++            // an unavailable AXValue is represented by absence.
++            if let Some(value) = node.value_state.clone() {
+                 entry["value"] = serde_json::Value::String(value);
++                entry["value_exact"] = serde_json::Value::Bool(true);
+             }
+             if let Some(desc) = node.value_description.clone() {
+                 entry["value_description"] = serde_json::Value::String(desc);
+@@ -1184,7 +1181,7 @@ mod tests {
+             None,
+             None,
+         )];
+-        nodes[0].value = Some("i love u".into());
++        nodes[0].value_state = Some("i love u".into());
+         let entry = &build_elements_array(&nodes)[0];
+         assert_eq!(entry["label"], "Compose message", "label stays the title");
+         assert_eq!(
+@@ -1270,22 +1267,14 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn elements_value_state_falls_back_to_string_value() {
+-        // String-valued elements keep their `value` even with no value_state.
+-        let mut nodes = vec![node(Some(0), "AXComboBox", None, 0, None, None)];
+-        nodes[0].value = Some("Search".into());
+-        let entry = &build_elements_array(&nodes)[0];
+-        assert_eq!(entry["value"], "Search");
+-    }
+-
+-    #[test]
+-    fn elements_omit_empty_value() {
+-        // An empty AXValue must not emit a `value` field (matches the other
+-        // optional fields' omit-when-absent contract).
+-        let mut nodes = vec![node(Some(0), "AXButton", Some("OK"), 0, None, None)];
+-        nodes[0].value = Some(String::new());
+-        let entry = &build_elements_array(&nodes)[0];
+-        assert!(entry.get("value").is_none(), "empty value must be omitted");
++    fn elements_preserve_raw_values_and_never_substitute_placeholders() {
++        let mut nodes = vec![node(Some(0), "AXTextField", Some("Proof"), 0, None, None)];
++        nodes[0].value = Some("Display placeholder".into());
++        assert!(build_elements_array(&nodes)[0].get("value").is_none());
++        for value in ["", "  ", "  東京 🐟  ", "00123", "\tline\n"] {
++            nodes[0].value_state = Some(value.into());
++            assert_eq!(build_elements_array(&nodes)[0]["value"], value);
++        }
+     }
+ 
+     #[test]
