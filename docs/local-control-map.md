@@ -1,5 +1,28 @@
 # Local Control refactor wayfinder
 
+## Mac/Linux accuracy and background audit
+
+2026-09-22: [comparison and implementation order](audits/2026-09-22/native-platform-comparison/README.md)
+checks the supplied Layers 3–4 report against installed reference SDK/docs and
+Mako's pinned native source. Keep accuracy as a release constraint and measure
+performance per independently verified complete job.
+
+Four source-derived protocol probes reproduced Linux incompatibilities without
+sending input: strict locators always refuse the driver's incomplete trees;
+exact editable-value proof is missing; the foreground guard requires an app flag
+Linux always returns false; native capability help asserts background routes
+without backend evidence. These are not Linux GUI test results. Mac acceptance
+and the previous native 995/995 typing result do not establish Linux/browser parity.
+
+Priorities: driver-owned platform/focus/value/scope contracts; a reproducible
+isolated Linux desktop and packaged runtime; durable ownership/action recovery;
+broader child-tab attribution; then measured readiness/API improvements.
+For shared Mac/regular-profile browsers, preserve real popup semantics by default.
+The reference's popup interception sometimes returns a substitute window object;
+copying it universally would trade website correctness for background behavior.
+Cloud Linux should isolate desktops per job so popup focus stays within the job.
+These are audited next steps, not implemented or deployed changes.
+
 ## Extension workflow validation and release
 
 2026-09-22: implementation is in `/Users/kashyab/mako-control-rollout`.
