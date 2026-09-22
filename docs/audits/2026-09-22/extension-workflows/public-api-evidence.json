@@ -1,0 +1,137 @@
+{
+  "status": "passed",
+  "cells": [
+    {
+      "milliseconds": 1735,
+      "bytes": 755,
+      "image": false
+    },
+    {
+      "milliseconds": 1523,
+      "bytes": 16238,
+      "image": true
+    },
+    {
+      "milliseconds": 1310,
+      "bytes": 535,
+      "image": false
+    },
+    {
+      "milliseconds": 1286,
+      "bytes": 539,
+      "image": false
+    },
+    {
+      "milliseconds": 1455,
+      "bytes": 565,
+      "image": false
+    },
+    {
+      "milliseconds": 1240,
+      "bytes": 545,
+      "image": false
+    },
+    {
+      "milliseconds": 1277,
+      "bytes": 555,
+      "image": false
+    },
+    {
+      "milliseconds": 1164,
+      "bytes": 936,
+      "image": false
+    },
+    {
+      "milliseconds": 790,
+      "bytes": 133,
+      "image": false
+    },
+    {
+      "milliseconds": 302,
+      "bytes": 28652,
+      "image": true
+    },
+    {
+      "milliseconds": 42,
+      "bytes": 1453,
+      "image": false
+    },
+    {
+      "milliseconds": 11,
+      "bytes": 73,
+      "image": false
+    },
+    {
+      "milliseconds": 229,
+      "bytes": 52,
+      "image": false
+    },
+    {
+      "milliseconds": 277,
+      "bytes": 52,
+      "image": false
+    },
+    {
+      "milliseconds": 352,
+      "bytes": 52,
+      "image": false
+    },
+    {
+      "milliseconds": 224,
+      "bytes": 38,
+      "image": false
+    },
+    {
+      "milliseconds": 177,
+      "bytes": 38,
+      "image": false
+    },
+    {
+      "milliseconds": 185,
+      "bytes": 38,
+      "image": false
+    },
+    {
+      "milliseconds": 180,
+      "bytes": 38,
+      "image": false
+    },
+    {
+      "milliseconds": 7,
+      "bytes": 31,
+      "image": false
+    }
+  ],
+  "help": {
+    "fullBytes": 4645,
+    "focusedBytes": 935
+  },
+  "scoped": [
+    {
+      "length": 5,
+      "billingUnchanged": true,
+      "matched": true
+    },
+    {
+      "length": 9,
+      "billingUnchanged": true,
+      "matched": true
+    },
+    {
+      "length": 1309,
+      "billingUnchanged": true,
+      "matched": true
+    }
+  ],
+  "native": {
+    "value": "native-v2",
+    "screenshot": true,
+    "persistentHandle": true
+  },
+  "page": {
+    "value": "{\"shipping\":\"long-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-end\",\"billing\":\"untouched\",\"events\":[\"00123\",\"  東京 🐟  \",\"long-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-end\"]}",
+    "screenshot": true,
+    "persistentHandle": true
+  },
+  "frontmostUnchanged": true
+}

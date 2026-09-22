@@ -1,0 +1,19 @@
+
+> mako@0.0.1 control:test
+> npm test --workspace @mako/control
+
+
+> @mako/control@0.1.0 test
+> npm run -s build && node test/artifacts.mjs && node test/browser-observation.mjs && node test/control-contract.mjs && node test/control-plane.mjs && node test/client.mjs && node test/projection.mjs && node test/reference.mjs && node test/steps.mjs && node test/policy.mjs && node test/task-state.mjs
+
+artifacts ok
+browser observation tests passed
+control contract ok
+control plane ok
+Control client: exact assertions, ambiguity, incomplete reads, compact output and snapshot-independent diffs passed
+Fresh scoped locators: unique dispatch, renewed refs, ambiguity and partial-coverage refusal passed
+projection ok
+reference ok
+steps ok
+policy ok
+task state ok
