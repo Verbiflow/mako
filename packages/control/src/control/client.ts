@@ -381,7 +381,7 @@ export class AppHandle {
 }
 
 export type OpenTabOptions = {
-  browser: string
+  browser?: string
   url?: string
   background?: boolean
   disposition?: "tab" | "window"

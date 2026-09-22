@@ -1,6 +1,7 @@
-import { desktop } from "@/state/desktop"
+import { CopyGitContextButton, GitConflictFooter } from "@/components/inspector/git-conflict-footer"
 import {
   useCallback,
+  useId,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -16,7 +17,7 @@ import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronRightIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
 import { ThinkingOrb } from "thinking-orbs"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import {
@@ -167,11 +168,7 @@ export function CommitBox({
   const openModelSettings = () =>
     window.dispatchEvent(new CustomEvent("mako:settings", { detail: "commits" }))
 
-  if (operation || conflicts.length) return <div data-commit-box className="shrink-0 border-t border-hairline p-3 text-label">
-    <p className="font-medium">{conflicts.length ? `${conflicts.length} conflicted ${conflicts.length === 1 ? "file" : "files"}` : `Ready to continue ${operation}`}</p>
-    <p className="mt-1 text-muted-foreground">{conflicts.length ? "Resolve the conflicts in your editor, then stage each file above." : "The conflicts are staged. Continue to finish the operation."}</p>
-    <div className="mt-2 flex max-h-24 flex-col overflow-auto">{conflicts.map(file => <button key={file.path} className="truncate py-1 text-left text-foreground hover:underline" onClick={() => void desktop.openInEditor(`${cwd}/${file.path}`)}>{file.path}</button>)}</div>
-  </div>
+  if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} />
 
   return (
     <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} className="shrink-0 border-t border-hairline p-3">
@@ -490,8 +487,21 @@ export function GitRemoteNotice({ cwd, branch }: { cwd: string; branch: string }
   const conflicts = useSession(s => s.git?.files.some(file => file.status === "conflicted") ?? false)
   if (state.kind !== "failed") return null
   if (state.reason === "incoming" && behind === 0 || state.reason === "conflicts" && !conflicts) return null
-  return <div role="status" className="px-2.5 pb-2 text-label text-muted-foreground">
-    <p>{state.message}</p>
-    {state.detail ? <details className="mt-1"><summary className="cursor-pointer">Git details</summary><pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-label">{state.detail}</pre></details> : null}
+  return <GitRemoteProblem key={`${state.message}:${state.detail ?? ""}`} message={state.message} detail={state.detail} copyContext={state.reason === "untracked"} keepEdits={state.reason === "dirty"} />
+}
+
+function GitRemoteProblem({ message, detail, copyContext, keepEdits }: { message: string; detail?: string; copyContext: boolean; keepEdits: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const detailsId = useId()
+  return <div data-git-remote-notice className="px-2.5 py-1.5 text-label text-muted-foreground">
+    <div className="flex min-h-6 items-start gap-2">
+      {detail ? <button type="button" className="flex min-h-6 min-w-0 flex-1 items-start gap-1.5 rounded-sm text-left hover:text-foreground focus-visible:outline focus-visible:outline-ring" aria-expanded={expanded} aria-controls={detailsId} title={expanded ? "Hide Git details" : "Show Git details"} onClick={() => setExpanded(value => !value)}>
+        <ChevronRightIcon className={cn("mt-1 size-3.5 shrink-0 text-faint", expanded && "rotate-90")} />
+        <span className="min-w-0 py-0.5 leading-5">{message}</span>
+      </button> : <p role="status" className="min-w-0 flex-1 py-0.5 leading-5">{message}</p>}
+      {copyContext ? <CopyGitContextButton /> : null}
+    </div>
+    {expanded && detail ? <pre id={detailsId} className="my-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline bg-raised p-2.5 font-mono text-label leading-relaxed">{detail}</pre> : null}
+    {keepEdits ? <Action size="xs" className="mt-1" onClick={() => void git.remote("merge_autostash")}>Pull and keep my edits</Action> : null}
   </div>
 }

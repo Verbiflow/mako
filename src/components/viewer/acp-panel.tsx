@@ -9,6 +9,8 @@ import { TransferStatus } from "./transfer-status"
 import { LiveActionStatus } from "./live-action-status"
 import { loadEarlierLive } from "@/state/live-recovery"
 import { sendTo } from "@/state/acp-queue"
+import { prefsStore, setPref, usePrefs } from "@/state/prefs"
+import { RecoveryNotice } from "./recovery-notice"
 import { useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
@@ -136,7 +138,9 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
         <div className="mx-auto flex w-full max-w-content flex-col gap-4 px-6 py-6">
           <p className="pt-8 text-center text-ui leading-relaxed text-faint">
             {session?.status === "failed"
-              ? session.error || "The provider could not open this session. Your saved message is preserved below."
+              ? requests.some((request) => request.status === "failed" || request.status === "uncertain")
+                ? "Saved conversation"
+                : session.error || "The provider could not open this session."
               : session?.connection === "disconnected"
                 ? "Saved conversation. The provider is not currently connected."
                 : running
@@ -379,16 +383,142 @@ function QuestionPermission({
   )
 }
 
-export function RetainedRequests() {
-  const requests = useAcp((state) => {
-    const current = activeAcp(state)
-    return current ? recoverableRequests(current) : EMPTY_QUEUE
-  }, (left, right) => left.length === right.length && left.every((request, index) => request === right[index]))
-  if (!requests.length) return null
+export function RetainedRequests({ history = false }: { history?: boolean }) {
+  const requests = useAcp(
+    (state) => {
+      const current = activeAcp(state)
+      return current ? recoverableRequests(current) : EMPTY_QUEUE
+    },
+    (left, right) =>
+      left.length === right.length &&
+      left.every((request, index) => request === right[index])
+  )
+  const conversation = useAcp((state) => activeLiveAcp(state)?.key)
+  const allRequests = useAcp(
+    (state) => activeLiveAcp(state)?.requests ?? EMPTY_QUEUE
+  )
+  const latest = useMemo(() => {
+    const completed = allRequests.findLastIndex(
+      (request) => request.status === "completed"
+    )
+    const candidates = new Set(
+      allRequests.slice(completed + 1).map((request) => request.id)
+    )
+    return requests.findLast((request) => candidates.has(request.id))
+  }, [allRequests, requests])
+  const dismissed = usePrefs((state) => state.dismissedRecoveryRequests)
+  if (history)
+    return requests.length ? (
+      <details className="px-2 py-2 text-label">
+        <summary className="pressable cursor-pointer">
+          Saved messages ({requests.length})
+        </summary>
+        {requests.map((request) => (
+          <RequestRecovery key={request.id} request={request} />
+        ))}
+      </details>
+    ) : null
+  if (
+    !conversation ||
+    !latest ||
+    dismissed[`${conversation}:${latest.id}`] === latest.status
+  )
+    return null
   return (
-    <div className="max-h-48 shrink-0 overflow-y-auto border-t border-hairline px-4 text-label text-muted-foreground">
-      {requests.map((request) => <RequestRecovery key={request.id} request={request} />)}
-    </div>
+    <RequestNotice
+      key={`${conversation}:${latest.id}`}
+      request={latest}
+      earlier={requests.filter((request) => request.id !== latest.id)}
+      onDismiss={() => {
+        setPref("dismissedRecoveryRequests", {
+          ...prefsStore.get().dismissedRecoveryRequests,
+          [`${conversation}:${latest.id}`]: latest.status,
+        })
+      }}
+    />
+  )
+}
+
+function RequestNotice({
+  request,
+  earlier,
+  onDismiss,
+}: {
+  request: LiveRequest
+  earlier: LiveRequest[]
+  onDismiss(): void
+}) {
+  const [review, setReview] = useState<LiveRequest | null>(null)
+  const [history, setHistory] = useState(false)
+  const title =
+    request.status === "uncertain"
+      ? "Message delivery is unconfirmed"
+      : request.status === "interrupted"
+        ? "Message interrupted"
+        : request.failure === "rate-limited"
+          ? "Model temporarily unavailable"
+          : request.failure === "auth"
+            ? "Sign-in required"
+            : request.failure === "context-exhausted"
+              ? "Conversation context is full"
+              : request.failure === "resume-failed"
+                ? "Could not reopen this session"
+                : "Message could not be completed"
+  return (
+    <RecoveryNotice
+      title={title}
+      description={
+        request.status === "uncertain"
+          ? "Check the conversation before sending again."
+          : request.failure === "rate-limited"
+            ? "Your message is saved. Choose another model or try again later."
+            : "Your message is saved. Review the details before trying again."
+      }
+      onDismiss={onDismiss}
+      actions={
+        <>
+          <button
+            type="button"
+            className="pressable rounded-md border border-hairline px-2.5 py-1 text-label hover:bg-fill-hover"
+            onClick={() => setReview(review ? null : request)}
+            aria-expanded={Boolean(review)}
+          >
+            {review ? "Hide details" : "Review message"}
+          </button>
+          {earlier.length ? (
+            <button
+              type="button"
+              className="pressable px-1 py-1 text-label text-muted-foreground hover:text-foreground"
+              onClick={() => setHistory(!history)}
+              aria-expanded={history}
+            >
+              Earlier messages ({earlier.length})
+            </button>
+          ) : null}
+        </>
+      }
+    >
+      {history ? (
+        <div className="mb-2 space-y-1">
+          {[...earlier].reverse().map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className="pressable block w-full truncate rounded px-2 py-1 text-left text-label text-muted-foreground hover:bg-fill-hover"
+              onClick={() => {
+                setReview(item)
+                setHistory(false)
+              }}
+            >
+              {item.displayText ?? item.text}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {review ? (
+        <RequestRecovery key={review.id} request={review} expanded />
+      ) : null}
+    </RecoveryNotice>
   )
 }
 
@@ -397,7 +527,7 @@ function interruptedLabel(reason: InterruptionReason, provider: string): string 
   return reason === "stopped" ? "Stopped message" : turnStopLabel(reason, provider)
 }
 
-function RequestRecovery({ request }: { request: LiveRequest }) {
+function RequestRecovery({ request, expanded = false }: { request: LiveRequest; expanded?: boolean }) {
   const text = request.displayText ?? request.text
   const { copy, copied } = useCopy(text)
   const conversationId = useAcp((state) => activeLiveAcp(state)?.key ?? null)
@@ -440,14 +570,14 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
     setResent(accepted ? "sent" : null)
   }
   return (
-    <details className="py-2" data-request-recovery={request.id} data-failure={request.failure}>
-      <summary className="pressable cursor-pointer">{continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message</summary>
-      {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
+    <details open={expanded || undefined} className="py-2" data-request-recovery={request.id} data-failure={request.failure}>
+      <summary className={expanded ? "sr-only" : "pressable cursor-pointer"}>{continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message</summary>
+      {failure && request.failure !== "network" && request.failure !== "rate-limited" ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
       {request.error ? <p className={cn("mt-2", failure && "text-faint")}>{request.error}</p> : null}
       <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
       {request.status === "failed" && request.failure === "context-exhausted" ? <CompactionControl requestId={request.id} /> : null}
       {recovered ? <p className="mt-2">Compaction completed. You can send the saved message again.</p> : null}
-      <div className="mt-2 flex items-center gap-3">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         {retriable && conversationId ? (
           <button type="button" onClick={() => void resend()} disabled={resent !== null || !idle} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
             {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : "Send again"}
@@ -458,7 +588,7 @@ function RequestRecovery({ request }: { request: LiveRequest }) {
             onClick={() => {
               setResent("sending")
               void acp.recoverFresh(conversationId, request.id).then((accepted) => setResent(accepted ? "sent" : null))
-            }}>Start new thread with saved message</button>
+            }}>Use in new thread</button>
         ) : null}
         <button type="button" onClick={() => void copy()} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
       </div>
