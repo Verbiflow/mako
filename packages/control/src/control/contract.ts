@@ -308,7 +308,7 @@ export function planControlOperation(
       status: "foreground-required",
       route: "foreground",
       reason:
-        "An inactive native application does not dispatch Command menu key equivalents. Use an exact page route, semantic control, command adapter, or an explicitly foreground workflow.",
+        "The native driver has not passed background Command delivery acceptance. Use an exact page route, semantic control, command adapter, or an explicitly foreground workflow.",
     }
   if (!capabilities)
     return {

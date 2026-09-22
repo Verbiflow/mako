@@ -45,13 +45,13 @@ export const ControlProgramRequestSchema = z
       .min(1)
       .max(100_000)
       .optional()
-      .describe("Async JavaScript body; await every action."),
+      .describe('Async JavaScript, e.g. {"source":"return 1"}.'),
     cell: z
       .number()
       .int()
       .positive()
       .optional()
-      .describe("Running cell to collect without replay."),
+      .describe('Numeric continuation ID, e.g. {"cell":1}.'),
   })
   .refine(
     (request) =>
@@ -59,6 +59,12 @@ export const ControlProgramRequestSchema = z
     { message: "Pass exactly one of source or cell" }
   )
   .strict()
+/** Publish the XOR as well as enforcing it: Zod refinements are not JSON Schema. */
+export const ControlProgramInputSchema = {
+  ...z.toJSONSchema(ControlProgramRequestSchema, { io: "input" }),
+  oneOf: [{ required: ["source"] }, { required: ["cell"] }],
+}
+
 export type ControlProgramRequest = z.infer<typeof ControlProgramRequestSchema>
 
 export type ControlProgramOutput =
@@ -123,8 +129,10 @@ export class ControlProgramRuntime {
     const retained = this.cells.keys().next().value
     if (retained !== undefined)
       return Promise.reject(
-        new Error(
-          `Control cell ${String(retained)} must be collected before another program starts. Call this same exec tool with {cell:${String(retained)}}.`
+        new ControlFault(
+          "cell-pending",
+          `Control cell ${String(retained)} must be collected before another program starts. Call this same exec tool with ${JSON.stringify({ cell: retained })}.`,
+          "not-dispatched"
         )
       )
     const active = AbortSignal.any([signal, this.stopping.signal])
@@ -148,7 +156,7 @@ export class ControlProgramRuntime {
             text: JSON.stringify({
               cell: cellId,
               status: "running",
-              wait: "Call this same exec tool with {cell} to receive the result. The program continues without another model turn.",
+              wait: `Call this same exec tool with ${JSON.stringify({ cell: cellId })} to collect this program. Do not resubmit its source.`,
             }),
           },
         ])
@@ -173,8 +181,10 @@ export class ControlProgramRuntime {
     const cell = this.cells.get(cellId)
     if (!cell)
       return Promise.reject(
-        new Error(
-          `Control cell ${String(cellId)} is not retained; it was already collected or belongs to another MCP client.`
+        new ControlFault(
+          "cell-not-found",
+          `Control cell ${String(cellId)} is not retained; it was already collected or belongs to another MCP client. No program was started. Check the original result or client before considering another mutation.`,
+          "not-dispatched"
         )
       )
     return new Promise((resolve, reject) => {

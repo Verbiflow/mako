@@ -1,6 +1,7 @@
 export {
   ControlProgramRuntime,
   ControlProgramRequestSchema,
+  ControlProgramInputSchema,
   PROGRAM_TIME_LIMIT_MS,
   PROGRAM_YIELD_MS,
   type ControlProgramRequest,

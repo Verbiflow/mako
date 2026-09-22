@@ -260,11 +260,15 @@ export class ControlHandle {
           `Assertion ambiguous: ${matches.length} observed ${wanted.role} ${JSON.stringify(wanted.name)}`
         )
       const node = matches[0]
+      if (node?.valueExact === false &&
+          (wanted.value !== undefined || wanted.states?.value !== undefined))
+        throw new Error("Exact value unavailable: this native driver returned display-normalized text. An exact-value-capable driver is required; no input was replayed.")
       const matched = wanted.absent
         ? !node && view.coverage.complete && view.coverage.textComplete
         : node !== undefined &&
           view.coverage.textComplete &&
-          (wanted.value === undefined || node.value === wanted.value) &&
+          (wanted.value === undefined ||
+            (node.valueExact !== false && node.value === wanted.value)) &&
           Object.entries(wanted.states ?? {}).every(
             ([key, value]) => node[key] === value
           )

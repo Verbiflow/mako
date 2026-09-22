@@ -14,8 +14,7 @@ import type { JsonObject } from "../json.js"
  * modifiers — reports `escalation.reason: delivery_failed` and changes
  * nothing in the renderer, whatever the driver's own description promises
  * about the auth-message envelope. On a Cocoa field (F3 of the audit)
- * `type_text` lands, a Cmd chord does not (an inactive application does
- * not dispatch menu key equivalents), and a Shift+arrow chord lands while
+ * `type_text` lands, a Cmd chord did not with that driver, and a Shift+arrow chord lands while
  * the driver still reports it `delivery_failed`. So the driver's own
  * delivery verdict on keys is a hint, the read-back is the truth, and the
  * wrapper says both (`keyRouteAdvice`).
@@ -49,7 +48,7 @@ export const BACKGROUND_INPUT_LADDER = [
     route: "pid-keyboard",
     action:
       "type_text, press_key, hotkey (delivery_mode background, the default)",
-    when: "Native Cocoa fields only, and never a Cmd chord: an inactive application does not dispatch menu key equivalents, so Mako refuses a background Cmd chord before it is posted. A Chromium or Electron renderer that is not frontmost drops every posted key. The driver cannot read a key back; use act('press_key', …) so the window delta says whether it landed, and switch route when it did not.",
+    when: "Native Cocoa fields only. Background Cmd chords remain refused pending exact-window keyboard acceptance; candidate driver success on a fixture does not establish support across applications. A Chromium or Electron renderer that is not frontmost drops every posted key. The driver cannot read a key back; use act('press_key', …) so the window delta says whether it landed, and switch route when it did not.",
   },
   {
     route: "menu",
@@ -169,8 +168,8 @@ function isBackgroundCmdChord(action: string, args: JsonObject): boolean {
  * What Mako refuses before the driver is asked. Fronting is a declared
  * step: `invoke_menu`, `bring_to_front` and `delivery_mode: "foreground"`
  * need `foreground: true` on the call. A Cmd chord posted to a backgrounded
- * application is a menu key equivalent that an inactive application never
- * dispatches (measured on Cocoa and on Electron), so it is refused with
+ * application failed with the installed driver in the original acceptance
+ * tests, so it remains refused with
  * the routes that work rather than posted and waited on for a second;
  * `force: true` posts it anyway for an application whose own key handler
  * reads it.
@@ -195,7 +194,7 @@ export function refusalFor(
     return {
       code: "background-chord",
       message:
-        "A Cmd chord posted to an application that is not frontmost is a menu key equivalent, and an inactive application does not dispatch those (measured on Cocoa and Electron fields: Cmd+A changed nothing). Nothing was posted. Use the menu item: invoke_menu({pid, window_id, path, foreground: true}); for text, fill or set_value; for a renderer, its page route; for an application whose own key handler reads the chord, pass force: true.",
+        "Background Command delivery has not passed exact-window acceptance for the installed driver. Nothing was posted. Use the menu item: invoke_menu({pid, window_id, path, foreground: true}); for text, fill or set_value; for a renderer, its page route; for an application whose own key handler reads the chord, pass force: true.",
     }
   return undefined
 }
