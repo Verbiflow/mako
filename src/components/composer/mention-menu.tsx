@@ -1,5 +1,7 @@
+import { useGitPush } from "@/state/git-push"
+import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { BookOpenIcon, FileIcon, PlugIcon, SlashIcon } from "lucide-react"
+import { GitMergeIcon, BookOpenIcon, FileIcon, PlugIcon, SlashIcon } from "lucide-react"
 import { harnessTitle } from "@/components/composer/harness-title"
 import { SkillSourceMark } from "@/components/composer/reference-chip"
 import { Chip, Eyebrow, Keys } from "@/components/ui/kit"
@@ -85,6 +87,9 @@ export function MentionMenu({
   const driver = useProviders((state) => state.profiles[harness]?.transport)
   const transports = mcpTransportsFor(driver)
   const workspaceCwd = useSession((state) => state.meta?.cwd ?? "")
+  const git = useSession(state => state.git)
+  const remote = useGitPush(git?.root ?? "", git?.branch ?? "")
+  const blockedPull = remote.kind === "failed" && remote.reason === "untracked"
   const capabilities = kind !== "@"
   const skillsSnapshot = useSkills((state) => state.snapshot)
   const skillsStatus = useSkills((state) => state.status)
@@ -108,7 +113,15 @@ export function MentionMenu({
 
   const referenceGroups = useMemo<Group[]>(() => {
     if (capabilities) return []
+    const conflicts = git?.files.filter(file => file.status === "conflicted").length ?? 0
     const candidates = [
+      ...(git?.root && (conflicts || blockedPull) ? [{
+        value: GIT_CONFLICT_CONTEXT,
+        title: "Git conflicts",
+        hint: blockedPull ? `${workspaceName(git.root)} · incoming changes` : `${workspaceName(git.root)} · ${conflicts} ${conflicts === 1 ? "file" : "files"}`,
+        icon: <GitMergeIcon className="size-3.5" />,
+        key: `git conflicts merge pull blocked untracked ${git.root}`,
+      }] : []),
       ...threads.map((thread) => ({
         value: threadToken(thread.harness, threadReferenceId(thread)),
         title: thread.title ?? "Untitled conversation",
@@ -135,8 +148,8 @@ export function MentionMenu({
       })),
     ]
     const rows = rankReferences(candidates, query)
-    return rows.length ? [{ label: "Conversations and files", rows }] : []
-  }, [capabilities, files, query, threads])
+    return rows.length ? [{ label: "Context", rows }] : []
+  }, [blockedPull, capabilities, files, git, query, threads])
 
   const capabilityGroups = useMemo<Group[]>(() => {
     if (!capabilities) return []
@@ -270,7 +283,7 @@ export function MentionMenu({
 
   const title = capabilities
     ? `Skills and MCP for ${harnessTitle(harness)}`
-    : "Conversations and files"
+    : "Add context"
 
   let index = -1
   return (

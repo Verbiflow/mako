@@ -24,6 +24,7 @@ import {
 import { ConversationRelations } from "@/components/viewer/conversation-relations"
 import { TransferStatus } from "@/components/viewer/transfer-status"
 import { LiveActionStatus } from "@/components/viewer/live-action-status"
+import { RetainedRequests } from "@/components/viewer/acp-panel"
 import { CaptureNotice } from "@/components/viewer/capture-notice"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 
@@ -58,6 +59,7 @@ export function LiveComposerControls() {
         >
           {usage ? <ContextReading usage={usage} /> : null}
           <CompactionControl onStart={() => setOpen(false)} />
+          <RetainedRequests history />
           <TransferStatus history />
           <LiveActionStatus history />
           {connection === "disconnected" ? <CaptureNotice /> : null}

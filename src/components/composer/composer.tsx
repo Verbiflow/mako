@@ -1,3 +1,5 @@
+import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
+import { gitConflictAttachment } from "@/state/git-conflicts"
 import { AttachmentStrip } from "./attachments"
 import { useComposerClipboard } from "./composer-clipboard"
 import { InterruptedSends } from "./interrupted-sends"
@@ -554,7 +556,14 @@ export function Composer() {
   const pick = useCallback(
     (value: string) => {
       if (!mention) return
-      const next = replaceMention(draft, mention, value)
+      let replacement = value
+      if (value === GIT_CONFLICT_CONTEXT) {
+        const file = gitConflictAttachment()
+        if (!file) { toast.info("No conflicts remain in the selected repository."); return }
+        replacement = attachments.add([file])
+        if (!replacement) return
+      }
+      const next = replaceMention(draft, mention, replacement)
       update(next.text)
       if (value.startsWith("@thread:")) {
         prefetchThreadReferences(value, threadsStore.get().threads)
@@ -562,7 +571,7 @@ export function Composer() {
       setMention(null)
       focusComposerSoon(textarea, next.caret)
     },
-    [draft, mention, update]
+    [attachments, draft, mention, update]
   )
 
   const stopCurrentTurn = useCallback(() => actions.stopCurrentTurn(), [])

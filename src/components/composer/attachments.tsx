@@ -1,4 +1,4 @@
-import { FileIcon, FilmIcon, XIcon } from "lucide-react"
+import { PaperclipIcon, FileIcon, FilmIcon, XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   formatBytes,
@@ -27,7 +27,11 @@ export function AttachmentStrip({
   return (
     <div className="flex shrink-0 gap-2 overflow-x-auto px-4 pt-4 pb-1" aria-label="Attachments">
       {items.map((item) => (
-        <Thumbnail key={item.id} item={item} onRemove={onRemove} />
+        item.contextLabel ? <div key={item.id} title={item.error ?? (item.pending ? "Preparing context…" : item.name)} className={cn("flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-hairline bg-raised pl-2 text-label", item.pending && "opacity-60", item.error && "text-negative")}>
+          <PaperclipIcon className="size-3 text-muted-foreground" />
+          <span className="max-w-64 truncate">{item.contextLabel}</span>
+          <button type="button" aria-label={`Remove ${item.name}`} className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-ring" onMouseDown={event => event.preventDefault()} onClick={() => onRemove(item.id)}><XIcon className="size-3" /></button>
+        </div> : <Thumbnail key={item.id} item={item} onRemove={onRemove} />
       ))}
     </div>
   )
