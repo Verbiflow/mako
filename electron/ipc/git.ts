@@ -30,6 +30,7 @@ export interface GitIpcContext {
 export function installGitIpc(context: GitIpcContext): void {
   const { withHost } = context
   configureKiriCache(join(app.getPath("userData"), "kiri-analysis-cache"))
+  registerIpc("mako:git-select-repository", (_event, cwd: string, root: string) => withHost((host) => host.selectGitRepository(cwd, root)))
   registerIpc("mako:git-status", () => withHost((host) => host.gitStatus()))
   registerIpc("mako:git-diff", (_event, path: string) =>
     withHost((host) => host.gitDiff(path))
@@ -53,13 +54,13 @@ export function installGitIpc(context: GitIpcContext): void {
       withHost(async (host) => {
         if (options?.amend) await host.gitCommit(message, options)
         else {
-          await generation.commit(hostClient(), host.workspace, message)
+          await generation.commit(hostClient(), host.gitWorkspace, message)
           await host.pushGit()
         }
       })
   )
   registerIpc("mako:git-push", (_event, input: GitPushInput) => withHost((host) => {
-    if (host.workspace !== input.cwd) throw new Error("The project changed before pushing. Select the intended project and try again.")
+    if (host.gitWorkspace !== input.cwd) throw new Error("The project changed before pushing. Select the intended project and try again.")
     return host.gitPush(input.branch)
   }))
   registerIpc("mako:git-log", (_event, limit?: number) =>
@@ -135,7 +136,7 @@ export function installGitIpc(context: GitIpcContext): void {
     "mako:git-generate-message",
     (_event, input: CommitGenerationInput) =>
       withHost((host) => {
-        if (host.workspace !== input.cwd)
+        if (host.gitWorkspace !== input.cwd)
           throw new Error(
             "The workspace changed. Refresh Changes before drafting a message."
           )

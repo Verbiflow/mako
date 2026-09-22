@@ -85,7 +85,6 @@ export function installSessionIpc(context: SessionIpcContext): void {
       return {
         id: host.id,
         session: host.state(),
-        git: await host.gitStatus(),
         capabilities: host.capabilities(),
       }
     })

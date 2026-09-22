@@ -1,3 +1,4 @@
+import type { ConversationRoutingResult } from "../shared-conversations.js"
 import { ipcMain } from "electron"
 import { withHostClient } from "../host-client.js"
 import { breadcrumb } from "../crash.js"
@@ -6,6 +7,12 @@ import { hostCallInputs } from "../contracts/host-call-inputs.js"
 type HostChannel = keyof typeof hostCallInputs
 type HostArguments<Channel extends HostChannel> =
   (typeof hostCallInputs)[Channel]["_output"]
+let routeConversation: ((channel: string, args: unknown[]) => Promise<ConversationRoutingResult>) | undefined
+
+export function installConversationRouting(route: NonNullable<typeof routeConversation>): void {
+  routeConversation = route
+}
+
 const calls = new Map<string, (args: unknown[]) => Promise<string>>()
 
 /** Web replies are encoded here so Electron keeps its original structured values. */
@@ -27,6 +34,8 @@ export function registerIpc<Channel extends HostChannel, Result>(
     // A refused call is returned to the renderer. Recording it as a crash
     // filled the local store with expected validation errors and hid the
     // failures that actually killed a process.
+    const routed = await routeConversation?.(channel, parsed)
+    if (routed?.handled) return routed.value
     return await listener(undefined, ...parsed)
   }
   calls.set(channel, async (args) =>
