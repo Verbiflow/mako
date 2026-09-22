@@ -2,6 +2,8 @@
 .skills/
 logs
 *.log
+docs/audit/
+docs/meta-harness
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
