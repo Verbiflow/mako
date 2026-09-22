@@ -1,3 +1,4 @@
+import { resolveExecutable } from "../../executable.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import { codexWireSettings } from "./settings.js"
 import {
@@ -34,6 +35,7 @@ function overrides(args: readonly string[]): Map<string, string> {
 
 export const codexNativeRunner: NativeRunner = {
   provider: "codex",
+  available: () => resolveExecutable("codex") !== null,
   fastMode: "supported",
   carries: CARRIES,
   // The legacy speed name becomes the request tier here, so what the command
