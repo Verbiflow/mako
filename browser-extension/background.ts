@@ -118,6 +118,7 @@ chrome.debugger.onEvent.addListener((source, method, params) =>
 chrome.debugger.onDetach.addListener((source, reason) =>
   router?.detached(source, reason)
 )
+chrome.tabs.onRemoved.addListener((tabId) => router?.removed(tabId))
 chrome.runtime.onInstalled.addListener(() => void connect())
 chrome.runtime.onStartup.addListener(() => void connect())
 chrome.alarms.onAlarm.addListener((alarm) => {

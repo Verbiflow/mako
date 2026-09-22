@@ -238,11 +238,22 @@ export class ExtensionRouter {
         kind: "event",
         client: attached.client,
         method: "Target.detachedFromTarget",
-        params: { sessionId: id, targetId: attached.target.id },
+        params: { sessionId: id, targetId: attached.target.id, reason: reason ?? "unknown" },
       })
     }
-    if (reason === "target_closed" && source.targetId)
-      this.created.delete(source.targetId)
+    // Chromium also reports target_closed for a debugger security detach while
+    // the tab stays open. Ownership lasts until tabs.onRemoved, not onDetach.
+  }
+
+  removed(tabId: number): void {
+    for (const targets of [this.creating, this.created]) {
+      for (const [id, target] of targets) {
+        if (target.tabId !== tabId) continue
+        targets.delete(id)
+        this.emit({ kind: "event", client: target.client,
+          method: "Target.targetDestroyed", params: { targetId: id } })
+      }
+    }
   }
 
   async disconnect(client: string): Promise<void> {
