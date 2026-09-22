@@ -77,6 +77,20 @@ export const hostCallInputs = {
   ]),
   "mako:git-log": z.tuple([z.number().optional()]),
   "mako:git-push": z.tuple([z.object({ cwd: z.string(), branch: z.string() })]),
+  "mako:git-remote": z.tuple([
+    z.object({
+      head: z.string().optional(),
+      action: z.union([
+        z.literal("merge"),
+        z.literal("abort"),
+        z.literal("fetch"),
+        z.literal("pull"),
+        z.literal("continue"),
+      ]),
+      cwd: z.string(),
+      branch: z.string(),
+    }),
+  ]),
   "mako:git-select-repository": z.tuple([z.string(), z.string()]),
   "mako:git-stage": z.tuple([z.array(z.string())]),
   "mako:git-stage-all": z.tuple([]),
@@ -173,6 +187,31 @@ export const hostCallInputs = {
   "mako:live-child-cancel": z.tuple([z.string(), z.string()]),
   "mako:live-clear-queue": z.tuple([z.string()]),
   "mako:live-close": z.tuple([z.string()]),
+  "mako:live-continue": z.tuple([
+    z.string(),
+    z.string(),
+    z.string(),
+    z.string(),
+    z
+      .array(
+        z.object({
+          name: z.string(),
+          mimeType: z.string(),
+          size: z.number(),
+          data: z.string().optional(),
+          path: z.string().optional(),
+        })
+      )
+      .optional(),
+    z
+      .object({
+        model: z.string().optional(),
+        options: z
+          .record(z.string(), z.union([z.boolean(), z.string()]))
+          .optional(),
+      })
+      .optional(),
+  ]),
   "mako:live-delegate": z.tuple([
     z.string(),
     z.object({ id: z.string(), provider: z.string(), task: z.string() }),
@@ -322,6 +361,7 @@ export const hostCallInputs = {
           path: z.string().optional(),
         })
       ),
+      bindingId: z.string().optional(),
       tuning: z
         .object({
           model: z.string().optional(),
@@ -608,6 +648,7 @@ export const hostCallInputs = {
     z.object({ inline: z.boolean().optional() }).optional(),
   ]),
   "mako:thread-continuation-plan": z.tuple([z.string()]),
+  "mako:thread-continuation-resolve": z.tuple([z.string()]),
   "mako:thread-continue-with": z.tuple([
     z.string(),
     z.string(),

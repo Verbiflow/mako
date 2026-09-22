@@ -76,6 +76,7 @@ export interface TurnContinuation {
 }
 
 export interface LiveRequest {
+  targetBindingId?: string
   snapshots?: RunSnapshots
   tuning?: SessionSettings
   inputDigest?: string

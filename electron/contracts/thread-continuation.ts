@@ -1,30 +1,27 @@
+import type { LiveSnapshot } from "./live-conversations.js"
 import type { ThreadRef } from "@mako/sessions"
 import type { ExternalThreadActivity } from "./host-events-boot.js"
 import { heldReason } from "./session-hold.js"
 
-/**
- * How the next message reaches a catalogued conversation.
- *
- * One decision, made by the host from what only the host knows: which
- * drivers are installed, whether a driver can reopen a store, whether a
- * process already owns the file, and what the provider said about the store
- * itself. The renderer asks for the plan and follows it; the host refuses a
- * request that does not match it. Before this the renderer chose a transport
- * from provider-level flags served once at startup, and a stale flag did not
- * fail: it silently routed a reply to a different transport (a Cursor ACP
- * session went to `cursor-agent -p --resume`, which forked the store and
- * rejected the model).
- */
+/** Host-selected transport for a catalogued native session. */
 export type ContinuationPlan =
   | { transport: "attached"; provider: string; conversationId: string }
   | { transport: "live"; provider: string; nativeId: string }
   | { transport: "native"; provider: string }
   | { transport: "handoff"; provider: string; reason: string }
   | { transport: "refused"; reason: string }
+  | { transport: "unavailable"; reason: string }
+
+export type OwnerResolution<Snapshot = LiveSnapshot> =
+  | { kind: "attached"; conversationId: string; provider: string; snapshot: Snapshot; bindingId?: string }
+  | { kind: "unowned" }
+  | { kind: "unavailable"; reason: string }
+
+export type ContinuationResolution<Snapshot = LiveSnapshot> =
+  | Exclude<ContinuationPlan, { transport: "attached" }>
+  | { transport: "attached"; provider: string; conversationId: string; snapshot: Snapshot; bindingId?: string }
 
 export interface ContinuationInputs {
-  /** An existing conversation reachable through its Mako host. */
-  attached?: string | null
   /** The provider's live driver, if one is registered. */
   live: { available: boolean; canResume: boolean } | null
   /** The provider's headless CLI is installed. */
@@ -38,7 +35,7 @@ export interface ContinuationInputs {
 export function planContinuation(
   ref: ThreadRef,
   inputs: ContinuationInputs
-): ContinuationPlan {
+): Exclude<ContinuationPlan, { transport: "attached" }> {
   const provider = ref.harness
   if (ref.archived)
     return {
@@ -46,8 +43,6 @@ export function planContinuation(
       provider,
       reason: "This history lives only in Mako's archive; its CLI no longer has the session.",
     }
-  if (inputs.attached)
-    return { transport: "attached", provider, conversationId: inputs.attached }
   if (ref.resumeUnavailable)
     return { transport: "handoff", provider, reason: ref.resumeUnavailable }
   // Another Mako host has this session live. The installed app and a

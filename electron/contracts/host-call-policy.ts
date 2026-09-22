@@ -37,6 +37,7 @@ const reads = [
   "mako:thread-archives",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
+  "mako:thread-continuation-resolve",
   "mako:list-files",
   "mako:read-file",
   "mako:capabilities",
@@ -81,6 +82,7 @@ const reads = [
 const replays = [
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */
   "mako:live-prompt",
+  "mako:live-continue",
   /** `LiveConversations.start`: the conversation id; a second start returns the session. */
   "mako:live-start",
   /** `LiveTransfers.accept`: the transfer id; content is fingerprinted. */

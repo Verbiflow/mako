@@ -1,3 +1,4 @@
+import type { GitRemoteInput, GitRemoteResult } from "./git-workspace-search.js"
 import type {
   ThreadTarget,
   ThreadControls,
@@ -48,6 +49,7 @@ import type {
   ExternalEditor,
   ExternalThreadActivity,
   ContinuationPlan,
+  ContinuationResolution,
   FileContents,
   GitCommitEntry,
   GitCommitFile,
@@ -202,6 +204,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     unfollowThread: () => invokeTrustedHost<void>("mako:thread-unfollow"),
     harnessDescriptors: () =>
       invokeTrustedHost<HarnessDescriptor[]>("mako:harness-descriptors"),
+    resolveContinuation: (path: string) =>
+      invokeTrustedHost<ContinuationResolution>("mako:thread-continuation-resolve", path),
     continuationPlan: (path: string) =>
       invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
     rememberThreadMode: (path: string, modeId: string) =>
@@ -305,6 +309,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-snapshot", id),
+    liveContinue: (id: string, bindingId: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) =>
+      invokeTrustedHost<LiveSnapshot>("mako:live-continue", id, bindingId, requestId, text, attachments, tuning),
     livePrompt: (
       id: string,
       requestId: string,
@@ -535,6 +541,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<SearchResults>("mako:search", query, options),
 
     selectGitRepository: (cwd: string, root: string) => invokeTrustedHost<GitStatus>("mako:git-select-repository", cwd, root),
+    gitRemote: (input: GitRemoteInput) => invokeTrustedHost<GitRemoteResult>("mako:git-remote", input),
     gitStatus: () => invokeTrustedHost<GitStatus>("mako:git-status"),
     gitDiff: (path: string) =>
       invokeTrustedHost<GitDiff>("mako:git-diff", path),

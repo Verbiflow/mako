@@ -15,6 +15,8 @@ export const RUNTIME_PROTOCOL = 1
 export const RuntimeInfoSchema = z.object({
   protocol: z.literal(RUNTIME_PROTOCOL),
   instanceId: z.string().uuid(),
+  /** Stable local host identity for browser pending-message storage. */
+  storageScope: z.string().optional(),
   pid: z.number().int().positive(),
   version: z.string(),
   /** Executable content loaded by a development host; absent on older/packaged hosts. */
@@ -29,5 +31,5 @@ export const RuntimePacketSchema = z.discriminatedUnion("channel", [
 ])
 export const RuntimeReplySchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), value: z.json().optional() }),
-  z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE]).optional() }),
+  z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable"]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() }),
 ])

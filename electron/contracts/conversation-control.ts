@@ -8,6 +8,7 @@ export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
 export const TransferInputSchema = z.object({
+  bindingId: z.string().uuid().optional(),
   id: z.string().uuid(),
   provider: z.string().min(1),
   text: z.string().max(1_000_000),

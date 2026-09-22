@@ -1,7 +1,7 @@
 import type { ChatRole } from "./conversation-session.js"
 
 export type GitFileStatus =
-  "added" | "modified" | "deleted" | "renamed" | "untracked"
+  "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted"
 
 /** Cheap per-file entry. Contents are fetched on demand via `git:diff`. */
 export interface GitFile {
@@ -19,6 +19,16 @@ export type GitCommitFile = Pick<GitFile, "path" | "status" | "insertions" | "de
 export interface GitPushInput {
   cwd: string
   branch: string
+}
+
+export type GitRemoteAction = "fetch" | "pull" | "merge" | "continue" | "abort"
+export interface GitRemoteInput extends GitPushInput {
+  head?: string
+  action: GitRemoteAction
+}
+export interface GitRemoteResult {
+  status: GitStatus
+  problem?: { kind: "incoming" | "conflicts" | "dirty" | "failed"; message: string; detail?: string }
 }
 
 export interface GitRepositorySummary {

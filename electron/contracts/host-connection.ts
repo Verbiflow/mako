@@ -24,3 +24,16 @@ export const HOST_OUTAGE_MESSAGE =
 export function isHostReconnectingError(error: Error): boolean {
   return error.message.includes(HOST_RECONNECTING_MESSAGE)
 }
+
+/** Delivery state survives forwarding; a peer outage does not disconnect the UI's own host. */
+export class RuntimeDisconnectedError extends Error {
+  readonly code = "host-disconnected"
+  readonly unconfirmed: boolean
+  readonly conversationId?: string
+  constructor(unconfirmed: boolean, conversationId?: string) {
+    super(unconfirmed ? HOST_CALL_UNCONFIRMED_MESSAGE : HOST_RECONNECTING_MESSAGE)
+    this.name = "RuntimeDisconnectedError"
+    this.unconfirmed = unconfirmed
+    this.conversationId = conversationId
+  }
+}
