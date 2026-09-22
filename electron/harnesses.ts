@@ -19,7 +19,7 @@ export { normalizeAcpOptions } from "@mako/sessions/model-catalog"
 export { devinExecutable } from "./providers/devin/executable.js"
 export {
   openCodeExecutable,
-  openCodeInstallation,
+  resolveOpenCodeInstallation,
   openCodeSessionGeneration,
   type OpenCodeInstallation,
 } from "./providers/opencode/installation.js"

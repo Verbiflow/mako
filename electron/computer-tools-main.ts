@@ -5,6 +5,7 @@ import { ComputerObservationClient } from "./computer-observation-client.js"
 import { resolveDriverPaths } from "./computer-paths.js"
 import {
   ControlProgramRequestSchema,
+  ControlProgramInputSchema,
   ControlProgramRuntime,
   INLINE_IMAGE_COUNT,
   INLINE_TEXT_BUDGET,
@@ -102,7 +103,7 @@ How to work: windows(pid) to pick the document window; view(target) to read it a
 
 Long tasks: \`checkpoint({objective?, location?, remember?, completed?, pending?})\` keeps the bounded working set a later cell needs and \`recall()\` reads it. Store constraints, discoveries and evidence receipts there; put raw trees, screenshots and long prose in artifacts instead. Grounding: an element_token alone addresses an action, because Mako remembers which pid and window produced each snapshot; every read (view, act, until, get_window_state) takes a new snapshot and invalidates the earlier tokens for that window. Never carry a token by role or label: duplicate or reordered controls can make that target unsafe. fill() returns view, the exact newest lines from its read-back, so take the next token from written.view before another action. Screenshot coordinates are window-local pixels of that window's latest capture (element frames are screen points: subtract window_bounds and multiply by screenshot_scale); for a small target zoom a region and pass from_zoom:true with coordinates read off the zoom image. Reobserve after acting: transport success is not proof the UI changed, and a timeout or cancellation does not prove an action did not run. A stale token or a missing window means rediscover, never another window.
 
-Background input, in order (details in mako_computer_help().routes): 1 accessibility — fill, set_value and element_token clicks (action press/pick/confirm/open), for anything an observed element exposes; this is how a backgrounded Electron or Chromium field is written, since set_value replaces text where a keyboard would select-all and retype. 2 page route — launch_app({bundle_id, page_route: true}) starts an Electron or Chromium app in the background with a private DevTools port and registers it as browser 'app:<bundle_id>'; the browser object is available in every computer program (browser.tabs({browser}), browser.select, browser.click, browser.type, browser.press, browser.observe, browser.screenshot), with keyboard, pointer, DOM reads and screenshots that never touch focus. 3 command — script and shell. 4 window pointer with x,y. 5 pid keyboard (type_text, press_key, hotkey): native Cocoa fields only and never a Cmd chord — Mako refuses a background Cmd chord before it is posted because an application that is not frontmost does not dispatch menu key equivalents (force: true posts it anyway); a Chromium or Electron renderer that is not frontmost drops every posted key; the driver cannot read keys back, so send them through act() and let the delta say whether they landed, and treat mako_routes.status 'unconfirmed' as a reason to read, not to retry. 6 invoke_menu for a menu item or its shortcut: the driver fronts the application for the call and restores the previous frontmost app itself, so it requires foreground: true and reports fronted.ms. 7 delivery_mode:'foreground' with foreground: true: Mako verifies that the exact application and window are already frontmost and refuses otherwise; bring_to_front requires foreground: true too. Mako never fronts on its own, and a result never asks you to: the user is working in another application. Electron and Chromium windows ignore background scrolling on macOS; use their page route. Do not repeat text based on delivered_chars alone: the driver can report zero when the field received everything.
+Background input, in order (details in mako_computer_help().routes): 1 accessibility — fill, set_value and element_token clicks (action press/pick/confirm/open), for anything an observed element exposes; this is how a backgrounded Electron or Chromium field is written, since set_value replaces text where a keyboard would select-all and retype. 2 page route — launch_app({bundle_id, page_route: true}) starts an Electron or Chromium app in the background with a private DevTools port and registers it as browser 'app:<bundle_id>'; the browser object is available in every computer program (browser.tabs({browser}), browser.select, browser.click, browser.type, browser.press, browser.observe, browser.screenshot), with keyboard, pointer, DOM reads and screenshots that never touch focus. 3 command — script and shell. 4 window pointer with x,y. 5 pid keyboard (type_text, press_key, hotkey): native Cocoa fields only and never a Cmd chord — Mako refuses a background Cmd chord before it is posted because the installed keyboard path has not passed background Command delivery acceptance (force: true posts it anyway); a Chromium or Electron renderer that is not frontmost drops every posted key; the driver cannot read keys back, so send them through act() and let the delta say whether they landed, and treat mako_routes.status 'unconfirmed' as a reason to read, not to retry. 6 invoke_menu for a menu item or its shortcut: the driver fronts the application for the call and restores the previous frontmost app itself, so it requires foreground: true and reports fronted.ms. 7 delivery_mode:'foreground' with foreground: true: Mako verifies that the exact application and window are already frontmost and refuses otherwise; bring_to_front requires foreground: true too. Mako never fronts on its own, and a result never asks you to: the user is working in another application. Electron and Chromium windows ignore background scrolling on macOS; use their page route. Do not repeat text based on delivered_chars alone: the driver can report zero when the field received everything.
 
 Results: every action resolves to the driver's structured data, and a refused action throws with the driver's message (Mako's own refusals — a fronting call without foreground: true, a background Cmd chord — throw before the driver is asked); images ride on result.content. A call that fronted carries fronted: {pid, ms}, and mako_computer_status counts them for the task. list_windows rows carry kind: document, helper or unknown, and helper strips are not windows. get_window_state omits the application's menu bar and the duplicate tree_markdown (include_menu_bar:true and include_markdown:true restore them) and defaults max_elements to ${DEFAULT_MAX_ELEMENTS}. A returned or logged value at or past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB, and every image after the ${INLINE_IMAGE_COUNT}th in one program, is written whole to a file and the result carries a receipt with the path, size, hash and an outline of the value's shape; nothing is cut. Programs stop after ${PROGRAM_TIME_LIMIT_MS / 1000} seconds; on timeout, cancellation or an error the worker and \`state\` reset while the driver session, snapshots and Mako's checks remain. Scripts are trusted local code, not an OS sandbox; every action still passes Mako's session, snapshot, path, foreground and preview checks.
 
@@ -423,6 +424,8 @@ const windowRowsSchema = z.looseObject({
   ),
 })
 const nativeElementSchema = ElementSchema.extend({
+  value_exact: z.boolean().optional(),
+  in_web_content: z.boolean().optional(),
   depth: z.number().int().nonnegative().default(0),
 })
 const nativeViewSchema = z.looseObject({
@@ -1425,7 +1428,7 @@ export function createComputerToolsServer(
       if (element.element_token) node.ref = element.element_token
       while (ancestors.length && ancestors.at(-1)!.depth >= node.depth)
         ancestors.pop()
-      const web = ancestors.some((ancestor) => ancestor.role === "AXWebArea")
+      const web = element.in_web_content === true || ancestors.some((ancestor) => ancestor.role === "AXWebArea")
       ancestors.push({ depth: node.depth, role: element.role })
       if (
         ["TextField", "TextArea", "SearchField", "ComboBox"].includes(
@@ -1435,7 +1438,11 @@ export function createComputerToolsServer(
         node.inputRoute = web ? "page" : "accessibility"
         if (web && nativePageBrowser) node.pageBrowser = nativePageBrowser
       }
-      if (element.value != null) node.value = String(element.value)
+      if (element.value != null) {
+        node.value = String(element.value)
+        // Older drivers normalize whitespace and substitute placeholders.
+        node.valueExact = element.value_exact === true
+      }
       if (element.enabled !== undefined) node.disabled = !element.enabled
       if (element.selected !== undefined) node.selected = element.selected
       return [node]
@@ -1450,6 +1457,7 @@ export function createComputerToolsServer(
     const webRefs = new Set(
       nodes.filter((node) => node.inputRoute === "page").map((node) => node.ref)
     )
+    const lossyRefs = new Set(nodes.filter((node) => node.valueExact === false).map((node) => node.ref))
     const lines = availableLines
       .filter((line) => returnedRefs.has(controlLineRef(line)))
       .map((line) =>
@@ -1457,6 +1465,7 @@ export function createComputerToolsServer(
           ? `${line} [text input: page route]`
           : line
       )
+      .map((line) => lossyRefs.has(controlLineRef(line)) ? `${line} [value is display-only]` : line)
     controlViews.set(key, { observation: state.snapshot_id, lines })
     rememberControlRefs(request.target, state.snapshot_id, lines)
     for (const ref of webRefs) {
@@ -2017,8 +2026,9 @@ export function createComputerToolsServer(
     }
     return {
       version: 2,
+      execution: `Start ${execTool} with {"source":"return await control.browsers()"}. A running receipt returns a numeric cell; collect it through the same tool with {"cell":1}. Copy the receipt's actual ID. Supply exactly one field; cell never contains source code.`,
       discovery:
-        "control.apps(), control.windows(pid), control.browsers(), control.tabs(browser)",
+        "control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,connection,...}]}; control.tabs(browser) -> {kind:'pages',browser,pages:[{targetId,title,url,selectable,...}]}. These methods return objects, not arrays.",
       handles:
         "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser,url?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across cells. App windows are selected explicitly; no implicit first window.",
       target:
@@ -2212,13 +2222,13 @@ export function createComputerToolsServer(
       {
         name: execTool,
         description: unified
-          ? `Run or resume Local Control v2: {source} with async JavaScript or {cell} to collect a yielded run. Use bound window/tab handles, explicit observe/expect, state for cross-cell handles, return/console.log for text and emitImage for screenshots. Read mako_control_help once for API signatures. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit; output past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB spills whole to artifacts. No actions are replayed.`
+          ? `Run Local Control v2 with {"source":"return await control.browsers()"}. To collect a running program, copy its numeric cell into {"cell":1}; supply exactly one field. Use bound window/tab handles, explicit observe/expect, state for cross-cell handles, return/console.log for text and emitImage for screenshots. Read mako_control_help once for API signatures. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit; output past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB spills whole to artifacts. No actions are replayed.`
           : `Run or resume a computer control program: pass {source} with trusted async JavaScript, or {cell} when a program yields after ten seconds and continues. Read a window with view(), take and verify a step with act(), write a field with fill(), press Enter with submit(), select a proven route with route(), and guard chained steps with expect() and until(); state and bounded checkpoint/recall task memory survive cells. Await every action and return only what you need to decide. Nothing fronts the user's application without foreground: true on the call. Results are never truncated: a value past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB is written to a file and described. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit; every action keeps Mako's session, snapshot, path, foreground and preview checks.
 
 checkpoint({objective?, location?, remember?: {key: value}, completed?: string[], pending?: string[]}) stores bounded task memory; remember is an object, not prose. recall() reads it.
 
 ${await reference()}`,
-        inputSchema: z.toJSONSchema(COMPUTER_TOOL_INPUTS.exec, { io: "input" }),
+        inputSchema: ControlProgramInputSchema,
         annotations: {
           readOnlyHint: false,
           destructiveHint: true,
@@ -2229,6 +2239,7 @@ ${await reference()}`,
     ],
   }))
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    let dispatched = false
     try {
       switch (request.params.name) {
         case statusTool: {
@@ -2251,6 +2262,7 @@ ${await reference()}`,
             request.params.arguments
           )
           const active = await program()
+          dispatched = true
           return {
             content:
               input.source !== undefined
@@ -2273,16 +2285,21 @@ ${await reference()}`,
         status: "error",
       })
       const detail = {
-        code: controlFaultData(error)?.code ?? "computer-control-error",
-        outcome: controlFaultData(error)?.outcome ?? "unknown",
+        code: controlFaultData(error)?.code ?? (dispatched ? "computer-control-error" : "invalid-request"),
+        outcome: controlFaultData(error)?.outcome ?? (dispatched ? "unknown" : "not-dispatched"),
         message:
           error instanceof z.ZodError
             ? `Invalid arguments for ${request.params.name}. ${z.prettifyError(error).replace(/\s+/g, " ").trim()}`
             : error instanceof Error
               ? error.message
               : "Computer operation failed",
-        recovery:
-          "Read the exact target again before deciding whether to repeat an action.",
+        recovery: !dispatched
+          ? request.params.name === execTool
+            ? `No program was started or resumed by this call. To start, use {"source":"<async JavaScript>"}; to collect, copy the numeric cell from the running receipt, for example {"cell":1}. Correct the arguments; do not resubmit a running program's source.`
+            : "Correct the tool arguments and call again; no control action was dispatched."
+          : controlFaultData(error)?.code === "cell-pending" || controlFaultData(error)?.code === "cell-not-found"
+            ? "Follow the cell instructions in the message. Do not start another program to recover a pending result."
+            : "Read the exact target again before deciding whether to repeat an action.",
       }
       return {
         isError: true,

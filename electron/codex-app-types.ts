@@ -77,7 +77,7 @@ export type Turn = {
 }
 
 export type ThreadResponse = {
-  thread: { id: string; cwd?: string; turns?: Turn[] }
+  thread: { id: string; cwd?: string; path?: string | null; turns?: Turn[] }
   model?: string
   serviceTier?: string | null
   reasoningEffort?: string | null

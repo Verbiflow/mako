@@ -1,3 +1,4 @@
+import { processIdentityMatches } from "./providers/process-liveness.js"
 import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -31,10 +32,10 @@ import { hostWarn } from "./host-log.js"
  * own record still wins whenever it names a model, and the ledger fills what
  * the store left out (`rememberedSettings`).
  *
- * Holds are leases, not locks: a hold names its host by pid and start time,
- * is heartbeated while the host runs, and is ignored once the pid is gone or
- * the heartbeat is older than `HOLD_STALE_MS`, so a crashed host never pins a
- * session. Writers serialize through SQLite's write lock, so two hosts racing
+ * Holds name a process generation. A missed heartbeat never authorizes a
+ * second writer: a live host may be suspended. Dead processes release immediately;
+ * stale generations are checked asynchronously against the OS. Writers serialize
+ * through SQLite's write lock, so two hosts racing
  * to open one session see one winner.
  */
 const MemoryRowSchema = z.object({
@@ -95,6 +96,7 @@ export interface SessionMemoryHost {
 export interface SessionMemoryOptions {
   now?: () => number
   alive?: (pid: number) => boolean
+  identityCurrent?: (pid: number, startedAt: number, signal: AbortSignal) => Promise<boolean>
 }
 
 export const HOLD_STALE_MS = 3 * 60_000
@@ -144,6 +146,10 @@ export class SessionMemory {
   private readonly host: SessionMemoryHost
   private readonly now: () => number
   private readonly alive: (pid: number) => boolean
+  private readonly identityCurrent: NonNullable<SessionMemoryOptions["identityCurrent"]>
+  private readonly lifecycle = new AbortController()
+  private verifying = false
+  private holdCheckOffset = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null }>()
 
@@ -152,10 +158,11 @@ export class SessionMemory {
     this.host = host
     this.now = options.now ?? Date.now
     this.alive = options.alive ?? processAlive
+    this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: 1_500 }))
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     try {
-      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
+      this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
       CREATE TABLE IF NOT EXISTS runtime_hosts (socket TEXT PRIMARY KEY, launch TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_journals (conversation_id TEXT PRIMARY KEY, socket TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_routes (
@@ -175,6 +182,37 @@ export class SessionMemory {
       this.db.exec("BEGIN IMMEDIATE")
       if (!this.db.prepare("PRAGMA table_info(conversation_routes)").all().some((column) => column.name === "updated_at"))
         this.db.exec("ALTER TABLE conversation_routes ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS session_memory_migrations (version INTEGER PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS conversation_bindings (
+          provider TEXT NOT NULL, native_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+          updated_at INTEGER NOT NULL, PRIMARY KEY(provider, native_id, conversation_id));
+        CREATE INDEX IF NOT EXISTS conversation_bindings_lookup
+          ON conversation_bindings(provider, native_id, updated_at DESC);
+      `)
+      if (!this.db.prepare("SELECT version FROM session_memory_migrations WHERE version = 1").get()) {
+        this.db.exec(`INSERT OR IGNORE INTO conversation_bindings
+          SELECT provider,native_id,conversation_id,updated_at FROM conversation_routes;
+          INSERT OR IGNORE INTO conversation_journals SELECT conversation_id,socket FROM conversation_routes;
+          INSERT INTO session_memory_migrations VALUES (1);`)
+      }
+      if (!this.db.prepare("SELECT version FROM session_memory_migrations WHERE version = 2").get()) {
+        this.db.exec(`DROP TRIGGER IF EXISTS conversation_route_insert;
+          DROP TRIGGER IF EXISTS conversation_route_update;
+        CREATE TRIGGER conversation_route_insert AFTER INSERT ON conversation_routes BEGIN
+          INSERT INTO conversation_bindings VALUES (NEW.provider, NEW.native_id, NEW.conversation_id, CASE WHEN NEW.updated_at = 0 THEN CAST(unixepoch('subsec') * 1000 AS INTEGER) ELSE NEW.updated_at END)
+            ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=excluded.updated_at;
+          INSERT INTO conversation_journals VALUES (NEW.conversation_id, NEW.socket)
+            ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket;
+        END;
+        CREATE TRIGGER conversation_route_update AFTER UPDATE ON conversation_routes BEGIN
+          INSERT INTO conversation_bindings VALUES (NEW.provider, NEW.native_id, NEW.conversation_id, CASE WHEN NEW.updated_at = 0 THEN CAST(unixepoch('subsec') * 1000 AS INTEGER) ELSE NEW.updated_at END)
+            ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=excluded.updated_at;
+          INSERT INTO conversation_journals VALUES (NEW.conversation_id, NEW.socket)
+            ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket;
+        END;
+          INSERT INTO session_memory_migrations VALUES (2);`)
+      }
       this.db.exec("COMMIT")
       if (host.socket && host.launch)
         this.db.prepare("INSERT INTO runtime_hosts (socket, launch) VALUES (?, ?) ON CONFLICT(socket) DO UPDATE SET launch=excluded.launch")
@@ -188,8 +226,31 @@ export class SessionMemory {
   /** Keep this host's holds fresh for as long as it runs. */
   startHeartbeat(intervalMs = HOLD_HEARTBEAT_MS): void {
     if (this.timer) return
-    this.timer = setInterval(() => this.heartbeat(), intervalMs)
+    this.timer = setInterval(() => {
+      this.heartbeat()
+      void this.reconcileHolds()
+    }, intervalMs)
     this.timer.unref()
+  }
+
+  /** Check stale process generations off the send path; probe failure keeps ownership. */
+  async reconcileHolds(): Promise<void> {
+    if (this.verifying || this.lifecycle.signal.aborted) return
+    this.verifying = true
+    try {
+      const rows = z.array(HoldRowSchema.extend({ provider: z.string(), native_id: z.string() })).parse(
+        this.db.prepare("SELECT * FROM holds WHERE heartbeat_at < ? ORDER BY provider, native_id LIMIT 8 OFFSET ?").all(this.now() - HOLD_STALE_MS, this.holdCheckOffset))
+      this.holdCheckOffset = rows.length < 8 ? 0 : this.holdCheckOffset + rows.length
+      await Promise.all(rows.map(async (row) => {
+        const current = await this.identityCurrent(row.host_pid, row.host_started_at, this.lifecycle.signal).catch(() => undefined)
+        if (current !== false || this.lifecycle.signal.aborted) return
+        this.db.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ? AND heartbeat_at = ?")
+          .run(row.provider, row.native_id, row.host_pid, row.host_started_at, row.heartbeat_at)
+        this.annotations.delete(`${row.provider}\n${row.native_id}`)
+      }))
+    } catch (error) {
+      hostWarn("memory", "owner identity check failed", { error: error instanceof Error ? error.message : String(error) })
+    } finally { this.verifying = false }
   }
 
   recall(provider: string, nativeId: string): SessionMemoryEntry | null {
@@ -327,16 +388,19 @@ export class SessionMemory {
   }
 
   /** An older host can be reached through its existing private runtime socket. */
-  rememberRoute(route: ConversationRoute, expected: SessionHold): void {
+  rememberRoute(route: ConversationRoute, expected: SessionHold): boolean {
     this.db.exec("BEGIN IMMEDIATE")
     try {
       const hold = this.heldBy(route.provider, route.nativeId)
-      if (!hold || hold.conversationId !== route.conversationId || hold.hostPid !== expected.hostPid || hold.since !== expected.since)
-        throw new Error("The session owner changed. Reopen this thread to continue.")
+      if (!hold || hold.conversationId !== route.conversationId || hold.hostPid !== expected.hostPid || hold.since !== expected.since) {
+        this.db.exec("ROLLBACK")
+        return false
+      }
       this.db.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
         .run(route.conversationId, route.provider, route.nativeId, route.socket, this.now())
       this.db.exec("COMMIT")
+      return true
     } catch (error) {
       this.db.exec("ROLLBACK")
       throw error
@@ -363,15 +427,39 @@ export class SessionMemory {
   routeForSession(provider: string, nativeId: string): ConversationRoute | null {
     const hold = this.readHold(provider, nativeId)
     if (hold && this.holdLive(hold)) {
-      const row = this.db.prepare(`SELECT conversation_id AS conversationId, provider, native_id AS nativeId, socket
-        FROM conversation_routes WHERE conversation_id = ?`).get(hold.conversation_id)
-      const parsed = RouteSchema.safeParse(row)
-      return parsed.success && parsed.data.socket !== this.host.socket ? parsed.data : null
+      const row = this.db.prepare(`SELECT conversation_id AS conversationId, socket
+        FROM conversation_journals WHERE conversation_id = ?`).get(hold.conversation_id)
+      const parsed = z.object({ conversationId: z.string(), socket: z.string() }).safeParse(row)
+      return parsed.success ? { ...parsed.data, provider, nativeId } : null
     }
-    const row = this.db.prepare(`SELECT conversation_id AS conversationId, provider, native_id AS nativeId, socket
-      FROM conversation_routes WHERE provider = ? AND native_id = ? ORDER BY updated_at DESC LIMIT 1`).get(provider, nativeId)
+    const row = this.db.prepare(`SELECT b.conversation_id AS conversationId, b.provider,
+      b.native_id AS nativeId, j.socket FROM conversation_bindings b
+      JOIN conversation_journals j ON j.conversation_id = b.conversation_id
+      WHERE b.provider = ? AND b.native_id = ? ORDER BY b.updated_at DESC, b.conversation_id LIMIT 1`).get(provider, nativeId)
     const parsed = RouteSchema.safeParse(row)
-    return parsed.success && parsed.data.socket !== this.host.socket ? parsed.data : null
+    return parsed.success ? parsed.data : null
+  }
+
+  isLocal(socket: string): boolean { return socket === this.host.socket }
+
+  hostSockets(): string[] {
+    return z.array(z.object({ socket: z.string() })).parse(
+      this.db.prepare("SELECT socket FROM runtime_hosts WHERE socket <> ?").all(this.host.socket ?? ""))
+      .map((row) => row.socket)
+  }
+
+  /** Reconstruct aliases from journal metadata without reading transcript blocks. */
+  rememberBindings(conversationId: string, bindings: ReadonlyArray<{ provider: string; nativeId?: string }>, at: number): void {
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      this.rememberJournal(conversationId)
+      const insert = this.db.prepare(`INSERT INTO conversation_bindings VALUES (?, ?, ?, ?)
+        ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)`)
+      for (const binding of bindings) {
+        if (binding.nativeId) insert.run(binding.provider, binding.nativeId, conversationId, at)
+      }
+      this.db.exec("COMMIT")
+    } catch (error) { this.db.exec("ROLLBACK"); throw error }
   }
 
   /** Every hold this host has: what `stop()` lets go of. */
@@ -415,6 +503,7 @@ export class SessionMemory {
   }
 
   close(): void {
+    this.lifecycle.abort()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.db.close()
@@ -434,7 +523,7 @@ export class SessionMemory {
   }
 
   private holdLive(row: z.infer<typeof HoldRowSchema>): boolean {
-    return this.now() - row.heartbeat_at <= HOLD_STALE_MS && this.alive(row.host_pid)
+    return row.host_pid === this.host.pid ? this.ownHold(row) : this.alive(row.host_pid)
   }
 
   private describe(row: z.infer<typeof HoldRowSchema>): SessionHold {

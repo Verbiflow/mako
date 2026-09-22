@@ -51,6 +51,7 @@ const question = z.object({
   defaultValues: z.array(z.string()).optional(),
 })
 export const LiveRequestSchema = z.object({
+  targetBindingId: z.string().optional(),
   snapshots: RunSnapshotsSchema.optional(),
   tuning: SessionSettingsSchema.optional(),
   inputDigest: z.string().optional(),
@@ -212,6 +213,7 @@ export class LiveJournal {
       revision,
       threadPath,
       createdAt,
+      nativeBindings: control?.bindings ?? [{ provider: session.harness, nativeId: session.nativeId }],
       nativePaths: control?.bindings.flatMap((binding) =>
         binding.path ? [binding.path] : []
       ),

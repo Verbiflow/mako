@@ -96,6 +96,7 @@ export interface Dependencies {
 }
 
 export interface LiveAccess {
+  discoverNativePath(resident: Resident): void
   observe(event: LiveDriverEvent): void
   retainAttachments(attachments: PromptAttachment[]): PromptAttachment[]
   dependencies: Dependencies

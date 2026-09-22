@@ -1,5 +1,5 @@
 import { HOST_CALL_REPLAY_WAIT_MS, hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "./contracts/host-call-policy.js"
-import { RuntimeDisconnectedError } from "./runtime-connection.js"
+import { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 
 /**
  * Calls the window may repeat once the shared host is back: reads, which
@@ -33,9 +33,15 @@ export async function invokeWithRecovery<T>(
     return await run(1)
   } catch (error) {
     if (!(error instanceof RuntimeDisconnectedError)) throw error
+    if (error.conversationId) throw error
     link.lost()
     if (hostCallReplay(channel) === "never") throw error
     if (!(await link.whenConnected(timeoutMs))) throw error
-    return run(2)
+    try { return await run(2) }
+    catch (retryError) {
+      // A later refusal cannot resolve whether the first mutation was accepted.
+      if (error.unconfirmed && hostCallReplay(channel) === "replay") throw error
+      throw retryError
+    }
   }
 }

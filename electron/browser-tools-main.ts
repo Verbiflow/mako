@@ -20,6 +20,7 @@ import {
 import { browserProtocolHelp } from "./browser-protocol-help.js"
 import {
   ControlProgramRequestSchema,
+  ControlProgramInputSchema,
   INLINE_IMAGE_COUNT,
   INLINE_TEXT_BUDGET,
   PROGRAM_TIME_LIMIT_MS,
@@ -261,9 +262,7 @@ export function createBrowserToolsServer(
         {
           name: "mako_browser_exec",
           description: `Run or resume a browser control program: pass {source} with trusted async JavaScript, or {cell} when a program yielded after ten seconds. browser.<action>({...}) exposes every action in the server instructions; persistent state and bounded checkpoint/recall task memory survive cells. Await every action and return only what you need to see. Results are never truncated: oversized values are written to files and described. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit; actions keep exact task ownership and are never replayed.`,
-          inputSchema: z.toJSONSchema(BROWSER_TOOL_INPUTS.exec, {
-            io: "input",
-          }),
+          inputSchema: ControlProgramInputSchema,
           annotations: {
             readOnlyHint: false,
             destructiveHint: true,

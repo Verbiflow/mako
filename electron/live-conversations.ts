@@ -105,6 +105,7 @@ export class LiveConversations {
     this.dependencies = dependencies
     this.assets = new LiveAssets(join(dependencies.root, "assets"))
     const access: LiveAccess = {
+      discoverNativePath: (resident) => this.discoverNativePath(resident),
       observe: (event) => this.observe(event),
       retainAttachments: (attachments) => this.assets.retainPrompt(attachments),
       close: (id) => this.close(id),
@@ -136,7 +137,7 @@ export class LiveConversations {
         try {
           const summary = journal.summary()
           if (summary) {
-            dependencies.memory?.rememberJournal(id)
+            dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             this.backfillMemory(id, summary.session)
             this.recovered.set(id, {
               ...summary,
@@ -606,6 +607,7 @@ export class LiveConversations {
         ? [
             LiveRequestSchema.parse({
               ...options.initialRequest,
+              targetBindingId: options.resume ? id : undefined,
               displayText: options.displayPrompt,
               tuning,
               inputDigest: promptFingerprint(
@@ -1434,27 +1436,39 @@ export class LiveConversations {
       this.drain(resident)
   }
 
+  continueBinding(id: string, bindingId: string, requestId: string, text: string,
+    attachments: PromptAttachment[] = [], tuning?: SessionSettings): LiveSnapshot {
+    const resident = this.require(id)
+    const control = this.control(resident)
+    const binding = control.bindings.find((item) => item.id === bindingId)
+    if (!binding) throw new Error("The selected native session is no longer part of this conversation")
+    const existing = resident.snapshot.requests.find((item) => item.id === requestId)
+    const transfer = control.transfers.find((item) => item.input.id === requestId)
+    if (transfer || (!existing && (control.activeBindingId !== bindingId || (!resident.driver && !resident.hibernating && resident.snapshot.session.connection !== "hibernated"))))
+      return this.transfer(id, { id: requestId, bindingId, provider: binding.provider, text, attachments, tuning })
+    this.submit(id, requestId, text, attachments, tuning, bindingId)
+    return resident.snapshot
+  }
+
   submit(
     id: string,
     requestId: string,
     text: string,
     attachments: PromptAttachment[] = [],
-    tuning?: SessionSettings
+    tuning?: SessionSettings,
+    targetBindingId?: string
   ): LiveRequest {
     assertLifecycleAdmission()
     const resident = this.require(id)
     if (resident.rewinding)
       throw new Error("Wait for the workspace rewind to finish before sending")
-    if (this.transfers.pending(resident))
-      throw new Error(
-        "A provider switch is pending. Wait for it to settle before sending another message."
-      )
     this.flush(resident)
     const request = LiveRequestSchema.parse({
       id: requestId,
       text,
       attachments,
       tuning,
+      targetBindingId,
       status: "queued",
     })
     const inputDigest = promptFingerprint(
@@ -1466,6 +1480,8 @@ export class LiveConversations {
       (candidate) => candidate.id === request.id
     )
     if (existing) {
+      if (existing.targetBindingId !== targetBindingId)
+        throw new Error("This request ID was already accepted for a different native session")
       if (
         existing.inputDigest
           ? existing.inputDigest !== inputDigest
@@ -1480,6 +1496,10 @@ export class LiveConversations {
       if (existing.status === "queued") this.drain(resident)
       return existing
     }
+    if (this.transfers.pending(resident))
+      throw new Error("A provider switch is pending. Wait for it to settle before sending another message.")
+    if (targetBindingId && this.control(resident).activeBindingId !== targetBindingId)
+      throw new Error("The selected native session changed before this message was accepted")
     if (!text.trim() && !attachments.length)
       throw new Error("A prompt cannot be empty")
     // The user's own message supersedes any continuation Mako was about to send.
@@ -1499,6 +1519,7 @@ export class LiveConversations {
       this.transfer(id, {
         id: requestId,
         provider: resident.snapshot.session.harness,
+        bindingId: targetBindingId,
         text,
         attachments,
         tuning,
@@ -2004,13 +2025,21 @@ export class LiveConversations {
   /** Native identity belongs to the host, including sessions never opened in a renderer. */
   discoverNativePaths(): void {
     for (const resident of this.records.values()) {
-      if (!resident.driver || resident.snapshot.threadPath) continue
-      this.updateBinding(resident, resident.snapshot.session)
-      if (!resident.snapshot.threadPath) continue
-      this.flush(resident)
-      this.checkpointIdle(resident)
-      this.scheduleHibernation(resident)
+      if (resident.opening || resident.transferring) continue
+      this.discoverNativePath(resident)
     }
+  }
+
+  private discoverNativePath(resident: Resident): void {
+    const binding = this.activeBinding(resident)
+    if (!binding?.nativeId || (resident.driver && binding.path)) return
+    const session = { ...resident.snapshot.session, harness: binding.provider, nativeId: binding.nativeId, nativePath: binding.path }
+    const path = this.dependencies.nativePath?.(session)
+    if (!path || path === binding.path) return
+    this.updateBinding(resident, { ...session, nativePath: path })
+    this.flush(resident)
+    this.checkpointIdle(resident)
+    this.scheduleHibernation(resident)
   }
 
   editQueued(id: string, input: QueuedPromptEdit): LiveSnapshot {

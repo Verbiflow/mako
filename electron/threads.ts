@@ -1,4 +1,5 @@
 import { threadIdentity } from "@mako/sessions"
+import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 /**
  * The machine's sessions, whoever wrote them.
  *
@@ -700,6 +701,11 @@ export function listThreads(
         .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
     : (catalog?.list(filter) ?? [])
   return refs.slice(0, LIST_CAP).map(annotate)
+}
+
+/** Recovery must not depend on the sidebar's ordering or visible result cap. */
+export function nativePathForSession(identity: NativeSourceIdentity): string | undefined {
+  return nativeSessionPath(identity, daemon ? [...mirror.values()] : catalog?.list() ?? [])
 }
 
 /**

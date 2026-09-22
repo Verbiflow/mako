@@ -1,3 +1,4 @@
+import type { GitRemoteInput, GitRemoteResult } from "./shared.js"
 import { watch, type FSWatcher } from "node:fs"
 import { homedir } from "node:os"
 import { WorkspaceGit } from "./host-git.js"
@@ -353,6 +354,12 @@ export class AgentHost {
     await this.workspaceGit.commit(message, options)
     await this.pushGit()
     this.emit({ type: "notice", level: "success", message: "Committed" })
+  }
+
+  async gitRemote(input: GitRemoteInput): Promise<GitRemoteResult> {
+    if (this.gitWorkspace !== input.cwd) throw new Error("Select this repository before continuing.")
+    try { return await this.workspaceGit.remote(input) }
+    finally { await this.pushGit("index") }
   }
 
   async gitPush(expectedBranch?: string): Promise<void> {

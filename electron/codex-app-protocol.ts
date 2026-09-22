@@ -1,3 +1,4 @@
+import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
 import {
   codexPresentation,
@@ -555,7 +556,9 @@ function beginRpcRequest<M extends RpcMethod>(
     const timer = setTimeout(() => {
       context.pending.delete(rpcKey(id))
       reject(new Error(`Codex app-server did not answer ${method}`))
-    }, RPC_TIMEOUT_MS)
+    }, ["initialize", "thread/start", "thread/resume", "thread/fork"].includes(method)
+      ? STARTUP_TOTAL_MS
+      : RPC_TIMEOUT_MS)
     const pending: PendingRpc<M> = {
       method,
       resolve,

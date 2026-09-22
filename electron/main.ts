@@ -1,10 +1,11 @@
+import { z } from "zod"
 import { recoveryCapabilities } from "./providers/live-driver.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
 import { handleQuit } from "./background-lifecycle.js"
 import { devHostBuild } from "./dev-host-build.js"
 import { RUNTIME_PROTOCOL } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
-import { runtimeInfo } from "./runtime-connection.js"
+import { runtimeInfo, RuntimeDisconnectedError } from "./runtime-connection.js"
 import { lstat, mkdir, stat, unlink } from "node:fs/promises"
 import { rmSync } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -16,6 +17,7 @@ import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-
 import type { DesktopNotification } from "./contracts/notifications.js"
 import { RelayConversations } from "./relay-conversations.js"
 import { nativeCheckpoint, resumeVerdict } from "./native-continuation.js"
+import { nativePathForSession } from "./threads.js"
 import { createContinuationPlanner } from "./continuation.js"
 import { NativeRequests } from "./native-requests.js"
 import type {
@@ -51,7 +53,7 @@ import { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { RewindInput } from "./contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "./contracts/live-actions.js"
 import { LiveConversations } from "./live-conversations.js"
-import { SessionMemory, sessionMemoryPath } from "./session-memory.js"
+import { SessionMemory, SessionHeldError, sessionMemoryPath } from "./session-memory.js"
 import { ThreadArchives } from "./thread-archives.js"
 import { ThreadLifecycle } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
@@ -1016,7 +1018,13 @@ function bindIpc() {
     ]),
   ]
   const continuation = createContinuationPlanner({
-    attached: async (ref) => liveConversations.connectedSession(ref.harness, ref.nativeId) ?? await sharedConversations?.attachment(ref.harness, ref.nativeId) ?? null,
+    assessResume: async (ref) => providerHost.liveDrivers.get(ref.harness)?.resumeVerdict?.({
+      id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
+      coveredBlocks: 0, includesBase: false,
+    }),
+    resolveOwner: async (ref) => sharedConversations
+      ? sharedConversations.resolve(ref.harness, ref.nativeId, Boolean(ref.heldBy || ref.locked || threadActivitySnapshot()[ref.path]))
+      : { kind: "unavailable", reason: "Session ownership is unavailable. Retry when the host reconnects." },
     ref: async (path) =>
       listThreads().find((ref) => ref.path === path) ??
       (await openThread(path))?.ref,
@@ -1028,20 +1036,19 @@ function bindIpc() {
     },
     nativeInstalled: (provider) => {
       const runner = providerHost.nativeRunners.get(provider)
-      return runner ? resolveExecutable(runner.fresh("", {}).command) !== null : false
+      return runner?.available() ?? false
     },
     running: (path) => threadRun(path)?.status === "running",
     external: (path) => threadActivitySnapshot()[path]?.status ?? null,
   })
+  handle("mako:thread-continuation-resolve", (_event, path: string) => continuation.resolve(path))
   handle("mako:thread-continuation-plan", (_event, path: string) => continuation.plan(path))
   handle("mako:live-locate", (_event, provider: string, nativeId: string) =>
     liveConversations.connectedSession(provider, nativeId))
   handle("mako:live-attach", async (_event, path: string) => {
-    const ref = listThreads().find((candidate) => candidate.path === path) ?? (await openThread(path))?.ref
-    if (!ref || ref.archived) return null
-    const local = liveConversations.connectedSession(ref.harness, ref.nativeId)
-    if (local) return liveConversations.snapshot(local)
-    return await sharedConversations?.attach(ref.harness, ref.nativeId) ?? null
+    const result = await continuation.resolve(path)
+    if (result.transport === "unavailable") throw new RuntimeDisconnectedError(false)
+    return result.transport === "attached" ? result.snapshot : null
   })
   handle("mako:thread-remember-mode", (_event, path: string, modeId: string) =>
     rememberThreadMode(path, modeId)
@@ -1374,8 +1381,25 @@ function bindIpc() {
       }
       // A resume id is honoured only when the host's own plan reopens that
       // store live; renderer state that says otherwise is stale, not a vote.
-      if (options.resume && options.threadPath)
-        await continuation.assertLive(options.threadPath, harness, options.resume)
+      const continueOwned = async (resolved: Awaited<ReturnType<typeof continuation.resolve>>) => {
+        if (resolved.transport !== "attached") throw new Error("The conversation owner is not ready")
+        if (options.initialRequest) {
+          const request = options.initialRequest
+          const args = resolved.bindingId
+            ? [resolved.conversationId, resolved.bindingId, request.id, request.text, request.attachments, options.tuning]
+            : [resolved.conversationId, request.id, request.text, request.attachments, options.tuning]
+          await invokeHost(resolved.bindingId ? "mako:live-continue" : "mako:live-prompt", args)
+          return z.object({ value: z.json() }).parse(JSON.parse(await invokeHost("mako:live-snapshot", [resolved.conversationId]))).value
+        }
+        return resolved.snapshot
+      }
+      if (options.resume && options.threadPath) {
+        const resolved = await continuation.resolve(options.threadPath)
+        if (resolved.transport === "attached") return continueOwned(resolved)
+        if (resolved.transport === "unavailable") throw new RuntimeDisconnectedError(false)
+        if (resolved.transport !== "live" || resolved.provider !== harness || resolved.nativeId !== options.resume)
+          throw new Error(resolved.transport === "refused" ? resolved.reason : "This native session cannot be resumed with the selected provider")
+      }
       const remembered = options.resume
         ? sessionMemory?.recall(harness, options.resume)
         : undefined
@@ -1385,10 +1409,14 @@ function bindIpc() {
         options.tuning ?? remembered?.settings
       )
       trace("profile")
-      await liveConversations.start(harness, cwd, {
-        ...options,
-        tuning,
-      })
+      try {
+        await liveConversations.start(harness, cwd, { ...options, tuning })
+      } catch (error) {
+        if (!(error instanceof SessionHeldError) || !options.threadPath) throw error
+        const resolved = await continuation.resolve(options.threadPath)
+        if (resolved.transport !== "attached") throw error
+        return continueOwned(resolved)
+      }
       trace("accepted")
       return liveConversations.snapshot(options.conversationId)
     }
@@ -1485,6 +1513,14 @@ function bindIpc() {
     "mako:live-state",
     (_event, id: string) => liveConversations.snapshot(id)?.session ?? null
   )
+  handle("mako:live-continue", async (_event, id: string, bindingId: string,
+    requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) => {
+    const snapshot = liveConversations.snapshot(id)
+    const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
+    if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
+    const selected = await resolveHarnessLaunch(binding.provider, snapshot.session.cwd, tuning ?? binding.tuning)
+    return liveConversations.continueBinding(id, bindingId, requestId, text, attachments, selected)
+  })
   handle(
     "mako:live-prompt",
     async (
@@ -1796,11 +1832,7 @@ app.whenReady().then(async () => {
         ? driver.checkpoint(path)
         : nativeCheckpoint(path)
     },
-    nativePath: (session) =>
-      listThreads().find(
-        (ref) =>
-          ref.harness === session.harness && ref.nativeId === session.nativeId
-      )?.path,
+    nativePath: nativePathForSession,
     resumeVerdict: (binding) => {
       const driver = providerHost.liveDrivers.get(binding.provider)
       return driver?.resumeVerdict
@@ -1915,6 +1947,12 @@ app.whenReady().then(async () => {
     const conversations = new SharedConversations(sessionMemory, (event) => {
       webHost?.conversationEvent(event)
       for (const renderer of rendererWindows) renderer.webContents.send("mako:event", event)
+    }, {
+      snapshot: (id) => liveConversations.snapshot(id),
+      find: (provider, nativeId) => {
+        const id = liveConversations.connectedSession(provider, nativeId)
+        return id ? liveConversations.snapshot(id) : null
+      },
     })
     sharedConversations = conversations
     installConversationRouting((channel, args) => conversations.route(channel, args))
@@ -1952,6 +1990,7 @@ app.whenReady().then(async () => {
       {
         protocol: RUNTIME_PROTOCOL,
         instanceId: crypto.randomUUID(),
+        storageScope: basename(dirname(webSocket)),
         pid: process.pid,
         version: app.getVersion(),
         devBuild: loadedDevBuild,

@@ -1,27 +1,26 @@
+import type { ResumeVerdict } from "./contracts/conversation-control.js"
 import type { ThreadRef } from "@mako/sessions"
 import type { ExternalThreadActivity } from "./contracts/host-events-boot.js"
 import {
   planContinuation,
   type ContinuationPlan,
+  type ContinuationResolution,
+  type OwnerResolution,
 } from "./contracts/thread-continuation.js"
 
-/**
- * The host's side of the continuation plan: gathers what the plan needs and
- * holds the two entry points to it. The renderer asks `plan`; `live-start`
- * with a resume id and `native-submit` each assert that the plan agrees, so
- * a request built from stale renderer state fails with the reason instead of
- * running on another transport.
- */
-export interface ContinuationDependencies {
+/** Ownership is resolved once before consulting provider-native resume policy. */
+export interface ContinuationDependencies<Snapshot = unknown> {
   ref(path: string): Promise<ThreadRef | undefined>
-  attached?(ref: ThreadRef): Promise<string | null>
+  resolveOwner?(ref: ThreadRef): Promise<OwnerResolution<Snapshot>>
+  assessResume?(ref: ThreadRef): Promise<ResumeVerdict | undefined>
   live(provider: string): { available: boolean; canResume: boolean } | null
   nativeInstalled(provider: string): boolean
   running(path: string): boolean
   external(path: string): ExternalThreadActivity["status"] | null
 }
 
-export interface ContinuationPlanner {
+export interface ContinuationPlanner<Snapshot = unknown> {
+  resolve(path: string): Promise<ContinuationResolution<Snapshot>>
   plan(path: string): Promise<ContinuationPlan>
   /** Throws unless the plan reopens `path` live on `provider` as `nativeId`. */
   assertLive(path: string, provider: string, nativeId: string): Promise<void>
@@ -29,25 +28,42 @@ export interface ContinuationPlanner {
   assertNative(path: string): Promise<void>
 }
 
-export function createContinuationPlanner(
-  dependencies: ContinuationDependencies
-): ContinuationPlanner {
-  const plan = async (path: string): Promise<ContinuationPlan> => {
+export function createContinuationPlanner<Snapshot>(
+  dependencies: ContinuationDependencies<Snapshot>
+): ContinuationPlanner<Snapshot> {
+  const resolve = async (path: string): Promise<ContinuationResolution<Snapshot>> => {
     const ref = await dependencies.ref(path)
     if (!ref)
       return {
         transport: "refused",
         reason: "This session is no longer in the catalog.",
       }
-    return planContinuation(ref, {
-      attached: ref.archived ? null : await dependencies.attached?.(ref),
-      live: dependencies.live(ref.harness),
+    const owner = ref.archived ? undefined : await dependencies.resolveOwner?.(ref)
+    if (owner?.kind === "attached") return { transport: "attached", provider: owner.provider, conversationId: owner.conversationId, snapshot: owner.snapshot, bindingId: owner.bindingId }
+    if (owner?.kind === "unavailable") return { transport: "unavailable", reason: owner.reason }
+    const live = dependencies.live(ref.harness)
+    const running = dependencies.running(path)
+    const assessment = !ref.archived && !ref.resumeUnavailable && live?.available && live.canResume && ref.liveResume !== false && !running
+      ? await dependencies.assessResume?.(ref) : undefined
+    if (assessment?.kind === "held") return { transport: "refused", reason: `This session is open in ${assessment.by}. Wait for it to finish before replying.` }
+    if (assessment?.kind === "unavailable") return { transport: "unavailable", reason: assessment.reason }
+    const currentRef = owner?.kind === "unowned" ? { ...ref, heldBy: undefined } : ref
+    const plan = planContinuation(assessment?.kind === "resumable" ? { ...currentRef, locked: false } : currentRef, {
+      live,
       nativeInstalled: dependencies.nativeInstalled(ref.harness),
-      running: dependencies.running(path),
-      external: dependencies.external(path),
+      running,
+      external: assessment?.kind === "resumable" ? null : dependencies.external(path),
     })
+    return plan
+  }
+  const plan = async (path: string): Promise<ContinuationPlan> => {
+    const result = await resolve(path)
+    return result.transport === "attached"
+      ? { transport: "attached", provider: result.provider, conversationId: result.conversationId }
+      : result
   }
   return {
+    resolve,
     plan,
     async assertLive(path, provider, nativeId) {
       const decided = await plan(path)
@@ -71,6 +87,7 @@ function describeMismatch(plan: ContinuationPlan, refusal: string): string {
   switch (plan.transport) {
     case "attached":
       return "This conversation already has a Mako owner. Attach to it before sending."
+    case "unavailable":
     case "refused":
       return plan.reason
     case "handoff":

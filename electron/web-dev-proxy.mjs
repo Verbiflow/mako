@@ -23,9 +23,7 @@ export function trustedLocalOrigins(urls) {
 
 /** Same-origin browser access; the host itself is reachable only over a private socket. */
 export function webHostProxy(socket) {
-  return {
-    name: "mako-real-host",
-    configureServer(server) {
+  const configure = (server) => {
       server.middlewares.use((request, response, next) => {
         if (!request.url?.startsWith("/__mako/")) return next()
         const origins = trustedLocalOrigins(server.resolvedUrls?.local ?? [])
@@ -73,16 +71,17 @@ export function webHostProxy(socket) {
               ...result.headers,
               "cache-control": "no-store",
             })
+            result.on("error", () => response.destroy())
             result.pipe(response)
           }
         )
         upstream.on("error", () => {
           if (!response.headersSent) response.writeHead(503)
-          response.end("Start the real Mako host with npm run web")
+          response.end("The Mako host connection was interrupted; delivery is unconfirmed")
         })
         response.once("close", () => upstream.destroy())
         request.pipe(upstream)
       })
-    },
   }
+  return { name: "mako-real-host", configureServer: configure, configurePreviewServer: configure }
 }

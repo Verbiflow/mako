@@ -50,7 +50,7 @@ function availableNativeRunners() {
   return providerHost.nativeRunners
     .list()
     .filter(
-      (runner) => resolveExecutable(runner.fresh("", {}).command) !== null
+      (runner) => runner.available()
     )
 }
 
@@ -174,9 +174,9 @@ export async function resumeNative(
     ref.cwd,
     runner,
     options,
-    (prepared) => {
+    (prepared, env) => {
       hooks.prepared?.(ref, preparedSettings(prepared))
-      return runner.resume(ref.nativeId, prompt, prepared)
+      return runner.resume(ref.nativeId, prompt, prepared, env)
     },
     tuning?.captureOutput ?? false
   )
@@ -206,7 +206,7 @@ export async function startFresh(
     cwd,
     runner,
     options,
-    (prepared) => runner.fresh(prompt, prepared),
+    (prepared, env) => runner.fresh(prompt, prepared, env),
     options.captureOutput ?? false
   )
 }
@@ -217,7 +217,7 @@ async function launch(
   workingDir: string | undefined,
   runner: NativeRunner,
   options: NativeRunOptions,
-  build: (options: NativeRunOptions) => NativeCommand,
+  build: (options: NativeRunOptions, env: NodeJS.ProcessEnv) => NativeCommand | Promise<NativeCommand>,
   captureOutput: boolean
 ): Promise<ThreadRunState> {
   const cwd = workingDir && existsSync(workingDir) ? workingDir : homedir()
@@ -246,7 +246,7 @@ async function launch(
         message: `This ${harness} reply runs without ${named}: its command line cannot carry ${prepared.dropped.length === 1 ? "it" : "them"}.`,
       })
     }
-    ;({ command, args, env: commandEnv } = build(prepared.options))
+    ;({ command, args, env: commandEnv } = await build(prepared.options, env))
   } finally {
     preparingRuns.delete(key)
   }

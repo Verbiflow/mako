@@ -26,14 +26,25 @@ export async function nativeCheckpoint(
   }
 }
 
-/**
- * The generic answer for a provider without its own resume policy: the
- * provider's process probe says who has the session, the record's hash says
- * whether it moved since the binding's checkpoint.
- */
+/** Native record evidence; adapters interpret stores, shared policy compares history. */
+export type NativeResumeRecord =
+  | { kind: "available"; checkpoint: string }
+  | { kind: "unavailable"; reason: string }
+
+export type NativeResumeReader = (binding: ProviderBinding) => Promise<NativeResumeRecord>
+
+const readNativeFile: NativeResumeReader = async (binding) => {
+  const current = binding.path ? await nativeCheckpoint(binding.path) : undefined
+  return current === undefined
+    ? { kind: "unavailable", reason: "The native record is missing or changed while it was being read." }
+    : { kind: "available", checkpoint: current }
+}
+
+/** Shared ownership and history policy, with regular-file reading as the legacy default. */
 export async function resumeVerdict(
   binding: ProviderBinding,
-  probe: ProviderProcessProbe | undefined
+  probe: ProviderProcessProbe | undefined,
+  readRecord: NativeResumeReader = readNativeFile
 ): Promise<ResumeVerdict> {
   if (!binding.nativeId)
     return { kind: "unavailable", reason: "The saved binding has no native session ID." }
@@ -53,10 +64,9 @@ export async function resumeVerdict(
     )
   )
     return { kind: "held", by: `another ${binding.provider} process` }
-  const current = await nativeCheckpoint(binding.path)
-  if (current === undefined)
-    return { kind: "unavailable", reason: "The native record is missing or changed while it was being read." }
-  return { kind: "resumable", record: compareNativeCheckpoint(binding.checkpoint, current) }
+  const record = await readRecord(binding)
+  if (record.kind === "unavailable") return record
+  return { kind: "resumable", record: compareNativeCheckpoint(binding.checkpoint, record.checkpoint) }
 }
 
 /** The strict form: unowned and unchanged since the binding's checkpoint. */

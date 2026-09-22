@@ -2,23 +2,10 @@ import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions"
 import { RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, type RuntimeCall } from "./contracts/runtime.js"
-import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
+import { RuntimeDisconnectedError, HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import type { z } from "zod"
 
-/**
- * The host stopped answering while a call was out. `unconfirmed` is true when
- * the request may have reached the host before the connection dropped; a
- * connection that was refused outright never dispatched anything.
- */
-export class RuntimeDisconnectedError extends Error {
-  readonly code = "host-disconnected"
-  readonly unconfirmed: boolean
-  constructor(unconfirmed: boolean) {
-    super(unconfirmed ? HOST_CALL_UNCONFIRMED_MESSAGE : HOST_RECONNECTING_MESSAGE)
-    this.name = "RuntimeDisconnectedError"
-    this.unconfirmed = unconfirmed
-  }
-}
+export { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 
 // No socket, a socket nobody accepts on, or a plain file where the socket was: nothing listens.
 const REFUSED = new Set(["ECONNREFUSED", "ENOENT", "ENOTSOCK"])
@@ -61,7 +48,9 @@ export async function runtimeRequest<Schema extends z.ZodType>({ socket, path, s
   return new Promise((resolve, reject) => {
     const headers = new Map([["content-type", "application/json"]])
     if (client) headers.set("x-mako-window", client)
+    let receivedReply = false
     const req = request({ socketPath: socket, path, method: body === undefined ? "GET" : "POST", headers: Object.fromEntries(headers) }, (response) => {
+      receivedReply = true
       const chunks: Buffer[] = []
       let bytes = 0
       response.on("data", (chunk: Buffer) => {
@@ -69,18 +58,22 @@ export async function runtimeRequest<Schema extends z.ZodType>({ socket, path, s
         if (bytes > 32 * 1024 * 1024) response.destroy(new Error("Mako host response exceeded its limit"))
         else chunks.push(chunk)
       })
-      response.on("error", reject)
+      const invalidReply = (error: Error) => reject(path === "/rpc" ? new RuntimeDisconnectedError(true) : error)
+      response.on("error", invalidReply)
       response.on("end", () => {
         try {
           // A host whose close() has begun answers anything but an RPC with 503 on a closing connection.
           if (response.statusCode === 503) throw new RuntimeDisconnectedError(false)
           if (response.statusCode !== 200) throw new Error(`Mako host returned ${response.statusCode}`)
           resolve(schema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))))
-        } catch (error) { reject(error) }
+        } catch (error) {
+          if (response.statusCode === 200) invalidReply(error instanceof Error ? error : new Error("Invalid host reply"))
+          else reject(error)
+        }
       })
     })
-    req.setTimeout(timeoutMs, () => req.destroy(new Error("Mako host request timed out")))
-    req.on("error", reject)
+    req.setTimeout(timeoutMs, () => req.destroy(path === "/rpc" ? new RuntimeDisconnectedError(true) : new Error("Mako host request timed out")))
+    req.on("error", (error) => reject(path === "/rpc" && receivedReply ? new RuntimeDisconnectedError(true) : error))
     req.end(body === undefined ? undefined : JSON.stringify(body))
   })
 }
@@ -151,6 +144,7 @@ export async function invokeRuntime(socket: string, client: string, channel: str
     throw error instanceof Error ? (disconnection(error) ?? error) : error
   }
   if (!reply.ok) {
+    if (reply.code === "owner-unavailable") throw new RuntimeDisconnectedError(reply.unconfirmed ?? true, reply.conversationId)
     if (reply.code === HOST_RESTARTING_CODE) throw new RuntimeDisconnectedError(true)
     if (reply.code === HOST_CLOSED_CODE) throw new RuntimeDisconnectedError(false)
     throw new Error(reply.error)

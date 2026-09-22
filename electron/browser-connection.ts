@@ -54,7 +54,11 @@ export class BrowserConnection {
             ? new BrowserFault({
                 code: "protocol-error",
                 message: value.error.message,
-                outcome: "rejected",
+                // A debugger can detach after input has reached the renderer.
+                // The protocol error is not proof that dispatch was rejected.
+                outcome: /detached while handling command/i.test(value.error.message)
+                  ? "unknown"
+                  : "rejected",
               })
             : null,
           value.result ?? {}
@@ -79,7 +83,7 @@ export class BrowserConnection {
           new BrowserFault({
             code: "disconnected",
             message:
-              "Chrome disconnected. Observe the target after reconnecting before deciding whether to retry.",
+              "Browser disconnected. Observe the target after reconnecting before deciding whether to retry.",
             outcome: "unknown",
           })
         )

@@ -511,6 +511,12 @@ export class BrowserService {
     connection: BrowserConnection,
     event: BrowserProtocolEvent
   ): void {
+    if (event.method === "Target.targetDestroyed") {
+      // Destruction can arrive after detach already removed the binding.
+      for (const [key, target] of this.ownedTargets)
+        if (target.connection === connection && target.tab === event.params.targetId)
+          this.ownedTargets.delete(key)
+    }
     for (const [key, binding] of this.bindings) {
       if (binding.connection !== connection) continue
       if (

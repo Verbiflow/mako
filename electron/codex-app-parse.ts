@@ -268,6 +268,9 @@ export function parseThreadResponse(
   const cwd = optionalString(thread.cwd)
   if (!cwd.valid)
     return invalidResult("Codex app-server returned an invalid thread cwd")
+  const path = optionalNullableString(thread.path)
+  if (!path.valid)
+    return invalidResult("Codex app-server returned an invalid thread path")
   const turns = optionalArray(thread.turns, parseTurn)
   if (!turns.valid)
     return invalidResult("Codex app-server returned invalid thread turns")
@@ -278,6 +281,7 @@ export function parseThreadResponse(
     return invalidResult("Codex app-server returned invalid thread metadata")
   const parsedThread: ThreadResponse["thread"] = { id }
   if (cwd.value !== undefined) parsedThread.cwd = cwd.value
+  if (path.value !== undefined) parsedThread.path = path.value
   if (turns.value !== undefined) parsedThread.turns = turns.value
   const response: ThreadResponse = { thread: parsedThread }
   if (model.value !== undefined) response.model = model.value

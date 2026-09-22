@@ -1,7 +1,7 @@
 import { relative } from "node:path"
 import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
 import type { Comparison, RepoPath, KiriRepository, KiriClient, ResultValue } from "@kiri/client"
-import type { GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "./shared.js"
+import type { GitRemoteInput, GitRemoteResult, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "./shared.js"
 import { withKiriRepository } from "./kiri-engine.js"
 import { readGitPreview, readGitPreviewSet } from "./git-preview.js"
 
@@ -15,6 +15,7 @@ export async function waitForIndexWrites(root: string, signal: AbortSignal): Pro
 }
 function kind(value: string): GitFileStatus {
   switch (value) {
+    case "unmerged": return "conflicted"
     case "added": return "added"
     case "deleted": return "deleted"
     case "renamed": return "renamed"
@@ -41,7 +42,15 @@ export class WorkspaceGit {
   setCwd(cwd: string): void { if (cwd !== this.cwdValue) { this.cwdValue = cwd; this.version += 1; this.paths.clear(); this.selectedRoot = undefined; this.repositoryRoots = [] } }
   get target(): string { return this.selectedRoot ?? this.cwdValue }
   async selectRepository(cwd: string, root: string): Promise<GitStatus> {
-    if (cwd !== this.cwdValue || !this.repositoryRoots.includes(root)) throw new Error("Choose a repository in the current workspace.")
+    if (cwd !== this.cwdValue) throw new Error("The workspace changed. Refresh Changes and select the repository again.")
+    // The renderer can still display a repository list after this owner was
+    // recreated. Discovery is evidence; an unpopulated cache is not a refusal.
+    if (!this.repositoryRoots.includes(root)) {
+      const version = this.version
+      await this.status()
+      if (cwd !== this.cwdValue || version !== this.version) throw new Error("The workspace changed. Refresh Changes and select the repository again.")
+    }
+    if (!this.repositoryRoots.includes(root)) throw new Error("This repository is no longer available in the current workspace. Refresh Changes to update the list.")
     const previous = this.selectedRoot
     this.selectedRoot = root
     this.version += 1
@@ -127,7 +136,7 @@ export class WorkspaceGit {
   private async readRepositoryStatus(cwd: string, repo: KiriRepository, client: KiriClient): Promise<GitStatus> {
       const [snapshot, operation] = await Promise.all([repo.status(true), client.request({ method: "operation", repo: repo.id })])
       const status = snapshot.status
-      const files: GitFile[] = status.files.map((file) => ({ path: this.path(file.path), oldName: file.original_path ? this.path(file.original_path) : undefined, status: file.staged === "renamed" || file.worktree === "renamed" ? "renamed" : kind(file.worktree ?? file.staged ?? "modified"), staged: file.staged != null, insertions: null, deletions: null, binary: false }))
+      const files: GitFile[] = status.files.map((file) => ({ path: this.path(file.path), oldName: file.original_path ? this.path(file.original_path) : undefined, status: file.staged === "unmerged" || file.worktree === "unmerged" ? "conflicted" : file.staged === "renamed" || file.worktree === "renamed" ? "renamed" : kind(file.worktree ?? file.staged ?? "modified"), staged: file.staged != null, insertions: null, deletions: null, binary: false }))
       return { cwd, root: repo.root, branch: status.branch, head: status.head ?? undefined, upstream: status.upstream ?? undefined, ahead: status.ahead, behind: status.behind, files, operation: expected(operation, "operation").operation ?? undefined }
   }
   async listFiles(): Promise<string[] | null> {
@@ -149,6 +158,28 @@ export class WorkspaceGit {
   async stageAll(): Promise<void> { await this.withRepo(async (repo, client) => { await client.request({ method: "stage_all", repo: repo.id, side: "worktree" }) }) }
   async unstageAll(): Promise<void> { await this.withRepo(async (repo, client) => { await client.request({ method: "stage_all", repo: repo.id, side: "staged" }) }) }
   async commit(message: string, options: { amend?: boolean } = {}): Promise<void> { await this.withRepo(async (repo, client) => { await client.request({ method: "commit_message", repo: repo.id, message, amend: options.amend ?? false }) }) }
+  async remote(input: GitRemoteInput): Promise<GitRemoteResult> {
+    const target = new WorkspaceGit(input.cwd)
+    let failure: unknown
+    try {
+      await withKiriRepository(input.cwd, async (repo, client) => {
+        if (!repo) throw new Error("This repository is unavailable.")
+        const expected = { branch: input.branch, head: input.head ?? null }
+        if (input.action === "fetch" || input.action === "pull") {
+          await client.request({ method: "sync", repo: repo.id, action: input.action, target: expected })
+        } else {
+          if (input.action === "merge") await client.request({ method: "sync", repo: repo.id, action: "fetch", target: null })
+          await client.request({ method: "integrate", repo: repo.id, action: input.action, target: expected })
+        }
+      })
+    } catch (error) { failure = error }
+    const status = await target.status()
+    if (!failure) return { status }
+    if (status.files.some(file => file.status === "conflicted")) return { status, problem: { kind: "conflicts", message: "Resolve and stage the conflicted files, then continue." } }
+    if ((input.action === "pull" || input.action === "merge") && status.files.some(file => file.status !== "untracked")) return { status, problem: { kind: "dirty", message: "Commit or stash your changes before pulling. Your edits are still here." } }
+    if (input.action === "pull" && status.ahead > 0 && status.behind > 0) return { status, problem: { kind: "incoming", message: "Both branches have new commits. Pull & merge to combine them, then push." } }
+    return { status, problem: { kind: "failed", message: `Could not ${input.action === "merge" ? "merge incoming changes" : input.action}. Review the Git details before trying again.`, detail: failure instanceof Error ? failure.message : String(failure) } }
+  }
   async push(branch?: string): Promise<{ branch: string; output: string }> {
     return this.withRepo(async (repo, client) => {
       const current = branch ?? (await repo.status(true)).status.branch

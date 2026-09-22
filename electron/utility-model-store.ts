@@ -21,9 +21,9 @@ import {
 } from "./utility-models.js"
 
 export interface UtilityKeyEncryption {
-  available(): boolean
-  encrypt(value: string): Buffer
-  decrypt(value: Buffer): string
+  available(): boolean | Promise<boolean>
+  encrypt(value: string): Buffer | Promise<Buffer>
+  decrypt(value: Buffer): string | Promise<string>
 }
 
 const apiKeySchema = z
@@ -86,7 +86,7 @@ export class UtilityModelStore {
       providers: utilityProviders,
       connections,
       issues,
-      secureStorage: this.encryption.available(),
+      secureStorage: await this.encryption.available(),
     }
   }
 
@@ -96,10 +96,10 @@ export class UtilityModelStore {
     try {
       const info = await stat(path)
       if (info.size > 32_768) throw new Error("Invalid credential file")
-      if (!this.encryption.available())
+      if (!(await this.encryption.available()))
         throw new Error("Secure storage unavailable")
       const value = storedSchema.parse(
-        JSON.parse(this.encryption.decrypt(await readFile(path)))
+        JSON.parse(await this.encryption.decrypt(await readFile(path)))
       )
       return { ...parseConnection(value), apiKey: value.apiKey }
     } catch (error) {
@@ -132,7 +132,7 @@ export class UtilityModelStore {
   async connect(input: UtilityConnectionInput): Promise<UtilityConnection> {
     await this.ready
     const connection = parseConnection(input)
-    if (!this.encryption.available())
+    if (!(await this.encryption.available()))
       throw new Error(
         "Secure key storage is unavailable. Unlock your system keychain before connecting a model."
       )
@@ -152,7 +152,7 @@ export class UtilityModelStore {
       try {
         await writeFile(
           temporary,
-          this.encryption.encrypt(JSON.stringify({ ...connection, apiKey })),
+          await this.encryption.encrypt(JSON.stringify({ ...connection, apiKey })),
           { mode: 0o600, flag: "wx" }
         )
         await rename(temporary, path)

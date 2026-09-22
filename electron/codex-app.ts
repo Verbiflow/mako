@@ -1,3 +1,4 @@
+import { ProviderStartupWatch } from "./provider-startup.js"
 import { CodexAgents } from "./providers/codex/agents.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -81,12 +82,11 @@ type Live = {
   stderrBuffer: string
   agents: CodexAgents
   protocol: ProtocolCallbacks
-  startupTimer: ReturnType<typeof setTimeout> | null
+  startupWatch: ProviderStartupWatch | null
   replayUpdates: LiveUpdate[] | null
   exited: boolean
 }
 
-const STARTUP_TIMEOUT_MS = 10_000
 const MAX_STDERR_BUFFER = 16 * 1024
 const MAX_PROMPT_CHARS = 1_000_000
 const engine = createLiveEngine<Live>()
@@ -185,26 +185,21 @@ export async function codexAppStart(
       clearTurnServerRequests: (turnId) =>
         clearTurnServerRequests(live, turnId),
     },
-    startupTimer: null,
+    startupWatch: null,
     replayUpdates: null,
     exited: false,
   }
   sessions.set(id, live)
   bindProcess(live)
 
-  const startup = new Promise<never>((_, reject) => {
-    live.startupTimer = setTimeout(
-      () =>
-        reject(new Error("Codex app-server did not start within 10 seconds")),
-      STARTUP_TIMEOUT_MS
-    )
+  const watch = new ProviderStartupWatch(child, {
+    harness: "Codex",
+    stderr: () => live.stderrBuffer,
   })
+  live.startupWatch = watch
   try {
-    const response = await Promise.race([
-      openThread(live, options.resume, options.fork),
-      startup,
-    ])
-    clearStartupTimer(live)
+    const response = await openThread(live, watch, options.resume, options.fork)
+    clearStartupWatch(live)
     live.threadId = response.thread.id
     if (options.resume === response.thread.id && !options.fork)
       live.agents.restore(options.observedAgents ?? [])
@@ -227,6 +222,7 @@ export async function codexAppStart(
       )
     updateState(live, {
       nativeId: response.thread.id,
+      nativePath: response.thread.path ?? undefined,
       settings,
       status: "ready",
       connection: "connected",
@@ -239,7 +235,7 @@ export async function codexAppStart(
     })
     return live.state
   } catch (error) {
-    clearStartupTimer(live)
+    clearStartupWatch(live)
     const fallback =
       lastLine(live.stderrBuffer) || "Codex app-server failed to start"
     const message =
@@ -408,13 +404,14 @@ export function stopCodexApps(): void {
 
 async function openThread(
   live: Live,
+  watch: ProviderStartupWatch,
   resume?: string,
   fork?: { nativeId: string; runId: string }
 ): Promise<ThreadResponse> {
-  await rpcRequest(live, "initialize", {
+  await watch.step("initialize", rpcRequest(live, "initialize", {
     clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
     capabilities: { experimentalApi: true, requestAttestation: false },
-  })
+  }))
   sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
   const tuning = threadTuning(
     live.tuning,
@@ -426,19 +423,19 @@ async function openThread(
     )
   )
   if (fork)
-    return rpcRequest(live, "thread/fork", {
+    return watch.step("thread/fork", rpcRequest(live, "thread/fork", {
       threadId: fork.nativeId,
       lastTurnId: fork.runId,
       cwd: live.cwd,
       ...tuning,
-    })
+    }))
   return resume
-    ? rpcRequest(live, "thread/resume", {
+    ? watch.step("thread/resume", rpcRequest(live, "thread/resume", {
         threadId: resume,
         cwd: live.cwd,
         ...tuning,
-      })
-    : rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning })
+      }))
+    : watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning }))
 }
 
 function threadTuning(
@@ -506,7 +503,7 @@ function disposeLive(live: Live, error: Error): void {
   if (live.exited) return
   live.exited = true
   live.agents.dispose()
-  clearStartupTimer(live)
+  clearStartupWatch(live)
   for (const pending of live.pending.values()) {
     clearTimeout(pending.timer)
     pending.reject(error)
@@ -517,9 +514,9 @@ function disposeLive(live: Live, error: Error): void {
   live.stdoutLines = new LineAssembler(MAX_STDOUT_BUFFER)
 }
 
-function clearStartupTimer(live: Live): void {
-  if (live.startupTimer) clearTimeout(live.startupTimer)
-  live.startupTimer = null
+function clearStartupWatch(live: Live): void {
+  live.startupWatch?.dispose()
+  live.startupWatch = null
 }
 
 function updateState(live: Live, patch: Partial<LiveSessionState>): void {

@@ -55,7 +55,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk"
 import { accountEnv } from "./accounts.js"
-import { AcpStartupWatch, stderrDetail } from "./acp-startup.js"
+import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { trackProviderChild } from "./provider-children.js"
 import { errorMessage } from "./live-runtime.js"
@@ -198,10 +198,13 @@ export async function liveStart(
       : policy?.default
   const launchAccess =
     launchTier && policy?.launch?.includes(launchTier) ? launchTier : null
+  const env = await accountEnv(harness, process.env)
   const launchOptions: AcpLaunchOptions = {
     appPath: app.getAppPath(),
     execPath: process.execPath,
     resume: options.resume,
+    nativePath: options.threadPath,
+    env,
     tuning: options.tuning,
   }
   if (launchAccess) launchOptions.access = launchAccess
@@ -216,7 +219,6 @@ export async function liveStart(
   // Claude Code. Mako is not one, but it may have been *launched from* one,
   // and the variable would be inherited. The selected account's config home
   // rides in the same way it does for headless runs.
-  const env = await accountEnv(harness, process.env)
   delete env.CLAUDECODE
   delete env.CLAUDE_CODE_ENTRYPOINT
   spec.configureEnvironment(env)
@@ -277,7 +279,7 @@ export async function liveStart(
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-4000)
   })
-  const watch = new AcpStartupWatch(child, { harness, stderr: () => stderr })
+  const watch = new ProviderStartupWatch(child, { harness, stderr: () => stderr })
   trackProviderChild(child, { kind: `acp:${harness}`, owner: id })
   hostLog("acp", "spawned", {
     harness,

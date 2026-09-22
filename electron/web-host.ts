@@ -1,3 +1,4 @@
+import { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 import {
   createServer,
   type IncomingMessage,
@@ -7,7 +8,7 @@ import { once } from "node:events"
 import { chmod } from "node:fs/promises"
 import { z } from "zod"
 import type { HostEvent, TerminalEvent } from "./shared.js"
-import { RuntimeCallSchema, type RuntimeInfo } from "./contracts/runtime.js"
+import { RuntimeCallSchema, type RuntimeInfo, type RuntimeReplySchema } from "./contracts/runtime.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import { hostLog } from "./host-log.js"
 
@@ -29,7 +30,7 @@ async function readRequest(request: IncomingMessage) {
   return RuntimeCallSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")))
 }
 
-/** Development-only host transport on a private Unix socket, never a public TCP listener. */
+/** Host transport shared by desktop and browser gateways on a private Unix socket. */
 export async function startWebHost(
   socket: string,
   invoke: (channel: string, args: unknown[], client?: string) => Promise<string>,
@@ -136,16 +137,16 @@ export async function startWebHost(
           .end(encoded)
       })
       .catch((error) => {
+        const reply: z.input<typeof RuntimeReplySchema> = {
+          ok: false, error: error instanceof Error ? error.message : "Mako host request failed",
+        }
+        if (error instanceof RuntimeDisconnectedError) {
+          reply.code = error.conversationId ? "owner-unavailable" : error.unconfirmed ? HOST_RESTARTING_CODE : HOST_CLOSED_CODE
+          reply.unconfirmed = error.unconfirmed
+          reply.conversationId = error.conversationId
+        }
         if (!response.destroyed && !response.headersSent)
-          response.writeHead(200, { "content-type": "application/json" }).end(
-            JSON.stringify({
-              ok: false,
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "Mako host request failed",
-            })
-          )
+          response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(reply))
       })
   })
   await new Promise<void>((resolve, reject) => {

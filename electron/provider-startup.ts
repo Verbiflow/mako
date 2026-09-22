@@ -2,7 +2,7 @@ import type { EventEmitter } from "node:events"
 import { stripVTControlCharacters } from "node:util"
 
 /**
- * The deadline on an ACP agent's startup, measured the way a stall actually
+ * The deadline on a provider process's startup, measured the way a stall actually
  * shows itself: as silence.
  *
  * A fixed 20-second budget on `session/new` once killed a Grok that answered
@@ -76,7 +76,7 @@ function seconds(ms: number): string {
   return ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`
 }
 
-export class AcpStartupWatch {
+export class ProviderStartupWatch {
   readonly steps: StartupStepReport[] = []
   private readonly harness: string
   private readonly silenceMs: number

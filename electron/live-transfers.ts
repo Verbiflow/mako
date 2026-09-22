@@ -172,10 +172,14 @@ export class LiveTransfers {
     let activated = false
     try {
       this.save(resident, { ...transfer, state: { kind: "preparing" } })
+      this.host.discoverNativePath(resident)
       const source = resident.snapshot
       const control = this.host.control(resident)
+      const target = transfer.input.bindingId
+      if (target && !control.bindings.some((binding) => binding.id === target && binding.provider === transfer.input.provider))
+        throw new Error("The selected native session is unavailable")
       const currentBinding = control.bindings.find((binding) => binding.id === control.activeBindingId)
-      reconnect = !resident.driver && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding.nativeId)
+      reconnect = (!target || target === control.activeBindingId) && !resident.driver && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding.nativeId)
       const bindings = control.bindings.map((binding) =>
         binding.id === control.activeBindingId && resident.driver
           ? {
@@ -191,6 +195,7 @@ export class LiveTransfers {
       // native file may have changed outside Mako; a fresh full handoff is the safe fallback.
       let prior = bindings.find(
         (binding) =>
+          (!target || binding.id === target) &&
           binding.provider === transfer.input.provider &&
           (transfer.input.tuning === undefined ||
             JSON.stringify(binding.tuning) ===
@@ -209,23 +214,24 @@ export class LiveTransfers {
       ) {
         for (const binding of [...bindings].reverse()) {
           if (
+            (target && binding.id !== target) ||
             binding.provider !== transfer.input.provider ||
-            !(reconnect
+            !(target || (reconnect
               ? binding.id === control.activeBindingId
               : transfer.input.tuning === undefined ||
                 JSON.stringify(binding.tuning) ===
-                  JSON.stringify(transfer.input.tuning))
+                  JSON.stringify(transfer.input.tuning)))
           )
             continue
           const candidate = await this.host.dependencies.resumeVerdict?.(binding)
-          if (reconnect) verdict = candidate
-          if (candidate && resumable(candidate, reconnect ? "moved" : "same")) {
+          if (reconnect || target) verdict = candidate
+          if (candidate && resumable(candidate, reconnect || target ? "moved" : "same")) {
             prior = binding
             break
           }
         }
       }
-      if (reconnect && !prior) throw new Error(reconnectRefusal(verdict))
+      if ((reconnect || target) && !prior) throw new Error(reconnectRefusal(verdict))
       const tuning =
         transfer.input.tuning ??
         prior?.tuning ??
@@ -293,6 +299,7 @@ export class LiveTransfers {
             : undefined,
           conversationId: bindingId,
           resume: prior?.nativeId,
+          threadPath: prior?.path,
           observedAgents: prior?.nativeId && !nativeFork
             ? source.nativeAgents?.agents.filter((agent) => agent.bindingId === prior.id && agent.provider === prior.provider)
             : undefined,
@@ -415,6 +422,7 @@ export class LiveTransfers {
           ...previous.requests,
           LiveRequestSchema.parse({
             id: transfer.input.id,
+            targetBindingId: transfer.input.bindingId,
             text: transfer.input.text,
             displayText: transfer.input.text,
             attachments: transfer.input.attachments,
