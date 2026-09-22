@@ -16,6 +16,7 @@ import { tabsStore } from "@/state/tabs"
 export interface TabStage {
   companion: string | null
   dock: string | null
+  dockExpanded?: boolean
   presentation: "beside" | "over"
 }
 
@@ -84,6 +85,13 @@ export const stage = {
       ...current,
       dock: current.dock === surfaceId ? null : surfaceId,
     })
+  },
+
+  toggleDockExpanded() {
+    const tabId = activeTab()
+    if (!tabId) return
+    const current = stageOf(tabId)
+    write(tabId, { ...current, dockExpanded: !current.dockExpanded })
   },
 
   /**

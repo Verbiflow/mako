@@ -24,9 +24,9 @@ export function useGitPush(cwd: string, branch: string) {
   return usePushStore((state) => state.branches.get(keyOf(cwd, branch)) ?? idle)
 }
 
-export function gitUntrackedBlocker(cwd: string, branch: string) {
+export function gitPullBlocker(cwd: string, branch: string) {
   const state = pushStore.get().branches.get(keyOf(cwd, branch))
-  return state?.kind === "failed" && state.reason === "untracked" ? { message: state.message, detail: state.detail } : undefined
+  return state?.kind === "failed" && (state.reason === "untracked" || state.reason === "dirty") ? { kind: state.reason, message: state.message, detail: state.detail } : undefined
 }
 
 function update(key: string, state: PushState) {

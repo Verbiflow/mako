@@ -1,4 +1,4 @@
-import { gitUntrackedBlocker } from "@/state/git-push"
+import { gitPullBlocker } from "@/state/git-push"
 import { getMako } from "@/lib/bridge"
 import { attachmentReference } from "@/lib/attachment-references"
 import { gitConflictContext } from "@/lib/git-conflict-context"
@@ -7,13 +7,13 @@ import { actions, store } from "@/state/session"
 
 export function gitConflictAttachment(): AttachmentInput | null {
   const status = store.get().git
-  const context = gitConflictContext(status, undefined, gitUntrackedBlocker(status?.root ?? "", status?.branch ?? ""))
+  const context = gitConflictContext(status, undefined, gitPullBlocker(status?.root ?? "", status?.branch ?? ""))
   return context ? { file: new File([context.text], context.name, { type: "text/markdown" }), contextLabel: context.label } : null
 }
 
 export async function copyGitConflictContext(): Promise<boolean> {
   const status = store.get().git
-  const context = gitConflictContext(status, undefined, gitUntrackedBlocker(status?.root ?? "", status?.branch ?? ""))
+  const context = gitConflictContext(status, undefined, gitPullBlocker(status?.root ?? "", status?.branch ?? ""))
   if (!context) throw new Error("No conflicts remain. Refresh the Git panel to see the latest state.")
   const bytes = new TextEncoder().encode(context.text)
   const data = btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(""))
