@@ -72,6 +72,11 @@ try {
   host.event({type:"notice",level:"info",message:"private"},`web:${a}`)
   await wait(()=>framesA.length===3&&framesB.length===2)
   assert.deepEqual(framesB.at(-1),{channel:"event",payload:{type:"notice",level:"info",message:"global"}})
+  host.terminal({ type: "output", sessionId: "left", sequence: 1, data: "private terminal" }, `web:${a}`)
+  host.terminal({ type: "wake" })
+  await wait(() => framesA.length === 5 && framesB.length === 3)
+  assert.deepEqual(framesA.at(-2), { channel: "terminal", payload: { type: "output", sessionId: "left", sequence: 1, data: "private terminal" } })
+  assert.deepEqual(framesB.at(-1), { channel: "terminal", payload: { type: "wake" } })
   console.log("Runtime transport: shared health, exact arguments, distinct clients, global events and targeted workspace delivery verified")
 } finally {closeA();closeB();host.close();await rm(root,{recursive:true,force:true})}
 

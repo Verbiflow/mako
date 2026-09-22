@@ -1,3 +1,4 @@
+import { TerminalHistoryFilter } from "../electron/terminal-history-filter.js"
 import assert from "node:assert/strict"
 import {
   BoundedTerminalHistory,
@@ -99,3 +100,39 @@ assert.deepEqual(decoder.push(Buffer.from('}\n{"two":2}\n')), [
 ])
 
 console.log("terminal protocol bounds passed")
+
+// Control traffic may cross any PTY chunk boundary. Drawing and mode changes survive.
+const drawing = "hello\x1b[31mred\x1b[0m\x1b[?1049h\x1b[2;3Hscreen\x1b[?1049l"
+const queries = [
+  "\x1b[6n",
+  "\x1b[?2004$p",
+  "\x1b[>0q",
+  "\x1b[?u",
+  "\x1b]11;?\x07",
+  "\x1bP$qm\x1b\\",
+  "\x1b]52;c;clipboard\x07",
+  "\x9b6n",
+  "\x9d10;?\x9c",
+]
+for (const query of queries) {
+  for (let split = 0; split <= query.length; split++) {
+    const filter = new TerminalHistoryFilter()
+    assert.equal(
+      filter.push(drawing + query.slice(0, split)) +
+        filter.push(query.slice(split) + drawing),
+      drawing + drawing
+    )
+  }
+}
+const filter = new TerminalHistoryFilter()
+assert.equal(filter.push("\x1b]" + "a".repeat(100_000)), "")
+assert.equal(filter.push("discarded\x1b") + filter.push("\\visible"), "visible")
+const unicodeHistory = new BoundedTerminalHistory(17)
+unicodeHistory.append("🙂界".repeat(20))
+assert.ok(
+  !unicodeHistory.text().includes("�"),
+  "Eviction must not retain incomplete UTF-8 prefixes"
+)
+console.log(
+  "terminal history: split control traffic, drawing modes, bounded strings and UTF-8 eviction passed"
+)
