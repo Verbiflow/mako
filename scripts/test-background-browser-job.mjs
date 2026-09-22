@@ -3,7 +3,7 @@ import { createServer } from "node:http"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { BrowserService } from "../dist-electron/browser-service.js"
-import { sampleFrontmost } from "./lib/control-fixture.mjs"
+import { sampleFrontmost, frontmostPid } from "./lib/control-fixture.mjs"
 import { BrowserCommandSchema } from "../dist-electron/contracts/browser-control.js"
 
 // Uses an already connected browser, opens only task-owned local fixture tabs,
@@ -41,12 +41,21 @@ const service = new BrowserService(
       : undefined
   ),
   owner = "background-job-" + Date.now()
-const run = (input) =>
-  service.execute(
-    owner,
-    BrowserCommandSchema.parse(input),
-    AbortSignal.timeout(15000)
-  )
+const run = async (input) => {
+  const trace = process.env.MAKO_TEST_FOCUS_TRACE === "1"
+  const before = trace ? await frontmostPid() : undefined
+  const startedAt = Date.now()
+  try {
+    return await service.execute(owner, BrowserCommandSchema.parse(input), AbortSignal.timeout(15000))
+  } finally {
+    if (trace) {
+      const after = await frontmostPid()
+      evidence.focusTrace ??= []
+      evidence.focusTrace.push({ action: input.action, startedAt, endedAt: Date.now(), before, after })
+      await writeFile(join(root, "focus-trace.json"), JSON.stringify(evidence.focusTrace,null,2))
+    }
+  }
+}
 const evidence = { rounds: [], refusals: [], screenshots: [], targets: [] }
 let samples
 async function until(check) {

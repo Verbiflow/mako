@@ -19,6 +19,7 @@ let path = CommandLine.arguments[1]
 let marker: Int64 = 0x4d414b4f54455354
 var sent = 0, received = 0
 var failures: [String] = []
+var focusChanges: [[String: Any]] = []
 var started = false
 var stopped = false
 let startedAt = Date()
@@ -35,7 +36,7 @@ Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { _ in
     stopped = FileManager.default.fileExists(atPath: path + ".stop")
     if foreground && window.isKeyWindow { started = true }
     if started && !stopped && foreground && !window.isKeyWindow && failures.last != "key-window-lost" { failures.append("key-window-lost") }
-    if started && !stopped && !foreground { if failures.last != "foreground-lost" { failures.append("foreground-lost") } }
+    if started && !stopped && !foreground { if failures.last != "foreground-lost" { failures.append("foreground-lost"); focusChanges.append(["pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1, "time": Date().timeIntervalSince1970]) } }
     if started && !stopped && foreground && window.isKeyWindow && failures.isEmpty {
         let source = CGEventSource(stateID: .privateState)
         if let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true), let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
@@ -43,7 +44,7 @@ Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { _ in
             down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap); sent += 1
         }
     }
-    let state: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier,"started":started,"stopped":stopped,"sent":sent,"received":received,"failures":failures,"elapsed":Date().timeIntervalSince(startedAt)]
+    let state: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier,"started":started,"stopped":stopped,"sent":sent,"received":received,"failures":failures,"focusChanges":focusChanges,"elapsed":Date().timeIntervalSince(startedAt)]
     if let data = try? JSONSerialization.data(withJSONObject: state) { try? data.write(to:URL(fileURLWithPath:path),options:.atomic) }
 }
 if CommandLine.arguments.contains("--activate") { app.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
