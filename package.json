@@ -74,7 +74,7 @@
     "package:mac": "npm run build && npm run test:renderer-assets && node scripts/package-mac.mjs",
     "package:mac:local": "npm run build && npm run test:renderer-assets && node scripts/package-mac.mjs --local --dir",
     "test:local-signing": "node scripts/test-local-signing.mjs",
-    "test:application": "node scripts/test-daemon-login.mjs && tsx scripts/test-application-lifecycle.ts && tsx scripts/test-window-shutdown.ts && tsx scripts/test-host-idle.ts && tsx scripts/test-local-build-source.ts && tsx scripts/test-local-update-install.ts && node scripts/test-application-runtime.mjs && node scripts/test-checkout-copy.mjs && node scripts/test-application-ui.mjs",
+    "test:application": "node scripts/test-daemon-login.mjs && tsx scripts/test-application-lifecycle.ts && tsx scripts/test-window-shutdown.ts && tsx scripts/test-host-idle.ts && tsx scripts/test-local-build-source.ts && tsx scripts/test-local-update-install.ts && tsx scripts/test-local-update-startup.ts && node scripts/test-application-runtime.mjs && node scripts/test-checkout-copy.mjs && node scripts/test-application-ui.mjs",
     "test:provider-ui": "node scripts/test-provider-ui.mjs",
     "test:application-ui": "node scripts/test-application-ui.mjs",
     "test:checkout-copy": "node scripts/test-checkout-copy.mjs",

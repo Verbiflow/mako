@@ -29,13 +29,23 @@ export const preloadBuildOptions = {
 
 /** Build once, or keep rebuilding while `electron/` changes; returns the disposer. */
 export async function buildPreload({ watch = false } = {}) {
+  // The detached Settings installer survives replacement of the running ASAR.
+  // Its startup probe must carry its dependencies outside that bundle too.
+  const startupOptions = {
+    entryPoints: [join(root, "electron/local-update-startup.ts")],
+    outfile: join(root, "dist-electron/local-update-startup.mjs"),
+    bundle: true, format: "esm", platform: "node", target: "node22",
+    logLevel: "warning",
+  }
   if (!watch) {
-    await build(preloadBuildOptions)
+    await Promise.all([build(preloadBuildOptions), build(startupOptions)])
     return async () => {}
   }
   const watcher = await context(preloadBuildOptions)
+  const startupWatcher = await context(startupOptions)
   await watcher.watch()
-  return () => watcher.dispose()
+  await startupWatcher.watch()
+  return () => Promise.all([watcher.dispose(), startupWatcher.dispose()])
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
