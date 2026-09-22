@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises"
-import { isAbsolute, join, basename } from "node:path"
+import { isAbsolute, join, basename, dirname } from "node:path"
 import { z } from "zod"
 
 const displayName = z
@@ -48,6 +48,18 @@ export async function singleBrowserProfile(
 export async function browserProfileName(
   directory: string
 ): Promise<string | undefined> {
+  if (!isAbsolute(directory)) return
+  try {
+    const path = join(dirname(directory), "Local State")
+    if ((await stat(path)).size <= 8 * 1024 * 1024) {
+      const state = z.object({ profile: z.object({ info_cache: z.record(z.string(), z.json()) }) })
+        .parse(JSON.parse(await readFile(path, "utf8")))
+      const profile = z.object({ name: displayName }).safeParse(state.profile.info_cache[basename(directory)])
+      if (profile.success) return profile.data.name
+    }
+  } catch {
+    // Older roots can lack the index. The exact profile Preferences is the fallback.
+  }
   try {
     const path = join(directory, "Preferences")
     if ((await stat(path)).size > 8 * 1024 * 1024) return

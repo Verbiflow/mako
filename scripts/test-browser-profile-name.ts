@@ -12,18 +12,18 @@ try {
   await writeFile(
     join(root, "Local State"),
     JSON.stringify({
-      profile: { info_cache: { Default: { name: "Old name" } } },
+      profile: { info_cache: { Default: { name: "Work" } } },
     })
   )
   await writeFile(
     join(root, "Default", "Preferences"),
-    JSON.stringify({ profile: { name: "Work" } })
+    JSON.stringify({ profile: { name: "Your Aside" } })
   )
   assert.equal(await singleBrowserProfile(root), join(root, "Default"))
   assert.equal(await browserProfileName(join(root, "Default")), "Work")
   await writeFile(
-    join(root, "Default", "Preferences"),
-    JSON.stringify({ profile: { name: "Personal" } })
+    join(root, "Local State"),
+    JSON.stringify({ profile: { info_cache: { Default: { name: "Personal" } } } })
   )
   assert.equal(
     await browserProfileName(join(root, "Default")),
