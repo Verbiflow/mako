@@ -1,3 +1,4 @@
+import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
 import type {
@@ -37,6 +38,8 @@ export interface ConversationTools {
 
 /** Host-only launch credentials. Never included in the renderer wire contract or journals. */
 export interface ProviderStartOptions extends LiveStartOptions {
+  /** Prior child identities for this exact resumed binding; states require fresh evidence. */
+  observedAgents?: NativeAgentObservation[]
   emit?: (event: LiveDriverEvent) => void
   mcpSnapshot?: () => Promise<McpRegistrySnapshot>
   fork?: { nativeId: string; runId: string }

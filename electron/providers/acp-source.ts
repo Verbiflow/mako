@@ -1,4 +1,5 @@
-import type { McpServer, ClientCapabilities } from "@agentclientprotocol/sdk"
+import type { McpServer, ClientCapabilities, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk"
+import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
@@ -33,6 +34,16 @@ export interface AcpLaunch {
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
 export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict"> {
+  /** Native tool identity supplied by provider extensions to ACP metadata. */
+  toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
+  /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */
+  observeAgents?(input: {
+    nativeId: string
+    observedAgents?: readonly NativeAgentObservation[]
+    cwd: string
+    env: NodeJS.ProcessEnv
+    publish(agent: NativeAgentObservation): void
+  }): Promise<AcpAgentObserver> | AcpAgentObserver
   compaction?: import("../acp-compaction.js").AcpCompactionSpec
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
@@ -55,4 +66,10 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
   sessionMetadata?(tuning: SessionSettings): NewSessionRequest["_meta"]
   available(appPath: string): boolean
   launch(options: AcpLaunchOptions): Promise<AcpLaunch | null>
+}
+
+export interface AcpAgentObserver {
+  /** Child-owned events are consumed before parent content/settings projection. */
+  observe(notification: SessionNotification): "child" | void
+  dispose(): void
 }
