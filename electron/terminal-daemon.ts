@@ -9,6 +9,7 @@ import {
   wrapMacosTerminalLogin,
 } from "./macos-terminal-login.js"
 import { childProcessEnv } from "./accounts-common.js"
+import { TerminalHistoryFilter } from "./terminal-history-filter.js"
 import { killTerminalProcessGroups } from "./terminal-process-groups.js"
 import type { TerminalSession } from "./shared.js"
 import {
@@ -31,6 +32,7 @@ import {
 interface LiveSession {
   summary: TerminalSession
   history: BoundedTerminalHistory
+  historyFilter: TerminalHistoryFilter
   pty: IPty | null
   flowPaused: boolean
   pendingOutput: Array<{ sequence: number; data: string }>
@@ -38,14 +40,17 @@ interface LiveSession {
   exitListener?: IDisposable
 }
 
+interface SessionConsumer {
+  pendingBytes: number
+  pendingOutput: Map<number, number>
+  snapshotSequence: number
+}
+
 interface ClientConnection {
   socket: Socket
   decoder: JsonLineDecoder
   blocked: boolean
-  missedOutput: boolean
-  pendingBytes: number
-  pendingOutput: Map<number, number>
-  attachedSessionId?: string
+  sessions: Map<string, SessionConsumer>
 }
 
 interface PersistedSession {
@@ -144,16 +149,15 @@ function send(connection: ClientConnection, frame: TerminalResponse | TerminalDa
 function broadcast(event: TerminalDaemonEvent, sessionId?: string) {
   const frame = encodeTerminalFrame(event)
   for (const client of clients) {
-    if (sessionId && client.attachedSessionId !== sessionId) continue
-    if (client.blocked) {
-      if (sessionId) client.missedOutput = true
-      continue
-    }
+    const consumer = sessionId ? client.sessions.get(sessionId) : undefined
+    if (sessionId && !consumer) continue
+    if (event.type === "output" && consumer && event.sequence <= consumer.snapshotSequence) continue
+    // Status/removal must survive socket backpressure too. Output is gated by drainSessionOutput.
     const writable = client.socket.write(frame)
-    if (event.type === "output") {
+    if (event.type === "output" && consumer) {
       const bytes = Buffer.byteLength(event.data)
-      client.pendingOutput.set(event.sequence, bytes)
-      client.pendingBytes += bytes
+      consumer.pendingOutput.set(event.sequence, bytes)
+      consumer.pendingBytes += bytes
       reconcileProducerFlow(event.sessionId)
     }
     if (!writable) client.blocked = true
@@ -163,9 +167,10 @@ function broadcast(event: TerminalDaemonEvent, sessionId?: string) {
 function reconcileProducerFlow(sessionId: string) {
   const session = sessions.get(sessionId)
   if (!session?.pty) return
-  const consumers = [...clients].filter(
-    (client) => client.attachedSessionId === sessionId
-  )
+  const consumers = [...clients].flatMap((client) => {
+    const consumer = client.sessions.get(sessionId)
+    return consumer ? [consumer] : []
+  })
   const shouldPause = consumers.some(
     (client) => client.pendingBytes >= TERMINAL_FLOW_HIGH_BYTES
   )
@@ -190,28 +195,23 @@ function reconcileProducerFlow(sessionId: string) {
   }
 }
 
-function resetConnectionFlow(
-  connection: ClientConnection,
-  sessionId?: string
-) {
-  const previous = connection.attachedSessionId
-  connection.pendingOutput.clear()
-  connection.pendingBytes = 0
-  connection.attachedSessionId = sessionId
-  if (previous) reconcileProducerFlow(previous)
-  if (sessionId && sessionId !== previous) reconcileProducerFlow(sessionId)
+function attachConsumer(connection: ClientConnection, sessionId: string, snapshotSequence: number) {
+  connection.sessions.set(sessionId, { pendingOutput: new Map(), pendingBytes: 0, snapshotSequence })
+  reconcileProducerFlow(sessionId)
 }
 
-function acknowledgeOutput(
-  connection: ClientConnection,
-  sessionId: string,
-  sequence: number
-) {
-  if (connection.attachedSessionId !== sessionId) return
-  for (const [sentSequence, bytes] of connection.pendingOutput) {
+function detachConsumer(connection: ClientConnection, sessionId: string) {
+  connection.sessions.delete(sessionId)
+  reconcileProducerFlow(sessionId)
+}
+
+function acknowledgeOutput(connection: ClientConnection, sessionId: string, sequence: number) {
+  const consumer = connection.sessions.get(sessionId)
+  if (!consumer) return
+  for (const [sentSequence, bytes] of consumer.pendingOutput) {
     if (sentSequence > sequence) continue
-    connection.pendingOutput.delete(sentSequence)
-    connection.pendingBytes = Math.max(0, connection.pendingBytes - bytes)
+    consumer.pendingOutput.delete(sentSequence)
+    consumer.pendingBytes -= bytes
   }
   reconcileProducerFlow(sessionId)
 }
@@ -279,6 +279,11 @@ async function createSession(
       sequence: 0,
     },
     history: new BoundedTerminalHistory(),
+    historyFilter: new TerminalHistoryFilter((title) => {
+      if (session.summary.title === title) return
+      session.summary.title = title
+      publishStatus(session)
+    }),
     pty,
     flowPaused: false,
     pendingOutput: [],
@@ -293,7 +298,7 @@ async function createSession(
 
 function drainSessionOutput(session: LiveSession) {
   const hasConsumer = [...clients].some(
-    (client) => client.attachedSessionId === session.summary.id
+    (client) => client.sessions.has(session.summary.id)
   )
   if (!hasConsumer) {
     session.pendingOutput = []
@@ -302,7 +307,7 @@ function drainSessionOutput(session: LiveSession) {
   while (!session.flowPaused) {
     const transportBlocked = [...clients].some(
       (client) =>
-        client.attachedSessionId === session.summary.id && client.blocked
+        client.sessions.has(session.summary.id) && client.blocked
     )
     if (transportBlocked) return
     const output = session.pendingOutput.shift()
@@ -322,7 +327,7 @@ function drainSessionOutput(session: LiveSession) {
 
 function receiveOutput(session: LiveSession, data: string) {
   for (const chunk of splitTerminalOutput(data)) {
-    session.history.append(chunk)
+    session.history.append(session.historyFilter.push(chunk))
     session.summary.sequence += 1
     session.summary.updatedAt = Date.now()
     session.pendingOutput.push({
@@ -399,8 +404,9 @@ async function handleRequest(connection: ClientConnection, request: TerminalRequ
     }
     if (request.type === "attach") {
       const session = getSession(request.sessionId)
-      session.pendingOutput = []
-      resetConnectionFlow(connection, request.sessionId)
+      // This client's snapshot already contains queued output. Other clients
+      // still need those frames; attaching must not clear their shared queue.
+      attachConsumer(connection, request.sessionId, session.summary.sequence)
       send(
         connection,
         response(request.id, {
@@ -415,9 +421,7 @@ async function handleRequest(connection: ClientConnection, request: TerminalRequ
       return
     }
     if (request.type === "detach") {
-      if (connection.attachedSessionId === request.sessionId) {
-        resetConnectionFlow(connection)
-      }
+      detachConsumer(connection, request.sessionId)
       send(connection, response(request.id, { kind: "ok" }))
       return
     }
@@ -451,9 +455,11 @@ async function handleRequest(connection: ClientConnection, request: TerminalRequ
       return
     }
     if (request.type === "kill") {
-      const session = getSession(request.sessionId)
+      const session = sessions.get(request.sessionId)
+      if (!session) { send(connection, response(request.id, { kind: "ok" })); return }
       terminateSession(session)
       sessions.delete(request.sessionId)
+      for (const client of clients) client.sessions.delete(request.sessionId)
       markDirty()
       broadcast({
         protocol: TERMINAL_PROTOCOL_VERSION,
@@ -485,26 +491,15 @@ function accept(socket: Socket) {
     socket,
     decoder: new JsonLineDecoder(),
     blocked: false,
-    missedOutput: false,
-    pendingBytes: 0,
-    pendingOutput: new Map(),
+    sessions: new Map(),
   }
   clients.add(connection)
   socket.on("drain", () => {
     connection.blocked = false
-    const sessionId = connection.attachedSessionId
-    if (!sessionId) return
-    const session = sessions.get(sessionId)
-    if (!session) return
-    if (connection.missedOutput) {
-      connection.missedOutput = false
-      send(connection, {
-        protocol: TERMINAL_PROTOCOL_VERSION,
-        type: "status",
-        session: sessionCopy(session.summary),
-      })
+    for (const sessionId of connection.sessions.keys()) {
+      const session = sessions.get(sessionId)
+      if (session) drainSessionOutput(session)
     }
-    drainSessionOutput(session)
   })
   socket.on("data", (chunk) => {
     try {
@@ -519,9 +514,8 @@ function accept(socket: Socket) {
     }
   })
   const drop = () => {
-    const attached = connection.attachedSessionId
     clients.delete(connection)
-    if (attached) reconcileProducerFlow(attached)
+    for (const sessionId of connection.sessions.keys()) reconcileProducerFlow(sessionId)
   }
   socket.on("close", drop)
   socket.on("error", drop)
@@ -561,7 +555,10 @@ async function restore() {
     if (!parsed.success) return
     for (const saved of parsed.data.sessions) {
       const history = new BoundedTerminalHistory()
-      history.restore(saved.history)
+      const legacy = new BoundedTerminalHistory()
+      legacy.restore(saved.history)
+      const historyFilter = new TerminalHistoryFilter()
+      history.append(historyFilter.push(legacy.text()))
       sessions.set(saved.summary.id, {
         summary: {
           ...saved.summary,
@@ -571,6 +568,7 @@ async function restore() {
               : saved.summary.status,
         },
         history,
+        historyFilter,
         pty: null,
         flowPaused: false,
         pendingOutput: [],

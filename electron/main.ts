@@ -184,7 +184,7 @@ import {
   PROFILE_HOST_IDLE_MS,
   activeHostLeases,
 } from "./host-idle.js"
-import { TerminalDaemonClient } from "./terminal-client.js"
+import { TerminalClients } from "./terminal-clients.js"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "./cua-embedded.js"
 import { cuaDriverStatus, updateCuaDriver } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "./local-update-installer.js"
@@ -505,12 +505,12 @@ const webSocket =
   isDev || persistentHost ? process.env.MAKO_WEB_SOCKET : undefined
 const webOnly =
   persistentHost || Boolean(webSocket && process.env.MAKO_WEB_ONLY !== "0")
-let terminalClient: TerminalDaemonClient | null = null
+let terminalClients: TerminalClients | null = null
 const workspaceClients = new WorkspaceClients(emit)
 
 function terminal() {
-  if (!terminalClient) throw new Error("Terminal service is not ready")
-  return terminalClient
+  if (!terminalClients) throw new Error("Terminal service is not ready")
+  return terminalClients.forOwner(hostClient())
 }
 
 function ensureMakoLocalControl() {
@@ -817,7 +817,6 @@ async function createWindow() {
   const watcher = watchPlugins(() => emit({ type: "plugins-changed" }))
   window.once("closed", () => watcher?.close())
   window.once("closed", () => {
-    void terminalClient?.detachActive().catch(() => {})
     window = null
   })
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -839,6 +838,7 @@ function trackRenderer(renderer: BrowserWindow): void {
   const client = `renderer:${renderer.webContents.id}`
   renderer.once("closed", () => {
     rendererWindows.delete(renderer)
+    terminalClients?.release(client)
     void workspaceClients.release(client)
   })
 }
@@ -1809,13 +1809,15 @@ app.whenReady().then(async () => {
     if (moved.kind === "failed") hostWarn("renderer", "storage move failed", { error: moved.error })
     else if (moved.kind === "moved") hostLog("renderer", "storage moved", { origin: "mako-app://desk", entries: moved.entries })
   }
-  terminalClient = new TerminalDaemonClient(
+  terminalClients = new TerminalClients(
     join(__dirname, "terminal-daemon.js"),
     join(app.getPath("userData"), "terminal"),
-    (event) => {
-      webHost?.terminal(event)
-      for (const renderer of rendererWindows)
-        renderer.webContents.send("mako:terminal-event", event)
+    (event, owner) => {
+      webHost?.terminal(event, owner)
+      for (const renderer of rendererWindows) {
+        if (owner === `renderer:${renderer.webContents.id}`)
+          renderer.webContents.send("mako:terminal-event", event)
+      }
     },
     buildTag()
   )
@@ -1994,6 +1996,7 @@ app.whenReady().then(async () => {
       (request, client = "web") =>
         withHostClient(client, () => readFilePreview(request)),
       (client) => {
+        terminalClients?.release(client)
         void workspaceClients.release(client)
       },
       {
@@ -2080,7 +2083,7 @@ app.on("before-quit", (event) =>
       }
       powerMonitor.removeListener("resume", emitTerminalWake)
       powerMonitor.removeListener("unlock-screen", emitTerminalWake)
-      terminalClient?.dispose()
+      terminalClients?.dispose()
       stopCuaEmbedded()
       void appshots.close()
       controlService?.close()

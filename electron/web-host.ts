@@ -175,7 +175,7 @@ export async function startWebHost(
     clients: () => [...new Set([...streams.values()].filter((entry) => !entry.observer).map((entry) => entry.client))],
     event: (event: HostEvent, client?: string) => send("event", event, client),
     conversationEvent: (event: z.infer<ReturnType<typeof z.json>>) => send("event", event),
-    terminal: (event: TerminalEvent) => send("terminal", event),
+    terminal: (event: TerminalEvent, client?: string) => send("terminal", event, client),
     /**
      * Leave without resetting anyone. Every call still waiting gets an explicit
      * "restarting" reply on a connection marked to close, so a client can tell a
