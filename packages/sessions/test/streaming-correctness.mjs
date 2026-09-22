@@ -763,6 +763,9 @@ async function cacheInvalidationIsScopedToTheProvider() {
     rescanRoot: () => true,
     roots: () => [sharedRoot],
     discover: async () => sharedPaths.map((path) => ({ path, bytes: 1, mtimeMs: 1 })),
+    // Virtual database locators have no file to stat. Match the native
+    // provider contract so this fixture actually exercises the warm cache.
+    stat: async (path) => ({ path, bytes: 1, mtimeMs: 1 }),
     peek: async (file) => ({ harness: "shared", nativeId: file.path, path: file.path, bytes: 1 }),
     read: async (path) => {
       sharedReads += 1
