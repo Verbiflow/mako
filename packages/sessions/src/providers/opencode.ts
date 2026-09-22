@@ -2,7 +2,8 @@ import { attachmentFromUrl, type AttachmentContent } from "../content.js"
 import { stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname } from "node:path"
+import { openCodeDatabasePaths } from "./opencode-location.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
@@ -94,15 +95,15 @@ export class OpenCodeProvider implements SessionProvider {
   rescanRoot = (): boolean => true
   rescanDebounceMs = 250
 
-  private root: string
+  private readonly databases: string[]
   private snapshots = new Map<string, Snapshot>()
 
-  constructor(home = homedir()) {
-    this.root = join(home, ".local", "share", "opencode")
+  constructor(home?: string, env = home === undefined ? process.env : {}) {
+    this.databases = openCodeDatabasePaths(env, home ?? homedir())
   }
 
   roots(): string[] {
-    return [this.root]
+    return [...new Set(this.databases.map(path => dirname(path)))]
   }
 
   /**
@@ -297,7 +298,7 @@ export class OpenCodeProvider implements SessionProvider {
   }
 
   private databasePaths(): string[] {
-    return [join(this.root, "opencode.db"), join(this.root, "opencode-next.db")]
+    return this.databases
   }
 
   /** Remove a session and its messages, parts, and child sessions from the store it lives in. */

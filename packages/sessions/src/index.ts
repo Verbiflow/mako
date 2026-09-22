@@ -133,3 +133,5 @@ export { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
 export { attachmentFiles } from "./attachment-files.js"
 
 export * from "./settings.js"
+
+export { openCodeDatabasePaths } from "./providers/opencode-location.js"
