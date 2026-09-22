@@ -5,10 +5,15 @@ import { devinExecutable } from "./executable.js"
 import { devinPermissionTitle } from "./permissions.js"
 import { configureDevinEnvironment } from "./environment.js"
 import { devinCompaction } from "./compaction.js"
+import { devinToolName } from "./tool-name.js"
+import { DevinAgents } from "./agents.js"
 
 export const devinAcpSource: ProviderAcpSource = {
   ...devinResumePolicy(),
   provider: "devin",
+  toolName: devinToolName,
+  clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
+  observeAgents: input => new DevinAgents(input),
   compaction: devinCompaction,
   canResume: true,
   steering: "concurrent-prompt",

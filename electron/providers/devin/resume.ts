@@ -4,7 +4,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { resumable, type ProviderBinding, type ResumeVerdict } from "../../contracts/conversation-control.js"
+import { compareNativeCheckpoint, resumable, type ProviderBinding, type ResumeVerdict } from "../../contracts/conversation-control.js"
 
 const rowSchema = z.object({ main_chain_id: z.number().nullable(), model: z.string().nullable(), working_directory: z.string() })
 
@@ -64,7 +64,7 @@ export function devinResumePolicy(directory = join(homedir(), ".local", "share",
     const current = await checkpoint(binding.path)
     if (current === undefined)
       return { kind: "unavailable", reason: "The Devin session is missing from its database." }
-    return { kind: "resumable", record: binding.checkpoint === undefined || current === binding.checkpoint ? "same" : "moved" }
+    return { kind: "resumable", record: compareNativeCheckpoint(binding.checkpoint, current) }
   }
   /** The strict form: unowned and unchanged since the binding's checkpoint. */
   const canResumeBinding = async (binding: ProviderBinding): Promise<boolean> =>
