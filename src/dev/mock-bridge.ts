@@ -524,6 +524,7 @@ export function installMockBridge() {
     applySkillSync: async () => SKILLS,
 
     selectGitRepository: async () => GIT,
+    gitRemote: async () => ({ status: { cwd: META.cwd, ahead: 0, behind: 0, files: [] } }),
     gitStatus: async () => GIT,
     gitDiff: async (path: string) => ({
       path,
@@ -1048,6 +1049,12 @@ export function installMockBridge() {
         canResume: live.includes(provider),
       }))
     },
+    resolveContinuation: async (path: string) => {
+      const snapshot = await window.mako!.liveAttach(path)
+      if (snapshot) return { transport: "attached", provider: snapshot.session.harness, conversationId: snapshot.session.id, snapshot }
+      const plan = await window.mako!.continuationPlan(path)
+      return plan.transport === "attached" ? { transport: "unavailable", reason: "Mock owner unavailable" } : plan
+    },
     continuationPlan: async (path: string) => {
       const thread = await window.mako?.openThread(path)
       if (!thread)
@@ -1436,6 +1443,12 @@ export function installMockBridge() {
     }),
     liveAttach: async () => null,
     liveSnapshot: async (id: string) => liveSnapshots.get(id) ?? null,
+    liveContinue: async (id, _bindingId, requestId, text, attachments, tuning) => {
+      await window.mako!.livePrompt(id, requestId, text, attachments, tuning)
+      const snapshot = await window.mako!.liveSnapshot(id)
+      if (!snapshot) throw new Error("Mock session is closed")
+      return snapshot
+    },
     livePrompt: async (
       id: string,
       requestId: string,

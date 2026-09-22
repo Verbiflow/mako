@@ -38,9 +38,9 @@ export function selectProject(path: string, count = 13_000) {
 export function selectMultiRepositoryProject() {
   selectProject("/fixture/mono", 12)
   const current = projects.get(cwd)!
-  const snapshot = { ...current, root: `${cwd}/app`, repositories: [
-    { root: `${cwd}/app`, label: "app", branch: "main", changes: 12 },
-    { root: `${cwd}/backend`, label: "backend", branch: "main", changes: 1 },
+  const snapshot = { ...current, root: `${cwd}/mako`, repositories: [
+    { root: `${cwd}/mako`, label: "mako", branch: "main", changes: 12 },
+    { root: `${cwd}/mako-backend`, label: "mako-backend", branch: "main", changes: 1 },
   ] }
   projects.set(cwd, snapshot)
   store.set({ git: snapshot })
@@ -73,8 +73,20 @@ export function finishPush(path: string, success: boolean) {
     const value = projects.get(path)
     if (value) projects.set(path, { ...value, ahead: 0 })
     pending.resolve()
-  } else pending.reject(new Error("Remote rejected the update. Fetch remote changes before retrying."))
+  } else {
+    const value = projects.get(path)
+    if (value) projects.set(path, { ...value, behind: 3 })
+    pending.reject(new Error("Remote rejected the update. Fetch remote changes before retrying."))
+  }
   pushes.delete(path)
+}
+
+export function incoming(path: string, conflicts = false) {
+  const current = projects.get(path)!
+  const snapshot: GitStatus = { ...current, ahead: 2, behind: 3, operation: conflicts ? "merge" : undefined,
+    files: conflicts ? [{ path: "shared.ts", status: "conflicted", staged: false, insertions: null, deletions: null, binary: false }] : current.files }
+  projects.set(path, snapshot)
+  if (cwd === path) store.set({ git: snapshot })
 }
 
 async function stagePaths(paths: string[], staged: boolean) {
@@ -104,6 +116,12 @@ window.mako = {
   gitStage: (paths) => stagePaths(paths, true),
   gitUnstage: (paths) => stagePaths(paths, false),
   gitPush: async (target) => { calls.pushes += 1; return new Promise<void>((resolve, reject) => pushes.set(target.cwd, { resolve, reject })) },
+  gitRemote: async (target) => {
+    const current = projects.get(target.cwd)!
+    const status: GitStatus = target.action === "fetch" ? current : { ...current, behind: 0, ahead: current.ahead + (target.action === "merge" ? 1 : 0), operation: undefined }
+    projects.set(target.cwd, status)
+    return { status }
+  },
   gitCommit: async () => { calls.commits += 1; await new Promise((resolve) => setTimeout(resolve, 80)); const value = projects.get(cwd); if (value) projects.set(cwd, { ...value, head: "c".repeat(40), files: [], ahead: value.ahead + 1 }) },
   gitDiff: async (path) => { calls.diffs += 1; return { path, binary: false, oldFile: null, newFile: null, preview: { kind: "patch", contents: "diff --git a/large.ts b/large.ts\n@@ -1 +1 @@\n-old\n+new\n", limited: true } } },
 }

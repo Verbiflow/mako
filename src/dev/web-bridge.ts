@@ -6,8 +6,9 @@ import {
   type TerminalEvent,
 } from "../../electron/shared.ts"
 import { hostCallInputs } from "../../electron/contracts/host-call-inputs.ts"
-import { HOST_CALL_REPLAY_WAIT_MS, hostCallReplay } from "../../electron/contracts/host-call-policy.ts"
-import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_CLOSED_CODE, HOST_OUTAGE_MESSAGE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../../electron/contracts/host-connection.ts"
+import { invokeWithRecovery } from "../../electron/runtime-retry.ts"
+import { RuntimeDisconnectedError, HOST_CLOSED_CODE, HOST_OUTAGE_MESSAGE, HOST_RESTARTING_CODE } from "../../electron/contracts/host-connection.ts"
+import { setClientStorageScope } from "../lib/client-storage-scope"
 import { createWebNotificationChannels } from "./web-notifications.ts"
 
 type WebEvent =
@@ -52,28 +53,21 @@ export async function installWebBridge(): Promise<void> {
   const refusal = (response: Response): Error => {
     if (response.status === 403)
       return new Error(
-        `Mako's dev proxy refused this page's origin (${location.origin}). Open the URL that npm run web printed.`
+        `Mako refused this page's origin (${location.origin}). Open the URL provided by the Mako web server.`
       )
     if (response.status >= 502 && response.status <= 504)
-      return new Error("The real Mako host is unavailable. Start it with npm run web.")
+      return new Error("The Mako host is unavailable. Open Mako on the computer running this web server.")
     return new Error(`The Mako host answered ${response.status} ${response.statusText}`.trimEnd())
-  }
-  /** The host went away under a call; `unconfirmed` when it may have run first. */
-  class Disconnected extends Error {
-    readonly unconfirmed: boolean
-    constructor(unconfirmed: boolean) {
-      super(unconfirmed ? HOST_CALL_UNCONFIRMED_MESSAGE : HOST_RECONNECTING_MESSAGE)
-      this.unconfirmed = unconfirmed
-    }
   }
   // The reply body is the host's JSON answer, typed by the channel's contract
   // in `createMakoBridge`, the same way Electron's `ipcRenderer.invoke` is.
   const post = async (channel: string, args: unknown[], attempt: number) => {
-    if (!connected) throw new Disconnected(false)
+    if (!connected) throw new RuntimeDisconnectedError(false)
     let reply: Response
     try {
       reply = await fetch("/__mako/rpc", {
         method: "POST",
+        signal: AbortSignal.timeout(5 * 60_000),
         headers: { "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId },
         body: JSON.stringify({
           channel,
@@ -86,15 +80,18 @@ export async function installWebBridge(): Promise<void> {
     } catch {
       // The proxy could not reach the socket or the connection reset: the
       // request may have been read before the host left.
-      throw new Disconnected(true)
+      throw new RuntimeDisconnectedError(true)
     }
-    if (reply.status === 502 || reply.status === 503 || reply.status === 504) throw new Disconnected(false)
+    if (reply.status === 502 || reply.status === 503 || reply.status === 504) throw new RuntimeDisconnectedError(true)
     if (!reply.ok) throw refusal(reply)
     // This transport shares createMakoBridge's result contract with Electron IPC.
-    const result = await reply.json()
+    let result
+    try { result = await reply.json() }
+    catch { throw new RuntimeDisconnectedError(true) }
     if (!result.ok) {
-      if (result.code === HOST_RESTARTING_CODE) throw new Disconnected(true)
-      if (result.code === HOST_CLOSED_CODE) throw new Disconnected(false)
+      if (result.code === "owner-unavailable") throw new RuntimeDisconnectedError(result.unconfirmed ?? true, result.conversationId)
+      if (result.code === HOST_RESTARTING_CODE) throw new RuntimeDisconnectedError(true)
+      if (result.code === HOST_CLOSED_CODE) throw new RuntimeDisconnectedError(false)
       throw new Error(result.error)
     }
     return result.value
@@ -104,23 +101,17 @@ export async function installWebBridge(): Promise<void> {
    * mutation that the host dropped runs once more when the host is back; any
    * other mutation is told its outcome is unknown.
    */
-  const invokeHost = async (channel: string, args: unknown[]) => {
-    try {
-      return await post(channel, args, 1)
-    } catch (error) {
-      if (!(error instanceof Disconnected)) throw error
-      if (hostCallReplay(channel) === "never") throw error
-      if (!(await whenConnected(HOST_CALL_REPLAY_WAIT_MS))) throw error
-      return post(channel, args, 2)
-    }
-  }
+  const invokeHost = (channel: string, args: unknown[]) => invokeWithRecovery(
+    channel, (attempt) => post(channel, args, attempt),
+    { lost() { /* The independent event stream owns connection status. */ }, whenConnected }
+  )
   const response = await fetch("/__mako/events", {
     method: "POST",
     headers: { "x-mako-client": "web", "x-mako-window": clientId },
   })
   if (!response.ok) throw refusal(response)
   if (!response.body)
-    throw new Error("The real Mako host is unavailable. Start it with npm run web.")
+    throw new Error("The Mako host is unavailable. Open Mako on the computer running this web server.")
   let reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
   const dispatch = (line: string) => {
     if (!line.trim()) return
@@ -128,6 +119,17 @@ export async function installWebBridge(): Promise<void> {
     const event: WebEvent = JSON.parse(line)
     if (event.channel === "ready") {
       if (event.runtime || import.meta.env.MAKO_SHARED_RUNTIME === true) supported = new Set(RuntimeInfoSchema.parse(event.runtime).methods)
+      if (event.runtime?.storageScope) {
+        try { setClientStorageScope(event.runtime.storageScope) }
+        catch (error) {
+          stopped = true
+          connected = false
+          settle(false)
+          for (const listener of events) listener({ type: "host-disconnected", message: error instanceof Error ? error.message : "The Mako host changed. Reload this page." })
+          void reader.cancel().catch(() => {})
+          return
+        }
+      }
       connected = true
       settle(true)
       if (seen) for (const listener of events) listener({ type: "host-reconnected" })
@@ -221,7 +223,20 @@ export async function installWebBridge(): Promise<void> {
       return target.href.replace(/^mako-file:\/\/(asset|workspace)\//, "/__mako/file/$1/")
     },
   })
-  window.addEventListener("pagehide", () => { stopped = true; settle(false); void reader.cancel().catch(() => {}) }, { once: true })
+  window.addEventListener("pagehide", (event) => {
+    // A cached page is suspended, not disposed. The existing reader/reconnect
+    // loop resumes with it; canceling it and permanently stopping loses the tab.
+    if (event.persisted) return
+    stopped = true
+    settle(false)
+    void reader.cancel().catch(() => {})
+  })
+  window.addEventListener("pageshow", (event) => {
+    if (!event.persisted || stopped) return
+    // Force a fresh subscription and authoritative hydration after suspension.
+    connected = false
+    void reader.cancel().catch(() => {})
+  })
   void (async () => {
     while (!stopped) {
       try {
