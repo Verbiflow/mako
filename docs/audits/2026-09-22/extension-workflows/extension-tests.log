@@ -1,0 +1,24 @@
+
+> mako@0.0.1 test:browser-extension
+> npm run build:electron && npm run build:browser-extension && node scripts/test-browser-extension.mjs && node scripts/test-browser-extension-router.mjs && node scripts/test-browser-extension-activity.mjs && node scripts/test-browser-extension-lifecycle.mjs && node scripts/test-browser-extension-downloads.mjs
+
+
+> mako@0.0.1 build:electron
+> npm run prepare:kiri && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs
+
+
+> mako@0.0.1 prepare:kiri
+> node scripts/prepare-kiri.mjs
+
+
+> mako@0.0.1 build:browser-extension
+> tsgo -p browser-extension/tsconfig.json && node scripts/build-browser-extension.mjs
+
+Built Mako Browser extension in dist-browser-extension
+Browser extension native bridge: generic Chromium discovery and identity, framing limits, private registration, origin/secret rejection, per-client routing, replay suppression, disconnect and cleanup passed
+Browser extension router: exact ownership, stale sessions, routed events, background tab/window creation, orphan cleanup, foreign close rejection and disconnect during attachment passed
+{"passed":"task groups, owned mute, retained results, exact worker recovery, screenshot cleanup, hidden feedback and visible coalescing","hiddenActions":10000,"hiddenFeedbackCommands":0,"hiddenMs":1.337875000000011,"visibleBurstCommands":6}
+Pending cursor feedback does not block clear or lease cleanup
+Extension lifecycle: protocol mismatch refuses requests; updates wait for both actions and task resources to finish
+Local extension updates compare numeric versions, bypass cache and never downgrade
+Extension downloads: exact ownership, completion, interruption, timeout continuation, listener cleanup and no repeated starts passed

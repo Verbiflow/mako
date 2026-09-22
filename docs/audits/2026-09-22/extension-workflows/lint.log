@@ -1,0 +1,71 @@
+
+> mako@0.0.1 lint
+> eslint . && npm run lint:anti-slop && node scripts/check-actionable-toasts.mjs
+
+
+/Users/kashyab/mako-control-rollout/src/components/composer/mention-menu.tsx
+  218:9  warning  The 'groups' conditional could make the dependencies of useMemo Hook (at line 221) change on every render. To fix this, wrap the initialization of 'groups' in its own useMemo() Hook  react-hooks/exhaustive-deps
+
+/Users/kashyab/mako-control-rollout/src/components/rail/file-tree.tsx
+  57:23  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/kashyab/mako-control-rollout/src/components/rail/file-tree.tsx:57:23
+  55 |   }, [deferred, files, openDirs])
+  56 |
+> 57 |   const virtualizer = useVirtualizer({
+     |                       ^^^^^^^^^^^^^^ TanStack Virtual's `useVirtualizer()` API returns functions that cannot be memoized safely
+  58 |     count: rows.length,
+  59 |     getScrollElement: () => scroller.current,
+  60 |     estimateSize: () => ROW_HEIGHT,  react-hooks/incompatible-library
+
+/Users/kashyab/mako-control-rollout/src/components/search/search-view.tsx
+  217:23  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/kashyab/mako-control-rollout/src/components/search/search-view.tsx:217:23
+  215 |   }, [results])
+  216 |
+> 217 |   const virtualizer = useVirtualizer({
+      |                       ^^^^^^^^^^^^^^ TanStack Virtual's `useVirtualizer()` API returns functions that cannot be memoized safely
+  218 |     count: rows.length,
+  219 |     getScrollElement: () => scroller.current,
+  220 |     estimateSize: (index) =>  react-hooks/incompatible-library
+
+/Users/kashyab/mako-control-rollout/src/components/transcript/conversation-timeline.tsx
+  253:16  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/kashyab/mako-control-rollout/src/components/transcript/conversation-timeline.tsx:253:16
+  251 |       ? "more"
+  252 |       : "start"
+> 253 |   const rows = useVirtualizer({
+      |                ^^^^^^^^^^^^^^ TanStack Virtual's `useVirtualizer()` API returns functions that cannot be memoized safely
+  254 |     count: exchanges.length,
+  255 |     enabled: windowed,
+  256 |     getScrollElement: () => viewport.current,  react-hooks/incompatible-library
+
+/Users/kashyab/mako-control-rollout/src/components/transcript/turn-navigator.tsx
+  217:16  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/kashyab/mako-control-rollout/src/components/transcript/turn-navigator.tsx:217:16
+  215 |   const scroller = useRef<HTMLDivElement>(null)
+  216 |   const large = exchanges.length > 100
+> 217 |   const rows = useVirtualizer({
+      |                ^^^^^^^^^^^^^^ TanStack Virtual's `useVirtualizer()` API returns functions that cannot be memoized safely
+  218 |     count: exchanges.length,
+  219 |     enabled: large,
+  220 |     getScrollElement: () => scroller.current,  react-hooks/incompatible-library
+
+✖ 5 problems (0 errors, 5 warnings)
+
+
+> mako@0.0.1 lint:anti-slop
+> oxlint --config oxlint.config.ts src electron browser-extension packages/sessions/src packages/relay/src packages/relay/test packages/control/src packages/control/test packages/backend/app packages/backend/agent packages/backend/scripts packages/backend/src packages/backend/test scripts
+
+Actionable toasts stay long enough to act on, and none stays forever

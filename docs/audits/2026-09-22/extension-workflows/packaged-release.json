@@ -1,0 +1,32 @@
+{
+  "build": {
+    "id": "89c04a9f9814da4b",
+    "builtAt": "2026-09-22T14:08:03.056Z",
+    "revision": "0b4bddb00501aa0d4699f73a526ecadd932d299d",
+    "dirty": true
+  },
+  "extension": "0.3.0",
+  "checks": [
+    {
+      "path": "dist-browser-extension/background.js",
+      "sha256": "90e28381ad3883a5694c2ade7c5ad0e59b2bc280d62657993213b4bdae92d2bd"
+    },
+    {
+      "path": "dist-browser-extension/manifest.json",
+      "sha256": "ccc5d7c1083bf4bad45eaa2e76687d89845b4f8f096b54761b21cf0e01332085"
+    },
+    {
+      "path": "dist-electron/browser-service.js",
+      "sha256": "76bdca23d31561e8a6f2ff7a9c1f75d73b75cf3bb3a902eaa311e8d66903641e"
+    },
+    {
+      "path": "dist-electron/browser-native-host.js",
+      "sha256": "7eb1a08d3e1edffc21e3cb83168370bbe4cab93a4df7ada6ad8e8774f370c7a3"
+    },
+    {
+      "path": "node_modules/@mako/control/dist/control/client.js",
+      "sha256": "41e101468826a63b1cf861d08e43f0fb76d479595d71b914b0d99704aa39f9cf"
+    }
+  ],
+  "signature": "codesign --verify --deep --strict passed"
+}
