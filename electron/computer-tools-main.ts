@@ -1003,8 +1003,17 @@ export function createComputerToolsServer(
       )
         args.window_id = remembered.window_id
     }
-    if (args.delivery_mode === "foreground" && input.properties?.pid)
-      await verifyForegroundInput(connection, args, signal)
+    if (args.delivery_mode === "foreground" && input.properties?.pid) {
+      try {
+        await verifyForegroundInput(connection, args, signal)
+      } catch (error) {
+        throw new ControlFault(
+          "foreground-unavailable",
+          error instanceof Error ? error.message : "Target focus could not be verified.",
+          "not-dispatched"
+        )
+      }
+    }
     const capturedWindow = AppshotTargetSchema.safeParse({
       pid: args.pid,
       windowId: args.window_id,

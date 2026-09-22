@@ -144,9 +144,10 @@ try {
       String(userWindow.window_id),
     ])
     const foreground = await cell(
-      `try {await control.native('type_text',{...${JSON.stringify(address)},text:'must-not-type',delivery_mode:'foreground',foreground:true});return {refused:false}}catch(error){return {refused:true,message:error.message}}`
+      `try {await control.native('type_text',{...${JSON.stringify(address)},text:'must-not-type',delivery_mode:'foreground',foreground:true});return {refused:false}}catch(error){return {refused:true,message:error.message,outcome:error.outcome}}`
     )
     assert.equal(foreground.refused, true)
+    assert.equal(foreground.outcome, "not-dispatched")
     assert.match(foreground.message, /could not verify keyboard focus/)
     const rawForeground = await client.callTool({
       name: "type_text",
