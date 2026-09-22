@@ -125,7 +125,7 @@
     "@ai-sdk/openai-compatible": "3.0.42",
     "@anthropic-ai/claude-agent-sdk": "0.3.263",
     "@cursor/sdk": "1.0.31",
-    "@kiri/client": "file:vendor/kiri-client-0.2.10.tgz",
+    "@kiri/client": "file:vendor/kiri-client-0.2.12.tgz",
     "@lydell/node-pty": "1.1.0",
     "@mako/control": "^0.1.0",
     "@mako/relay": "^0.1.0",

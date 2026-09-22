@@ -1,3 +1,4 @@
+import { runGitRemote } from "@/state/git-push"
 import { createRoot } from "react-dom/client"
 import { GitWorkbenchFixture } from "./git-workbench-fixture"
 import { actions, store } from "@/state/session"
@@ -19,7 +20,10 @@ const switches = new Map<string, (snapshot: TabSnapshot) => void>()
 const projects = new Map<string, GitStatus>()
 const histories = new Map<string, Array<(commits: GitCommitEntry[]) => void>>()
 const pushes = new Map<string, { resolve: () => void; reject: (error: Error) => void }>()
-export const calls = { selections: 0, pushes: 0, stages: 0, commits: 0, diffs: 0 }
+export const calls = { selections: 0, pushes: 0, stages: 0, commits: 0, diffs: 0, copied: "", copiedHtml: "", context: "" }
+Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+  write: async (items: ClipboardItem[]) => { calls.copied = await (await items[0].getType("text/plain")).text(); calls.copiedHtml = await (await items[0].getType("text/html")).text() },
+} })
 let cwd = "/fixture/large"
 
 function project(path: string, count: number): GitStatus {
@@ -89,6 +93,16 @@ export function incoming(path: string, conflicts = false) {
   if (cwd === path) store.set({ git: snapshot })
 }
 
+let untrackedBlock = false
+export async function showUntrackedBlocker(path: string) {
+  const snapshot: GitStatus = { ...projects.get(path)!, behind: 3, operation: undefined, files: [{ path: "report.md", status: "untracked", staged: false, insertions: null, deletions: null, binary: false }] }
+  projects.set(path, snapshot)
+  store.set({ git: snapshot })
+  untrackedBlock = true
+  await runGitRemote("merge")
+  untrackedBlock = false
+}
+
 async function stagePaths(paths: string[], staged: boolean) {
   calls.stages += 1
   const target = cwd
@@ -101,6 +115,11 @@ async function stagePaths(paths: string[], staged: boolean) {
 
 window.mako = {
   ...bridge,
+  copy: async (text) => { calls.copied = text },
+  stageFile: async (name, data) => {
+    calls.context = new TextDecoder().decode(Uint8Array.from(atob(data), char => char.charCodeAt(0)))
+    return { path: `/fixture/attachments/${name}`, name, size: calls.context.length }
+  },
   setCwd: async (path) => new Promise<TabSnapshot>((resolve) => switches.set(path, resolve)),
   selectGitRepository: async (workspace, root) => {
     calls.selections += 1
@@ -118,6 +137,7 @@ window.mako = {
   gitPush: async (target) => { calls.pushes += 1; return new Promise<void>((resolve, reject) => pushes.set(target.cwd, { resolve, reject })) },
   gitRemote: async (target) => {
     const current = projects.get(target.cwd)!
+    if (untrackedBlock) return { status: current, problem: { kind: "untracked", message: "A local file conflicts with incoming changes.", detail: "The following untracked working tree files would be overwritten by merge: report.md" } }
     const status: GitStatus = target.action === "fetch" ? current : { ...current, behind: 0, ahead: current.ahead + (target.action === "merge" ? 1 : 0), operation: undefined }
     projects.set(target.cwd, status)
     return { status }

@@ -477,6 +477,7 @@ export function installMockBridge() {
         connection: { status: "disconnected" as const },
       },
     ],
+    preferBrowser: async (browser) => [{ id: "chrome", name: "Google Chrome", preferred: browser === "chrome", connection: { status: "disconnected" as const } }],
     connectBrowser: async () => [
       {
         id: "chrome",
