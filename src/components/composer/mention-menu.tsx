@@ -89,7 +89,7 @@ export function MentionMenu({
   const workspaceCwd = useSession((state) => state.meta?.cwd ?? "")
   const git = useSession(state => state.git)
   const remote = useGitPush(git?.root ?? "", git?.branch ?? "")
-  const blockedPull = remote.kind === "failed" && remote.reason === "untracked"
+  const blockedPull = remote.kind === "failed" && (remote.reason === "untracked" || remote.reason === "dirty")
   const capabilities = kind !== "@"
   const skillsSnapshot = useSkills((state) => state.snapshot)
   const skillsStatus = useSkills((state) => state.status)
