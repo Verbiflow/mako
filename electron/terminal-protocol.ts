@@ -2,7 +2,9 @@ import { z } from "zod"
 import type { TerminalSession, TerminalSnapshot } from "./shared.js"
 
 export const TERMINAL_PROTOCOL_VERSION = 2
-export const TERMINAL_DAEMON_VERSION = String(TERMINAL_PROTOCOL_VERSION)
+// Implementation revision: multi-session consumers and replay-safe history.
+// Development checkout build tags can stay unchanged across source updates.
+export const TERMINAL_DAEMON_VERSION = `${TERMINAL_PROTOCOL_VERSION}.2`
 export const TERMINAL_HISTORY_BYTES = 2 * 1024 * 1024
 export const TERMINAL_MAX_SESSIONS = 24
 export const TERMINAL_MAX_INPUT_BYTES = 64 * 1024
@@ -241,6 +243,7 @@ export class BoundedTerminalHistory {
   }
 
   append(data: string) {
+    if (!data) return
     let chunk = Buffer.from(data)
     if (chunk.byteLength > this.#limit) chunk = chunk.subarray(chunk.byteLength - this.#limit)
     this.#chunks.push(chunk)
@@ -271,7 +274,10 @@ export class BoundedTerminalHistory {
   }
 
   text() {
-    return Buffer.concat(this.#chunks, this.#bytes).toString("utf8")
+    const buffer = Buffer.concat(this.#chunks, this.#bytes)
+    let start = 0
+    while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++
+    return buffer.subarray(start).toString("utf8")
   }
 
   base64() {
@@ -284,24 +290,29 @@ export class BoundedTerminalHistory {
 }
 
 export class JsonLineDecoder {
-  #pending = Buffer.alloc(0)
+  #parts: Buffer[] = []
+  #bytes = 0
 
   push(chunk: Buffer): TerminalWireValue[] {
-    if (this.#pending.byteLength + chunk.byteLength > TERMINAL_MAX_FRAME_BYTES) {
-      throw new Error("Terminal protocol frame exceeded 16 MiB")
-    }
-    this.#pending = Buffer.concat([this.#pending, chunk])
     const values: TerminalWireValue[] = []
-    let newline = this.#pending.indexOf(10)
-    while (newline >= 0) {
-      const line = this.#pending.subarray(0, newline)
-      this.#pending = this.#pending.subarray(newline + 1)
-      if (line.byteLength > 0) {
+    let start = 0
+    while (start < chunk.length) {
+      const newline = chunk.indexOf(10, start)
+      const end = newline < 0 ? chunk.length : newline
+      const part = chunk.subarray(start, end)
+      this.#bytes += part.length
+      if (this.#bytes > TERMINAL_MAX_FRAME_BYTES) throw new Error("Terminal protocol frame exceeded 16 MiB")
+      if (part.length) this.#parts.push(part)
+      if (newline < 0) break
+      if (this.#bytes) {
+        const line = this.#parts.length === 1 ? this.#parts[0] : Buffer.concat(this.#parts, this.#bytes)
         const parsed = jsonValueSchema.safeParse(JSON.parse(line.toString("utf8")))
         if (!parsed.success) throw new Error("Terminal protocol frame was not JSON")
         values.push(parsed.data)
       }
-      newline = this.#pending.indexOf(10)
+      this.#parts = []
+      this.#bytes = 0
+      start = newline + 1
     }
     return values
   }

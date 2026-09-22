@@ -20,7 +20,7 @@ const switches = new Map<string, (snapshot: TabSnapshot) => void>()
 const projects = new Map<string, GitStatus>()
 const histories = new Map<string, Array<(commits: GitCommitEntry[]) => void>>()
 const pushes = new Map<string, { resolve: () => void; reject: (error: Error) => void }>()
-export const calls = { selections: 0, pushes: 0, stages: 0, commits: 0, diffs: 0, copied: "", copiedHtml: "", context: "" }
+export const calls = { selections: 0, pushes: 0, stages: 0, commits: 0, diffs: 0, copied: "", copiedHtml: "", context: "", remoteAction: "" }
 Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
   write: async (items: ClipboardItem[]) => { calls.copied = await (await items[0].getType("text/plain")).text(); calls.copiedHtml = await (await items[0].getType("text/html")).text() },
 } })
@@ -94,6 +94,8 @@ export function incoming(path: string, conflicts = false) {
 }
 
 let untrackedBlock = false
+let mergeConflict = false
+let dirtyBlock = false
 export async function showUntrackedBlocker(path: string) {
   const snapshot: GitStatus = { ...projects.get(path)!, behind: 3, operation: undefined, files: [{ path: "report.md", status: "untracked", staged: false, insertions: null, deletions: null, binary: false }] }
   projects.set(path, snapshot)
@@ -101,6 +103,22 @@ export async function showUntrackedBlocker(path: string) {
   untrackedBlock = true
   await runGitRemote("merge")
   untrackedBlock = false
+}
+
+export async function showDirtyBlocker(path: string) {
+  const snapshot: GitStatus = { ...projects.get(path)!, behind: 3, operation: undefined, files: [{ path: "local-edit.ts", status: "modified", staged: false, insertions: null, deletions: null, binary: false }] }
+  projects.set(path, snapshot)
+  store.set({ git: snapshot })
+  dirtyBlock = true
+  await runGitRemote("merge")
+  dirtyBlock = false
+}
+
+export async function showMergeConflict(path: string) {
+  incoming(path, true)
+  mergeConflict = true
+  await runGitRemote("merge")
+  mergeConflict = false
 }
 
 async function stagePaths(paths: string[], staged: boolean) {
@@ -136,7 +154,10 @@ window.mako = {
   gitUnstage: (paths) => stagePaths(paths, false),
   gitPush: async (target) => { calls.pushes += 1; return new Promise<void>((resolve, reject) => pushes.set(target.cwd, { resolve, reject })) },
   gitRemote: async (target) => {
+    calls.remoteAction = target.action
     const current = projects.get(target.cwd)!
+    if (dirtyBlock) return { status: current, problem: { kind: "dirty", message: "Git needs your local edits set aside before merging. Temporarily stash and restore them to pull without committing. Restoring may cause conflicts; staged edits return unstaged.", detail: "Your local changes would be overwritten by merge: local-edit.ts" } }
+    if (mergeConflict) return { status: current, problem: { kind: "conflicts", message: "Resolve and stage the conflicted files, then continue.", detail: "CONFLICT (content): Merge conflict in shared.ts" } }
     if (untrackedBlock) return { status: current, problem: { kind: "untracked", message: "A local file conflicts with incoming changes.", detail: "The following untracked working tree files would be overwritten by merge: report.md" } }
     const status: GitStatus = target.action === "fetch" ? current : { ...current, behind: 0, ahead: current.ahead + (target.action === "merge" ? 1 : 0), operation: undefined }
     projects.set(target.cwd, status)

@@ -2,6 +2,12 @@
 .skills/
 logs
 *.log
+docs/audits/2026*
+docs/meta-harness
+docs/shared-host-continuation.md
+docs/sessions-in-a-thread.md
+docs/provider-recovery.md
+docs/meta-harness*.md
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -209,6 +209,13 @@
   --negative: oklch(0.68 0.14 25);
   --destructive: var(--negative);
   --caution: oklch(0.78 0.09 80);
+  /* ANSI hues encode shell output, independently of the neutral app chrome. */
+  --terminal-blue: #89a9de;
+  --terminal-bright-blue: #afc8f0;
+  --terminal-cyan: #80bdb5;
+  --terminal-bright-cyan: #a6d9cf;
+  --terminal-magenta: #bc9acb;
+  --terminal-bright-magenta: #d7b7e4;
   --added: var(--positive);
   --removed: var(--negative);
 
@@ -273,6 +280,12 @@
   --positive: oklch(0.53 0.095 150);
   --negative: oklch(0.545 0.15 26);
   --caution: oklch(0.59 0.085 75);
+  --terminal-blue: #365f9e;
+  --terminal-bright-blue: #426fac;
+  --terminal-cyan: #276d68;
+  --terminal-bright-cyan: #317d76;
+  --terminal-magenta: #80528e;
+  --terminal-bright-magenta: #9461a3;
 
   --primary: var(--foreground);
   --primary-foreground: var(--surface);
@@ -1354,4 +1367,12 @@ diffs-container {
   --shiki-token-string-expression: var(--muted-foreground);
   --shiki-token-punctuation: var(--faint);
   --shiki-token-link: var(--foreground);
+}
+
+/* Keep xterm's scrolling inside the dock and match the surrounding chrome. */
+.terminal-viewport .xterm { height: 100%; }
+.terminal-viewport .xterm-viewport { overscroll-behavior: contain; }
+.terminal-viewport .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  background: var(--fill-selected);
+  border-radius: 4px;
 }

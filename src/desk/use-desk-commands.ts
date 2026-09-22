@@ -24,6 +24,8 @@ import { cycleComposerRole } from "@/state/composer-settings"
 import { applyLoadoutEntry } from "@/state/model-loadout"
 import { AGENT_TAB_ID, viewer, viewerStore } from "@/state/viewer"
 import { markAllSeen, nextUnseen, openItem } from "@/state/notifications"
+import { terminalActions, terminalStore } from "@/state/terminal"
+import { terminalGroupFor } from "@/lib/terminal-layout"
 import { toast } from "sonner"
 
 const openPalette = () => {
@@ -366,6 +368,40 @@ const DESK_COMMANDS: DeskCommand[] = [
     keys: "mod+j",
     hint: "Open the terminal below the conversation",
     run: () => stage.toggleDock("terminal"),
+  },
+  {
+    id: "terminal.new", title: "New terminal", section: "View", keys: "mod+shift+`",
+    when: () => Boolean(terminalStore.get().activeId),
+    run: () => {
+      const state = terminalStore.get()
+      const session = state.sessions.find((s) => s.id === state.activeId)
+      if (session) void terminalActions.create(session.cwd)
+    },
+  },
+  {
+    id: "terminal.split-right", title: "Split terminal right", section: "View", keys: "mod+alt+\\",
+    when: () => Boolean(terminalStore.get().activeId),
+    run: () => { void terminalActions.split("horizontal") },
+  },
+  {
+    id: "terminal.split-down", title: "Split terminal down", section: "View",
+    when: () => Boolean(terminalStore.get().activeId),
+    run: () => { void terminalActions.split("vertical") },
+  },
+  {
+    id: "terminal.next-pane", title: "Focus next terminal pane", section: "View", keys: "mod+alt+]",
+    when: () => Boolean(document.activeElement?.closest("[data-terminal-panel]")),
+    run: () => {
+      const state = terminalStore.get()
+      const ids = terminalGroupFor(state.groups, state.activeId)?.sessionIds ?? []
+      const next = ids[(ids.indexOf(state.activeId ?? "") + 1) % ids.length]
+      if (next) terminalActions.activate(next)
+    },
+  },
+  {
+    id: "terminal.close", title: "Close terminal pane", section: "View",
+    when: () => Boolean(terminalStore.get().activeId),
+    run: () => terminalActions.requestClose(),
   },
   {
     id: "view.all-projects",

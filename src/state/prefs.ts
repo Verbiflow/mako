@@ -1,3 +1,5 @@
+import { z } from "zod"
+import { terminalGroupSchema, type TerminalGroup } from "@/lib/terminal-layout"
 import { SessionSettingsSchema, SettingsPreferenceSchema, type SessionSettings, type SettingsPreference } from "@mako/sessions/settings"
 import { createHook, createStore } from "@/state/store"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -79,6 +81,10 @@ export interface Prefs {
   /** Pending selections scoped to a workspace draft or a single conversation. */
   settingsOverrides: Record<string, SessionSettings>
   keybindings: PreferenceStringMap
+  terminalFontSize: number
+  terminalFontFamily: string
+  terminalGroups: TerminalGroup[]
+  terminalPaneSizes: SurfaceWidthMap
   terminalOptionAsMeta: "auto" | "on" | "off"
   /**
    * How a conversation moves to another harness. Transcript replay is the
@@ -143,6 +149,10 @@ const defaults: Prefs = {
   providerSettings: {},
   settingsOverrides: {},
   keybindings: {},
+  terminalFontSize: 12,
+  terminalFontFamily: "",
+  terminalGroups: [],
+  terminalPaneSizes: {},
   terminalOptionAsMeta: "auto",
   titleOverrides: {},
   terminalTitles: {},
@@ -369,6 +379,10 @@ function parsePrefs(value: JsonValue): Prefs | null {
     providerSettings: readProviderSettings(value.providerSettings, value.composerTuning),
     settingsOverrides: readSettingsOverrides(value.settingsOverrides),
     keybindings: readStringRecord(value.keybindings),
+    terminalFontSize: Math.min(24, Math.max(10, readNumber(value.terminalFontSize, defaults.terminalFontSize))),
+    terminalFontFamily: (readOptionalString(value.terminalFontFamily) ?? "").slice(0, 200),
+    terminalGroups: z.array(terminalGroupSchema).max(24).catch([]).parse(value.terminalGroups),
+    terminalPaneSizes: readNumberRecord(value.terminalPaneSizes),
     terminalOptionAsMeta: readChoice(
       value.terminalOptionAsMeta,
       ["auto", "on", "off"],

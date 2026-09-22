@@ -42,9 +42,9 @@ export class TerminalDaemonClient {
   #decoder = new JsonLineDecoder()
   #connectPromise: Promise<void> | null = null
   #reconnectTimer: NodeJS.Timeout | null = null
+  #reconnectDelay = 500
   #nextId = 1
   #disposed = false
-  #attachedSessionId?: string
   #daemonPid: number | null = null
   readonly #daemonEntry: string
   readonly #stateDir: string
@@ -88,20 +88,13 @@ export class TerminalDaemonClient {
   }
 
   async attach(sessionId: string): Promise<TerminalSnapshot> {
-    this.#attachedSessionId = sessionId
     const result = await this.#request({ id: this.#id(), type: "attach", sessionId })
     if (result.kind !== "snapshot") throw new Error("Terminal daemon returned an invalid snapshot")
     return result.snapshot
   }
 
   async detach(sessionId: string) {
-    if (this.#attachedSessionId === sessionId) this.#attachedSessionId = undefined
     await this.#expectOk({ id: this.#id(), type: "detach", sessionId })
-  }
-
-  async detachActive() {
-    const sessionId = this.#attachedSessionId
-    if (sessionId) await this.detach(sessionId)
   }
 
   async acknowledge(sessionId: string, sequence: number) {
@@ -129,7 +122,6 @@ export class TerminalDaemonClient {
   }
 
   async kill(sessionId: string) {
-    if (this.#attachedSessionId === sessionId) this.#attachedSessionId = undefined
     await this.#expectOk({ id: this.#id(), type: "kill", sessionId })
   }
 
@@ -170,8 +162,9 @@ export class TerminalDaemonClient {
   }
 
   #ensureConnected() {
-    if (this.#socket && !this.#socket.destroyed) return Promise.resolve()
     if (this.#disposed) return Promise.reject(new Error("Terminal client stopped"))
+    if (this.#connectPromise) return this.#connectPromise
+    if (this.#socket && !this.#socket.destroyed) return Promise.resolve()
     this.#connectPromise ??= this.#connect().finally(() => {
       this.#connectPromise = null
     })
@@ -190,7 +183,7 @@ export class TerminalDaemonClient {
     try {
       let hello = await this.#hello()
       if (this.#outdated(hello)) {
-        await this.#expectOk({
+        await this.#requestConnected({
           protocol: TERMINAL_PROTOCOL_VERSION,
           id: this.#id(),
           type: "replace",
@@ -206,15 +199,9 @@ export class TerminalDaemonClient {
         if (this.#outdated(hello)) throw new Error("The terminal daemon could not be replaced")
       }
       this.#daemonPid = hello.pid
+      this.#reconnectDelay = 500
       this.#emit({ type: "connection", state: "ready" })
-      if (this.#attachedSessionId) {
-        const result = await this.#requestConnected({
-          id: this.#id(),
-          type: "attach",
-          sessionId: this.#attachedSessionId,
-        })
-        if (result.kind === "snapshot") this.#emit({ type: "snapshot", snapshot: result.snapshot })
-      }
+
     } catch (error) {
       socket.destroy()
       this.#scheduleReconnect()
@@ -295,10 +282,15 @@ export class TerminalDaemonClient {
   }
 
   #adopt(socket: Socket) {
+    if (this.#disposed) {
+      socket.destroy()
+      throw new Error("Terminal client stopped")
+    }
     this.#socket = socket
     this.#decoder = new JsonLineDecoder()
     socket.setNoDelay(true)
     socket.on("data", (chunk) => {
+      if (this.#socket !== socket) return
       try {
         for (const value of this.#decoder.push(chunk)) this.#receive(value)
       } catch (error) {
@@ -355,9 +347,11 @@ export class TerminalDaemonClient {
 
   #scheduleReconnect() {
     if (this.#disposed || this.#reconnectTimer) return
+    const delay = this.#reconnectDelay
+    this.#reconnectDelay = Math.min(10_000, delay * 2)
     this.#reconnectTimer = setTimeout(() => {
       this.#reconnectTimer = null
       void this.#ensureConnected().catch(() => undefined)
-    }, 500)
+    }, delay)
   }
 }

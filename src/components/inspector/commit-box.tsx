@@ -1,7 +1,6 @@
-import { CopyGitContextButton, GitConflictFooter } from "@/components/inspector/git-conflict-footer"
+import { CopyGitContextButton, GitConflictFooter, GitDetailsButton } from "@/components/inspector/git-conflict-footer"
 import {
   useCallback,
-  useId,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -17,7 +16,7 @@ import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronRightIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
 import { ThinkingOrb } from "thinking-orbs"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import {
@@ -46,7 +45,23 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
  * queues every index write and the commit itself per repository, so a commit
  * clicked mid-staging runs after the write and includes it.
  */
-export function CommitBox({
+export function CommitBox({ staged, total }: { staged: number; total: number }) {
+  const status = useSession(state => state.git)
+  const root = status?.root
+  const resolving = Boolean(status?.operation || status?.files.some(file => file.status === "conflicted"))
+  return <div data-git-footer className="shrink-0 border-t border-hairline">
+    {root && status.branch ? <>
+      <div data-git-actions data-repository={root} className="flex min-h-8 items-center gap-2 px-2.5">
+        <span className="min-w-0 flex-1 truncate text-label text-muted-foreground" title={`${root} · ${status.branch}`}>{root.split("/").filter(Boolean).at(-1)}</span>
+        {status.head ? <PushControl cwd={root} branch={status.branch} ahead={status.ahead} upstream={status.upstream} /> : null}
+      </div>
+      {!resolving ? <GitRemoteNotice cwd={root} branch={status.branch} /> : null}
+    </> : null}
+    <CommitEditor staged={staged} total={total} />
+  </div>
+}
+
+function CommitEditor({
   staged,
   total,
 }: {
@@ -168,10 +183,10 @@ export function CommitBox({
   const openModelSettings = () =>
     window.dispatchEvent(new CustomEvent("mako:settings", { detail: "commits" }))
 
-  if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} />
+  if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} detail={pushState.kind === "failed" ? pushState.detail : undefined} />
 
   return (
-    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} className="shrink-0 border-t border-hairline p-3">
+    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} className="shrink-0 p-3">
       <div className="commit-editor relative overflow-hidden rounded-lg bg-raised ring-1 ring-hairline focus-within:ring-border">
         <textarea
           aria-label="Commit message"
@@ -450,20 +465,14 @@ function GenerationSettings({
   )
 }
 
-/**
- * Pushing publishes work outside the machine, so it stays a deliberate,
- * separately-labelled action and never rides along with a commit. It sits
- * on the Commits header, beside the history it publishes, and only while it
- * has something to say: commits waiting, a branch with no upstream, a push
- * in flight, its receipt, or its failure. A branch that is up to date shows
- * nothing — a permanently lit "Up to date" was a status bar in disguise.
- */
+/** Remote actions follow the selected repository above the shared commit editor. */
 export function PushControl({ cwd, branch, ahead, upstream }: { cwd: string; branch: string; ahead: number; upstream?: string }) {
   const state = useGitPush(cwd, branch)
   const behind = useSession(s => s.git?.behind ?? 0)
   const operation = useSession(s => s.git?.operation)
   const conflicts = useSession(s => s.git?.files.some(file => file.status === "conflicted") ?? false)
   const pending = state.kind === "pushing" || state.kind === "syncing"
+  const keepEdits = state.kind === "failed" && state.reason === "dirty"
   const style = "h-6 gap-1 px-1.5 text-label font-normal tabular text-faint hover:text-foreground disabled:opacity-50 [&_svg]:size-3"
   if (operation) return <span data-push-control className="flex shrink-0 items-center gap-1">
     <Action size="xs" className={style} disabled={pending} onClick={() => void git.remote("abort")}>Abort {operation}</Action>
@@ -471,10 +480,10 @@ export function PushControl({ cwd, branch, ahead, upstream }: { cwd: string; bra
   </span>
   return <span data-push-control className="flex shrink-0 items-center gap-1">
     <IconAction size="xs" label="Fetch remote changes" disabled={pending} onClick={() => void git.remote("fetch")}><RefreshCwIcon className={state.kind === "syncing" && state.action === "fetch" ? "animate-spin motion-reduce:animate-none" : ""} /></IconAction>
-    {behind > 0 ? <Action size="xs" className={style} disabled={pending || conflicts} aria-label={ahead > 0 ? `Pull and merge ${behind} incoming commits` : `Pull ${behind} incoming commits`} title={ahead > 0 ? "Merge incoming commits into this branch, preserving both histories" : "Pull incoming commits"} onClick={() => void git.remote(ahead > 0 ? "merge" : "pull")}>
-      <ArrowDownIcon />{state.kind === "syncing" ? "Pulling…" : ahead > 0 ? `Pull & merge ${behind}` : `Pull ${behind}`}
+    {behind > 0 ? <Action size="xs" className={style} disabled={pending || conflicts} aria-label={keepEdits ? `Pull ${behind} incoming commits with stash` : ahead > 0 ? `Pull and merge ${behind} incoming commits` : `Pull ${behind} incoming commits`} title={keepEdits ? "Temporarily stash your edits, pull, then restore them. Restoring may cause conflicts; staged edits return unstaged." : ahead > 0 ? "Merge incoming commits into this branch, preserving both histories" : "Pull incoming commits"} onClick={() => void git.remote(keepEdits ? "merge_autostash" : ahead > 0 ? "merge" : "pull")}>
+      <ArrowDownIcon />{state.kind === "syncing" ? "Pulling…" : keepEdits ? `Pull with stash ${behind}` : ahead > 0 ? `Pull & merge ${behind}` : `Pull ${behind}`}
     </Action> : null}
-    {ahead > 0 || !upstream || state.kind === "pushed" || state.kind === "pushing" ? <Action size="xs" className={style} data-push-state={state.kind} aria-label={`Push to ${branch}`} aria-busy={state.kind === "pushing"} disabled={pending || state.kind === "pushed" || behind > 0 || conflicts} title={behind > 0 ? "Pull incoming commits before pushing" : upstream ? `Push ${ahead} commits to ${upstream}` : `Publish ${branch} to origin`} onClick={() => void git.push()}>
+    {behind === 0 && (ahead > 0 || !upstream || state.kind === "pushed" || state.kind === "pushing") ? <Action size="xs" className={style} data-push-state={state.kind} aria-label={`Push to ${branch}`} aria-busy={state.kind === "pushing"} disabled={pending || state.kind === "pushed" || behind > 0 || conflicts} title={behind > 0 ? "Pull incoming commits before pushing" : upstream ? `Push ${ahead} commits to ${upstream}` : `Publish ${branch} to origin`} onClick={() => void git.push()}>
       {state.kind === "pushed" ? <CheckIcon /> : <ArrowUpIcon />}
       <span role="status" className="git-action-label" key={state.kind}>{state.kind === "pushing" ? `Pushing ${ahead}…` : state.kind === "pushed" ? "Pushed" : upstream ? `Push ${ahead}` : "Publish branch"}</span>
     </Action> : null}
@@ -484,24 +493,18 @@ export function PushControl({ cwd, branch, ahead, upstream }: { cwd: string; bra
 export function GitRemoteNotice({ cwd, branch }: { cwd: string; branch: string }) {
   const state = useGitPush(cwd, branch)
   const behind = useSession(s => s.git?.behind ?? 0)
-  const conflicts = useSession(s => s.git?.files.some(file => file.status === "conflicted") ?? false)
-  if (state.kind !== "failed") return null
-  if (state.reason === "incoming" && behind === 0 || state.reason === "conflicts" && !conflicts) return null
-  return <GitRemoteProblem key={`${state.message}:${state.detail ?? ""}`} message={state.message} detail={state.detail} copyContext={state.reason === "untracked"} keepEdits={state.reason === "dirty"} />
+  const conflicts = useSession(s => s.git?.files.filter(file => file.status === "conflicted").length ?? 0)
+  if (state.kind !== "failed" || conflicts) return null
+  if (state.reason === "incoming" && behind === 0 || state.reason === "conflicts") return null
+  return <GitRemoteProblem key={`${state.message}:${state.detail ?? ""}`} message={state.reason === "dirty" ? "Local edits overlap incoming changes." : state.message} detail={state.detail} copyContext={state.reason === "untracked" || state.reason === "dirty"} />
 }
 
-function GitRemoteProblem({ message, detail, copyContext, keepEdits }: { message: string; detail?: string; copyContext: boolean; keepEdits: boolean }) {
-  const [expanded, setExpanded] = useState(false)
-  const detailsId = useId()
+function GitRemoteProblem({ message, detail, copyContext }: { message: string; detail?: string; copyContext: boolean }) {
   return <div data-git-remote-notice className="px-2.5 py-1.5 text-label text-muted-foreground">
-    <div className="flex min-h-6 items-start gap-2">
-      {detail ? <button type="button" className="flex min-h-6 min-w-0 flex-1 items-start gap-1.5 rounded-sm text-left hover:text-foreground focus-visible:outline focus-visible:outline-ring" aria-expanded={expanded} aria-controls={detailsId} title={expanded ? "Hide Git details" : "Show Git details"} onClick={() => setExpanded(value => !value)}>
-        <ChevronRightIcon className={cn("mt-1 size-3.5 shrink-0 text-faint", expanded && "rotate-90")} />
-        <span className="min-w-0 py-0.5 leading-5">{message}</span>
-      </button> : <p role="status" className="min-w-0 flex-1 py-0.5 leading-5">{message}</p>}
+    <div className="flex min-h-6 items-start gap-1">
+      <p role="status" className="min-w-0 flex-1 py-0.5 leading-5">{message}</p>
       {copyContext ? <CopyGitContextButton /> : null}
+      {detail ? <GitDetailsButton detail={detail} /> : null}
     </div>
-    {expanded && detail ? <pre id={detailsId} className="my-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline bg-raised p-2.5 font-mono text-label leading-relaxed">{detail}</pre> : null}
-    {keepEdits ? <Action size="xs" className="mt-1" onClick={() => void git.remote("merge_autostash")}>Pull and keep my edits</Action> : null}
   </div>
 }

@@ -105,6 +105,7 @@ export function Stage() {
         min,
       })
     : 0
+  const dockExpanded = Boolean(dockSurface && tabStage.dockExpanded)
   const dockMin = dockSurface?.minHeight ?? 180
   const dockMax = clampDockHeight({
     height: 9999,
@@ -131,7 +132,12 @@ export function Stage() {
       ref={stageRef}
       className="relative flex min-h-0 min-w-0 flex-1 flex-col"
     >
-      <div className="relative flex min-h-0 min-w-0 flex-1">
+      <div
+        className={cn(
+          "relative flex min-h-0 min-w-0 flex-1",
+          dockExpanded && "hidden"
+        )}
+      >
         <FileViewer
           AgentSurface={AgentSurface}
           workspaceRef={workbenchRef}
@@ -194,24 +200,26 @@ export function Stage() {
 
       {dockSurface ? (
         <>
-          <Divider
-            side="bottom"
-            size={dockHeight}
-            min={dockMin}
-            max={dockMax}
-            onResize={(next) => {
-              if (dockRef.current) dockRef.current.style.height = `${next}px`
-            }}
-            onCommit={(next) =>
-              setPref("surfaceHeights", {
-                ...prefsStore.get().surfaceHeights,
-                [dockSurface.id]: next,
-              })
-            }
-          />
+          {!dockExpanded ? (
+            <Divider
+              side="bottom"
+              size={dockHeight}
+              min={dockMin}
+              max={dockMax}
+              onResize={(next) => {
+                if (dockRef.current) dockRef.current.style.height = `${next}px`
+              }}
+              onCommit={(next) =>
+                setPref("surfaceHeights", {
+                  ...prefsStore.get().surfaceHeights,
+                  [dockSurface.id]: next,
+                })
+              }
+            />
+          ) : null}
           <div
             ref={dockRef}
-            style={{ height: dockHeight }}
+            style={{ height: dockExpanded ? "100%" : dockHeight }}
             className="terminal-panel relative flex shrink-0 flex-col overflow-hidden bg-surface"
           >
             <ErrorBoundary key={dockSurface.id} surface={dockSurface.label}>
