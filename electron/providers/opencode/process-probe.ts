@@ -1,3 +1,4 @@
+import { processIdentityMatches } from "../process-liveness.js"
 import { openCodeRegistryActivity } from "./activity-registry.js"
 import { open, readdir } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -67,6 +68,9 @@ async function serviceActivity(
   signal: AbortSignal
 ): Promise<ProviderActivitySession[]> {
   const info = await readRegistration(path, signal)
+  // Native service registrations can outlive their process. A dead PID is
+  // stale evidence; permission failures and live identity mismatches remain unknown.
+  if (!(await processIdentityMatches({ pid: info.pid, signal }))) return []
   const endpoint = new URL(info.url)
   if (
     endpoint.protocol !== "http:" ||

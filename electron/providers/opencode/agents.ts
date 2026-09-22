@@ -1,6 +1,5 @@
 import { Worker } from "node:worker_threads"
-import { homedir } from "node:os"
-import { join } from "node:path"
+import { openCodeDatabasePaths } from "@mako/sessions"
 import { z } from "zod"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { NativeAgentObservationSchema, type NativeAgentObservation } from "../../contracts/native-agents.js"
@@ -38,9 +37,8 @@ export class OpenCodeAgents implements AcpAgentObserver {
   constructor(input: Input) {
     this.input = input
     for (const agent of input.observedAgents ?? []) this.current.set(agent.nativeId, agent)
-    const root = join(input.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "opencode")
     this.worker = new Worker(new URL("./agent-worker.js", import.meta.url), {
-      workerData: { paths: [join(root, "opencode.db"), join(root, "opencode-next.db")], nativeId: input.nativeId },
+      workerData: { paths: openCodeDatabasePaths(input.env), nativeId: input.nativeId },
       resourceLimits: { maxOldGenerationSizeMb: 64 },
     })
     this.ready = new Promise(resolve => { this.readyResolve = resolve })

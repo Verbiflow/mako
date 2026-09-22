@@ -1,4 +1,4 @@
-import { openCodeInstallation } from "./installation.js"
+import { openCodeExecutable, openCodeSessionGeneration, resolveOpenCodeInstallation } from "./installation.js"
 import {
   argumentAfter,
   commandTuning,
@@ -26,23 +26,16 @@ function tuningArgs(tuning: CommandTuning, generation: "v1" | "v2") {
 
 export const openCodeNativeRunner: NativeRunner = {
   provider: "opencode",
+  available: () => openCodeExecutable() !== null,
   fastMode: "supported",
   carries: CARRIES,
   prepare: async (options) => dropUncarried(options, CARRIES),
-  resume(id, prompt, options) {
-    const preferred =
-      options?.nativePath?.includes("#v2:") ||
-      options?.nativePath?.includes("opencode-next.db#")
-        ? "v2"
-        : "v1"
-    const installation = openCodeInstallation(preferred)
-    if (!installation)
-      throw new Error(
-        `OpenCode ${preferred} is required to resume this session.`
-      )
+  async resume(id, prompt, options, env = process.env) {
+    const preferred = await openCodeSessionGeneration(id, options?.nativePath, env)
+    const installation = await resolveOpenCodeInstallation(preferred, env)
     const generation = installation.generation
     return {
-      command: installation?.command ?? "opencode",
+      command: installation.command,
       args: [
         "run",
         ...(generation === "v2" ? ["--auto"] : []),
@@ -53,11 +46,11 @@ export const openCodeNativeRunner: NativeRunner = {
       ],
     }
   },
-  fresh(prompt, options) {
-    const installation = openCodeInstallation()
-    const generation = installation?.generation ?? "v1"
+  async fresh(prompt, options, env = process.env) {
+    const installation = await resolveOpenCodeInstallation(undefined, env)
+    const generation = installation.generation
     return {
-      command: installation?.command ?? "opencode",
+      command: installation.command,
       args: [
         "run",
         ...(generation === "v2" ? ["--auto"] : []),

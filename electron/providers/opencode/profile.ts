@@ -12,7 +12,7 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { runDiscovery } from "../profile-transport.js"
-import { openCodeInstallation } from "./installation.js"
+import { resolveOpenCodeInstallation } from "./installation.js"
 
 const ModelSchema = z.object({
   id: z.string(),
@@ -106,19 +106,19 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
     "models",
     "agents",
   ],
-  cacheKey: () => {
+  cacheKey: (env) => {
+    const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.OPENCODE_BIN_PATH, env.OPENCODE1_BIN_PATH, env.OPENCODE2_BIN_PATH])
     try {
       const info = statSync(
-        join(homedir(), ".local", "share", "opencode", "auth.json")
+        join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "auth.json")
       )
-      return `${info.mtimeMs}:${info.size}`
+      return `${configuration}:${info.mtimeMs}:${info.size}`
     } catch {
-      return "missing"
+      return `${configuration}:missing`
     }
   },
   async load(env, cwd) {
-    const installation = openCodeInstallation()
-    if (!installation) throw new Error("OpenCode is not installed")
+    const installation = await resolveOpenCodeInstallation(undefined, env)
     let output = await runDiscovery(
       installation.command,
       installation.generation === "v2" ? ["models"] : ["models", "--verbose"],
@@ -139,7 +139,7 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
     }
     const rows =
       installation.generation === "v2"
-        ? await v2Models(output)
+        ? await v2Models(output, env)
         : parseModels(output)
     const catalog = normalizeOpenCodeModels(rows)
     if (!catalog.models.length)
@@ -220,13 +220,13 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
   },
 }
 
-async function v2Models(output: string): Promise<OpenCodeModelRow[]> {
+async function v2Models(output: string, env: NodeJS.ProcessEnv): Promise<OpenCodeModelRow[]> {
   let cached: z.infer<typeof CacheSchema> = {}
   try {
     const parsed = CacheSchema.safeParse(
       JSON.parse(
         await readFile(
-          join(homedir(), ".cache", "opencode", "models.json"),
+          join(env.XDG_CACHE_HOME || join(homedir(), ".cache"), "opencode", "models.json"),
           "utf8"
         )
       )

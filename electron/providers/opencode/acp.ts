@@ -1,10 +1,12 @@
 import { z } from "zod"
 import { OpenCodeAgents } from "./agents.js"
+import { openCodeCheckpoint, openCodeResumeVerdict } from "./resume.js"
 import type { ProviderAcpSource } from "../acp-source.js"
 import type { AccessTier } from "../../contracts/access.js"
 import {
-  openCodeInstallation,
+  openCodeExecutable,
   openCodeSessionGeneration,
+  resolveOpenCodeInstallation,
 } from "./installation.js"
 
 interface OpenCodeAcpConfig {
@@ -42,6 +44,8 @@ export const openCodeAcpSource: ProviderAcpSource = {
   },
   compaction: { kind: "supported", command: "/compact", completion: { kind: "response" } },
   canResume: true,
+  checkpoint: openCodeCheckpoint,
+  resumeVerdict: openCodeResumeVerdict,
   launchOptionIds: ["effort"],
   access: {
     native: { plan: "plan" },
@@ -56,13 +60,13 @@ export const openCodeAcpSource: ProviderAcpSource = {
     { id: "build", name: "build" },
     { id: "plan", name: "plan" },
   ],
-  available: () => openCodeInstallation() !== null,
+  available: () => openCodeExecutable() !== null,
   async launch(options) {
+    const env = options.env ?? process.env
     const generation = options.resume
-      ? await openCodeSessionGeneration(options.resume)
-      : openCodeInstallation()?.generation
-    const installation = openCodeInstallation(generation)
-    if (!installation) return null
+      ? await openCodeSessionGeneration(options.resume, options.nativePath, env)
+      : undefined
+    const installation = await resolveOpenCodeInstallation(generation, env)
     return {
       command: installation.command,
       args: ["acp"],
