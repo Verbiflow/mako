@@ -1,3 +1,4 @@
+import { CodexAgentStatus, type CodexAgentRun } from "./agent-status.js"
 import { z } from "zod"
 import type { ThreadItem } from "./generated/v2/ThreadItem.js"
 import type { NativeAgentObservation } from "../../contracts/native-agents.js"
@@ -37,13 +38,15 @@ export const CodexAgentItemSchema = z.object({
 }) satisfies z.ZodType<
   Omit<Extract<ThreadItem, { type: "collabAgentToolCall" }>, "reasoningEffort">
 >
+// The checked-in generated baseline predates the additive completed activity.
+// Verified in the installed 0.154.0 native records and upstream completion emitter.
 export const CodexAgentActivitySchema = z.object({
   type: z.literal("subAgentActivity"),
   id: z.string(),
-  kind: z.enum(["started", "interacted", "interrupted"]),
+  kind: z.enum(["started", "interacted", "interrupted", "completed"]),
   agentThreadId: z.string(),
   agentPath: z.string(),
-}) satisfies z.ZodType<Extract<ThreadItem, { type: "subAgentActivity" }>>
+}) satisfies z.ZodType<Omit<Extract<ThreadItem, { type: "subAgentActivity" }>, "kind"> & { kind: "started" | "interacted" | "interrupted" | "completed" }>
 export type CodexAgentItem =
   | z.infer<typeof CodexAgentItemSchema>
   | z.infer<typeof CodexAgentActivitySchema>
@@ -73,6 +76,42 @@ function nativeState(
 
 export class CodexAgents {
   private readonly agents = new Map<string, NativeAgentObservation>()
+  private readonly status?: CodexAgentStatus
+  constructor(source?: {
+    read(nativeId: string): Promise<CodexAgentRun | null>
+    publish(agent: NativeAgentObservation): void
+  }) {
+    if (source) this.status = new CodexAgentStatus({
+      read: source.read,
+      publish: (nativeId, run) => {
+        const previous = this.agents.get(nativeId)
+        if (!previous) return
+        const agent: NativeAgentObservation = {
+          ...previous,
+          nativeRunId: run.id,
+          state: run.status === "inProgress" ? { kind: "working" }
+            : run.status === "completed" ? { kind: "completed" }
+            : run.status === "interrupted" ? { kind: "canceled" }
+            : { kind: "failed", error: "Agent turn failed" },
+        }
+        this.agents.set(nativeId, agent)
+        source.publish(agent)
+      },
+    })
+  }
+  restore(agents: readonly NativeAgentObservation[]): void {
+    for (const agent of agents.slice(0, 256)) {
+      this.agents.set(agent.nativeId, {
+        ...agent,
+        state: { kind: "unknown", reason: "Rechecking child after reconnect." },
+      })
+      this.status?.observe(agent.nativeId)
+    }
+  }
+  dispose(): void { this.status?.dispose() }
+  refresh(nativeId: string): void {
+    if (this.agents.has(nativeId)) this.status?.observe(nativeId)
+  }
   project(item: CodexAgentItem, replay: boolean): NativeAgentObservation[] {
     const updates = new Map<string, NativeAgentObservation>()
     const add = (agent: NativeAgentObservation) => {
@@ -90,17 +129,24 @@ export class CodexAgents {
           : agent
       this.agents.set(agent.nativeId, observed)
       updates.set(agent.nativeId, observed)
+      if (!replay) this.status?.observe(agent.nativeId)
     }
     if (item.type === "subAgentActivity") {
-      if (item.kind === "interacted") return []
+      if (item.kind === "interacted") {
+        if (!replay && this.agents.has(item.agentThreadId)) this.status?.observe(item.agentThreadId)
+        return []
+      }
       const previous = this.agents.get(item.agentThreadId)
       add({
         ...previous,
         nativeId: item.agentThreadId,
         title: previous?.title ?? item.agentPath.slice(0, 512),
         toolId: previous?.toolId ?? item.id,
-        state:
-          item.kind === "started" ? { kind: "working" } : { kind: "canceled" },
+        nativeRunId: item.kind === "started" ? undefined : previous?.nativeRunId,
+        state: item.kind === "started" ? { kind: "working" }
+          : item.kind === "completed" || this.status
+            ? previous?.state ?? { kind: "unknown", reason: "Awaiting current child turn evidence." }
+            : { kind: "canceled" },
       })
     } else {
       if (item.tool === "spawnAgent" || item.tool === "resumeAgent") {
@@ -139,6 +185,7 @@ export class CodexAgents {
       const oldest = this.agents.keys().next().value
       if (!oldest) break
       this.agents.delete(oldest)
+      this.status?.forget(oldest)
     }
     return [...updates.values()]
   }
