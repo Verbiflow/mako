@@ -6,6 +6,8 @@ import { z } from "zod"
 const choice = z.object({
   id: z.string().min(1).max(100),
   product: z.string().max(80).optional(),
+  applicationPath: z.string().max(4096).optional(),
+  setupRequired: z.boolean().optional(),
   profileName: z.string().max(100).optional(),
   name: z.string().min(1).max(100),
   transport: z.enum(["extension", "direct"]).optional(),

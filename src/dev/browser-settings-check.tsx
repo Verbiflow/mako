@@ -1,12 +1,18 @@
 // Isolated fixture for the production Settings component; never an app entry.
 import { createRoot } from "react-dom/client"
-import { BrowserConnections } from "@/components/settings/browser-connections"
+import { McpSection } from "@/components/settings/mcp-section"
 import { mcpStore } from "@/state/mcp"
 import { installMockBridge } from "./mock-bridge"
 import type { BrowserControlStatus } from "@/lib/types"
 import "../index.css"
 installMockBridge()
 const profiles: BrowserControlStatus[] = [
+  {
+    id: "mako",
+    name: "Mako (this app)",
+    kind: "desk",
+    connection: { status: "disconnected" },
+  },
   {
     id: "aside",
     name: "Aside · Work",
@@ -22,10 +28,9 @@ const profiles: BrowserControlStatus[] = [
     id: "chrome",
     name: "Chrome · Kashyab",
     product: "Chrome",
-    profileName: "Kashyab",
     kind: "chromium",
     transport: "extension",
-    connection: { status: "disconnected" },
+    connection: { status: "setup-required" },
   },
   {
     id: "direct",
@@ -55,10 +60,27 @@ window.mako!.disconnectBrowser = async (id) =>
     .browsers.map((b) =>
       b.id === id ? { ...b, connection: { status: "disconnected" } } : b
     )
+window.mako!.prepareBrowserExtension = async () => ({
+  directory: "/Users/example/.mako/browser-extension-package",
+  extensionId: "fixture",
+})
+window.mako!.computerDriver = async () => ({
+  executable: null,
+  version: null,
+  verified: "0.28.2",
+  outdated: false,
+  detail: "fixture",
+})
+window.mako!.computerPermissions = async () => ({
+  supported: true,
+  persistentAcrossUpdates: false,
+  accessibility: true,
+  screenRecording: "granted",
+})
 window.mako!.browserControlStatus = async () => mcpStore.get().browsers
 createRoot(document.getElementById("root")!).render(
   <main className="mx-auto max-w-2xl px-6 py-8">
     <p className="mb-6 text-label text-faint">Settings / Tools</p>
-    <BrowserConnections />
+    <McpSection />
   </main>
 )

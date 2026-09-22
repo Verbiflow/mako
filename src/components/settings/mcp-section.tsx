@@ -32,41 +32,35 @@ export function McpSection() {
 
   return (
     <div>
-      <p className="pb-3 text-ui leading-relaxed text-muted-foreground">
-        Servers found in each provider&apos;s configuration, deduplicated by
-        connection. Mako&apos;s local browser and computer control attach only
-        to sessions launched here; they are never written into provider clients.
-        Environment and header values stay in the host.
-      </p>
-
       <BrowserConnections />
       {state.permissions?.supported ? (
-        <div className="mb-3 flex items-center gap-3 rounded-lg bg-surface px-2.5 py-2 ring-1 ring-hairline">
-          <span className="min-w-0 flex-1">
-            <span className="block text-ui text-foreground/90">
-              Computer use runs as Mako
-            </span>
-            <span className="block text-label text-faint">
+        <section
+          aria-label="Computer use"
+          className="mb-6 flex items-center justify-between gap-4 border-t border-hairline pt-4"
+        >
+          <div className="min-w-0">
+            <h3 className="text-ui font-medium">Computer use</h3>
+            <p className="mt-1 text-label text-muted-foreground">
               {state.permissions.accessibility &&
               state.permissions.screenRecording === "granted"
-                ? state.permissions.persistentAcrossUpdates
-                  ? "Accessibility and Screen Recording are granted to Mako."
-                  : "Granted for this unsigned build; a future update may require access again."
-                : state.permissions.persistentAcrossUpdates
-                  ? "Grant Accessibility and Screen Recording to Mako."
-                  : "Grant access to this unsigned build; updates may require access again."}
-            </span>
-          </span>
+                ? "Mako can read the screen and interact with apps."
+                : "Allow Mako to read the screen and interact with apps."}
+            </p>
+          </div>
           {!state.permissions.accessibility ||
           state.permissions.screenRecording !== "granted" ? (
             <Action
               tone="outline"
               onClick={() => void mcp.requestComputerPermissions()}
             >
-              Grant to Mako
+              Allow access
             </Action>
-          ) : null}
-        </div>
+          ) : (
+            <span className="shrink-0 text-label text-muted-foreground">
+              Allowed
+            </span>
+          )}
+        </section>
       ) : null}
       {state.driver?.executable ? (
         <div className="mb-3 flex items-center gap-3 rounded-lg bg-surface px-2.5 py-2 ring-1 ring-hairline">
@@ -104,6 +98,9 @@ export function McpSection() {
 
       {snapshot ? (
         <>
+          <p className="mb-3 text-label text-muted-foreground">
+            MCP servers from your agents’ settings.
+          </p>
           <div className="flex items-center justify-between pt-2 pb-1">
             <Eyebrow className="px-0">Sync to</Eyebrow>
             <span className="flex rounded-md bg-raised p-0.5 text-label">

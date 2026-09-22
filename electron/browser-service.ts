@@ -321,8 +321,13 @@ function browserStatus(
   const status: BrowserControlStatus = {
     id: definition.id,
     name: definition.name,
-    connection,
+    connection: definition.setupRequired
+      ? { status: "setup-required" }
+      : connection,
   }
+  if (definition.applicationPath)
+    status.applicationPath = definition.applicationPath
+  if (definition.icon) status.icon = definition.icon
   if (definition.product) status.product = definition.product
   if (definition.profileName) status.profileName = definition.profileName
   if (definition.transport) status.transport = definition.transport
@@ -394,9 +399,17 @@ export class BrowserService {
       ...entry.status,
       preferred: entry.definition.id === selected?.id,
     }))
-    if (selected && !this.browsers.has(selected.id))
+    if (selected && !this.browsers.has(selected.id)) {
+      const application = statuses.find(
+        (status) =>
+          status.connection.status === "setup-required" &&
+          selected.applicationPath &&
+          status.applicationPath === selected.applicationPath
+      )
+      if (application) statuses.splice(statuses.indexOf(application), 1)
       statuses.push({
         ...selected,
+        icon: application?.icon,
         kind: "chromium",
         preferred: true,
         connection: {
@@ -407,6 +420,7 @@ export class BrowserService {
               : "This preferred profile is not available. Open its browser and enable Mako Browser, or choose another profile.",
         },
       })
+    }
     return statuses
   }
   refresh(): Promise<BrowserControlStatus[]> {
@@ -434,6 +448,8 @@ export class BrowserService {
       if (entry) {
         entry.definition = definition
         if (
+          entry.status.icon !== definition.icon ||
+          entry.status.applicationPath !== definition.applicationPath ||
           entry.status.product !== definition.product ||
           entry.status.profileName !== definition.profileName ||
           entry.status.transport !== definition.transport ||
@@ -462,6 +478,42 @@ export class BrowserService {
         changed = true
       }
     }
+    const selected = this.preference.value
+    const selectedDefinition = selected
+      ? this.browsers.get(selected.id)?.definition
+      : undefined
+    if (
+      selected &&
+      !selected.applicationPath &&
+      selectedDefinition?.applicationPath
+    ) {
+      await this.preference.set({
+        ...selected,
+        applicationPath: selectedDefinition.applicationPath,
+      })
+      changed = true
+    }
+    if (selected?.setupRequired && selected.applicationPath) {
+      const profiles = definitions.filter(
+        (browser) =>
+          !browser.setupRequired &&
+          browser.transport === "extension" &&
+          browser.applicationPath === selected.applicationPath
+      )
+      // Selection before setup grants no authority to an ambiguous profile.
+      if (profiles.length === 1 && this.preference.value === selected) {
+        const profile = profiles[0]!
+        await this.preference.set({
+          id: profile.id,
+          name: profile.name,
+          product: profile.product,
+          profileName: profile.profileName,
+          transport: profile.transport,
+          applicationPath: profile.applicationPath,
+        })
+        changed = true
+      }
+    }
     if (!this.preference.hasSavedChoice && this.defaultApplication) {
       const applicationPath = await this.defaultApplication()
       // Several profiles in the same browser are ambiguous. Never pick the first.
@@ -482,6 +534,8 @@ export class BrowserService {
           id: browser.id,
           name: browser.name,
           product: browser.product,
+          applicationPath: browser.applicationPath,
+          setupRequired: browser.setupRequired,
           profileName: browser.profileName,
           transport: browser.transport,
         })
@@ -525,6 +579,8 @@ export class BrowserService {
         id,
         name: entry.definition.name,
         product: entry.definition.product,
+        applicationPath: entry.definition.applicationPath,
+        setupRequired: entry.definition.setupRequired,
         profileName: entry.definition.profileName,
         transport: entry.definition.transport,
       })
@@ -537,6 +593,11 @@ export class BrowserService {
     if (this.closing)
       fault("disconnected", "Mako browser control is shutting down.")
     const entry = this.entry(id)
+    if (entry.definition.setupRequired)
+      fault(
+        "unavailable",
+        `Open ${entry.definition.name} and add the Mako Browser extension to use it.`
+      )
     if (entry.connection) return Promise.resolve(entry.connection)
     if (!entry.connecting) {
       const abort = new AbortController()
@@ -982,10 +1043,11 @@ export class BrowserService {
     authorize()
     signal.throwIfAborted()
     if (command.action === "status")
-      return (await this.refresh()).map((status) => ({
-        ...status,
-        connection: { ...status.connection },
-      }))
+      return (await this.refresh()).map(({ icon, ...status }) => {
+        // Native app icons belong to Settings, not model context.
+        void icon
+        return { ...status, connection: { ...status.connection } }
+      })
     if (command.action === "connect") {
       if (!this.browsers.has(command.browser)) await this.refresh()
       await this.connect(command.browser)

@@ -2,6 +2,7 @@ import { ControlReadScopeSchema } from "@mako/control/control/scope"
 import { z } from "zod"
 
 export const BrowserStateSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("setup-required") }),
   z.object({ status: z.literal("connecting") }),
   z.object({ status: z.literal("disconnected") }),
   z.object({ status: z.literal("awaiting-approval"), startedAt: z.number() }),
@@ -13,6 +14,8 @@ export interface BrowserControlStatus {
   id: string
   name: string
   product?: string
+  applicationPath?: string
+  icon?: string
   profileName?: string
   preferred?: boolean
   transport?: "extension" | "direct"

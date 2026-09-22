@@ -32,15 +32,18 @@ async function checkWindow() {
   const evaluate=s=>page.executeJavaScript(s)
   const until=async s=>{const end=Date.now()+15000;while(!await evaluate(s)){if(Date.now()>end)throw Error(s);await new Promise(r=>setTimeout(r,40))}}
   const click=async selector=>{const point=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);for(const type of ['mousePressed','mouseReleased'])await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})}
-  const evidence=resolve('docs/audits/2026-09-22/browser-settings')
+  const evidence=resolve('docs/audits/2026-09-22/browser-settings-repair')
   await mkdir(evidence,{recursive:true})
   const capture=async name=>{await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true))))');await writeFile(join(evidence,name),(await page.capturePage()).toPNG())}
   const timer=setTimeout(()=>app.exit(1),60000)
   try {
     await w.loadURL(process.env.MAKO_BROWSER_SETTINGS_URL+'scripts/browser-settings.html')
-    await until("document.querySelectorAll('input[type=radio]').length===3")
+    await until("document.querySelectorAll('input[type=radio]').length===2")
     assert.equal(await evaluate("document.querySelector('input[value=aside]').checked"),true)
-    assert.equal(await evaluate("document.querySelector('[data-browser-options]').open"),false)
+    assert.equal(await evaluate("document.querySelector('input[value=mako]')===null"),true)
+    assert.equal(await evaluate("document.body.innerText.includes('Unnamed profile')"),false)
+    assert.equal(await evaluate("document.body.innerText.includes('unsigned build')"),false)
+    assert.equal(await evaluate("document.body.innerText.includes('Mako can read the screen')"),true)
     await until("[...document.images].every(i=>i.complete && i.naturalWidth>0)")
     assert.equal(await evaluate("document.body.innerText.includes('3de14b')"),false)
     assert.equal(await evaluate("document.body.innerText.includes('Work')"),true)
@@ -69,16 +72,16 @@ async function checkWindow() {
     await click('label:has(input[value=chrome])')
     await until("document.querySelector('input[value=chrome]').checked")
     assert.equal(await evaluate("document.querySelector('input[value=aside]').checked"),false)
-    assert.equal(await evaluate("document.querySelector('[role=status]').innerText.includes('Browser access is off')"),true)
-    await click('section > div:has([role=status]) button')
+    assert.equal(await evaluate("document.querySelector('[role=status]').innerText.includes('Open Chrome')"),true)
+    await click('section[aria-label="Browser use"] > div:has([role=status]) button')
+    await until("document.querySelector('input[aria-label=\"Browser extension folder\"]')!==null")
+    assert.equal(await evaluate("document.querySelector('[role=status]').innerText.includes('Open Chrome')"),true)
+    await capture('chrome-setup.png')
+    await evaluate("(async()=>{const {mcpStore}=await import('/src/state/mcp.ts');mcpStore.set({browserSetup:undefined,browsers:mcpStore.get().browsers.map(b=>b.id==='chrome'?{...b,profileName:'Kashyab',connection:{status:'disconnected'}}:b)})})()")
+    await click('section[aria-label="Browser use"] > div:has([role=status]) button')
     await until("document.querySelector('[role=status]').innerText.includes('Ready for browser tasks')")
-    await click('[data-browser-options] summary')
-    await click('[data-browser-options] button:last-child')
-    await until("document.querySelector('[role=status]').innerText.includes('Browser access is off')")
-    await click('[data-browser-options] summary')
-    await click('[data-browser-options] summary')
-    await until("document.querySelector('[data-browser-options]').open")
-    await capture('direct-expanded.png')
+    await click('section[aria-label="Browser use"] > div:has([role=status]) button')
+    await until("document.querySelector('[role=status]').innerText.includes('Not connected')")
     await evaluate("document.documentElement.classList.add('light');document.documentElement.classList.remove('dark')")
     await capture('light.png')
     w.setSize(430,960)
@@ -93,6 +96,34 @@ async function checkWindow() {
     assert.equal(await evaluate("Boolean(document.querySelector('input:checked'))"),false)
     await evaluate("(async()=>{const {mcpStore}=await import('/src/state/mcp.ts');mcpStore.set({browsers:[]})})()")
     await capture('empty.png')
-    console.log('PASS: production browser settings; pointer and keyboard selection; preference does not connect; enable/disable access; reduced-motion static frame; idle orb absent; direct disclosure; empty state; narrow layout; light/dark captures')
+    // Optional acceptance against this Mac's installed browsers; no connection is opened.
+    if (process.env.MAKO_BROWSER_SETTINGS_LIVE === "1") {
+    const {localBrowsers}=await import('../dist-electron/browser-discovery.js')
+    const {BrowserService}=await import('../dist-electron/browser-service.js')
+    const {browserApplicationIcon}=await import('../dist-electron/browser-icon.js')
+    const started=performance.now()
+    const definitions=await localBrowsers()
+    const discoveryMs=performance.now()-started
+    const candidates=await Promise.all(definitions.map(async browser=>({
+      ...browser,
+      icon:browser.applicationPath ? await browserApplicationIcon(browser.applicationPath) : undefined,
+    })))
+    const service=new BrowserService(candidates)
+    const aside=candidates.find(b=>b.applicationPath==='/Applications/Aside.app' && b.transport==='extension')
+    if(aside) await service.prefer(aside.id)
+    const statuses=service.status()
+    assert.ok(statuses.some(b=>b.applicationPath==='/Applications/Google Chrome.app'))
+    assert.ok(!statuses.some(b=>b.applicationPath==='/Applications/ChatGPT.app'))
+    await evaluate(`(async()=>{const {mcpStore}=await import('/src/state/mcp.ts');mcpStore.set({browsers:${JSON.stringify(statuses)}})})()`)
+    await until("document.body.innerText.includes('Google Chrome')")
+    await evaluate("document.documentElement.classList.remove('light');document.documentElement.classList.add('dark')")
+    w.setSize(760,920)
+    await new Promise(resolve=>setTimeout(resolve,300))
+    await until("[...document.images].every(i=>i.complete && i.naturalWidth>0)")
+    await capture('installed-browsers.png')
+    await writeFile(join(evidence,'discovery.json'),JSON.stringify({discoveryMs,browsers:statuses.map(({name,kind,applicationPath,connection,preferred})=>({name,kind,applicationPath,connection,preferred}))},null,2))
+    await service.close()
+    }
+    console.log('PASS: production browser settings; pointer and keyboard selection; preference does not connect; enable/disable access; reduced-motion static frame; idle orb absent; desk excluded; setup without connection; empty state; narrow layout; light/dark captures')
   } finally {clearTimeout(timer);w.destroy();app.quit()}
 }

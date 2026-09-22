@@ -1,3 +1,4 @@
+import { browserApplicationIcon } from "./browser-icon.js"
 import { z } from "zod"
 import { recoveryCapabilities } from "./providers/live-driver.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
@@ -404,13 +405,32 @@ const deskBrowser = new DeskBrowser({
 let removeDeskBrowserRegistration: (() => void) | undefined
 let stopDevRendererWatch: (() => void) | undefined
 let defaultBrowserApplication: Promise<string | undefined> | undefined
+function preferredBrowserApplication() {
+  return (defaultBrowserApplication ??= app
+    .whenReady()
+    .then(() => app.getApplicationInfoForProtocol("https://example.com"))
+    .then((info) => info.path)
+    .catch(() => undefined))
+}
 const browserControl = new BrowserService(
-  async () => [...(await localBrowsers()), deskBrowser.definition],
+  async () => {
+    const defaultPath = await preferredBrowserApplication()
+    const browsers = await localBrowsers(defaultPath ? [defaultPath] : [])
+    await app.whenReady()
+    return [
+      ...(await Promise.all(
+        browsers.map(async (browser) => {
+          const path = browser.applicationPath
+          if (!path) return browser
+          return { ...browser, icon: await browserApplicationIcon(path) }
+        })
+      )),
+      deskBrowser.definition,
+    ]
+  },
   {
     preferencePath: join(app.getPath("userData"), "browser-preference.json"),
-    defaultApplication: () => (defaultBrowserApplication ??= app.whenReady()
-      .then(() => app.getApplicationInfoForProtocol("https://example.com"))
-      .then(info => info.path).catch(() => undefined)),
+    defaultApplication: preferredBrowserApplication,
   }
 )
 let devRendererGeneration = 0

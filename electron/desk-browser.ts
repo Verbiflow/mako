@@ -74,6 +74,7 @@ export class DeskBrowser {
     this.definition = {
       id: this.id,
       name: options.name ?? "Mako (this app)",
+      kind: "desk",
       requiresApproval: false,
       endpoint: async () => {
         if (!this.endpoint) await this.start()

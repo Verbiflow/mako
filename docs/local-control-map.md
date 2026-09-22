@@ -1,5 +1,38 @@
 # Local Control refactor wayfinder
 
+## Browser settings discovery and presentation repair
+
+2026-09-22: the reported “Mako (this app) / Unnamed profile” row came from the
+local DeskBrowser definition omitting `kind: desk`. Chrome was absent because
+Settings listed live extension/debugging registrations, not installed browsers.
+The old fixture supplied both browser profiles and never exercised that gap.
+
+The desk definition is now classified at its source, and Settings accepts only
+external extension browsers. macOS discovery checks installed web-handler bundles
+for Chromium browser resources, excludes Electron packages (including renamed
+frameworks), deduplicates canonical paths and includes the OS-default app outside
+standard application folders. It is bounded, asynchronous and cached; it does not
+open browsers, request debugging, or connect. Other platforms retain extension
+registration discovery; this change does not claim Linux installed-app inventory.
+
+Installed browsers remain selectable before connection. A saved application choice
+resolves to a live profile only on an exact application match with one profile;
+several profiles require an explicit choice. Closed saved profiles retain their
+name without duplicating the installed app. The UI uses compact rows, actual app
+icons, real profile names only, inline Aside instructions and a plain Computer use
+permission row. Removed the generated avatar, unnamed-profile prompt, Manage
+browsers section and unsigned-build copy. Icon bytes do not enter agent status.
+
+Validation: installed-app, saved/default preference and desk tests passed; host and
+renderer typechecks passed; full lint passed with the existing five React warnings.
+Production component checks passed pointer/keyboard selection, setup without
+connection, reduced motion, narrow/light/dark layouts, and actual installed browser
+metadata/icons. The live Mac scan found Aside and Google Chrome in about 162 ms;
+Mako and ChatGPT were excluded. Screenshots and discovery evidence are in
+[audit evidence](audits/2026-09-22/browser-settings-repair/README.md).
+These are source and isolated-renderer results; the installed app has not received
+this repair. The prior failed installer remains a separate release gate below.
+
 ## Linux implementation and durable browser recovery
 
 2026-09-22: source work is in `/Users/kashyab/mako-control-rollout`; native source
@@ -35,14 +68,37 @@ and 76183. The installer now verifies and reaps that exact orphaned executable
 after authorized host exit. Tests preserve unrelated, parented and changed
 processes. The implementation is integrated into main at `7b6fc7e`. Signed app
 `f3562d64e9ea18dc` contains extension 0.3.1 and the updated host/installer; packaged
-bytes and its signature were verified. Installation is queued, waiting for active
-sessions to finish. A detached handoff waits for authorized host exit and checks
-the replacement host's actual build. See the [live installation receipt](audits/2026-09-22/linux-control-implementation/installation.json)
+bytes and its signature were verified. The queued handoff subsequently ran and
+**failed verification**: after stopping the idle browser helper, the replacement
+host reported old build `1f2c6af3acd5149e`, not expected `f3562d64e9ea18dc`.
+The receipt does not establish why replacement failed; installation needs further
+investigation. See the [live installation receipt](audits/2026-09-22/linux-control-implementation/installation.json)
 and [signed build receipt](audits/2026-09-22/linux-control-implementation/signed-app.json).
-The running host remains `1f2c6af3acd5149e`; the installed Mac driver remains
+The last verified host is `1f2c6af3acd5149e`; the installed Mac driver remains
 `+mako.1`. The Linux ARM64 `+mako.3` release is packaged separately. Regular Aside
 extension upgrade and controlled typing, native popup focus, Wayland, Linux x64
 and wider app coverage remain open. No ChatGPT parity claim is made.
+
+## Reference evidence still worth obtaining
+
+The user offered additional reference details. Highest value: action traces or
+implementation details behind native Mac/Linux input (exact target, focus,
+clipboard, text composition and fallback); capture/readiness rules with timings;
+full task tool inputs/outputs and observation sizes; popup/foreign-extension and
+restart failure traces; and the actual Linux desktop/compositor and job-isolation
+configuration. Record product/build, OS/backend, app/browser version and transport
+for each. Prefer reproducible saved outcomes over demonstrations of cursor motion.
+The installed JavaScript SDK, extension bundle and report have already been read;
+additional wrapper inventories do not answer native-service behavior.
+
+Mako's remaining work includes installed regular-profile acceptance; Electron/Qt,
+rich editors, text selection/paste, named accessibility actions and cancellable
+drags; event-based bounded readiness and measured scoped/incremental reads;
+arbitrary page-triggered download completion; Linux x64/Wayland and production
+job isolation; and repeated matched workflows across models/providers. Compare
+verified completion, incorrect mutations, user interference, refusals, model
+round trips, context volume and p95 job time. Existing passing fixtures do not
+prove better end-to-end model performance or universal background support.
 
 ## Mac/Linux accuracy and background audit
 
