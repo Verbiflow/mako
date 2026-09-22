@@ -11,7 +11,7 @@ async function start() {
   if (import.meta.env.DEV && new URLSearchParams(location.search).has("mock")) {
     const { installMockBridge } = await import("./dev/mock-bridge.ts")
     installMockBridge()
-  } else if (import.meta.env.DEV && !window.mako) {
+  } else if (!window.mako && /^(https?):$/.test(location.protocol)) {
     const { installWebBridge } = await import("./dev/web-bridge.ts")
     await installWebBridge()
   }
