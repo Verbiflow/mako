@@ -50,22 +50,18 @@ export class HostPool {
 
   /* -------------------------------------------------- snapshots */
 
-  async snapshot(host: AgentHost): Promise<TabSnapshot> {
+  snapshot(host: AgentHost): TabSnapshot {
     return {
       id: host.id,
       session: host.state(),
-      git: await host.gitStatus().catch(() => ({
-        cwd: host.workspace,
-        ahead: 0,
-        behind: 0,
-        files: [],
-      })),
       capabilities: host.capabilities(),
     }
   }
 
-  async snapshots(): Promise<TabSnapshot[]> {
-    return Promise.all(this.hosts.map((host) => this.snapshot(host)))
+  snapshots(): TabSnapshot[] {
+    // Boot needs the conversation, not a completed Git scan. The renderer
+    // requests Git separately once it has adopted these tabs.
+    return this.hosts.map((host) => this.snapshot(host))
   }
 
   /* -------------------------------------------------- lifecycle */

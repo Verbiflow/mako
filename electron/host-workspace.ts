@@ -129,11 +129,10 @@ export class WorkspaceFiles {
         ? gitPaths
         : // Not a repo: a bounded walk, skipping the usual heavy directories.
           await walkWorkspace(cwd, cwd, 0)
-      const changed = new Set(
-        (await this.git.status().catch(() => null))?.files.map(
-          (file) => file.path
-        ) ?? []
-      )
+      const status = await this.git.status().catch(() => null)
+      const changed = new Set(status?.files.map((file) =>
+        status.root ? relative(cwd, join(status.root, file.path)) : file.path
+      ) ?? [])
       const files = paths
         .sort((a, b) => a.localeCompare(b))
         .map((path) => (changed.has(path) ? { path, changed: true } : { path }))

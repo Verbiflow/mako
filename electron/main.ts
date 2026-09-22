@@ -84,6 +84,7 @@ import {
   record,
 } from "./crash.js"
 import { hostLog, hostLogPath, hostWarn, installHostLog } from "./host-log.js"
+import { watchRendererHealth } from "./renderer-health.js"
 import { installProviderChildren } from "./provider-children.js"
 import { installAutomation } from "./automation.js"
 import {
@@ -220,7 +221,8 @@ import {
 import { installGitIpc } from "./ipc/git.js"
 import { fileResponse } from "./file-response.js"
 import { startWebHost } from "./web-host.js"
-import { registerIpc as handle, invokeHost } from "./ipc/register.js"
+import { SharedConversations } from "./shared-conversations.js"
+import { registerIpc as handle, invokeHost, installConversationRouting } from "./ipc/register.js"
 import { installSessionIpc } from "./ipc/session.js"
 import { installWorkspaceIpc, stopWorkspaceIpc } from "./ipc/workspace.js"
 import type {
@@ -287,6 +289,11 @@ function openSessionMemory(): SessionMemory | null {
       pid: process.pid,
       startedAt: Math.round(performance.timeOrigin),
       label: sessionMemoryLabel(),
+      socket: process.env.MAKO_WEB_SOCKET,
+      launch: {
+        dataRoot: app.getPath("userData"), executable: process.execPath,
+        args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), profile: instanceProfile,
+      },
     })
     memory.startHeartbeat()
     return memory
@@ -485,6 +492,7 @@ const desktopNotifier = electronDesktopNotifier({
   },
 })
 let webHost: Awaited<ReturnType<typeof startWebHost>> | undefined
+let sharedConversations: SharedConversations | undefined
 const webSocket =
   isDev || persistentHost ? process.env.MAKO_WEB_SOCKET : undefined
 const webOnly =
@@ -511,13 +519,15 @@ function emitTerminalWake() {
 }
 
 function emit(event: HostEvent, client?: string) {
-  if (event.type === "threads") liveConversations?.discoverNativePaths()
+  if (event.type === "threads" || event.type === "thread-ref")
+    liveConversations?.discoverNativePaths()
   if (event.type === "thread-run" && event.run.status !== "running")
     nativeRequests?.ready(event.run.path)
   // Git status is recomputed after every turn and on focus, which is exactly
   // when HEAD could have moved — so the commit trigger rides on it rather than
   // running a watcher of its own.
-  if (event.type === "git") noticeHead(event.git.head)
+  // Selecting a child repository is not a commit in the parent workspace.
+  if (event.type === "git" && !event.git.repositories?.length) noticeHead(event.git.head)
   webHost?.event(event, client)
   for (const renderer of rendererWindows) {
     if (!client || client === `renderer:${renderer.webContents.id}`)
@@ -763,17 +773,7 @@ async function createWindow() {
     })
   }
 
-  // A dead renderer is a blank window with no way back. Record it, then reload
-  // once — the agent's runtimes live in this process and survived, so the
-  // conversation is still there on the other side of a reload.
-  window.webContents.on("render-process-gone", (_event, details) => {
-    record("renderer-gone", new Error(`renderer exited: ${details.reason}`))
-    if (details.reason === "clean-exit" || window?.isDestroyed()) return
-    setTimeout(() => {
-      if (!window || window.isDestroyed()) return
-      window.reload()
-    }, 400)
-  })
+  watchRendererHealth(window, { closing: () => shuttingDown || relaunching })
 
   installAutomation(window, isDev)
 
@@ -949,25 +949,25 @@ function bindIpc() {
       if (failure) shell.showItemInFolder(absolute)
     })
   )
-  handle("mako:github-status", () => withHost((h) => githubStatus(h.workspace)))
-  handle("mako:pull-request", () => withHost((h) => pullForBranch(h.workspace)))
+  handle("mako:github-status", () => withHost((h) => githubStatus(h.gitWorkspace)))
+  handle("mako:pull-request", () => withHost((h) => pullForBranch(h.gitWorkspace)))
   handle("mako:pull-requests", (_e, limit?: number) =>
-    withHost((h) => listPulls(h.workspace, limit))
+    withHost((h) => listPulls(h.gitWorkspace, limit))
   )
   handle("mako:pull-branches", () =>
-    withHost((h) => listRemoteBranches(h.workspace))
+    withHost((h) => listRemoteBranches(h.gitWorkspace))
   )
   handle("mako:create-pull", (_e, options: CreatePullOptions) =>
-    withHost((h) => createPull(h.workspace, options))
+    withHost((h) => createPull(h.gitWorkspace, options))
   )
   handle("mako:merge-pull", (_e, strategy: "merge" | "squash" | "rebase") =>
-    withHost((h) => mergePull(h.workspace, strategy))
+    withHost((h) => mergePull(h.gitWorkspace, strategy))
   )
-  handle("mako:rerun-checks", () => withHost((h) => rerunChecks(h.workspace)))
+  handle("mako:rerun-checks", () => withHost((h) => rerunChecks(h.gitWorkspace)))
   handle("mako:repo-avatar", (_e, repo: string) =>
-    withHost((h) => repoAvatar(h.workspace, repo))
+    withHost((h) => repoAvatar(h.gitWorkspace, repo))
   )
-  handle("mako:user-avatar", () => withHost((h) => userAvatar(h.workspace)))
+  handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace)))
 
   handle("mako:usage", () =>
     usageSummary(join(homedir(), ".mako", "sessions"), homedir())
@@ -1016,6 +1016,7 @@ function bindIpc() {
     ]),
   ]
   const continuation = createContinuationPlanner({
+    attached: async (ref) => liveConversations.connectedSession(ref.harness, ref.nativeId) ?? await sharedConversations?.attachment(ref.harness, ref.nativeId) ?? null,
     ref: async (path) =>
       listThreads().find((ref) => ref.path === path) ??
       (await openThread(path))?.ref,
@@ -1032,9 +1033,16 @@ function bindIpc() {
     running: (path) => threadRun(path)?.status === "running",
     external: (path) => threadActivitySnapshot()[path]?.status ?? null,
   })
-  handle("mako:thread-continuation-plan", (_event, path: string) =>
-    continuation.plan(path)
-  )
+  handle("mako:thread-continuation-plan", (_event, path: string) => continuation.plan(path))
+  handle("mako:live-locate", (_event, provider: string, nativeId: string) =>
+    liveConversations.connectedSession(provider, nativeId))
+  handle("mako:live-attach", async (_event, path: string) => {
+    const ref = listThreads().find((candidate) => candidate.path === path) ?? (await openThread(path))?.ref
+    if (!ref || ref.archived) return null
+    const local = liveConversations.connectedSession(ref.harness, ref.nativeId)
+    if (local) return liveConversations.snapshot(local)
+    return await sharedConversations?.attach(ref.harness, ref.nativeId) ?? null
+  })
   handle("mako:thread-remember-mode", (_event, path: string, modeId: string) =>
     rememberThreadMode(path, modeId)
   )
@@ -1903,6 +1911,14 @@ app.whenReady().then(async () => {
       setImmediate(() => app.quit())
     },
   })
+  if (sessionMemory) {
+    const conversations = new SharedConversations(sessionMemory, (event) => {
+      webHost?.conversationEvent(event)
+      for (const renderer of rendererWindows) renderer.webContents.send("mako:event", event)
+    })
+    sharedConversations = conversations
+    installConversationRouting((channel, args) => conversations.route(channel, args))
+  }
   bindIpc()
   bindAcp((event) => liveConversations.observe(event))
   bindCodexApp((event) => liveConversations.observe(event))
@@ -2003,6 +2019,7 @@ app.on("before-quit", (event) =>
     cleanup: () => {
       desktopNotifier.dispose()
       application?.dispose()
+      sharedConversations?.dispose()
       webHost?.close()
       if (persistentHost && webSocket) {
         // The runtime directory is this host's alone; leaving it behind is how

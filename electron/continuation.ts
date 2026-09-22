@@ -14,6 +14,7 @@ import {
  */
 export interface ContinuationDependencies {
   ref(path: string): Promise<ThreadRef | undefined>
+  attached?(ref: ThreadRef): Promise<string | null>
   live(provider: string): { available: boolean; canResume: boolean } | null
   nativeInstalled(provider: string): boolean
   running(path: string): boolean
@@ -39,6 +40,7 @@ export function createContinuationPlanner(
         reason: "This session is no longer in the catalog.",
       }
     return planContinuation(ref, {
+      attached: ref.archived ? null : await dependencies.attached?.(ref),
       live: dependencies.live(ref.harness),
       nativeInstalled: dependencies.nativeInstalled(ref.harness),
       running: dependencies.running(path),
@@ -67,6 +69,8 @@ export function createContinuationPlanner(
 
 function describeMismatch(plan: ContinuationPlan, refusal: string): string {
   switch (plan.transport) {
+    case "attached":
+      return "This conversation already has a Mako owner. Attach to it before sending."
     case "refused":
       return plan.reason
     case "handoff":

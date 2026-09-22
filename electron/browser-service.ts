@@ -15,6 +15,7 @@ import {
 } from "./browser-page.js"
 import {
   AccessibilityNodeSchema,
+  scopeAccessibilityNodes,
   browserObservation,
   OBSERVATION_BUDGET_BYTES,
 } from "./browser-observation.js"
@@ -376,10 +377,7 @@ export class BrowserService {
           entry.status.origin !== definition.origin ||
           entry.status.sourceRoot !== definition.sourceRoot
         ) {
-          entry.status = browserStatus(
-            definition,
-            entry.status.connection
-          )
+          entry.status = browserStatus(definition, entry.status.connection)
           changed = true
         }
       } else {
@@ -700,12 +698,12 @@ export class BrowserService {
       )
     if (existing) {
       if (existing.focusEmulated)
-      await connection.send(
-        "Emulation.setFocusEmulationEnabled",
-        { enabled: false },
-        signal,
-        existing.sessionId
-      )
+        await connection.send(
+          "Emulation.setFocusEmulationEnabled",
+          { enabled: false },
+          signal,
+          existing.sessionId
+        )
       await connection.send(
         "Target.detachFromTarget",
         { sessionId: existing.sessionId },
@@ -972,11 +970,7 @@ export class BrowserService {
             .catch(() => {})
         else
           await connection
-            .send(
-              "Target.closeTarget",
-              { targetId },
-              AbortSignal.timeout(2000)
-            )
+            .send("Target.closeTarget", { targetId }, AbortSignal.timeout(2000))
             .catch(() => {})
         throw error
       }
@@ -1041,11 +1035,8 @@ export class BrowserService {
         })
       binding.running++
       try {
-        const value = await this.withActionFocus(
-          binding,
-          command,
-          signal,
-          () => this.bound(binding, command, signal)
+        const value = await this.withActionFocus(binding, command, signal, () =>
+          this.bound(binding, command, signal)
         )
         if (
           !["close", "release"].includes(command.action) &&
@@ -1186,8 +1177,23 @@ export class BrowserService {
     command: Extract<BrowserCommand, { target: BrowserTarget }>,
     signal: AbortSignal
   ): Promise<JsonValue> {
-    const send = (method: string, params: JsonObject = {}) =>
-      binding.connection.send(method, params, signal, binding.sessionId)
+    const send = async (method: string, params: JsonObject = {}) => {
+      try {
+        return await binding.connection.send(
+          method,
+          params,
+          signal,
+          binding.sessionId
+        )
+      } catch (error) {
+        if (error instanceof BrowserFault)
+          throw new BrowserFault({
+            ...error.detail,
+            message: `${method}: ${error.detail.message}`,
+          })
+        throw error
+      }
+    }
     const root = (method: string, params: JsonObject) =>
       binding.connection.send(method, params, signal)
     switch (command.action) {
@@ -1195,18 +1201,116 @@ export class BrowserService {
         const info = await root("Target.getTargetInfo", {
           targetId: binding.target.tab,
         })
+        const scoped = command.within.length > 0 || command.match !== undefined
+        const readTree = async () => {
+          if (!scoped)
+            return send(
+              "Accessibility.getFullAXTree",
+              command.frameId ? { frameId: command.frameId } : {}
+            )
+          if (command.frameId)
+            fault(
+              "invalid-request",
+              "Scoped reads currently require the selected page's main frame; select an out-of-process frame as its own tab or use an explicit frame observation."
+            )
+          const visibility = z
+            .object({
+              result: z.object({ value: z.enum(["visible", "hidden"]) }),
+            })
+            .parse(
+              await send("Runtime.evaluate", {
+                expression: "document.visibilityState",
+                returnByValue: true,
+              })
+            ).result.value
+          if (visibility === "hidden") {
+            // queryAXTree waits for a visual lifecycle update, which Chromium
+            // can throttle for occluded pages. A synchronous snapshot remains
+            // read-only and does not activate or change focus on the page.
+            const snapshot = z
+              .object({ nodes: z.array(AccessibilityNodeSchema) })
+              .parse(await send("Accessibility.getFullAXTree"))
+            return { nodes: scopeAccessibilityNodes(snapshot.nodes, command) }
+          }
+          const document = z
+            .object({ root: z.object({ backendNodeId: z.number() }) })
+            .parse(await send("DOM.getDocument", { depth: 0 }))
+          let backendNodeId = document.root.backendNodeId
+          for (const scope of command.within) {
+            const result = z
+              .object({ nodes: z.array(AccessibilityNodeSchema) })
+              .parse(
+                await send("Accessibility.queryAXTree", {
+                  backendNodeId,
+                  role: scope.role,
+                  accessibleName: scope.name,
+                })
+              )
+            const matches = result.nodes.filter(
+              (node) =>
+                node.backendDOMNodeId !== backendNodeId &&
+                !node.ignored &&
+                node.role?.value === scope.role &&
+                (node.name?.value ?? "") === scope.name
+            )
+            if (matches.length !== 1 || !matches[0]?.backendDOMNodeId)
+              fault(
+                "invalid-request",
+                `Scope requires one ${scope.role} ${JSON.stringify(scope.name)}; found ${matches.length}. Observe and disambiguate the container.`
+              )
+            backendNodeId = matches[0]!.backendDOMNodeId!
+          }
+          const params: JsonObject = { backendNodeId }
+          if (command.match) {
+            params.role = command.match.role
+            params.accessibleName = command.match.name
+          }
+          const subtree = z
+            .object({ nodes: z.array(AccessibilityNodeSchema) })
+            .parse(await send("Accessibility.queryAXTree", params))
+          if (command.within.length)
+            subtree.nodes = subtree.nodes.filter(
+              (node) => node.backendDOMNodeId !== backendNodeId
+            )
+          return subtree
+        }
         const [tree, metrics] = await Promise.all([
-          send(
-            "Accessibility.getFullAXTree",
-            command.frameId ? { frameId: command.frameId } : {}
-          ),
-          pageMetrics(binding.connection, binding.sessionId, signal).catch(
-            () => null
-          ),
+          readTree(),
+          scoped
+            ? Promise.resolve(null)
+            : pageMetrics(binding.connection, binding.sessionId, signal).catch(
+                () => null
+              ),
         ])
         const result = z
           .object({ nodes: z.array(AccessibilityNodeSchema) })
           .parse(tree)
+        // AX omits some empty values and may abbreviate others. Read the actual
+        // matched control, using its backend identity, for exact assertions.
+        if (command.match) {
+          for (const node of result.nodes.slice(
+            command.offset,
+            command.offset + command.maxNodes
+          )) {
+            if (
+              !node.backendDOMNodeId ||
+              !["textbox", "searchbox", "combobox"].includes(
+                String(node.role?.value)
+              )
+            )
+              continue
+            const response = await this.callOnBackendNode(
+              binding,
+              node.backendDOMNodeId,
+              "function(){if(!this.isConnected)throw Error('Element detached: observe again');return typeof this.value==='string'?this.value:this.isContentEditable?this.textContent:null}",
+              signal
+            )
+            const value = z
+              .object({ result: z.object({ value: z.string().nullable() }) })
+              .parse(response).result.value
+            if (value !== null) node.value = { value }
+          }
+        }
         const observation = browserObservation({
           target: binding.target,
           info,
@@ -1215,6 +1319,7 @@ export class BrowserService {
           offset: command.offset,
           query: command.query,
           interactiveOnly: command.interactiveOnly,
+          exactValues: command.match !== undefined,
           viewport: metrics
             ? {
                 ...metrics.cssVisualViewport,
@@ -1463,9 +1568,13 @@ export class BrowserService {
             0,
             ["selectAll"]
           )
-          await this.keyPress(send, keySpec("Backspace"), 0)
         }
-        await send("Input.insertText", { text: command.text })
+        // Selection replacement is one edit. Clearing first emits an intermediate
+        // empty input event that controlled forms may reject or use to move focus.
+        if (command.clear && field.length > 0 && command.text === "")
+          await this.keyPress(send, keySpec("Backspace"), 0)
+        else if (command.text !== "")
+          await send("Input.insertText", { text: command.text })
         if (command.submit) await this.keyPress(send, keySpec("Enter"), 0)
         return {
           field: field.tag,
@@ -1975,9 +2084,23 @@ export class BrowserService {
     return id
   }
 
-  private async callOnNode(
+  private callOnNode(
     binding: Binding,
     ref: string,
+    functionDeclaration: string,
+    signal: AbortSignal
+  ): Promise<JsonObject> {
+    return this.callOnBackendNode(
+      binding,
+      this.node(binding, ref),
+      functionDeclaration,
+      signal
+    )
+  }
+
+  private async callOnBackendNode(
+    binding: Binding,
+    backendNodeId: number,
     functionDeclaration: string,
     signal: AbortSignal
   ): Promise<JsonObject> {
@@ -1985,7 +2108,9 @@ export class BrowserService {
     try {
       node = await binding.connection.send(
         "DOM.resolveNode",
-        { backendNodeId: this.node(binding, ref) },
+        {
+          backendNodeId,
+        },
         signal,
         binding.sessionId
       )
@@ -1996,7 +2121,7 @@ export class BrowserService {
       )
         fault(
           "stale-target",
-          `Ref "${ref}" no longer resolves to an element; the page changed. Observe the exact tab again.`
+          `Backend node ${backendNodeId} no longer resolves to an element; the page changed. Observe the exact tab again.`
         )
       throw error
     }

@@ -7,7 +7,7 @@ import { AcpCompaction } from "./acp-compaction.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "./acp-access.js"
-import type { AcpLaunchOptions } from "./providers/acp-source.js"
+import type { AcpLaunchOptions, AcpAgentObserver } from "./providers/acp-source.js"
 import { accessTierOfModeId, hostAccessDecision, type AccessTier } from "./contracts/access.js"
 /**
  * Interactive foreign agents, over ACP.
@@ -92,6 +92,7 @@ interface LegacySessionModelRequest {
 }
 
 interface Live {
+  agents?: AcpAgentObserver
   compaction?: AcpCompaction
   id: string
   harness: string
@@ -289,6 +290,7 @@ export async function liveStart(
     mcpServers: preparedServers.length,
   })
   child.on("exit", (code, signal) => {
+    live.agents?.dispose()
     live.compaction?.dispose()
     live.startup.abort()
     hostLog("acp", "exited", {
@@ -347,6 +349,7 @@ export async function liveStart(
     },
     async sessionUpdate(params: SessionNotification) {
       if (live.sessionId && params.sessionId !== live.sessionId) return
+      if (live.agents?.observe(params) === "child") return
       live.compaction?.observe(params.update)
       if (params.update.sessionUpdate === "config_option_update") live.configOptions = params.update.configOptions
       if (params.update.sessionUpdate === "current_mode_update") {
@@ -376,7 +379,8 @@ export async function liveStart(
         })
         return
       }
-      forward(live, params, emit, update, live.state.settings)
+      forward(live, params, emit, update, live.state.settings,
+        params.update.sessionUpdate === "tool_call" ? source?.toolName?.(params.update) : undefined)
     },
   }
 
@@ -453,6 +457,16 @@ export async function liveStart(
           ),
     })
     live.sessionId = session.sessionId
+    live.agents = await source?.observeAgents?.({
+      nativeId: session.sessionId, cwd: workingDir, env, observedAgents: options.observedAgents,
+      publish: (agent) => {
+        if (!live.startup.signal.aborted) engine.emitAgent(live, agent)
+      },
+    })
+    if (live.startup.signal.aborted) {
+      live.agents?.dispose()
+      throw new Error("Provider disconnected while restoring child observations")
+    }
     live.configOptions = session.configOptions
     live.state.settings = acpObservedSettings(live.configOptions, session.model)
     const applied = await applyTuning(live, options.tuning, true)
@@ -777,6 +791,7 @@ export async function liveClose(id: string): Promise<void> {
   const live = sessions.get(id)
   if (!live) return
   const operation = (async () => {
+    live.agents?.dispose()
     live.compaction?.dispose()
     update(live, { status: "closed" })
     live.startup.abort()

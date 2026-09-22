@@ -293,6 +293,9 @@ export class LiveTransfers {
             : undefined,
           conversationId: bindingId,
           resume: prior?.nativeId,
+          observedAgents: prior?.nativeId && !nativeFork
+            ? source.nativeAgents?.agents.filter((agent) => agent.bindingId === prior.id && agent.provider === prior.provider)
+            : undefined,
           fork: nativeFork,
           conversationTools: this.host.dependencies.tools?.(
             bindingId,

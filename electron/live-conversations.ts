@@ -10,6 +10,7 @@ import {
 } from "./contracts/live-queue.js"
 import {
   disconnectNativeAgents,
+  isActiveNativeAgent,
   observeNativeAgent,
   NativeAgentObservationSchema,
 } from "./contracts/native-agents.js"
@@ -43,6 +44,7 @@ import type {
 } from "./contracts/conversation-control.js"
 import { liveEntries } from "./live-context.js"
 import { randomUUID } from "node:crypto"
+import { isDeepStrictEqual } from "node:util"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import type { SessionFacts } from "./session-memory.js"
@@ -86,6 +88,9 @@ export class LiveConversations {
   private readonly closedCache = new Map<string, { bytes: number; revision: number }>()
   private readonly bindingOwners = new Map<string, string>()
   private readonly captures = new Map<string, Promise<LiveSnapshot>>()
+  // Refresh reads an already durable conversation; unlike an initial capture,
+  // it must not hold shutdown open while waiting on an external native store.
+  private readonly refreshes = new Map<string, Promise<LiveSnapshot>>()
   private readonly starts = new Map<string, Promise<LiveSessionState>>()
   private readonly recovered = new Map<string, LiveSummary>()
   private readonly assets: LiveAssets
@@ -131,6 +136,7 @@ export class LiveConversations {
         try {
           const summary = journal.summary()
           if (summary) {
+            dependencies.memory?.rememberJournal(id)
             this.backfillMemory(id, summary.session)
             this.recovered.set(id, {
               ...summary,
@@ -216,6 +222,7 @@ export class LiveConversations {
             : session.connection === "disconnected"
               ? "disconnected"
               : session.status === "running" ||
+                  resident.snapshot.nativeAgents?.agents.some(isActiveNativeAgent) ||
                   resident.opening ||
                   resident.transferring ||
                   resident.snapshot.requests.some(
@@ -255,10 +262,10 @@ export class LiveConversations {
       const { snapshot } = resident
       const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
       const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
-      const native = snapshot.nativeAgents?.agents.filter((agent) => agent.state.kind === "working" || agent.state.kind === "waiting") ?? []
+      const native = snapshot.nativeAgents?.agents.filter(isActiveNativeAgent) ?? []
       if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !requests.length && !native.length && !snapshot.permissions.length))) return []
-      const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" ? "running" : "queued"
-      return [{ id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }]
+      const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
+      return [{ id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }]
     })
     for (const id of this.starts.keys()) if (!work.some((item) => item.id === id)) work.push({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
     for (const path of this.captures.keys()) work.push({ id: `capture:${path}`, token: path, title: "Saving a conversation", provider: "", cwd: path, status: "finishing", stoppable: false })
@@ -306,6 +313,18 @@ export class LiveConversations {
     ]
   }
 
+  /** A connected driver is authoritative even if a ledger write failed earlier. */
+  connectedSession(provider: string, nativeId: string): string | null {
+    for (const { snapshot } of this.records.values()) {
+      const session = snapshot.session
+      if (session.connection === "connected" && session.harness === provider && session.nativeId === nativeId) {
+        this.syncMemory(session, session)
+        return session.id
+      }
+    }
+    return null
+  }
+
   snapshot(id: string): LiveSnapshot | null {
     const resident = this.load(id)
     if (!resident) return null
@@ -332,8 +351,7 @@ export class LiveConversations {
         (resident.snapshot.blocks.length > 0 &&
           (!binding?.includesBase || covered !== resident.snapshot.blocks.length)))
       return this.snapshot(id)
-    const key = `refresh:${id}`
-    const pending = this.captures.get(key)
+    const pending = this.refreshes.get(id)
     if (pending) return pending
     const before = resident.snapshot
     const generation = resident.generation
@@ -348,8 +366,10 @@ export class LiveConversations {
         if (sameRevision) return this.stamp(resident.snapshot)
         const refreshed = await captureNativeHistory(path, (path, before) =>
           before === undefined ? Promise.resolve(latest) : this.dependencies.history(path, before))
-        if (refreshed && resident.snapshot === before && resident.generation === generation &&
-            !resident.opening && !resident.transferring) {
+        if (refreshed && this.records.get(id) === resident &&
+            resident.snapshot === before && resident.generation === generation &&
+            !resident.opening && !resident.transferring && !lifecycleBlocked() &&
+            ((before.baseCoveredBlocks ?? 0) !== covered || !isDeepStrictEqual(base, refreshed))) {
           resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered }
           this.flush(resident)
         }
@@ -358,8 +378,8 @@ export class LiveConversations {
       }
       return this.stamp(resident.snapshot)
     })()
-    this.captures.set(key, work)
-    void work.finally(() => this.captures.delete(key)).catch(() => {})
+    this.refreshes.set(id, work)
+    void work.finally(() => this.refreshes.delete(id)).catch(() => {})
     return work
   }
 
@@ -786,7 +806,7 @@ export class LiveConversations {
     if (clearSince) resident.idleSince = undefined
   }
 
-  private canHibernate(resident: Resident): boolean {
+  private canHibernate(resident: Resident, preparing = false): boolean {
     const native = resident.snapshot.nativeAgents?.agents ?? []
     const children = this.control(resident).children
     const binding = this.activeBinding(resident)
@@ -800,7 +820,7 @@ export class LiveConversations {
         binding.path &&
         !resident.opening &&
         !resident.closing &&
-        !resident.hibernating &&
+        (!resident.hibernating || preparing) &&
         !resident.waking &&
         !resident.transferring &&
         !resident.checkpointing &&
@@ -816,10 +836,7 @@ export class LiveConversations {
           (request) =>
             request.status === "queued" || request.status === "dispatching"
         ) &&
-        !native.some(
-          (agent) =>
-            agent.state.kind === "working" || agent.state.kind === "waiting"
-        ) &&
+        !native.some(isActiveNativeAgent) &&
         !children.some(
           (child) =>
             child.status === "starting" ||
@@ -944,7 +961,7 @@ export class LiveConversations {
     if (
       !checkpointReady ||
       resident.generation !== generation ||
-      resident.snapshot.session.status !== "ready"
+      !this.canHibernate(resident, true)
     )
       return
     const retiringGeneration = ++resident.generation
@@ -1079,6 +1096,7 @@ export class LiveConversations {
       const session = await driver.start(resident.snapshot.session.cwd, {
         conversationId: binding.id,
         resume: binding.nativeId,
+        observedAgents: resident.snapshot.nativeAgents?.agents.filter((agent) => agent.bindingId === binding.id && agent.provider === binding.provider),
         threadPath: binding.path,
         title: resident.snapshot.session.title,
         tuning,
@@ -1401,10 +1419,10 @@ export class LiveConversations {
       }
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
-    if (event.type === "live-session" || event.type === "live-permission")
+    if (event.type === "live-session" || event.type === "live-permission" || event.type === "live-agent")
       this.flush(resident)
     else this.schedule(resident)
-    if (event.type === "live-session") {
+    if (event.type === "live-session" || event.type === "live-agent") {
       if (
         resident.snapshot.session.status === "ready" &&
         resident.snapshot.session.connection === "connected"
@@ -1874,6 +1892,7 @@ export class LiveConversations {
     const journal = new LiveJournal(this.dependencies.root, command.id)
     try {
       journal.commit(snapshot)
+      this.dependencies.memory?.rememberJournal(command.id)
     } catch (error) {
       journal.close()
       throw error
@@ -2641,7 +2660,7 @@ export class LiveConversations {
         memory.release(next.harness, next.nativeId, next.id)
         return
       }
-      if (!wasHeld || previous.nativeId !== next.nativeId)
+      if (!memory.owns(next.harness, next.nativeId, next.id))
         memory.hold(next.harness, next.nativeId, next.id)
       const fresh = !wasHeld || previous.nativeId !== next.nativeId
       const settingsChanged =

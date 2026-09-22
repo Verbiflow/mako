@@ -1,3 +1,4 @@
+import type { CodexAgentRun } from "./providers/codex/agent-status.js"
 import type { CodexAgentItem } from "./providers/codex/agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { AttachmentContent, LineAssembler } from "@mako/sessions"
@@ -114,6 +115,7 @@ export type RpcParams = {
     serviceTier?: string
     config?: JsonObject
   }
+  "thread/turns/list": { threadId: string; limit: 1; sortDirection: "desc"; itemsView: "notLoaded" }
   "turn/start": TurnStartParams
   "turn/steer": TurnSteerParams
   "thread/compact/start": ThreadCompactStartParams
@@ -125,6 +127,7 @@ export type RpcResults = {
   "thread/start": ThreadResponse
   "thread/fork": ThreadResponse
   "thread/resume": ThreadResponse
+  "thread/turns/list": { data: CodexAgentRun[] }
   "turn/start": { turn: Turn }
   "turn/steer": { turnId: string }
   "thread/compact/start": JsonObject
@@ -165,6 +168,7 @@ export interface ProtocolCallbacks {
   updateState(patch: Partial<LiveSessionState>): void
   emitUpdate(update: LiveUpdate): void
   observeAgents(item: CodexAgentItem, replay: boolean): void
+  observeAgentTurn?(nativeId: string): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void
   resolveServerRequest(id: JsonRpcId): void
   clearTurnServerRequests(turnId: string): void

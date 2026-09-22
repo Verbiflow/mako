@@ -14,6 +14,10 @@ import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-
 import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
+import { breadcrumb, clearCrashes, crashesDir, installCrashReporting, listCrashes, record } from "./crash.js"
+import { flushHostLog, hostLog, installHostLog } from "./host-log.js"
+import { watchRendererHealth } from "./renderer-health.js"
+import { buildIdentity } from "./build-identity.js"
 
 const directory = dirname(fileURLToPath(import.meta.url))
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
@@ -22,6 +26,9 @@ const flavor = process.env.MAKO_CLIENT_ID ?? (isDev ? `dev-${createHash("sha256"
 if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(flavor)) throw new Error("Invalid Mako client identity")
 const uiRoot = `${dataRoot}-ui-${flavor}`
 app.setPath("userData", uiRoot)
+installHostLog(join(uiRoot, "logs", "desktop.log"))
+installCrashReporting({ directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}` })
+hostLog("desktop", "starting", { pid: process.pid, build: buildIdentity()?.id, version: app.getVersion(), dataRoot, uiRoot })
 protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
 
@@ -76,6 +83,7 @@ async function openWindow(preview = false) {
     show: false, titleBarStyle: "hiddenInset", trafficLightPosition: { ...DESK_TRAFFIC_LIGHTS },
     webPreferences: { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`] },
   })
+  watchRendererHealth(window, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
   // Shown on the first paint rather than on load: `loadURL` settles on
   // `did-finish-load`, which can precede the first frame, and `--background`
   // keeps test windows hidden until something activates them explicitly.
@@ -135,6 +143,8 @@ async function openWindow(preview = false) {
         if (packet.payload instanceof Object && "type" in packet.payload) {
           if (packet.payload.type === "app-shutdown") shutdownAction = z.object({ action: z.enum(["quit", "install", "restart"]) }).parse(packet.payload).action
           if (packet.payload.type === "application-lifecycle" && z.object({ lifecycle: z.object({ operation: z.object({ kind: z.literal("error") }) }) }).safeParse(packet.payload).success) shutdownAction = null
+          // Event names only: never retain prompts, tool output or arguments.
+          breadcrumb(`window=${window.id} event ${String(packet.payload.type)}`)
         }
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
@@ -194,6 +204,18 @@ async function start() {
       const args = schema.parse(raw)
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
+      breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
+      // Reporting must work even when the shared host is unavailable.
+      if (channel === "mako:report-crash") {
+        const [kind, payload] = hostCallInputs["mako:report-crash"].parse(args)
+        const error = new Error(payload.message)
+        error.stack = payload.stack
+        record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
+        return
+      }
+      if (channel === "mako:crashes") return listCrashes()
+      if (channel === "mako:crashes-dir") return crashesDir()
+      if (channel === "mako:clear-crashes") return clearCrashes()
       if (channel === "mako:shutdown-ack" && draftShutdown.acknowledge(z.string().parse(args[0]), String(event.sender.id))) return
       if (channel === "mako:quit-client") {
         if (shutdownAction) {
@@ -254,7 +276,13 @@ app.on("before-quit", (event) => {
   for (const client of clients.values()) client.dispose()
 })
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit() })
+app.on("will-quit", () => {
+  hostLog("desktop", "quitting", { pid: process.pid, action: shutdownAction ?? "client" })
+  void flushHostLog()
+})
 void start().catch(async (error) => {
+  record("main-rejection", error, "startup")
+  await flushHostLog()
   await app.whenReady()
   dialog.showErrorBox("Mako could not attach to its shared host", error instanceof Error ? error.message : "Shared host startup failed")
   app.exit(1)

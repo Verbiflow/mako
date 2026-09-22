@@ -37,7 +37,7 @@ export async function startWebHost(
   disconnected?: (client: string) => void,
   runtime?: RuntimeInfo
 ) {
-  const streams = new Map<ServerResponse, string>()
+  const streams = new Map<ServerResponse, { client: string; observer: boolean }>()
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Set<ServerResponse>()
   let closed = false
@@ -101,10 +101,10 @@ export async function startWebHost(
       response.write(JSON.stringify({ channel: "ready", runtime }) + "\n")
       clearTimeout(releases.get(clientId))
       releases.delete(clientId)
-      streams.set(response, clientId)
+      streams.set(response, { client: clientId, observer: request.headers["x-mako-observer"] === "1" })
       response.once("close", () => {
         streams.delete(response)
-        if (!closed && client.data && ![...streams.values()].includes(clientId)) {
+        if (!closed && client.data && ![...streams.values()].some((entry) => entry.client === clientId)) {
           const timer = setTimeout(() => { releases.delete(clientId); disconnected?.(clientId) }, 5_000)
           timer.unref()
           releases.set(clientId, timer)
@@ -159,20 +159,21 @@ export async function startWebHost(
   heartbeat.unref()
   const send = (
     channel: "event" | "terminal",
-    payload: HostEvent | TerminalEvent,
+    payload: HostEvent | TerminalEvent | z.infer<ReturnType<typeof z.json>>,
     client?: string
   ) => {
     const line = JSON.stringify({ channel, payload }) + "\n"
     for (const [stream, owner] of streams) {
-      if (client && client !== owner) continue
+      if (client && client !== owner.client) continue
       if (stream.writableLength > 8 * 1024 * 1024)
         stream.destroy(new Error("Web client stopped consuming host events"))
       else stream.write(line)
     }
   }
   return {
-    clients: () => [...new Set(streams.values())],
+    clients: () => [...new Set([...streams.values()].filter((entry) => !entry.observer).map((entry) => entry.client))],
     event: (event: HostEvent, client?: string) => send("event", event, client),
+    conversationEvent: (event: z.infer<ReturnType<typeof z.json>>) => send("event", event),
     terminal: (event: TerminalEvent) => send("terminal", event),
     /**
      * Leave without resetting anyone. Every call still waiting gets an explicit

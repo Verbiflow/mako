@@ -77,7 +77,6 @@ export class AgentHost {
 
   async start(cwd = this.workspace): Promise<void> {
     this.setWorkspace(cwd)
-    await this.workspaceGit.root()
   }
 
   private setWorkspace(cwd: string): void {
@@ -179,9 +178,8 @@ export class AgentHost {
 
   async setCwd(cwd: string): Promise<void> {
     this.setWorkspace(cwd)
-    await this.workspaceGit.root()
     this.pushState()
-    await this.pushGit()
+    void this.pushGit()
   }
 
   setName(name: string): void {
@@ -249,6 +247,13 @@ export class AgentHost {
     void name
     void args
     unavailable("Running a built-in extension command")
+  }
+
+  get gitWorkspace(): string { return this.workspaceGit.target }
+
+  async selectGitRepository(cwd: string, root: string): Promise<GitStatus> {
+    this.gitPushGeneration += 1
+    return this.workspaceGit.selectRepository(cwd, root)
   }
 
   async gitStatus(): Promise<GitStatus> {

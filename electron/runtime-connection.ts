@@ -98,9 +98,9 @@ export type RuntimeProbe =
   | { state: "closing" }
   | { state: "ready"; info: RuntimeInfo }
 
-export async function probeRuntime(socket: string): Promise<RuntimeProbe> {
+export async function probeRuntime(socket: string, options: { timeoutMs?: number } = {}): Promise<RuntimeProbe> {
   try {
-    return { state: "ready", info: await runtimeRequest({ socket, path: "/health", schema: RuntimeInfoSchema, timeoutMs: 10_000 }) }
+    return { state: "ready", info: await runtimeRequest({ socket, path: "/health", schema: RuntimeInfoSchema, timeoutMs: options.timeoutMs ?? 10_000 }) }
   } catch (error) {
     if (!(error instanceof Error)) throw error
     if (refused(error)) return { state: "absent" }
@@ -137,7 +137,7 @@ export async function runtimeInfo(socket: string): Promise<RuntimeInfo | null> {
   throw new RuntimeDisconnectedError(false)
 }
 
-export async function invokeRuntime(socket: string, client: string, channel: string, args: unknown[], attempt = 1) {
+export async function invokeRuntime(socket: string, client: string, channel: string, args: unknown[], attempt = 1, options?: { timeoutMs: number }) {
   const encoded = JSON.stringify({
     channel,
     args: args.map((value) => value === undefined ? { kind: "absent" } : { kind: "value", value }),
@@ -146,7 +146,7 @@ export async function invokeRuntime(socket: string, client: string, channel: str
   const body = RuntimeCallSchema.parse(JSON.parse(encoded))
   let reply: z.output<typeof RuntimeReplySchema>
   try {
-    reply = await runtimeRequest({ socket, path: "/rpc", schema: RuntimeReplySchema, body, client, timeoutMs: 5 * 60_000 })
+    reply = await runtimeRequest({ socket, path: "/rpc", schema: RuntimeReplySchema, body, client, timeoutMs: options?.timeoutMs ?? 5 * 60_000 })
   } catch (error) {
     throw error instanceof Error ? (disconnection(error) ?? error) : error
   }
@@ -158,11 +158,13 @@ export async function invokeRuntime(socket: string, client: string, channel: str
   return reply.value
 }
 
-export function subscribeRuntime(socket: string, client: string, receive: (packet: z.infer<typeof RuntimePacketSchema>) => void, disconnected: () => void) {
+export function subscribeRuntime(socket: string, client: string, receive: (packet: z.infer<typeof RuntimePacketSchema>) => void, disconnected: () => void, options: { observer?: boolean } = {}) {
   let closed = false
   let ended = false
   const end = () => { if (!ended && !closed) { ended = true; disconnected() } }
-  const req = request({ socketPath: socket, path: "/events", method: "POST", headers: { "x-mako-window": client } }, (response) => {
+  const headers = new Map([["x-mako-window", client]])
+  if (options.observer) headers.set("x-mako-observer", "1")
+  const req = request({ socketPath: socket, path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
     const lines = new LineAssembler(32 * 1024 * 1024)
     if (response.statusCode !== 200) { response.destroy(); end(); return }
     response.on("data", (chunk: Buffer) => {

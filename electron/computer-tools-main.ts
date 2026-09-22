@@ -1,3 +1,4 @@
+import type { JsonValue } from "./codex-app-json.js"
 import { AppshotTargetSchema } from "./contracts/appshots.js"
 import { verifyForegroundInput } from "./computer-input-target.js"
 import { ComputerObservationClient } from "./computer-observation-client.js"
@@ -13,8 +14,8 @@ import {
 } from "@mako/control/program"
 import {
   actionReceipt,
+  ElementSchema,
   BACKGROUND_INPUT_LADDER,
-  diffLines,
   elementLines,
   KEYBOARD_TOOLS,
   KEY_ROUTE_ADVICE,
@@ -29,35 +30,34 @@ import {
   renderReference,
   signatureOf,
   summaryOf,
-  shownValue,
   toolResultData,
   toolResultError,
   withWindowKinds,
   windowCapabilities,
-  withReceiptVerification,
   withoutEscalationNudge,
   withoutMenuBar,
   type DriverTool,
   type SnapshotIndex,
 } from "@mako/control/computer"
 import {
-  ControlActRequestSchema,
-  ControlAdvancedRequestSchema,
+  scopeControlNodes,
+  ControlDispatchRequestSchema,
+  ControlRawRequestSchema,
   ControlEventsRequestSchema,
   ControlObserveRequestSchema,
+  ControlTargetSchema,
+  ControlFault,
+  controlFaultData,
   ControlTargetsRequestSchema,
-  ControlWaitRequestSchema,
   controlLineRef,
+  ControlObservationSchema,
   pageElementLines,
   planControlOperation,
   type ControlTarget,
   type PageTarget,
   type WindowControlTarget,
 } from "@mako/control/control"
-import {
-  BROWSER_ACTIONS,
-  type BrowserCall,
-} from "./browser-tools-runtime.js"
+import { BROWSER_ACTIONS, type BrowserCall } from "./browser-tools-runtime.js"
 import { browserProtocolHelp } from "./browser-protocol-help.js"
 import { browserControlClient } from "./browser-control-client.js"
 import {
@@ -107,13 +107,9 @@ Background input, in order (details in mako_computer_help().routes): 1 accessibi
 Results: every action resolves to the driver's structured data, and a refused action throws with the driver's message (Mako's own refusals — a fronting call without foreground: true, a background Cmd chord — throw before the driver is asked); images ride on result.content. A call that fronted carries fronted: {pid, ms}, and mako_computer_status counts them for the task. list_windows rows carry kind: document, helper or unknown, and helper strips are not windows. get_window_state omits the application's menu bar and the duplicate tree_markdown (include_menu_bar:true and include_markdown:true restore them) and defaults max_elements to ${DEFAULT_MAX_ELEMENTS}. A returned or logged value at or past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB, and every image after the ${INLINE_IMAGE_COUNT}th in one program, is written whole to a file and the result carries a receipt with the path, size, hash and an outline of the value's shape; nothing is cut. Programs stop after ${PROGRAM_TIME_LIMIT_MS / 1000} seconds; on timeout, cancellation or an error the worker and \`state\` reset while the driver session, snapshots and Mako's checks remain. Scripts are trusted local code, not an OS sandbox; every action still passes Mako's session, snapshot, path, foreground and preview checks.
 
 Output and input file paths (screenshot_out_file, output_dir, destination_root, files) may be absolute, ~-rooted or relative to the working directory; Mako resolves symlinked parents such as /tmp before the driver inspects them. macOS permissions, Chrome debugging consent and provider tool approval are distinct.`
-const controlInstructions = `Mako control is one provider-neutral code API for pages, native windows and system automation. Use mako_control_exec and the control object; Mako chooses the backend from the exact target and operation. Models do not choose CDP versus accessibility versus pointer delivery.
-
-If the task gives exact pid/window_id or a page handle, construct that target directly; do not rediscover it. Otherwise discover only the missing class with control.targets({kind:'browsers'|'pages'|'apps'|'windows', ...}), then control.observe({target, interactive:true}) for compact lines. A browser target with kind:'desk', origin and sourceRoot is an active Mako development host: choose the row matching the requested Vite origin or checkout, even when this task runs in the installed app. It creates its page in that host's hidden renderer, needs no Chromium profile and must never fall back to this host's plain 'mako' target. Use \`control.ref(line)\` to extract the exact first token and call control.act({target, operation:{kind:'set-text'|'activate'|'press-key'|'pointer'|'scroll'|'select-option', ...}}); never split a line by punctuation. Every action returns its host plan, a receipt, a compact post-action observation and a delta. Its observation mints the refs for the next known step, so chain from action.observation instead of making another observation. Page targets always use the page route; exact window targets use the strongest proven background route. Foreground-required or unsupported plans are returned without dispatch. System work is operation:{kind:'command', language:'shell'|'applescript'|'jxa', source}; it never touches focus.
-
-Chain deterministic steps in one async JavaScript program. Return when the next action needs semantic judgement. For page-specific work, \`page.open({browser,url?,disposition:'tab'|'window',lifetime:'task'|'persistent',context:'profile'|'isolated'})\` and \`page.claim\` mint exact page targets; background task-lifetime profile pages are the defaults and close with the control client. Isolated contexts require direct CDP and are disposed as one task resource; extension transports refuse them instead of pretending. \`page.observe\` keeps a structured AX tree inside the worker, \`page.select\` filters it by role, text and state with ancestor context, \`page.lines\` renders only that working set, and typed \`page.cdp\` reaches the complete pinned Chrome protocol. Call mako_control_help({domain, method?}) only when a protocol command is needed. control.wait({target, contains, hidden?, timeout_ms?}) polls locally, and control.events({target, after?}) reads page protocol events or Mako's bounded native topology events. control.advanced({backend, name, args}) remains the raw escape hatch for capabilities the closed operation contract does not yet express. \`state\`, bounded \`checkpoint\`/\`recall\`, artifact spilling and resumable cells work the same in every harness. Results are never truncated; oversized values are written whole to an artifact with a receipt.
-
-Refs belong to one backend, exact target and latest observation. Reobserve after every action; never carry a ref across targets or observations. A set-text receipt of suspected-noop may be reobserved and retried once because setting the same value is idempotent; never replay a pointer, activation or unknown outcome. Mako refuses unsafe background key chords and never fronts an application implicitly. Browser, Accessibility and Screen Recording permissions remain separate.`
+const controlInstructions = `Mako control is one provider-neutral code API. Use bound window/tab handles through mako_control_exec; call mako_control_help for methods. Store handles in state across cells. control.apps/windows/browsers/tabs discover only missing targets; control.window({pid,window_id}) binds a known window, control.openTab({browser,url}) creates a task page. For Mako development choose the browser row whose desk origin/sourceRoot matches the requested checkout; never substitute the installed app.
+Observe explicitly: const view=await state.tab.observe(); const field=view.get({role:'textbox',name:'Email'}); await state.tab.setValue(field.ref,'alice@example.com'); return await state.tab.expect({role:'textbox',name:'Email',value:'alice@example.com'}). Observe again before using another ref. Refusal throws before dispatch; timeout/cancellation can mean unknown outcome. Never replay uncertain or non-idempotent input. A dispatched receipt is not verification.
+Observations keep structured nodes local and return compact lines once. Return view.select(...) or view.diff(previous) for smaller output; emitImage(await handle.screenshot()) only when needed. Oversized output spills whole to artifacts. Await all actions; late callbacks are refused. Ordinary errors retain state, timeout/cancellation reset it. checkpoint/recall store bounded JSON facts. Background input never fronts implicitly; browser and native permissions stay separate. Scripts are trusted local JavaScript, not an OS sandbox. The old control.act/observe/advanced and page APIs have been replaced. Read help to migrate; do not retry an old action.`
 const toolInputSchema = z.object({
   properties: z.record(z.string(), z.json()).optional(),
   required: z.array(z.string()).optional(),
@@ -157,10 +153,14 @@ export const COMPUTER_TOOL_INPUTS = {
 }
 const controlHelpInputSchema = z
   .object({
+    tool: z
+      .string()
+      .optional()
+      .describe("Native driver action whose live schema is needed."),
     domain: z
       .string()
       .optional()
-      .describe("Chrome DevTools Protocol domain to inspect for page.cdp."),
+      .describe("Chrome DevTools Protocol domain to inspect for tab.cdp."),
     method: z
       .string()
       .optional()
@@ -177,6 +177,9 @@ const programImageSchema = z.object({
   mimeType: z.enum(["image/png", "image/jpeg"]),
 })
 const programImageReceiptSchema = z.object({
+  view: z.string().optional(),
+  target: z.json().optional(),
+  coordinates: z.json().optional(),
   snapshot_id: z.string().optional(),
   pid: z.number().int().positive().optional(),
   window_id: z.number().int().positive().optional(),
@@ -324,7 +327,15 @@ function computerProgramImage(
   value: z.infer<typeof z.json>
 ): ControlProgramOutput[] {
   const direct = programImageSchema.safeParse(value)
-  if (direct.success) return [{ type: "image", ...direct.data }]
+  if (direct.success) {
+    const receipt = programImageReceiptSchema.parse(value)
+    return [
+      ...(Object.keys(receipt).length
+        ? [{ type: "text" as const, text: JSON.stringify(receipt) }]
+        : []),
+      { type: "image", ...direct.data },
+    ]
+  }
   const result = toolResultSchema.safeParse(value)
   const image = result.success
     ? result.data.content
@@ -411,13 +422,17 @@ const windowRowsSchema = z.looseObject({
     })
   ),
 })
+const nativeElementSchema = ElementSchema.extend({
+  depth: z.number().int().nonnegative().default(0),
+})
 const nativeViewSchema = z.looseObject({
   snapshot_id: z.string(),
   elements: z.array(z.json()).default([]),
 })
 const pageViewSchema = z.looseObject({
   observation: z.string(),
-  nodes: z.array(z.json()).default([]),
+  // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Zod schema composition API.
+  nodes: ControlObservationSchema.shape.nodes.default([]),
   viewport: z.json().nullable().optional(),
   matched: z.number().int().optional(),
   nextOffset: z.number().int().nullable().optional(),
@@ -629,9 +644,11 @@ export function createComputerToolsServer(
     string,
     { observation: string; lines: string[] }
   >()
+  const controlUncertain = new Set<string>()
+  const controlVisuals = new Map<string, string>()
   const controlRefs = new Map<
     string,
-    { target: string; observation: string }
+    { target: string; observation: string; webText?: boolean }
   >()
   const controlEvents: Array<{
     cursor: number
@@ -643,6 +660,12 @@ export function createComputerToolsServer(
   let controlEventCursor = 0
   const asyncNativeGuard = process.env.MAKO_CONTROL_ASYNC_GUARD === "1"
   const controlTargetKey = (target: ControlTarget) => JSON.stringify(target)
+  const invalidateControlTarget = (key: string) => {
+    controlViews.delete(key)
+    controlVisuals.delete(key)
+    for (const [ref, binding] of controlRefs)
+      if (binding.target === key) controlRefs.delete(ref)
+  }
   const rememberControlRefs = (
     target: ControlTarget,
     observation: string,
@@ -658,6 +681,11 @@ export function createComputerToolsServer(
         continue
       }
     }
+    while (controlViews.size > 64) {
+      const oldest = controlViews.keys().next().value
+      if (oldest === undefined) break
+      invalidateControlTarget(oldest)
+    }
     while (controlRefs.size > 2_048) {
       const oldest = controlRefs.keys().next().value
       if (oldest === undefined) break
@@ -669,6 +697,7 @@ export function createComputerToolsServer(
     kind: string,
     detail: ComputerArguments
   ) => {
+    if (kind === "topology") invalidateControlTarget(controlTargetKey(target))
     controlEventCursor++
     controlEvents.push({
       cursor: controlEventCursor,
@@ -743,10 +772,14 @@ export function createComputerToolsServer(
       ["set_agent_cursor_enabled", { enabled: false }],
     ] as const) {
       try {
-        await connection.callTool(name, { session, ...rest }, {
-          signal,
-          timeout: 10_000,
-        })
+        await connection.callTool(
+          name,
+          { session, ...rest },
+          {
+            signal,
+            timeout: 10_000,
+          }
+        )
       } catch {
         // A driver without the cursor, or one that refuses: the action
         // itself decides whether this session works.
@@ -774,6 +807,10 @@ export function createComputerToolsServer(
       client = connection
       session = `mako-${taskId}-${randomUUID().slice(0, 8)}`
       snapshots.clear()
+      controlViews.clear()
+      controlRefs.clear()
+      controlUncertain.clear()
+      controlVisuals.clear()
       connection.onClose(() => {
         if (client !== connection) return
         starting = undefined
@@ -792,43 +829,58 @@ export function createComputerToolsServer(
     })
     return starting
   }
-  const status = async (): Promise<ComputerArguments> => ({
-    available: unified ? Boolean(backend || browserCall) : Boolean(backend),
-    driverTools: (await tools()).length,
-    program: `${toolPrefix}_exec`,
-    helpers: unified
-      ? ["targets", "observe", "act", "wait", "events", "advanced"]
-      : [
-          "view",
-          "act",
-          "until",
-          "expect",
-          "token",
-          "windows",
-          "fill",
-          "submit",
-          "routes",
-          "route",
-        ],
-    makoActions: MAKO_ACTIONS.map((tool) => tool.name),
-    browser: browserCall
-      ? "browser.<action> available in programs"
-      : "unavailable outside a Mako task",
-    agentCursor:
-      "quiet for every Mako session: glide_duration_ms 1, no dwell, hidden (the driver's awaited cursor glide cost 1.5 s of every action on a new element and moved on the user's screen); computer.set_agent_cursor_enabled({enabled: true}) shows it",
-    help: `${toolPrefix}_help`,
-    inputRoutes: {
-      default: "background",
-      order: BACKGROUND_INPUT_LADDER.map((rung) => rung.route),
-      foreground: "explicit-preflight",
-      preflight: ["foreground-flag", "active-application", "front-window"],
-      automaticEscalation: false,
-      backgroundCmdChords: "refused before dispatch unless force: true",
-    },
-    frontingEvents,
-    pageRoutes: await pageRouteValue(),
-    artifacts,
-  })
+  const status = async (): Promise<ComputerArguments> =>
+    unified
+      ? {
+          available: Boolean(backend || browserCall),
+          version: 2,
+          native: { configured: Boolean(backend), catalog: "help({tool})" },
+          browser: { configured: Boolean(browserCall) },
+          program: `${toolPrefix}_exec`,
+          help: `${toolPrefix}_help`,
+          input:
+            "background by default; foreground requires explicit preflight",
+          artifacts,
+        }
+      : {
+          available: Boolean(backend),
+          driverTools: (await tools()).length,
+          program: `${toolPrefix}_exec`,
+          helpers: [
+            "view",
+            "act",
+            "until",
+            "expect",
+            "token",
+            "windows",
+            "fill",
+            "submit",
+            "routes",
+            "route",
+          ],
+          makoActions: MAKO_ACTIONS.map((tool) => tool.name),
+          browser: browserCall
+            ? "browser.<action> available in programs"
+            : "unavailable outside a Mako task",
+          agentCursor:
+            "quiet for every Mako session: glide_duration_ms 1, no dwell, hidden (the driver's awaited cursor glide cost 1.5 s of every action on a new element and moved on the user's screen); computer.set_agent_cursor_enabled({enabled: true}) shows it",
+          help: `${toolPrefix}_help`,
+          inputRoutes: {
+            default: "background",
+            order: BACKGROUND_INPUT_LADDER.map((rung) => rung.route),
+            foreground: "explicit-preflight",
+            preflight: [
+              "foreground-flag",
+              "active-application",
+              "front-window",
+            ],
+            automaticEscalation: false,
+            backgroundCmdChords: "refused before dispatch unless force: true",
+          },
+          frontingEvents,
+          pageRoutes: await pageRouteValue(),
+          artifacts,
+        }
   const help = async (args: z.infer<typeof COMPUTER_TOOL_INPUTS.help>) => {
     const available = await tools()
     const all = [...MAKO_ACTIONS, ...available.map(asDriverTool)]
@@ -950,10 +1002,14 @@ export function createComputerToolsServer(
     })
     const startedAt = Date.now()
     const raw = toolResultSchema.parse(
-      await connection.callTool(tool.name, computerArgumentsSchema.parse(args), {
-        signal,
-        timeout: 60_000,
-      })
+      await connection.callTool(
+        tool.name,
+        computerArgumentsSchema.parse(args),
+        {
+          signal,
+          timeout: 60_000,
+        }
+      )
     )
     if (tool.name === "get_window_state")
       rememberSnapshot(raw.structuredContent)
@@ -1187,10 +1243,15 @@ export function createComputerToolsServer(
     pid: number,
     signal: AbortSignal
   ): Promise<z.infer<typeof windowRowsSchema>["windows"]> => {
-    const listed = windowRowsSchema.safeParse(
-      toolResultData(await invokeTool("list_windows", { pid }, signal))
-    )
-    return listed.success ? listed.data.windows : []
+    return windowRowsSchema.parse(
+      controlData(await invokeTool("list_windows", { pid }, signal))
+    ).windows
+  }
+  const controlData = (result: Parameters<typeof toolResultData>[0]) => {
+    const refused = toolResultError(result)
+    if (refused !== undefined)
+      throw new ControlFault("native-driver-error", refused, "unknown")
+    return toolResultData(result)
   }
   const nativeCapabilities = async (
     target: WindowControlTarget,
@@ -1241,7 +1302,7 @@ export function createComputerToolsServer(
       }
     }
     if (request.kind === "apps")
-      return toolResultData(await invokeTool("list_apps", {}, signal))
+      return controlData(await invokeTool("list_apps", {}, signal))
     return {
       kind: request.kind,
       pid: request.pid,
@@ -1253,7 +1314,10 @@ export function createComputerToolsServer(
     signal: AbortSignal
   ) => {
     const request = ControlObserveRequestSchema.parse(raw)
+    const scope: ComputerArguments = { within: request.within }
+    if (request.match) scope.match = request.match
     const key = controlTargetKey(request.target)
+    invalidateControlTarget(key)
     if (request.target.kind === "page") {
       if (!browserCall)
         throw new Error("Page control is unavailable outside a Mako task")
@@ -1263,6 +1327,8 @@ export function createComputerToolsServer(
             action: "observe",
             target: pageTarget(request.target),
             maxNodes: request.max,
+            within: request.within,
+            match: request.match,
             query: request.query,
             interactiveOnly: request.interactive,
           }),
@@ -1270,6 +1336,34 @@ export function createComputerToolsServer(
         )
       )
       const lines = pageElementLines(value.nodes)
+      const nodes = value.nodes.map((raw) => {
+        const node = { ...raw }
+        for (const state of [
+          "checked",
+          "disabled",
+          "focused",
+          "expanded",
+          "selected",
+          "required",
+          "pressed",
+          "readonly",
+          "invalid",
+          "modal",
+          "multiselectable",
+        ])
+          if (node[state] === "true" || node[state] === "false")
+            node[state] = node[state] === "true"
+        return node
+      })
+      const coverage = {
+        complete:
+          value.omitted === 0 &&
+          value.nextOffset == null &&
+          !request.query &&
+          !request.interactive,
+        omitted: value.omitted ?? null,
+        textComplete: value.truncatedTextFields === 0,
+      }
       controlViews.set(key, { observation: value.observation, lines })
       rememberControlRefs(request.target, value.observation, lines)
       const result: ComputerArguments = {
@@ -1277,43 +1371,127 @@ export function createComputerToolsServer(
         route: "page",
         observation: value.observation,
         lines,
+        nodes,
+        coverage,
+        scope,
         viewport: value.viewport ?? null,
       }
       if (value.matched !== undefined) result.matched = value.matched
-      if (value.nextOffset !== undefined)
-        result.nextOffset = value.nextOffset
+      if (value.nextOffset !== undefined) result.nextOffset = value.nextOffset
       if (value.omitted !== undefined) result.omitted = value.omitted
-      return result
+      controlUncertain.delete(key)
+      return ControlObservationSchema.parse(result)
     }
     const state = nativeViewSchema.parse(
-      toolResultData(
+      controlData(
         await invokeTool(
           "get_window_state",
           {
             pid: request.target.pid,
             window_id: request.target.window_id,
-            max_elements: request.max,
+            max_elements:
+              request.within.length || request.match ? 1000 : request.max,
+            include_screenshot: false,
           },
           signal
         )
       )
     )
-    const lines = elementLines(state.elements, {
+    const availableLines = elementLines(state.elements, {
       interactive: request.interactive,
       query: request.query,
     })
+    const visibleRefs = new Set(
+      availableLines.map((line) => {
+        try {
+          return controlLineRef(line)
+        } catch {
+          return ""
+        }
+      })
+    )
+    const nativePageBrowser = pageRoutes.get(request.target.pid)?.browser
+    const ancestors: Array<{ depth: number; role: string }> = []
+    const allNodes = state.elements.flatMap((raw) => {
+      const parsed = nativeElementSchema.safeParse(raw)
+      if (!parsed.success) return []
+      const element = parsed.data
+      if (element.role.startsWith("AXMenu")) return []
+      const node: z.infer<typeof ControlObservationSchema>["nodes"][number] = {
+        depth: element.depth,
+        role: element.role.replace(/^AX/, ""),
+        name: element.label ?? "",
+      }
+      if (element.element_token) node.ref = element.element_token
+      while (ancestors.length && ancestors.at(-1)!.depth >= node.depth)
+        ancestors.pop()
+      const web = ancestors.some((ancestor) => ancestor.role === "AXWebArea")
+      ancestors.push({ depth: node.depth, role: element.role })
+      if (
+        ["TextField", "TextArea", "SearchField", "ComboBox"].includes(
+          node.role ?? ""
+        )
+      ) {
+        node.inputRoute = web ? "page" : "accessibility"
+        if (web && nativePageBrowser) node.pageBrowser = nativePageBrowser
+      }
+      if (element.value != null) node.value = String(element.value)
+      if (element.enabled !== undefined) node.disabled = !element.enabled
+      if (element.selected !== undefined) node.selected = element.selected
+      return [node]
+    })
+    const scoped = scopeControlNodes(allNodes, request).filter(
+      (node) =>
+        !(request.interactive || request.query) ||
+        visibleRefs.has(node.ref ?? "")
+    )
+    const nodes = scoped.slice(0, request.max)
+    const returnedRefs = new Set(nodes.map((node) => node.ref))
+    const webRefs = new Set(
+      nodes.filter((node) => node.inputRoute === "page").map((node) => node.ref)
+    )
+    const lines = availableLines
+      .filter((line) => returnedRefs.has(controlLineRef(line)))
+      .map((line) =>
+        webRefs.has(controlLineRef(line))
+          ? `${line} [text input: page route]`
+          : line
+      )
     controlViews.set(key, { observation: state.snapshot_id, lines })
     rememberControlRefs(request.target, state.snapshot_id, lines)
-    return {
-      target: request.target,
-      route: "accessibility",
-      observation: state.snapshot_id,
-      lines,
+    for (const ref of webRefs) {
+      if (!ref) continue
+      const remembered = controlRefs.get(ref)
+      if (remembered) remembered.webText = true
     }
+    controlUncertain.delete(key)
+    return ControlObservationSchema.parse({
+      target: request.target,
+      observation: state.snapshot_id,
+      scope,
+      nodes,
+      lines,
+      coverage: {
+        complete:
+          state.elements_complete === true &&
+          scoped.length <= request.max &&
+          !request.query &&
+          !request.interactive,
+        omitted: z.number().safeParse(state.total_element_count).success
+          ? Math.max(
+              0,
+              z.number().parse(state.total_element_count) -
+                state.elements.length +
+                Math.max(0, scoped.length - nodes.length)
+            )
+          : null,
+        textComplete: state.truncated !== true,
+      },
+    })
   }
   const dispatchControlOperation = async (
     target: ControlTarget | undefined,
-    operation: z.infer<typeof ControlActRequestSchema>["operation"],
+    operation: z.infer<typeof ControlDispatchRequestSchema>["operation"],
     signal: AbortSignal
   ): Promise<z.infer<typeof z.json>> => {
     if (operation.kind === "command") {
@@ -1402,9 +1580,18 @@ export function createComputerToolsServer(
         signal
       )
     }
+    if (
+      operation.kind === "pointer" &&
+      (operation.button === "middle" ||
+        operation.count === 3 ||
+        (operation.button === "right" && operation.count !== 1))
+    )
+      throw new Error(
+        "This native pointer combination is unsupported; nothing was dispatched"
+      )
     const base = { pid: target.pid, window_id: target.window_id }
     if (operation.kind === "set-text")
-      return toolResultData(
+      return controlData(
         await invokeTool(
           "set_value",
           { ...base, element_token: operation.ref, value: operation.text },
@@ -1412,7 +1599,7 @@ export function createComputerToolsServer(
         )
       )
     if (operation.kind === "activate")
-      return toolResultData(
+      return controlData(
         await invokeTool(
           "click",
           { ...base, element_token: operation.ref },
@@ -1428,7 +1615,7 @@ export function createComputerToolsServer(
         if (operation.ref) args.element_token = operation.ref
       }
       const action = operation.modifiers.length > 0 ? "hotkey" : "press_key"
-      return toolResultData(await invokeTool(action, args, signal))
+      return controlData(await invokeTool(action, args, signal))
     }
     if (operation.kind === "pointer") {
       const args =
@@ -1441,7 +1628,7 @@ export function createComputerToolsServer(
           : operation.count === 2
             ? "double_click"
             : "click"
-      return toolResultData(await invokeTool(action, args, signal))
+      return controlData(await invokeTool(action, args, signal))
     }
     if (operation.kind === "scroll") {
       const args: ComputerArguments = {
@@ -1455,12 +1642,10 @@ export function createComputerToolsServer(
         args.x = operation.at.x
         args.y = operation.at.y
       }
-      return toolResultData(
-        await invokeTool("scroll", args, signal)
-      )
+      return controlData(await invokeTool("scroll", args, signal))
     }
     const value = z.string().parse(operation.value ?? operation.label)
-    return toolResultData(
+    return controlData(
       await invokeTool(
         "set_value",
         {
@@ -1506,7 +1691,7 @@ export function createComputerToolsServer(
     }
   }
   const operationRefs = (
-    operation: z.infer<typeof ControlActRequestSchema>["operation"]
+    operation: z.infer<typeof ControlDispatchRequestSchema>["operation"]
   ): string[] => {
     if (
       operation.kind === "set-text" ||
@@ -1526,8 +1711,24 @@ export function createComputerToolsServer(
   }
   const validateControlRefs = (
     target: ControlTarget | undefined,
-    operation: z.infer<typeof ControlActRequestSchema>["operation"]
+    operation: z.infer<typeof ControlDispatchRequestSchema>["operation"]
   ) => {
+    if (
+      (operation.kind === "pointer" || operation.kind === "scroll") &&
+      operation.at &&
+      "x" in operation.at
+    ) {
+      if (
+        !target ||
+        !operation.at.view ||
+        controlVisuals.get(controlTargetKey(target)) !== operation.at.view
+      )
+        throw new ControlFault(
+          "stale-view",
+          "Coordinates require this target's latest screenshot view token; capture it again. Nothing was dispatched.",
+          "not-dispatched"
+        )
+    }
     const refs = operationRefs(operation)
     if (refs.length === 0) return
     if (!target) throw new Error("A ref requires an exact control target")
@@ -1540,17 +1741,34 @@ export function createComputerToolsServer(
         binding.target !== key ||
         binding.observation !== current?.observation
       )
-        throw new Error(
-          `Ref "${ref}" is not from this target's latest observation. Observe the exact target again; nothing was dispatched.`
+        throw new ControlFault(
+          "stale-reference",
+          `Ref "${ref}" is not from this target's latest observation. Observe the exact target again; nothing was dispatched.`,
+          "not-dispatched"
         )
     }
   }
-  const controlAct = async (
+  const controlDispatch = async (
     raw: ComputerArguments,
     signal: AbortSignal
   ) => {
-    const request = ControlActRequestSchema.parse(raw)
+    const request = ControlDispatchRequestSchema.parse(raw)
     validateControlRefs(request.target, request.operation)
+    if (
+      request.target?.kind === "window" &&
+      request.operation.kind === "set-text" &&
+      controlRefs.get(request.operation.ref)?.webText
+    ) {
+      const browser = pageRoutes.get(request.target.pid)?.browser
+      const recovery = browser
+        ? `Discover the exact page with control.tabs(${JSON.stringify(browser)}), claim it, observe and fill its own ref.`
+        : "Use a connected page handle for this web content; no page connection is registered for this app."
+      throw new ControlFault(
+        "page-input-required",
+        `This text field is inside web content. Native AX value writes are not reliable here. ${recovery} Nothing was dispatched.`,
+        "not-dispatched"
+      )
+    }
     const capabilities =
       request.target?.kind === "window"
         ? request.operation.kind === "set-text" ||
@@ -1571,85 +1789,46 @@ export function createComputerToolsServer(
       capabilities
     )
     if (plan.status !== "selected")
-      return { dispatched: false, plan, receipt: null }
-    const before = request.target
-      ? controlViews.get(controlTargetKey(request.target))
-      : undefined
-    const result = await dispatchControlOperation(
-      request.target,
-      request.operation,
-      signal
-    )
-    let after =
-      request.operation.kind === "command" || !request.target
-        ? undefined
-        : await controlObserve(
-            {
-              target: request.target,
-              interactive: false,
-              max: DEFAULT_MAX_ELEMENTS,
-            },
+      throw new ControlFault(
+        "unsupported",
+        `Nothing was dispatched: ${JSON.stringify(plan)}`,
+        "not-dispatched"
+      )
+    const key = request.target ? controlTargetKey(request.target) : undefined
+    if (key && controlUncertain.has(key))
+      throw new ControlFault(
+        "observation-required",
+        "Previous action outcome unknown. Observe this exact target before another mutation; nothing was dispatched.",
+        "not-dispatched"
+      )
+    validateControlRefs(request.target, request.operation)
+    if (key) invalidateControlTarget(key)
+    let result: JsonValue
+    try {
+      result = z
+        .json()
+        .parse(
+          await dispatchControlOperation(
+            request.target,
+            request.operation,
             signal
           )
-    let afterLines = after ? z.array(z.string()).parse(after.lines) : []
-    const expectedText =
-      request.operation.kind === "set-text"
-        ? shownValue(request.operation.text)
-        : undefined
-    if (expectedText && request.target && !afterLines.some((line) => line.includes(expectedText))) {
-      const deadline = Date.now() + 800
-      while (Date.now() < deadline) {
-        await wait(100, signal)
-        after = await controlObserve(
-          {
-            target: request.target,
-            interactive: false,
-            max: DEFAULT_MAX_ELEMENTS,
-          },
-          signal
         )
-        afterLines = z.array(z.string()).parse(after.lines)
-        if (afterLines.some((line) => line.includes(expectedText))) break
-      }
+    } catch (error) {
+      const detail = controlFaultData(error)
+      if (key && (!detail || detail.outcome === "unknown"))
+        controlUncertain.add(key)
+      throw new ControlFault(
+        detail?.code ?? "dispatch-failed",
+        error instanceof Error ? error.message : "Control dispatch failed",
+        detail?.outcome ?? "unknown"
+      )
     }
-    const delta = before
-      ? diffLines(before.lines, afterLines)
-      : { added: [], removed: [], unchanged: 0 }
-    const confirmed =
-      expectedText
-        ? afterLines.some((line) => line.includes(expectedText))
-        : delta.added.length > 0 || delta.removed.length > 0
-    const target =
-      request.target?.kind === "window"
-        ? {
-            pid: request.target.pid,
-            window_id: request.target.window_id,
-          }
-        : undefined
-    const baseReceipt = actionReceipt(
+    const evidence = actionReceipt(
       request.operation.kind,
       {},
-      target,
-      { route: plan.route, result: z.json().parse(result) }
-    )
-    const receipt = withReceiptVerification(
-      {
-        ...baseReceipt,
-        route: plan.route,
-        outcome:
-          expectedText && !confirmed
-            ? "suspected-noop"
-            : baseReceipt.outcome,
-      },
-      {
-        kind: plan.verification,
-        status:
-          plan.verification === "direct" || confirmed
-            ? "confirmed"
-            : delta.added.length > 0 || delta.removed.length > 0
-              ? "changed"
-              : "unchanged",
-      }
+      undefined,
+      result
     )
     const actionId = randomUUID()
     let guard: ComputerArguments = { status: "settled" }
@@ -1671,43 +1850,16 @@ export function createComputerToolsServer(
       }
       void watchNativeTopology(request.target, actionId, baseline)
     }
-    return {
-      dispatched: true,
-      action_id: actionId,
-      plan,
-      receipt,
+    const receipt: ComputerArguments = {
+      status: "dispatched",
+      actionId,
+      route: plan.route,
+      delivery: evidence.delivery,
+      verification: "not-requested",
       guard,
-      observation: after,
-      delta,
     }
-  }
-  const controlWait = async (
-    raw: ComputerArguments,
-    signal: AbortSignal
-  ) => {
-    const request = ControlWaitRequestSchema.parse(raw)
-    const deadline = Date.now() + request.timeout_ms
-    let observation: Awaited<ReturnType<typeof controlObserve>>
-    for (;;) {
-      observation = await controlObserve(
-        {
-          target: request.target,
-          interactive: request.interactive,
-          max: DEFAULT_MAX_ELEMENTS,
-        },
-        signal
-      )
-      const lines = z.array(z.string()).parse(observation.lines)
-      const found = lines.some((line) => line.includes(request.contains))
-      if (found !== request.hidden)
-        return { matched: true, observation, elapsed_ms: request.timeout_ms - (deadline - Date.now()) }
-      if (Date.now() >= deadline)
-        return { matched: false, observation, elapsed_ms: request.timeout_ms }
-      await wait(
-        Math.min(request.every_ms, Math.max(1, deadline - Date.now())),
-        signal
-      )
-    }
+    if (request.operation.kind === "command") receipt.result = result
+    return receipt
   }
   const controlEventValue = async (
     raw: ComputerArguments,
@@ -1729,9 +1881,7 @@ export function createComputerToolsServer(
     }
     const key = controlTargetKey(request.target)
     const events = controlEvents
-      .filter(
-        (event) => event.target === key && event.cursor > request.after
-      )
+      .filter((event) => event.target === key && event.cursor > request.after)
       .slice(0, request.limit)
     return {
       events,
@@ -1739,109 +1889,182 @@ export function createComputerToolsServer(
         events.at(-1)?.cursor ?? Math.max(request.after, controlEventCursor),
     }
   }
-  const controlAdvanced = async (
+  const controlRaw = async (
+    backend: "native" | "page",
     raw: ComputerArguments,
     signal: AbortSignal
   ) => {
-    const request = ControlAdvancedRequestSchema.parse(raw)
-    if (request.backend === "native")
-      return toolResultData(
-        await invokeTool(request.name, request.args, signal)
+    const request = ControlRawRequestSchema.parse({ ...raw, backend })
+    if (backend === "native" && controlUncertain.size > 0)
+      throw new ControlFault(
+        "observation-required",
+        "An action outcome is unknown. Observe or capture the affected target before raw native calls; nothing was dispatched.",
+        "not-dispatched"
       )
-    if (request.backend === "page") {
+    // Raw calls have no unified snapshot contract. Retire all affected refs.
+    for (const key of controlViews.keys()) invalidateControlTarget(key)
+    controlVisuals.clear()
+    if (backend === "native") {
+      if (request.name === "launch_app" && request.args.page_route === true) {
+        const args = { ...request.args }
+        delete args.page_route
+        return launchWithPageRoute(args, signal)
+      }
+      return controlData(await invokeTool(request.name, request.args, signal))
+    }
+    if (!browserCall)
+      throw new Error("Page control is unavailable outside a Mako task")
+    return browserCall(
+      BrowserCommandSchema.parse({ ...request.args, action: request.name }),
+      signal
+    )
+  }
+  const rememberVisual = (key: string, view: string) => {
+    controlVisuals.set(key, view)
+    while (controlVisuals.size > 64)
+      controlVisuals.delete(controlVisuals.keys().next().value!)
+  }
+  const controlCapture = async (
+    raw: ComputerArguments,
+    signal: AbortSignal
+  ) => {
+    const request = z
+      .object({
+        target: ControlTargetSchema,
+        options: computerArgumentsSchema.default({}),
+      })
+      .strict()
+      .parse(raw)
+    const key = controlTargetKey(request.target)
+    invalidateControlTarget(key)
+    if (request.target.kind === "page") {
       if (!browserCall)
         throw new Error("Page control is unavailable outside a Mako task")
-      return browserCall(
-        BrowserCommandSchema.parse({
-          action: request.name,
-          ...request.args,
-        }),
+      const value = z.record(z.string(), z.json()).parse(
+        await browserCall(
+          BrowserCommandSchema.parse({
+            ...request.options,
+            action: "screenshot",
+            target: pageTarget(request.target),
+          }),
+          signal
+        )
+      )
+      const view = z.string().safeParse(value.view)
+      if (view.success) rememberVisual(key, view.data)
+      controlUncertain.delete(key)
+      return value
+    }
+    const value = controlData(
+      await invokeTool(
+        "get_window_state",
+        {
+          ...request.options,
+          pid: request.target.pid,
+          window_id: request.target.window_id,
+          include_screenshot: true,
+        },
         signal
       )
+    )
+    const view = randomUUID()
+    rememberVisual(key, view)
+    controlUncertain.delete(key)
+    const content = z
+      .object({ content: z.array(z.json()).default([]) })
+      .parse(value).content
+    const image = content
+      .map((block) => programImageSchema.safeParse(block))
+      .find((result) => result.success)
+    const inline = image?.success ? image.data : undefined
+    if (inline)
+      return { ...inline, ...programImageReceiptSchema.parse(value), view }
+    const screenshotPath = z.string().safeParse(value.screenshot_file_path)
+    if (screenshotPath.success) {
+      const data = await readFile(screenshotPath.data)
+      return {
+        data: data.toString("base64"),
+        mimeType: "image/png",
+        ...programImageReceiptSchema.parse(value),
+        view,
+      }
     }
-    if (request.name !== "shell" && request.name !== "script")
-      throw new Error('System advanced actions are "shell" or "script"')
-    return makoAction(request.name, request.args, signal)
+    throw new Error("The native driver returned no screenshot")
   }
   const CONTROL_ACTIONS = [
-    "status",
     "targets",
     "observe",
-    "act",
-    "wait",
+    "dispatch",
     "events",
-    "advanced",
+    "capture",
+    "native",
+    "page",
   ] as const
   const controlHelp = async (
     args: z.infer<typeof controlHelpInputSchema> = {}
   ) => {
     if (args.domain !== undefined)
       return browserProtocolHelp(args.domain, args.method)
+    if (args.tool !== undefined) {
+      const detail = await help({ tool: args.tool })
+      return {
+        ...detail,
+        signature: `control.native(${JSON.stringify(args.tool)}, args)`,
+        notes: [
+          "Raw native call; unified refs expire. Observe before high-level input. Host target, session and foreground checks still apply.",
+        ],
+      }
+    }
     return {
-    actions: [
-      {
-        action: "targets",
-        signature:
-          "targets({kind:'browsers'|'pages'|'apps'|'windows', browser?, pid?})",
-        purpose: "Discover only the class of target needed next.",
-      },
-      {
-        action: "observe",
-        signature: "observe({target, query?, interactive?, max?})",
-        purpose:
-          "Return compact ref-bearing lines from the exact page or window.",
-      },
-      {
-        action: "act",
-        signature: "act({target?, operation})",
-        purpose:
-          "Plan, dispatch and verify one closed-contract operation through the strongest proven route.",
-      },
-      {
-        action: "wait",
-        signature:
-          "wait({target, contains, hidden?, timeout_ms?, every_ms?, interactive?})",
-        purpose:
-          "Poll observations locally until text appears or disappears.",
-      },
-      {
-        action: "events",
-        signature: "events({target, after?, limit?})",
-        purpose:
-          "Read page protocol events or bounded native topology guard events.",
-      },
-      {
-        action: "advanced",
-        signature: "advanced({backend:'native'|'page'|'system', name, args})",
-        purpose:
-          "Explicit escape hatch for a capability the closed operation contract does not express.",
-      },
-    ],
-    operationKinds: [
-      "set-text",
-      "activate",
-      "press-key",
-      "pointer",
-      "scroll",
-      "select-option",
-      "command",
-    ],
-    targetKinds: ["page", "window"],
-    routing:
-      "The host planner selects the route. A page target uses page control; a window target uses capability-proven accessibility, window pointer or pid keyboard; command uses the system adapter. Foreground is never selected implicitly.",
-    refs:
-      "A ref belongs to the exact target and its latest observation. Call control.ref(line) to extract it; never split a line by punctuation. Reobserve after every action.",
-    page:
-      "page.open({browser,url?,background?,disposition?:'tab'|'window',lifetime?:'task'|'persistent',context?:'profile'|'isolated'}), page.claim({browser,tab,takeover?}), page.release(target), page.close(target), page.observe(target, options?), page.select(observation, {text?,roles?,states?,refsOnly?,includeAncestors?,max?}), page.lines(selection), page.cdp(target, method, params?). Task-lifetime background profile pages are the defaults; isolated contexts require direct CDP. page is page-only code over the same host ownership and validation as control.",
-    protocol:
-      "Call mako_control_help with domain to list its commands and events, or domain plus method for the exact pinned Chrome protocol schema.",
-    native: unified
-      ? (await tools()).map((tool) => tool.name)
-      : [],
+      version: 2,
+      discovery:
+        "control.apps(), control.windows(pid), control.browsers(), control.tabs(browser)",
+      handles:
+        "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser,url?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across cells. App windows are selected explicitly; no implicit first window.",
+      target:
+        "await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard}; refs expire after mutation or observation.",
+      observations:
+        "Observation has nodes, lines, coverage, get({role,name,within?}) for exactly one observed node, select({text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. No app-specific instructions are assumed.",
+      assertions:
+        "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial.",
+      page: "tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot(options?), upload(ref,files), close(), release(), cdp(method,params?). tab.raw(name,args?) is the explicit page escape hatch; call help({domain,method}) for pinned CDP schemas. Profile/task/background defaults; isolated contexts require direct CDP.",
+      native:
+        "window.screenshot({screenshot_out_file?}) returns a view token; coordinates require {x,y,view}, window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
+      command:
+        "control.command({language:'shell'|'applescript'|'jxa',source,cwd?}) returns dispatch evidence plus result (stdout,stderr,exit_code,timed_out,truncated). Inspect exit_code; dispatch is not command success.",
+      output:
+        "return value or console.log(value); emitImage(await handle.screenshot()) emits images through existing budgets. state retains handles across cells, checkpoint/recall retain bounded JSON facts; cancellation resets the worker. Await every action. Old cell callbacks cannot use a newer cell.",
     }
   }
+  let controlTail: Promise<unknown> = Promise.resolve()
+  const runControl = async (
+    command: ComputerArguments,
+    signal: AbortSignal
+  ): Promise<JsonValue> => {
+    const action = z.enum(CONTROL_ACTIONS).parse(command.action)
+    const args = { ...command }
+    delete args.action
+    const invoke = async () => {
+      signal.throwIfAborted()
+      if (action === "targets") return controlTargets(args, signal)
+      if (action === "observe") return controlObserve(args, signal)
+      if (action === "dispatch") return controlDispatch(args, signal)
+      if (action === "events") return controlEventValue(args, signal)
+      if (action === "capture") return controlCapture(args, signal)
+      return controlRaw(action, args, signal)
+    }
+    // Explicit concurrent CDP is needed to release a paused request or dialog.
+    const concurrent =
+      action === "page" &&
+      z
+        .object({ args: z.object({ concurrent: z.literal(true) }) })
+        .safeParse(args).success
+    const running = concurrent ? invoke() : controlTail.then(invoke, invoke)
+    if (!concurrent) controlTail = running.catch(() => {})
+    return z.json().parse(await running)
+  }
   const program = async () => {
-    const available = await tools()
+    const available = unified ? [] : await tools()
     runtime ??= new ControlProgramRuntime({
       namespace,
       actions: unified
@@ -1855,70 +2078,7 @@ export function createComputerToolsServer(
       extra: !unified && browserCall ? { browser: BROWSER_ACTIONS } : {},
       artifacts,
       call: async (command, signal, namespace) => {
-        if (unified) {
-          const action = z.enum(CONTROL_ACTIONS).parse(command.action)
-          const args = { ...command }
-          delete args.action
-          if (action === "status")
-            return z.json().parse({
-              ...(await status()),
-              surface: "control",
-              asyncNativeGuard,
-            })
-          if (action === "targets")
-            return z
-              .json()
-              .parse(
-                await controlTargets(
-                  computerArgumentsSchema.parse(args),
-                  signal
-                )
-              )
-          if (action === "observe")
-            return z
-              .json()
-              .parse(
-                await controlObserve(
-                  computerArgumentsSchema.parse(args),
-                  signal
-                )
-              )
-          if (action === "act")
-            return z
-              .json()
-              .parse(
-                await controlAct(
-                  computerArgumentsSchema.parse(args),
-                  signal
-                )
-              )
-          if (action === "wait")
-            return z
-              .json()
-              .parse(
-                await controlWait(
-                  computerArgumentsSchema.parse(args),
-                  signal
-                )
-              )
-          if (action === "events")
-            return z
-              .json()
-              .parse(
-                await controlEventValue(
-                  computerArgumentsSchema.parse(args),
-                  signal
-                )
-              )
-          return z
-            .json()
-            .parse(
-              await controlAdvanced(
-                computerArgumentsSchema.parse(args),
-                signal
-              )
-            )
-        }
+        if (unified) return runControl(command, signal)
         if (namespace === "browser") {
           if (!browserCall)
             throw new Error(
@@ -1970,7 +2130,8 @@ export function createComputerToolsServer(
         return toolResultData(result)
       },
       image: computerProgramImage,
-      fault: (detail) => new Error(detail.message),
+      fault: (detail) =>
+        new ControlFault(detail.code, detail.message, detail.outcome),
     })
     return runtime
   }
@@ -1989,7 +2150,10 @@ export function createComputerToolsServer(
   const helpTool = `${toolPrefix}_help`
   const execTool = `${toolPrefix}_exec`
   const server = new ComputerServer(
-    { name: unified ? "mako-control" : "mako-driver-test-runtime", version: "4.0.0" },
+    {
+      name: unified ? "mako-control" : "mako-driver-test-runtime",
+      version: "4.0.0",
+    },
     {
       capabilities: { tools: {} },
       instructions: unified ? controlInstructions : instructions,
@@ -2014,10 +2178,9 @@ export function createComputerToolsServer(
     tools: [
       {
         name: statusTool,
-        description:
-          unified
-            ? "Report the routes available to this provider-neutral Mako control client, including page control, native control and the bounded native guard. Does not request OS permission."
-            : "Report whether this MCP client is attached to Mako's native computer-control driver, the input routing policy, and where oversized results are written. Does not request OS permission.",
+        description: unified
+          ? "Report the routes available to this provider-neutral Mako control client, including page control, native control and the bounded native guard. Does not request OS permission."
+          : "Report whether this MCP client is attached to Mako's native computer-control driver, the input routing policy, and where oversized results are written. Does not request OS permission.",
         inputSchema: z.toJSONSchema(COMPUTER_TOOL_INPUTS.status, {
           io: "input",
         }),
@@ -2030,14 +2193,13 @@ export function createComputerToolsServer(
       },
       {
         name: helpTool,
-        description:
-          unified
-            ? "Reference for the closed control contract, page code helpers, deterministic routing and the advanced escape hatch. With domain and optional method, returns the pinned Chrome protocol schema for page.cdp."
-            : "Reference for the computer program API, read from the live driver. With no arguments, lists every computer.<action> signature and the background input ladder. With tool, returns that action's full input and output schema, its description and Mako's notes.",
+        description: unified
+          ? "Reference for Local Control v2 bound handles, explicit observations, assertions and escape hatches. With domain and optional method, returns the pinned CDP schema."
+          : "Reference for the computer program API, read from the live driver. With no arguments, lists every computer.<action> signature and the background input ladder. With tool, returns that action's full input and output schema, its description and Mako's notes.",
         inputSchema: z.toJSONSchema(
           unified ? controlHelpInputSchema : COMPUTER_TOOL_INPUTS.help,
           {
-          io: "input",
+            io: "input",
           }
         ),
         annotations: {
@@ -2050,11 +2212,7 @@ export function createComputerToolsServer(
       {
         name: execTool,
         description: unified
-          ? `Run or resume provider-neutral control code. Pass {source} with trusted async JavaScript, or {cell} to resume a yielded program. Use control.targets, control.observe, control.act, control.wait and control.events; Mako owns route selection and returns a plan, receipt, observation and delta. The page helper provides exact page lifecycle, structured AX selection and typed CDP without bypassing host ownership. If pid/window_id or a page handle is already known, construct that exact target directly. A known sequence belongs in one program: observe once, act, then take the next ref from action.observation and act again. Use control.advanced only when neither the closed contract nor page helper expresses the task. Return when the next step needs model judgement. Results are never truncated: a value past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB is written whole to an artifact with a receipt. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit.
-
-checkpoint({objective?, location?, remember?: {key: value}, completed?: string[], pending?: string[]}) stores bounded task memory; remember is an object, not prose. recall() reads it.
-
-${JSON.stringify(await controlHelp())}`
+          ? `Run or resume Local Control v2: {source} with async JavaScript or {cell} to collect a yielded run. Use bound window/tab handles, explicit observe/expect, state for cross-cell handles, return/console.log for text and emitImage for screenshots. Read mako_control_help once for API signatures. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit; output past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB spills whole to artifacts. No actions are replayed.`
           : `Run or resume a computer control program: pass {source} with trusted async JavaScript, or {cell} when a program yields after ten seconds and continues. Read a window with view(), take and verify a step with act(), write a field with fill(), press Enter with submit(), select a proven route with route(), and guard chained steps with expect() and until(); state and bounded checkpoint/recall task memory survive cells. Await every action and return only what you need to decide. Nothing fronts the user's application without foreground: true on the call. Results are never truncated: a value past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB is written to a file and described. ${PROGRAM_TIME_LIMIT_MS / 1000}-second hard limit; every action keeps Mako's session, snapshot, path, foreground and preview checks.
 
 checkpoint({objective?, location?, remember?: {key: value}, completed?: string[], pending?: string[]}) stores bounded task memory; remember is an object, not prose. recall() reads it.
@@ -2089,7 +2247,9 @@ ${await reference()}`,
           }
         }
         case execTool: {
-          const input = COMPUTER_TOOL_INPUTS.exec.parse(request.params.arguments)
+          const input = COMPUTER_TOOL_INPUTS.exec.parse(
+            request.params.arguments
+          )
           const active = await program()
           return {
             content:
@@ -2105,12 +2265,16 @@ ${await reference()}`,
       }
     } catch (error) {
       observations.submit({
-        operation: request.params.name.replace(/^mako_(?:computer|control)_/, ""),
+        operation: request.params.name.replace(
+          /^mako_(?:computer|control)_/,
+          ""
+        ),
         target: "Selected application",
         status: "error",
       })
       const detail = {
-        code: "computer-control-error",
+        code: controlFaultData(error)?.code ?? "computer-control-error",
+        outcome: controlFaultData(error)?.outcome ?? "unknown",
         message:
           error instanceof z.ZodError
             ? `Invalid arguments for ${request.params.name}. ${z.prettifyError(error).replace(/\s+/g, " ").trim()}`

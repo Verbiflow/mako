@@ -160,12 +160,21 @@ export async function codexAppStart(
     items: new Map(),
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
-    agents: new CodexAgents(),
+    agents: new CodexAgents({
+      read: async (threadId) => {
+        const result = await rpcRequest(live, "thread/turns/list", {
+          threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded",
+        })
+        return result.data[0] ?? null
+      },
+      publish: (agent) => engine.emitAgent(live, agent),
+    }),
     protocol: {
       actionResult: (actionId, result) => emit({ type: "live-action-result", id: live.id, actionId, result }),
       handleFatal: (message) => protocolFatal(live, message),
       updateState: (patch) => updateState(live, patch),
       emitUpdate: (update) => emitUpdate(live, update),
+      observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
       observeAgents: (item, replay) => {
         for (const agent of live.agents.project(item, replay))
           engine.emitAgent(live, agent)
@@ -197,6 +206,8 @@ export async function codexAppStart(
     ])
     clearStartupTimer(live)
     live.threadId = response.thread.id
+    if (options.resume === response.thread.id && !options.fork)
+      live.agents.restore(options.observedAgents ?? [])
     if (response.thread.cwd !== undefined) live.cwd = response.thread.cwd
     const replayUpdates: LiveUpdate[] = []
     live.replayUpdates = replayUpdates
@@ -494,6 +505,7 @@ function failLive(live: Live, message: string): void {
 function disposeLive(live: Live, error: Error): void {
   if (live.exited) return
   live.exited = true
+  live.agents.dispose()
   clearStartupTimer(live)
   for (const pending of live.pending.values()) {
     clearTimeout(pending.timer)

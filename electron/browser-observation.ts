@@ -32,6 +32,53 @@ export const AccessibilityNodeSchema = z.object({
     .optional(),
 })
 type AccessibilityNode = z.infer<typeof AccessibilityNodeSchema>
+
+/** Filter a fresh synchronous snapshot when background rendering is throttled. */
+export function scopeAccessibilityNodes(
+  nodes: AccessibilityNode[],
+  scope: {
+    within: Array<{ role: string; name: string }>
+    match?: { role: string; name: string }
+  }
+): AccessibilityNode[] {
+  let selected = nodes
+  const children = new Map<string, AccessibilityNode[]>()
+  for (const node of nodes)
+    if (node.parentId) {
+      const siblings = children.get(node.parentId) ?? []
+      siblings.push(node)
+      children.set(node.parentId, siblings)
+    }
+  for (const container of scope.within) {
+    const matches = selected.filter(
+      (node) =>
+        !node.ignored &&
+        node.role?.value === container.role &&
+        (node.name?.value ?? "") === container.name
+    )
+    if (matches.length !== 1)
+      throw new Error(
+        `Scope requires one ${container.role} ${JSON.stringify(container.name)}; found ${matches.length}. Observe and disambiguate the container.`
+      )
+    const descendants = new Set<string>()
+    const pending = [...(children.get(matches[0]!.nodeId) ?? [])]
+    while (pending.length) {
+      const node = pending.pop()!
+      if (descendants.has(node.nodeId)) continue
+      descendants.add(node.nodeId)
+      pending.push(...(children.get(node.nodeId) ?? []))
+    }
+    selected = selected.filter((node) => descendants.has(node.nodeId))
+  }
+  if (scope.match)
+    selected = selected.filter(
+      (node) =>
+        !node.ignored &&
+        node.role?.value === scope.match!.role &&
+        (node.name?.value ?? "") === scope.match!.name
+    )
+  return selected
+}
 const ObservationInfoSchema = z.object({
   targetInfo: z.object({
     targetId: z.string(),
@@ -84,7 +131,7 @@ const WRAPPER_ROLES = new Set([
   "presentation",
   "GenericContainer",
 ])
-/** Accessibility properties worth carrying; a false or empty value is omitted. */
+/** Accessibility states retain false and empty values as assertion evidence. */
 const STATE_PROPERTIES = [
   "checked",
   "disabled",
@@ -133,6 +180,7 @@ export function browserObservation(input: {
   maxNodes: number
   offset?: number
   query?: string
+  exactValues?: boolean
   interactiveOnly?: boolean
   viewport?: ObservationViewport
 }) {
@@ -183,7 +231,27 @@ export function browserObservation(input: {
   const depths = new Map<string, number>()
   const query = input.query?.trim().toLowerCase() || undefined
   const candidates: Array<{ node: AccessibilityNode; row: JsonObject }> = []
+  // CDP may return breadth-first rows. Emit depth-first rows so a container's
+  // descendants remain together, including through ignored wrapper nodes.
+  const byId = new Map(input.nodes.map((node) => [node.nodeId, node]))
+  const children = new Map<string, AccessibilityNode[]>()
+  const roots: AccessibilityNode[] = []
   for (const node of input.nodes) {
+    if (node.parentId && byId.has(node.parentId)) {
+      const siblings = children.get(node.parentId) ?? []
+      siblings.push(node)
+      children.set(node.parentId, siblings)
+    } else roots.push(node)
+  }
+  const pending = roots.reverse()
+  const visited = new Set<string>()
+  while (pending.length) {
+    const node = pending.pop()!
+    if (visited.has(node.nodeId)) continue
+    visited.add(node.nodeId)
+    const descendants = children.get(node.nodeId) ?? []
+    for (let index = descendants.length - 1; index >= 0; index--)
+      pending.push(descendants[index]!)
     const depth = node.parentId ? (depths.get(node.parentId) ?? 0) + 1 : 0
     depths.set(node.nodeId, depth)
     if (node.ignored) continue
@@ -211,11 +279,14 @@ export function browserObservation(input: {
     const row: JsonObject = { depth, role: text(role, 100) }
     const trimmedName = text(name, 500)
     if (trimmedName !== null && trimmedName !== "") row.name = trimmedName
-    const trimmedValue = text(value, 1000)
-    if (trimmedValue !== null && trimmedValue !== "") row.value = trimmedValue
+    const trimmedValue = text(
+      value,
+      input.exactValues ? OBSERVATION_BUDGET_BYTES : 1000
+    )
+    if (trimmedValue !== null) row.value = trimmedValue
     for (const state of STATE_PROPERTIES) {
       const raw = properties.get(state)
-      if (raw === undefined || raw === "false" || raw === "") continue
+      if (raw === undefined) continue
       if (state === "level") {
         const level = Number(raw)
         if (Number.isFinite(level)) row.level = level

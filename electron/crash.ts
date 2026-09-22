@@ -1,4 +1,5 @@
-import { app } from "electron"
+import { app, crashReporter } from "electron"
+import { randomUUID } from "node:crypto"
 import { hostError, hostLogPath } from "./host-log.js"
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -80,6 +81,9 @@ const KEEP = 40
  */
 const TRAIL = 40
 const trail: string[] = []
+let reportDirectory: string | undefined
+let reportSource: string | undefined
+let installed = false
 
 export function breadcrumb(note: string) {
   trail.push(`${new Date().toISOString()} ${note}`)
@@ -87,7 +91,7 @@ export function breadcrumb(note: string) {
 }
 
 export function crashesDir() {
-  return join(app.getPath("userData"), "crashes")
+  return reportDirectory ?? join(app.getPath("userData"), "crashes")
 }
 
 function normalizeCause(cause: unknown): CrashDescription {
@@ -111,10 +115,10 @@ function normalizeCause(cause: unknown): CrashDescription {
   return { message: String(cause) }
 }
 
-/** Sortable and unique enough without pulling in a uuid for a filename. */
-let counter = 0
+/** Sortable across processes, without collisions between host and client. */
 function nextId() {
-  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${(counter += 1)}`
+  // Hosts and desktop clients write into the same report directory.
+  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`
 }
 
 export function record(kind: CrashKind, cause: unknown, source?: string): CrashReport {
@@ -125,7 +129,7 @@ export function record(kind: CrashKind, cause: unknown, source?: string): CrashR
     at: new Date().toISOString(),
     message,
     stack,
-    source,
+    source: [reportSource, source].filter(Boolean).join(" · ") || undefined,
     app: {
       version: app.getVersion(),
       electron: process.versions.electron ?? "",
@@ -330,7 +334,21 @@ export function clearCrashes() {
  * which is the exact failure this file exists to end. A caught exception is
  * recorded and the app carries on — degraded, but present and able to say so.
  */
-export function installCrashReporting() {
+export function installCrashReporting(options: { directory?: string; source?: string } = {}) {
+  if (installed) return
+  installed = true
+  reportDirectory = options.directory
+  reportSource = options.source
+  // Native failures cannot run a JavaScript exception handler. Keep their dumps
+  // on this machine, including when the desktop was launched with no terminal.
+  try {
+    const dumps = join(app.getPath("userData"), "Crashpad")
+    mkdirSync(dumps, { recursive: true })
+    app.setPath("crashDumps", dumps)
+    crashReporter.start({ uploadToServer: false })
+  } catch (error) {
+    record("main-uncaught", error, "native crash reporter startup")
+  }
   process.on("uncaughtException", (error) => {
     record("main-uncaught", error)
   })
@@ -338,6 +356,7 @@ export function installCrashReporting() {
     record("main-rejection", reason)
   })
   app.on("child-process-gone", (_event, details) => {
-    record("child-gone", new Error(`${details.type} exited: ${details.reason}`))
+    if (details.reason === "clean-exit") return
+    record("child-gone", new Error(`${details.type} exited: ${details.reason} (exit ${details.exitCode})`))
   })
 }

@@ -1,3 +1,4 @@
+import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
 import {
   codexPresentation,
   codexPrompt,
@@ -135,8 +136,11 @@ function handleNotification(
     notification.threadId &&
     context.threadId &&
     notification.threadId !== context.threadId
-  )
+  ) {
+    if (notification.method === "turn/started" || notification.method === "turn/completed")
+      context.protocol.observeAgentTurn?.(notification.threadId)
     return
+  }
   switch (notification.method) {
     case "turn/started":
       if (context.compaction && !context.compaction.turnId)
@@ -512,6 +516,12 @@ export function rpcRequest(
   params: RpcParams[RpcMethod]
 ): Promise<RpcResults[RpcMethod]> {
   switch (method) {
+    case "thread/turns/list":
+      return beginRpcRequest(context, method, params, (value) => {
+        const parsed = CodexAgentRunsSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid child turn status response" }
+      })
     case "initialize":
       return beginRpcRequest(context, method, params, parseObjectResult)
     case "thread/start":

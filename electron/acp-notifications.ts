@@ -1,4 +1,3 @@
-import { z } from "zod"
 import { acpObservedSettings } from "./acp-config.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { AttachmentContent, ToolDetail } from "@mako/sessions"
@@ -29,7 +28,8 @@ export function forward<LiveSession extends { id: string }>(
   notification: SessionNotification,
   emit: (event: LiveDriverEvent) => void,
   updateState: (live: LiveSession, patch: Partial<LiveSessionState>) => void,
-  currentSettings?: SessionSettings
+  currentSettings?: SessionSettings,
+  toolName?: string
 ): void {
   const raw = notification.update
   let update: LiveUpdate
@@ -59,17 +59,11 @@ export function forward<LiveSession extends { id: string }>(
           : { kind: "attachment", attachment: contentAttachment(raw.content) }
       break
     case "tool_call": {
-      // Devin names the underlying tool in metadata; the ACP kind is only
-      // what it does. The name is what the transcript keys on.
-      const inference = InferenceMetaSchema.safeParse(raw._meta)
       update = {
         kind: "tool",
         id: raw.toolCallId,
         title: raw.title ?? "tool",
-        toolKind:
-          (inference.success
-            ? inference.data["cognition.ai/inferenceToolName"]
-            : undefined) ?? raw.kind,
+        toolKind: toolName ?? raw.kind,
         status: raw.status ?? "pending",
         ...toolContent(raw.content),
         details: withLocations(
@@ -231,8 +225,3 @@ function withLocations(
   }))
   return [...(details ?? []), ...links]
 }
-
-/** Devin's metadata names the tool the model actually called. */
-const InferenceMetaSchema = z.object({
-  "cognition.ai/inferenceToolName": z.string().trim().min(1).optional(),
-})

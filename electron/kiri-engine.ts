@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { KiriClient, KiriRepository, ModelCall } from "@kiri/client"
+import { hostLog } from "./host-log.js"
 
 type ModelHandler = (call: ModelCall, signal: AbortSignal) => Promise<string>
 interface RepositoryLease { value: Promise<KiriRepository | null>; transport: Promise<KiriClient>; users: number }
@@ -68,6 +69,7 @@ export async function withKiriRepository<T>(cwd: string, action: (repo: KiriRepo
   } catch (error) {
     if (!opened && repositories.get(cwd) === entry) repositories.delete(cwd)
     const { KiriError } = await import("@kiri/client")
+    if (error instanceof KiriError) hostLog("git", "Kiri request failed", { cwd, code: error.code, message: error.message })
     if (error instanceof KiriError && (error.code === "disconnected" || error.code === "outcome_unknown") && connection === entry.transport) {
       connection = null
       repositories.clear()

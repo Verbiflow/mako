@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { stat } from "node:fs/promises"
-import { resumable, type ProviderBinding, type ResumeVerdict } from "./contracts/conversation-control.js"
+import { compareNativeCheckpoint, resumable, type ProviderBinding, type ResumeVerdict } from "./contracts/conversation-control.js"
 import type { ProviderProcessProbe } from "./providers/process-probe.js"
 
 /** Streaming fingerprints cover the entire native record without retaining it in memory. */
@@ -35,8 +35,10 @@ export async function resumeVerdict(
   binding: ProviderBinding,
   probe: ProviderProcessProbe | undefined
 ): Promise<ResumeVerdict> {
-  if (!binding.nativeId || !binding.path || !binding.checkpoint)
-    return { kind: "unavailable", reason: "The saved binding has no native record to resume from." }
+  if (!binding.nativeId)
+    return { kind: "unavailable", reason: "The saved binding has no native session ID." }
+  if (!binding.path)
+    return { kind: "unavailable", reason: "The native session source has not been located." }
   if (!probe)
     return { kind: "unavailable", reason: "Whether another process has this session open cannot be checked for this provider." }
   const activity = await probe
@@ -54,7 +56,7 @@ export async function resumeVerdict(
   const current = await nativeCheckpoint(binding.path)
   if (current === undefined)
     return { kind: "unavailable", reason: "The native record is missing or changed while it was being read." }
-  return { kind: "resumable", record: current === binding.checkpoint ? "same" : "moved" }
+  return { kind: "resumable", record: compareNativeCheckpoint(binding.checkpoint, current) }
 }
 
 /** The strict form: unowned and unchanged since the binding's checkpoint. */

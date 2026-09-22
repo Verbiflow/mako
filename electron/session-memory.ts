@@ -64,9 +64,30 @@ export interface SessionHold {
   since: number
 }
 
+export interface ConversationEndpoint {
+  conversationId: string
+  socket: string
+}
+
+export interface ConversationRoute extends ConversationEndpoint {
+  provider: string
+  nativeId: string
+}
+
+const RouteSchema = z.object({
+  conversationId: z.string(), provider: z.string(), nativeId: z.string(), socket: z.string(),
+})
+
+const RuntimeLaunchSchema = z.object({
+  dataRoot: z.string(), executable: z.string(), args: z.array(z.string()), cwd: z.string(), profile: z.string(),
+})
+export type RuntimeLaunch = z.infer<typeof RuntimeLaunchSchema>
+
 export interface SessionMemoryHost {
   pid: number
   startedAt: number
+  socket?: string
+  launch?: RuntimeLaunch
   /** How another host names this one in a refusal: "the installed Mako app". */
   label: string
 }
@@ -135,6 +156,11 @@ export class SessionMemory {
     this.db = new DatabaseSync(path)
     try {
       this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
+      CREATE TABLE IF NOT EXISTS runtime_hosts (socket TEXT PRIMARY KEY, launch TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_journals (conversation_id TEXT PRIMARY KEY, socket TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_routes (
+        conversation_id TEXT PRIMARY KEY, provider TEXT NOT NULL, native_id TEXT NOT NULL, socket TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX IF NOT EXISTS conversation_routes_native ON conversation_routes(provider, native_id);
       CREATE TABLE IF NOT EXISTS memory (
         provider TEXT NOT NULL, native_id TEXT NOT NULL,
         settings TEXT, mode_id TEXT, updated_at INTEGER NOT NULL,
@@ -144,6 +170,15 @@ export class SessionMemory {
         host_pid INTEGER NOT NULL, host_started_at INTEGER NOT NULL, host_label TEXT NOT NULL,
         conversation_id TEXT NOT NULL, since INTEGER NOT NULL, heartbeat_at INTEGER NOT NULL,
         PRIMARY KEY (provider, native_id));`)
+      // Hosts share this ledger across builds. Lock before inspecting so two
+      // hosts cannot both try to add the column during an upgrade.
+      this.db.exec("BEGIN IMMEDIATE")
+      if (!this.db.prepare("PRAGMA table_info(conversation_routes)").all().some((column) => column.name === "updated_at"))
+        this.db.exec("ALTER TABLE conversation_routes ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
+      this.db.exec("COMMIT")
+      if (host.socket && host.launch)
+        this.db.prepare("INSERT INTO runtime_hosts (socket, launch) VALUES (?, ?) ON CONFLICT(socket) DO UPDATE SET launch=excluded.launch")
+          .run(host.socket, JSON.stringify(host.launch))
     } catch (error) {
       this.db.close()
       throw error
@@ -218,6 +253,11 @@ export class SessionMemory {
   }
 
   /** Another host's live hold on this session, or null when none, ours, or stale. */
+  owns(provider: string, nativeId: string, conversationId: string): boolean {
+    const row = this.readHold(provider, nativeId)
+    return row !== null && this.ownHold(row) && row.conversation_id === conversationId
+  }
+
   heldBy(provider: string, nativeId: string): SessionHold | null {
     const row = this.readHold(provider, nativeId)
     if (!row) return null
@@ -250,6 +290,10 @@ export class SessionMemory {
            ON CONFLICT (provider, native_id) DO UPDATE SET host_pid = excluded.host_pid, host_started_at = excluded.host_started_at, host_label = excluded.host_label, conversation_id = excluded.conversation_id, since = excluded.since, heartbeat_at = excluded.heartbeat_at`
         )
         .run(provider, nativeId, this.host.pid, this.host.startedAt, this.host.label, conversationId, since, at)
+      if (this.host.socket)
+        this.db.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
+          .run(conversationId, provider, nativeId, this.host.socket, at)
       this.db.exec("COMMIT")
     } catch (error) {
       this.db.exec("ROLLBACK")
@@ -273,6 +317,61 @@ export class SessionMemory {
       this.db
         .prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ? AND conversation_id = ?")
         .run(provider, nativeId, this.host.pid, this.host.startedAt, conversationId)
+  }
+
+  runtimeLaunch(socket: string): RuntimeLaunch | null {
+    const row = z.object({ launch: z.string() }).safeParse(this.db.prepare("SELECT launch FROM runtime_hosts WHERE socket = ?").get(socket))
+    if (!row.success) return null
+    try { return RuntimeLaunchSchema.parse(JSON.parse(row.data.launch)) }
+    catch { return null }
+  }
+
+  /** An older host can be reached through its existing private runtime socket. */
+  rememberRoute(route: ConversationRoute, expected: SessionHold): void {
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      const hold = this.heldBy(route.provider, route.nativeId)
+      if (!hold || hold.conversationId !== route.conversationId || hold.hostPid !== expected.hostPid || hold.since !== expected.since)
+        throw new Error("The session owner changed. Reopen this thread to continue.")
+      this.db.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
+        .run(route.conversationId, route.provider, route.nativeId, route.socket, this.now())
+      this.db.exec("COMMIT")
+    } catch (error) {
+      this.db.exec("ROLLBACK")
+      throw error
+    }
+  }
+
+  /** Journal location survives hibernation and host restart; a route grants no write ownership. */
+  rememberJournal(conversationId: string, socket = this.host.socket): void {
+    if (!socket) return
+    this.db.prepare(`INSERT INTO conversation_journals (conversation_id, socket) VALUES (?, ?)
+      ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket`).run(conversationId, socket)
+  }
+
+  routeForConversation(conversationId: string): ConversationEndpoint | null {
+    const journal = z.object({ conversationId: z.string(), socket: z.string() }).safeParse(
+      this.db.prepare("SELECT conversation_id AS conversationId, socket FROM conversation_journals WHERE conversation_id = ?").get(conversationId))
+    if (journal.success) return journal.data.socket !== this.host.socket ? journal.data : null
+    const row = this.db.prepare(`SELECT conversation_id AS conversationId, provider, native_id AS nativeId, socket
+      FROM conversation_routes WHERE conversation_id = ?`).get(conversationId)
+    const parsed = RouteSchema.safeParse(row)
+    return parsed.success && parsed.data.socket !== this.host.socket ? parsed.data : null
+  }
+
+  routeForSession(provider: string, nativeId: string): ConversationRoute | null {
+    const hold = this.readHold(provider, nativeId)
+    if (hold && this.holdLive(hold)) {
+      const row = this.db.prepare(`SELECT conversation_id AS conversationId, provider, native_id AS nativeId, socket
+        FROM conversation_routes WHERE conversation_id = ?`).get(hold.conversation_id)
+      const parsed = RouteSchema.safeParse(row)
+      return parsed.success && parsed.data.socket !== this.host.socket ? parsed.data : null
+    }
+    const row = this.db.prepare(`SELECT conversation_id AS conversationId, provider, native_id AS nativeId, socket
+      FROM conversation_routes WHERE provider = ? AND native_id = ? ORDER BY updated_at DESC LIMIT 1`).get(provider, nativeId)
+    const parsed = RouteSchema.safeParse(row)
+    return parsed.success && parsed.data.socket !== this.host.socket ? parsed.data : null
   }
 
   /** Every hold this host has: what `stop()` lets go of. */

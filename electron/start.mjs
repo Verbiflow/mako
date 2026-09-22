@@ -16,6 +16,7 @@ import { manualDevUpdates } from "./dev-updates.mjs"
 import { buildPreload } from "../scripts/build-preload.mjs"
 import { createHash } from "node:crypto"
 import { publishDevRendererRegistration } from "../dist-electron/dev-renderer-registration.js"
+import { replaceDevHost } from "./dev-host-replacement.mjs"
 
 // ORCA: Electron-based hosts leak this. If it stays set, Electron boots as Node
 // and `require("electron")` is the npm stub instead of the real API.
@@ -44,7 +45,8 @@ if (!shared && env.MAKO_HOST_ONLY === "1") {
 const profile = env.MAKO_PROFILE || (process.argv.includes("--sandbox") ? `sandbox-${createHash("sha256").update(root).digest("hex").slice(0, 8)}` : shared ? undefined : "dev")
 const appData = process.platform === "darwin" ? join(homedir(), "Library", "Application Support") : process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming") : process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
 const dataRoot = runtimeDataRoot(appData, { ...env, MAKO_PROFILE: profile })
-let runtime = await ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...env, MAKO_PROFILE: profile } })
+const startRuntime = () => ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...env, MAKO_PROFILE: profile } })
+let runtime = await startRuntime()
 const socket = runtime.socket
 // The host survives the launcher. Method names alone cannot detect a changed
 // implementation, so compare executable content before serving the renderer.
@@ -54,19 +56,32 @@ const missingOn = (info) =>
 const needsRestart = (info) => missingOn(info).length > 0 ||
   (expectedBuild !== undefined && info.devBuild !== expectedBuild)
 if (needsRestart(runtime.info)) {
-  console.warn(`[mako-client] Host pid ${runtime.info.pid} has an older build. Restarting through Mako's lifecycle; running work is allowed to finish.`)
-  await invokeRuntime(socket, crypto.randomUUID(), "mako:relaunch", [])
-  const deadline = Date.now() + 60_000
-  for (;;) {
-    const probe = await settleRuntime(socket).catch(() => null)
-    if (probe?.state === "ready" && !needsRestart(probe.info)) {
-      runtime = { ...runtime, info: probe.info }
-      break
+  if (!shared) {
+    console.warn(`[mako-client] Replacing host ${runtime.info.pid} with the build from ${root}. Running work is allowed to finish.`)
+    const replacement = await replaceDevHost({
+      original: runtime.info,
+      probe: () => settleRuntime(socket),
+      command: (command) => invokeRuntime(socket, crypto.randomUUID(), "mako:lifecycle-command", [command]),
+      start: startRuntime,
+      compatible: (info) => !needsRestart(info),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    })
+    runtime = { ...runtime, ...replacement }
+  } else {
+    console.warn(`[mako-client] Host pid ${runtime.info.pid} has an older build. Restarting through Mako's lifecycle; running work is allowed to finish.`)
+    await invokeRuntime(socket, crypto.randomUUID(), "mako:relaunch", [])
+    const deadline = Date.now() + 60_000
+    for (;;) {
+      const probe = await settleRuntime(socket).catch(() => null)
+      if (probe?.state === "ready" && !needsRestart(probe.info)) {
+        runtime = { ...runtime, info: probe.info }
+        break
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("The previous host has not finished restarting. No new web client was started against the old build. Let its running work finish, then run this command again.")
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250))
     }
-    if (Date.now() >= deadline) {
-      throw new Error("The previous host has not finished restarting. No new web client was started against the old build. Let its running work finish, then run this command again.")
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250))
   }
 }
 // A profile host stops itself once nothing has used it for a while. This
