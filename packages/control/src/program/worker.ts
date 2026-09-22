@@ -1,12 +1,17 @@
+import {
+  ControlFault,
+  ControlFaultSchema,
+  controlFaultData,
+} from "../control/fault.js"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parentPort } from "node:worker_threads"
 import { z } from "zod"
 import type { JsonValue } from "../json.js"
-import { pageHelpers } from "../browser/steps.js"
+import { AsyncLocalStorage } from "node:async_hooks"
+import { controlClient } from "../control/client.js"
 import { artifactFileName } from "./artifacts.js"
 import { computerHelpers, type ComputerHelpers } from "../computer/steps.js"
-import { controlLineRef } from "../control/projection.js"
 import { checkpointTask, recallTask } from "./task-state.js"
 
 const identifier = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/)
@@ -25,6 +30,7 @@ const incoming = z.discriminatedUnion("kind", [
     id: z.number(),
     value: z.json().optional(),
     error: z.string().optional(),
+    fault: ControlFaultSchema.optional(),
   }),
 ])
 const imageValue = z.object({
@@ -84,68 +90,82 @@ function saveArtifact(directory: string, name: string, value: JsonValue) {
   return { path, bytes: body.byteLength }
 }
 
+interface RunContext {
+  runId: number
+  active: boolean
+  requests: Set<number>
+}
+const runs = new AsyncLocalStorage<RunContext>()
+const call = (
+  namespace: string,
+  action: string,
+  args: Record<string, JsonValue> = {}
+) => {
+  const context = runs.getStore()
+  if (!context?.active)
+    throw new Error(
+      "This script has already finished; late control actions are refused"
+    )
+  return new Promise<JsonValue>((resolve, reject) => {
+    const id = ++sequence
+    context.requests.add(id)
+    pending.set(id, {
+      resolve: (value) => {
+        context.requests.delete(id)
+        resolve(value)
+      },
+      reject: (error) => {
+        context.requests.delete(id)
+        reject(error)
+      },
+    })
+    port.postMessage({
+      kind: "call",
+      runId: context.runId,
+      id,
+      namespace,
+      command: { ...args, action },
+    })
+  })
+}
+const client = controlClient((action, args) => call("control", action, args))
+
 port.on("message", (raw) => {
   const message = incoming.parse(raw)
   if (message.kind === "reply") {
     const request = pending.get(message.id)
     pending.delete(message.id)
-    if (message.error) request?.reject(new Error(message.error))
+    if (message.error)
+      request?.reject(
+        message.fault
+          ? new ControlFault(
+              message.fault.code,
+              message.error,
+              message.fault.outcome
+            )
+          : new Error(message.error)
+      )
     else request?.resolve(message.value ?? null)
     return
   }
 
   const runId = message.runId
-  let active = true
-  const requests = new Set<number>()
+  const context: RunContext = { runId, active: true, requests: new Set() }
   const apiFor = (namespace: string, actions: readonly string[]) =>
     Object.fromEntries(
       actions.map((action) => [
         action,
-        (args: Record<string, JsonValue> = {}) => {
-          if (!active)
-            throw new Error(
-              "This script has already finished; late control actions are refused"
-            )
-          return new Promise<JsonValue>((resolve, reject) => {
-            const id = ++sequence
-            requests.add(id)
-            pending.set(id, {
-              resolve: (value) => {
-                requests.delete(id)
-                resolve(value)
-              },
-              reject: (error) => {
-                requests.delete(id)
-                reject(error)
-              },
-            })
-            port.postMessage({
-              kind: "call",
-              runId,
-              id,
-              namespace,
-              command: { ...args, action },
-            })
-          })
-        },
+        (args: Record<string, JsonValue> = {}) => call(namespace, action, args),
       ])
     )
   const api = apiFor(message.namespace, message.actions)
-  const controlApi =
-    message.namespace === "control"
-      ? Object.assign(api, { ref: controlLineRef })
-      : api
-  const page =
-    message.namespace === "control"
-      ? pageHelpers((action, args) =>
-          controlApi.advanced({ backend: "page", name: action, args })
-        )
-      : undefined
+  const controlApi = message.namespace === "control" ? client : api
   const extras = Object.entries(message.extra).filter(
     ([name]) => name !== message.namespace
   )
   const output = (kind: "output" | "image", value: JsonValue) => {
-    if (active) port.postMessage({ kind, runId, value: jsonSafe(value) })
+    if (context.active)
+      port.postMessage({ kind, runId, value: jsonSafe(value) })
   }
   const artifacts = {
     save: (name: string, value: JsonValue) =>
@@ -158,57 +178,58 @@ port.on("message", (raw) => {
     message.namespace === "computer" ? computerHelpers(api, state) : {}
 
   // Trusted local JavaScript. Worker isolation bounds scheduling, not OS authority.
-  void Promise.resolve()
-    .then(() => {
-      const run = new Function(
-        message.namespace,
-        ...extras.map(([name]) => name),
-        "page",
-        "state",
-        "console",
-        "emitImage",
-        "artifacts",
-        "checkpoint",
-        "recall",
-        ...Object.keys(helpers),
-        `return (async () => {${message.source}\n})()`
-      )
-      return run(
-        controlApi,
-        ...extras.map(([name, actions]) => apiFor(name, actions)),
-        page,
-        state,
-        {
-          log: (...values: JsonValue[]) =>
-            output("output", values.length === 1 ? values[0] : values),
-        },
-        (value: JsonValue) => output("image", value),
-        artifacts,
-        (value: Record<string, JsonValue>) =>
-          checkpointTask(state, z.record(z.string(), z.json()).parse(value)),
-        () => recallTask(state),
-        ...Object.values(helpers)
-      )
-    })
-    .then((value: JsonValue | undefined) => {
-      if (requests.size)
-        throw new Error(
-          "Script returned with unawaited control actions. Their outcome may be unknown; observe before retrying."
+  void runs.run(context, () =>
+    Promise.resolve()
+      .then(() => {
+        const run = new Function(
+          message.namespace,
+          ...extras.map(([name]) => name),
+          "state",
+          "console",
+          "emitImage",
+          "artifacts",
+          "checkpoint",
+          "recall",
+          ...Object.keys(helpers),
+          `return (async () => {${message.source}\n})()`
         )
-      return jsonSafe(value)
-    })
-    .then(
-      (value) => {
-        active = false
-        port.postMessage({ kind: "done", runId, value })
-      },
-      (error) => {
-        active = false
-        port.postMessage({
-          kind: "error",
-          runId,
-          message: error instanceof Error ? error.message : String(error),
-        })
-      }
-    )
+        return run(
+          controlApi,
+          ...extras.map(([name, actions]) => apiFor(name, actions)),
+          state,
+          {
+            log: (...values: JsonValue[]) =>
+              output("output", values.length === 1 ? values[0] : values),
+          },
+          (value: JsonValue) => output("image", value),
+          artifacts,
+          (value: Record<string, JsonValue>) =>
+            checkpointTask(state, z.record(z.string(), z.json()).parse(value)),
+          () => recallTask(state),
+          ...Object.values(helpers)
+        )
+      })
+      .then((value: JsonValue | undefined) => {
+        if (context.requests.size)
+          throw new Error(
+            "Script returned with unawaited control actions. Their outcome may be unknown; observe before retrying."
+          )
+        return jsonSafe(value)
+      })
+      .then(
+        (value) => {
+          context.active = false
+          port.postMessage({ kind: "done", runId, value })
+        },
+        (error) => {
+          context.active = false
+          port.postMessage({
+            kind: "error",
+            runId,
+            message: error instanceof Error ? error.message : String(error),
+            fault: controlFaultData(error),
+          })
+        }
+      )
+  )
 })

@@ -1,3 +1,8 @@
+import {
+  ControlFault,
+  ControlFaultSchema,
+  controlFaultData,
+} from "../control/fault.js"
 import { existsSync } from "node:fs"
 import { Worker } from "node:worker_threads"
 import { z } from "zod"
@@ -25,6 +30,7 @@ const messageSchema = z.discriminatedUnion("kind", [
     runId: z.number(),
     kind: z.literal("error"),
     message: z.string(),
+    fault: ControlFaultSchema.optional(),
   }),
 ])
 
@@ -343,6 +349,7 @@ export class ControlProgramRuntime {
                   worker.postMessage({
                     kind: "reply",
                     id: value.id,
+                    fault: controlFaultData(error),
                     error:
                       error instanceof Error ? error.message : String(error),
                   })
@@ -361,7 +368,16 @@ export class ControlProgramRuntime {
             )
           }
         } else if (value.kind === "error")
-          finish(new Error(value.message), true)
+          finish(
+            value.fault
+              ? new ControlFault(
+                  value.fault.code,
+                  value.message,
+                  value.fault.outcome
+                )
+              : new Error(value.message),
+            true
+          )
         else {
           if (value.value !== null) appendText("result", value.value)
           finish()
