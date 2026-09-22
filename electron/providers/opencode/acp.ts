@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { OpenCodeAgents } from "./agents.js"
 import type { ProviderAcpSource } from "../acp-source.js"
 import type { AccessTier } from "../../contracts/access.js"
 import {
@@ -34,6 +35,11 @@ function openCodePermission(access: AccessTier): string | undefined {
 
 export const openCodeAcpSource: ProviderAcpSource = {
   provider: "opencode",
+  async observeAgents(input) {
+    const observer = new OpenCodeAgents(input)
+    await observer.ready
+    return observer
+  },
   compaction: { kind: "supported", command: "/compact", completion: { kind: "response" } },
   canResume: true,
   launchOptionIds: ["effort"],
