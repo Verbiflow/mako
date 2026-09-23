@@ -20,7 +20,14 @@ export interface RuntimeUpdateSource {
   /** Require the verified release, including for package-manager updates. */
   pinVersion?: boolean
   /** Resolve release policy from the version the host read, never from a filename. */
-  release?(version: string, binary: string, real: string): RuntimeRelease
+  release?(
+    version: string,
+    binary: string,
+    real: string,
+    env: NodeJS.ProcessEnv
+  ): RuntimeRelease
+  /** Provider updater subprocess dependencies, resolved in desktop environments too. */
+  updateEnvironment?(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 
   /** Resolve the binary the driver actually launches. */
   binary(env: NodeJS.ProcessEnv): string | null | Promise<string | null>

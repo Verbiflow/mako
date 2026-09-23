@@ -1,3 +1,4 @@
+import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
@@ -63,11 +64,13 @@ export interface ProviderLiveDriver extends ProviderCapability {
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   available(appPath: string): boolean
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
+  /** Resolving this call is not a receipt. Report native evidence through the attempt-scoped dispatch. */
   prompt(
     id: string,
     text: string,
     attachments: PromptAttachment[],
-    settings?: SessionSettings
+    settings: SessionSettings | undefined,
+    dispatch: PromptDispatch
   ): Promise<void>
   permission(
     id: string,
