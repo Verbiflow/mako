@@ -9,6 +9,14 @@ export const LiveActionInputSchema = z.discriminatedUnion("kind", [
     text: z.string().min(1).max(1_000_000),
     attachments: z.array(PromptAttachmentSchema).max(100),
   }),
+  z.object({
+    kind: z.literal("steer-queued"),
+    id: z.string().uuid(),
+    requestId: z.string().uuid(),
+    queuedRequestId: z.string().uuid(),
+    text: z.string().min(1).max(1_000_000),
+    attachments: z.array(PromptAttachmentSchema).max(100),
+  }),
   z.object({ kind: z.literal("compact"), id: z.string().uuid(), requestId: z.string().uuid().optional() }),
 ])
 export type LiveActionInput = z.infer<typeof LiveActionInputSchema>
@@ -23,6 +31,8 @@ export const LiveActionSchema = z.object({
   digest: z.string(),
   bindingId: z.string().uuid(),
   createdAt: z.number(),
+  /** Host-owned queue state restored only after an authoritative refusal. */
+  queueStatus: z.enum(["queued", "held"]).optional(),
   state: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("dispatching") }),
     z.object({ kind: z.literal("accepted") }),

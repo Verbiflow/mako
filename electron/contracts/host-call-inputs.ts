@@ -175,6 +175,22 @@ export const hostCallInputs = {
         ),
       }),
       z.object({
+        kind: z.literal("steer-queued"),
+        id: z.string(),
+        requestId: z.string(),
+        queuedRequestId: z.string(),
+        text: z.string(),
+        attachments: z.array(
+          z.object({
+            name: z.string(),
+            mimeType: z.string(),
+            size: z.number(),
+            data: z.string().optional(),
+            path: z.string().optional(),
+          })
+        ),
+      }),
+      z.object({
         kind: z.literal("compact"),
         id: z.string(),
         requestId: z.string().optional(),
