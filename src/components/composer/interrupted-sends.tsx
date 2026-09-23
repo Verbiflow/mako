@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { XIcon } from "lucide-react"
+import { Notice, NoticeAction } from "@/components/ui/notice"
 import type { RejectedDraft } from "@/state/drafts"
 import { takeInterruptedSend, useSendRecovery } from "@/state/send-recovery"
 
@@ -12,38 +13,34 @@ export function InterruptedSends({
   const [expanded, setExpanded] = useState(false)
   if (!drafts.length) return null
   return (
-    <section
-      aria-label="Interrupted sends"
-      className="mx-2 mb-2 rounded-md border border-hairline p-2"
+    <Notice
+      tone="caution"
+      label="Interrupted sends"
+      title="Send interrupted"
+      description="Delivery could not be confirmed. Check the conversation before sending again."
+      className="mx-2 mt-2"
     >
-      <p className="text-ui text-foreground">Send interrupted</p>
-      <p className="mt-1 text-label text-faint">
-        Delivery could not be confirmed. Check the conversation before sending
-        again.
-      </p>
-      <div className="max-h-40 overflow-auto">
+      <div className="-mx-1 max-h-40 overflow-auto">
         {drafts.slice(0, expanded ? 20 : 2).map((draft) => (
-          <div key={draft.id} className="mt-2 flex items-center gap-2">
+          <div key={draft.id} className="group/draft flex items-center gap-1">
             <button
               type="button"
-              className="pressable min-w-0 flex-1 rounded px-1 py-1 text-left text-ui text-muted-foreground hover:bg-fill-hover"
+              className="pressable flex min-w-0 flex-1 items-baseline gap-2 rounded-md px-1 py-1 text-left hover:bg-fill-hover"
               onClick={() => {
                 onRestore(draft)
                 takeInterruptedSend(draft.id)
               }}
             >
-              <span className="block truncate">
+              <span className="min-w-0 flex-1 truncate text-ui text-foreground/90">
                 {draft.text || "Attachments"}
               </span>
-              <span className="text-label text-faint">
-                Restore to current draft
-              </span>
+              <span className="shrink-0 text-label text-faint">Restore</span>
             </button>
             <button
               type="button"
               aria-label="Dismiss recovery copy"
               title="Dismiss recovery copy"
-              className="pressable grid size-6 shrink-0 place-items-center rounded text-faint hover:bg-fill-hover"
+              className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground"
               onClick={() => takeInterruptedSend(draft.id)}
             >
               <XIcon className="size-3.5" />
@@ -52,19 +49,17 @@ export function InterruptedSends({
         ))}
       </div>
       {drafts.length > 2 && !expanded ? (
-        <button
-          type="button"
-          className="pressable mt-2 text-label text-faint"
-          onClick={() => setExpanded(true)}
-        >
-          Show more recovery copies
-        </button>
+        <div className="-ml-2 mt-1">
+          <NoticeAction quiet onClick={() => setExpanded(true)}>
+            Show {drafts.length - 2} more
+          </NoticeAction>
+        </div>
       ) : null}
       {expanded && drafts.length > 20 ? (
-        <p className="mt-2 text-label text-faint">
+        <p className="mt-1 text-label text-faint">
           Restore or dismiss a copy to see the next one.
         </p>
       ) : null}
-    </section>
+    </Notice>
   )
 }

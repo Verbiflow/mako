@@ -47,7 +47,7 @@ export function ProviderConnectionNotice() {
     >
       <HarnessIcon harness={connection.provider} className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate">{working ? "Waiting for the browser…" : text}</span>
-      {connection.secureStorage ? (
+      {(connection.actions?.includes("sign-in-browser") ?? connection.secureStorage) ? (
         <button
           type="button"
           disabled={Boolean(busy)}

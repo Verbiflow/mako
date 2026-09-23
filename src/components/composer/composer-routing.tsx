@@ -1,8 +1,6 @@
 import { LiveComposerControls, NextSessionModePicker } from "./live-controls"
 import { useComposerSettings } from "./use-composer-settings"
-import { AgentPicker } from "@/components/composer/agent-picker"
-import { ForeignEffortPicker } from "@/components/composer/foreign-effort"
-import { ForeignModelPicker } from "@/components/composer/foreign-model"
+import { AgentModelPicker } from "@/components/composer/agent-model-picker"
 import { activeAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
 
@@ -24,9 +22,7 @@ export function ComposerRouting() {
 
   return (
     <>
-      <AgentPicker />
-      <ForeignModelPicker view={settings} />
-      <ForeignEffortPicker view={settings} />
+      <AgentModelPicker view={settings} />
       {liveOwnsComposer && !moving ? (
         <LiveComposerControls />
       ) : (
