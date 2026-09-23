@@ -29,18 +29,45 @@ export interface RuntimeRowView {
 /** How long a finished update is named in the row before it reads as merely current. */
 const RECENT_UPDATE_MS = 5 * 60_000
 
-export function runtimeRowView(info: HarnessUpdateInfo, now = Date.now()): RuntimeRowView {
+export function runtimeRowView(
+  info: HarnessUpdateInfo,
+  now = Date.now()
+): RuntimeRowView {
   const failed = info.result?.outcome === "failed" ? info.result : undefined
-  const note = failed ? `Update failed: ${failed.message ?? "the updater did not finish"}` : undefined
+  const note = failed
+    ? `Update failed: ${failed.message ?? "the updater did not finish"}`
+    : undefined
   if (info.phase === "updating")
-    return { version: info.installed ?? "…", detail: "Updating…", shimmer: false, tone: "muted" }
+    return {
+      version: info.installed ?? "…",
+      detail: "Updating…",
+      shimmer: false,
+      tone: "muted",
+    }
   if (!info.installed && info.phase === "checking")
     return { version: "…", detail: "Checking…", shimmer: true, tone: "faint" }
   if (info.error)
-    return { version: "—", detail: info.error, shimmer: false, tone: "negative", note }
+    return {
+      version: "—",
+      detail: info.error,
+      shimmer: false,
+      tone: "negative",
+      note,
+    }
   const version = info.installed ?? "—"
   if (info.latestError && !info.latest)
-    return { version, detail: "Latest version unknown", shimmer: false, tone: "faint", note }
+    return {
+      version,
+      detail: info.latestError.includes("different release channel")
+        ? "No compatible update published"
+        : "Couldn’t check for updates",
+      action: info.update
+        ? { label: failed ? "Try again" : "Check and update" }
+        : undefined,
+      shimmer: false,
+      tone: "faint",
+      note,
+    }
   const behind = versionBehind(info.installed, info.latest)
   const owner = ownerText(info)
   if (behind === true) {
@@ -49,14 +76,17 @@ export function runtimeRowView(info: HarnessUpdateInfo, now = Date.now()): Runti
       detail: info.update
         ? `${info.latest} available`
         : `${info.latest} available · ${owner ?? "not installed through a package manager Mako runs"}`,
-      action: info.update ? { label: failed ? "Try again" : info.update.label } : undefined,
+      action: info.update
+        ? { label: failed ? "Try again" : info.update.label }
+        : undefined,
       shimmer: false,
       tone: "muted",
       note,
     }
   }
   const recent =
-    info.result?.outcome === "updated" && now - info.result.at < RECENT_UPDATE_MS
+    info.result?.outcome === "updated" &&
+    now - info.result.at < RECENT_UPDATE_MS
       ? `Updated from ${info.result.from ?? "an earlier version"}`
       : undefined
   if (behind === false)
@@ -71,8 +101,12 @@ export function runtimeRowView(info: HarnessUpdateInfo, now = Date.now()): Runti
   if (info.channel === "self" && info.update)
     return {
       version,
-      detail: recent ?? (info.latestError ? "Latest version unknown" : "Checks with its own updater"),
-      action: { label: failed ? "Try again" : "Check for updates" },
+      detail:
+        recent ??
+        (info.latestError
+          ? "Latest version unknown"
+          : "Checks with its own updater"),
+      action: { label: failed ? "Try again" : "Check and update" },
       shimmer: false,
       tone: "faint",
       note,
@@ -94,25 +128,32 @@ export function runtimeRowView(info: HarnessUpdateInfo, now = Date.now()): Runti
 }
 
 function ownerText(info: HarnessUpdateInfo): string | undefined {
-  if (info.channel === "managed" && info.managedBy) return `Updates come from ${info.managedBy}`
-  if (info.channel === "app" && info.managedBy) return `Updates come with ${info.managedBy}`
+  if (info.channel === "managed" && info.managedBy)
+    return `Update through ${info.managedBy.replace(/\.app$/, "")}`
+  if (info.channel === "app" && info.managedBy)
+    return `Included with ${info.managedBy.replace(/\.app$/, "")}`
   if (info.channel === "brew" && !info.update) return "Installed with Homebrew"
   return undefined
 }
 
 /** Rows worth showing: runtimes found on this machine, or ones that would not say their version. */
-export function runtimeRows(updates: HarnessUpdates | null): Array<[string, HarnessUpdateInfo]> {
+export function runtimeRows(
+  updates: HarnessUpdates | null
+): Array<[string, HarnessUpdateInfo]> {
   return Object.entries(updates ?? {})
     .filter(([, info]) => info.binary || info.error)
     .sort(([left], [right]) => left.localeCompare(right))
 }
 
 /** The oldest installed reading among the rows, for the card's "checked … ago". */
-export function runtimeCheckedAt(updates: HarnessUpdates | null): number | undefined {
+export function runtimeCheckedAt(
+  updates: HarnessUpdates | null
+): number | undefined {
   let oldest: number | undefined
   for (const [, info] of runtimeRows(updates)) {
     if (!info.checkedAt) return undefined
-    oldest = oldest === undefined ? info.checkedAt : Math.min(oldest, info.checkedAt)
+    oldest =
+      oldest === undefined ? info.checkedAt : Math.min(oldest, info.checkedAt)
   }
   return oldest
 }

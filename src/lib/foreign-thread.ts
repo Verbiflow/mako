@@ -118,13 +118,13 @@ export function threadToMessages(
           }
           if (block.error) result.isError = true
           if (block.canceled) result.isCanceled = true
-          if (
+          const trimmedOutput =
             block.outputLength !== undefined &&
             block.output !== undefined &&
             block.outputLength > block.output.length
-          )
+          if (trimmedOutput || block.attachmentsOmitted)
             result.rest = {
-              length: block.outputLength,
+              length: block.outputLength ?? block.output?.length ?? 0,
               at: { entry: entryIndex, block: blockIndex },
             }
           blocks.push(result)
