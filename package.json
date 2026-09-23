@@ -31,7 +31,7 @@
     "backend:typecheck": "npm run typecheck --workspace @mako/backend",
     "build:browser-extension": "tsgo -p browser-extension/tsconfig.json && node scripts/build-browser-extension.mjs",
     "prepare:kiri": "node scripts/prepare-kiri.mjs",
-    "build:electron": "npm run prepare:kiri && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs",
+    "build:electron": "node scripts/prune-host-output.mjs && npm run prepare:kiri && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs",
     "build": "node scripts/build-parallel.mjs",
     "build:all": "npm run relay:build && npm run build && npm run backend:build",
     "icons": "swiftc -O -o build/make-icns scripts/make-icns.swift && build/make-icns mako-icons/_masters/desktop-gradient.png build/Mako.iconset && iconutil -c icns build/Mako.iconset -o build/Mako.icns && cp build/Mako.iconset/icon_512x512@2x.png public/icons/app-icon.png",
@@ -55,7 +55,7 @@
     "verify:mac-release": "tsx scripts/verify-macos-release.ts",
     "test:plugins": "tsx scripts/test-plugins.ts",
     "test:opencode-native-runtime": "npm run build:electron && node scripts/test-opencode-native-runner.mjs",
-    "test:providers": "tsx scripts/test-providers.ts && tsx scripts/test-runtime-updates.ts && tsx scripts/test-opencode-updates.ts && tsx scripts/test-transport-agreement.ts && tsx scripts/test-codex-activity.ts && tsx scripts/test-opencode-activity.ts && tsx scripts/test-opencode-plugin.ts",
+    "test:providers": "tsx scripts/test-grok-connection.ts && tsx scripts/test-codex-executable.ts && tsx scripts/test-providers.ts && tsx scripts/test-runtime-updates.ts && tsx scripts/test-opencode-updates.ts && tsx scripts/test-transport-agreement.ts && tsx scripts/test-codex-activity.ts && tsx scripts/test-opencode-activity.ts && tsx scripts/test-opencode-plugin.ts",
     "test:provider-launch-options": "tsx --tsconfig tsconfig.app.json scripts/test-provider-launch-options.ts && tsx scripts/test-acp-authentication.ts && tsx scripts/test-devin-environment.ts",
     "test:skills": "tsx scripts/test-skills.ts && tsx scripts/test-skill-references.ts && esbuild scripts/test-skill-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-skill-ui.mjs --log-level=warning && node node_modules/.tmp/test-skill-ui.mjs",
     "test:stage": "tsx scripts/test-stage-layout.ts && tsx scripts/test-thread-opening.ts && tsx scripts/test-composer-settings.ts && tsx scripts/test-commit-model-status.ts && tsx scripts/test-composer-capabilities.ts && tsx scripts/test-session-identity.ts && tsx scripts/test-ui-preferences.ts && npm run test:thread-references",
@@ -71,6 +71,7 @@
     "relay:typecheck": "npm run typecheck --workspace @mako/relay",
     "control:build": "npm run build --workspace @mako/control",
     "control:test": "npm test --workspace @mako/control",
+    "test:control-recording": "tsx scripts/test-control-recording.ts && tsx scripts/test-browser-recording.ts && tsx scripts/test-native-recording.ts",
     "preview": "vite preview",
     "package": "npm run package:mac",
     "package:mac": "npm run build && npm run test:renderer-assets && node scripts/package-mac.mjs",
@@ -85,7 +86,8 @@
     "update:local": "node scripts/update-local.mjs",
     "test:update-local": "node scripts/test-update-local.mjs",
     "release": "npm run package:mac",
-    "test:live": "tsx scripts/test-live-conversations.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
+    "test:live-prompt-delivery": "tsx scripts/test-prompt-recovery.ts && tsx scripts/test-live-prompt-delivery.ts && tsx scripts/test-cursor-delivery.ts",
+    "test:live": "npm run test:live-prompt-delivery && tsx scripts/test-live-conversations.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
     "verify:sessions": "npm run typecheck && npm test --workspace @mako/sessions && npm run test:live && npm run test:codex-protocol && npm run test:providers && npm run test:host && npm run test:stage && npm run test:performance && npm run lint && npm run build",
     "test:conversation-control": "tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-child-workspace.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts",
     "test:provider-e2e": "npm run build:electron && node scripts/test-provider-e2e.mjs",
@@ -109,7 +111,8 @@
     "benchmark:snapshots": "node --max-old-space-size=256 --import tsx scripts/benchmark-snapshots.ts",
     "test:rewind-e2e": "npm run build:electron && node scripts/test-rewind-e2e.mjs",
     "generate:codex-inputs": "node scripts/generate-codex-inputs.mjs",
-    "test:live-actions": "tsx scripts/test-compaction.ts && tsx scripts/test-live-actions.ts && tsx scripts/test-claude-sdk.ts && tsx scripts/test-claude-fork.ts && tsx scripts/test-permission-memory.ts",
+    "test:action-recovery": "tsx scripts/test-operation-recovery.ts && esbuild scripts/test-action-recovery.ts --bundle --platform=node --format=esm --packages=external --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-action-recovery.mjs && node node_modules/.tmp/test-action-recovery.mjs",
+    "test:live-actions": "npm run test:action-recovery && tsx scripts/test-compaction.ts && tsx scripts/test-live-actions.ts && tsx scripts/test-claude-sdk.ts && tsx scripts/test-claude-fork.ts && tsx scripts/test-permission-memory.ts",
     "test:live-controls": "esbuild scripts/test-live-controls.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-live-controls.mjs && node --max-old-space-size=256 node_modules/.tmp/test-live-controls.mjs && tsx scripts/test-draft-persistence.ts",
     "test:native-agents": "tsx scripts/test-native-agents.ts && tsx scripts/test-codex-agent-status.ts && tsx scripts/test-grok-agents.ts && tsx scripts/test-devin-agents.ts && tsx scripts/test-child-residency.ts && npm run test:opencode-agents",
     "test:opencode-agents": "tsgo -p tsconfig.electron.json && tsx scripts/test-opencode-agents.ts",
@@ -117,7 +120,9 @@
     "test:prompt-delivery": "esbuild scripts/test-prompt-delivery.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-prompt-delivery.mjs && node --max-old-space-size=256 node_modules/.tmp/test-prompt-delivery.mjs",
     "test:message-queue": "tsx scripts/test-message-queue.ts && tsx scripts/test-send-discovery.ts && tsx scripts/test-claude-discovery.ts && tsx scripts/test-profile-transport.ts && tsx scripts/test-send-recovery.ts && npm run test:prompt-delivery",
     "test:packaged-startup": "node scripts/test-packaged-startup.mjs",
-    "test:packaged-lifecycle": "node --max-old-space-size=256 scripts/test-packaged-lifecycle.mjs"
+    "test:packaged-lifecycle": "node --max-old-space-size=256 scripts/test-packaged-lifecycle.mjs",
+    "test:control-driver-install": "node scripts/test-control-driver-install.mjs",
+    "prepare:control-media": "node scripts/build-control-media.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
@@ -132,7 +137,6 @@
     "@mako/control": "^0.1.0",
     "@mako/relay": "^0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@trycua/cua-driver": "0.28.1",
     "ai": "7.0.89",
     "devtools-protocol": "0.0.1692173",
     "electron-updater": "^6.8.9",
@@ -140,6 +144,7 @@
     "image-size": "2.0.2",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "sharp": "0.35.3",
     "ws": "8.21.3",
     "yaml": "^2.9.0",
     "zod": "4.4.3"
@@ -188,13 +193,12 @@
     "remark-parse": "11.0.0",
     "remark-rehype": "11.1.2",
     "shadcn": "^4.18.0",
-    "sharp": "0.35.3",
     "shiki": "^4.4.3",
     "sonner": "^2.0.8",
     "sucrase": "^3.35.1",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4",
-    "thinking-orbs": "0.3.1",
+    "thinking-orbs": "0.3.2",
     "tsx": "^4.23.12",
     "tw-animate-css": "^1.4.0",
     "typescript": "~6",
@@ -323,8 +327,7 @@
     ],
     "asarUnpack": [
       "node_modules/@anthropic-ai/claude-agent-sdk-*/**",
-      "node_modules/@cursor/sdk-*/**",
-      "node_modules/@trycua/cua-driver-*/**"
+      "node_modules/@cursor/sdk-*/**"
     ]
   },
   "workspaces": [

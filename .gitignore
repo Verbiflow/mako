@@ -56,3 +56,12 @@ build/make-icns
 build/mako-notification-status
 release/
 .env*
+
+# Python fixture bytecode is generated, never source.
+__pycache__/
+*.py[cod]
+
+# Recording executables/source archives are reproducible release artifacts.
+# Keep sources.json and the build recipe under version control.
+vendor/control-media/*-*/
+vendor/control-media/.build-*/
