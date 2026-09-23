@@ -62,6 +62,8 @@ if (needsRestart(runtime.info)) {
       original: runtime.info,
       probe: () => settleRuntime(socket),
       command: (command) => invokeRuntime(socket, crypto.randomUUID(), "mako:lifecycle-command", [command]),
+      readState: () => invokeRuntime(socket, crypto.randomUUID(), "mako:lifecycle-state", []),
+      report: (message) => console.warn(`[mako-client] ${message}`),
       start: startRuntime,
       compatible: (info) => !needsRestart(info),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
 import { spawn, execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { promisify, stripVTControlCharacters } from "node:util"
 import { z } from "zod"
 import { createHash } from "node:crypto"
 import {
@@ -595,9 +595,15 @@ async function runBuild(
     const child = spawn(command, args, {
       cwd,
       env,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     })
+    // Keep a bounded diagnostic tail. Discarding all output made a failed
+    // Settings check report only "exited with 1", hiding the failing test.
+    let stdout = ""
+    let stderr = ""
+    child.stdout.setEncoding("utf8").on("data", (text: string) => { stdout = (stdout + text).slice(-8192) })
+    child.stderr.setEncoding("utf8").on("data", (text: string) => { stderr = (stderr + text).slice(-8192) })
     let timedOut = false
     let force: ReturnType<typeof setTimeout> | undefined
     const kill = (signal: NodeJS.Signals) => {
@@ -623,16 +629,20 @@ async function runBuild(
       clearTimeout(force)
       reject(error)
     })
-    child.once("exit", (code) => {
+    child.once("close", (code) => {
       clearTimeout(timer)
       clearTimeout(force)
+      // The pipes can drain out of order: a stdout burst must not erase the
+      // final stderr failure, even if the child wrote stderr last.
+      const diagnostic = [stdout.slice(stderr ? -600 : -1200), stderr.slice(stdout ? -600 : -1200)]
+        .map(text => stripVTControlCharacters(text).trim()).filter(Boolean).join("\n")
       if (code === 0 && !timedOut) resolve()
       else
         reject(
           new Error(
             timedOut
               ? "The build step exceeded its time limit."
-              : `${basename(command)} ${args.join(" ")} exited with ${code ?? "a signal"}. Run this step in the selected checkout to inspect its output.`
+              : `${basename(command)} ${args.join(" ")} exited with ${code ?? "a signal"}. ${diagnostic || "The step produced no diagnostic output."}`
           )
         )
     })

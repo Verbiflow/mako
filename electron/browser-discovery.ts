@@ -2,7 +2,6 @@ import {
   installedChromiumBrowsers,
   mergeInstalledBrowsers,
 } from "./browser-installed.js"
-import { regularDebuggingBrowsers } from "./browser-debugging-profiles.js"
 import { extensionBrowsers } from "./browser-extension-registration.js"
 import { registeredDeskBrowsers } from "./desk-browser-registration.js"
 
@@ -26,14 +25,12 @@ export interface LocalBrowser {
 export async function localBrowsers(
   additionalApplications: string[] = []
 ): Promise<LocalBrowser[]> {
-  const [installed, extensions, direct] = await Promise.all([
+  const [installed, extensions] = await Promise.all([
     installedChromiumBrowsers(additionalApplications),
     extensionBrowsers(),
-    regularDebuggingBrowsers(),
   ])
   return [
     ...mergeInstalledBrowsers(installed, extensions),
-    ...direct,
     ...registeredDeskBrowsers(),
   ]
 }

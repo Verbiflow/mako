@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util"
+import type { LiveRequest } from "./contracts/live-conversations.js"
 import { createHash } from "node:crypto"
 import {
   LiveActionInputSchema,
@@ -42,6 +44,8 @@ export class LiveActions {
     const action = control.actions?.find((item) => item.input.id === id)
     if (!action) throw new Error("This provider action is unavailable")
     const updated = { ...action, state }
+    const restoreQueue = state.kind === "not-accepted" && action.input.kind === "steer-queued" && action.queueStatus
+      ? { id: action.input.queuedRequestId, status: action.queueStatus } : undefined
     if (state.kind !== "dispatching" && state.kind !== "accepted") {
       const key = `${resident.snapshot.session.id}:${id}`
       clearTimeout(this.deadlines.get(key))
@@ -49,6 +53,11 @@ export class LiveActions {
     }
     resident.snapshot = {
       ...resident.snapshot,
+      // Restore ownership and the refusal in the same journal transaction.
+      requests: restoreQueue
+        ? resident.snapshot.requests.map((request) => request.id === restoreQueue.id && request.status === "canceled"
+          ? { ...request, status: restoreQueue.status } : request)
+        : resident.snapshot.requests,
       control: {
         ...control,
         actions: control.actions?.map((item) =>
@@ -94,6 +103,28 @@ export class LiveActions {
   }
 
   settle(resident: Resident, bindingId: string): void {
+    const session = resident.snapshot.session
+    const interrupted = session.connection === "disconnected" ||
+      session.status === "failed" || session.status === "closed" ||
+      /cancel|interrupt/i.test(session.lastStop ?? "")
+    if (interrupted) {
+      for (const action of this.host.control(resident).actions ?? []) {
+        if (action.bindingId !== bindingId || action.input.kind === "compact" || action.state.kind !== "dispatching") continue
+        // A provider may never answer a steer after its turn is cancelled.
+        // Retain its unknown outcome and pause the queue; neither can remain
+        // fictitious running work that prevents this host from shutting down.
+        resident.snapshot = {
+          ...resident.snapshot,
+          requests: resident.snapshot.requests.map((request) =>
+            request.status === "queued" ? { ...request, status: "held" } : request
+          ),
+        }
+        this.state(resident, action.input.id, {
+          kind: "uncertain",
+          reason: "The turn ended before the provider confirmed this steering message. It will not be sent again automatically.",
+        })
+      }
+    }
     // An idle session does not prove that a command has completed (Devin
     // acknowledges /compact before doing the work). Only its result can.
     if (
@@ -184,7 +215,8 @@ export class LiveActions {
     const bindingId = control.activeBindingId
     let perform: () => Promise<LiveAction["state"]>
     let retained = input
-    if (input.kind === "steer") {
+    let queued: LiveRequest | undefined
+    if (input.kind !== "compact") {
       const steer = driver.steer
       const request = resident.snapshot.requests.find(
         (item) => item.id === input.requestId && item.status === "dispatching"
@@ -201,6 +233,15 @@ export class LiveActions {
         throw new Error(
           "The selected turn is no longer running or has not started yet"
         )
+      if (input.kind === "steer-queued") {
+        queued = resident.snapshot.requests.find((item) => item.id === input.queuedRequestId)
+        if (!queued || (queued.status !== "queued" && queued.status !== "held"))
+          throw new Error("This queued message is no longer available for steering")
+        if (queued.targetBindingId && queued.targetBindingId !== bindingId)
+          throw new Error("This queued message belongs to a different agent session")
+        if (queued.text !== input.text || !isDeepStrictEqual(queued.attachments, input.attachments))
+          throw new Error("This queued message changed. Review it before steering")
+      }
       const expectedRunId = request.nativeRun.runId
       const attachments = this.host.retainAttachments(input.attachments)
       retained = { ...input, attachments }
@@ -251,11 +292,13 @@ export class LiveActions {
       digest,
       bindingId,
       createdAt: Date.now(),
+      queueStatus: queued?.status === "queued" || queued?.status === "held" ? queued.status : undefined,
       state: { kind: "dispatching" },
     }
     const previous = resident.snapshot
     resident.snapshot = {
       ...previous,
+      requests: queued ? previous.requests.map((item) => item.id === queued.id ? { ...item, status: "canceled" } : item) : previous.requests,
       control: { ...control, actions: [...(control.actions ?? []), action] },
     }
     try {
@@ -264,6 +307,7 @@ export class LiveActions {
       resident.snapshot = previous
       throw error
     }
+    const generation = resident.generation
     let result: LiveAction["state"]
     if (input.kind === "compact") {
       const timer = setTimeout(() => {
@@ -284,18 +328,20 @@ export class LiveActions {
         reason: `${errorMessage({ error })} This action will not be retried automatically.`,
       }
     }
+    if (resident.generation !== generation)
+      throw new Error("The action owner changed; reload its saved receipt before continuing")
     const current = this.host
       .control(resident)
       .actions?.find((item) => item.input.id === input.id)
     if (current?.state.kind !== "dispatching") return current ?? action
-    if (result.kind === "accepted" && input.kind === "steer") {
+    if (result.kind === "accepted" && input.kind !== "compact") {
       resident.updates.push({
         kind: "user",
         requestId: input.id,
         steeringFor: input.requestId,
         text: input.text,
         attachments:
-          retained.kind === "steer"
+          retained.kind !== "compact"
             ? retained.attachments.map((attachment) => ({
                 type: "attachment",
                 name: attachment.name,

@@ -25,9 +25,8 @@ export interface ComputerDriverCallOptions {
 }
 
 /**
- * The host-side native-driver seam. CUA's MCP transport is one
- * implementation; an in-process SDK can implement this contract without
- * changing policy, projection, programs or app captures.
+ * The host-side native-driver seam. The patched driver's MCP process owns
+ * native input and capture; policy, projection and programs stay in Mako.
  */
 export interface ComputerDriverClient {
   listTools(): Promise<Tool[]>

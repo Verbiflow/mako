@@ -2474,19 +2474,7 @@ export async function startComputerToolsServer(): Promise<void> {
           },
         }
       : undefined
-  const transport = z
-    .enum(["mcp", "direct-sdk"])
-    .default("mcp")
-    .parse(process.env.MAKO_CUA_TRANSPORT)
-  const connectDriver: ComputerDriverConnector =
-    transport === "mcp"
-      ? connectMcpComputerDriver
-      : async (process) => {
-          const { connectCuaSdkComputerDriver } =
-            await import("./cua-sdk-client.js")
-          return connectCuaSdkComputerDriver(process)
-        }
-  const server = createComputerToolsServer(backend, undefined, connectDriver, {
+  const server = createComputerToolsServer(backend, undefined, connectMcpComputerDriver, {
     surface: values["driver-test"] ? "driver" : "control",
   })
   const close = () => {
