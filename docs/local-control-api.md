@@ -266,8 +266,12 @@ model context. It draws a separate cursor from known mouse dispatch positions;
 semantic actions without a dispatched pointer do not invent cursor movement.
 The human's pointer is excluded from exact-window recording. The updated native
 driver also records dispatched drag, move and scroll positions. Mac background
-scroll and Linux XTest foreground drag/scroll have live acceptance; Mac foreground
-drag, MPX and Wayland gesture recording still need separate evidence. Recording
+left/right/middle/double clicks and scroll have live event-count and recording
+acceptance. Linux XTest foreground drag/scroll also passed. GNOME helper v9
+provides exact-window screenshots and video while covered; minimizing the target
+ends capture explicitly and retains playable partial video. Its capture source is
+limited to five frames per second; the encoded video may repeat frames. Mac
+foreground drag, MPX and Wayland gesture cursors still need separate evidence. Recording
 does not relax an operation's foreground requirement.
 
 ```js

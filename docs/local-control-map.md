@@ -1,49 +1,88 @@
 # Local Control refactor wayfinder
 
-## Current follow-through: background accuracy (2026-09-22)
+## Packaging cleanup and installed Aside acceptance
 
-Native +mako.12 is a scratch candidate; +mako.11 remains selected for new
-launches. The Mac raw-click route previously posted a defocus record to the
-user's foreground process. It now uses the keyboard route's target-only key-window
-preparation, refuses before mouse dispatch if preparation fails, and keeps the
-focus guard enabled. The unsafe helper was deleted. The candidate passed 375 Mac
-unit tests (two existing ignores) and a live raw-click/scroll/recording job:
-seven pointer samples, five independently received gesture events, and all
-56 foreground samples remained Aside. This fixes a concrete source of focus
-interference; it does not prove prevention of arbitrary app self-activation.
-Evidence: [target-only Mac job](audits/2026-09-22/local-control-next/mac-target-only/evidence.json).
+2026-09-22: the user confirmed retaining the patched Cua native driver. Browser
+control is Mako-owned and does not require Cua. The obsolete npm Cua SDK,
+experimental in-process adapter/selector and benchmark option are removed. The
+shared MCP/native route remains. Automatic regular-profile remote-debugging
+scanning is removed; explicit Electron, desk and cloud/test CDP routes remain.
+See [packaging architecture, target matrix and open work](local-control-packaging.md).
 
-Packaged browser setup had a reproducible ASAR bug: `fs.cp` cannot traverse the
-virtual extension directory although individual file reads work. Publication now
-reads all source assets before mutation, writes assets atomically, and publishes
-the manifest last. Real signed-archive verification compares all five assets
-byte-for-byte. The regular extension directory now contains 0.3.2 and its native
-helper points at a separately staged signed host. Aside's running worker is still
-0.2.0 until reload; installed acceptance is therefore pending. The user was asked
-to coordinate that brief UI interruption because Aside was in active use.
-The running Mako app was not replaced. An older app can still republish its old
-files; permanent app deployment remains a separate gate.
-Evidence: [archive publication](audits/2026-09-22/local-control-next/browser-publication/).
+Generated Python bytecode and media build directories are now ignored, with
+source manifests/recipes retained. Builds prune orphaned host JavaScript; six
+old compiled modules were found. The packager stages only target-specific Kiri
+and media resources and audits the actual archive for wrong-platform packages,
+stale SDK code, source maps and unexpected repository files. The first audit
+caught 10,194,163 bytes of dependency maps despite the old staging exclusions.
+Linux packaging now requires an explicit architecture and separates target caches.
+The verified signed ARM64 app is 661,313,122 file bytes (630.7 MiB), down
+65,677,597 bytes (62.6 MiB) from the prior signed control candidate. Both cold-start
+routes, 700 resolved host imports, source/signature checks, ASAR extension setup
+and packaged browser/native recording passed. Build and full lint pass (five
+pre-existing React Compiler warnings; zero lint errors and anti-slop findings).
+The Linux ARM64 executable was rechecked for version, ELF architecture and shared
+libraries; no library was missing. x64 was not built or certified.
 
-Broader Wayland acceptance now includes a real GNOME 46 headless compositor with
-AT-SPI and the installed helper. Ten Unicode writes to a minimized GTK window
-passed while another window retained compositor focus. Minimized capture and
-exact-window recording refused explicitly. The first visible screenshot also
-exposed the limits of desktop cropping under GNOME transforms/occlusion; an exact
-window-texture capture path is under implementation, not yet accepted.
-[Initial GNOME run](audits/2026-09-22/local-control-next/gnome-initial/evidence.json)
-is retained as input evidence, not an accurate-capture certification.
+The existing Aside Work extension was reloaded through its Extensions UI from
+0.2.0 to 0.3.2, then the user's video/fullscreen was restored. Two installed-profile
+runs completed 80 exact-value save jobs through public Local Control v2, including
+scoped duplicate controls, confirmation dialogs, Unicode and unchanged Billing.
+The second run also retained an interrupted recording on client disconnect,
+refused stale handles before and after reconnect, and created/closed a fresh tab.
+All 167 foreground samples in that run were Aside; physical human typing was not
+measured. The first run sampled both Mako and Aside and makes no focus-continuity
+claim. [Evidence](audits/2026-09-22/local-control-packaging/README.md).
 
-Physical typing/IME still requires the user's coordinated participation. Automated
-Unicode writes are not composition tests. The reference Linux executable is still
-unavailable. No general parity claim is justified by these results.
+The full installed desktop host has not been replaced while active. General
+proactive native focus interception, physical IME/concurrent typing, remaining
+native gestures, KDE/other compositors and Linux x64 acceptance are still open.
+The physical-input coordination question remains unanswered; generated Unicode
+is explicitly not counted as IME evidence. The reference Linux binary remains
+unavailable. Packaging cleanup does not change these acceptance limits.
 
-## Next parity work: active implementation
+
+## Current release: background accuracy (+mako.12)
+
+2026-09-22: +mako.12 is signed, packaged and selected for new Mac driver launches.
+Active daemons and the running Mako host were not restarted. The Linux ARM64
+package includes GNOME helper v9. Source/binary/helper provenance and the complete
+patch are retained. [Release report and evidence](audits/2026-09-22/local-control-next/release12/README.md).
+
+Mac background raw clicks no longer defocus the user's process. Right-clicks no
+longer double-dispatch, and middle-clicks now carry exact window routing. The
+final signed-package job independently received 16 correctly counted gesture
+events at the requested coordinates, matched all 19 recorded cursor samples, and
+kept the same foreground app across 109 samples. Background drag still refuses.
+A fixture bug (`clickCount` on scroll events) was reproduced and fixed; its
+counterexample is retained. General app-initiated focus blocking is still open.
+
+GNOME 46 exact-window screenshots now use the window texture, excluding covering
+apps and overview transforms. Covered text updates and exact dimensions passed.
+Window video shares the bounded X11 encoder; minimization returns a playable
+partial recording and an explicit interruption. GNOME source capture is capped
+at five frames per second. The final packaged GNOME and Sway jobs each passed ten
+hidden/minimized Unicode writes while another window retained focus. The shared
+X11 encoder/gesture job also passed. 375 Mac and 448 Linux unit tests passed.
+
+Packaged browser setup's ASAR directory-copy failure is fixed and covered by a
+real signed-archive regression, including repair on repeated setup. Regular-profile
+extension 0.3.2 is now reloaded and has installed-profile acceptance above.
+No remote-debugging fallback was introduced.
+The old running host can still overwrite setup files until the full host is updated.
+
+Still open: proactive blocking of arbitrary app focus theft; coordinated physical
+IME/concurrent human typing; Mac foreground drag, MPX and Wayland gesture cursor
+routes; KDE/other compositors, scaling and x64 coverage; and installed Aside/host
+acceptance. The reference Linux executable remains unavailable. These results
+support the tested routes, not a general claim of ChatGPT parity.
+
+## Earlier +mako.11 implementation and acceptance
 
 The user renewed authorization to finish native settling/focus protection, IME and
 physical-input evidence, Wayland, gesture recordings, bundled media dependencies
 and installed Aside acceptance. Native changes are in the existing driver checkout;
-driver +mako.11 is now selected for new launches. Existing driver daemons and the
+driver +mako.11 was selected before the +mako.12 release above. Existing driver daemons and the
 running Mako app/extension remain unchanged. A new isolated signed host candidate
 is prepared at `/private/tmp/mako-local-control-release/release/local-control-final/mac-arm64/Mako.app`.
 
@@ -102,7 +141,7 @@ cause of the earlier intermittent empty list. Logs and package receipts are in
 
 2026-09-22: the [native-delivery recovery proof](audits/2026-09-22/native-delivery-validation/README.md) exposed browser loading of Node-only control code through `RecordingOptionsSchema`. The browser contract now imports the dedicated `@mako/control/control/recording` entry, and recording identity comparison uses typed target fields without `node:util`. Window/page/generation/lease and recording-ID mismatch tests pass. This preserves the recording API; it does not establish installed recording acceptance.
 
-## Completion work in progress: observations and recordings
+## Earlier observations and recordings implementation
 
 2026-09-22: shared host/API changes are implemented in this checkout; native source
 is `/private/tmp/mako-control-driver-platform`. Signed native release
