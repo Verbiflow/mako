@@ -1,5 +1,6 @@
 import type { JsonObject } from "../../codex-app-json.js"
 import type { AttachmentContent } from "@mako/sessions"
+import { fileURLToPath } from "node:url"
 import { z } from "zod"
 
 const Source = z.object({
@@ -11,10 +12,22 @@ const Source = z.object({
   mimeType: z.string().optional(),
   filename: z.string().optional(),
 })
+function localPath(path: string): string {
+  if (!path.startsWith("file:")) return path
+  const url = URL.parse(path)
+  return url && (!url.hostname || url.hostname === "localhost")
+    ? fileURLToPath(url)
+    : path
+}
+
 export function attachmentFromCodexContent(
   value: JsonObject
 ): AttachmentContent {
-  const source = Source.parse(value)
+  const parsed = Source.parse(value)
+  // Codex records viewed images as `file://` URLs in some item shapes.
+  const source = parsed.path
+    ? { ...parsed, path: localPath(parsed.path) }
+    : parsed
   const mimeType =
     source.mimeType ??
     (source.type?.toLowerCase().includes("audio") ? "audio/wav" : "image/png")

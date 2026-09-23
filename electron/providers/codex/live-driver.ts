@@ -22,8 +22,10 @@ export const codexLiveDriver: ProviderLiveDriver = {
     (await import("../../codex-app.js")).codexAppStart(...args),
   prompt: async (...args) =>
     (await import("../../codex-app.js")).codexAppPrompt(...args),
-  permission: async (...args) => {
-    ;(await import("../../codex-app.js")).codexAppPermission(...args)
+  permission: async (id, requestId, response, dispatch) => {
+    const { codexAppPermission } = await import("../../codex-app.js")
+    dispatch.assertCurrent()
+    dispatch.report(codexAppPermission(id, requestId, response))
   },
   cancel: async (id) => (await import("../../codex-app.js")).codexAppCancel(id),
   close: async (id) => (await import("../../codex-app.js")).codexAppClose(id),
