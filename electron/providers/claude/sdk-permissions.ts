@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/approval-response.js"
 import { claudeProposedPlan } from "./sdk-plan.js"
 import type { CanUseTool, OnElicitation } from "@anthropic-ai/claude-agent-sdk"
 import { ElicitRequestFormParamsSchema } from "@modelcontextprotocol/sdk/types.js"
@@ -35,7 +37,7 @@ const ToolPathSchema = z.object({
 export class ClaudePermissions {
   private readonly pending = new Map<
     string,
-    (response: LivePermissionResponse) => void
+    (response: LivePermissionResponse, ended?: ApprovalEndSource) => void
   >()
   private readonly id: string
   private readonly emit: (event: LiveDriverEvent) => void
@@ -44,15 +46,16 @@ export class ClaudePermissions {
     this.emit = emit
   }
 
-  respond(id: string, response: LivePermissionResponse): void {
+  respond(id: string, response: LivePermissionResponse): ApprovalSubmission {
     const resolve = this.pending.get(id)
-    if (!resolve) throw new Error("This Claude request is no longer pending")
+    if (!resolve) return { kind: "not-submitted", pending: false, reason: "request-ended" }
     resolve(response)
+    return { kind: "submitted", source: "callback" }
   }
 
   close(): void {
     for (const resolve of this.pending.values())
-      resolve({ kind: "choice", optionId: null })
+      resolve({ kind: "choice", optionId: null }, "connection-close")
   }
 
   private ask(
@@ -63,18 +66,20 @@ export class ClaudePermissions {
       return Promise.resolve({ kind: "choice", optionId: null })
     if (this.pending.has(request.id))
       throw new Error("Claude repeated a pending permission request")
+    const observationId = randomUUID()
     return new Promise((resolve) => {
-      const abort = () => settle({ kind: "choice", optionId: null })
-      const settle = (response: LivePermissionResponse) => {
+      const abort = () => settle({ kind: "choice", optionId: null }, "request-aborted")
+      const settle = (response: LivePermissionResponse, ended?: ApprovalEndSource) => {
         this.pending.delete(request.id)
         signal.removeEventListener("abort", abort)
+        if (ended) this.emit({ type: "live-permission-ended", id: this.id, requestId: request.id, observationId, source: ended })
         resolve(response)
       }
       this.pending.set(request.id, settle)
       signal.addEventListener("abort", abort, { once: true })
       this.emit({
         type: "live-permission",
-        request: { ...request, sessionId: this.id },
+        request: { ...request, observationId, sessionId: this.id },
       })
     })
   }

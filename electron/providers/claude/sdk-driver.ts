@@ -497,8 +497,11 @@ export function createClaudeSdkDriver(
         message: { role: "user", content: "/compact" },
       })
     } },
-    async permission(id, requestId, response) {
-      requireLive(id).permissions.respond(requestId, response)
+    async permission(id, requestId, response, dispatch) {
+      dispatch.assertCurrent()
+      const live = sessions.get(id)
+      dispatch.report(live ? live.permissions.respond(requestId, response)
+        : { kind: "not-submitted", pending: false, reason: "request-ended" })
     },
     async setMode(id, modeId) {
       const live = requireLive(id)
