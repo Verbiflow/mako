@@ -3,30 +3,52 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.3`. Mac lossless values and keyboard changes are retained. Linux adds
+`0.28.2+mako.12`. Mac lossless values and keyboard changes are retained. Linux adds
 exact values and coverage, retained accessibility objects for semantic input,
 modal refusal and focus checks before foreground input. Non-actionable rows can
-omit `element_index`; Mako's shared host handles them as readable containers.
+omit `element_index`; the host handles them as readable containers.
 
-Use `node scripts/package-control-driver-linux.mjs <checkout>` with the image in
-[scripts/linux-control](../../scripts/linux-control/README.md) to build Linux.
-The package records the source, patch, image and binary hashes and keeps Cua's
-MIT license. It does not install or replace a running driver. Linux ARM64/X11 is
-the tested platform; x64 and Wayland need separate acceptance.
+This release adds owned exact-window recording: ScreenCaptureKit on macOS and
+XComposite on X11. Physical cursors are excluded. Actual native click, move, drag and scroll
+dispatches feed the host's recorded cursor; semantic input invents no movement. Target loss or resize ends capture explicitly;
+playable early-ending video is retained with an interruption reason. Native AX
+walks have deadline/cancellation limits. Mac actions report bounded accessibility
+notification settling separately from action success. A stalled observer cannot
+establish quiet; callers still verify the intended result explicitly. Optional
+unsupported AppKit identifiers do not incorrectly mark an entire tree incomplete.
+Focus restoration ignores stale activation notifications. Raw background clicks
+prepare only the target process and never defocus the user's app. Right-clicks
+use one transport; middle-clicks include exact window routing. General focus-steal
+interception and physical IME/concurrent typing remain unproven.
 
-For Mac, `node scripts/package-control-driver.mjs <checkout>` certificate-signs
-the exact pinned source and verifies the final binary/version. The installed Mac
-driver remains `0.28.2+mako.1`, with the earlier six-job and 995-key evidence.
-This iteration does not claim a new Mac driver installation or notarized release.
-The common contract and Mac native unit suites passed after the contract change.
+`node scripts/package-control-driver-linux.mjs <checkout> --arch=arm64` builds Linux using the
+image in [scripts/linux-control](../../scripts/linux-control/README.md). The package
+records source, patch, image and binary hashes and retains Cua's MIT license.
+Linux ARM64/X11, Sway and GNOME 46 have scoped acceptance. GNOME helper v9 adds
+exact-window texture capture and covered video; minimization ends capture and
+retains playable partial video. The helper and installer ship with the Linux
+package. Sway hidden capture/video, other compositors and x64 remain unverified.
 
-The earlier installer selects `/Applications/CuaDriverLocal.app` atomically for
-new launches and preserves active daemons. It currently verifies an existing
-installation against the candidate; it is not an automatic in-place version
-upgrader. Do not run it against the older installed app and assume an upgrade.
+`node scripts/package-control-driver.mjs <checkout>` signs the Mac build and checks
+its binary/version. `node scripts/install-control-driver.mjs` installs the manifest's
+verified package from `release/control-driver/<version>/` into
+an immutable version under `~/Library/Application Support/mako/control-drivers/`
+and atomically selects it through `~/.local/bin/cua-driver`. The installer verifies
+provenance/signature before selection, keeps the previous executable for running
+daemons and rollback, and refuses unknown launcher targets or another install lock.
+It does not restart active daemons. Version `0.28.2+mako.12` is now selected on this
+Mac for new launches; the running Mako host/extension deployment remains separate.
 
-See the [implementation evidence](../../docs/audits/2026-09-22/linux-control-implementation/README.md)
-and [earlier Mac release evidence](../../docs/audits/2026-09-22/background-control-release/README.md).
+Installer upgrade/repeat/lock/verification-failure tests and signed installation
+passed. The current source passed 375 Mac tests (two existing ignores) and 448
+Linux tests (five existing ignores). Final packaged Mac gesture/cursor, GNOME
+covered capture/video and Sway hidden-workspace jobs passed. The shared X11
+encoder regression also passed; an intermittent unmanaged-window setup failure
+remains documented separately.
+See the [current wayfinder](../../docs/local-control-map.md) and
+[recording evidence](../../docs/audits/2026-09-22/local-control-next/release12/README.md)
+for live results and remaining gates. These are locally signed builds, not a
+notarized public release.
 
 ## Historical prototype
 
