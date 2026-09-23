@@ -12,6 +12,7 @@ import {
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import { compareNativeCheckpoint, type ProviderBinding, type ResumeVerdict } from "../../../contracts/conversation-control.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
+import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
 import {
   CONNECTION_LOST_STOP,
   type LivePermissionResponse,
@@ -302,7 +303,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return resolved.selection
   }
 
-  async function ensureSignedIn(live: Live): Promise<void> {
+  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace): Promise<void> {
     const snapshot = dependencies.auth.current ?? (await dependencies.auth.status())
     if (snapshot.state.status === "signed-in") return
     // A remembered "signed out" may be stale — the CLI may have logged in
@@ -311,7 +312,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     if (fresh.state.status === "signed-in") return
     const requestId = `${live.state.id}-authenticate-${now()}`
     const problem = fresh.state.problem?.message
-    const response = await engine.ask(live, {
+    const response = await trace.step("human-sign-in", () => engine.ask(live, {
       id: requestId,
       sessionId: live.state.id,
       kind: "authentication",
@@ -319,11 +320,11 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         ? `${problem} Sign in with your Cursor account in the browser to continue, or paste an API key under Settings › Agents.`
         : "Cursor needs a sign-in before this thread can open. Sign in with your Cursor account in the browser, or paste an API key under Settings › Agents.",
       options: [{ optionId: "browser", name: "Sign in in the browser", kind: "allow_once" }],
-    })
+    }))
     if (live.closed) throw new Error("Cursor was closed while waiting for sign-in")
     if (response.kind !== "choice" || response.optionId !== "browser")
       throw new Error("Cursor sign-in was declined; the thread was not opened")
-    const after = await dependencies.auth.signInWithBrowser()
+    const after = await trace.step("human-sign-in", () => dependencies.auth.signInWithBrowser())
     if (after.state.status !== "signed-in") throw new Error("Cursor sign-in did not complete")
   }
 
@@ -368,6 +369,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
 
   return {
     provider: "cursor",
+    approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
     observesNativeAgents: true,
     compaction: { kind: "unavailable", reason: "Cursor's SDK does not expose manual compaction. Start a new thread and carry over what matters." },
     canResume: true,
@@ -381,11 +383,11 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     modes: CURSOR_SDK_MODES,
     defaultMode: CURSOR_SDK_DEFAULT_MODE,
     available: () => true,
-    async start(cwd, options) {
+    start: (cwd, options) => traceProviderLaunch("cursor", options.conversationId, async trace => {
       if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false)
         throw new Error("This Cursor binding is already connected")
-      const env = await dependencies.auth.childEnv()
+      const env = await trace.step("account", () => dependencies.auth.childEnv())
       const agentId = options.resume ?? options.conversationId
       const stateRoot = dependencies.stateRoot()
       const spawn: CursorSdkSpawnOptions = {
@@ -396,7 +398,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           if (live) receive(engine, live, event)
         },
       }
-      const client = dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn)
+      const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn))
       const live: Live = {
         client,
         emit: options.emit,
@@ -437,30 +439,31 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         })
       })
       try {
-        await live.client.hello()
-        await ensureSignedIn(live)
-        const catalog = await loadModels(live.client)
+        await trace.step("handshake", () => live.client.hello())
+        await trace.step("authentication", () => ensureSignedIn(live, trace))
+        const catalog = await trace.step("model-discovery", () => loadModels(live.client))
         live.models = catalog.models
         const selection = selectionFor(live, options.tuning, catalog.defaultModel)
         const importFrom = importSource(options, cwd)
-        await Promise.allSettled([
+        await trace.step("configuration", () => Promise.allSettled([
           migrateRetiredMakoMcpFile(
             join(dependencies.home ?? homedir(), ".cursor", "mcp.json")
           ),
           migrateRetiredMakoMcpFile(
             join(cwd, ".cursor", "mcp.json")
           ),
-        ])
-        const opened = await live.client.request("open", {
+        ]))
+        const servers = await trace.step("mcp-preparation", () => mcpServers(options))
+        const opened = await trace.step(options.resume ? "session-resume" : "session-open", () => live.client.request("open", {
           cwd,
           stateRoot,
           agentId,
           create: !options.resume,
           name: options.title,
           model: selection,
-          mcpServers: await mcpServers(options),
+          mcpServers: servers,
           importFrom,
-        })
+        }))
         if (live.closed) throw new Error("Cursor disconnected during startup")
         const reported = opened.model ?? selection
         engine.patch(live, {
@@ -489,7 +492,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         }
         throw error
       }
-    },
+    }),
     async prompt(id, text, attachments, settings, dispatch) {
       const { live, selection } = preparePrompt(dispatch, () => {
         const live = requireLive(id)

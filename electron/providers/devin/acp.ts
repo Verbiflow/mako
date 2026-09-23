@@ -11,6 +11,7 @@ import { DevinAgents } from "./agents.js"
 export const devinAcpSource: ProviderAcpSource = {
   ...devinResumePolicy(),
   provider: "devin",
+  approvalEvidence: { kind: "submission-only", reason: "ACP forwards native permission choices, but this adapter has no exact native decision observer or reconnect receipt." },
   toolName: devinToolName,
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
   observeAgents: input => new DevinAgents(input),

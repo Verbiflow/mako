@@ -4,6 +4,7 @@ import type { ProviderLiveDriver } from "../live-driver.js"
 
 export const codexLiveDriver: ProviderLiveDriver = {
   provider: "codex",
+  approvalEvidence: { kind: "request-lifecycle", reason: "App-server resolves a request before validating or applying its answer, including cancellation and error paths. It does not report the consumed decision." },
   observesNativeAgents: true,
   canResume: true,
   forkPoint: "run",
