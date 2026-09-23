@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react"
+import { memo, useCallback, useRef, useState } from "react"
 import { ArchiveIcon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
@@ -117,6 +117,8 @@ export const ThreadRow = memo(function ThreadRow({
   const open = () => {
     void threads.view(ref)
   }
+  // Opening on press, not release, lights the row a click's length sooner.
+  const openedOnPress = useRef(false)
 
   // One selection at a time: while a thread is open in the viewer, IT is
   // the selection — the native tab keeps its state but not its highlight,
@@ -130,7 +132,17 @@ export const ThreadRow = memo(function ThreadRow({
     <div
       role="button"
       tabIndex={0}
-      onClick={open}
+      onPointerDown={(event) => {
+        openedOnPress.current = false
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+        if (event.target instanceof Element && event.target.closest("input, [data-tip-quiet]")) return
+        openedOnPress.current = true
+        open()
+      }}
+      onClick={() => {
+        if (openedOnPress.current) openedOnPress.current = false
+        else open()
+      }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return
         if (event.key !== "Enter" && event.key !== " ") return

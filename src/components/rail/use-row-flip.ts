@@ -41,32 +41,63 @@ function reducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches
 }
 
+function measure(root: HTMLElement, nodes: HTMLElement[]) {
+  const bounds = root.getBoundingClientRect()
+  // The row's top within the scrolled content: what the scrollbar reveals,
+  // not what the window happens to be showing.
+  const origin = bounds.top - root.scrollTop
+  const tops = new Map<string, number>()
+  for (const node of nodes) {
+    const key = node.dataset["flipKey"]
+    if (key) tops.set(key, node.getBoundingClientRect().top - origin)
+  }
+  return { bounds, origin, tops }
+}
+
+/**
+ * Most commits (a selection, a status pip, the minute timer) leave every
+ * row where it was. Reading each row's rectangle forces layout inside the
+ * commit, so those commits only note the order, and the places are read
+ * again when the frame is idle, ready for the next commit that moves a row.
+ */
 export function useRowFlip(
   scroller: RefObject<HTMLElement | null>,
   scene: string
 ): void {
-  const previous = useRef<{ scene: string; tops: Map<string, number> } | null>(
-    null
-  )
+  const previous = useRef<{
+    scene: string
+    order: string
+    tops: Map<string, number>
+  } | null>(null)
+  const refresh = useRef<number | null>(null)
   useLayoutEffect(() => {
     const root = scroller.current
     if (!root) return
     const nodes = [...root.querySelectorAll<HTMLElement>("[data-flip-key]")]
+    const order = nodes.map((node) => node.dataset["flipKey"] ?? "").join("\n")
+    if (refresh.current !== null) {
+      cancelIdleCallback(refresh.current)
+      refresh.current = null
+    }
+    const before = previous.current
+    if (before && before.scene === scene && before.order === order) {
+      refresh.current = requestIdleCallback(() => {
+        refresh.current = null
+        if (previous.current !== before) return
+        const gliding = nodes.some((node) =>
+          node.getAnimations().some((running) => running.id === FLIP)
+        )
+        if (gliding) return
+        previous.current = { scene, order, tops: measure(root, nodes).tops }
+      })
+      return
+    }
     // A move still in flight would be measured mid-glide; settle it first.
     for (const node of nodes)
       for (const running of node.getAnimations())
         if (running.id === FLIP) running.cancel()
-    const bounds = root.getBoundingClientRect()
-    // The row's top within the scrolled content: what the scrollbar reveals,
-    // not what the window happens to be showing.
-    const origin = bounds.top - root.scrollTop
-    const tops = new Map<string, number>()
-    for (const node of nodes) {
-      const key = node.dataset["flipKey"]
-      if (key) tops.set(key, node.getBoundingClientRect().top - origin)
-    }
-    const before = previous.current
-    previous.current = { scene, tops }
+    const { bounds, origin, tops } = measure(root, nodes)
+    previous.current = { scene, order, tops }
     if (!before || before.scene !== scene) return
     if (document.hidden || reducedMotion()) return
     // Back to screen coordinates for the "is this worth animating" test: a
@@ -98,4 +129,10 @@ export function useRowFlip(
       )
     }
   })
+  useLayoutEffect(
+    () => () => {
+      if (refresh.current !== null) cancelIdleCallback(refresh.current)
+    },
+    []
+  )
 }
