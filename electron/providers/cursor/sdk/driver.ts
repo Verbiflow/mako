@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { preparePrompt } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import {
@@ -490,16 +490,19 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         throw error
       }
     },
-    async prompt(id, text, attachments, settings) {
-      const live = requireLive(id)
-      if (live.state.status === "running") throw new Error("Cursor is already working")
-      const merged: SessionSettings = {
-        ...live.state.settings,
-        ...settings,
-        options: { ...live.state.settings?.options, ...settings?.options },
-      }
-      const selection = selectionFor(live, merged, live.state.settings?.model)
-      const turn = randomUUID()
+    async prompt(id, text, attachments, settings, dispatch) {
+      const { live, selection } = preparePrompt(dispatch, () => {
+        const live = requireLive(id)
+        if (live.state.status === "running") throw new Error("Cursor is already working")
+        const merged: SessionSettings = {
+          ...live.state.settings,
+          ...settings,
+          options: { ...live.state.settings?.options, ...settings?.options },
+        }
+        const selection = selectionFor(live, merged, live.state.settings?.model)
+        return { live, selection }
+      })
+      const turn = dispatch.attemptId
       live.turn = turn
       live.projection = new CursorSdkProjection(turn)
       engine.patch(live, {
@@ -513,12 +516,14 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       engine.emitUpdate(live, { kind: "user", text })
       try {
         const images = promptImages(attachments)
+        dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn })
         const sent = await live.client.request("send", {
           turn,
           text: promptText(text, attachments),
           images: images.length > 0 ? images : undefined,
           model: selection,
         })
+        dispatch.report({ kind: "accepted", source: "native-response", referenceId: sent.runId })
         if (live.turn === turn) engine.patch(live, { nativeRunId: sent.runId })
       } catch (error) {
         if (live.turn === turn) {
