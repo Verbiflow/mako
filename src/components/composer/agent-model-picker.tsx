@@ -3,9 +3,12 @@ import {
   AlertCircleIcon,
   CheckIcon,
   ChevronDownIcon,
-  ListPlusIcon,
+  BrainIcon,
+  PinIcon,
   PinOffIcon,
+  RulerIcon,
   Settings2Icon,
+  SlidersHorizontalIcon,
   ZapIcon,
 } from "lucide-react"
 import type { ModelOption, SettingValue } from "@mako/sessions/settings"
@@ -28,7 +31,6 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import {
   chooseComposerModel,
   chooseComposerOption,
-  resetComposerSettings,
 } from "@/state/composer-settings"
 import {
   addToLoadout,
@@ -37,14 +39,18 @@ import {
   type LoadoutEntry,
 } from "@/state/model-loadout"
 import { modelKey, usePrefs } from "@/state/prefs"
-import { providers, useProviders } from "@/state/providers"
+import { providerProfileKey, providers, useProviders } from "@/state/providers"
 import { shallowEqual } from "@/state/store"
 import { setComposerHarness } from "@/state/threads"
+import { formatTokens } from "@/lib/format"
 import { fuzzy } from "@/lib/fuzzy"
 import { cn } from "@/lib/utils"
 import type { HarnessModel } from "@/lib/types"
 import { settingSourceLabel, settingValueLabel } from "./settings-source"
 import { useComposerSettings, type ComposerSettingsView } from "./use-composer-settings"
+import { ActivityMark } from "@/components/ui/activity-mark"
+import { Shimmer } from "@/components/ui/shimmer"
+import { Skeleton } from "@/components/ui/skeleton"
 
 /**
  * Harness, model, reasoning and speed in one control.
@@ -117,12 +123,6 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
         >
           <Settings2Icon className="size-3.5 shrink-0" />
           <span className="flex-1">Edit loadout and defaults</span>
-          {reasoning ? (
-            <span className="flex items-center gap-1.5 text-label text-faint">
-              <Keys keys={["⌘", "⇧", "/"]} />
-              effort
-            </span>
-          ) : null}
         </MenuItem>
       </MenuContent>
     </Menu>
@@ -177,12 +177,9 @@ function LoadoutRows({ view }: { view: ComposerSettingsView }) {
           }}
           className="text-muted-foreground"
         >
-          <ListPlusIcon className="size-3.5 shrink-0" />
-          <span className="truncate">
-            {loadout.length === 0 ? "Pin " : "Add "}
-            {view.modelLabel}
-            {loadout.length === 0 ? ` for ⌃⌘1` : ""}
-          </span>
+          <PinIcon className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">Pin {view.modelLabel}</span>
+          <Keys keys={["⌃", "⌘", String(loadout.length + 1)]} />
         </MenuItem>
       ) : null}
     </>
@@ -277,7 +274,9 @@ function HarnessRow({ harness, composer }: { harness: string; composer: Composer
           {harnessLabel(harness)}
         </span>
         <span className="min-w-0 flex-1 truncate text-right text-label text-faint">
-          {profile?.pending || !profile ? "Checking…" : view.modelLabel}
+          {profile?.pending || !profile
+            ? "Checking…"
+            : [view.modelLabel, currentEffort(view)].filter(Boolean).join(" · ")}
         </span>
       </MenuSubTrigger>
       <MenuSubContent className="w-[21rem]">
@@ -349,20 +348,25 @@ function HarnessModels({
           </p>
         ) : null}
         {!profile || profile.pending ? (
-          <p className="shimmer px-2 py-3 text-ui text-faint">Asking {harnessLabel(harness)} for its models…</p>
+          <div role="status" className="px-2 py-1.5">
+            <p className="flex h-7 items-center gap-2 text-ui">
+              <ActivityMark state="connecting" size={20} />
+              <Shimmer text={`Asking ${harnessLabel(harness)} for its models…`} />
+            </p>
+            {models.length === 0 ? (
+              <div className="skeleton-rows flex flex-col">
+                {["w-28", "w-36", "w-24", "w-32"].map((width) => (
+                  <div key={width} className="flex h-8 items-center gap-2.5 pl-7">
+                    <Skeleton className={`h-2.5 ${width}`} />
+                    <Skeleton className="ml-auto h-2 w-8 opacity-60" />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
-      {active ? (
-        <>
-          <MenuSeparator />
-          <MenuItem onSelect={() => resetComposerSettings(view.target)} className="text-muted-foreground">
-            <span className="flex-1">
-              {view.target.kind === "new" ? "Use provider defaults" : "Use session settings"}
-            </span>
-            <span className="truncate text-label text-faint">{settingSourceLabel(view.resolved.model)}</span>
-          </MenuItem>
-        </>
-      ) : null}
+      <OptionRows view={view} />
     </>
   )
 }
@@ -392,8 +396,8 @@ function ModelRow({
         ) : null}
       </span>
       {model.contextWindow ? (
-        <span className="shrink-0 text-label text-faint">
-          {Math.round(model.contextWindow / 1000)}K context
+        <span className="shrink-0 text-label text-faint tabular">
+          {formatTokens(model.contextWindow).replace(/\.0(?=[kM])/, "").toUpperCase()}
         </span>
       ) : null}
       <button
@@ -409,7 +413,7 @@ function ModelRow({
           pinned ? "text-foreground/70" : "opacity-0 group-data-[highlighted]/model:opacity-100"
         )}
       >
-        <ListPlusIcon className="size-3.5" />
+        <PinIcon className="size-3.5" />
       </button>
       <CheckIcon className={cn("size-3.5 shrink-0", selected ? "opacity-100" : "opacity-0")} />
     </MenuItem>
@@ -451,7 +455,8 @@ function rankModels(
 function OptionRows({ view }: { view: ComposerSettingsView }) {
   const ordered = [...view.options].sort((left, right) => roleOrder(left) - roleOrder(right))
   const issues = view.resolved.issues
-  if (ordered.length === 0 && issues.length === 0) return null
+  const missing = useMissingRoles(view)
+  if (ordered.length === 0 && issues.length === 0 && missing.length === 0) return null
   return (
     <>
       <MenuSeparator />
@@ -463,6 +468,13 @@ function OptionRows({ view }: { view: ComposerSettingsView }) {
           <SelectOption key={option.id} view={view} option={option} />
         )
       )}
+      {missing.map((role) => (
+        <MenuItem key={role} disabled title={`${view.model?.label ?? "This model"} has no ${ROLE_NAMES[role].toLowerCase()} setting.`}>
+          <OptionGlyph role={role} />
+          <span className="flex-1 truncate">{ROLE_NAMES[role]}</span>
+          <span className="text-label text-faint">Not on this model</span>
+        </MenuItem>
+      ))}
       {issues.map((issue) => (
         <p key={issue.option} className="flex items-start gap-2 px-2 py-1.5 text-label text-caution">
           <AlertCircleIcon className="mt-px size-3 shrink-0" />
@@ -473,8 +485,44 @@ function OptionRows({ view }: { view: ComposerSettingsView }) {
   )
 }
 
+type OptionRole = NonNullable<ModelOption["role"]>
+
+const ROLE_ORDER = ["reasoning", "speed", "context"] satisfies OptionRole[]
+
+const ROLE_NAMES = {
+  reasoning: "Effort",
+  speed: "Fast",
+  context: "Context window",
+} satisfies Record<OptionRole, string>
+
+const ROLE_KEYS = {
+  reasoning: ["⌘", "⇧", "/"],
+  speed: ["⌘", "⇧", "."],
+} satisfies Partial<Record<OptionRole, string[]>>
+
 function roleOrder(option: ModelOption) {
-  return option.role === "reasoning" ? 0 : option.role === "speed" ? 1 : 2
+  return option.role ? ROLE_ORDER.indexOf(option.role) : ROLE_ORDER.length
+}
+
+/**
+ * Effort and the fast lane where this harness offers them on other models
+ * but not the selected one, so switching to such a model reads as the
+ * control going away rather than the menu losing a row.
+ */
+function useMissingRoles(view: ComposerSettingsView): OptionRole[] {
+  const offered = useProviders(
+    (state) =>
+      ROLE_ORDER.filter(
+        (role) =>
+          role !== "context" &&
+          (state.contexts[providerProfileKey(view.target.harness, view.target.cwd)]?.models ?? []).some(
+            (model) => model.options.some((option) => option.role === role)
+          )
+      ),
+    shallowEqual
+  )
+  if (!view.model) return []
+  return offered.filter((role) => !view.options.some((option) => option.role === role))
 }
 
 /** Two-valued options read as a switch: on/off, or a provider's fast/standard pair. */
@@ -483,9 +531,7 @@ function isSwitch(option: ModelOption) {
 }
 
 function optionName(option: ModelOption) {
-  if (option.role === "reasoning") return "Effort"
-  if (option.role === "speed") return "Fast"
-  return option.label
+  return option.role ? ROLE_NAMES[option.role] : option.label
 }
 
 function SwitchOption({ view, option }: { view: ComposerSettingsView; option: ModelOption }) {
@@ -513,10 +559,15 @@ function SwitchOption({ view, option }: { view: ComposerSettingsView; option: Mo
         const value = next()
         if (value !== undefined) chooseComposerOption(view.target, option.id, value)
       }}
+      className="group/option"
     >
-      {option.role === "speed" ? <ZapIcon className="size-3.5 shrink-0 text-faint" /> : <OptionGlyph />}
+      <OptionGlyph role={option.role} />
       <span className="flex-1 truncate">{optionName(option)}</span>
-      {option.role === "speed" ? <Keys keys={["⌘", "⇧", "E"]} /> : null}
+      {option.disabledReason ? (
+        <span className="text-label text-faint">Not available</span>
+      ) : (
+        <RoleKeys role={option.role} />
+      )}
       <SwitchMark on={on} />
     </MenuItem>
   )
@@ -528,9 +579,10 @@ function SelectOption({ view, option }: { view: ComposerSettingsView; option: Mo
   const value = current?.kind === "known" ? String(current.value) : ""
   return (
     <MenuSub>
-      <MenuSubTrigger disabled={Boolean(option.disabledReason)} title={option.disabledReason}>
-        <OptionGlyph />
+      <MenuSubTrigger disabled={Boolean(option.disabledReason)} title={option.disabledReason} className="group/option">
+        <OptionGlyph role={option.role} />
         <span className="flex-1 truncate">{optionName(option)}</span>
+        <RoleKeys role={option.role} />
         <span className="truncate text-label text-faint">
           {current?.kind === "known" ? settingValueLabel(option, current.value) : "Not reported"}
         </span>
@@ -563,8 +615,26 @@ function SelectOption({ view, option }: { view: ComposerSettingsView; option: Mo
   )
 }
 
-function OptionGlyph() {
-  return <span aria-hidden className="size-3.5 shrink-0" />
+const ROLE_GLYPHS = {
+  reasoning: BrainIcon,
+  speed: ZapIcon,
+  context: RulerIcon,
+} satisfies Record<OptionRole, typeof ZapIcon>
+
+function OptionGlyph({ role }: { role: ModelOption["role"] }) {
+  const Glyph = role ? ROLE_GLYPHS[role] : SlidersHorizontalIcon
+  return <Glyph aria-hidden className="size-3.5 shrink-0 text-faint" />
+}
+
+/** The role's shortcut, shown only on the highlighted row so the menu is not a wall of key caps. */
+function RoleKeys({ role }: { role: ModelOption["role"] }) {
+  const keys = role === "reasoning" || role === "speed" ? ROLE_KEYS[role] : undefined
+  if (!keys) return null
+  return (
+    <span className="opacity-0 transition-opacity duration-100 group-data-[highlighted]/option:opacity-100">
+      <Keys keys={keys} />
+    </span>
+  )
 }
 
 function SwitchMark({ on }: { on: boolean }) {

@@ -18,6 +18,8 @@ import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
 import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
+import { useOrbTheme } from "@/components/ui/use-orb-theme"
+import { BorderBeam } from "border-beam"
 import {
   Popover,
   PopoverContent,
@@ -71,6 +73,7 @@ function CommitEditor({
   const draftState = useCommitDraft(cwd)
   const message = draftState.text
   const drafting = draftState.requestId !== null
+  const theme = useOrbTheme()
   const pref = usePrefs((prefs) => prefs.commitModel)
   const { model, status: connection } = useResolvedCommitModel(pref)
   const hasModel = Boolean(model)
@@ -185,7 +188,8 @@ function CommitEditor({
   if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} detail={pushState.kind === "failed" ? pushState.detail : undefined} />
 
   return (
-    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} className="shrink-0 p-3">
+    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} data-drafting={drafting || undefined} className="shrink-0 p-3">
+      <BorderBeam size="md" colorVariant="mono" theme={theme} active={drafting} brightness={1.8}>
       <div className="commit-editor relative overflow-hidden rounded-lg bg-raised ring-1 ring-hairline focus-within:ring-border">
         <textarea
           aria-label="Commit message"
@@ -335,6 +339,7 @@ function CommitEditor({
           </Action>
         </div>
       </div>
+      </BorderBeam>
     </div>
   )
 }

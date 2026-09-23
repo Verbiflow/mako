@@ -7,6 +7,9 @@ import { descriptorFor } from "@/state/descriptors"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatTokens } from "@/lib/format"
+import { cn } from "@/lib/utils"
+import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
+import { Blank } from "@/components/ui/kit"
 import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
 
 const labels = {
@@ -66,44 +69,51 @@ function AgentRoster({
   const working = agents.filter(
     (agent) => agent.state.kind === "working" || agent.state.kind === "waiting"
   ).length
+  if (agents.length === 0)
+    return (
+      <Blank
+        icon={<GitBranchIcon />}
+        title={!provider ? "No live conversation" : "No agents yet"}
+        body={
+          !provider
+            ? "Open a live conversation to follow the agents it starts."
+            : supported
+              ? "Agents the provider starts appear here with their progress and results."
+              : `${harnessLabel(provider)} does not report its agents to Mako.`
+        }
+      />
+    )
+  const finished = agents.filter(
+    (agent) => agent.state.kind === "completed"
+  ).length
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-hairline px-4 py-3">
-        <span className="text-ui font-medium">Agents</span>
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-label text-faint">
+        <span className="tabular">
+          {agents.length} {agents.length === 1 ? "agent" : "agents"}
+        </span>
         {working > 0 ? (
-          <span className="text-label text-faint">{working} working</span>
+          <span className="tabular text-muted-foreground">
+            {working} working
+          </span>
         ) : null}
+        {finished > 0 ? <span className="tabular">{finished} done</span> : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        {agents.length === 0 ? (
-          <p className="px-4 py-6 text-ui leading-relaxed text-faint">
-            {!provider
-              ? "Open a live conversation to view its agents."
-              : supported
-                ? "Agents started by the provider appear here with their progress and results."
-                : "This provider does not report native agent activity to Mako."}
-          </p>
-        ) : (
-          agents
-            .slice(0, visible)
-            .map((agent) => (
-              <AgentRow
-                key={`${agent.bindingId}:${agent.nativeId}`}
-                agent={agent}
-              />
-            ))
-        )}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
+        {agents.slice(0, visible).map((agent) => (
+          <AgentRow key={`${agent.bindingId}:${agent.nativeId}`} agent={agent} />
+        ))}
         {agents.length > visible ? (
           <button
             type="button"
-            className="pressable w-full px-4 py-3 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable w-full rounded-md px-3 py-2 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
             onClick={() => setVisible((count) => count + 40)}
           >
             Show more agents
           </button>
         ) : null}
         {roster?.limited ? (
-          <p className="px-4 py-3 text-label text-faint">
+          <p className="px-3 py-2 text-label text-faint">
             Some older agent observations are omitted.
           </p>
         ) : null}
@@ -112,45 +122,80 @@ function AgentRoster({
   )
 }
 
+const marks = {
+  working: "working",
+  waiting: "waiting",
+  completed: "complete",
+  failed: "failed",
+  canceled: "idle",
+  unknown: "idle",
+} satisfies Record<NativeAgent["state"]["kind"], ActivityState>
+
 export function AgentRow({ agent }: { agent: NativeAgent }) {
   const [expanded, setExpanded] = useState(false)
+  const facts = [
+    harnessLabel(agent.provider),
+    agent.model,
+    agent.role,
+    agent.usage?.tokens !== undefined
+      ? `${formatTokens(agent.usage.tokens)} tokens`
+      : undefined,
+    agent.usage?.toolUses !== undefined
+      ? `${agent.usage.toolUses} tools used`
+      : undefined,
+    agent.usage?.durationMs !== undefined
+      ? `${Math.round(agent.usage.durationMs / 1000)} s elapsed`
+      : undefined,
+  ].filter(Boolean)
   return (
-    <article className="contain-turn flex flex-col gap-2 border-b border-hairline px-4 py-3">
+    <article className="contain-turn">
       <button
         type="button"
         aria-expanded={expanded}
-        className="pressable flex items-start gap-3 rounded text-left hover:text-foreground"
+        className="pressable flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover"
         onClick={() => setExpanded((value) => !value)}
       >
-        <span className="min-w-0 flex-1 text-ui font-medium">
-          {agent.title}
+        <span className="flex h-5 shrink-0 items-center text-muted-foreground">
+          <ActivityMark state={marks[agent.state.kind]} />
         </span>
-        <span className="shrink-0 text-label text-faint">
-          {labels[agent.state.kind]}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex h-5 min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
+              {agent.title}
+            </span>
+            <span
+              className={cn(
+                "shrink-0 text-label",
+                agent.state.kind === "failed" ? "text-negative" : "text-faint"
+              )}
+            >
+              {labels[agent.state.kind]}
+            </span>
+            <ChevronDownIcon
+              className={cn(
+                "size-3 shrink-0 text-faint transition-transform duration-150",
+                expanded && "rotate-180"
+              )}
+            />
+          </span>
+          <span
+            className={cn(
+              "text-ui leading-snug text-muted-foreground",
+              expanded ? "break-words whitespace-pre-wrap" : "line-clamp-2"
+            )}
+          >
+            {activity(agent)}
+          </span>
+          <span className="mt-0.5 flex flex-wrap gap-x-1.5 text-label text-faint">
+            {facts.map((fact, index) => (
+              <span key={`${index}:${fact}`}>
+                {index > 0 ? <span aria-hidden className="mr-1.5 text-faint/50">·</span> : null}
+                {fact}
+              </span>
+            ))}
+          </span>
         </span>
-        <ChevronDownIcon
-          className={`mt-0.5 size-3 shrink-0 text-faint ${expanded ? "rotate-180" : ""}`}
-        />
       </button>
-      <p
-        className={`${expanded ? "break-words whitespace-pre-wrap" : "line-clamp-2"} min-h-10 text-ui text-muted-foreground`}
-      >
-        {activity(agent)}
-      </p>
-      <p className="flex min-h-4 flex-wrap gap-x-2 text-label text-faint">
-        <span>{harnessLabel(agent.provider)}</span>
-        {agent.model ? <span>{agent.model}</span> : null}
-        {agent.role ? <span>{agent.role}</span> : null}
-        {agent.usage?.tokens !== undefined ? (
-          <span>{formatTokens(agent.usage.tokens)} tokens</span>
-        ) : null}
-        {agent.usage?.toolUses !== undefined ? (
-          <span>{agent.usage.toolUses} tools used</span>
-        ) : null}
-        {agent.usage?.durationMs !== undefined ? (
-          <span>{Math.round(agent.usage.durationMs / 1000)} s elapsed</span>
-        ) : null}
-      </p>
     </article>
   )
 }

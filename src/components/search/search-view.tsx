@@ -15,6 +15,7 @@ import {
   WholeWordIcon,
   XIcon,
 } from "lucide-react"
+import { Shimmer } from "@/components/ui/shimmer"
 
 const ROW_HEIGHT = 22
 const HEADER_HEIGHT = 26
@@ -149,7 +150,7 @@ function Summary({
   return (
     <div className="flex h-6 shrink-0 items-center gap-2 border-b border-hairline px-3 text-label text-faint">
       {running ? (
-        <span className="shimmer">Searching…</span>
+        <span className=""><Shimmer text="Searching…" /></span>
       ) : results ? (
         <>
           <span className="tabular">

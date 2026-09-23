@@ -169,6 +169,10 @@
   --fill-hover: color-mix(in oklab, var(--foreground) 7%, transparent);
   --fill-selected: color-mix(in oklab, var(--foreground) 10%, transparent);
 
+  /* Placeholder bars and the glint that crosses them: lighter in both modes. */
+  --skeleton: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --skeleton-glint: color-mix(in oklab, var(--foreground) 13%, transparent);
+
   /*
    * Ember is punctuation, not brand. It may appear on: the live/working
    * dot, the composer caret, at most one badge. Never on links, borders,
@@ -257,6 +261,9 @@
 
   --fill-hover: color-mix(in oklab, var(--foreground) 4%, transparent);
   --fill-selected: color-mix(in oklab, var(--foreground) 6%, transparent);
+
+  --skeleton: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --skeleton-glint: oklch(1 0 0 / 65%);
 
   --ember: oklch(0.59 0.135 41);
   --ember-soft: color-mix(in oklab, var(--ember) 12%, transparent);
@@ -440,7 +447,7 @@ diffs-container {
     transform: none;
   }
 
-  [data-commit-box][data-busy] .commit-editor::after {
+  [data-commit-box][data-busy]:not([data-drafting]) .commit-editor::after {
     content: "";
     position: absolute;
     inset-block-start: 0;
@@ -461,10 +468,6 @@ diffs-container {
     animation: git-feedback 140ms var(--ease-out) both;
   }
 
-  .git-loading [data-slot="skeleton"] {
-    animation-duration: 1.8s;
-  }
-
   @keyframes git-progress {
     from { transform: translateX(-110%); }
     to { transform: translateX(400%); }
@@ -483,8 +486,7 @@ diffs-container {
   @media (prefers-reduced-motion: reduce) {
     [data-commit-box][data-busy] .commit-editor::after,
     [data-push-state="pushing"] > svg,
-    .git-action-label,
-    .git-loading [data-slot="skeleton"] {
+    .git-action-label {
       animation: none;
     }
   }
@@ -638,12 +640,100 @@ diffs-container {
   }
 }
 
-/* Loading placeholders mirror the rows they stand in for without moving. */
-.skeleton {
-  position: relative;
-  overflow: hidden;
-  border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--foreground) 7%, transparent);
+/*
+ * Loading placeholders mirror the rows they stand in for. They hold back a
+ * beat so a fast load never flashes, then a glint crosses each row a little
+ * after the one above it. The glint band is a fixed width moving at one
+ * speed, so it lines up across bars of any length. Only transform and
+ * opacity animate: the compositor carries it while the main thread loads.
+ */
+@property --skeleton-row {
+  syntax: "<integer>";
+  inherits: true;
+  initial-value: 1;
+}
+
+@layer components {
+  .skeleton-rows > * {
+    --skeleton-row: sibling-index();
+  }
+
+  .skeleton {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    background: var(--skeleton);
+    animation: mako-loading-in 260ms var(--ease-out) 140ms both;
+  }
+
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 180px;
+    background: linear-gradient(90deg, transparent, var(--skeleton-glint), transparent);
+    transform: translateX(-100%);
+    animation: mako-skeleton-glint 2.2s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+    animation-delay: calc(140ms + var(--skeleton-row) * 80ms);
+  }
+
+  /*
+   * A whole transcript placeholder. Blocks rise into place from the newest,
+   * nearest the composer, upward; history fades out toward the top edge. The
+   * mask is static, so it rasterises once while the glint moves beneath it.
+   */
+  .skeleton-transcript {
+    mask-image: linear-gradient(to bottom, transparent, #000 55%);
+  }
+
+  .skeleton-transcript > * {
+    animation: mako-skeleton-rise 420ms var(--ease-out) both;
+    animation-delay: calc(120ms + (sibling-count() - sibling-index()) * 45ms);
+  }
+
+  .skeleton-transcript .skeleton {
+    animation: none;
+  }
+
+  .skeleton-transcript .skeleton::after {
+    width: 320px;
+    animation-name: mako-skeleton-glint-wide;
+  }
+}
+
+@keyframes mako-loading-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes mako-skeleton-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+}
+
+@keyframes mako-skeleton-glint-wide {
+  0% {
+    transform: translateX(-100%);
+  }
+  60%,
+  100% {
+    transform: translateX(1000px);
+  }
+}
+
+@keyframes mako-skeleton-glint {
+  0% {
+    transform: translateX(-100%);
+  }
+  60%,
+  100% {
+    transform: translateX(520px);
+  }
 }
 
 .animate-enter {
@@ -785,12 +875,33 @@ diffs-container {
   transition-timing-function: var(--ease-swift);
 }
 
-.shimmer {
-  color: var(--muted-foreground);
+/*
+ * Loading text. A crest of light runs through the glyphs, rests, and runs
+ * again; delays are negative so the first frame is already mid-wave. Each
+ * glyph animates only its opacity, so the compositor carries the whole label.
+ */
+
+.shimmer-chars {
+  color: var(--foreground);
 }
 
 .shimmer-chars > span {
-  color: var(--muted-foreground);
+  display: inline-block;
+  white-space: pre;
+  opacity: 0.45;
+  animation: mako-glyph 2.2s ease-in-out infinite;
+  animation-delay: calc(sibling-index() * 38ms - 2.2s);
+}
+
+@keyframes mako-glyph {
+  0%,
+  36%,
+  100% {
+    opacity: 0.45;
+  }
+  18% {
+    opacity: 1;
+  }
 }
 
 /*
@@ -860,6 +971,16 @@ diffs-container {
   visibility: visible;
 }
 
+/* Always drawn: when the list ends, it only covers the scroller's padding. */
+.scroll-fade-bottom {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 16px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(to top, var(--fade-from, var(--surface)), transparent);
+}
+
 /*
  * Reduced motion means less movement, not less feedback: opacity and colour
  * transitions still carry meaning, so only the transforms are dropped.
@@ -879,11 +1000,14 @@ diffs-container {
     transform: none;
   }
 
-  .shimmer,
   .shimmer-chars > span {
     animation: none;
-    background: none;
+    opacity: 1;
     color: var(--muted-foreground);
+  }
+
+  .skeleton::after {
+    display: none;
   }
 
   .status-swap,
@@ -1289,15 +1413,23 @@ diffs-container {
   display: none;
 }
 
+/* Scrolling rows clip anything drawn outside their chips; an outset focus
+   ring survived only as a bracket on the chip's right edge. */
+.composer-routing :focus-visible,
+.terminal-tabs :focus-visible {
+  outline-width: 1.5px;
+  outline-offset: -1.5px;
+}
+
 /* The row hides its scrollbar; the edge that still hides a control fades
    so the cut is visible. */
-.composer-routing[data-overflow="end"] {
+:is(.composer-routing, .terminal-tabs)[data-overflow="end"] {
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
-.composer-routing[data-overflow="start"] {
+:is(.composer-routing, .terminal-tabs)[data-overflow="start"] {
   mask-image: linear-gradient(to right, transparent, black 28px);
 }
-.composer-routing[data-overflow="both"] {
+:is(.composer-routing, .terminal-tabs)[data-overflow="both"] {
   mask-image: linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent);
 }
 

@@ -7,6 +7,7 @@ import { usageWindowLabel } from "@/lib/usage-window"
 import { CheckIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import { Shimmer } from "@/components/ui/shimmer"
 
 export function ProviderAccounts({ providerId }: { providerId: string }) {
   // Shared with the identity menu through state/accounts.ts; the section is
@@ -127,9 +128,7 @@ export function ProviderAccounts({ providerId }: { providerId: string }) {
                                   "Usage is temporarily unavailable")}
                           </span>
                         ) : (
-                          <span className="shimmer text-label text-faint">
-                            Loading usage…
-                          </span>
+                          <span className="text-label text-faint"><Shimmer text="Loading usage…" /></span>
                         )}
                       </span>
                       {account.active ? (
@@ -138,9 +137,7 @@ export function ProviderAccounts({ providerId }: { providerId: string }) {
                           Active
                         </span>
                       ) : busyAccount === key ? (
-                        <span className="shrink-0 shimmer text-label text-faint">
-                          Switching…
-                        </span>
+                        <span className="shrink-0 text-label text-faint"><Shimmer text="Switching…" /></span>
                       ) : null}
                     </button>
                     {account.name !== "default" &&
@@ -274,9 +271,7 @@ export function ProviderAccounts({ providerId }: { providerId: string }) {
                                 : (stats.detail ?? "Usage is unavailable")}
                           </span>
                         ) : (
-                          <span className="shimmer text-label text-faint">
-                            Loading usage…
-                          </span>
+                          <span className="text-label text-faint"><Shimmer text="Loading usage…" /></span>
                         )}
                       </span>
                       <span className="shrink-0 text-label text-faint">

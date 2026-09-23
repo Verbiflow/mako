@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react"
+import { GitLoading } from "@/components/inspector/git-loading"
 
 /**
  * Pierre's diff engine drags in a syntax-highlighting runtime, which has no
@@ -13,7 +14,7 @@ const Panel = lazy(() =>
 
 export function ChangesPanel() {
   return (
-    <Suspense fallback={<p className="shimmer p-3 text-ui">Loading diffs…</p>}>
+    <Suspense fallback={<GitLoading label="Loading changes…" />}>
       <Panel />
     </Suspense>
   )

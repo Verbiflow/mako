@@ -65,7 +65,10 @@ export function TerminalViewport({
         <ContextMenu.Trigger asChild>
           <div
             ref={hostRef}
-            className="terminal-viewport h-full bg-surface px-3 py-2.5 font-mono"
+            className={cn(
+              "terminal-viewport h-full bg-surface px-3 py-2.5 font-mono transition-opacity duration-150",
+              split && !focused && "opacity-55"
+            )}
           />
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
@@ -235,8 +238,19 @@ export function TerminalViewport({
         </button>
       ) : null}
       {session.status !== "running" ? (
-        <div className="absolute inset-x-2 bottom-2 flex items-center justify-between rounded-md border border-hairline bg-raised px-2.5 py-1.5 text-label text-muted-foreground">
-          <span>
+        <div className="absolute bottom-3 left-3 z-10 flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-lg bg-raised py-1 pr-1 pl-2.5 text-label text-muted-foreground [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+          <span
+            aria-hidden
+            className={cn(
+              "size-1.5 shrink-0 rounded-full",
+              session.status === "interrupted"
+                ? "bg-caution"
+                : session.exitCode
+                  ? "bg-negative"
+                  : "bg-faint"
+            )}
+          />
+          <span className="min-w-0 truncate">
             {session.status === "interrupted"
               ? "Shell stopped · scrollback restored"
               : `Shell exited${session.exitCode === undefined ? "" : ` with code ${session.exitCode}`}`}
@@ -250,7 +264,7 @@ export function TerminalViewport({
                 session.rows
               )
             }
-            className="pressable rounded px-1.5 py-0.5 text-foreground hover:bg-background/30"
+            className="pressable shrink-0 rounded-md px-2 py-0.5 text-foreground hover:bg-fill-hover"
           >
             New shell
           </button>

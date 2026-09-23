@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react"
+import { Shimmer } from "@/components/ui/shimmer"
 
 const Panel = lazy(() =>
   import("@/components/inspector/terminal-panel").then((module) => ({
@@ -8,7 +9,7 @@ const Panel = lazy(() =>
 
 export function TerminalPanel() {
   return (
-    <Suspense fallback={<p className="shimmer p-3 text-ui">Loading terminal…</p>}>
+    <Suspense fallback={<p className="p-3 text-ui"><Shimmer text="Loading terminal…" /></p>}>
       <Panel />
     </Suspense>
   )

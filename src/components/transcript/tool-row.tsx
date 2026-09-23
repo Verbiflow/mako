@@ -26,6 +26,7 @@ import {
   XIcon,
 } from "lucide-react"
 import { ToolGlyph } from "@/components/transcript/tool-views"
+import { Shimmer } from "@/components/ui/shimmer"
 
 /**
  * One tool invocation, collapsed to a single line by default. The row is the
@@ -115,9 +116,8 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
             </div>
           ) : null}
           {rest ? (
-            <p className="shimmer px-2.5 pb-2 text-label">
-              Reading the rest of this output
-              {rest.length ? ` · ${rest.length.toLocaleString()} characters` : null}
+            <p className="px-2.5 pb-2 text-label">
+              <Shimmer text={`Reading the rest of this output${rest.length ? ` · ${rest.length.toLocaleString()} characters` : ""}`} />
             </p>
           ) : null}
         </div>
@@ -219,7 +219,7 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
       ) : call.result ? (
         <Output text={call.result} dense={dense} isError={call.isError} />
       ) : call.pending ? (
-        <p className="shimmer text-ui">Waiting for result…</p>
+        <p className="text-ui"><Shimmer text="Waiting for result…" /></p>
       ) : !call.attachments?.length && !call.details?.length ? (
         <p className="text-ui text-faint">Completed with no text output.</p>
       ) : null}

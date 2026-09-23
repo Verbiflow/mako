@@ -568,6 +568,10 @@ export function AgentThreads() {
             </>
           )}
         </div>
+        <span
+          aria-hidden
+          className="scroll-fade-bottom [--fade-from:var(--shell)]"
+        />
         <RailTip scroller={scroller} />
       </div>
     </div>
@@ -882,11 +886,21 @@ function FolderSection({
           onClick={onToggle}
           className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch px-1.5 text-left"
         >
-          {closed ? (
-            <FolderIcon className="size-3.5 shrink-0 text-faint" />
-          ) : (
-            <FolderOpenIcon className="size-3.5 shrink-0 text-faint" />
-          )}
+          {/* The folder glyph turns into the disclosure chevron under the
+              pointer, so the row carries one leading mark instead of two. */}
+          <span className="relative flex size-3.5 shrink-0 items-center justify-center text-faint">
+            {closed ? (
+              <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
+            ) : (
+              <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
+            )}
+            <ChevronRightIcon
+              className={cn(
+                "absolute size-3.5 opacity-0 transition-[opacity,transform] duration-200 ease-out group-hover/folder:opacity-100 group-focus-within/folder:opacity-100",
+                !closed && "rotate-90"
+              )}
+            />
+          </span>
           <span
             className={cn(
               "min-w-14 flex-1 truncate text-ui",
@@ -906,49 +920,45 @@ function FolderSection({
             </span>
           ) : null}
           <FolderActivity folder={folder} />
-          {!folder.priority && folder.latest ? (
-            <span className="tabular shrink-0 text-label text-faint/60">
+          {/* Open, the newest row already shows this time. */}
+          {closed && !folder.priority && folder.latest ? (
+            <span className="tabular shrink-0 pr-0.5 text-label text-faint/60 group-hover/folder:hidden group-focus-within/folder:hidden">
               {formatRelative(folder.latest)}
             </span>
           ) : null}
-          <span className="tabular text-label text-faint/60 opacity-0 transition-opacity duration-100 group-hover/folder:opacity-100">
-            {folder.refs.length}
-          </span>
-          <ChevronRightIcon
-            className={cn(
-              "size-3 shrink-0 text-faint/50 transition-transform duration-200 ease-out",
-              !closed && "rotate-90"
-            )}
-          />
+          {folder.pinned ? (
+            <PinIcon className="size-3 shrink-0 fill-current text-faint/70 group-hover/folder:hidden group-focus-within/folder:hidden" />
+          ) : null}
         </button>
-        {onNew ? (
-          <button
-            type="button"
-            aria-label={`New thread in ${folder.name}`}
-            title={`New thread in ${folder.name}`}
-            onClick={onNew}
-            className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-background/40 hover:text-foreground"
-          >
-            <PlusIcon className="size-3" />
-          </button>
-        ) : null}
-        {onPin ? (
-          <button
-            type="button"
-            aria-label={folder.pinned ? "Unpin folder" : "Pin folder"}
-            onClick={onPin}
-            className={cn(
-              "pressable mr-0.5 flex size-6 shrink-0 items-center justify-center rounded text-faint transition-opacity duration-150 hover:text-foreground",
-              folder.pinned
-                ? "text-foreground/70"
-                : "opacity-0 group-hover/folder:opacity-100 focus:opacity-100"
-            )}
-          >
-            <PinIcon
-              className={cn("size-3", folder.pinned && "fill-current")}
-            />
-          </button>
-        ) : null}
+        <span className="mr-0.5 hidden shrink-0 items-center group-hover/folder:flex group-focus-within/folder:flex">
+          {onNew ? (
+            <button
+              type="button"
+              aria-label={`New thread in ${folder.name}`}
+              title={`New thread in ${folder.name}`}
+              onClick={onNew}
+              className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+            >
+              <PlusIcon className="size-3.5" />
+            </button>
+          ) : null}
+          {onPin ? (
+            <button
+              type="button"
+              aria-label={folder.pinned ? "Unpin folder" : "Pin folder"}
+              title={folder.pinned ? "Unpin folder" : "Pin folder"}
+              onClick={onPin}
+              className={cn(
+                "pressable flex size-6 shrink-0 items-center justify-center rounded transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
+                folder.pinned ? "text-foreground/70" : "text-faint"
+              )}
+            >
+              <PinIcon
+                className={cn("size-3", folder.pinned && "fill-current")}
+              />
+            </button>
+          ) : null}
+        </span>
       </div>
       <div
         id={contentId}

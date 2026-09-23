@@ -8,8 +8,9 @@ import { TerminalToolbar } from "./terminal/terminal-toolbar"
 import { usePrefs } from "@/state/prefs"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { createHook } from "@/state/store"
+import { stage } from "@/state/stage"
 import { terminalActions, terminalStore } from "@/state/terminal"
-import { SessionTab } from "./terminal/session-tab"
+import { TerminalTabs } from "./terminal/terminal-tabs"
 
 const useTerminal = createHook(terminalStore)
 
@@ -46,9 +47,6 @@ export function TerminalPanel() {
     retainedPanes += group.sessionIds.length
   }
   if (activeGroup && recentIds[0] !== activeGroup.id) setRecentIds(retainedIds)
-  const workspaceIds = workspaceGroups.flatMap((group) => group.sessionIds)
-  const hasSidebar = workspaceIds.length > 1
-
   useEffect(() => terminalActions.mount(), [])
   useEffect(() => {
     if (cwd) void terminalActions.ensureWorkspace(cwd)
@@ -85,11 +83,25 @@ export function TerminalPanel() {
       data-terminal-panel
       className="relative flex h-full min-h-0 min-w-0 flex-col bg-surface"
     >
-      {!hasSidebar ? (
-        <div className="absolute top-2 right-2 z-20 rounded-md border border-hairline bg-surface">
-          <TerminalToolbar />
-        </div>
-      ) : null}
+      <header
+        onDoubleClick={(event) => {
+          if (event.target === event.currentTarget) stage.toggleDockExpanded()
+        }}
+        className="flex h-9 shrink-0 items-center gap-2 border-b border-hairline bg-shell pr-1 pl-2"
+      >
+        <TerminalTabs
+          groups={workspaceGroups}
+          sessions={sessions}
+          activeId={activeId}
+          titles={titles}
+        />
+        <div
+          aria-hidden
+          className="h-full min-w-4 flex-1"
+          onDoubleClick={() => stage.toggleDockExpanded()}
+        />
+        <TerminalToolbar />
+      </header>
 
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -121,70 +133,6 @@ export function TerminalPanel() {
             />
           )}
         </div>
-        {hasSidebar ? (
-          <aside
-            className="flex w-40 shrink-0 flex-col border-l border-hairline bg-shell/30"
-            aria-label="Terminal sessions"
-          >
-            <TerminalToolbar />
-            <div
-              role="tablist"
-              aria-label="Terminal sessions"
-              aria-orientation="vertical"
-              onKeyDown={(event) => {
-                if (
-                  !(event.target instanceof HTMLElement) ||
-                  event.target.getAttribute("role") !== "tab"
-                )
-                  return
-                const index = workspaceIds.indexOf(activeId ?? "")
-                const next =
-                  event.key === "ArrowDown"
-                    ? (index + 1) % workspaceIds.length
-                    : event.key === "ArrowUp"
-                      ? (index - 1 + workspaceIds.length) % workspaceIds.length
-                      : event.key === "Home"
-                        ? 0
-                        : event.key === "End"
-                          ? workspaceIds.length - 1
-                          : undefined
-                if (next === undefined) return
-                event.preventDefault()
-                terminalActions.activate(workspaceIds[next])
-                event.currentTarget
-                  .querySelectorAll<HTMLButtonElement>('[role="tab"]')
-                  .item(next)
-                  ?.focus()
-              }}
-              className="flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1"
-            >
-              {workspaceGroups.map((group) => (
-                <div key={group.id} className="flex flex-col gap-0.5">
-                  {group.sessionIds.length > 1 ? (
-                    <div className="px-1.5 pt-2 pb-1 text-label text-faint">
-                      {group.orientation === "vertical"
-                        ? "Stacked"
-                        : "Side by side"}
-                    </div>
-                  ) : null}
-                  {group.sessionIds.map((id) => {
-                    const session = sessions.find((entry) => entry.id === id)!
-                    return (
-                      <SessionTab
-                        key={id}
-                        session={session}
-                        title={titles[id] ?? session.title}
-                        active={id === activeId}
-                        onSelect={() => terminalActions.activate(id)}
-                        onClose={() => terminalActions.requestClose(id)}
-                      />
-                    )
-                  })}
-                </div>
-              ))}
-            </div>
-          </aside>
-        ) : null}
       </div>
       <Dialog
         open={Boolean(closing)}

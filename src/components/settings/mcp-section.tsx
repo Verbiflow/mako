@@ -5,6 +5,7 @@ import type { McpSyncTarget } from "@/lib/types"
 import { mcp, useMcp } from "@/state/mcp"
 import { AlertTriangleIcon, RefreshCwIcon } from "lucide-react"
 import { BrowserConnections } from "./browser-connections"
+import { Shimmer } from "@/components/ui/shimmer"
 
 export function McpSection() {
   const state = useMcp((value) => value)
@@ -91,9 +92,7 @@ export function McpSection() {
       ) : null}
 
       {state.status === "loading" && !snapshot ? (
-        <p className="shimmer text-ui text-faint">
-          Reading provider configurations…
-        </p>
+        <p className="text-ui text-faint"><Shimmer text="Reading provider configurations…" /></p>
       ) : null}
 
       {snapshot ? (

@@ -1,3 +1,4 @@
+import { ApprovalStatus } from "./approval-status"
 import { promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, turnStops } from "@/state/prompt-delivery"
 import { agentActivity } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
@@ -69,6 +70,7 @@ export function AcpPanel() {
       <TransferStatus />
       <LiveActionStatus />
       <RetainedRequests />
+      <ApprovalStatus />
       <Permission />
     </div>
   )
@@ -178,9 +180,12 @@ function AcpActivity({
 }) {
   const activity = useAcp((state) => {
     const live = activeLiveAcp(state)
+    const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
+    // The approval notice owns this status; do not repeat it in the transcript.
+    if (approval) return { kind: "idle" as const, label: "" }
     return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, preparing })
   }, shallowEqual)
-  return running && activity.kind !== "responding" ? (
+  return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
       <ActivityMark state={activity.kind} size={20} />
       <span className="truncate">{activity.label}</span>
@@ -197,9 +202,21 @@ function AcpActivity({
  */
 function Permission() {
   const permission = useAcp((state) => activeLiveAcp(state)?.permission ?? null)
+  const receipt = useAcp(state => {
+    const live = activeLiveAcp(state)
+    return live?.control?.approvalResponses?.find(item => item.id === live.permission?.id)
+  })
   if (!permission) return null
+  // Keep a structured draft mounted while its answer is in flight. A proven
+  // refusal can renew the public occurrence without clearing the user's input.
+  return <div hidden={Boolean(receipt)}>
+    <PermissionInput key={permission.origin ? JSON.stringify(permission.origin) : permission.id} permission={permission} />
+  </div>
+}
+
+function PermissionInput({ permission }: { permission: LivePermissionRequest }) {
   if (permission.questions)
-    return <QuestionPermission key={permission.id} permission={permission} />
+    return <QuestionPermission permission={permission} />
   return (
     <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">

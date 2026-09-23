@@ -1,5 +1,7 @@
 import { useState } from "react"
 import { Action } from "@/components/ui/kit"
+import { Shimmer } from "@/components/ui/shimmer"
+import { Skeleton } from "@/components/ui/skeleton"
 import { harnessLabel } from "@/lib/harness-label"
 import { runtimeRowView } from "@/lib/runtime-updates"
 import { providers, useProviders } from "@/state/providers"
@@ -60,14 +62,13 @@ export function RuntimeRow({
       aria-busy={pending || info.phase === "updating"}
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span
-          className={cn(
-            "tabular text-label text-faint",
-            view.shimmer && "shimmer"
-          )}
-        >
-          {info.installed ? `Version ${view.version}` : view.version}
-        </span>
+        {view.version === undefined ? (
+          <Skeleton className="h-2.5 w-20" />
+        ) : (
+          <span className="tabular text-label text-faint">
+            {info.installed ? `Version ${view.version}` : view.version}
+          </span>
+        )}
         <span aria-hidden="true" className="text-label text-faint">
           ·
         </span>
@@ -79,7 +80,7 @@ export function RuntimeRow({
             view.tone === "muted" && "text-muted-foreground"
           )}
         >
-          {view.detail}
+          {view.busy ? <Shimmer text={view.detail} /> : view.detail}
         </span>
         {view.action ? (
           <Action

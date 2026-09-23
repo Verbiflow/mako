@@ -9,6 +9,7 @@ import { usageWindowLabel } from "@/lib/usage-window"
 import { harnessLabel } from "@/lib/harness-label"
 import { useThreads } from "@/state/threads"
 import { CheckIcon, CopyIcon, SettingsIcon } from "lucide-react"
+import { Shimmer } from "@/components/ui/shimmer"
 
 /**
  * Who the desk is working as: the GitHub identity on top, then every
@@ -139,7 +140,7 @@ export function IdentityMenu() {
                 {account.active ? (
                   <CheckIcon className="size-3.5 shrink-0 text-foreground" />
                 ) : busy === key ? (
-                  <span className="shrink-0 shimmer text-label">…</span>
+                  <Shimmer text="Switching…" className="shrink-0 text-label" />
                 ) : null}
               </button>
             )
@@ -232,7 +233,7 @@ export function IdentityMenu() {
                               : "Usage unavailable"}
                           </span>
                         ) : (
-                          <span className="shimmer">Loading usage…</span>
+                          <span className=""><Shimmer text="Loading usage…" /></span>
                         )}
                       </span>
                     </span>

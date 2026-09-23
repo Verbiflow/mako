@@ -9,6 +9,7 @@ import { useSession } from "@/state/session"
 import { cn } from "@/lib/utils"
 import type { GitCommitEntry, GitFileStatus } from "@/lib/types"
 import { ChevronRightIcon, GitCommitHorizontalIcon } from "lucide-react"
+import { Shimmer } from "@/components/ui/shimmer"
 
 /**
  * Commit history, openable.
@@ -187,7 +188,7 @@ function WorkspaceGitLog({
               <div className="min-h-0 overflow-hidden">
                 {expanded ? (
                   commitFiles === undefined ? (
-                    <p className="shimmer py-1 pl-10 text-label">Reading the commit…</p>
+                    <p className="py-1 pl-10 text-label"><Shimmer text="Reading the commit…" /></p>
                   ) : commitFiles.length === 0 ? (
                     <p className="py-1 pl-10 text-label text-faint">Nothing readable in it.</p>
                   ) : (

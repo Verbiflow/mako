@@ -12,6 +12,7 @@ import { TranscriptAttachment } from "./attachment"
 import { memo, useMemo, useState } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { ToolRow } from "@/components/transcript/tool-row"
+import { ToolGlyph } from "@/components/transcript/tool-views"
 import { FileChip } from "@/components/composer/reference-chip"
 import { Slot } from "@/extend/slot"
 import {
@@ -54,6 +55,7 @@ import { usePrefs } from "@/state/prefs"
 import { cn } from "@/lib/utils"
 import type { ChatMessage, TurnContinuation } from "@/lib/types"
 import {
+  BotIcon,
   CheckIcon,
   ChevronRightIcon,
   CopyIcon,
@@ -421,7 +423,7 @@ function WorkSection({
           data-work-log
           className={cn(
             "flex flex-col gap-2.5",
-            summarized && "mt-2 ml-[5px] border-l border-hairline pb-1 pl-4"
+            summarized && "mt-1.5 ml-[6.5px] border-l border-hairline pb-1 pl-4"
           )}
         >
           {messages.map((message) => (
@@ -431,6 +433,45 @@ function WorkSection({
       </Collapse>
     </div>
   )
+}
+
+/**
+ * What a folded stretch of tool calls did, said the way the transcript says
+ * everything else: "Ran 5 commands and read a file". The glyphs in front
+ * are the kinds of step, in the same order, so the row can be read at a
+ * glance without the words; the open log hangs from them on a hairline.
+ */
+const WORK_PHRASES = [
+  { glyph: "edit", count: (work) => work.changedFiles, phrase: (n) => `edited ${n === 1 ? "a file" : `${n} files`}` },
+  { glyph: "bash", count: (work) => work.commands, phrase: (n) => `ran ${n === 1 ? "a command" : `${n} commands`}` },
+  { glyph: "read", count: (work) => work.reads, phrase: (n) => `read ${n === 1 ? "a file" : `${n} files`}` },
+  { glyph: "grep", count: (work) => work.searches, phrase: (n) => `searched ${n === 1 ? "once" : `${n} times`}` },
+  { glyph: "skill", count: (work) => work.skills, phrase: (n) => `used ${n === 1 ? "a skill" : `${n} skills`}` },
+  { glyph: "agent", count: (work) => work.agents, phrase: (n) => `started ${n === 1 ? "a background agent" : `${n} background agents`}` },
+  { glyph: "todowrite", count: (work) => work.plans, phrase: (n) => `updated the plan${n === 1 ? "" : ` ${n} times`}` },
+  { glyph: "other", count: (work) => work.other, phrase: (n) => `used ${n === 1 ? "another tool" : `${n} other tools`}` },
+] satisfies Array<{
+  glyph: string
+  count: (work: WorkSummaryData) => number
+  phrase: (count: number) => string
+}>
+
+function describeWork(work: WorkSummaryData) {
+  const done = WORK_PHRASES.flatMap((entry) => {
+    const count = entry.count(work)
+    return count > 0 ? [{ glyph: entry.glyph, count, text: entry.phrase(count) }] : []
+  })
+  const shown = done.slice(0, 3)
+  const rest = done.slice(3).reduce((total, entry) => total + entry.count, 0)
+  const parts = [
+    ...shown.map((entry) => entry.text),
+    ...(rest > 0 ? [`${rest} more ${rest === 1 ? "step" : "steps"}`] : []),
+  ]
+  const text =
+    parts.length > 1
+      ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`
+      : (parts[0] ?? `used ${work.tools} tools`)
+  return { glyphs: shown.map((entry) => entry.glyph), text }
 }
 
 function WorkSummary({
@@ -448,48 +489,9 @@ function WorkSummary({
 }) {
   const elapsed =
     work.duration !== undefined ? formatDuration(work.duration) : undefined
-  const activity = [
-    work.changedFiles > 0
-      ? `${work.changedFiles} file${work.changedFiles === 1 ? "" : "s"} changed`
-      : null,
-    work.commands > 0
-      ? `${work.commands} command${work.commands === 1 ? "" : "s"}`
-      : null,
-    work.reads > 0 ? `${work.reads} read${work.reads === 1 ? "" : "s"}` : null,
-    work.searches > 0
-      ? `${work.searches} search${work.searches === 1 ? "" : "es"}`
-      : null,
-    work.skills > 0
-      ? `${work.skills} skill${work.skills === 1 ? "" : "s"}`
-      : null,
-    work.agents > 0
-      ? `${work.agents} background agent${work.agents === 1 ? "" : "s"}`
-      : null,
-    work.plans > 0
-      ? `${work.plans} plan update${work.plans === 1 ? "" : "s"}`
-      : null,
-    work.other > 0 ? `${work.other} other` : null,
-  ].filter((piece): piece is string => piece !== null)
-  const hiddenActions = activity.slice(4).reduce((count, piece) => {
-    const amount = Number.parseInt(piece, 10)
-    return count + (Number.isNaN(amount) ? 0 : amount)
-  }, 0)
-  const head = interrupted
-    ? elapsed
-      ? `Interrupted after ${elapsed}`
-      : "Interrupted"
-    : failed
-      ? elapsed
-        ? `Failed after ${elapsed}`
-        : "Failed"
-      : elapsed
-        ? `Worked for ${elapsed}`
-        : "Work log"
-  const detail = [
-    ...(activity.length > 0 ? activity.slice(0, 4) : [`${work.tools} tools`]),
-    hiddenActions > 0 ? `${hiddenActions} more` : null,
-  ].filter((piece): piece is string => piece !== null)
+  const { glyphs, text } = describeWork(work)
   const troubled = interrupted || failed
+  const stop = interrupted ? "Interrupted" : "Failed"
   return (
     <button
       type="button"
@@ -497,28 +499,47 @@ function WorkSummary({
       aria-expanded={open}
       data-work-summary
       className={cn(
-        "pressable group/work -mx-1 flex h-6 max-w-full items-center gap-1.5 self-start rounded-md px-1 text-label transition-colors duration-100",
+        "pressable group/work -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start rounded-md px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
         interrupted
           ? "text-caution"
           : failed
             ? "text-negative"
-            : "text-muted-foreground hover:text-foreground"
+            : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
       )}
     >
       {troubled ? (
-        <TriangleAlertIcon className="size-3 shrink-0" />
+        <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
       ) : (
-        <span aria-hidden className="size-[5px] shrink-0 rounded-full bg-current opacity-50" />
-      )}
-      <span className="flex min-w-0 items-baseline gap-1.5 truncate">
-        <span className="shrink-0">{head}</span>
-        <span className={cn("truncate", troubled ? "opacity-70" : "text-faint group-hover/work:text-muted-foreground")}>
-          <ChangingLabel text={detail.join(" · ")} />
+        <span aria-hidden className="flex shrink-0 items-center gap-1 text-faint transition-colors duration-100 group-hover/work:text-muted-foreground">
+          {glyphs.map((glyph) => (
+            <ToolGlyph
+              key={glyph}
+              name={glyph}
+              override={glyph === "agent" ? BotIcon : undefined}
+              className="size-3.5"
+            />
+          ))}
         </span>
-        {work.failed > 0 ? (
-          <span className="shrink-0 text-negative">{work.failed} failed</span>
-        ) : null}
+      )}
+      <span className="min-w-0 truncate">
+        {troubled ? (
+          <>
+            {elapsed ? `${stop} after ${elapsed}` : stop}
+            <span className="text-muted-foreground"> · </span>
+            <span className="text-muted-foreground">
+              <ChangingLabel text={text} />
+            </span>
+          </>
+        ) : (
+          <ChangingLabel text={text.charAt(0).toUpperCase() + text.slice(1)} />
+        )}
       </span>
+      {work.failed > 0 ? (
+        <span className="shrink-0 text-negative">{work.failed} failed</span>
+      ) : null}
+      {elapsed && !troubled ? (
+        <span className="shrink-0 text-label text-faint tabular">{elapsed}</span>
+      ) : null}
       <ChevronRightIcon
         aria-hidden
         className={cn(

@@ -1,5 +1,5 @@
 import { DropdownMenu } from "radix-ui"
-import { MoreHorizontalIcon } from "lucide-react"
+import { CheckIcon, MoreHorizontalIcon } from "lucide-react"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { terminalActions } from "@/state/terminal"
 
@@ -8,6 +8,7 @@ const item =
 export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
   const fontSize = usePrefs((prefs) => prefs.terminalFontSize)
   const fontFamily = usePrefs((prefs) => prefs.terminalFontFamily)
+  const optionAsMeta = usePrefs((prefs) => prefs.terminalOptionAsMeta)
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
@@ -109,7 +110,10 @@ export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
               )
             }
           >
-            Option as Meta: {usePrefs((prefs) => prefs.terminalOptionAsMeta)}
+            <span className="flex-1">Use Option as Meta</span>
+            {optionAsMeta === "on" ? (
+              <CheckIcon className="size-3.5 text-muted-foreground" />
+            ) : null}
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

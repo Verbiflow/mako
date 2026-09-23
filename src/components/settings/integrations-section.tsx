@@ -17,6 +17,7 @@ import { Action, Eyebrow } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import type { IntegrationCategory, IntegrationRecord } from "@/lib/types"
 import { integrations, useIntegrations } from "@/state/integrations"
+import { Shimmer } from "@/components/ui/shimmer"
 
 const CATEGORIES: IntegrationCategory[] = [
   "Communication",
@@ -102,7 +103,7 @@ export function IntegrationsSection() {
       </label>
 
       {state.status === "loading" && !state.snapshot ? (
-        <p className="shimmer text-ui text-faint">Checking connections…</p>
+        <p className="text-ui text-faint"><Shimmer text="Checking connections…" /></p>
       ) : null}
 
       {groups.map((group) => (

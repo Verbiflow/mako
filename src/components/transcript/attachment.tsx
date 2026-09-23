@@ -1,5 +1,5 @@
 import type { AttachmentContent } from "@mako/sessions"
-import { MediaPreview } from "./media-preview"
+import { MediaPreview, MediaUnavailable } from "./media-preview"
 import { viewer } from "@/state/viewer"
 import { useTranscriptSource } from "./source-context"
 
@@ -11,11 +11,8 @@ export function TranscriptAttachment({
   const context = useTranscriptSource()
   const { source, name, mimeType } = attachment
   if (source.kind === "unavailable")
-    return (
-      <p className="text-ui text-muted">
-        {name}: {source.reason}
-      </p>
-    )
+    return <MediaUnavailable name={name} reason={source.reason} />
+
   if (/^(?:image|audio|video)\//i.test(mimeType))
     return <MediaPreview attachment={attachment} />
   if (source.kind === "file")
@@ -65,9 +62,7 @@ export function TranscriptAttachment({
     )
   if (!safe)
     return (
-      <p className="text-ui text-muted">
-        {name}: this attachment has no supported preview URL
-      </p>
+      <MediaUnavailable name={name} reason="This link type can't be previewed" />
     )
   return (
     <a

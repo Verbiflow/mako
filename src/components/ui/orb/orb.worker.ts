@@ -64,6 +64,10 @@ interface Orb {
   dark: boolean
   tint?: z.infer<typeof tint>
   paused: boolean
+  /** The moment a paused orb holds, so its frame stays still while it fades. */
+  heldAt: number
+  /** Whether the last paint was part of an entrance or crossfade. */
+  settling: boolean
   visible: boolean
   state: OrbState
 }
@@ -111,11 +115,12 @@ function paint(orb: Orb, frame: OrbFrame, opacity: number) {
 const easeOut = (p: number) => 1 - (1 - p) ** 3
 
 function draw(orb: Orb, now: number) {
-  const t = reduced ? 0.6 : now / 1000
+  const t = reduced ? 0.6 : (orb.paused ? orb.heldAt : now) / 1000
   const { ctx, size, dpr } = orb
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, size, size)
   const enter = reduced ? 1 : easeOut(Math.min(1, (now - orb.entered) / ENTER_MS))
+  orb.settling = enter < 1
   if (orb.leaving) {
     const p = reduced ? 1 : Math.min(1, (now - orb.leaving.since) / CROSSFADE_MS)
     if (p >= 1) orb.leaving = undefined
@@ -123,14 +128,17 @@ function draw(orb: Orb, now: number) {
       const out = orb.leaving.motion
       paint(orb, out.frame(size, t * out.speed, out.opts), (1 - easeOut(p)) * enter)
       paint(orb, orb.motion.frame(size, t * orb.motion.speed, orb.motion.opts), easeOut(p) * enter)
+      orb.settling = true
       return
     }
   }
   paint(orb, orb.motion.frame(size, t * orb.motion.speed, orb.motion.opts), enter)
 }
 
+// A paused orb still paints until its entrance or crossfade finishes;
+// otherwise its only frame is the first one, drawn at zero opacity.
 function animating(orb: Orb): boolean {
-  return orb.visible && !orb.paused && !pageHidden && !reduced
+  return orb.visible && !pageHidden && (orb.settling || (!orb.paused && !reduced))
 }
 
 function tick(now: number) {
@@ -177,6 +185,8 @@ globalThis.addEventListener("message", (event: MessageEvent<unknown>) => {
       dark: message.dark,
       tint: message.tint,
       paused: message.paused,
+      heldAt: now,
+      settling: true,
       visible: true,
       state: message.state,
     }
@@ -192,6 +202,7 @@ globalThis.addEventListener("message", (event: MessageEvent<unknown>) => {
     }
     orb.dark = message.dark
     orb.tint = message.tint
+    if (message.paused && !orb.paused) orb.heldAt = now
     orb.paused = message.paused
     draw(orb, now)
   } else if (message.type === "visible") {

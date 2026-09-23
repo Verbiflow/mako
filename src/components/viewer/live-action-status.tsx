@@ -9,10 +9,10 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
   const action = useAcp((state) =>
     activeLiveAcp(state)?.control?.actions?.at(-1)
   )
-  if (!id || !action || action.state.kind === "acknowledged") return null
+  if (!id || !action) return null
   if (
     !history &&
-    (action.state.kind === "completed" ||
+    (action.state.kind === "acknowledged" || action.state.kind === "completed" ||
       (action.state.kind === "accepted" && action.input.kind !== "compact"))
   )
     return null
@@ -20,12 +20,14 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
   const recovery = describeActionRecovery(action)
   const troubled =
     state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed"
+  const reason = troubled ? state.reason
+    : state.kind === "acknowledged" ? state.receipt?.outcome.reason : undefined
   const tone: NoticeTone =
     state.kind === "completed" || (state.kind === "accepted" && action.input.kind !== "compact")
       ? "success"
       : state.kind === "failed" || state.kind === "not-accepted"
         ? "danger"
-        : state.kind === "uncertain"
+        : (state.kind === "uncertain" || state.kind === "acknowledged")
           ? "caution"
           : "progress"
   return (
@@ -46,9 +48,9 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
         ) : null
       }
       details={
-        troubled || action.input.kind !== "compact" ? (
+        reason || action.input.kind !== "compact" ? (
           <>
-            {troubled ? <p className="text-faint">{state.reason}</p> : null}
+            {reason ? <p className="text-faint">{reason}</p> : null}
             {action.input.kind !== "compact" ? <p className="mt-1.5 whitespace-pre-wrap">{action.input.text}</p> : null}
           </>
         ) : undefined

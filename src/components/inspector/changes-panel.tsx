@@ -26,7 +26,6 @@ import {
   CheckCircle2Icon,
   ChevronRightIcon,
   Columns2Icon,
-  FolderIcon,
   Maximize2Icon,
   MinusIcon,
   PanelBottomCloseIcon,
@@ -70,6 +69,9 @@ const MARK = {
   deleted: { glyph: "D", tone: "text-removed", title: "Deleted" },
   renamed: { glyph: "R", tone: "text-foreground/70", title: "Renamed" },
 } satisfies Record<GitFile["status"], StatusMark>
+
+/** Pixels per tree level. The staging checkboxes stay in one column. */
+const TREE_INDENT = 12
 
 export function ChangesPanel() {
   const focus = useWorkspaceFocus()
@@ -633,10 +635,7 @@ function DirRow({
   const state = row.staged === 0 ? "off" : row.staged === row.files ? "on" : "partial"
 
   return (
-    <div
-      style={{ paddingInlineStart: 4 + row.depth * 11 }}
-      className="group flex h-6 items-center gap-1.5 rounded pr-1 select-none transition-colors duration-100 hover:bg-fill-hover"
-    >
+    <div className="group flex h-6 items-center rounded pr-1 pl-0.5 select-none transition-colors duration-100 hover:bg-fill-hover">
       <StageBox
         state={state}
         busy={busy}
@@ -648,21 +647,25 @@ function DirRow({
       <button
         type="button"
         onClick={() => onToggle(row.key)}
+        style={{ paddingInlineStart: row.depth * TREE_INDENT }}
         className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1 text-left"
       >
         <ChevronRightIcon
           className={cn(
-            "size-3 shrink-0 text-faint transition-transform duration-150",
+            "size-3.5 shrink-0 text-faint transition-transform duration-150",
             !row.collapsed && "rotate-90"
           )}
         />
-        <FolderIcon className="size-3 shrink-0 text-faint" />
         <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
           {row.label}
         </span>
-        <span className="tabular shrink-0 pr-1 text-label text-faint">
-          {row.staged > 0 && row.staged < row.files ? `${row.staged}/${row.files}` : row.files}
-        </span>
+        {/* Open, the files below say what the count would; it earns its
+            place when it hides them or when only part of them is staged. */}
+        {row.collapsed || (row.staged > 0 && row.staged < row.files) ? (
+          <span className="tabular shrink-0 pr-1 text-label text-faint">
+            {row.staged > 0 && row.staged < row.files ? `${row.staged}/${row.files}` : row.files}
+          </span>
+        ) : null}
       </button>
     </div>
   )
@@ -686,9 +689,8 @@ function FileRow({
 
   return (
     <div
-      style={{ paddingInlineStart: 4 + row.depth * 11 }}
       className={cn(
-        "group flex h-6 items-center gap-1.5 rounded pr-1 select-none transition-colors duration-100",
+        "group flex h-6 items-center rounded pr-1 pl-0.5 select-none transition-colors duration-100",
         "hover:bg-fill-hover",
         active && "bg-fill-selected"
       )}
@@ -704,6 +706,8 @@ function FileRow({
         type="button"
         onClick={() => onSelect(file.path)}
         title={file.path}
+        // Files sit under their folder's label, past the chevron column.
+        style={{ paddingInlineStart: row.depth * TREE_INDENT + 18 }}
         className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
         <span
@@ -721,9 +725,9 @@ function FileRow({
           {row.label}
         </span>
         {file.insertions || file.deletions ? (
-          <span className="tabular shrink-0 text-label">
-            <span className="text-added">+{file.insertions}</span>{" "}
-            <span className="text-removed">−{file.deletions}</span>
+          <span className="tabular flex shrink-0 gap-1 text-label">
+            {file.insertions ? <span className="text-added">+{file.insertions}</span> : null}
+            {file.deletions ? <span className="text-removed">−{file.deletions}</span> : null}
           </span>
         ) : null}
       </button>

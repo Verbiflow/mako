@@ -258,7 +258,7 @@ const DESK_COMMANDS: DeskCommand[] = [
     id: "composer.toggle-speed",
     title: "Toggle the fast lane",
     section: "Model",
-    keys: "mod+shift+e",
+    keys: "mod+shift+.",
     hint: "Only where the model reports a speed option",
     run: () => {
       const landed = cycleComposerRole("speed")

@@ -240,7 +240,7 @@ export const ThreadRow = memo(function ThreadRow({
         </span>
       ) : null}
       {isPinned ? (
-        <PinIcon className="size-3 shrink-0 fill-current text-foreground/60" aria-label="Pinned" />
+        <PinIcon className="size-3 shrink-0 fill-current text-foreground/60 group-hover:hidden group-focus-within:hidden" aria-label="Pinned" />
       ) : null}
       <Attached path={ref.path} />
       {ref.archived ? (
@@ -249,15 +249,15 @@ export const ThreadRow = memo(function ThreadRow({
           aria-label="Saved copy: the native session is gone; Mako kept the conversation"
         />
       ) : null}
-      <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
-      {/* Hover pill: the row's controls, laid over the meta on hover or focus so
-          a row never reserves width for buttons nobody can see. It also stays
-          while a menu inside it is open: the menu is portaled, so focus leaves
-          the row, and a hidden trigger has no box to anchor the menu to.
-          Over the controls the row's tip stands down for their own labels. */}
+      {/* The row's controls join the row on hover or focus, so a row never
+          reserves width for buttons nobody can see and never stacks a second
+          fill over its own hover. They also stay while a menu inside is open:
+          the menu is portaled, so focus leaves the row, and a hidden trigger
+          has no box to anchor the menu to. Over the controls the row's tip
+          stands down for their own labels. */}
       <span
         data-tip-quiet
-        className="absolute top-1/2 right-7 hidden -translate-y-1/2 items-center gap-0.5 rounded-md bg-raised p-0.5 group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
+        className="-my-1 hidden shrink-0 items-center group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
         onClick={(event) => event.stopPropagation()}
       >
         <button
@@ -274,6 +274,7 @@ export const ThreadRow = memo(function ThreadRow({
         <ThreadActions target={target} title={override ?? ref.title ?? "Untitled session"} archived={archived} running={working || activeElsewhere || status.kind === "needs-permission"} controlled={target.kind === "live" || working} path={ref.path} />
         <Detach path={ref.path} />
       </span>
+      <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
     </div>
   )
 })

@@ -1,7 +1,7 @@
+import { NativeControlPreview } from "./native-control-preview"
 import { useEffect, useRef, useState } from "react"
 import { GlobeIcon, MonitorIcon, XIcon } from "lucide-react"
 import {
-  controlPreviewStream,
   useControlPreview,
   watchControlPreview,
 } from "@/state/control-preview"
@@ -84,7 +84,7 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
       {/* The image sets its own height; no letterbox band around it. */}
       <div className="group relative flex min-h-16 items-center justify-center overflow-hidden">
         {nativeWindow ? (
-          <NativePreview
+          <NativeControlPreview
             key={`${id}:${nativeWindow.pid}:${nativeWindow.windowId}`}
             id={id}
             poster={
@@ -143,61 +143,5 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
         )}
       </div>
     </section>
-  )
-}
-
-function NativePreview({ id, poster }: { id: string; poster?: string }) {
-  const video = useRef<HTMLVideoElement>(null)
-  const [failed, setFailed] = useState(false)
-  useEffect(() => {
-    let closed = false
-    let stream: MediaStream | null = null
-    void controlPreviewStream(id)
-      .then(async (value) => {
-        if (closed) {
-          value?.getTracks().forEach((track) => track.stop())
-          return
-        }
-        stream = value
-        const element = video.current
-        if (!stream || !element) {
-          setFailed(true)
-          return
-        }
-        element.srcObject = stream
-        await element.play()
-      })
-      .catch(() => {
-        stream?.getTracks().forEach((track) => track.stop())
-        if (!closed) setFailed(true)
-      })
-    return () => {
-      closed = true
-      stream?.getTracks().forEach((track) => track.stop())
-    }
-  }, [id])
-  if (failed)
-    return poster ? (
-      <img
-        src={poster}
-        alt="Latest view of this task's application window"
-        className="block max-h-64 w-full object-contain"
-        decoding="async"
-      />
-    ) : (
-      <span role="status" className="py-6 text-label text-muted-foreground">
-        Waiting for a screenshot
-      </span>
-    )
-  return (
-    <video
-      ref={video}
-      muted
-      autoPlay
-      playsInline
-      poster={poster}
-      aria-label="Live application window"
-      className="block max-h-64 w-full object-contain"
-    />
   )
 }

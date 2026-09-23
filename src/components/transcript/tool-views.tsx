@@ -32,6 +32,7 @@ import {
   SquareTerminalIcon,
   WrenchIcon,
 } from "lucide-react"
+import { Shimmer } from "@/components/ui/shimmer"
 
 /** Icon by tool name, so the transcript is scannable without reading labels. */
 const ICONS = new Map([
@@ -307,7 +308,7 @@ export function SkillBody({ call }: ToolViewProps) {
       ) : call.result ? (
         <Output text={call.result} dense isError={call.isError} />
       ) : call.pending ? (
-        <p className="shimmer text-ui text-faint">Loading instructions…</p>
+        <p className="text-ui text-faint"><Shimmer text="Loading instructions…" /></p>
       ) : null}
     </div>
   )
@@ -349,7 +350,7 @@ export function BashBody({ call }: ToolViewProps) {
       ) : call.result ? (
         <Output text={call.result} isError={call.isError} />
       ) : call.pending ? (
-        <p className="shimmer text-ui">Running…</p>
+        <p className="text-ui"><Shimmer text="Running…" /></p>
       ) : (
         <p className="text-ui text-faint">Completed with no text output.</p>
       )}

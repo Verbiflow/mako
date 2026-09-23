@@ -7,6 +7,7 @@ import { retryWorkspaceFiles, useWorkspaceFiles } from "@/state/files"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { viewer, useViewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
+import { fileName } from "@/lib/format"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { ChevronRightIcon, FileIcon, FolderIcon, FolderOpenIcon, SearchIcon, XIcon } from "lucide-react"
 
@@ -285,15 +286,27 @@ const FileRow = memo(function FileRow({
       )}
     >
       <span className="w-3 shrink-0" />
-      <FileIcon className={cn("size-3.5 shrink-0", row.changed ? "text-caution" : "text-faint/70")} />
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate text-ui",
-          active ? "font-medium text-foreground" : "text-foreground/80"
-        )}
-      >
-        {row.label}
-      </span>
+      <FileIcon className="size-3.5 shrink-0 text-faint/70" />
+      {onReveal ? (
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className={cn("shrink-0 truncate text-ui", active ? "font-medium text-foreground" : "text-foreground/85")}>
+            {fileName(row.path)}
+          </span>
+          {/* rtl truncates from the left, keeping the nearest folders. */}
+          <span className="min-w-0 truncate text-label text-faint" dir="rtl">
+            <bdi>{row.path.slice(0, Math.max(0, row.path.lastIndexOf("/")))}</bdi>
+          </span>
+        </span>
+      ) : (
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-ui",
+            active ? "font-medium text-foreground" : "text-foreground/80"
+          )}
+        >
+          {row.label}
+        </span>
+      )}
       {row.changed ? (
         <span aria-label="Changed" className="size-1 shrink-0 rounded-full bg-caution" />
       ) : null}

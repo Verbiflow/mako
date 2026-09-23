@@ -3,6 +3,7 @@ import { Eyebrow } from "@/components/ui/kit"
 import { loadUsage } from "@/state/usage"
 import { formatTokens } from "@/lib/format"
 import type { UsageSummary, UsageTotals } from "@/lib/types"
+import { Shimmer } from "@/components/ui/shimmer"
 
 export function UsageSection() {
   const [data, setData] = useState<UsageSummary>()
@@ -15,7 +16,7 @@ export function UsageSection() {
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <p className="shimmer text-ui">Reading local usage…</p>
+  if (loading) return <p className="text-ui"><Shimmer text="Reading local usage…" /></p>
   if (!data || data.total.messages === 0) {
     return (
       <p className="rounded-lg bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">

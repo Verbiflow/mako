@@ -4,6 +4,7 @@ import { Action } from "@/components/ui/kit"
 import { skillColumns, skillMatrixRows } from "@/lib/skill-matrix"
 import { skills, useSkills } from "@/state/skills"
 import { SkillMatrix } from "./skill-matrix"
+import { Shimmer } from "@/components/ui/shimmer"
 
 export function SkillsSection() {
   const snapshot = useSkills((state) => state.snapshot)
@@ -42,7 +43,7 @@ export function SkillsSection() {
       </p>
 
       {status === "loading" && !snapshot ? (
-        <p className="shimmer text-ui text-faint">Reading skill roots…</p>
+        <p className="text-ui text-faint"><Shimmer text="Reading skill roots…" /></p>
       ) : null}
 
       {snapshot ? (

@@ -317,7 +317,7 @@ function DocumentView({ document }: { document: ViewerDocument }) {
         ) : document.kind === "diff" && document.diff ? (
           <CenterDiff diffs={document.diff.diffs} note={document.diff.note} />
         ) : document.kind === "file" && document.file ? (
-          <Suspense fallback={<p className="shimmer p-4 text-ui">Opening…</p>}>
+          <Suspense fallback={<GitLoading kind="diff" label={`Opening ${document.path}`} />}>
             <View
               file={document.file}
               line={document.line}
@@ -325,7 +325,7 @@ function DocumentView({ document }: { document: ViewerDocument }) {
             />
           </Suspense>
         ) : (
-          <p className="shimmer p-4 text-ui">Reading {document.path}…</p>
+          <GitLoading kind="diff" label={`Reading ${document.path}`} />
         )}
       </div>
     </>
@@ -383,7 +383,7 @@ function CenterDiff({
   note?: string
 }) {
   return (
-    <Suspense fallback={<p className="shimmer p-4 text-ui">Loading diff…</p>}>
+    <Suspense fallback={<GitLoading kind="diff" label="Loading diff" />}>
       <LazyDiff diffs={diffs} note={note} />
     </Suspense>
   )

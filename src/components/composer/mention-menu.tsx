@@ -7,6 +7,7 @@ import { SkillSourceMark } from "@/components/composer/reference-chip"
 import { Chip, Eyebrow, Keys } from "@/components/ui/kit"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   capabilityCatalog,
@@ -459,13 +460,13 @@ function Highlighted({ text, indices }: { text: string; indices: number[] }) {
 /** Discovery in flight: the rows keep their shape so the menu does not jump when they land. */
 function LoadingRows() {
   return (
-    <div className="flex flex-col gap-1 px-1 py-1" aria-busy>
-      <Eyebrow className="shimmer px-1 pt-0.5 pb-1">Reading skills and MCP servers…</Eyebrow>
-      {[0, 1, 2].map((row) => (
-        <div key={row} className="flex h-7 items-center gap-2.5 px-1">
+    <div className="skeleton-rows flex flex-col gap-1 px-1 py-1" aria-busy>
+      <Eyebrow className="px-1 pt-0.5 pb-1"><Shimmer text="Reading skills and MCP servers…" /></Eyebrow>
+      {[["w-24", "w-2/5"], ["w-32", "w-1/4"], ["w-20", "w-1/3"]].map(([name, detail]) => (
+        <div key={name} className="flex h-7 items-center gap-2.5 px-1">
           <Skeleton className="size-3.5 rounded-sm" />
-          <Skeleton className="h-3 w-28" />
-          <Skeleton className="h-3 flex-1" />
+          <Skeleton className={`h-2.5 ${name}`} />
+          <Skeleton className={`h-2.5 opacity-60 ${detail}`} />
         </div>
       ))}
     </div>

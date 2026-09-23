@@ -110,6 +110,8 @@ export function useTerminalRenderer(
       macOptionIsMeta: false,
       rightClickSelectsWord: true,
       scrollOnUserInput: true,
+      // xterm sizes its scrollbar from the overview ruler (14px otherwise).
+      overviewRuler: { width: 8 },
       theme: terminalTheme(style),
     })
     const addon = new FitAddon()

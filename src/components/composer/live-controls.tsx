@@ -1,3 +1,4 @@
+import { ApprovalStatus } from "@/components/viewer/approval-status"
 import { CompactionControl } from "./compaction-control"
 import { AgentsToggle } from "@/components/inspector/agents-panel"
 import { useState } from "react"
@@ -62,6 +63,7 @@ export function LiveComposerControls() {
           <RetainedRequests history />
           <TransferStatus history />
           <LiveActionStatus history />
+          <ApprovalStatus history />
           {connection === "disconnected" ? <CaptureNotice /> : null}
           {connection === "hibernated" ? (
             <p className="px-2 py-2 text-label text-faint">
@@ -122,14 +124,11 @@ function modeLabel(mode: LiveSessionMode): string {
 
 /**
  * The provider's own name for a tier when it differs, and who enforces it.
- * "Mako approves" is stated rather than hidden: the agent still asks, and
- * the host answers on the user's behalf.
  */
 function modeDetail(mode: LiveSessionMode, harness: string): string | null {
   const parts: string[] = []
   if (mode.access && mode.name !== accessTierInfo(mode.access).label)
     parts.push(`${harness}: ${mode.name}`)
-  if (mode.enforcement === "host") parts.push("Mako approves the agent's requests")
   if (mode.enforcement === "launch") parts.push("Set when the session starts")
   if (!mode.access && mode.description) parts.push(mode.description)
   return parts.length ? parts.join(" · ") : null

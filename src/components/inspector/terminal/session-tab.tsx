@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { TerminalSquareIcon, XIcon } from "lucide-react"
+import { TerminalIcon, XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { prefsStore, setPref } from "@/state/prefs"
 import type { TerminalSession } from "@/lib/types"
@@ -7,12 +7,15 @@ import type { TerminalSession } from "@/lib/types"
 export function SessionTab({
   session,
   title,
+  ordinal,
   active,
   onSelect,
   onClose,
 }: {
   session: TerminalSession
   title: string
+  /** Set when an earlier tab has the same title. */
+  ordinal?: number
   active: boolean
   onSelect: () => void
   onClose: () => void
@@ -34,19 +37,28 @@ export function SessionTab({
     setPref("terminalTitles", titles)
     setEditing(false)
   }
+  const failed = session.status === "exited" && Boolean(session.exitCode)
   return (
     <div
       className={cn(
-        "group flex h-7 min-w-0 items-center gap-1.5 rounded px-1.5 text-label",
+        "group flex h-6 max-w-48 min-w-16 shrink-0 items-center gap-1.5 rounded-md pr-0.5 pl-2 text-label",
         active
-          ? "bg-fill-selected text-foreground"
+          ? "bg-raised text-foreground"
           : "text-faint hover:bg-fill-hover hover:text-muted-foreground"
       )}
     >
-      <TerminalSquareIcon
+      <TerminalIcon
         className={cn(
           "size-3.5 shrink-0",
-          session.status === "interrupted" ? "text-caution" : "text-faint"
+          session.status === "interrupted"
+            ? "text-caution"
+            : failed
+              ? "text-negative"
+              : session.status === "exited"
+                ? "text-faint/60"
+                : active
+                  ? "text-muted-foreground"
+                  : "text-faint"
         )}
       />
       {editing ? (
@@ -84,6 +96,9 @@ export function SessionTab({
           className="h-full min-w-0 flex-1 truncate text-left"
         >
           {title}
+          {ordinal ? (
+            <span className="ml-1 text-faint tabular-nums">{ordinal}</span>
+          ) : null}
         </button>
       )}
       <button
