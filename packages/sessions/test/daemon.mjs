@@ -110,11 +110,11 @@ assert.equal(refreshed.runtime, process.execPath)
 assert.deepEqual(await client.list(), catalog.list(), "every ref field crosses the wire")
 assert.deepEqual(await client.open(thread.ref.path), thread)
 assert.deepEqual(await client.page(thread.ref.path), page)
-assert.deepEqual(pageOptions, { toolOutputChars: undefined, maxChars: undefined })
+assert.deepEqual(pageOptions, { toolOutputChars: undefined, maxChars: undefined, preview: undefined })
 // A viewer page names how much tool output it wants; the option and the
 // block address cross the wire, and a block comes back schema-checked.
-await client.page(thread.ref.path, 40, 20, { toolOutputChars: 4_096, maxChars: 65_536 })
-assert.deepEqual(pageOptions, { toolOutputChars: 4_096, maxChars: 65_536 })
+await client.page(thread.ref.path, 40, 20, { toolOutputChars: 4_096, maxChars: 65_536, preview: true })
+assert.deepEqual(pageOptions, { toolOutputChars: 4_096, maxChars: 65_536, preview: true })
 assert.deepEqual(await client.block(thread.ref.path, { entry: 3, block: 7 }), {
   type: "tool",
   name: "exec",
