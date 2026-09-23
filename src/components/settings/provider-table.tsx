@@ -16,7 +16,7 @@ import {
   ConnectionStatus,
 } from "./provider-connections"
 import { ProviderAccounts } from "./provider-accounts"
-import { RuntimeRow } from "./harness-updates"
+import { RuntimeRow, InstallationDetails } from "./harness-updates"
 import { runtimeBusy, runtimeRows } from "@/lib/runtime-updates"
 import { cn } from "@/lib/utils"
 
@@ -25,8 +25,6 @@ interface Agent {
   name: string
   how: string
 }
-const columns =
-  "grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.35fr)] gap-x-5 @max-[540px]:grid-cols-1 @max-[540px]:gap-y-4"
 
 export function ProviderTable({
   harnesses,
@@ -53,7 +51,7 @@ export function ProviderTable({
   }
   return (
     <div className="@container">
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between">
         <span className="text-ui font-medium">Your agents</span>
         <Action
           size="xs"
@@ -69,21 +67,10 @@ export function ProviderTable({
         </Action>
       </div>
       <div
-        role="table"
-        aria-label="Agents, accounts and versions"
-        className="overflow-hidden rounded-lg border border-hairline"
+        role="list"
+        aria-label="Agent connections"
+        className="divide-y divide-hairline overflow-hidden rounded-lg border border-hairline"
       >
-        <div
-          role="row"
-          className={cn(
-            columns,
-            "border-b border-hairline bg-surface px-3 py-2 text-label text-faint @max-[540px]:hidden"
-          )}
-        >
-          <span role="columnheader">Agent</span>
-          <span role="columnheader">Account</span>
-          <span role="columnheader">Version</span>
-        </div>
         {harnesses.map((agent) => (
           <ProviderRow
             key={agent.id}
@@ -108,6 +95,8 @@ function ProviderRow({
   const connection = useProviderConnections((state) =>
     connectionFor(state, agent.id)
   )
+  const connectionBusy = useProviderConnections((state) => state.busy)
+  const connectionLoaded = useProviderConnections((state) => state.loadedAt)
   const accountProvider = useAccounts((state) =>
     state.providers.find((provider) => provider.provider === agent.id)
   )
@@ -121,144 +110,187 @@ function ProviderRow({
     .sort(
       ([, a], [, b]) => Number(Boolean(b.primary)) - Number(Boolean(a.primary))
     )
+  const primary = runtimes[0]
   const [expanded, setExpanded] = useState(false)
   const [keyOpen, setKeyOpen] = useState(false)
   const selected = providerAccounts.find((account) => account.active)
   const summary = selected
     ? (selected.email ?? selected.accountId ?? selected.name)
     : providerAccounts.length > 0
-      ? `${providerAccounts.length} credentials`
+      ? `${providerAccounts.length} connected accounts`
       : accountsLoaded
-        ? "No credentials found"
-        : "Checking account…"
-  const canManage = Boolean(connection || accountProvider)
+        ? "Not signed in"
+        : "Checking connection…"
   const needsSignIn = connection
     ? connection.state.status === "signed-out"
-    : providerAccounts.length === 0
-  const accountBusy = useAccounts((state) => Boolean(state.busy))
-  const connectionBusy = useProviderConnections((state) => Boolean(state.busy))
+    : Boolean(accountProvider && providerAccounts.length === 0)
+  const browserOnly =
+    connection?.actions?.length &&
+    !connection.actions.includes("sign-in-key") &&
+    connection.actions.includes("sign-in-browser")
+  const working = connectionBusy?.provider === agent.id
   const detailsId = `provider-${agent.id}-accounts`
   return (
-    <div role="rowgroup" className="border-b border-hairline last:border-b-0">
-      <div role="row" className={cn(columns, "px-3 py-3.5")}>
-        <div role="cell" className="flex items-start gap-2.5">
-          <HarnessIcon harness={agent.id} className="mt-0.5 size-4 shrink-0" />
-          <div className="min-w-0">
-            <span className="block text-ui font-medium">{agent.name}</span>
-            <span className="mt-0.5 block text-label text-faint">
-              {agent.how}
-            </span>
-          </div>
-        </div>
-        <div role="cell" className="min-w-0">
-          <span className="mb-1 hidden text-label text-faint @max-[540px]:block">
-            Account
+    <div role="listitem" aria-label={agent.name}>
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-fill-hover text-muted-foreground">
+            <HarnessIcon harness={agent.id} className="size-4" />
           </span>
-          {connection ? (
-            <ConnectionStatus connection={connection} />
-          ) : (
-            <span className="block text-label break-words text-muted-foreground">
-              {canManage
-                ? summary
-                : installed === false
-                  ? "Install to connect"
-                  : "Managed by provider"}
-            </span>
-          )}
-          {canManage ? (
+          <div className="min-w-0 flex-1">
+            <span className="block text-ui font-medium">{agent.name}</span>
+            <div className="mt-0.5 text-label text-muted-foreground">
+              {connection ? (
+                <ConnectionStatus connection={connection} />
+              ) : (
+                <span className="block break-words">
+                  {accountProvider
+                    ? summary
+                    : installed === false
+                      ? "Not installed"
+                      : !connectionLoaded
+                        ? "Checking connection…"
+                        : "Uses your existing CLI login"}
+                </span>
+              )}
+            </div>
+          </div>
+          {needsSignIn && browserOnly && connection ? (
             <Action
               size="xs"
-              className="mt-1 -ml-1.5"
-              aria-expanded={expanded}
-              aria-controls={detailsId}
-              onClick={() => setExpanded(!expanded)}
+              tone="solid"
+              disabled={Boolean(connectionBusy)}
+              onClick={() => {
+                setExpanded(true)
+                void providerConnections.act(connection.provider, {
+                  kind: "sign-in-browser",
+                })
+              }}
             >
-              {expanded ? "Close" : needsSignIn ? "Sign in" : "Manage"}
-              <ChevronDownIcon
-                className={cn(
-                  "size-3 transition-transform motion-reduce:transition-none",
-                  expanded && "rotate-180"
-                )}
-              />
+              Sign in
             </Action>
           ) : null}
-        </div>
-        <div role="cell" className="min-w-0 space-y-3">
-          <span className="mb-1 hidden text-label text-faint @max-[540px]:block">
-            Version
-          </span>
-          {runtimes.map(([id, info]) => (
-            <RuntimeRow
-              key={id}
-              runtimeId={id}
-              provider={agent.id}
-              info={info}
+          <Action
+            size="xs"
+            aria-label={`${expanded ? "Close" : "Manage"} ${agent.name}`}
+            aria-expanded={expanded}
+            aria-controls={detailsId}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded
+              ? "Close"
+              : needsSignIn && !browserOnly
+                ? "Sign in"
+                : "Manage"}
+            <ChevronDownIcon
+              className={cn(
+                "size-3 transition-transform motion-reduce:transition-none",
+                expanded && "rotate-180"
+              )}
             />
-          ))}
-          {runtimes.length === 0 ? (
+          </Action>
+        </div>
+        <div className="mt-3 pl-11 @max-[400px]:pl-0">
+          {primary ? (
+            <RuntimeRow
+              runtimeId={primary[0]}
+              provider={agent.id}
+              info={primary[1]}
+            />
+          ) : (
             <span className="text-label text-faint">
               {installed === null
                 ? "Checking installation…"
                 : installed === false
-                  ? "Not installed"
+                  ? "Install the CLI to use this agent."
                   : agent.how === "Remote agent"
-                    ? "Managed remotely"
-                    : updates === null
-                      ? "Reading version…"
-                      : "Version unavailable"}
+                    ? "Updated by the provider"
+                    : "Reading version…"}
             </span>
-          ) : null}
+          )}
         </div>
       </div>
-      {canManage && expanded ? (
-        <div role="row">
-          <div
-            role="cell"
-            aria-colspan={3}
-            id={detailsId}
-            className="border-t border-hairline bg-surface px-3 py-3"
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-ui font-medium">
-                {agent.name}{" "}
-                {accountProvider?.mode === "observed"
-                  ? "credentials"
-                  : "accounts"}
-              </span>
-              <Action
-                size="xs"
-                disabled={accountBusy || connectionBusy}
-                onClick={() => {
-                  accounts.load(true)
-                  providerConnections.load(true)
-                }}
-              >
-                Refresh accounts
-              </Action>
-            </div>
-            {connection ? (
-              <div className="group/harness space-y-3">
-                <ConnectionControls
-                  connection={connection}
-                  keyOpen={keyOpen}
-                  onPasteKey={() => {
-                    providerConnections.dismissFailure(connection.provider)
-                    setKeyOpen(true)
+      {expanded ? (
+        <div
+          id={detailsId}
+          className="space-y-4 border-t border-hairline bg-surface px-4 py-4"
+        >
+          {connection || accountProvider ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-label font-medium">
+                  {agent.name}
+                  {accountProvider?.mode === "observed"
+                    ? " credentials"
+                    : " account"}
+                </span>
+                <Action
+                  size="xs"
+                  disabled={Boolean(connectionBusy)}
+                  onClick={() => {
+                    accounts.load(true)
+                    providerConnections.load(true)
                   }}
-                />
-                {keyOpen ? (
-                  <ConnectionKeyForm
-                    connection={connection}
-                    onClose={() => setKeyOpen(false)}
-                  />
-                ) : null}
-                <ConnectionNotes connection={connection} keyOpen={keyOpen} />
+                >
+                  Refresh connection
+                </Action>
               </div>
-            ) : null}
-            {accountProvider ? (
-              <ProviderAccounts providerId={agent.id} />
-            ) : null}
-          </div>
+              {connection ? (
+                <>
+                  {working ? (
+                    <p
+                      role="status"
+                      className="text-label text-muted-foreground"
+                    >
+                      {connectionBusy.action === "sign-in-browser"
+                        ? "Complete sign-in in your browser. This will refresh when you’re connected."
+                        : "Updating connection…"}
+                    </p>
+                  ) : null}
+                  <ConnectionControls
+                    connection={connection}
+                    keyOpen={keyOpen}
+                    onPasteKey={() => {
+                      providerConnections.dismissFailure(connection.provider)
+                      setKeyOpen(true)
+                    }}
+                  />
+                  {keyOpen ? (
+                    <ConnectionKeyForm
+                      connection={connection}
+                      onClose={() => setKeyOpen(false)}
+                    />
+                  ) : null}
+                  <ConnectionNotes connection={connection} keyOpen={keyOpen} />
+                </>
+              ) : null}
+              {accountProvider ? (
+                <ProviderAccounts providerId={agent.id} />
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-label text-muted-foreground">
+              {installed === false
+                ? `Install ${agent.name}, then refresh to connect.`
+                : `${agent.name} manages sign-in in its own CLI.`}
+            </p>
+          )}
+          {primary ? <InstallationDetails info={primary[1]} /> : null}
+          {runtimes.length > 1 ? (
+            <div className="space-y-3 border-t border-hairline pt-3">
+              <p className="text-label font-medium">Other installations</p>
+              <p className="text-label text-faint">
+                New conversations use the version shown above. These copies may
+                be used by older conversations.
+              </p>
+              {runtimes.slice(1).map(([id, info]) => (
+                <div key={id} className="space-y-2">
+                  <RuntimeRow runtimeId={id} provider={agent.id} info={info} />
+                  <InstallationDetails info={info} />
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

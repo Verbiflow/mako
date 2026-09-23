@@ -9,6 +9,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, IconAction } from "@/components/ui/kit"
 import { MakoMark } from "@/components/ui/mako-mark"
+import { Notice, NoticeAction } from "@/components/ui/notice"
 import { application, useApplication } from "@/state/application"
 import type { LifecycleWork } from "../../../electron/shared"
 
@@ -225,29 +226,30 @@ export function ApplicationNotice() {
         ? "Restart"
         : "Quit"
   return (
-    <div
-      className="flex shrink-0 items-center gap-3 border-b border-hairline bg-surface px-4 py-2 text-ui"
-      role="status"
-    >
-      <Clock3Icon className="size-4 shrink-0 text-faint" />
-      <p className="min-w-0 flex-1 text-muted-foreground">
-        {operation.kind === "waiting"
-          ? `${label} will begin when ${work.length ? "active work finishes" : "Mako is ready"}. You can keep working.`
+    <Notice
+      tone={operation.kind === "error" ? "danger" : operation.kind === "waiting" ? "info" : "progress"}
+      title={
+        operation.kind === "waiting"
+          ? `${label} will begin when ${work.length ? "active work finishes" : "Mako is ready"}`
           : operation.kind === "error"
             ? operation.message
-            : `${label} in progress. Saving conversations and closing safely…`}
-      </p>
-      {(operation.kind === "waiting" || operation.kind === "error") && (
-        <Action
-          tone="outline"
-          disabled={busy}
-          onClick={() => void application.cancel()}
-        >
-          {operation.kind === "waiting"
-            ? `Cancel ${label.toLowerCase()}`
-            : "Dismiss"}
-        </Action>
-      )}
-    </div>
+            : `${label} in progress`
+      }
+      description={
+        operation.kind === "waiting"
+          ? "You can keep working."
+          : operation.kind === "error"
+            ? undefined
+            : "Saving conversations and closing safely…"
+      }
+      className="mx-3 my-2"
+      actions={
+        operation.kind === "waiting" || operation.kind === "error" ? (
+          <NoticeAction disabled={busy} onClick={() => void application.cancel()}>
+            {operation.kind === "waiting" ? `Cancel ${label.toLowerCase()}` : "Dismiss"}
+          </NoticeAction>
+        ) : null
+      }
+    />
   )
 }

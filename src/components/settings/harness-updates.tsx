@@ -59,41 +59,28 @@ export function RuntimeRow({
       aria-label={info.label ?? `${harnessLabel(provider)} installation`}
       aria-busy={pending || info.phase === "updating"}
     >
-      {info.label ? (
-        <span className="mb-0.5 block text-label font-medium">
-          {info.label}
-        </span>
-      ) : null}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        {info.binary ? (
-          <details className="min-w-0 text-label">
-            <summary
-              aria-label={`${info.label ?? harnessLabel(provider)} installation details`}
-              className="pressable w-fit cursor-pointer rounded-sm text-foreground marker:text-faint"
-            >
-              <span className={cn("tabular", view.shimmer && "shimmer")}>
-                {view.version}
-              </span>
-            </summary>
-            <p className="mt-1 font-mono text-code break-all text-faint">
-              {info.binary}
-            </p>
-            {info.channel ? (
-              <p className="mt-1 text-faint">
-                {info.channel === "self"
-                  ? "Provider installer"
-                  : `Installed via ${info.channel}`}
-              </p>
-            ) : null}
-            {info.latestError ? (
-              <p className="mt-1 break-words text-faint">{info.latestError}</p>
-            ) : null}
-          </details>
-        ) : (
-          <span className={cn("tabular text-label", view.shimmer && "shimmer")}>
-            {view.version}
-          </span>
-        )}
+        <span
+          className={cn(
+            "tabular text-label text-faint",
+            view.shimmer && "shimmer"
+          )}
+        >
+          {info.installed ? `Version ${view.version}` : view.version}
+        </span>
+        <span aria-hidden="true" className="text-label text-faint">
+          ·
+        </span>
+        <span
+          role="status"
+          className={cn(
+            "min-w-0 flex-1 text-label text-faint",
+            view.tone === "negative" && "text-removed",
+            view.tone === "muted" && "text-muted-foreground"
+          )}
+        >
+          {view.detail}
+        </span>
         {view.action ? (
           <Action
             size="xs"
@@ -106,31 +93,46 @@ export function RuntimeRow({
               ? "Updating…"
               : info.result?.outcome === "failed"
                 ? "Retry"
-                : view.action.label === "Check for updates"
-                  ? "Check for updates"
+                : view.action.label === "Check and update"
+                  ? "Check and update"
                   : "Update"}
           </Action>
         ) : null}
       </div>
-      <span
-        role="status"
-        className={cn(
-          "mt-0.5 block text-label break-words text-faint",
-          view.tone === "negative" && "text-removed",
-          view.tone === "muted" && "text-muted-foreground"
-        )}
-      >
-        {view.detail}
-      </span>
-      {info.description ? (
-        <span className="mt-0.5 block text-label text-faint">
-          {info.description}
-        </span>
-      ) : null}
       {view.note ? (
         <p role="alert" className="mt-1 text-label text-removed">
           {view.note}
         </p>
+      ) : null}
+    </div>
+  )
+}
+
+/** Technical provenance is available on demand, away from connection and update actions. */
+export function InstallationDetails({ info }: { info: HarnessUpdateInfo }) {
+  return (
+    <div className="space-y-1 text-label text-faint">
+      <span className="font-medium text-muted-foreground">Installation</span>
+      {info.managedBy ? (
+        <p>
+          This copy is included with {info.managedBy.replace(/\.app$/, "")}.
+          Update that app to update this copy.
+        </p>
+      ) : null}
+      {info.binary ? (
+        <p className="font-mono text-code break-all">{info.binary}</p>
+      ) : null}
+      {info.channel && info.channel !== "app" && info.channel !== "managed" ? (
+        <p>
+          {info.channel === "self"
+            ? "Updated by the CLI’s own installer"
+            : info.channel === "manual"
+              ? "Installed manually"
+              : `Installed with ${info.channel}`}
+        </p>
+      ) : null}
+      {info.latestError ? (
+        <p className="break-words">{info.latestError}</p>
       ) : null}
     </div>
   )

@@ -1,5 +1,6 @@
 import { useState } from "react"
-import { Action, Keys } from "@/components/ui/kit"
+import { SearchIcon } from "lucide-react"
+import { Action, Keys, ListCard, Segmented, SettingRow } from "@/components/ui/kit"
 import {
   chordFromEvent,
   formatChord,
@@ -34,76 +35,76 @@ export function KeyboardSection() {
     setCapturing(undefined)
   }
 
+  const groups = Map.groupBy(shown, (command) => command.section)
+
   return (
-    <section className="mb-5 last:mb-0">
-      <div className="flex items-center gap-2 pb-3">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search commands"
-          className="h-8 min-w-0 flex-1 rounded-md bg-surface px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:ring-border focus:outline-none"
-        />
-        {Object.keys(keybindings).length > 0 ? (
-          <Action tone="ghost" onClick={() => setPref("keybindings", {})}>
-            Reset all
-          </Action>
-        ) : null}
+    <section className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-shell/55 px-2.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
+            <SearchIcon className="size-3.5 shrink-0 text-faint" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search commands"
+              className="min-w-0 flex-1 bg-transparent text-ui text-foreground placeholder:text-faint focus:outline-none"
+            />
+          </label>
+          {Object.keys(keybindings).length > 0 ? (
+            <Action tone="ghost" onClick={() => setPref("keybindings", {})}>
+              Reset all
+            </Action>
+          ) : null}
+        </div>
+        <p className="text-label leading-relaxed text-muted-foreground">
+          Click a shortcut, then press the new keys. Mako shortcuts take priority
+          inside the terminal; unassigned terminal keys still go straight to the shell.
+        </p>
       </div>
-      <p className="pb-2 text-ui leading-relaxed text-faint">
-        Click a shortcut, then press the new keys. Mako shortcuts take priority
-        inside the terminal; unassigned terminal keys still go straight to the shell.
-      </p>
-      <div className="mb-3 flex items-center gap-3 rounded-lg bg-surface px-2.5 py-2 ring-1 ring-hairline">
-        <span className="min-w-0 flex-1">
-          <span className="block text-ui text-foreground/90">Option key in terminal</span>
-          <span className="block text-label text-faint">
-            Auto uses Meta on a US layout and preserves characters on international layouts.
-          </span>
-        </span>
-        <span className="flex rounded-md bg-raised p-0.5">
-          {([
-            ["auto", "Auto"],
-            ["on", "Meta"],
-            ["off", "Characters"],
-          ] as const).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setPref("terminalOptionAsMeta", value)}
-              className={cn(
-                "pressable rounded px-1.5 py-1 text-label",
-                optionAsMeta === value
-                  ? "bg-fill-selected text-foreground"
-                  : "text-faint hover:text-foreground"
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </span>
-      </div>
-      <div className="flex flex-col gap-0.5">
-        {shown.map((command) => (
-          <ShortcutRow
-            key={command.id}
-            command={command}
-            commands={commands}
-            keybindings={keybindings}
-            capturing={capturing === command.id}
-            candidate={candidate}
-            onCapture={() => {
-              setCandidate(keysFor(command, keybindings) ?? "")
-              setCapturing(command.id)
-            }}
-            onCandidate={setCandidate}
-            onCancel={() => setCapturing(undefined)}
-            onSave={() => save(command)}
+      <ListCard>
+        <SettingRow
+          title="Option key in terminal"
+          description="Auto uses Meta on a US layout and preserves characters on international layouts."
+        >
+          <Segmented
+            label="Option key in terminal"
+            value={optionAsMeta}
+            options={[
+              { value: "auto", label: "Auto" },
+              { value: "on", label: "Meta" },
+              { value: "off", label: "Characters" },
+            ]}
+            onChange={(value) => setPref("terminalOptionAsMeta", value)}
           />
-        ))}
-        {shown.length === 0 ? (
-          <p className="py-8 text-center text-ui text-faint">No commands match.</p>
-        ) : null}
-      </div>
+        </SettingRow>
+      </ListCard>
+      {[...groups].map(([section, entries]) => (
+        <div key={section} className="flex flex-col gap-2">
+          <h3 className="px-1 text-label font-medium text-muted-foreground">{section}</h3>
+          <ListCard className="px-1.5">
+            {entries.map((command) => (
+              <ShortcutRow
+                key={command.id}
+                command={command}
+                commands={commands}
+                keybindings={keybindings}
+                capturing={capturing === command.id}
+                candidate={candidate}
+                onCapture={() => {
+                  setCandidate(keysFor(command, keybindings) ?? "")
+                  setCapturing(command.id)
+                }}
+                onCandidate={setCandidate}
+                onCancel={() => setCapturing(undefined)}
+                onSave={() => save(command)}
+              />
+            ))}
+          </ListCard>
+        </div>
+      ))}
+      {shown.length === 0 ? (
+        <p className="py-8 text-center text-ui text-faint">No commands match.</p>
+      ) : null}
     </section>
   )
 }
@@ -134,18 +135,17 @@ function ShortcutRow({
   const conflicts = shortcutConflicts(command, chord, commands, keybindings)
 
   return (
-    <div className="rounded-lg px-2.5 py-2 hover:bg-surface">
-      <div className="flex items-center gap-3">
-        <span className="min-w-0 flex-1">
+    <div className="px-1 py-1.5">
+      <div className="flex min-h-8 items-center gap-3">
+        <span className="min-w-0 flex-1 pl-1">
           <span className="block truncate text-ui text-foreground/90">
             {command.title}
           </span>
-          <span className="block text-label text-faint">
-            {command.section}
-            {keybindings[command.id] !== undefined && command.keys
-              ? ` · default ${formatChord(command.keys).join("")}`
-              : ""}
-          </span>
+          {keybindings[command.id] !== undefined && command.keys ? (
+            <span className="block text-label text-faint">
+              Default {formatChord(command.keys).join("")}
+            </span>
+          ) : null}
         </span>
         {capturing ? (
           <button

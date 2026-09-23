@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from "react"
 import { ExternalLinkIcon } from "lucide-react"
 import { Action } from "@/components/ui/kit"
 import { desktop } from "@/state/desktop"
-import { providerConnections, useProviderConnections } from "@/state/provider-connections"
+import {
+  providerConnections,
+  useProviderConnections,
+} from "@/state/provider-connections"
 import { cn } from "@/lib/utils"
 import { connectionStatusText } from "@/lib/provider-connection-text"
 import type { ProviderConnection, ProviderConnectionAction } from "@/lib/types"
@@ -15,7 +18,8 @@ const inputClass =
 /** A provider is between states; the row says which rather than going blank. */
 function workingAction(
   connection: ProviderConnection,
-  busy: { provider: string; action: ProviderConnectionAction["kind"] } | undefined
+  busy:
+    { provider: string; action: ProviderConnectionAction["kind"] } | undefined
 ): ProviderConnectionAction["kind"] | undefined {
   return busy?.provider === connection.provider ? busy.action : undefined
 }
@@ -23,13 +27,21 @@ function workingAction(
 /** Only a key Mako minted or was handed is Mako's to revoke. */
 function ownsCredential(connection: ProviderConnection): boolean {
   const { state } = connection
-  return state.status === "signed-in" && (state.source === "mako" || state.source === "sdk")
+  return (
+    state.status === "signed-in" &&
+    state.source !== "env" &&
+    (connection.actions?.includes("sign-out") ??
+      (state.source === "mako" || state.source === "sdk"))
+  )
 }
 
 /** A borrowed CLI login still offers a key, because Mako's own takes precedence. */
 function offersSignIn(connection: ProviderConnection): boolean {
   const { state } = connection
-  return state.status === "signed-out" || state.source === "cli"
+  return (
+    state.status !== "signed-in" ||
+    (!connection.actions && state.source === "cli")
+  )
 }
 
 /**
@@ -38,7 +50,11 @@ function offersSignIn(connection: ProviderConnection): boolean {
  * account is the front of the line and the part worth keeping when the
  * window is narrow.
  */
-export function ConnectionStatus({ connection }: { connection: ProviderConnection }) {
+export function ConnectionStatus({
+  connection,
+}: {
+  connection: ProviderConnection
+}) {
   const busy = useProviderConnections((state) => state.busy)
   const working = workingAction(connection, busy)
   const { state } = connection
@@ -60,7 +76,7 @@ export function ConnectionStatus({ connection }: { connection: ProviderConnectio
         // fit: an account and where its key came from runs to eighty
         // characters, and the row is 644px with a transport label and
         // controls already on it, so every reading was a truncated one.
-        "block truncate text-label",
+        "block text-label break-words",
         // A key that was refused is a warning. Never having signed in is not:
         // it is simply where a provider starts, and colouring it would put a
         // caution light on an untouched install.
@@ -90,6 +106,8 @@ export function ConnectionControls({
   const anyBusy = Boolean(busy)
   const signedIn = connection.state.status === "signed-in"
   const canStore = connection.secureStorage
+  const offersKey = connection.actions?.includes("sign-in-key") ?? true
+  const offersBrowser = connection.actions?.includes("sign-in-browser") ?? true
 
   const act = (action: ProviderConnectionAction) =>
     providerConnections.act(connection.provider, action)
@@ -108,17 +126,26 @@ export function ConnectionControls({
       ) : null}
       {offersSignIn(connection) && !keyOpen ? (
         <>
-          <Action tone="ghost" size="xs" disabled={anyBusy || !canStore} onClick={onPasteKey}>
-            {signedIn ? "Use a key" : "Paste API key"}
-          </Action>
-          <Action
-            tone={signedIn ? "ghost" : "solid"}
-            size="xs"
-            disabled={anyBusy || !canStore}
-            onClick={() => void act({ kind: "sign-in-browser" })}
-          >
-            {signedIn ? "Sign in another account" : "Sign in with browser"}
-          </Action>
+          {offersKey ? (
+            <Action
+              tone="ghost"
+              size="xs"
+              disabled={anyBusy || !canStore}
+              onClick={onPasteKey}
+            >
+              {signedIn ? "Use a key" : "Paste API key"}
+            </Action>
+          ) : null}
+          {offersBrowser ? (
+            <Action
+              tone={signedIn ? "ghost" : "solid"}
+              size="xs"
+              disabled={anyBusy || (offersKey && !canStore)}
+              onClick={() => void act({ kind: "sign-in-browser" })}
+            >
+              {signedIn ? "Sign in another account" : "Sign in with browser"}
+            </Action>
+          ) : null}
         </>
       ) : null}
     </span>
@@ -147,7 +174,9 @@ export function ConnectionKeyForm({
   onClose: () => void
 }) {
   const busy = useProviderConnections((state) => state.busy)
-  const failure = useProviderConnections((state) => state.failures[connection.provider])
+  const failure = useProviderConnections(
+    (state) => state.failures[connection.provider]
+  )
   const [key, setKey] = useState("")
   const input = useRef<HTMLInputElement>(null)
   const working = workingAction(connection, busy)
@@ -205,7 +234,10 @@ export function ConnectionKeyForm({
           aria-invalid={failure?.action === "sign-in-key" ? true : undefined}
           aria-describedby={`${connection.provider}-key-note`}
           disabled={anyBusy}
-          className={cn(inputClass, failure?.action === "sign-in-key" && "ring-negative/60")}
+          className={cn(
+            inputClass,
+            failure?.action === "sign-in-key" && "ring-negative/60"
+          )}
         />
         <Action tone="solid" type="submit" disabled={anyBusy || !key.trim()}>
           {working === "sign-in-key" ? "Checking…" : "Save"}
@@ -230,8 +262,8 @@ export function ConnectionKeyForm({
         ) : null}
         <span>
           {connection.keyUrl && host ? "· " : ""}
-          Checked with {connection.label} before it is saved, then encrypted on this device using
-          the system key store.
+          Checked with {connection.label} before it is saved, then encrypted on
+          this device using the system key store.
         </span>
       </span>
     </form>
@@ -254,15 +286,27 @@ export function ConnectionNotes({
   connection: ProviderConnection
   keyOpen: boolean
 }) {
-  const failure = useProviderConnections((state) => state.failures[connection.provider])
+  const failure = useProviderConnections(
+    (state) => state.failures[connection.provider]
+  )
   const { state } = connection
   const problem = state.status === "signed-out" ? state.problem : undefined
-  const noStorage = !connection.secureStorage && offersSignIn(connection)
+  const noStorage =
+    !connection.secureStorage &&
+    offersSignIn(connection) &&
+    (connection.actions?.includes("sign-in-key") ?? true)
+  const unavailable = state.status === "unavailable" ? state.message : undefined
 
-  if (!problem && !noStorage && !keyOpen && !failure) return null
+  if (!problem && !noStorage && !keyOpen && !failure && !unavailable)
+    return null
   return (
     <div className="flex flex-col gap-1 pl-[26px] text-label leading-relaxed">
       {keyOpen ? <p className="text-faint">{connection.description}</p> : null}
+      {unavailable ? (
+        <p role="status" className="text-caution">
+          {unavailable}
+        </p>
+      ) : null}
       {problem ? (
         <p role="status" className="text-caution">
           {problem.message}
@@ -270,8 +314,8 @@ export function ConnectionNotes({
       ) : null}
       {noStorage ? (
         <p className="text-caution">
-          Keys cannot be saved on this machine because the system key store is unavailable. Set an
-          API key in Mako&rsquo;s environment instead.
+          Keys cannot be saved on this machine because the system key store is
+          unavailable. Set an API key in Mako&rsquo;s environment instead.
         </p>
       ) : null}
       {failure ? (
