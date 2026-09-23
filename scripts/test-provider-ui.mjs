@@ -114,7 +114,7 @@ async function review() {
   await window.loadURL(
     `${process.env.MAKO_PROVIDER_TEST_URL}scripts/provider-review.html`
   )
-  await until("document.body.textContent.includes('0.0.0-beta-19425')")
+  await until("document.body.textContent.includes('2.0.1')")
   assert.equal(
     await evaluate("document.querySelectorAll('[role=list]').length"),
     1
@@ -123,6 +123,10 @@ async function review() {
     await evaluate("document.body.textContent.includes('Runtime versions')"),
     false
   )
+  window.showInactive()
+  await new Promise(resolve => setTimeout(resolve, 250))
+  assert.equal(await evaluate("document.body.textContent.includes('1.18.31')"), false)
+  assert.equal(await evaluate("document.body.textContent.includes('supports OpenCode v2 only')"), false)
   await screenshot("agents-dark.png")
   await fixture("f.theme('light')")
   await screenshot("agents-light.png")
@@ -156,13 +160,14 @@ async function review() {
   await evaluate(
     "document.querySelector('#provider-opencode-accounts').scrollIntoView({block:'center'})"
   )
+  assert.equal(await evaluate("document.body.textContent.includes('Other installations')"), false)
   await screenshot("agents-opencode-credentials.png")
   await evaluate(
-    "document.querySelector('[aria-label=\"Update OpenCode 1\"]').scrollIntoView({block:'center'})"
+    "document.querySelector('[aria-label=\"Update OpenCode\"]').scrollIntoView({block:'center'})"
   )
-  // The update nearest OpenCode 1 must dispatch its installation key only.
+  // The update nearest OpenCode must dispatch its installation key only.
   const updatePoint = await evaluate(`(() => {
-    const button = document.querySelector('button[aria-label="Update OpenCode 1"]');
+    const button = document.querySelector('button[aria-label="Update OpenCode"]');
     const r = button.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};
   })()`)
   for (const type of ["mousePressed", "mouseReleased"])
@@ -175,7 +180,7 @@ async function review() {
   await until("document.body.textContent.includes('Download interrupted')")
   assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode"])
   assert.equal(
-    await evaluate("document.body.textContent.includes('0.0.0-beta-19425')"),
+    await evaluate("document.body.textContent.includes('2.0.1')"),
     true
   )
   await screenshot("agents-update-error.png")

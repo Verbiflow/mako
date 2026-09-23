@@ -418,5 +418,18 @@ console.log("cursor sdk projection, modes and wire ok")
     "an ordinary request still dies at the deadline"
   )
   client.kill()
+
+  const defaultDeadline = new CursorSdkClient({
+    owner: "test-cancel-default", cwd: tmpdir(), env: {}, onEvent() {},
+    execPath: process.execPath, entry: stub,
+  })
+  try {
+    const began = Date.now()
+    await assert.rejects(defaultDeadline.request("cancel", undefined), /did not answer cancel within 5s/)
+    assert.ok(Date.now() - began < 10_000, "Stop cannot wait the ordinary 60-second deadline")
+  } finally {
+    defaultDeadline.kill()
+    await defaultDeadline.exited
+  }
 }
 console.log("cursor sdk: steer outlives the request deadline, cancel does not")

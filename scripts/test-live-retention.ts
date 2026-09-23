@@ -73,6 +73,7 @@ Reflect.deleteProperty(globalThis, "window")
 const root = await mkdtemp(join(tmpdir(), "mako-closed-cache-"))
 const closed = mock.method(LiveJournal.prototype, "close")
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "fixture",
   canResume: true,
   available: () => true,

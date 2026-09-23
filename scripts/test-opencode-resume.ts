@@ -29,6 +29,11 @@ try {
       db.prepare(`INSERT INTO ${content} VALUES (?, ?, ?)`).run("msg_one", "ses_one", "original content")
       const binding: ProviderBinding = { id: "fixture", provider: "opencode", nativeId: "ses_one", path: `${path}#${layout === "mixed-v2" ? "v2:" : ""}ses_one`, includesBase: true, coveredBlocks: 1 }
       const initial = await read(binding)
+      if (layout === "legacy") {
+        assert.equal(initial.kind, "unavailable")
+        if (initial.kind === "unavailable") assert.match(initial.reason, /v1 sessions are no longer supported/)
+        continue
+      }
       assert.equal(initial.kind, "available", layout)
       if (initial.kind !== "available") throw new Error(initial.reason)
       assert.equal((await resumeVerdict(binding, idle)).kind, "unavailable", "the former generic file fallback cannot read a database-row locator")

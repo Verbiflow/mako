@@ -59,6 +59,7 @@ let blockedCloseStarted = false
 let releaseBlockedClose: (() => void) | undefined
 function driver(provider: string): ProviderLiveDriver {
   return {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     provider,
     canResume: true,
     available: () => true,

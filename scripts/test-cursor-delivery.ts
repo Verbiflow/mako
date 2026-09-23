@@ -5,6 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { CursorSdkDisconnectedError } from "../electron/providers/cursor/sdk/client.ts"
+import type { LiveSessionState } from "../electron/shared.ts"
 import {
   createCursorSdkDriver,
   type CursorSdkLiveClient,
@@ -126,6 +128,48 @@ try {
   console.log(
     "Cursor delivery: production adapter preflight refusal, delayed native response and lost-reply evidence passed"
   )
+
+  const states: LiveSessionState[] = []
+  let closeRequested = false
+  let exited = false
+  let confirmExit: (exit: { code: number | null; signal: NodeJS.Signals | null }) => void = () => {}
+  const unresponsive: CursorSdkLiveClient = {
+    ...client,
+    get alive() { return !exited },
+    exited: new Promise((resolve) => { confirmExit = resolve }),
+    request: async (method, params) => {
+      if (method === "cancel") throw new CursorSdkDisconnectedError("The Cursor SDK did not answer cancel")
+      return client.request(method, params)
+    },
+    close: async () => { closeRequested = true },
+  }
+  const stalled = createCursorSdkDriver({
+    auth, stateRoot: () => root, home: root, client: () => unresponsive,
+    models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
+  })
+  const stalledId = randomUUID()
+  await stalled.start(root, { conversationId: stalledId, emit(event) {
+    if (event.type === "live-session") states.push(event.session)
+  } })
+  const nativeId = states.at(-1)?.nativeId
+  assert.ok(nativeId)
+  const running = stalled.prompt(stalledId, "work", [], undefined, dispatch())
+  await tick()
+  answer({ runId: "stalled-native-run" })
+  await running
+  const stopping = assert.rejects(stalled.cancel(stalledId), /did not answer cancel/)
+  await tick()
+  assert.equal(closeRequested, true, "Stop must close an unresponsive provider")
+  assert.equal(states.at(-1)?.status, "running", "a timeout cannot report a still-live writer as ready")
+  await assert.rejects(stalled.prompt(stalledId, "competing", [], undefined, dispatch()), /already working/)
+  exited = true
+  confirmExit({ code: null, signal: "SIGKILL" })
+  await stopping
+  assert.equal(states.at(-1)?.connection, "disconnected")
+  assert.equal(states.at(-1)?.status, "failed")
+  assert.equal(states.at(-1)?.nativeId, nativeId, "process recovery preserves the native session")
+  await stalled.close(stalledId)
+  console.log("Cursor Stop: failed acknowledgement closes the process and waits for exit before allowing recovery")
 } finally {
   await driver.close(id)
   rmSync(root, { recursive: true, force: true })

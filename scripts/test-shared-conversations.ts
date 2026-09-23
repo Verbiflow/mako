@@ -32,6 +32,7 @@ const sessions = new Map<string, LiveSessionState>()
 const emitters = new Map<string, (event: LiveDriverEvent) => void>()
 const providers = ["codex", "claude", "cursor", "grok", "devin", "opencode"]
 const drivers = new Map(providers.map((provider) => [provider, {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider, canResume: true, available: () => true,
   start: async (cwd, options) => {
     starts.push(provider)
@@ -48,7 +49,7 @@ const drivers = new Map(providers.map((provider) => [provider, {
     await new Promise<void>((resolve) => { finishes.set(id, resolve) })
     emitters.get(id)?.({ type: "live-session", session: { ...session, status: "ready", lastStop: "cancelled" } })
   },
-  permission: async (_id, requestId) => { approvals.push(requestId) },
+  permission: async (_id, requestId, _response, dispatch) => { approvals.push(requestId); dispatch.report({ kind: "submitted", source: "callback" }) },
   cancel: async (id) => { cancellations.push(id); finishes.get(id)?.() },
   close: async (id) => { finishes.get(id)?.() },
   setMode: async () => {},
@@ -78,6 +79,7 @@ async function ownerCall(channel: string, args: unknown[]) {
     }
     case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallInputs[channel].parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
     case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallInputs[channel].parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
+    case "mako:live-steer-queued": { const [id, input] = hostCallInputs[channel].parse(args); value = await owner.act(id, input); break }
     case "mako:live-permission": { const [id, requestId, response] = hostCallInputs[channel].parse(args); value = await owner.permission(id, requestId, response); break }
     case "mako:live-cancel": { const [id] = hostCallInputs[channel].parse(args); value = await owner.cancel(id); break }
     case "mako:live-close": { const [id] = hostCallInputs[channel].parse(args); value = await owner.close(id); break }
@@ -144,11 +146,18 @@ try {
     const queuedId = randomUUID()
     await invokeRuntime(desktopSocket, client, "mako:live-prompt", [id, queuedId, `${provider} next`])
     assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === queuedId)?.status, "queued")
+    await assert.rejects(invokeRuntime(desktopSocket, client, "mako:live-steer-queued", [id, {
+      kind: "steer-queued", id: randomUUID(), requestId, queuedRequestId: queuedId, text: `${provider} next`, attachments: [],
+    }]), /does not support steering/, "queued steering reaches the owning host's provider check through either client")
+    assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === queuedId)?.status, "queued", "a provider refusal preserves the queue")
     const binding = owner.snapshot(id)?.control?.activeBindingId ?? id
     emitters.get(binding)?.({ type: "live-permission", request: { id: "approval", sessionId: binding, title: "Fixture approval", options: [{ optionId: "allow", name: "Allow" }] } })
     owner.snapshot(id)
     await until(() => received.some((event) => JSON.stringify(event).includes('"approval"')), "permission streams through desktop")
-    await invokeRuntime(desktopSocket, client, "mako:live-permission", [id, "approval", { kind: "choice", optionId: "allow" }])
+    const approvalId = owner.snapshot(id)?.permissions[0]?.id
+    assert.ok(approvalId)
+    assert.notEqual(approvalId, "approval")
+    await invokeRuntime(desktopSocket, client, "mako:live-permission", [id, approvalId, { kind: "choice", optionId: "allow" }])
     assert.equal(owner.snapshot(id)?.permissions.length, 0)
     await invokeRuntime(desktopSocket, client, "mako:live-cancel", [id])
     assert.ok(cancellations.includes(binding))

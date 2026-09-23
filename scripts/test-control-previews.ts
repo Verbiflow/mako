@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { setTimeout as delay } from "node:timers/promises"
 import { mock } from "node:test"
 import { BrowserService } from "../electron/browser-service.js"
 import { ControlPreviews } from "../electron/control-previews.js"
@@ -47,30 +48,58 @@ try {
   assert.equal(previews.read("other", true), null)
   previews.read("task", true)
   for (
-    let attempt = 0;
-    attempt < 100 && !previews.read("task", true)?.frame;
-    attempt++
+    let i = 0;
+    i < 100 && !fixture.calls.some((c) => c.method === "Page.startScreencast");
+    i++
   )
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await delay(5)
+  const session = fixture.sessionFor(target.tab)!
+  const emit = () =>
+    fixture.emit(session, "Page.screencastFrame", {
+      sessionId: 1,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOioAAAAASUVORK5CYII=",
+      metadata: {
+        deviceWidth: 1600,
+        deviceHeight: 1000,
+        pageScaleFactor: 1,
+        offsetTop: 0,
+      },
+    })
+  emit()
+  for (let i = 0; i < 100 && !previews.read("task", true)?.frame; i++)
+    await delay(5)
   assert.ok(previews.read("task", true)?.frame)
   assert.equal(
-    fixture.calls.filter((call) => call.method === "Page.captureScreenshot")
-      .length,
-    1,
-    "Polling while a capture runs does not duplicate it"
+    fixture.calls.filter((c) => c.method === "Page.captureScreenshot").length,
+    0,
+    "Preview never takes still screenshots"
   )
-  await new Promise((resolve) => setTimeout(resolve, 260))
-  assert.equal(events, 1, "Activity bursts publish one narrow event")
+  assert.equal(
+    fixture.calls.filter((c) => c.method === "Page.startScreencast").length,
+    1,
+    "Polling shares one stream"
+  )
+  await delay(260)
+  assert.equal(
+    events,
+    2,
+    "One frame notification plus one coalesced activity burst"
+  )
+  const before = previews.read("task", true)?.frame?.id
+  previews.browserTarget("task", { ...target }, () => {})
   previews.read("task", true, "overlay")
   previews.read("task", false, "panel")
-  await new Promise((resolve) => setTimeout(resolve, 400))
-  previews.read("task", true, "overlay")
-  await new Promise((resolve) => setTimeout(resolve, 25))
+  emit()
+  await delay(50)
+  assert.notEqual(
+    previews.read("task", true, "overlay")?.frame?.id,
+    before,
+    "Repeated target binding must keep delivering frames"
+  )
   assert.equal(
-    fixture.calls.filter((call) => call.method === "Page.captureScreenshot")
-      .length,
-    2,
-    "Closing the inspector must not stop the visible chat overlay"
+    fixture.calls.filter((c) => c.method === "Page.stopScreencast").length,
+    0,
+    "Closing one consumer preserves the other"
   )
   previews.read("task", false, "overlay")
   previews.observe({
@@ -112,7 +141,7 @@ try {
     previews.observe({ ...activity, conversationId: `task-${index}` })
   assert.equal(previews.read("task", false), null, "Retention is bounded")
   console.log(
-    "Control previews: hidden capture suppression, one in-flight frame, task isolation, event coalescing, target invalidation and bounded retention passed"
+    "Control previews: hidden capture suppression, one shared stream, task isolation, event coalescing, target invalidation and bounded retention passed"
   )
 } finally {
   previews.close()

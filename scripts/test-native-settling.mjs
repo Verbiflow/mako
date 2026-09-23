@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -29,7 +29,20 @@ await run(
   { timeout: 180000 }
 )
 const before = await frontmostPid()
-const app = spawn(binary, [status], { stdio: ["ignore", "ignore", "pipe"] })
+const foregroundPhase = process.argv.includes("--foreground-gestures")
+let fixturePid
+let app
+if (foregroundPhase) {
+  // LaunchServices must register the foreground fixture as an app. A bare
+  // command-line AppKit process can own WindowServer focus without appearing
+  // as NSWorkspace's active application, and is correctly refused by the host.
+  const bundle = join(root, "Mako Gesture Fixture.app")
+  await mkdir(join(bundle, "Contents", "MacOS"), { recursive: true })
+  await cp(binary, join(bundle, "Contents", "MacOS", "fixture"))
+  await writeFile(join(bundle, "Contents", "Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleIdentifier</key><string>dev.mako.gesture-fixture</string><key>CFBundleName</key><string>Mako Gesture Fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`)
+  await run("codesign", ["--force", "--sign", "-", bundle])
+  app = spawn("open", ["-n", "-g", bundle, "--args", status, "--regular"], { stdio: ["ignore", "ignore", "pipe"] })
+} else app = spawn(binary, [status], { stdio: ["ignore", "ignore", "pipe"] })
 let fixtureErrors = ""
 app.stderr.on("data", (chunk) => {
   fixtureErrors = (fixtureErrors + chunk.toString()).slice(-65536)
@@ -73,11 +86,12 @@ async function cell(source) {
     milliseconds: performance.now() - start,
     result,
   })
-  if (output.isError || result.code) throw new Error(JSON.stringify(result))
+  if (output.isError || (result.code && result.outcome)) throw new Error(JSON.stringify(result))
   return result
 }
 try {
   const state = await until(read)
+  fixturePid = state.pid
   evidence.driver = {
     executable: resolveExecutable("cua-driver"),
     version: (
@@ -114,6 +128,7 @@ try {
     0,
     "Application menu rows are outside the window observation scope"
   )
+  if (!foregroundPhase) {
   const clicked = await cell(
     "return await control.native('click',{...state.target,x:440,y:40});"
   )
@@ -301,6 +316,48 @@ try {
       evidence.foreground.every(([pid]) => pid !== state.pid),
     "The fixture never took the foreground"
   )
+  } else {
+    evidence.initialForeground = before
+    evidence.preGestureForeground = [...(await samples.stop())]
+    samples = undefined
+  }
+  if (process.argv.includes("--foreground-gestures")) {
+    // This explicitly requested phase uses only the disposable fixture. It is
+    // excluded from the background focus-continuity evidence above.
+    await cell("return await state.window.raw('bring_to_front',{foreground:true});")
+    const prior = (await read()).points.length
+    await cell(`state.dragVideo=await state.window.record({directory:${JSON.stringify(join(root, "foreground-drag"))},maxDurationMs:15000});return state.dragVideo;`)
+    evidence.beforeGestureWindows = await cell("return await control.native('list_windows',{pid:state.target.pid,on_screen_only:true});")
+    await cell("return await state.window.raw('drag',{from_x:345,from_y:110,to_x:535,to_y:180,steps:20,duration_ms:400,delivery_mode:'foreground',foreground:true});")
+    const received = await until(async () => {
+      const state = await read()
+      return state.points.slice(prior).some(point => point.kind === "up") ? state : null
+    })
+    const points = received.points.slice(prior)
+    assert.equal(points.filter(point => point.kind === "down").length, 1)
+    assert.equal(points.filter(point => point.kind === "up").length, 1)
+    assert.ok(points.filter(point => point.kind === "drag").length >= 10)
+    const down = points.find(point => point.kind === "down")
+    const up = points.find(point => point.kind === "up")
+    assert.ok(Math.abs(down.windowX - 345) < 1 && Math.abs(down.windowY - 110) < 1)
+    assert.ok(Math.abs(up.windowX - 535) < 1 && Math.abs(up.windowY - 180) < 1)
+    assert.equal(received.pressedButtons, 0, "Drag releases its button")
+    await cell("return await state.dragVideo.stop();")
+    const video = await until(async () => {
+      const status = await cell("return await state.dragVideo.status();")
+      return status.status === "finalizing" ? null : status
+    }, 30000)
+    assert.equal(video.status, "finished", video.error)
+    const timeline = JSON.parse(await readFile(video.timeline, "utf8"))
+    assert.ok(timeline.pointer.length >= 22, "Recorded cursor retains the actual drag path")
+    assert.ok(new Set(timeline.pointer.map(point => Math.round(point.x))).size >= 15)
+    const press = timeline.pointer.find(point => point.pressed)
+    assert.ok(press && Math.abs(press.x - down.windowX) < 1 && Math.abs(press.y - down.windowY) < 1)
+    const held = timeline.pointer.slice(timeline.pointer.indexOf(press), -1)
+    assert.ok(held.length >= 21 && held.every(point => point.pressed), "The recorded button stays held throughout the drag")
+    assert.equal(timeline.pointer.at(-1).pressed, false, "The recorded button releases at the end")
+    evidence.foregroundDrag = { points, pointer: timeline.pointer, video }
+  }
   assert.doesNotMatch(
     fixtureErrors,
     /NSInternalInconsistencyException|unexpected event type/,
@@ -316,6 +373,9 @@ try {
   await client.close().catch(() => {})
   await stopCuaEmbedded()
   app.kill()
+  if (foregroundPhase && fixturePid) {
+    try { process.kill(fixturePid, "SIGTERM") } catch {}
+  }
   await writeFile(
     join(root, "evidence.json"),
     JSON.stringify(evidence, null, 2) + "\n"

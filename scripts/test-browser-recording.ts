@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
+import { BrowserCapture } from "../electron/browser-capture.js"
 import { BrowserRecordings } from "../electron/browser-recording.js"
 import type { BrowserConnection } from "../electron/browser-connection.js"
 const directory = await mkdtemp(join(tmpdir(), "browser-recording-lifecycle-"))
@@ -24,7 +25,7 @@ type Connection = Pick<
   BrowserConnection,
   "send" | "onEvent" | "onInput" | "onClose"
 >
-function fixture(failStop = false, gate?: Promise<void>) {
+function fixture(failStop = false, gate?: Promise<void>, frames = true) {
   const calls: string[] = []
   let event: Parameters<Connection["onEvent"]>[0] = () => {}
   const connection: Connection = {
@@ -42,7 +43,7 @@ function fixture(failStop = false, gate?: Promise<void>) {
     },
     async send(method) {
       calls.push(method)
-      if (method === "Page.startScreencast") {
+      if (method === "Page.startScreencast" && frames) {
         event({
           method: "Page.screencastFrame",
           sessionId: "session",
@@ -78,7 +79,8 @@ for (const failStop of [false, true]) {
     source.connection,
     "session",
     { directory },
-    new AbortController().signal
+    new AbortController().signal,
+    new BrowserCapture(source.connection, "session")
   )
   assert.throws(
     () => manager.get("intruder", target, started.id),
@@ -113,7 +115,8 @@ for (const failStop of [false, true]) {
     source.connection,
     "session",
     { directory },
-    new AbortController().signal
+    new AbortController().signal,
+    new BrowserCapture(source.connection, "session")
   )
   manager.stopOwner("owner")
   await assert.rejects(starting, /lease ended/)
@@ -135,7 +138,8 @@ for (const failStop of [false, true]) {
     source.connection,
     "session",
     { directory },
-    new AbortController().signal
+    new AbortController().signal,
+    new BrowserCapture(source.connection, "session")
   )
   for (
     let i = 0;
@@ -155,3 +159,11 @@ for (const failStop of [false, true]) {
 console.log(
   "Browser recording: owner isolation, early/late teardown and exact-attachment cleanup after stop failure passed"
 )
+
+{
+  const manager = new BrowserRecordings(), source = fixture(false, undefined, false)
+  await assert.rejects(manager.start("owner", target, source.connection, "session", { directory }, new AbortController().signal, new BrowserCapture(source.connection, "session")), /no video frames within five seconds/)
+  assert.equal(source.calls.filter(c => c === "Page.stopScreencast").length, 1)
+  assert.ok(!source.calls.some(c => c === "Page.bringToFront" || c === "Target.activateTarget"))
+  console.log("Browser recording: no-frame startup refuses without activation or retargeting")
+}

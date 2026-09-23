@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { access, mkdtemp, rm } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { TerminalClients } from "../electron/terminal-clients.ts"
@@ -375,6 +375,36 @@ for (let attempt = 0; attempt < 100 && replacementPid; attempt += 1) {
     break
   }
   await new Promise((resolveWait) => setTimeout(resolveWait, 20))
+}
+
+// A daemon whose socket was rebound by a successor is unreachable. It leaves
+// on its own and leaves the successor's endpoint in place.
+if (process.platform !== "win32") {
+  const orphanState = join(root, "orphan")
+  const orphanEndpoint = terminalEndpoint(orphanState)
+  const orphan = spawn(
+    process.execPath,
+    [entry, "--endpoint", orphanEndpoint, "--state-dir", orphanState],
+    { stdio: "ignore" }
+  )
+  const orphanExited = new Promise<number | null>((resolveExit) =>
+    orphan.once("exit", (code) => resolveExit(code))
+  )
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await access(orphanEndpoint).then(() => true, () => false)) break
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20))
+  }
+  await rm(orphanEndpoint)
+  await writeFile(orphanEndpoint, "successor")
+  const exitCode = await Promise.race([
+    orphanExited,
+    new Promise<"timeout">((resolveWait) =>
+      setTimeout(() => resolveWait("timeout"), 8_000)
+    ),
+  ])
+  if (exitCode === "timeout") orphan.kill("SIGKILL")
+  assert.equal(exitCode, 0, "an orphaned daemon exits by itself")
+  assert.equal(await readFile(orphanEndpoint, "utf8"), "successor")
 }
 await rm(root, { recursive: true, force: true })
 

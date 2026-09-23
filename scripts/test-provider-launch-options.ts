@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
+import { toast } from "sonner"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -11,6 +12,18 @@ import { invokeRuntime } from "../electron/runtime-connection"
 import { startWebHost } from "../electron/web-host"
 import type { LiveSnapshot, LiveStartOptions } from "../electron/shared"
 
+const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+const stored = new Map<string, string>()
+Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+  get length() { return stored.size },
+  key: (index: number) => [...stored.keys()][index] ?? null,
+  getItem: (key: string) => stored.get(key) ?? null,
+  setItem: (key: string, value: string) => { stored.set(key, value) },
+  removeItem: (key: string) => { stored.delete(key) },
+  clear: () => stored.clear(),
+} satisfies Storage })
+const errors: unknown[] = []
+const errorToast = mock.method(toast, "error", (message) => { errors.push(message); return "test-error" })
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")
@@ -20,6 +33,7 @@ const { acpStore } = await import("../src/state/acp-state")
 const { prefsStore } = await import("../src/state/prefs")
 const { providerStore, providerProfileKey } =
   await import("../src/state/providers")
+const { pendingMessages } = await import("../src/state/message-outbox")
 const { threadsStore } = await import("../src/state/thread-store")
 installMockBridge()
 const root = await mkdtemp(join(tmpdir(), "mako-launch-options-"))
@@ -68,6 +82,7 @@ const start = mock.method(
   bridge,
   "liveStart",
   async (...[provider, cwd, options]: Parameters<typeof bridge.liveStart>) => {
+    assert.ok(pendingMessages().some(command => command.kind === "start" && command.args[2].conversationId === options.conversationId), "launch intent must be saved before dispatch")
     const args = hostCallInputs["mako:live-start"].parse([
       provider,
       cwd,
@@ -137,7 +152,24 @@ try {
       })
     }
     reset()
+    const callsBefore = start.mock.callCount()
+    const storage = globalThis.localStorage
+    Reflect.deleteProperty(globalThis, "localStorage")
+    try {
+      assert.equal(await acp.startFresh(provider, root, "Do not dispatch without storage"), false)
+      assert.equal(start.mock.callCount(), callsBefore)
+      assert.equal(errors.at(-1), "Message storage is unavailable. Your draft has not been sent.")
+    } finally { Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage }) }
+    reset()
+    const storageFailure = mock.method(globalThis.localStorage, "setItem", () => { throw new Error("Fixture storage is full") })
+    try {
+      assert.equal(await acp.startFresh(provider, root, "Do not dispatch without saving"), false)
+      assert.equal(start.mock.callCount(), callsBefore, `${provider}: storage failure must prevent provider dispatch`)
+      assert.equal(errors.at(-1), "Fixture storage is full")
+    } finally { storageFailure.mock.restore() }
+    reset()
     assert.equal(await acp.startFresh(provider, root, "Fresh prompt"), true)
+    assert.deepEqual(pendingMessages(), [], "accepted start removes the saved command")
     let call = last(provider)
     for (const field of ["threadPath", "displayPrompt", "modeId"] as const) {
       assert.equal(Object.hasOwn(call.options, field), true)
@@ -253,6 +285,7 @@ try {
       provider,
       transport: profile.transport,
       freshDefaults: "passed",
+      persistBeforeDispatchAndStorageFailure: "passed",
       noInitialPrompt: "passed",
       nestedSettingsAndAttachment: "passed",
       savedAndExplicitModeEncoding: "passed",
@@ -273,6 +306,9 @@ try {
   )
 } finally {
   start.mock.restore()
+  errorToast.mock.restore()
+  if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage)
+  else Reflect.deleteProperty(globalThis, "localStorage")
   host.close()
   Reflect.deleteProperty(globalThis, "window")
   await rm(root, { recursive: true, force: true })

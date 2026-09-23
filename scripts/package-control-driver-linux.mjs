@@ -29,8 +29,7 @@ async function verifySource() {
     (await run("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim(),
     manifest.base
   )
-  assert.equal(
-    (
+  const actualPatch = (
       await run(
         "git",
         [
@@ -44,9 +43,9 @@ async function verifySource() {
         ],
         { maxBuffer: 8 * 1024 * 1024 }
       )
-    ).stdout,
-    patch
-  )
+    ).stdout
+  const digest = value => createHash("sha256").update(value).digest("hex")
+  assert.equal(digest(actualPatch), digest(patch), "Native source changed during packaging; rebuild from the reviewed patch")
 }
 await verifySource()
 // Build an immutable archive reconstructed from the pinned base and reviewed
@@ -81,7 +80,8 @@ try {
     await run("docker", ["run", "--rm", "--platform", dockerPlatform, image, "uname", "-m"])
   ).stdout.trim()
   assert.equal(architecture, arch === "arm64" ? "aarch64" : "x86_64", "Build image does not match requested release target")
-  const volume = `mako-control-linux-target-${arch}`
+  // Preserve the established ARM cache; x64 never shares architecture artifacts.
+  const volume = arch === "arm64" ? "mako-control-linux-target" : "mako-control-linux-target-x64"
   const mounts = ["--platform", dockerPlatform, "--mount", `type=volume,source=${volume},target=/target`]
   await run(
     "docker",
@@ -100,7 +100,7 @@ try {
       image,
       "sh",
       "-c",
-      "mkdir -p /build && tar -xf /source.tar -C /build && cd /build/rust && cargo build --release --locked -p cua-driver",
+      "mkdir -p /build && tar -xf /source.tar -C /build && cd /build/rust && cargo build --release --locked -p cua-driver --features portal-input",
     ],
     { timeout: 1800000, maxBuffer: 16 * 1024 * 1024 }
   )
@@ -116,6 +116,9 @@ try {
     ])
   ).stdout.trim()
   assert.equal(version, `cua-driver ${manifest.version}`)
+  const runtimeManifest = JSON.parse((await run("docker", ["run", "--rm", ...mounts, image,
+    "/target/release/cua-driver", "manifest"])).stdout)
+  assert.equal(runtimeManifest.features?.portal_input, true, "Linux releases must include the GNOME/KDE portal input backend")
   const elf = (await run("docker", ["run", "--rm", ...mounts, image, "readelf", "-h", "/target/release/cua-driver"])).stdout
   assert.match(elf, arch === "arm64" ? /Machine:\s+AArch64/ : /Machine:\s+Advanced Micro Devices X86-64/, "Executable architecture differs from release target")
   const output = resolve("release/control-driver", manifest.version, platform)
@@ -161,13 +164,14 @@ try {
         base: manifest.base,
         version: manifest.version,
         platform,
+        features: runtimeManifest.features,
         elf,
         imageId,
         patchSha256: hash(patch),
         sourceArchiveSha256: hash(await readFile(sourceArchive)),
         binarySha256: hash(await readFile(join(output, "cua-driver"))),
         gnomeHelper: {
-          api: 9,
+          api: 10,
           files: Object.fromEntries(
             await Promise.all(
               ["extension.js", "metadata.json"].map(async (file) => [

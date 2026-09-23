@@ -16,6 +16,7 @@ const permissions: string[] = []
 const cancellations: string[] = []
 function driver(provider: string): ProviderLiveDriver {
   return {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     provider,
     canResume: false,
     available: () => true,
@@ -43,8 +44,9 @@ function driver(provider: string): ProviderLiveDriver {
         session: { ...session, status: "running" },
       })
     },
-    async permission(_id, requestId) {
+    async permission(_id, requestId, _response, dispatch) {
       permissions.push(requestId)
+      dispatch.report({ kind: "submitted", source: "callback" })
     },
     async cancel(id) {
       cancellations.push(id)
@@ -111,15 +113,18 @@ try {
     },
   })
   await until(() => events.some((event) => event.kind === "permission"))
+  const approvalId = owner.snapshot(jobId)?.permissions[0]?.id
+  assert.ok(approvalId)
+  assert.notEqual(approvalId, "permission")
   await relay.control(randomUUID(), {
     kind: "permission",
-    requestId: "permission",
+    requestId: approvalId,
     optionId: "allow",
   })
   assert.deepEqual(permissions, [])
   await relay.control(jobId, {
     kind: "permission",
-    requestId: "permission",
+    requestId: approvalId,
     optionId: "allow",
   })
   assert.deepEqual(permissions, ["permission"])

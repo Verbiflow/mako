@@ -25,6 +25,7 @@ let pauseCheckpoint = false
 let catalogPath: string | undefined
 const session: LiveSessionState = { id, nativeId: "native-parent", harness: "devin-fixture", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "devin-fixture", canResume: true, available: () => true,
   start: async () => session,
   prompt: async () => {

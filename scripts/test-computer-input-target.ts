@@ -14,6 +14,8 @@ const client = new Client({ name: "target-test", version: "1" })
 let activePid = 7
 let frontWindow = 70
 let windowReads = 0
+let exactFocus: boolean | null | undefined
+let windowPid = 7
 server.setRequestHandler(CallToolRequestSchema, (request) => {
   if (request.params.name === "list_apps")
     return {
@@ -27,9 +29,10 @@ server.setRequestHandler(CallToolRequestSchema, (request) => {
     structuredContent: {
       windows: [
         {
-          pid: 7,
+          pid: windowPid,
           window_id: 70,
           z_index: frontWindow === 70 ? 10 : 1,
+          focused: exactFocus,
           is_on_screen: true,
         },
         {
@@ -67,6 +70,16 @@ try {
     verifyForegroundInput(driver, target, signal, "darwin"),
     /window is not frontmost/
   )
+  exactFocus = true
+  await verifyForegroundInput(driver, target, signal, "darwin")
+  windowPid = 8
+  await assert.rejects(verifyForegroundInput(driver, target, signal, "darwin"), /keyboard focus could not be verified/)
+  windowPid = 7
+  for (const focus of [false, null]) {
+    exactFocus = focus
+    await assert.rejects(verifyForegroundInput(driver, target, signal, "darwin"), /keyboard focus could not be verified/)
+  }
+  exactFocus = undefined
   await assert.rejects(verifyForegroundInput(driver, { pid: 7 }, signal, "darwin"))
   let linuxFocused: boolean | null = true
   let backend = "x11"
@@ -86,7 +99,11 @@ try {
   }
   linuxFocused = true
   backend = "wayland"
-  await assert.rejects(verifyForegroundInput(linuxDriver, target, signal, "linux"), /could not verify keyboard focus/)
+  await verifyForegroundInput(linuxDriver, target, signal, "linux")
+  for (const focus of [false, null]) {
+    linuxFocused = focus
+    await assert.rejects(verifyForegroundInput(linuxDriver, target, signal, "linux"), /could not verify keyboard focus/)
+  }
   console.log(
     "Foreground guard: accepts matching target; refuses another app, another window, and incomplete identity"
   )

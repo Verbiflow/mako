@@ -20,7 +20,7 @@ type LiveSessionMode = import("../src/lib/types.ts").LiveSessionMode
 const modes: LiveSessionMode[] = [
   { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },
   { id: "agent", name: "Agent", access: "ask", enforcement: "provider" },
-  { id: "access:full", name: "Full access", access: "full", enforcement: "host" },
+  { id: "access:full", name: "Full access", access: "full", enforcement: "launch" },
 ]
 const state = {
   descriptors: [

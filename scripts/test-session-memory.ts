@@ -76,6 +76,7 @@ async function until(condition: () => boolean, what: string): Promise<void> {
 
 function fixtureDriver(nativeId: string, starts: string[]): ProviderLiveDriver {
   return {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     canResume: true,
     provider: "cursor",
     available: () => true,
@@ -340,7 +341,7 @@ try {
   const journalId = randomUUID()
   const journal = new LiveJournal(join(root, "journals"), journalId)
   const modes = [
-    { id: "access:full", name: "Full access", access: "full" as const, enforcement: "host" as const, description: "Mako approves every request." },
+    { id: "access:full", name: "Full access", access: "full" as const, enforcement: "launch" as const, description: "The provider reads this policy at launch." },
     { id: "plan", name: "Plan", access: "plan" as const, enforcement: "provider" as const },
   ]
   journal.commit({
@@ -355,6 +356,12 @@ try {
   assert.deepEqual(journal.summary()?.session.modes, modes, "a recovered session keeps each mode's tier, enforcement and description")
   assert.deepEqual(journal.read()?.session.modes, modes)
   journal.close()
+  const legacyJournal = new DatabaseSync(join(root, "journals", `${journalId}.sqlite`))
+  legacyJournal.prepare("UPDATE metadata SET value=json_set(value, '$.session.modes[0].enforcement', 'host') WHERE id=1").run()
+  legacyJournal.close()
+  const reopened = new LiveJournal(join(root, "journals"), journalId)
+  assert.deepEqual(reopened.read()?.session.modes, [modes[1]], "legacy history stays readable without reviving host-enforced choices")
+  reopened.close()
 
   // --- Live conversations write and read the ledger ----------------------------
   await liveConversationsRoundTrip()
@@ -381,7 +388,7 @@ async function liveConversationsRoundTrip() {
     connection: "connected",
     modes: [
       { id: "agent", name: "Agent", access: "ask", enforcement: "provider" },
-      { id: "access:full", name: "Full access", access: "full", enforcement: "host" },
+      { id: "access:full", name: "Full access", access: "full", enforcement: "launch" },
     ],
     currentMode: "agent",
     configOptions: [],
@@ -390,6 +397,7 @@ async function liveConversationsRoundTrip() {
   })
   let events: (event: import("../electron/shared.js").LiveDriverEvent) => void = () => {}
   const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     canResume: true,
     provider: "cursor",
     available: () => true,

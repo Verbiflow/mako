@@ -282,18 +282,19 @@ try {
     await shared.close()
   }
 
+  const yieldedProgramStarted = Promise.withResolvers<void>()
   const yielding = new ControlProgramRuntime({
     namespace: "browser",
-    actions: [],
+    actions: ["started"],
     artifacts: join(artifacts, "yielding"),
-    call: async () => null,
+    call: async () => { yieldedProgramStarted.resolve(); return null },
     image: () => [],
     fault: (detail) => new Error(detail.message),
     yieldAfterMs: 10,
   })
   try {
     const yielded = await yielding.run(
-      "await new Promise(resolve => setTimeout(resolve, 40)); return {done:true}",
+      "await browser.started(); await new Promise(resolve => setTimeout(resolve, 40)); return {done:true}",
       new AbortController().signal
     )
     const cell = z
@@ -301,6 +302,17 @@ try {
       .parse(JSON.parse(textOf(yielded[0])))
     await assert.rejects(
       yielding.run("return 'unsafe overlap'", new AbortController().signal),
+      /must be collected/
+    )
+    await yieldedProgramStarted.promise
+    const cancelledWait = new AbortController()
+    const abandoned = yielding.wait(cell.cell, cancelledWait.signal)
+    cancelledWait.abort()
+    await assert.rejects(abandoned, /Stopped waiting/)
+    // Let the program complete while nobody is collecting its receipt.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await assert.rejects(
+      yielding.run("return 'lost receipt'", new AbortController().signal),
       /must be collected/
     )
     const resumed = await yielding.wait(cell.cell, new AbortController().signal)

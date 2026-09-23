@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPackage } from "@electron/asar"
+import { createPackage, uncacheAll } from "@electron/asar"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
 
 const root = await mkdtemp(join(tmpdir(), "mako-package-imports-"))
@@ -40,6 +40,7 @@ try {
     await writeFile(join(source, "dist-electron/main.js"), importer)
     await writeFile(join(source, "dist-electron/values.js"), exports)
     await createPackage(source, join(app, "Contents/Resources/app.asar"))
+    uncacheAll()
     if (valid) assert.ok(assertPackagedImports(app) > 0)
     else
       assert.throws(() => assertPackagedImports(app), /Packaged export missing/)
@@ -47,6 +48,27 @@ try {
   console.log(
     "Packaged imports reject missing named/default exports and broken re-exports before launch"
   )
+  for (const dependency of ["zod", "./host-only.js", "node:fs/promises"]) {
+    const source = join(root, "native", "source")
+    const app = join(root, "native", "Mako.app")
+    await mkdir(join(source, "dist-electron/providers/fixture"), { recursive: true })
+    await mkdir(join(app, "Contents/Resources"), { recursive: true })
+    await writeFile(join(source, "dist-electron/main.js"), 'import "./values.js"; export const plugin = new URL("./providers/fixture/native-approval-plugin.bundle.mjs", import.meta.url);')
+    await writeFile(join(source, "dist-electron/values.js"), "export const value = 1;")
+    await writeFile(join(source, "dist-electron/providers/fixture/native-approval-plugin.bundle.mjs"),
+      `import * as dependency from ${JSON.stringify(dependency)}; export default dependency;`)
+    await createPackage(source, join(app, "Contents/Resources/app.asar"))
+    uncacheAll()
+    if (dependency.startsWith("node:")) assert.doesNotThrow(() => assertPackagedImports(app))
+    else assert.throws(() => assertPackagedImports(app), /Native plugin must be standalone/)
+  }
+  const nativeSource = join(root, "native", "source")
+  const nativeApp = join(root, "native", "Mako.app")
+  await rm(join(nativeSource, "dist-electron/providers/fixture/native-approval-plugin.bundle.mjs"))
+  await createPackage(nativeSource, join(nativeApp, "Contents/Resources/app.asar"))
+  uncacheAll()
+  assert.throws(() => assertPackagedImports(nativeApp), /Packaged import missing/)
+  console.log("Native plugin imports cannot depend on Mako's package or module tree")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

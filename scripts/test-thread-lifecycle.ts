@@ -17,6 +17,7 @@ const releases = new Map<string, () => void>()
 const sent: string[] = []
 let cancellations = 0
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "fixture", canResume: true, available: () => true,
   async start(cwd, options) {
     const state: LiveSessionState = { id:options.conversationId, nativeId:options.conversationId, nativePath:join(root,`${options.conversationId}.json`), harness:"fixture", cwd, status:"ready", connection:"connected", modes:[], currentMode:null, configOptions:[] }

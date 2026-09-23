@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { actionRetainsInput, describeActionRecovery, describeTransferRecovery } from "../electron/contracts/operation-recovery.js"
 import type { ContextTransfer } from "../electron/contracts/conversation-control.js"
-import type { LiveAction } from "../electron/contracts/live-actions.js"
+import { LiveActionSchema, type LiveAction } from "../electron/contracts/live-actions.js"
 import type { LiveRequest } from "../electron/contracts/live-conversations.js"
 
 const id = "11111111-1111-4111-8111-111111111111"
@@ -22,9 +22,10 @@ for (const provider of ["Claude Code", "Codex", "Cursor", "Grok", "Devin", "Open
   assert.equal(describeTransferRecovery(uncertain, provider).retryLabel, "Try switch again")
   assert.equal(describeTransferRecovery({ ...transfer, state: { kind: "failed", failure: "auth", error: "Sign in" } }, provider).retryLabel, undefined)
 }
-for (const kind of ["compact", "steer"] as const) {
-  for (const state of [{kind:"dispatching"}, {kind:"accepted"}, {kind:"completed"}, {kind:"failed",reason:"Failed after dispatch"}, {kind:"not-accepted",reason:"Turn stopped"}, {kind:"uncertain",reason:"Reply lost"}, {kind:"acknowledged"}] satisfies LiveAction["state"][]) {
-    const action: LiveAction = { input: kind === "compact" ? { kind, id } : { kind, id, requestId: id, text: "Change direction", attachments: [] }, digest: "digest", bindingId: id, createdAt: 1, state }
+for (const kind of ["compact", "steer", "steer-queued"] as const) {
+  for (const state of [{kind:"dispatching"}, {kind:"accepted"}, {kind:"completed"}, {kind:"failed",reason:"Failed after dispatch"}, {kind:"not-accepted",reason:"Turn stopped"}, {kind:"uncertain",reason:"Reply lost"}, {kind:"acknowledged"}, {kind:"acknowledged",receipt:{at:1,outcome:{kind:"uncertain",reason:"Original lost reply"}}}] satisfies LiveAction["state"][]) {
+    const action: LiveAction = { input: kind === "compact" ? { kind, id } : { kind, id, requestId: id, queuedRequestId: id, text: "Change direction", attachments: [] }, digest: "digest", bindingId: id, createdAt: 1, state }
+    assert.deepEqual(LiveActionSchema.parse(action).state, state, "journal parsing must retain both legacy and new acknowledgement evidence")
     assert.equal(actionRetainsInput(action), state.kind !== "not-accepted")
     const description = describeActionRecovery(action)
     assert.ok(description.guidance)

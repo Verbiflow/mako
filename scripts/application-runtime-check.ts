@@ -28,6 +28,7 @@ async function checkRuntime() {
   const sent: string[] = []
   const completed: LifecycleAction[] = []
   const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     provider: "fixture",
     canResume: true,
     available: () => true,

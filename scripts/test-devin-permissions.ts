@@ -34,6 +34,13 @@ assert.equal(
   "mako-control: mako_control_exec"
 )
 assert.equal(devinPermissionTitle({ ...request, options: [] }), undefined)
+const command = "printf '%s' 'approval-nonce' >> '/tmp/mako-provider-e2e/allow.txt'"
+assert.equal(devinPermissionTitle({ ...request, toolCall: { ...request.toolCall, _meta: { "cognition.ai/editableCommand": command } } }), command,
+  "native command metadata takes precedence over an unrelated fallback label")
+for (const value of [null, 17, "", " ", "x".repeat(8193)]) {
+  assert.equal(devinPermissionTitle({ ...request, options: [], toolCall: { ...request.toolCall, _meta: { "cognition.ai/editableCommand": value } } }), undefined,
+    "malformed or oversized native command metadata is not presented as a command")
+}
 assert.equal(
   devinPermissionTitle({
     ...request,
@@ -47,5 +54,5 @@ assert.equal(
   undefined
 )
 console.log(
-  "Devin names an individual MCP permission without confusing it with a server-wide grant"
+  "Devin displays native command evidence and names individual MCP permissions without confusing server-wide grants"
 )

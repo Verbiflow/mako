@@ -5,6 +5,7 @@ import { spawn } from "node:child_process"
 import {
   handleServerRequest,
   resolvePermission,
+  resolveServerRequest,
   type PermissionCallbacks,
   type PermissionContext,
 } from "../electron/codex-app-permissions.ts"
@@ -74,9 +75,24 @@ const permissionResults: unknown[] = []
 const permissionErrors: string[] = []
 const permissionCallbacks = {
   emit: (_context, event) => permissionEvents.push(event),
-  sendResult: (_context, _id, result) => permissionResults.push(result),
+  sendResult: (_context, _id, result) => { permissionResults.push(result); return true },
   sendError: (_context, _id, _code, message) => permissionErrors.push(message),
 } satisfies PermissionCallbacks<PermissionContext>
+for (const [id, command, reason, title] of [
+  ["command-detail", "printf fixture >> /tmp/fixture.txt", "Allow this write?", "printf fixture >> /tmp/fixture.txt"],
+  ["reason-only", null, "Allow this operation?", "Allow this operation?"],
+] as const) {
+  handleServerRequest(permissionContext, permissionCallbacks, id, "item/commandExecution/requestApproval", {
+    threadId: "thread-1", turnId: "turn-1", itemId: id, command, reason,
+    availableDecisions: ["accept", "decline"],
+  })
+  const event = permissionEvents.at(-1)
+  assert.equal(event?.type, "live-permission")
+  if (event?.type === "live-permission") {
+    assert.equal(event.request.title, title, "a native reason cannot hide the command being approved")
+    assert.deepEqual(event.request.options.map(option => option.kind), ["allow_once", "reject_once"])
+  }
+}
 handleServerRequest(
   permissionContext,
   permissionCallbacks,
@@ -110,6 +126,12 @@ if (permissionEvent?.type === "live-permission") {
     "Staging"
   )
 }
+const pendingQuestion = permissionContext.serverRequests.get("question-1")
+assert.ok(pendingQuestion)
+assert.deepEqual(resolvePermission(permissionContext, permissionCallbacks, "question-1", { kind: "answers", answers: {} }),
+  { kind: "not-submitted", pending: true, reason: "invalid-answer" })
+assert.equal(permissionResults.length, 0)
+assert.ok(permissionContext.serverRequests.has("question-1"), "invalid answers leave the native request open")
 resolvePermission(permissionContext, permissionCallbacks, "question-1", {
   kind: "answers",
   answers: { environment: ["Production"] },
@@ -118,6 +140,17 @@ assert.deepEqual(permissionResults, [
   { answers: { environment: { answers: ["Production"] } } },
 ])
 assert.deepEqual(permissionErrors, [])
+assert.deepEqual(resolvePermission(permissionContext, permissionCallbacks, "question-1", {
+  kind: "answers", answers: { environment: ["Production"] },
+}), { kind: "not-submitted", pending: false, reason: "request-ended" })
+assert.equal(permissionResults.length, 1, "retained correlation must never resend the answer")
+resolveServerRequest(permissionContext, permissionCallbacks, "question-1")
+assert.deepEqual(permissionEvents.at(-1), { type: "live-permission-ended", id: permissionContext.id,
+  requestId: "question-1", observationId: pendingQuestion.observationId, source: "native-resolution" })
+const resolvedCount = permissionEvents.length
+resolveServerRequest(permissionContext, permissionCallbacks, "question-1")
+assert.equal(permissionEvents.length, resolvedCount, "duplicate resolution is ignored")
+
 
 const parsedThread = parseThreadResponse({
   thread: {
@@ -407,3 +440,11 @@ assert.equal(proposals[0]?.status, "proposed")
 console.log(
   "PASS: Codex proposed-plan deltas and final replacements preserve one plan artifact"
 )
+
+assert.deepEqual(resolvePermission(permissionContext, permissionCallbacks, "absent", { kind: "choice", optionId: null }),
+  { kind: "not-submitted", pending: false, reason: "request-ended" })
+permissionContext.serverRequests.set("write-failed", { ...pendingQuestion, answered: false })
+assert.equal(resolvePermission(permissionContext, { ...permissionCallbacks, sendResult: () => false }, "write-failed", {
+  kind: "answers", answers: { environment: ["Staging"] },
+}).kind, "uncertain", "a failed pipe write is never a submitted receipt")
+console.log("PASS: Codex approval missing request, validation refusal and unconfirmed write evidence")

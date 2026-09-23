@@ -1,6 +1,9 @@
+import sharp from "sharp"
 import { WebSocketServer, type WebSocket } from "ws"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../electron/codex-app-json.js"
+
+const screenshotPixels = (await sharp({ create: { width: 1600, height: 1200, channels: 3, background: "white" } }).png().toBuffer()).toString("base64")
 
 const commandSchema = z.object({
   id: z.number(),
@@ -67,6 +70,13 @@ export async function browserFixture() {
     inflight: 0,
   }
   let delayed: (() => void) | undefined
+  let holdStop = false
+  let delayedStop: (() => void) | undefined
+  let recordingFrame: string | undefined
+  let holdCookies = false
+  let delayedCookies: (() => void) | undefined
+  let holdAxRead = false
+  let delayedAxRead: (() => void) | undefined
   server.on("connection", (socket) => {
     connections++
     sockets.add(socket)
@@ -92,6 +102,14 @@ export async function browserFixture() {
           JSON.stringify({ method, sessionId: command.sessionId, params })
         )
       switch (command.method) {
+        case "Page.startScreencast":
+          reply({})
+          if (recordingFrame) emit("Page.screencastFrame", {sessionId: 1, data: recordingFrame, metadata: {deviceWidth: 640, deviceHeight: 480, pageScaleFactor: 1, offsetTop: 0, timestamp: Date.now()/1000}})
+          break
+        case "Page.stopScreencast":
+          if (holdStop) { holdStop = false; delayedStop = () => reply({}) }
+          else reply({})
+          break
         case "Target.createBrowserContext": {
           const browserContextId = `context-${++sequence}`
           browserContexts.add(browserContextId)
@@ -175,6 +193,8 @@ export async function browserFixture() {
           const expression = z.string().parse(command.params.expression)
           if (expression === "document.visibilityState")
             reply({ result: { value: page.hidden ? "hidden" : "visible" } })
+          else if (expression.includes("width: window.innerWidth"))
+            reply({ result: { value: { density: 2, width: 800, height: 600 } } })
           else if (expression === "window.devicePixelRatio")
             reply({ result: { value: 2 } })
           else if (expression.includes("window.scrollX"))
@@ -301,7 +321,10 @@ export async function browserFixture() {
           break
         }
         case "Accessibility.getFullAXTree":
-          reply({ nodes: axNodes })
+          if (holdAxRead) {
+            holdAxRead = false
+            delayedAxRead = () => reply({ nodes: axNodes })
+          } else reply({ nodes: axNodes })
           break
         case "Page.getLayoutMetrics":
           reply({
@@ -338,7 +361,7 @@ export async function browserFixture() {
         }
         case "Page.captureScreenshot":
           reply({
-            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOioAAAAASUVORK5CYII=",
+            data: screenshotPixels,
           })
           break
         case "Page.handleJavaScriptDialog":
@@ -369,7 +392,8 @@ export async function browserFixture() {
                 ...cookie,
               }))
           )
-          reply({})
+          if (holdCookies) { holdCookies = false; delayedCookies = () => reply({}) }
+          else reply({})
           break
         case "Network.deleteCookies":
           page.cookies = page.cookies.filter(
@@ -474,6 +498,13 @@ export async function browserFixture() {
     axNodes,
     targets,
     page,
+    setRecordingFrame: (frame: string) => { recordingFrame = frame },
+    holdNextRecordingStop: () => { holdStop = true },
+    completeRecordingStop: () => { delayedStop?.(); delayedStop = undefined },
+    holdNextCookieWrite: () => { holdCookies = true },
+    completeCookieWrite: () => { delayedCookies?.(); delayedCookies = undefined },
+    holdNextAxRead: () => { holdAxRead = true },
+    completeAxRead: () => { delayedAxRead?.(); delayedAxRead = undefined },
     completeDelayed: () => {
       delayed?.()
       delayed = undefined

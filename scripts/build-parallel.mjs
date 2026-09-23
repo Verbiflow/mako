@@ -37,7 +37,9 @@ await lane("prune", process.execPath, ["scripts/prune-host-output.mjs"])
 await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/relay", "packages/control"])
 
 const lanes = await Promise.allSettled([
-  lane("tsgo", process.execPath, [tsgo, "-b"]),
+  lane("tsgo", process.execPath, [tsgo, "-b"]).then(() =>
+    lane("native-observers", process.execPath, ["scripts/build-native-observers.mjs"])
+  ),
   lane("kiri+preload", process.execPath, ["scripts/prepare-kiri.mjs"]).then(() =>
     lane("preload", process.execPath, ["scripts/build-preload.mjs"])
   ),

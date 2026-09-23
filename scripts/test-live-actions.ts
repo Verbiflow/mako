@@ -26,6 +26,7 @@ let answer: () => Promise<ProviderSteerResult> = async () => ({
   kind: "accepted",
 })
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "fixture",
   canResume: true,
   steering: "step",
@@ -170,7 +171,24 @@ try {
   owner = new LiveConversations(dependencies)
   assert.equal((await owner.act(id, uncertain)).state.kind, "uncertain")
   assert.equal(steeringCalls, 2, "restart cannot resend an uncertain action")
+  const originalOutcome = owner.snapshot(id)?.control?.actions?.at(-1)?.state
+  const failedAckSave = mock.method(LiveJournal.prototype, "commit", () => { throw new Error("acknowledgement disk full") })
+  await assert.rejects(owner.acknowledgeAction(id, uncertain.id), /acknowledgement disk full/)
+  failedAckSave.mock.restore()
+  assert.deepEqual(owner.snapshot(id)?.control?.actions?.at(-1)?.state, originalOutcome,
+    "failed acknowledgement persistence cannot dismiss the unknown outcome")
   await owner.acknowledgeAction(id, uncertain.id)
+  const acknowledged = owner.snapshot(id)?.control?.actions?.at(-1)
+  assert.equal(acknowledged?.state.kind, "acknowledged")
+  assert.ok(acknowledged?.state.kind === "acknowledged" && acknowledged.state.receipt)
+  assert.deepEqual(acknowledged.state.receipt.outcome, originalOutcome)
+  await owner.acknowledgeAction(id, uncertain.id)
+  assert.deepEqual(owner.snapshot(id)?.control?.actions?.at(-1), acknowledged, "duplicate acknowledgement preserves the first receipt")
+  owner.stop()
+  owner = new LiveConversations(dependencies)
+  assert.deepEqual(await owner.act(id, uncertain), acknowledged, "reopening retains the outcome and acknowledgement without replay")
+  await owner.acknowledgeAction(id, uncertain.id)
+  assert.equal(steeringCalls, 2)
   assert.equal(
     owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind,
     "acknowledged"
@@ -246,6 +264,39 @@ try {
   assert.equal((await owner.act(id, interruptedCompact)).state.kind, "uncertain")
   assert.equal(compactionCalls, dispatched, "restart cannot repeat compaction")
   console.log("PASS: failed compaction holds queued work; restart preserves an unknown outcome without replay")
+  const compactOutcome = owner.snapshot(id)?.control?.actions?.at(-1)?.state
+  await Promise.all([
+    owner.acknowledgeAction(id, interruptedCompact.id),
+    owner.acknowledgeAction(id, interruptedCompact.id),
+  ])
+  const compactAck = owner.snapshot(id)?.control?.actions?.at(-1)
+  assert.ok(compactAck?.state.kind === "acknowledged" && compactAck.state.receipt)
+  assert.deepEqual(compactAck.state.receipt.outcome, compactOutcome)
+  assert.equal(owner.snapshot(id)?.session.connection, "disconnected")
+  owner.stop()
+  owner = new LiveConversations({ ...dependencies, root: join(root, "compact-journals") })
+  assert.deepEqual(await owner.act(id, interruptedCompact), compactAck)
+  assert.equal(compactionCalls, dispatched)
+  console.log("PASS: concurrent compaction acknowledgement retains original uncertainty across reopen without replay")
+
+
+  owner.stop()
+  owner = new LiveConversations({ ...dependencies, root: join(root, "ack-close-race") })
+  await owner.start("fixture", root, { conversationId: id })
+  await connected(id)
+  const racingCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
+  await owner.act(id, racingCompact)
+  owner.observe({ type: "live-action-result", id, actionId: racingCompact.id, result: { kind: "uncertain", reason: "Still awaiting native completion" } })
+  const closeGate = Promise.withResolvers<void>()
+  driver.close = () => closeGate.promise
+  const ackClosing = owner.acknowledgeAction(id, racingCompact.id)
+  owner.observe({ type: "live-action-result", id, actionId: racingCompact.id, result: { kind: "completed" } })
+  closeGate.resolve()
+  await ackClosing
+  driver.close = () => {}
+  assert.equal(owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind, "completed",
+    "acknowledgement must not overwrite a native result received while disconnecting")
+  console.log("PASS: completion arriving during acknowledgement disconnect remains authoritative")
 
   for (const ended of [
     { status: "ready", connection: "connected", lastStop: "cancelled" },

@@ -264,7 +264,7 @@ const cursorLive = {
         id: accessModeId("full"),
         name: "Full access",
         access: "full" as const,
-        enforcement: "host" as const,
+        enforcement: "launch" as const,
       },
     ],
     currentMode: accessModeId("full"),

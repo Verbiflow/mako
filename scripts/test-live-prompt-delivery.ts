@@ -33,11 +33,14 @@ for (const provider of [
   let state: LiveSessionState
   const calls: PromptDispatch[] = []
   let fail = false
+  let failStart = false
   const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     provider,
     canResume: true,
     available: () => true,
     async start(cwd, options) {
+      if (failStart) throw new Error("Fixture refuses the requested mode before dispatch")
       emit = options.emit ?? (() => {})
       state = {
         id: options.conversationId,
@@ -177,6 +180,15 @@ for (const provider of [
       "uncertain",
       "retired controller callback ignored"
     )
+    failStart = true
+    const refusedId = randomUUID()
+    await owner.start(provider, root, { conversationId: refusedId,
+      initialRequest: { id: randomUUID(), text: "never dispatched", attachments: [] } })
+    for (let i = 0; i < 100 && owner.snapshot(refusedId)?.session.status !== "failed"; i++) await tick()
+    assert.equal(owner.snapshot(refusedId)?.requests[0]?.nativeDelivery?.evidence.kind, "not-accepted",
+      "verified startup refusal records not sent for every harness")
+    assert.equal(calls.length, 3, "startup refusal cannot reach native prompt dispatch")
+    await owner.close(refusedId)
     if (provider === "seventh-fixture") {
       owner.stop()
       const legacyJournal = new LiveJournal(root, id)

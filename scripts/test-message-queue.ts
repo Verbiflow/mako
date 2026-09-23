@@ -15,6 +15,7 @@ const root = mkdtempSync(join(tmpdir(), "mako-message-queue-"))
 const sent: string[] = []
 let session: LiveSessionState
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "test",
   canResume: true,
   available: () => true,

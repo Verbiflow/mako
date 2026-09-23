@@ -19,6 +19,7 @@ import {
   BACKGROUND_INPUT_LADDER,
   createComputerToolsServer,
 } from "../electron/computer-tools-main.js"
+import { connectMcpComputerDriver, type ComputerDriverClient } from "../electron/computer-driver-client.js"
 import { canonicalDriverPath } from "../electron/computer-paths.js"
 
 const source = `
@@ -55,7 +56,7 @@ server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
   {name:'get_config',description:'Config.',inputSchema:{type:'object',properties:{}}}
 ]}));
 const cursorCalls=[];
-let clicks=0; let fieldValue=''; let captures=0; let images=0; let newest='';
+let writes=0; let clicks=0; let fieldValue=''; let captures=0; let images=0; let newest='';
 // Like the driver: every capture is a new snapshot and only the newest
 // snapshot's tokens are honoured.
 const stale=(token)=>typeof token==='string'&&token!=='refuse'&&!token.startsWith(newest+':');
@@ -71,8 +72,8 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   if(request.params.name==='click'){ if(args.element_token==='refuse') return {isError:true,content:[{type:'text',text:'no such element in this snapshot'}]}; clicks+=1; const value={route:'accessibility',effect:'unverifiable',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_agent_cursor_motion'){ cursorCalls.push({session:args.session,glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms}); const value={motion:{glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms},session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_agent_cursor_enabled'){ cursorCalls.push({session:args.session,enabled:args.enabled}); const value={enabled:args.enabled,session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
-  if(request.params.name==='get_config'){ const value={cursorCalls,captures,images}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
-  if(request.params.name==='set_value'){ fieldValue=args.value; if(args.value==='unknown-outcome-fixture') return {isError:true,content:[{type:'text',text:'connection lost after possible write'}]}; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='get_config'){ const value={cursorCalls,captures,images,writes}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='set_value'){ writes+=1; fieldValue=args.value; if(args.value==='unknown-outcome-fixture') return {isError:true,content:[{type:'text',text:'connection lost after possible write'}]}; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='invoke_menu'){ const value={effect:'invoked',path:args.path,forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='zoom') return {content:[{type:'image',mimeType:'image/png',data:'aW1hZ2U='}],structuredContent:{pid:args.pid,window_id:args.window_id,screenshot_scale:4}};
   if(request.params.name==='hotkey'){ const dropped=args.keys.includes('x'); const value={effect:'unverifiable',keys:args.keys,delivery:{mode:args.delivery_mode??'background'},pid:args.pid,...(dropped?{escalation:{reason:'delivery_failed',target:'foreground'},route:'synthetic_events'}:{})}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
@@ -982,6 +983,14 @@ try {
 }
 
 let unifiedPageValue = ""
+let programCancellations = 0
+const unifiedNavigations: string[] = []
+const cancellationStarted = Promise.withResolvers<void>()
+let holdPageObservation = false
+const pageObservationStarted = Promise.withResolvers<void>()
+const pageObservationReleased = Promise.withResolvers<void>()
+const waitingDialog = Promise.withResolvers<void>()
+const answeredDialog = Promise.withResolvers<void>()
 const unifiedPageTarget = {
   browser: "fixture-browser",
   tab: "fixture-tab",
@@ -997,14 +1006,24 @@ const unifiedServer = createComputerToolsServer(
   undefined,
   {
     surface: "control",
-    browserCall: async (command) => {
+    onProgramCancelled: () => { programCancellations++ },
+    browserCall: async (command, signal) => {
       if (command.action === "status")
         return [{ id: "fixture-browser", connection: { status: "connected" } }]
+      if (command.action === "connect") {
+        assert.equal(command.browser, "fixture-browser")
+        return { status: "connected", generation: "fixture-generation" }
+      }
       if (command.action === "tabs")
         return [{ id: "fixture-tab", title: "Fixture", url: "about:blank" }]
       if (command.action === "open" || command.action === "select")
         return unifiedPageTarget
-      if (command.action === "observe")
+      if (command.action === "observe") {
+        if (holdPageObservation) {
+          holdPageObservation = false
+          pageObservationStarted.resolve()
+          await pageObservationReleased.promise
+        }
         return {
           observation: `page-${unifiedPageValue || "empty"}`,
           nodes: [
@@ -1032,6 +1051,32 @@ const unifiedServer = createComputerToolsServer(
           omitted: 0,
           truncatedTextFields: 0,
         }
+      }
+      if (command.action === "cdp" && command.params.expression === "release-observation") {
+        await pageObservationStarted.promise
+        pageObservationReleased.resolve()
+        return { result: { value: true } }
+      }
+      if (command.action === "navigate") {
+        unifiedNavigations.push(command.url)
+        if (command.url.endsWith("/lost-reply")) throw new Error("reply lost after navigation")
+        if (command.url.endsWith("/dialog-wait")) {
+          waitingDialog.resolve()
+          await answeredDialog.promise
+        }
+        if (command.url.endsWith("/late-cancellation")) {
+          cancellationStarted.resolve()
+          // Simulate a backend which completes input after transport cancellation.
+          await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 5), { once: true }))
+        }
+        return { completion: "commit" }
+      }
+      if (command.action === "dialog") {
+        await waitingDialog.promise
+        answeredDialog.resolve()
+        return { answered: { respond: command.respond } }
+      }
+      if (command.action === "children") return { children: [], note: "fixture" }
       if (command.action === "type") {
         unifiedPageValue = command.text
         return { typed: true }
@@ -1124,6 +1169,7 @@ try {
       source: `state.window = control.window({pid:42,window_id:7});
 const before = await state.window.observe();
 state.oldRef = before.get({role:'TextField',name:'Name'}).ref;
+await control.connectBrowser('fixture-browser');
 const receipt = await state.window.setValue(state.oldRef, 'unified');
 return {receipt, proof: await state.window.expect({role:'TextField',name:'Name',value:'unified'})};`,
     },
@@ -1204,14 +1250,127 @@ const final=await control.native('get_config'); return {reads:final.captures-ini
 try {await state.window.setValue(view.get({role:'TextField',name:'Name'}).ref,'unknown-outcome-fixture')} catch(e) {faults.push(e.outcome)};
 try {await state.window.pressKey('Enter')} catch(e) {faults.push(e.code)};
 try {await state.window.raw('press_key',{key:'Enter'})} catch(e) {faults.push(e.code)};
+try {await state.window.screenshot()} catch(e) {};
+try {await state.window.raw('hotkey',{keys:['a']})} catch(e) {faults.push(e.code)};
 const proof=await state.window.expect({role:'TextField',name:'Name',value:'unknown-outcome-fixture'}); return {faults,status:proof.status};`,
     },
   })
   assert.ok(!unknown.isError, JSON.stringify(unknown))
   assert.deepEqual(JSON.parse(firstText(unknown.content)), {
-    faults: ["unknown", "observation-required", "observation-required"],
+    faults: ["unknown", "observation-required", "observation-required", "observation-required"],
     status: "matched",
   })
+  const rawUnknown = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
+const page=await tab.observe(); const pageRef=page.get({role:'textbox',name:'Page proof'}).ref;
+const view=await state.window.observe(); const ref=view.get({role:'TextField',name:'Name'}).ref;
+const before=await control.native('get_config'); const faults=[];
+try {await state.window.raw('missing-tool')} catch(e) {if(e.outcome!=='not-dispatched') throw e};
+try {await state.window.raw('set_value',{element_token:ref,value:'unknown-outcome-fixture'})} catch(e) {faults.push(e.outcome)};
+try {await state.window.raw('set_value',{element_token:ref,value:'must-not-run'})} catch(e) {faults.push(e.code)};
+try {await state.window.pressKey('Enter')} catch(e) {faults.push(e.code)};
+await control.window({pid:43,window_id:7}).raw('hotkey',{keys:['a']});
+await tab.setValue(pageRef,'independent');
+const after=await control.native('get_config');
+const proof=await state.window.expect({role:'TextField',name:'Name',value:'unknown-outcome-fixture'});
+await state.window.raw('hotkey',{keys:['a']});
+return {faults,writes:after.writes-before.writes,proof:proof.status};`,
+    },
+  })
+  assert.ok(!rawUnknown.isError, JSON.stringify(rawUnknown))
+  assert.deepEqual(JSON.parse(firstText(rawUnknown.content)), {
+    faults: ["unknown", "observation-required", "observation-required"],
+    writes: 1,
+    proof: "matched",
+  })
+  const rawPageFailure = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
+const native=await state.window.observe(); const nativeRef=native.get({role:'TextField',name:'Name'}).ref;
+const view=await tab.observe(); const ref=view.get({role:'textbox',name:'Page proof'}).ref;
+await tab.children(); await tab.setValue(ref,'after-read');
+try {await tab.navigate('https://fixture.invalid/lost-reply')} catch(e) {};
+const faults=[];
+try {await tab.navigate('https://fixture.invalid/must-not-run')} catch(e) {faults.push(e.code)};
+try {await tab.pressKey('Enter')} catch(e) {faults.push(e.code)};
+await state.window.setValue(nativeRef,'native-independent');
+await tab.observe(); await tab.navigate('https://fixture.invalid/recovered');
+return {faults};`,
+    },
+  })
+  assert.ok(!rawPageFailure.isError, JSON.stringify(rawPageFailure))
+  assert.deepEqual(JSON.parse(firstText(rawPageFailure.content)), {
+    faults: ["observation-required", "observation-required"],
+  })
+  assert.deepEqual(unifiedNavigations, [
+    "https://fixture.invalid/lost-reply", "https://fixture.invalid/recovered",
+  ])
+  const cancellation = new AbortController()
+  const lateCall = unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: `await control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}}).navigate('https://fixture.invalid/late-cancellation')` },
+  }, undefined, { signal: cancellation.signal })
+  const cancelledCall = assert.rejects(lateCall)
+  await cancellationStarted.promise
+  cancellation.abort()
+  await cancelledCall
+  const afterCancellation = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
+let blocked; try {await tab.navigate('https://fixture.invalid/replayed')} catch(e) {blocked=e.code};
+await tab.observe(); return {blocked};` },
+  })
+  assert.ok(!afterCancellation.isError, JSON.stringify(afterCancellation))
+  assert.equal(JSON.parse(firstText(afterCancellation.content)).blocked, "observation-required")
+  assert.equal(unifiedNavigations.filter((url) => url.endsWith("/late-cancellation")).length, 1)
+  assert.ok(!unifiedNavigations.some((url) => url.endsWith("/replayed")))
+  assert.equal(programCancellations, 1, "actual program cancellation reaches its supervisor")
+  const yieldedReceipt = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: "await new Promise(resolve=>setTimeout(resolve,12000)); return {completed:true}" },
+  })
+  const yieldedCell = z.object({ cell: z.number() }).parse(JSON.parse(firstText(yieldedReceipt.content))).cell
+  const stopCollecting = new AbortController()
+  const collecting = unifiedClient.callTool({
+    name: "mako_control_exec", arguments: { cell: yieldedCell },
+  }, undefined, { signal: stopCollecting.signal })
+  const stoppedCollecting = assert.rejects(collecting)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  stopCollecting.abort()
+  await stoppedCollecting
+  await new Promise((resolve) => setTimeout(resolve, 2200))
+  const retainedReceipt = await unifiedClient.callTool({
+    name: "mako_control_exec", arguments: { cell: yieldedCell },
+  })
+  assert.ok(!retainedReceipt.isError, JSON.stringify(retainedReceipt))
+  assert.deepEqual(JSON.parse(firstText(retainedReceipt.content)), { completed: true })
+  assert.equal(programCancellations, 1, "abandoning receipt collection must not destroy the cloud job")
+  holdPageObservation = true
+  const overlappingRead = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
+const reading=tab.observe().then(()=> 'unsafe-success',e=>e.code);
+await tab.raw('cdp',{method:'Runtime.evaluate',params:{expression:'release-observation'},concurrent:true});
+const read=await reading;
+let blocked; try {await tab.navigate('https://fixture.invalid/stale-read')} catch(e) {blocked=e.code};
+await tab.observe(); return {read,blocked};` },
+  })
+  assert.ok(!overlappingRead.isError, JSON.stringify(overlappingRead))
+  assert.deepEqual(JSON.parse(firstText(overlappingRead.content)), {
+    read: "observation-interrupted", blocked: "observation-required",
+  })
+  const concurrentDialog = await unifiedClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
+const navigation=tab.navigate('https://fixture.invalid/dialog-wait');
+const dialog=await tab.dialog({respond:'dismiss'});
+await navigation; return dialog;` },
+  })
+  assert.ok(!concurrentDialog.isError, JSON.stringify(concurrentDialog))
+  assert.equal(JSON.parse(firstText(concurrentDialog.content)).answered.respond, "dismiss")
   const pageRun = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
@@ -1240,7 +1399,9 @@ return {receipt,proof:await tab.expect({role:'textbox',name:'Page proof',value:'
   const pageHelpersRun = await unifiedClient.callTool({
     name: "mako_control_exec",
     arguments: {
-      source: `const tab=await control.openTab({browser:'fixture-browser'});
+      source: `const connection=await control.connectBrowser('fixture-browser');
+if(connection.status!=='connected') throw new Error('Browser did not connect');
+const tab=await control.openTab({browser:'fixture-browser'});
 const observed=await tab.observe();
 const selected=observed.select({roles:['textbox'],text:'proof'});
 const protocol=await tab.cdp('Runtime.evaluate',{expression:'document.title'});
@@ -1293,6 +1454,55 @@ return {hidden,chord};`,
   await unifiedServer.close()
 }
 
+// Unspecified native input can fail before the host has seen any windows.
+let reconnectingDriver: ComputerDriverClient | undefined
+let reconnects = 0
+const unscopedServer = createComputerToolsServer(
+  { command: process.execPath, args: ["--input-type=module", "--eval", driverSource] },
+  "unscoped-control", async (process) => {
+    reconnects++
+    reconnectingDriver = await connectMcpComputerDriver(process)
+    return reconnectingDriver
+  }, { surface: "control" }
+)
+const unscopedClient = new Client({ name: "unscoped-test", version: "1" })
+const [unscopedClientTransport, unscopedServerTransport] = InMemoryTransport.createLinkedPair()
+try {
+  await unscopedServer.connect(unscopedServerTransport)
+  await unscopedClient.connect(unscopedClientTransport)
+  const reply = await unscopedClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: `const faults=[];
+try {await control.native('set_value',{element_token:'refuse',value:'unknown-outcome-fixture'})} catch(e) {faults.push(e.outcome)};
+const window=control.window({pid:42,window_id:7});
+try {await window.raw('hotkey',{keys:['a']})} catch(e) {faults.push(e.code)};
+await window.observe(); await window.raw('hotkey',{keys:['a']});
+try {await control.native('hotkey',{keys:['a']})} catch(e) {faults.push(e.code)};
+try {await control.window({pid:43,window_id:7}).raw('hotkey',{keys:['a']})} catch(e) {faults.push(e.code)};
+return {faults,writes:(await control.native('get_config')).writes};` },
+  })
+  assert.ok(!reply.isError, JSON.stringify(reply))
+  assert.deepEqual(JSON.parse(firstText(reply.content)), {
+    faults: ["unknown", "observation-required", "observation-required", "observation-required"],
+    writes: 1,
+  })
+  assert.ok(reconnectingDriver)
+  await reconnectingDriver.close()
+  const reconnected = await unscopedClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: `await control.native('get_config');
+let blocked; try {await control.window({pid:43,window_id:7}).raw('hotkey',{keys:['a']})} catch(e) {blocked=e.code};
+const window=control.window({pid:43,window_id:7}); await window.observe(); await window.raw('hotkey',{keys:['a']});
+return {blocked};` },
+  })
+  assert.ok(!reconnected.isError, JSON.stringify(reconnected))
+  assert.equal(JSON.parse(firstText(reconnected.content)).blocked, "observation-required")
+  assert.equal(reconnects, 2)
+} finally {
+  await unscopedClient.close()
+  await unscopedServer.close()
+}
+
 const guardDriverSource = `
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -1304,7 +1514,7 @@ server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
   {name:'click',inputSchema:{type:'object',properties:target,required:['session','element_token']}},
   {name:'list_windows',inputSchema:{type:'object',properties:{session:{type:'string'},pid:{type:'integer'}},required:['session','pid']}}
 ]}));
-let opened=false;
+let opened=false; let failedPid; let lateReads=0;
 server.setRequestHandler(CallToolRequestSchema,request=>{
   const args=request.params.arguments;
   if(request.params.name==='get_window_state'){
@@ -1312,10 +1522,13 @@ server.setRequestHandler(CallToolRequestSchema,request=>{
     return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
   }
   if(request.params.name==='click'){
+    if(args.pid===43) failedPid=43;
     setTimeout(()=>{opened=true},60);
-    const value={route:'accessibility',effect:'unverifiable'};
+    const value={route:'accessibility',effect:'unverifiable',...(args.pid===43||args.pid===44?{}:{focus_change:{previous_pid:10,current_pid:10,restoration_attempted:true,input_activity_observed:false}})};
     return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
   }
+  if(args.pid===44 && ++lateReads>1) return {isError:true,content:[{type:'text',text:'late window enumeration failed'}]};
+  if(args.pid===failedPid) return {isError:true,content:[{type:'text',text:'window enumeration failed after input'}]};
   const windows=[{window_id:7,title:'Main',is_on_screen:true},...(opened?[{window_id:9,title:'Late',is_on_screen:true}]:[])];
   const value={windows};
   return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
@@ -1345,11 +1558,16 @@ try {
 const window=control.window(target);
 const observed=await window.observe();
 const ref=observed.get({role:'Button',name:'Open later'}).ref;
-return window.activate(ref);`,
+const receipt=await window.activate(ref);
+let blocked; try {await window.activate(ref)} catch(error) {blocked={code:error.code,outcome:error.outcome}}
+const fresh=await window.observe(); await window.activate(fresh.get({role:'Button',name:'Open later'}).ref);
+return {...receipt,blocked};`,
     },
   })
   const actedValue = z
     .object({
+      focus_change: z.object({previous_pid:z.literal(10),current_pid:z.literal(10),restoration_attempted:z.literal(true),input_activity_observed:z.literal(false)}),
+      blocked: z.object({code:z.literal("observation-required"),outcome:z.literal("not-dispatched")}),
       guard: z.object({
         status: z.literal("watching"),
         action_id: z.string(),
@@ -1385,6 +1603,36 @@ return window.activate(ref);`,
     ),
     "a late popup is emitted after the verified action returns"
   )
+  const failedGuard = await guardClient.callTool({
+    name: "mako_control_exec",
+    arguments: {
+      source: `const window=control.window({pid:43,window_id:7});
+const view=await window.observe(); const ref=view.get({role:'Button',name:'Open later'}).ref;
+const receipt=await window.activate(ref);
+let blocked; try {await window.activate(ref)} catch(e) {blocked=e.code};
+return {status:receipt.status,guard:receipt.guard.status,blocked};`,
+    },
+  })
+  assert.ok(!failedGuard.isError, JSON.stringify(failedGuard))
+  assert.deepEqual(JSON.parse(firstText(failedGuard.content)), {
+    status: "dispatched",
+    guard: "unavailable",
+    blocked: "observation-required",
+  })
+
+  const lateGuard = await guardClient.callTool({
+    name: "mako_control_exec",
+    arguments: { source: `const window=control.window({pid:44,window_id:7});
+const view=await window.observe(); const receipt=await window.activate(view.get({role:'Button',name:'Open later'}).ref);
+let events; for(let i=0;i<100;i++) {events=await window.events(); if(events.events.some(e=>e.kind==='guard-unavailable')) break; await new Promise(r=>setTimeout(r,10))};
+let blocked; try {await window.raw('click',{element_token:'s00000001:0'})} catch(e) {blocked=e.code};
+return {guard:receipt.guard.status,events:events.events.map(e=>e.kind),blocked};` },
+  })
+  assert.ok(!lateGuard.isError, JSON.stringify(lateGuard))
+  assert.deepEqual(JSON.parse(firstText(lateGuard.content)), {
+    guard: "watching", events: ["guard-unavailable"], blocked: "observation-required",
+  })
+
 } finally {
   await guardClient.close()
   await guardServer.close()

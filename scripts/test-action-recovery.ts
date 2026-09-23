@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { z } from "zod"
 import { toast } from "sonner"
 import { performLiveAction } from "../src/state/live-actions"
 import type { LiveSnapshot } from "../src/lib/types"
@@ -33,6 +34,31 @@ Object.assign(globalThis, { window: { mako: {
 } } })
 assert.equal(await performLiveAction(id, input), false, "Without a receipt the input is not discarded")
 console.log("PASS: direct and recovered action receipts retain input consistently, preserve refusal and never redispatch")
+
+const queuedInput = { kind: "steer-queued", id, requestId: id, queuedRequestId: id, text: "Keep my queued message", attachments: [] } as const
+// The exact validator still loaded by older hosts, rather than a made-up error.
+const oldHost = z.tuple([z.string(), z.union([
+  z.object({ kind: z.literal("steer") }), z.object({ kind: z.literal("compact") }),
+])])
+const rejected = oldHost.safeParse([id, queuedInput])
+assert.equal(rejected.success, false)
+if (rejected.success) throw Error("Old fixture unexpectedly accepted queued steering")
+for (const error of [rejected.error, new Error("This action requires a newer shared host. Existing agents have not been restarted."), new Error("Unknown Mako host method: mako:live-steer-queued")]) {
+  let calls = 0
+  notices.length = 0
+  const queued = { id, text: queuedInput.text, attachments: [], status: "queued" as const }
+  Object.assign(globalThis, { window: { mako: {
+    liveAction: async () => { calls++; throw error },
+    liveSnapshot: async () => ({ ...snapshot, revision: snapshot.revision++, requests: [queued], control: { ...snapshot.control, actions: [] } }),
+  } } })
+  assert.equal(await performLiveAction(id, { ...queuedInput, attachments: [] }), false)
+  assert.equal(calls, 1, "an incompatible host must not receive a fallback steer that could duplicate queued input")
+  assert.equal(queued.status, "queued")
+  assert.match(String(notices.at(-1)), /running host needs an update/)
+  assert.match(String(notices.at(-1)), /message is still queued/)
+  assert.doesNotMatch(String(notices.at(-1)), /invalid_union/)
+}
+console.log("PASS: older host/preload compatibility errors retain queued input and explain the supported composer path")
 
 const { retryTransfer, submitTransfer } = await import("../src/state/live-transfers")
 const { applyLiveSnapshot } = await import("../src/state/live-recovery")

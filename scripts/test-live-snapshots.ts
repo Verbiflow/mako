@@ -33,6 +33,7 @@ const snapshots = new WorkspaceSnapshots(join(root, "snapshots"))
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "test",
   canResume: true,
   available: () => true,

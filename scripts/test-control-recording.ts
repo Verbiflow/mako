@@ -24,19 +24,19 @@ const recording = await ControlRecording.create(
     stops++
   }
 )
-const frame = async (color: string) =>
+const frame = async (color: string, width = 640, height = 480) =>
   (
     await sharp({
-      create: { width: 640, height: 480, channels: 3, background: color },
+      create: { width, height, channels: 3, background: color },
     })
       .jpeg()
       .toBuffer()
   ).toString("base64")
-await recording.frame(await frame("#3a2828"), 640, 480)
+await recording.frame(await frame("#3a2828", 480, 300), 1600, 1000)
 await delay(80)
 recording.pointer({ x: 100, y: 100, pressed: true })
 await delay(80)
-await recording.frame(await frame("#283a28"), 640, 480)
+await recording.frame(await frame("#283a28", 1600, 1000), 1600, 1000)
 await delay(80)
 recording.pointer({ x: 260, y: 180, pressed: false })
 await delay(80)
@@ -61,8 +61,9 @@ const probe = JSON.parse(
   ).stdout
 )
 assert.equal(probe.streams[0].codec_name, "h264")
-assert.equal(probe.streams[0].width, 640)
-assert.equal(probe.streams[0].height, 480)
+assert.equal(probe.streams[0].r_frame_rate, "60/1", "Browser recording defaults to 60 fps")
+assert.equal(probe.streams[0].width, 1600)
+assert.equal(probe.streams[0].height, 1000)
 assert.ok(Number(probe.format.duration) > 0.25)
 const timeline = JSON.parse(await readFile(result.timeline!, "utf8"))
 assert.ok(
@@ -73,6 +74,8 @@ assert.ok(
   "video duration preserves capture intervals within frame rounding"
 )
 assert.deepEqual(timeline.target, target)
+assert.deepEqual(result.dimensions, { width: 1600, height: 1000 })
+assert.deepEqual(timeline.frames.map((f: {width:number;height:number;viewportWidth:number;viewportHeight:number}) => [f.width,f.height,f.viewportWidth,f.viewportHeight]), [[480,300,1600,1000],[1600,1000,1600,1000]])
 assert.equal(timeline.pointer.length, 2)
 assert.ok(
   timeline.pointer.every(
@@ -160,9 +163,25 @@ assert.ok(
 const nativeTimeline = JSON.parse(
   await readFile(nativeReceipt.timeline!, "utf8")
 )
+assert.equal(nativeTimeline.fps, 30, "Native output keeps the actual driver rate")
 assert.deepEqual(
   nativeTimeline.pointer,
   [{ at: 100, x: 320, y: 240, pressed: true }],
   "only dispatch points enter native cursor overlay"
 )
 console.log(JSON.stringify({ nativeVideo: nativeReceipt.video, decoded }))
+
+// A burst keeps only its latest queued frame, including when stop interrupts the timer.
+const sampled = await ControlRecording.create(target, { directory, fps: 10 }, async () => {})
+await sampled.frame(await frame("red"), 640, 480)
+await sampled.frame(await frame("green"), 640, 480)
+await sampled.frame(await frame("blue"), 640, 480)
+await sampled.stop()
+const sampledResult = await sampled.settled()
+assert.equal(sampledResult.status, "finished", sampledResult.error)
+assert.equal(sampledResult.frames, 2)
+assert.equal(sampledResult.sampledFrames, 1)
+const sampledTimeline = JSON.parse(await readFile(sampledResult.timeline!, "utf8"))
+const lastPixel = await sharp(join(sampledResult.directory, sampledTimeline.frames.at(-1).file)).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer()
+assert.ok(lastPixel[2]! > 240 && lastPixel[0]! < 10, "Stop retains the last blue frame, not the older queued green frame")
+console.log("Recording sampling: bounded latest frame and final-frame flush passed")

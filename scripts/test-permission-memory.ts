@@ -29,6 +29,7 @@ const applied: string[] = []
 const prompts: string[] = []
 const gate = Promise.withResolvers<void>()
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "fixture",
   canResume: true,
   available: () => true,

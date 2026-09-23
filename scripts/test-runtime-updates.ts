@@ -427,11 +427,13 @@ try {
 
 // The row's words follow the reading.
 const now = 10_000_000
-assert.deepEqual(runtimeRowView({ phase: "checking" }, now), { version: "…", detail: "Checking…", shimmer: true, tone: "faint" })
+assert.deepEqual(runtimeRowView({ phase: "checking" }, now), { detail: "Checking…", busy: true, tone: "faint" })
+assert.equal(runtimeRowView({ installed: "0.147.0", phase: "updating" }, now).busy, true, "an update in flight reads as work, not a result")
+assert.equal(runtimeRowView({ installed: "0.147.0", channel: "npm" }, now).busy, true, "a version with no reading yet is still being checked")
 assert.equal(runtimeRowView({ installed: "0.147.0", phase: "checking" }, now).version, "0.147.0", "a re-read keeps the version on screen")
 assert.deepEqual(
   runtimeRowView({ installed: "0.147.0", latest: "0.154.0", channel: "npm", update: { label: "Update with npm", command: "npm", args: [] } }, now),
-  { version: "0.147.0", detail: "0.154.0 available", action: { label: "Update with npm" }, shimmer: false, tone: "muted", note: undefined }
+  { version: "0.147.0", detail: "0.154.0 available", action: { label: "Update with npm" }, busy: false, tone: "muted", note: undefined }
 )
 assert.equal(
   runtimeRowView({ installed: "0.147.0", latest: "0.154.0", channel: "app", managedBy: "ChatGPT.app" }, now).detail,

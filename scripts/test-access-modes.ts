@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
-import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "../electron/acp-access.ts"
-import { accessModeId, hostAccessDecision } from "../electron/contracts/access.ts"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpObservedMode, acpNativeModes, acpSessionModes } from "../electron/acp-access.ts"
+import { accessModeId } from "../electron/contracts/access.ts"
 import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
 import { CURSOR_SDK_MODES } from "../electron/providers/cursor/sdk/modes.ts"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
@@ -14,26 +14,6 @@ import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
 import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
 import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 import { validateLiveDriver } from "../electron/providers/live-driver.ts"
-
-const allowReject = [
-  { optionId: "allow-once", kind: "allow_once" },
-  { optionId: "allow-always", kind: "allow_always" },
-  { optionId: "reject-once", kind: "reject_once" },
-]
-
-// Host decisions: full answers everything answerable, edits answers file work, questions always reach the user.
-assert.equal(hostAccessDecision("full", { toolKind: "execute", options: allowReject }), "allow-once")
-assert.equal(hostAccessDecision("full", { toolKind: "execute", options: [{ optionId: "yes", kind: "allow_always" }, { optionId: "no", kind: "reject_once" }] }), "yes")
-assert.equal(hostAccessDecision("edits", { toolKind: "edit", options: allowReject }), "allow-once")
-assert.equal(hostAccessDecision("edits", { toolKind: "read", options: allowReject }), "allow-once")
-assert.equal(hostAccessDecision("edits", { toolKind: "execute", options: allowReject }), null)
-assert.equal(hostAccessDecision("edits", { toolKind: "delete", options: allowReject }), null)
-assert.equal(hostAccessDecision("edits", { options: allowReject }), null, "an untyped call asks")
-assert.equal(hostAccessDecision("ask", { toolKind: "edit", options: allowReject }), null)
-assert.equal(hostAccessDecision(null, { toolKind: "edit", options: allowReject }), null)
-assert.equal(hostAccessDecision("full", { toolKind: "other", options: [{ optionId: "a", kind: "allow_once" }, { optionId: "b" }] }), null, "a choice outside allow/reject is a question")
-assert.equal(hostAccessDecision("full", { toolKind: "other", options: allowReject, questions: true }), null)
-assert.equal(hostAccessDecision("full", { toolKind: "other", options: [] }), null)
 
 // Cursor runs through its SDK, which has no permission prompt: the ladder is
 // one provider-enforced mode, Agent on the full tier, and no tier that would
@@ -108,20 +88,20 @@ const grokUnset = await grokAcpSource.launch(grokLaunch)
 assert.equal(grokUnset?.args[0], "agent", "no selection leaves the user's Grok configuration alone")
 const grokEdits = await grokAcpSource.launch({ ...grokLaunch, access: "edits" })
 assert.equal(grokEdits?.args[0], "agent", "a tier Grok cannot enforce over ACP is not forwarded")
-assert.deepEqual(acpInitialSelection(grokAcpSource.access, grokModes, null, accessModeId("full")), { currentMode: accessModeId("full"), hostTier: null })
-assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, accessModeId("full"), "full", null, "grok"), { kind: "unchanged", modeId: accessModeId("full") })
-assert.throws(() => acpModeChange(grokAcpSource.access, grokModes, accessModeId("auto"), "full", null, "grok"), /when its session starts/)
+assert.deepEqual(acpInitialSelection(grokAcpSource.access, grokModes, null, accessModeId("full")), { currentMode: accessModeId("full") })
+assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, accessModeId("full"), "full", "grok"), { kind: "unchanged", modeId: accessModeId("full") })
+assert.throws(() => acpModeChange(grokAcpSource.access, grokModes, accessModeId("auto"), "full", "grok"), /when its session starts/)
 // Grok reports no session modes over ACP, so the deny tier it launches with
 // is the declared default: the desk always has a level to report.
 assert.equal(acpDefaultMode(grokAcpSource.access), accessModeId("deny"))
 assert.equal(acpLiveDriver(grokAcpSource).defaultMode, accessModeId("deny"))
 assert.deepEqual(
   acpInitialSelection(grokAcpSource.access, grokModes, null, acpDefaultMode(grokAcpSource.access)),
-  { currentMode: accessModeId("deny"), hostTier: null },
+  { currentMode: accessModeId("deny") },
   "an unchosen Grok session opens under its declared default, reported as such"
 )
 
-// OpenCode: plan is native, build is the base and hidden, ask/edits/full are launch rulesets; edits/full also host-enforced.
+// OpenCode: plan is native, build is the base and hidden, ask/edits/full are launch rulesets; all policies are provider-enforced.
 const openCodeNative = {
   currentModeId: "build",
   availableModes: [
@@ -132,14 +112,18 @@ const openCodeNative = {
 const openCodeModes = acpSessionModes(openCodeAcpSource.access, openCodeNative)
 assert.deepEqual(openCodeModes.map((mode) => [mode.id, mode.access, mode.enforcement]), [
   ["plan", "plan", "provider"],
-  [accessModeId("edits"), "edits", "host"],
-  [accessModeId("full"), "full", "host"],
   [accessModeId("ask"), "ask", "launch"],
+  [accessModeId("edits"), "edits", "launch"],
+  [accessModeId("full"), "full", "launch"],
 ])
+assert.deepEqual(acpModeChange(openCodeAcpSource.access, openCodeModes, accessModeId("full"), "full", "opencode"), { kind: "native", modeId: accessModeId("full"), nativeModeId: "build" }, "returning from Plan must switch the native agent back to Build")
+assert.equal(acpObservedMode(openCodeAcpSource.access, "build", "edits"), accessModeId("edits"))
+assert.equal(acpObservedMode(openCodeAcpSource.access, "plan", "full"), "plan")
+assert.equal(acpObservedMode(openCodeAcpSource.access, "custom", "full"), "custom")
 const openCodeSelection = acpInitialSelection(openCodeAcpSource.access, openCodeModes, openCodeNative, accessModeId("full"))
-assert.deepEqual(openCodeSelection, { currentMode: accessModeId("full"), hostTier: "full" })
-assert.throws(() => acpModeChange(openCodeAcpSource.access, openCodeModes, accessModeId("ask"), "full", "build", "opencode"), /when its session starts/)
-// OpenCode 1.18 sends no session.modes; the "mode" config option carries the
+assert.deepEqual(openCodeSelection, { currentMode: accessModeId("full") })
+assert.throws(() => acpModeChange(openCodeAcpSource.access, openCodeModes, accessModeId("ask"), "full", "opencode"), /when its session starts/)
+// OpenCode v2 sends no session.modes; the "mode" config option carries the
 // same fact, so the running session's ladder and current level still derive.
 const openCodeOption = acpNativeModes([
   {
@@ -167,17 +151,6 @@ assert.equal(
   accessModeId("ask"),
   "an unchosen OpenCode session opens under the ask overlay it launched with"
 )
-const openCodeLaunch = await openCodeAcpSource.launch({ appPath: "/app", execPath: process.execPath, access: "edits" })
-if (openCodeLaunch) {
-  const env: NodeJS.ProcessEnv = {}
-  openCodeLaunch.configureEnvironment(env)
-  assert.deepEqual(JSON.parse(env.OPENCODE_PERMISSION ?? "null"), { "*": "ask", read: "allow", glob: "allow", grep: "allow", list: "allow", question: "allow", todowrite: "allow", lsp: "allow", edit: "allow" })
-  const full: NodeJS.ProcessEnv = {}
-  const fullLaunch = await openCodeAcpSource.launch({ appPath: "/app", execPath: process.execPath, access: "full" })
-  fullLaunch?.configureEnvironment(full)
-  assert.equal(full.OPENCODE_PERMISSION, JSON.stringify("allow"))
-}
-
 // Codex: four tiers become the per-turn approval policy, sandbox, and reviewer.
 assert.deepEqual(codexAccessModes().map((mode) => mode.access), ["ask", "edits", "auto", "full"])
 assert.deepEqual(codexTurnAccess("full"), { approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, approvalsReviewer: "user" })
@@ -200,7 +173,7 @@ assert.equal(codexObservedTier({}), "ask")
 assert.ok(ClaudeModeSchema.safeParse("bypassPermissions").success)
 
 console.log(
-  "Access modes: host decisions, Cursor SDK tiers, Devin native tiers, Grok launch tiers without steering, OpenCode rulesets, Codex per-turn policy, and Claude bypass verified"
+  "Access modes: native policy ownership, Cursor SDK tiers, Devin native tiers, Grok launch tiers without steering, OpenCode rulesets, Codex per-turn policy, and Claude bypass verified"
 )
 
 // Before launch, every driver declares the same ladder its live session will show,
@@ -212,6 +185,15 @@ assert.deepEqual(codexLiveDriver.modes, codexAccessModes())
 assert.ok(claudeLiveDriver.modes?.length, "Claude declares its modes before launch")
 for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
 const accessDrivers = [cursorDriver, acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), acpLiveDriver(openCodeAcpSource), codexLiveDriver, claudeLiveDriver]
+for (const driver of accessDrivers) validateLiveDriver(driver)
+assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.approvalEvidence.kind])), {
+  cursor: "no-interactive-requests", devin: "submission-only", grok: "submission-only",
+  opencode: "native-decisions", codex: "request-lifecycle", claude: "request-lifecycle",
+}, "the actual six adapters declare their evidence, independently of shared host fixtures")
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, approvalEvidence: undefined }), /Invalid/,
+  "registration rejects a new adapter without an approval evidence declaration")
+assert.throws(() => validateLiveDriver({ ...cursorDriver, modes: [{ id: "ask", name: "Ask", access: "ask", enforcement: "provider" }] }),
+  /requires native interactive requests/, "an adapter without interactive requests cannot advertise Ask")
 for (const driver of accessDrivers)
   assert.ok(driver.modes?.every((mode) => !mode.access || mode.enforcement), `${driver.provider}: no tier without an enforcer`)
 // Every driver names the level a fresh session runs under, so the desk never
@@ -229,18 +211,18 @@ assert.equal(cursorDriver.defaultMode, "full-access")
 
 // Invariants the interface cannot type fail at install, not at a call site.
 assert.throws(
-  () => validateLiveDriver({ provider: "x", canResume: false, steer: async () => ({ kind: "accepted" as const }) }),
+  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, steer: async () => ({ kind: "accepted" as const }) }),
   /steer and steering/
 )
 assert.throws(
-  () => validateLiveDriver({ provider: "x", canResume: false, steering: "interrupt" }),
+  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, steering: "interrupt" }),
   /steer and steering/
 )
 assert.throws(
-  () => validateLiveDriver({ provider: "x", canResume: false, modes: [{ id: "a", name: "A", access: "full" }] }),
+  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, modes: [{ id: "a", name: "A", access: "full" }] }),
   /no enforcer/
 )
 assert.throws(
-  () => validateLiveDriver({ provider: "x", canResume: false, modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
+  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
   /not one of its declared modes/
 )

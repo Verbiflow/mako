@@ -264,6 +264,7 @@ const session: LiveSessionState = {
 }
 const events: HostEvent[] = []
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider: "fixture",
   canResume: true,
   available: () => true,

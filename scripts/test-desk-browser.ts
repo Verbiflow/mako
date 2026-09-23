@@ -1,3 +1,4 @@
+import sharp from "sharp"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -27,6 +28,8 @@ import {
   BrowserTargetSchema,
 } from "../electron/contracts/browser-control.js"
 import type { JsonObject } from "../electron/codex-app-json.js"
+
+const screenshotPixels = (await sharp({ create: { width: 1600, height: 1000, channels: 3, background: "white" } }).png().toBuffer()).toString("base64")
 
 /** An in-memory desk window: answers the protocol subset the service uses. */
 function fakePage(previewId: string, log: string[]) {
@@ -63,10 +66,10 @@ function fakePage(previewId: string, log: string[]) {
             },
           }
         case "Runtime.evaluate":
-          return { result: { value: 2 } }
+          return { result: { value: { density: 2, width: 1600, height: 1000 } } }
         case "Page.captureScreenshot":
           return {
-            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOioAAAAASUVORK5CYII=",
+            data: screenshotPixels,
           }
         case "Page.navigate": {
           url = z.string().parse(params.url)
@@ -207,6 +210,8 @@ try {
   )
   await run("agent", { action: "connect", browser: "mako" })
   assert.equal(service.status()[0].connection.status, "connected")
+  await assert.rejects(run("agent", { action: "open", browser: "mako", url: "http://127.0.0.1:5287/fixture.html" }), /Mako|desk|interface/i)
+  assert.equal(created.length, 0, "An unsupported URL must fail before creating a live Mako view")
 
   // The bridge only accepts the token path it minted.
   const endpoint = await desk.definition.endpoint()
@@ -251,26 +256,8 @@ try {
     run("agent", { action: "navigate", target, url: "https://example.test" }),
     /Mako's own interface/
   )
-  // open keeps the window it created and reports the refused navigation.
-  const refused = BrowserTargetSchema.extend({
-    navigation: z.object({ fault: z.object({ message: z.string() }) }),
-  }).parse(
-    await run("agent", {
-      action: "open",
-      browser: "mako",
-      url: "https://example.test",
-    })
-  )
-  assert.match(refused.navigation.fault.message, /Mako's own interface/)
-  await run("agent", {
-    action: "close",
-    target: {
-      browser: refused.browser,
-      tab: refused.tab,
-      generation: refused.generation,
-      lease: refused.lease,
-    },
-  })
+  await assert.rejects(run("agent", { action: "open", browser: "mako", url: "https://example.test" }), /Mako's own interface/)
+  assert.equal(desk.openPages, 1, "Refused URL creates no extra live app window")
 
   // A second agent gets its own window; the cap refuses a third.
   const second = BrowserTargetSchema.parse(

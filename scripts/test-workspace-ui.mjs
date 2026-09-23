@@ -86,6 +86,13 @@ async function checkWindow() {
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
   }
+  // Orbs paint in a worker and pause while the page is hidden, as this test
+  // window is; the main-thread orb draws the same motion and can be read back.
+  await window.loadURL("about:blank")
+  await page.debugger.sendCommand("Page.enable")
+  await page.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
+    source: "delete HTMLCanvasElement.prototype.transferControlToOffscreen",
+  })
   await window.loadURL(`${base}scripts/live-workflow.html`)
   console.log("UI fixture loaded")
   await until(`Boolean(document.querySelector('.composer-input'))`)
@@ -268,7 +275,15 @@ async function checkWindow() {
   await window.loadURL(`${base}?mock`)
   await until(`document.querySelector('[aria-label="Thread view"]') !== null`)
   assert.notEqual(await evaluate(`import('/src/state/session.ts').then(({store}) => store.get().meta?.cwd)`), "/Users/you/api")
-  await click('button[aria-label="New thread in api"]')
+  // A folder's actions join its row under the pointer, as they do for a person.
+  const newThreadIn = async (folder) => {
+    const action = `button[aria-label="New thread in ${folder}"]`
+    const row = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(action)}).closest('[data-flip-key^="folder:"]').getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", ...row })
+    await until(`document.querySelector(${JSON.stringify(action)}).getBoundingClientRect().width > 0`)
+    await click(action)
+  }
+  await newThreadIn("api")
   await until(`import('/src/state/session.ts').then(({store}) => store.get().meta?.cwd === '/Users/you/api')`)
   await until(`document.activeElement?.classList.contains('composer-input')`)
   assert.equal(await evaluate(`import('/src/state/tabs.ts').then(({tabsStore}) => { const s = tabsStore.get(); return s.tabs.length === 2 && s.activeId === s.tabs[1].id })`), true)
@@ -277,7 +292,7 @@ async function checkWindow() {
     window.mako.openTab = async () => { throw new Error("fixture: host refused the tab") };
   })()`)
   const beforeFailedOpen = await evaluate(`import('/src/state/session.ts').then(({store}) => store.get().meta?.cwd)`)
-  await click('button[aria-label="New thread in site"]')
+  await newThreadIn("site")
   await until(`document.body.textContent.includes('fixture: host refused the tab')`)
   assert.equal(await evaluate(`import('/src/state/session.ts').then(({store}) => store.get().meta?.cwd)`), beforeFailedOpen)
   assert.equal(await evaluate(`import('/src/state/tabs.ts').then(({tabsStore}) => tabsStore.get().tabs.length)`), 2)

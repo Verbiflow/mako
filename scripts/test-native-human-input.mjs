@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -16,6 +16,7 @@ const run = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-human-input-"))
 const evidence = { status: "preparing", root, jobs: [] }
 const processes = []
+const fixturePids = []
 const client = new Client({ name: "physical-input-acceptance", version: "1" })
 const read = async name => JSON.parse(await readFile(join(root, name + ".json"), "utf8"))
 async function until(fn, timeout = 10000) {
@@ -31,14 +32,21 @@ async function cell(source) {
     output = await client.callTool({ name: "mako_control_exec", arguments: { cell: receipt.cell } }, undefined, { timeout: 70000 })
   }
   const result = JSON.parse(output.content.filter(block => block.type === "text").at(-1).text)
-  if (output.isError || result.code) throw Error(JSON.stringify(result))
+  if (output.isError || (result.code && result.outcome)) throw Error(JSON.stringify(result))
   return result
 }
 try {
   for (const [name, source] of [["target", "native-settling-fixture.swift"], ["human", "native-human-input-fixture.swift"]]) {
     await run("xcrun", ["swiftc", "-O", "-o", join(root, name), resolve("scripts/lib", source)], { timeout: 180000 })
-    processes.push(spawn(join(root, name), [join(root, name + ".json")], { stdio: "ignore" }))
-    await until(() => read(name))
+    if (name === "human") {
+      const bundle = join(root, "Mako Human Typing.app")
+      await mkdir(join(bundle, "Contents", "MacOS"), { recursive: true })
+      await cp(join(root, name), join(bundle, "Contents", "MacOS", "fixture"))
+      await writeFile(join(bundle, "Contents", "Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleIdentifier</key><string>dev.mako.human-input-fixture</string><key>CFBundleName</key><string>Mako Human Typing</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`)
+      await run("codesign", ["--force", "--sign", "-", bundle])
+      processes.push(spawn("open", ["-n", "-g", bundle, "--args", join(root, name + ".json")], { stdio: "ignore" }))
+    } else processes.push(spawn(join(root, name), [join(root, name + ".json")], { stdio: "ignore" }))
+    fixturePids.push((await until(() => read(name))).pid)
   }
   const target = await read("target")
   const driver = resolveExecutable("cua-driver")
@@ -81,6 +89,7 @@ finally {
   await client.close().catch(() => {})
   await stopCuaEmbedded()
   for (const child of processes) child.kill()
+  for (const pid of fixturePids) { try { process.kill(pid, "SIGTERM") } catch {} }
   await writeFile(join(root, "evidence.json"), JSON.stringify(evidence, null, 2) + "\n")
   console.log(JSON.stringify({ status: evidence.status, root, error: evidence.error, jobs: evidence.jobs.length }))
 }

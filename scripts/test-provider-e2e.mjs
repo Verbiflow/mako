@@ -1,4 +1,5 @@
 import { verifyNativeDelivery } from "./provider-delivery-fixture.mjs"
+import { launchEvidence, verifyLaunchEvidence } from "./provider-launch-evidence.mjs"
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
 import {
   sampleFrontmost,
@@ -64,6 +65,8 @@ async function runElectron() {
   await mkdir(join(root, "user-data"))
   app.setPath("userData", join(root, "user-data"))
   await app.whenReady()
+  const { installHostLog } = await import("../dist-electron/host-log.js")
+  const launchLog = installHostLog(join(root, "host.log"))
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
   const { providerHost } = await import("../dist-electron/providers/index.js")
@@ -339,6 +342,7 @@ async function runElectron() {
           (snapshot) => snapshot?.session.status === "ready",
           60_000
         )
+        const launchMs = performance.now() - launchBegan
         if (profile) {
           const session = owner.snapshot(id).session
           result.startedSettings = session.settings
@@ -348,17 +352,22 @@ async function runElectron() {
         }
         if (launchOnly) {
           const state = owner.snapshot(id).session
+          await launchLog.flush()
+          result.launchPhases = launchEvidence(await readFile(launchLog.path, "utf8"), id)
+          verifyLaunchEvidence(result.launchPhases)
           result.status = "passed"
-          result.launchMs = performance.now() - launchBegan
+          result.launchMs = launchMs
           result.nativeIdentityReported = Boolean(state.nativeId)
+          result.nativeId = state.nativeId
           result.authenticationConsents = authentications.get(id) ?? 0
           result.currentMode = state.currentMode
           result.availableModeIds = state.modes.map((mode) => mode.id)
-          console.log(JSON.stringify(result))
+          console.log(JSON.stringify({ ...result, launchPhases: undefined }))
           await writeFile(
             join(root, "results.json"),
             JSON.stringify(results, null, 2)
           )
+          await owner.closeForExit([id])
           continue
         }
         if (process.argv.includes("--delivery")) {

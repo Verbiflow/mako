@@ -100,7 +100,7 @@ conversation.session = {
   modes: [
     { id: "agent", name: "Agent", access: "ask", enforcement: "provider" },
     { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },
-    { id: "access:full", name: "Full access", access: "full", enforcement: "host" },
+    { id: "access:full", name: "Full access", access: "full", enforcement: "launch" },
     { id: "access:auto", name: "Auto review", access: "auto", enforcement: "launch" },
     { id: "verbose", name: "Verbose", description: "Provider-only switch" },
   ],
@@ -117,7 +117,7 @@ const order = ["Plan", "Ask before acting", "Auto review", "Full access", "Verbo
 assert.ok(order.every((index) => index >= 0), `every mode renders: ${order.join(",")}`)
 assert.deepEqual([...order].sort((a, b) => a - b), order, "the ladder renders least to most permissive, provider-only modes last")
 assert.match(controlsMarkup, /claude: Agent/)
-assert.match(controlsMarkup, /Mako approves the agent&#x27;s requests/)
+assert.doesNotMatch(controlsMarkup, /Mako approves/)
 assert.match(controlsMarkup, /Set when the session starts/)
 assert.match(controlsMarkup, /Provider-only switch/)
 // A one-mode provider (Cursor) offers nothing to choose: the chip names the
@@ -197,10 +197,8 @@ assert.match(
   renderToStaticMarkup(<LiveActionStatus />),
   /Disconnect and keep history/
 )
-assert.match(
-  renderToStaticMarkup(<LiveActionStatus />),
-  /Connection lost after dispatch/
-)
+assert.match(renderToStaticMarkup(<LiveActionStatus />), /aria-expanded="false"/)
+assert.doesNotMatch(renderToStaticMarkup(<LiveActionStatus />), /Connection lost after dispatch/, "details mount only when opened; interactive coverage lives in test-recovery-notice-ui")
 control.transfers = [
   {
     input: { id, provider: "claude", text: "saved request", attachments: [] },
@@ -235,6 +233,7 @@ assert.match(
   renderToStaticMarkup(<TransferStatus />),
   /Acceptance not confirmed/
 )
+assert.match(renderToStaticMarkup(<TransferStatus />), /aria-expanded="true"/)
 assert.match(renderToStaticMarkup(<TransferStatus />), /saved request/)
 control.ancestry = {
   kind: "fork",
@@ -485,22 +484,21 @@ conversation.requests.push({id:"unsent",text:"Do not lose a pre-dispatch stop",a
 conversation.requests.push({id:"failed",text:"Failed input remains recoverable",attachments:[],status:"failed"})
 publish()
 const recoveries = renderToStaticMarkup(<RetainedRequests />)
-assert.match(recoveries, /Do not lose a pre-dispatch stop/)
-assert.match(recoveries, /Failed input remains recoverable/)
-assert.doesNotMatch(recoveries, /<details[^>]+open|Keep this original question|Message interrupted/)
-assert.match(recoveries, /Send again/, "an unclassified failure still offers Send again")
+assert.equal((recoveries.match(/data-recovery-notice="true"/g) ?? []).length, 1)
+assert.match(recoveries, /Review message/)
+assert.match(recoveries, /Earlier messages \(1\)/)
+assert.doesNotMatch(recoveries, /Do not lose a pre-dispatch stop|Failed input remains recoverable|Keep this original question|Send again/)
+assert.deepEqual(recoverableRequests(conversation).map(request => request.id), ["unsent", "failed"], "both saved messages remain available behind the disclosure")
 // A classified failure is described for the provider and offers Send again
 // only when a repeat can work.
 conversation.requests.push({id:"rejected",text:"Once more",attachments:[],status:"failed",failure:"transcript-rejected",error:"reasoning encrypted_content was not issued to this caller"})
 conversation.requests.push({id:"quit-unsent",text:"Cut short before it ran",attachments:[],status:"interrupted",interruption:{reason:"host-quit",at:1}})
 publish()
 const classified = renderToStaticMarkup(<RetainedRequests />)
-assert.match(classified, /data-failure="transcript-rejected"/)
-assert.match(classified, /Claude Code&#x27;s session history was rejected by its model provider/)
-assert.match(classified, /Start a new Claude Code thread/)
-assert.match(classified, /encrypted_content was not issued/, "the provider's own text stays readable")
-assert.match(classified, /Interrupted when Mako quit\. Review saved message/)
-assert.equal((classified.match(/Send again/g) ?? []).length, 1, "only the retriable failure offers Send again")
+assert.match(classified, /Review message/)
+assert.match(classified, /Earlier messages \(3\)/)
+assert.doesNotMatch(classified, /encrypted_content was not issued|Send again/, "details and actions require opening the saved message")
+assert.deepEqual(recoverableRequests(conversation).map(request => request.id), ["unsent", "failed", "rejected", "quit-unsent"])
 conversation.requests.splice(-2, 2)
 publish()
 const savedDescriptors = threadsStore.get().descriptors
@@ -520,14 +518,15 @@ publish()
 assert.match(renderToStaticMarkup(<CompactionControl requestId="failed" />), /disabled=""/)
 control.actions[0].state = { kind: "completed" }
 publish()
-assert.match(renderToStaticMarkup(<RetainedRequests />), /Compaction completed\. You can send/)
+assert.match(renderToStaticMarkup(<RetainedRequests />), /Review message/)
+assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Compaction completed\. You can send/, "compaction guidance belongs inside expanded recovery")
 // The unsupported-provider case must not inherit the completed compaction above.
 control.actions = []
 publish()
 threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true, canResume: true,
   recovery: { compaction: { kind: "unavailable", reason: "Fixture cannot compact" } } }] })
-assert.match(renderToStaticMarkup(<RetainedRequests />), /Fixture cannot compact/)
-assert.match(renderToStaticMarkup(<RetainedRequests />), /Start new thread with saved message/)
+assert.match(renderToStaticMarkup(<RetainedRequests />), /Review message/)
+assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Fixture cannot compact|Start new thread with saved message/)
 assert.doesNotMatch(renderToStaticMarkup(<CompactionControl />), /<button/)
 threadsStore.set({ descriptors: savedDescriptors })
 conversation.session = savedSession

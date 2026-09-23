@@ -193,14 +193,16 @@ if (answer.behavior === "allow")
 const denied = permissions.tool("Bash", { command: "echo test" }, options)
 permissions.close()
 assert.equal((await denied)?.behavior, "deny")
-assert.throws(
-  () =>
-    permissions.respond("permission", {
-      kind: "choice",
-      optionId: "allow_once",
-    }),
-  /no longer pending/
-)
+assert.deepEqual(permissions.respond("permission", { kind: "choice", optionId: "allow_once" }),
+  { kind: "not-submitted", pending: false, reason: "request-ended" })
+const abort = new AbortController()
+const cancelledQuestion = permissions.tool("Bash", { command: "echo harmless" }, { ...options, signal: abort.signal })
+const observedQuestion = permissionEvents.at(-1)
+assert.ok(observedQuestion?.type === "live-permission")
+abort.abort()
+assert.equal((await cancelledQuestion)?.behavior, "deny")
+assert.deepEqual(permissionEvents.at(-1), { type: "live-permission-ended", id: "permission-fixture",
+  requestId: "permission", observationId: observedQuestion.request.observationId, source: "request-aborted" })
 const queue = new ClaudeInput()
 queue.close()
 assert.throws(() => queue.send(steering.value), /closed/)

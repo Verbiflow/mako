@@ -109,8 +109,14 @@ try {
       name: "Collision",
       endpoint: await attachedFixture.definition.endpoint(),
     }),
-    /already attached/
+    /another task/
   )
+  await assert.rejects(run("task-b", { action: "detach", id: attachedId }), /another task/)
+  await assert.rejects(run("task-b", { action: "tabs", browser: attachedId }), /another task/)
+  await assert.rejects(run("task-b", {
+    action: "attach", id: "app:dev.mako.alias:4242:feedbeef", name: "Alias",
+    endpoint: await attachedFixture.definition.endpoint(),
+  }), /already registered/)
   assert.deepEqual(await run("task-a", { action: "detach", id: attachedId }), {
     id: attachedId,
     detached: true,
@@ -239,8 +245,25 @@ try {
     run("task-a", { action: "type", target: a, text: "retry" }),
     /outcome is unknown/
   )
+  fixture.emit(z.string().parse(fixture.sessionFor(a.tab)), "Page.javascriptDialogOpening", {
+    type: "alert", message: "Action interrupted", url: "https://example.test",
+  })
+  for (let attempt = 0; ; attempt++) {
+    const dialog = z.object({ pending: z.json().nullable() }).parse(
+      await run("task-a", { action: "dialog", target: a })
+    )
+    if (dialog.pending !== null) break
+    assert.ok(attempt < 100)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  await run("task-a", { action: "dialog", target: a, respond: "dismiss" })
+  await assert.rejects(
+    run("task-a", { action: "type", target: a, text: "dialog-is-not-verification" }),
+    /outcome is unknown/
+  )
   fixture.completeDelayed()
-  await service.preview("task-a", a, AbortSignal.timeout(1000), () => {})
+  const stopPreview = await service.previewStream("task-a", a, () => {}, () => {}, () => {})
+  await stopPreview()
   await assert.rejects(
     run("task-a", {
       action: "type",
@@ -558,6 +581,19 @@ try {
     2,
     "each of the two uncertain actions was dispatched exactly once"
   )
+  fixture.holdNextAxRead()
+  const readStart = fixture.calls.length
+  const overlapped = run("task-a", { action: "observe", target: a })
+  const readRejected = assert.rejects(overlapped, /overlapped a mutation/)
+  for (let attempt = 0; !fixture.calls.slice(readStart).some((call) => call.method === "Accessibility.getFullAXTree"); attempt++) {
+    assert.ok(attempt < 100, "observation reached the driver")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  await run("task-a", { action: "cdp", target: a, method: "Runtime.evaluate", params: { expression: "document.title" }, concurrent: true })
+  fixture.completeAxRead()
+  await readRejected
+  await assert.rejects(run("task-a", { action: "type", target: a, text: "stale-read" }), /outcome is unknown/)
+  await run("task-a", { action: "observe", target: a })
   fixture.targets.delete(a.tab)
   await assert.rejects(
     run("task-a", { action: "type", target: a, text: "closed" }),
@@ -1563,4 +1599,51 @@ try {
   control.close()
   await attachedFixture.close()
   await fixture.close()
+}
+
+// Cookie writes invalidate a profile, not just their originating tab. Refuse
+// contention before dispatch, including tabs whose acquisition is still pending.
+const profileFixture = await browserFixture()
+const profileService = new BrowserService([profileFixture.definition])
+const profileRun = (owner: string, command: z.input<typeof BrowserCommandSchema>, signal = new AbortController().signal) =>
+  profileService.execute(owner, BrowserCommandSchema.parse(command), signal)
+try {
+  await profileRun("a", { action: "connect", browser: "fixture" })
+  const a = BrowserTargetSchema.parse(await profileRun("a", { action: "open", browser: "fixture" }))
+  await profileRun("b", { action: "open", browser: "fixture" })
+  const cookie = BrowserCommandSchema.parse({ action: "cookies", target: a, operation: "set", cookies: [{ name: "session", value: "fixture", url: "https://example.test" }] })
+  await assert.rejects(profileRun("a", cookie), /Other tasks own tabs/)
+  assert.equal(profileFixture.calls.filter(call => call.method === "Network.setCookies").length, 0)
+  for (const method of ["Browser.close", "Browser.setDownloadBehavior", "Storage.setCookies", "Network.clearBrowserCookies", "Network.setCookies", "Target.sendMessageToTarget"])
+    await assert.rejects(profileRun("a", { action: "cdp", target: a, method, params: {} }), /outside the tab lease|target lifecycle/)
+  assert.ok(!profileFixture.calls.some(call => call.method === "Browser.close"))
+  await profileService.releaseOwner("b")
+  const peer = BrowserTargetSchema.parse(await profileRun("a", { action: "open", browser: "fixture" }))
+  const abort = new AbortController()
+  profileFixture.holdNextCookieWrite()
+  const pending = profileRun("a", cookie, abort.signal)
+  const rejected = assert.rejects(pending, error => error instanceof BrowserFault && error.detail.outcome === "unknown")
+  const deadline = Date.now() + 5000
+  while (!profileFixture.calls.some(call => call.method === "Network.setCookies")) {
+    assert.ok(Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  await assert.rejects(profileRun("b", { action: "open", browser: "fixture" }), /cookie operation is pending/)
+  await assert.rejects(profileRun("a", { action: "observe", target: peer }), /cookie operation is pending/)
+  abort.abort()
+  await rejected
+  profileFixture.completeCookieWrite()
+  await assert.rejects(profileRun("a", { action: "press", target: peer, key: "Enter" }), /Observe/)
+  const later = BrowserTargetSchema.parse(await profileRun("a", { action: "open", browser: "fixture" }))
+  await assert.rejects(profileRun("a", { action: "press", target: later, key: "Enter" }), /Observe/)
+  await profileRun("a", { action: "observe", target: peer })
+  await profileRun("a", { action: "press", target: peer, key: "Enter" })
+  await assert.rejects(profileRun("a", { action: "press", target: a, key: "Enter" }), /Observe/)
+  assert.equal(profileFixture.calls.filter(call => call.method === "Network.setCookies").length, 1, "Unknown cookie write was never replayed")
+  console.log("Browser-wide ownership: cross-task cookie refusal, raw browser administration refusal, pending profile lock and uncertainty across existing/new tabs passed")
+} finally {
+  await profileService.releaseOwner("a")
+  await profileService.releaseOwner("b")
+  profileService.close()
+  await profileFixture.close()
 }

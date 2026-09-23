@@ -16,6 +16,7 @@ const sent: Array<{ id: string; text: string }> = []
 const sessions = new Map<string, LiveSessionState>()
 let receive: (event: HostEvent) => void = () => {}
 const driver: ProviderLiveDriver = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   canResume: true,
   provider: "test",
   available: () => true,
@@ -55,7 +56,15 @@ const owner = new LiveConversations({
   emit: (event) => receive(event),
 })
 let loseStartReply = false
+const storage = new Map<string, string>()
 Object.assign(globalThis, {
+  localStorage: {
+    get length() { return storage.size },
+    key: (index: number) => [...storage.keys()][index] ?? null,
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { storage.set(key, value) },
+    removeItem: (key: string) => { storage.delete(key) },
+  },
   window: {
     mako: {
       onEvent: (callback: (event: HostEvent) => void) => {
@@ -85,6 +94,8 @@ Object.assign(globalThis, {
         text: string,
         attachments: PromptAttachment[]
       ) => owner.submit(id, requestId, text, attachments),
+      liveContinue: async (id: string, bindingId: string, requestId: string, text: string, attachments: PromptAttachment[]) =>
+        owner.continueBinding(id, bindingId, requestId, text, attachments),
       liveSnapshot: async (id: string) => owner.snapshot(id),
       liveClose: async (id: string) => owner.close(id),
       liveCancel: async (id: string) => owner.cancel(id),
@@ -133,7 +144,7 @@ try {
   })
   assert.equal(
     acpStore.get().conversations[a.key]?.kind === "live" &&
-      acpStore.get().conversations[a.key]?.permission?.id,
+      acpStore.get().conversations[a.key]?.permission?.origin?.nativeRequestId,
     "permission-a"
   )
   assert.equal(await acp.send("queued B"), true)

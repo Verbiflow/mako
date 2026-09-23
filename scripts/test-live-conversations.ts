@@ -58,6 +58,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   const events: HostEvent[] = []
   let closed = 0
   const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     canResume: true,
     provider: "test-provider",
     available: () => true,
@@ -150,6 +151,7 @@ async function hibernatesAndWakesExactlyOnce() {
     configOptions: [],
   })
   const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     canResume: true,
     provider: "test-provider",
     available: () => true,
@@ -323,6 +325,7 @@ async function boundsWarmProviders() {
   const closed: string[] = []
   let owner: LiveConversations
   const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     canResume: true,
     provider: "test-provider",
     available: () => true,
@@ -422,6 +425,7 @@ async function failedCloseKeepsOwnership() {
   let closes = 0
   let revocations = 0
   const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     provider: "test-provider",
     canResume: true,
     available: () => true,
