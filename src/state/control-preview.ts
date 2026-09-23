@@ -40,11 +40,13 @@ function startWatchingControlPreview(conversationId: string): () => void {
   const watcher = crypto.randomUUID()
   let closed = false
   let pending = false
+  let refreshRequested = false
   let timer: ReturnType<typeof setTimeout> | undefined
 
   const poll = async () => {
     timer = undefined
-    if (closed || pending || document.hidden) return
+    if (closed || document.hidden) return
+    if (pending) { refreshRequested = true; return }
     pending = true
     try {
       const preview = await getMako().controlPreview(
@@ -77,16 +79,11 @@ function startWatchingControlPreview(conversationId: string): () => void {
     } finally {
       pending = false
       if (closed || document.hidden) release()
+      else if (refreshRequested) { refreshRequested = false; void poll() }
       else {
-        const activity =
-          controlPreviewStore.get().previews[conversationId]?.activity
-        if (
-          activity &&
-          (activity.status === "running" ||
-            Date.now() - activity.updatedAt < 5_000)
-        )
-          timer = setTimeout(() => void poll(), 500)
-        else release()
+        const activity = controlPreviewStore.get().previews[conversationId]?.activity
+        if (!activity || activity.kind === "browser" || activity.status === "running" || Date.now() - activity.updatedAt < 5000)
+          timer = setTimeout(() => void poll(), 1000)
       }
     }
   }
@@ -142,9 +139,10 @@ export function receiveControlActivity(activity: ControlActivity) {
   })
 }
 /** Electron captures only the already-authorized native window. No AX query or input is involved. */
+const nativeStreams = new Map<string, { users: number; stream: Promise<MediaStream> }>()
 export async function controlPreviewStream(
   id: string
-): Promise<MediaStream | null> {
+): Promise<{ stream: MediaStream; release: () => void } | null> {
   if (!getMako().nativeWindowVideo) return null
   const source = await getMako().controlPreviewSource(id)
   if (!source) return null
@@ -160,10 +158,28 @@ export async function controlPreviewStream(
     mandatory: {
       chromeMediaSource: "desktop",
       chromeMediaSourceId: source,
-      maxWidth: 640,
-      maxHeight: 480,
-      maxFrameRate: 2,
+      maxWidth: 1920,
+      maxHeight: 1080,
+      maxFrameRate: 60,
     },
   }
-  return navigator.mediaDevices.getUserMedia({ audio: false, video })
+  const key = JSON.stringify([id, source])
+  let entry = nativeStreams.get(key)
+  if (!entry) {
+    entry = { users: 0, stream: navigator.mediaDevices.getUserMedia({ audio: false, video }) }
+    nativeStreams.set(key, entry)
+  }
+  entry.users++
+  const owned = entry
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    if (--owned.users === 0) {
+      if (nativeStreams.get(key) === owned) nativeStreams.delete(key)
+      void owned.stream.then(stream => stream.getTracks().forEach(track => track.stop())).catch(() => {})
+    }
+  }
+  try { return { stream: await owned.stream, release } }
+  catch (error) { release(); throw error }
 }

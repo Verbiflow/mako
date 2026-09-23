@@ -1,3 +1,4 @@
+import { answerLiveApproval } from "./live-approvals"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
 import { stagePrompt } from "@/state/acp-pending"
 import { autoContinuePending } from "@/state/prompt-delivery"
@@ -584,13 +585,8 @@ export const acp = {
   ): void {
     const current = activeLiveAcp(acpStore.get())
     if (!current?.permission || !hasBridge()) return
-    void getMako()
-      .livePermission(
-        current.key,
-        current.permission.id,
-        answers ? { kind: "answers", answers } : { kind: "choice", optionId }
-      )
-      .catch((error) => toast.error(String(error)))
+    void answerLiveApproval(current.key, current.permission.id,
+      answers ? { kind: "answers", answers } : { kind: "choice", optionId })
   },
 
   async setMode(modeId: string): Promise<void> {
