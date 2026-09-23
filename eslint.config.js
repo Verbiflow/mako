@@ -36,7 +36,7 @@ export default defineConfig([
     languageOptions: { globals: { ...globals.browser, chrome: "readonly" } },
   },
   {
-    files: ["packages/backend/**/*.{ts,tsx}"],
+    files: ["packages/backend/**/*.{ts,tsx}", "packages/control-runtime/src/**/*.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },

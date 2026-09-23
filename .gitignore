@@ -65,3 +65,6 @@ __pycache__/
 # Keep sources.json and the build recipe under version control.
 vendor/control-media/*-*/
 vendor/control-media/.build-*/
+
+# Synthetic Local Control acceptance output, collected locally or by CI.
+/evidence/

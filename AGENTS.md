@@ -291,10 +291,19 @@ bar out of a window state, `kind` on window records, the driver's data
 unwrapped from its MCP envelope), `steps` (`view`, `act`, `until`,
 `expect`, `windows`, built over the same actions a program calls by hand),
 `reference` (the API text rendered from the live tool catalog) and `policy`
-(the background input ladder and the keyboard verdicts). The hosts in
-`electron/computer-tools-main.ts` adds what only a host knows: the driver
-connection and session, snapshot memory, path resolution, the foreground
-preflight and previews. `browser-tools-main.ts` is a focused regression harness,
+(the background input ladder and the keyboard verdicts).
+
+`@mako/control-runtime` (`packages/control-runtime`) owns the Node session engine,
+CLI, browser connections, driver lifecycle, capture and recording. Its root
+`createControlRuntime({artifacts,browsers?,native?})` requires explicit standalone
+configuration. `/host`, `/browser`, `/session` and `/mcp` serve the desktop and
+transport adapters; `/contracts` and `/extension` are safe schema-only imports.
+Mako imports these package exports. Keep OS permission hosts and app UI wiring in
+`electron/`; do not move engine ownership back there. `runtime/control` is the
+Linux deployment recipe, not another package implementation. Build with
+`npm run build:control-runtime`; `npm run test:control-packages` checks packed
+public imports/types, relocation, workers, cleanup and release boundaries.
+`electron/browser-tools-main.ts` is a focused regression harness,
 not a managed or runtime-recognized server.
 `packages/control/test` covers the pure layer; `docs/audits/2026-09-14/`
 holds the measurements the design rests on.
@@ -1121,22 +1130,29 @@ preferences sync between windows; draft text and preview layout remain separate.
 
 `electron/contracts/access.ts` is the one ladder: plan, chat, ask, edits, auto,
 full, deny. A provider mode carries the tier it implements (`access`) and who
-makes it true (`enforcement`): the provider itself, the host answering the
-provider's permission requests, or a launch flag the running process already
-read. The picker orders by tier and shows the provider's own name beside it.
-Never show a tier nobody enforces. Host approval (`hostAccessDecision`) answers
-only allow/reject choices, never a question, and prefers once-scoped grants so
-a stricter tier chosen later is honoured by the agent's next ask. A mode id of
-the form `access:<tier>` is host-defined; anything else is the provider's own.
+makes it true (`enforcement`): the provider itself or a native launch setting.
+The picker orders by tier and shows the provider's own name beside it. Never
+show a tier nobody enforces. Mako selects native policy and forwards the user's
+answers; it must not implement a replacement tool-classification/approval policy.
+`hostAccessDecision` and host-enforced mode declarations have been removed.
+Legacy journal modes are filtered on read without deleting saved history. A mode id of the form
+`access:<tier>` is Mako's normalized selection id; anything else is the provider's own.
 
 Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
-(`native`, `host`, `launch`, `base`); `electron/acp-access.ts` builds the mode
+(`native`, `launch`, `base`); `electron/acp-access.ts` builds the mode
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11
 against the installed CLIs: Devin advertises all five tiers
 natively. Grok reads `--permission-mode` at launch and, in every mode except
 always-approve, denies tool calls over ACP instead of asking, so its tiers are
-launch-only. OpenCode reads `OPENCODE_PERMISSION` at launch; its remaining asks
-can be host-answered. Claude maps its own modes, with `bypassPermissions`
+launch-only. OpenCode supports v2 only (2.x and known v2 prereleases); runtime
+admission and update policy share `isOpenCodeV2`. Do not restore v1 execution,
+model discovery or update feeds. OpenCode Ask/Edit/Full presets use per-process native JSONC configuration on the Build agent;
+Plan and custom agents retain their native policies. Existing inline fields survive the merge.
+The process reads its preset at launch; selecting that preset after Plan must switch the
+native agent back to Build before reporting success. Native saved grants, session rules and
+plugins remain OpenCode's responsibility. Mako forwards every native approval to the user. Follow the migration and retained-history
+retirement gate in `docs/meta-harness/delivery-plan.md` (OpenCode v2-only migration).
+Claude maps its own modes, with `bypassPermissions`
 allowed at launch so a later switch is accepted. Codex sends approval policy,
 sandbox, and reviewer with every `turn/start`; a change applies to the next
 turn. Cursor is not an ACP provider: its ladder is the SDK's own and is

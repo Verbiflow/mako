@@ -2,7 +2,9 @@
   "compilerOptions": {
     "incremental": true,
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist-electron",
@@ -13,12 +15,25 @@
     "verbatimModuleSyntax": false,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["electron/**/*.ts"],
+  "include": [
+    "electron/**/*.ts"
+  ],
   "references": [
-    { "path": "./packages/sessions" },
-    { "path": "./packages/relay" },
-    { "path": "./packages/control" }
+    {
+      "path": "./packages/sessions"
+    },
+    {
+      "path": "./packages/relay"
+    },
+    {
+      "path": "./packages/control"
+    },
+    {
+      "path": "./packages/control-runtime"
+    }
   ]
 }
