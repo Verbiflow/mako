@@ -14,31 +14,6 @@ import {
 import { runDiscovery } from "../profile-transport.js"
 import { resolveOpenCodeInstallation } from "./installation.js"
 
-const ModelSchema = z.object({
-  id: z.string(),
-  providerID: z.string(),
-  name: z.string().optional(),
-  family: z.string().optional(),
-  status: z.string().optional(),
-  variants: z
-    .record(
-      z.string(),
-      z.object({ reasoningEffort: z.string().optional() }).passthrough()
-    )
-    .optional(),
-  limit: z
-    .object({ context: z.number().optional(), output: z.number().optional() })
-    .optional(),
-  capabilities: z
-    .object({
-      reasoning: z.boolean().optional(),
-      input: z
-        .object({ text: z.boolean().optional(), image: z.boolean().optional() })
-        .optional(),
-    })
-    .optional(),
-})
-
 const CacheModelSchema = z
   .object({
     id: z.string(),
@@ -71,16 +46,6 @@ const CacheProviderSchema = z
   .object({ models: z.record(z.string(), z.unknown()) })
   .passthrough()
 const CacheSchema = z.record(z.string(), z.unknown())
-const ConfigSchema = z.object({
-  model: z.string().optional(),
-  default_agent: z.string().optional(),
-  agent: z
-    .record(
-      z.string(),
-      z.object({ model: z.string().optional(), variant: z.string().optional() })
-    )
-    .optional(),
-})
 const DefaultModelSchema = z.object({
   data: z.object({
     id: z.string().min(1),
@@ -107,7 +72,7 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
     "agents",
   ],
   cacheKey: (env) => {
-    const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.OPENCODE_BIN_PATH, env.OPENCODE1_BIN_PATH, env.OPENCODE2_BIN_PATH])
+    const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.OPENCODE_BIN_PATH, env.OPENCODE2_BIN_PATH])
     try {
       const info = statSync(
         join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "auth.json")
@@ -118,17 +83,17 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
     }
   },
   async load(env, cwd) {
-    const installation = await resolveOpenCodeInstallation(undefined, env)
+    const installation = await resolveOpenCodeInstallation(env)
     let output = await runDiscovery(
       installation.command,
-      installation.generation === "v2" ? ["models"] : ["models", "--verbose"],
+      ["models"],
       env,
       undefined,
       cwd
     )
     // OpenCode v2 registers a cold workspace on its first request and can
     // return an empty successful response. Read again after that completes.
-    if (installation.generation === "v2" && !output.trim()) {
+    if (!output.trim()) {
       output = await runDiscovery(
         installation.command,
         ["models"],
@@ -137,80 +102,54 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
         cwd
       )
     }
-    const rows =
-      installation.generation === "v2"
-        ? await v2Models(output, env)
-        : parseModels(output)
+    const rows = await v2Models(output, env)
     const catalog = normalizeOpenCodeModels(rows)
     if (!catalog.models.length)
       throw new Error(
         "OpenCode did not report any models after workspace initialization"
       )
     try {
-      if (installation.generation === "v2") {
-        const query = cwd
-          ? `?location[directory]=${encodeURIComponent(cwd)}`
-          : ""
-        const response = DefaultModelSchema.parse(
-          JSON.parse(
-            await runDiscovery(
-              installation.command,
-              ["api", "GET", `/api/model/default${query}`],
-              env,
-              undefined,
-              cwd
-            )
-          )
-        )
-        const identity = `${response.data.providerID}/${response.data.id}`
-        const model = catalog.models.find((model) => model.id === identity)
-        if (!model)
-          throw new Error(
-            "OpenCode's default model is missing from its catalog"
-          )
-        if (response.data.variants) {
-          const variants = response.data.variants.map((variant) => variant.id)
-          model.options = normalizeOpenCodeModels([
-            {
-              id: response.data.id,
-              providerID: response.data.providerID,
-              variants: Object.fromEntries(variants.map((id) => [id, {}])),
-              defaultVariant: variants.includes("default")
-                ? "default"
-                : variants[0],
-            },
-          ]).models.flatMap((entry) => entry.options)
-        }
-        catalog.defaultModel = identity
-        catalog.settings = {
-          model: identity,
-          options: Object.fromEntries(
-            model.options.flatMap((option) =>
-              option.current === undefined ? [] : [[option.id, option.current]]
-            )
-          ),
-        }
-        return availableProviderProfile(openCodeProfileLoader, catalog)
-      }
-      const config = ConfigSchema.parse(
+      const query = cwd
+        ? `?location[directory]=${encodeURIComponent(cwd)}`
+        : ""
+      const response = DefaultModelSchema.parse(
         JSON.parse(
           await runDiscovery(
             installation.command,
-            ["debug", "config"],
+            ["api", "GET", `/api/model/default${query}`],
             env,
             undefined,
             cwd
           )
         )
       )
-      const agent = config.agent?.[config.default_agent ?? "build"]
-      const configured = agent?.model ?? config.model
-      if (configured) {
-        catalog.configuredModel = configured
-        catalog.settings = {
-          model: configured,
-          options: agent?.variant ? { effort: agent.variant } : {},
-        }
+      const identity = `${response.data.providerID}/${response.data.id}`
+      const model = catalog.models.find((model) => model.id === identity)
+      if (!model)
+        throw new Error(
+          "OpenCode's default model is missing from its catalog"
+        )
+      if (response.data.variants) {
+        const variants = response.data.variants.map((variant) => variant.id)
+        model.options = normalizeOpenCodeModels([
+          {
+            id: response.data.id,
+            providerID: response.data.providerID,
+            variants: Object.fromEntries(variants.map((id) => [id, {}])),
+            defaultVariant: variants.includes("default")
+              ? "default"
+              : variants[0],
+          },
+        ]).models.flatMap((entry) => entry.options)
+      }
+      catalog.defaultModel = identity
+      catalog.settings = {
+        model: identity,
+        options: Object.fromEntries(
+          model.options.flatMap((option) =>
+            option.current === undefined ? [] : [[option.id, option.current]]
+          )
+        ),
       }
     } catch {
       catalog.configurationError =
@@ -281,42 +220,4 @@ async function v2Models(output: string, env: NodeJS.ProcessEnv): Promise<OpenCod
       },
     ]
   })
-}
-
-function parseModels(output: string): OpenCodeModelRow[] {
-  const rows: OpenCodeModelRow[] = []
-  let start = output.indexOf("{")
-  while (start >= 0) {
-    let depth = 0
-    let quoted = false
-    let escaped = false
-    let end = start
-    for (; end < output.length; end += 1) {
-      const character = output[end]!
-      if (escaped) {
-        escaped = false
-        continue
-      }
-      if (character === "\\" && quoted) {
-        escaped = true
-        continue
-      }
-      if (character === '"') quoted = !quoted
-      if (quoted) continue
-      if (character === "{") depth += 1
-      if (character === "}") depth -= 1
-      if (depth === 0) {
-        end += 1
-        break
-      }
-    }
-    try {
-      const parsed = ModelSchema.safeParse(JSON.parse(output.slice(start, end)))
-      if (parsed.success) rows.push(parsed.data)
-    } catch {
-      return rows
-    }
-    start = output.indexOf("{", end)
-  }
-  return rows
 }

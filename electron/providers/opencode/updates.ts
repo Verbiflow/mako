@@ -2,20 +2,8 @@ import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { resolveExecutable } from "../../executable.js"
 import type { ProviderUpdateSource, RuntimeRelease } from "../update-source.js"
+import { isOpenCodeV2 } from "./version.js"
 import { openCodeExecutable } from "./installation.js"
-
-/** V2 betas used 0.0.0 versions before the stable 2.x releases. */
-export function openCodeVersionGeneration(
-  version: string
-): "v1" | "v2" | undefined {
-  if (version.startsWith("1.")) return "v1"
-  if (
-    /^(?:[2-9]|\d{2,})\./.test(version) ||
-    /^0\.0\.0-(?:beta|next|dev)-\d+$/.test(version)
-  )
-    return "v2"
-  return undefined
-}
 
 export function openCodeUpdateBinary(
   name: "opencode" | "opencode2",
@@ -28,7 +16,7 @@ export function openCodeUpdateBinary(
       ? configured
       : name === "opencode2"
         ? env.OPENCODE2_BIN_PATH
-        : env.OPENCODE1_BIN_PATH
+        : undefined
   const binary = resolveExecutable(override ?? name, env)
   return binary ? openCodeBinaryTarget(binary) : null
 }
@@ -39,56 +27,43 @@ export function openCodeRelease(
   real: string,
   env: NodeJS.ProcessEnv = process.env
 ): RuntimeRelease {
-  const generation = openCodeVersionGeneration(version)
+  if (!isOpenCodeV2(version))
+    throw new Error("Mako supports OpenCode v2 only. Install a v2 release to continue.")
   const prerelease = version.match(/^0\.0\.0-(beta|next|dev)-\d+$/)?.[1]
   const native = [binary, real].some((path) => path.includes("/.opencode/bin/"))
-  const label =
-    generation === "v2"
-      ? `OpenCode 2${prerelease ? ` · ${prerelease}` : ""}`
-      : generation === "v1"
-        ? "OpenCode 1"
-        : "OpenCode"
+  const label = `OpenCode 2${prerelease ? ` · ${prerelease}` : ""}`
   const selected = openCodeExecutable(env)
   const primary = Boolean(
     selected && sameOpenCodeBinary(openCodeBinaryTarget(selected), binary)
   )
   const description = primary
     ? "Used for new sessions"
-    : generation === "v1"
-      ? "Available for V1 sessions"
-      : "Additional installation"
-  // The beta's native installer publishes to a different repository from V1.
+    : "Additional installation"
+  // The v2 prerelease installer publishes to its own repository.
   // Package-manager installations must compare against their own package tag.
   return {
     label,
     description,
     pinVersion: true,
     primary,
-    npmPackage:
-      generation === "v1"
-        ? "opencode-ai"
-        : generation === "v2"
-          ? "@opencode-ai/cli"
-          : undefined,
+    npmPackage: "@opencode-ai/cli",
     npmTag: prerelease ?? "latest",
     githubRelease:
-      native && generation
+      native
         ? `anomalyco/${prerelease ? "opencode-beta" : "opencode"}`
         : undefined,
     acceptsLatest: (_installed, latest) =>
-      openCodeVersionGeneration(latest) === generation &&
+      isOpenCodeV2(latest) &&
       (prerelease
         ? latest.startsWith(`0.0.0-${prerelease}-`)
         : !latest.includes("-")),
     // Pin the verified version. An update must not silently migrate generations.
-    native: generation
-      ? {
-          label: "Update",
-          args: ["upgrade"],
-          ownsPath: (path) => path.includes("/.opencode/bin/"),
-          pinVersion: true,
-        }
-      : undefined,
+    native: {
+      label: "Update",
+      args: ["upgrade"],
+      ownsPath: (path) => path.includes("/.opencode/bin/"),
+      pinVersion: true,
+    },
     // Homebrew owns its formula migrations; do not apply an unverified generation change.
     homebrew: undefined,
   }
@@ -97,6 +72,7 @@ export function openCodeRelease(
 export const openCodeUpdateSource: ProviderUpdateSource = {
   provider: "opencode",
   binary: (env) => openCodeUpdateBinary("opencode", env),
+  supportsVersion: isOpenCodeV2,
   release: openCodeRelease,
   installations: [
     {
@@ -109,6 +85,7 @@ export const openCodeUpdateSource: ProviderUpdateSource = {
           ? null
           : binary
       },
+      supportsVersion: isOpenCodeV2,
       release: openCodeRelease,
     },
   ],

@@ -17,7 +17,7 @@ interface Input {
 }
 interface Admission { call: string; baseline?: string; previous?: NativeAgentObservation; previousAdmission?: Admission; ambiguous: boolean }
 
-/** OpenCode v2 metadata observation. Legacy v1 evidence is a separate adapter gap. */
+/** OpenCode v2 metadata observation. */
 export class OpenCodeAgents implements AcpAgentObserver {
   private readonly input: Input
   private readonly worker: Worker

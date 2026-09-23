@@ -6,7 +6,7 @@ import { openCodeProcessProbe } from "./process-probe.js"
 import { openCodeRecordLocator, type OpenCodeResumeRecord } from "./resume-store.js"
 
 const recordSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("available"), checkpoint: z.string(), generation: z.enum(["v1", "v2"]) }),
+  z.object({ kind: z.literal("available"), checkpoint: z.string(), generation: z.literal("v2") }),
   z.object({ kind: z.literal("unavailable"), reason: z.string() }),
 ])
 

@@ -1,4 +1,4 @@
-import { openCodeExecutable, openCodeSessionGeneration, resolveOpenCodeInstallation } from "./installation.js"
+import { openCodeExecutable, verifyOpenCodeSession, resolveOpenCodeInstallation } from "./installation.js"
 import {
   argumentAfter,
   commandTuning,
@@ -9,19 +9,9 @@ import {
 
 const CARRIES = ["effort"] as const
 
-function tuningArgs(tuning: CommandTuning, generation: "v1" | "v2") {
+function tuningArgs(tuning: CommandTuning) {
   if (!tuning.model) return []
-  if (generation === "v2") {
-    return [
-      "--model",
-      tuning.cliEffort ? `${tuning.model}#${tuning.cliEffort}` : tuning.model,
-    ]
-  }
-  return [
-    "--model",
-    tuning.model,
-    ...(tuning.cliEffort ? ["--variant", tuning.cliEffort] : []),
-  ]
+  return ["--model", tuning.cliEffort ? `${tuning.model}#${tuning.cliEffort}` : tuning.model]
 }
 
 export const openCodeNativeRunner: NativeRunner = {
@@ -31,30 +21,28 @@ export const openCodeNativeRunner: NativeRunner = {
   carries: CARRIES,
   prepare: async (options) => dropUncarried(options, CARRIES),
   async resume(id, prompt, options, env = process.env) {
-    const preferred = await openCodeSessionGeneration(id, options?.nativePath, env)
-    const installation = await resolveOpenCodeInstallation(preferred, env)
-    const generation = installation.generation
+    await verifyOpenCodeSession(id, options?.nativePath, env)
+    const installation = await resolveOpenCodeInstallation(env)
     return {
       command: installation.command,
       args: [
         "run",
-        ...(generation === "v2" ? ["--auto"] : []),
+        "--auto",
         "--session",
         id,
-        ...tuningArgs(commandTuning(options), generation),
+        ...tuningArgs(commandTuning(options)),
         prompt,
       ],
     }
   },
   async fresh(prompt, options, env = process.env) {
-    const installation = await resolveOpenCodeInstallation(undefined, env)
-    const generation = installation.generation
+    const installation = await resolveOpenCodeInstallation(env)
     return {
       command: installation.command,
       args: [
         "run",
-        ...(generation === "v2" ? ["--auto"] : []),
-        ...tuningArgs(commandTuning(options), generation),
+        "--auto",
+        ...tuningArgs(commandTuning(options)),
         prompt,
       ],
     }
@@ -62,9 +50,9 @@ export const openCodeNativeRunner: NativeRunner = {
   describe({ args }) {
     const options: Record<string, string> = {}
     const model = argumentAfter(args, "--model")
-    // v2 folds the variant into the model as `model#variant`; v1 flags it.
+    // OpenCode v2 carries the variant in `model#variant`.
     const hash = model?.indexOf("#") ?? -1
-    const variant = hash >= 0 ? model?.slice(hash + 1) : argumentAfter(args, "--variant")
+    const variant = hash >= 0 ? model?.slice(hash + 1) : undefined
     if (variant) options.effort = variant
     return { model: hash >= 0 ? model?.slice(0, hash) : model, options }
   },
