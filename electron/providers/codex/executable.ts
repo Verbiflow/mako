@@ -2,7 +2,10 @@ import { execFile } from "node:child_process"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { resolveExecutable } from "../../executable.js"
+import {
+  environmentForExecutable,
+  resolveExecutable,
+} from "../../executable.js"
 
 const run = promisify(execFile)
 
@@ -37,7 +40,7 @@ export async function resolveCodexExecutable(
   for (const command of candidates) {
     try {
       await run(command, ["features", "list"], {
-        env,
+        env: environmentForExecutable(command, env),
         timeout: 5_000,
         maxBuffer: 256 * 1024,
         windowsHide: true,
