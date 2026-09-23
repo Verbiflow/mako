@@ -39,6 +39,13 @@ const versions: HarnessUpdates = {
       args: ["add", "-g", "@openai/codex@latest"],
     },
   },
+  grok: {
+    installed: "1.0.34",
+    latest: "1.0.41",
+    binary: "/Users/developer/.grok/bin/grok",
+    channel: "self",
+    update: { label: "Update Grok", command: "grok", args: ["update"] },
+  },
   cursor: {
     installed: "2026.09.12-fd3934a",
     binary: "/Applications/Cursor.app/Contents/Resources/cursor-agent",
@@ -76,7 +83,7 @@ providerStore.set({
     codex: true,
     cursor: true,
     opencode: true,
-    grok: false,
+    grok: true,
   },
   runtimeUpdates: versions,
 })
@@ -142,7 +149,20 @@ const connection = {
   secureStorage: true,
   keyUrl: "https://cursor.com/dashboard",
 }
-providerConnectionsStore.set({ connections: [connection] })
+providerConnectionsStore.set({
+  loadedAt: Date.now(),
+  connections: [
+    connection,
+    {
+      provider: "grok",
+      label: "Grok",
+      description: "Sign in with Grok in your browser.",
+      state: { status: "signed-out" },
+      secureStorage: false,
+      actions: ["sign-in-browser", "sign-out"],
+    },
+  ],
+})
 const bridge = getMako()
 window.mako = {
   ...bridge,
@@ -166,10 +186,18 @@ window.mako = {
       },
     }
   },
-  providerConnectionAction: async (_provider, action) => {
+  providerConnectionAction: async (provider, action) => {
     calls.push(action.kind)
     if (action.kind === "sign-in-key")
       throw new Error("This key was refused. Check the key and try again.")
+    if (provider === "grok") {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      const grok = providerConnectionsStore
+        .get()
+        .connections.find((entry) => entry.provider === "grok")
+      if (!grok) throw new Error("Grok fixture is missing")
+      return { ...grok, state: { status: "signed-in", source: "cli" } }
+    }
     return connection
   },
 }
@@ -193,3 +221,13 @@ if (root)
       />
     </TooltipProvider>
   )
+
+export function grokConnected() {
+  providerConnectionsStore.set((state) => ({
+    connections: state.connections.map((entry) =>
+      entry.provider === "grok"
+        ? { ...entry, state: { status: "signed-in", source: "cli" } }
+        : entry
+    ),
+  }))
+}

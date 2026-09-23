@@ -712,6 +712,7 @@ export function installMockBridge() {
         hasEarlier: start > 0,
       }
     },
+    previewThread: async () => null,
     threadBlock: async (path: string, at: { entry: number; block: number }) => {
       const thread = await window.mako?.openThread(path)
       const entry = thread?.entries[at.entry]
@@ -1055,6 +1056,10 @@ export function installMockBridge() {
       if (snapshot) return { transport: "attached", provider: snapshot.session.harness, conversationId: snapshot.session.id, snapshot }
       const plan = await window.mako!.continuationPlan(path)
       return plan.transport === "attached" ? { transport: "unavailable", reason: "Mock owner unavailable" } : plan
+    },
+    resolveOwner: async (path: string) => {
+      const snapshot = await window.mako!.liveAttach(path)
+      return snapshot ? { transport: "attached", provider: snapshot.session.harness, conversationId: snapshot.session.id, snapshot } : null
     },
     continuationPlan: async (path: string) => {
       const thread = await window.mako?.openThread(path)
