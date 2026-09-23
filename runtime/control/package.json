@@ -1,0 +1,18 @@
+{
+  "name": "@mako/control-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Elastic-2.0",
+  "type": "module",
+  "description": "Job-scoped Linux Local Control service without Electron",
+  "engines": { "node": ">=24" },
+  "bin": { "mako-control": "dist-electron/cloud-control-main.js" },
+  "dependencies": {
+    "@mako/control": "file:packages/control",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "image-size": "2.0.2",
+    "sharp": "0.35.3",
+    "ws": "8.21.3",
+    "zod": "4.4.3"
+  }
+}
