@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { ExtensionCommand } from "../electron/browser-extension-protocol.js"
+import type { ExtensionCommand } from "@mako/control-runtime/extension"
 
 const frameSchema = z.object({
   frameTree: z.object({ frame: z.object({ id: z.string() }) }),

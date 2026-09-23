@@ -6,7 +6,7 @@ import { z } from "zod"
 import {
   BROWSER_EXTENSION_PROTOCOL,
   ExtensionHostMessageSchema,
-} from "../electron/browser-extension-protocol.js"
+} from "@mako/control-runtime/extension"
 import { ExtensionRouter } from "./router.js"
 
 const settingsSchema = z.object({

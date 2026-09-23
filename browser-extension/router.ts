@@ -2,11 +2,11 @@ import type { ExtensionDownloads } from "./downloads.js"
 import type { ExtensionTasks } from "./tasks.js"
 import type { ExtensionCursor } from "./cursor.js"
 import { z } from "zod"
-import type {
-  ExtensionCommand,
-  ExtensionMessage,
-} from "../electron/browser-extension-protocol.js"
-import { ExtensionFieldsSchema } from "../electron/browser-extension-protocol.js"
+import {
+  type ExtensionCommand,
+  type ExtensionMessage,
+  ExtensionFieldsSchema,
+} from "@mako/control-runtime/extension"
 
 type DebuggerEventParams = Parameters<
   Parameters<typeof chrome.debugger.onEvent.addListener>[0]

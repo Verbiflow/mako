@@ -1,4 +1,4 @@
-import type { ExtensionCommand } from "../electron/browser-extension-protocol.js"
+import type { ExtensionCommand } from "@mako/control-runtime/extension"
 import { z } from "zod"
 const requestSchema = z.object({
   url: z.url().refine((url) => /^https?:/.test(url)),
