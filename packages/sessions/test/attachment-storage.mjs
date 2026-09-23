@@ -63,6 +63,7 @@ try {
   assert.equal(saved(await persistThreadAttachments(thread(inline), assets)).source.path, retained.source.path)
   assert.equal(await fs.readFile(retained.source.path, 'utf8'), 'original bytes')
   const inlineSaved = await persistThreadAttachments(thread(attachment(inline.source, 'inline-only.txt')), assets)
+  assert.deepEqual(await persistThreadAttachments(inlineSaved, assets), inlineSaved, 'retained inline metadata stays stable')
   await fs.writeFile(saved(inlineSaved).source.path, 'broken')
   assert.equal(saved(await persistThreadAttachments(inlineSaved, assets)).source.kind, 'unavailable')
   console.log('PASS inline bytes repair corruption; lost inline snapshots never rebrand damaged bytes')
@@ -90,6 +91,34 @@ try {
   assert.equal(saved(await persistThreadAttachments(thread(file), invalidRoot, first)).source.kind, 'unavailable')
   assert.deepEqual(saved(await persistThreadAttachments(thread(inline), invalidRoot)), inline)
   console.log('PASS failed publication preserves inline input and refuses stale file fallback')
+
+  // A failed copy may leave a partial temporary file, but never a published one.
+  fs.copyFile = async (_from, to) => {
+    await originals.get('writeFile')(to, 'partial')
+    throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+  }
+  syncBuiltinESMExports()
+  const failedRoot = join(root, 'failed-copy')
+  assert.equal(saved(await persistThreadAttachments(thread(file), failedRoot)).source.kind, 'unavailable')
+  assert.deepEqual(await fs.readdir(failedRoot), [])
+  fs.copyFile = copy
+  const nativeLink = originals.get('link')
+  fs.link = async () => { throw Object.assign(new Error('no hard links'), { code: 'ENOTSUP' }) }
+  syncBuiltinESMExports()
+  const portable = saved(await persistThreadAttachments(thread(inline), join(root, 'portable')))
+  assert.equal(await fs.readFile(portable.source.path, 'utf8'), 'original bytes')
+  fs.link = nativeLink
+  syncBuiltinESMExports()
+  console.log('PASS partial-copy cleanup and atomic publication on filesystems without hard links')
+
+  await fs.rm(retained.source.path)
+  await fs.writeFile(source, 'original bytes')
+  await fs.symlink(source, retained.source.path)
+  await persistThreadAttachments(thread(file), assets)
+  assert.equal((await fs.lstat(retained.source.path)).isSymbolicLink(), false)
+  await fs.rm(source)
+  assert.equal(await fs.readFile(retained.source.path, 'utf8'), 'original bytes')
+  console.log('PASS a symlink is replaced by an independent retained copy')
 
   // Independent processes, not just promises sharing module state.
   restore()

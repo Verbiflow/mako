@@ -30,6 +30,13 @@ try {
  assert.equal((await archive.read(ref.path)).entries[0].attachments[0].source.kind,'file')
  console.log('PASS retained attachment survives original deletion plus later capture')
  await archive.stop()
+ const reopened = new SessionArchive(join(root,'archive'))
+ await reopened.load()
+ const fromDisk = await reopened.read(ref.path)
+ assert.equal(fromDisk.entries[0].attachments[0].source.path, savedPath)
+ assert.equal(await readFile(savedPath,'utf8'),'original bytes')
+ await reopened.stop()
+ console.log('PASS archive reopened from disk preserves attachments after original deletion')
  const inline={type:'attachment',name:'image.png',mimeType:'image/png',source:{kind:'inline',data:Buffer.from('test').toString('base64')}}
  const thread={ref,entries:[{kind:'user',text:'look',attachments:[inline]},{kind:'assistant',blocks:[{type:'text',text:'answer'},inline]}]}
  for (const [name,emit,Provider] of [['claude',emitClaudeSession,ClaudeProvider],['codex',emitCodexSession,CodexProvider],['cursor',emitCursorSession,CursorProvider],['grok',emitGrokSession,GrokProvider]]) {

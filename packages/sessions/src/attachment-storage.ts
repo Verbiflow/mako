@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto"
 import { createReadStream } from "node:fs"
-import { copyFile, link, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises"
+import {
+  copyFile,
+  link,
+  lstat,
+  mkdir,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises"
 import { basename, join } from "node:path"
 import type { AttachmentContent } from "./content.js"
 import type { Thread } from "./format.js"
@@ -36,24 +44,37 @@ async function intact(path: string, digest: string): Promise<boolean> {
 
 async function fileSnapshot(source: FileSource, name: string) {
   const expected = snapshotDigest(source, name)
-  if (!expected) return { path: source.path, digest: await fileDigest(source.path) }
+  if (!expected)
+    return { path: source.path, digest: await fileDigest(source.path) }
   if (await intact(source.path, expected))
     return { path: source.path, digest: expected, expected }
-  if (source.originalPath && await intact(source.originalPath, expected))
+  if (source.originalPath && (await intact(source.originalPath, expected)))
     return { path: source.originalPath, digest: expected, expected }
-  throw new Error("The retained attachment is missing or damaged and its original bytes are unavailable")
+  throw new Error(
+    "The retained attachment is missing or damaged and its original bytes are unavailable"
+  )
 }
 
 /** Publish complete bytes; independent processes can race without a shared lock. */
-async function publish(temporary: string, path: string, digest: string): Promise<void> {
+async function publish(
+  temporary: string,
+  path: string,
+  digest: string
+): Promise<void> {
   try {
     // Unlike rename, link does not replace an intact winner from another writer.
     await link(temporary, path)
   } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined
-    if (code !== "EEXIST") throw error
+    const code =
+      error instanceof Error && "code" in error ? error.code : undefined
+    if (
+      !["EEXIST", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"].includes(
+        String(code)
+      )
+    )
+      throw error
     if (await intact(path, digest)) return
-    // The destination is corrupt. Atomic replacement never exposes a partial copy.
+    // Repair corruption, or use atomic rename on a filesystem without hard links.
     // Concurrent repairs can only publish bytes for this same content address.
     await rename(temporary, path)
   }
@@ -84,7 +105,8 @@ export async function persistThreadAttachments(
         retained.set(attachment.source.originalPath, attachment)
   }
   const save = async (
-    attachment: AttachmentContent
+    attachment: AttachmentContent,
+    allowFallback = true
   ): Promise<AttachmentContent> => {
     if (
       attachment.source.kind === "url" ||
@@ -98,34 +120,53 @@ export async function persistThreadAttachments(
       source: {
         kind: "file",
         path,
-        originalPath: attachment.source.kind === "file"
-          ? (attachment.source.originalPath ?? attachment.source.path)
-          : undefined,
+        originalPath:
+          attachment.source.kind === "file"
+            ? (attachment.source.originalPath ??
+              (snapshotDigest(attachment.source, attachment.name)
+                ? undefined
+                : attachment.source.path))
+            : undefined,
       },
     })
     try {
-      const bytes = attachment.source.kind === "inline"
-        ? Buffer.from(attachment.source.data, "base64")
-        : undefined
-      const snapshot = attachment.source.kind === "file"
-        ? await fileSnapshot(attachment.source, attachment.name)
-        : undefined
-      digest = snapshot?.digest ?? createHash("sha256").update(bytes!).digest("hex")
+      const input =
+        attachment.source.kind === "file"
+          ? {
+              kind: "file" as const,
+              ...(await fileSnapshot(attachment.source, attachment.name)),
+            }
+          : {
+              kind: "inline" as const,
+              bytes: Buffer.from(attachment.source.data, "base64"),
+            }
+      digest =
+        input.kind === "file"
+          ? input.digest
+          : createHash("sha256").update(input.bytes).digest("hex")
       const name = assetName(attachment.name)
       let path = join(root, `${digest}-${name}`)
+      if (
+        input.kind === "file" &&
+        input.path === path &&
+        input.expected === digest
+      )
+        return retainedSource(path)
       if (await intact(path, digest)) return retainedSource(path)
 
       await mkdir(root, { recursive: true })
       temporary = join(root, `${randomUUID()}.tmp`)
-      if (snapshot) {
-        await copyFile(snapshot.path, temporary)
+      if (input.kind === "file") {
+        await copyFile(input.path, temporary)
         // The original may change between hashing and copying. Address the bytes
         // actually retained, and never substitute new bytes for a historical image.
         digest = await fileDigest(temporary)
-        if (snapshot.expected && digest !== snapshot.expected)
-          throw new Error("The original attachment changed while recovering its retained copy")
+        if (input.expected && digest !== input.expected)
+          throw new Error(
+            "The original attachment changed while recovering its retained copy"
+          )
         path = join(root, `${digest}-${name}`)
-      } else await writeFile(temporary, bytes!)
+      } else await writeFile(temporary, input.bytes)
       await publish(temporary, path, digest)
       return retainedSource(path)
     } catch (error) {
@@ -133,20 +174,16 @@ export async function persistThreadAttachments(
       const existing = retained.get(
         attachment.source.originalPath ?? attachment.source.path
       )
-      if (existing?.source.kind === "file") {
+      if (allowFallback && existing?.source.kind === "file") {
         try {
           const snapshot = await fileSnapshot(existing.source, existing.name)
           // A failed save of known new bytes must not report an older copy as saved.
           if (!digest || snapshot.digest === digest) {
             const expected = snapshotDigest(attachment.source, attachment.name)
             if (!expected || expected === snapshot.digest) {
-              const recovered = await persistThreadAttachments({
-                ...thread,
-                entries: [{ kind: "user", text: "", attachments: [existing] }],
-              }, root)
-              const entry = recovered.entries[0]
-              const fallback = entry?.kind === "user" ? entry.attachments?.[0] : undefined
-              if (fallback?.source.kind === "file") return { ...attachment, source: fallback.source }
+              const fallback = await save(existing, false)
+              if (fallback?.source.kind === "file")
+                return { ...attachment, source: fallback.source }
             }
           }
         } catch {
