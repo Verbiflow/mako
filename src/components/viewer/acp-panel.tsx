@@ -11,13 +11,15 @@ import { loadEarlierLive } from "@/state/live-recovery"
 import { sendTo } from "@/state/acp-queue"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { RecoveryNotice } from "./recovery-notice"
-import { useMemo, useState } from "react"
+import { useMemo, useState, type ReactNode } from "react"
+import { Collapse } from "@/components/ui/collapse"
+import { Disclosure, NoticeAction } from "@/components/ui/notice"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
 import { toast } from "sonner"
 import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/lib/types"
-import { describeProviderFailure } from "../../../electron/contracts/provider-failure"
+import { describePromptRecovery } from "../../../electron/contracts/prompt-recovery"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { liveToolName } from "@/lib/tools"
@@ -409,14 +411,11 @@ export function RetainedRequests({ history = false }: { history?: boolean }) {
   const dismissed = usePrefs((state) => state.dismissedRecoveryRequests)
   if (history)
     return requests.length ? (
-      <details className="px-2 py-2 text-label">
-        <summary className="pressable cursor-pointer">
-          Saved messages ({requests.length})
-        </summary>
+      <Disclosure summary={`Saved messages (${requests.length})`} className="px-2 py-2" bodyClassName="text-label text-muted-foreground">
         {requests.map((request) => (
           <RequestRecovery key={request.id} request={request} />
         ))}
-      </details>
+      </Disclosure>
     ) : null
   if (
     !conversation ||
@@ -448,65 +447,43 @@ function RequestNotice({
   earlier: LiveRequest[]
   onDismiss(): void
 }) {
-  const [review, setReview] = useState<LiveRequest | null>(null)
+  const [reviewId, setReview] = useState<string | null>(null)
+  const review = request.id === reviewId ? request : earlier.find((item) => item.id === reviewId) ?? null
+  const recovery = describePromptRecovery(request)
   const [history, setHistory] = useState(false)
-  const title =
-    request.status === "uncertain"
-      ? "Message delivery is unconfirmed"
-      : request.status === "interrupted"
-        ? "Message interrupted"
-        : request.failure === "rate-limited"
-          ? "Model temporarily unavailable"
-          : request.failure === "auth"
-            ? "Sign-in required"
-            : request.failure === "context-exhausted"
-              ? "Conversation context is full"
-              : request.failure === "resume-failed"
-                ? "Could not reopen this session"
-                : "Message could not be completed"
+  // The body keeps the last reviewed message while it folds away.
+  const [reviewed, setReviewed] = useState<LiveRequest | null>(null)
+  if (review && review !== reviewed) setReviewed(review)
   return (
     <RecoveryNotice
-      title={title}
-      description={
-        request.status === "uncertain"
-          ? "Check the conversation before sending again."
-          : request.failure === "rate-limited"
-            ? "Your message is saved. Choose another model or try again later."
-            : "Your message is saved. Review the details before trying again."
-      }
+      title={recovery.title}
+      description="Your message is saved. Review delivery details before trying again."
       onDismiss={onDismiss}
       actions={
         <>
-          <button
-            type="button"
-            className="pressable rounded-md border border-hairline px-2.5 py-1 text-label hover:bg-fill-hover"
-            onClick={() => setReview(review ? null : request)}
-            aria-expanded={Boolean(review)}
+          <NoticeAction
+            onClick={() => setReview(review ? null : request.id)}
+            expanded={Boolean(review)}
           >
             {review ? "Hide details" : "Review message"}
-          </button>
+          </NoticeAction>
           {earlier.length ? (
-            <button
-              type="button"
-              className="pressable px-1 py-1 text-label text-muted-foreground hover:text-foreground"
-              onClick={() => setHistory(!history)}
-              aria-expanded={history}
-            >
+            <NoticeAction quiet onClick={() => setHistory(!history)} expanded={history}>
               Earlier messages ({earlier.length})
-            </button>
+            </NoticeAction>
           ) : null}
         </>
       }
     >
-      {history ? (
-        <div className="mb-2 space-y-1">
+      <Collapse open={history}>
+        <div className="-mx-1 mb-1 space-y-0.5">
           {[...earlier].reverse().map((item) => (
             <button
               type="button"
               key={item.id}
               className="pressable block w-full truncate rounded px-2 py-1 text-left text-label text-muted-foreground hover:bg-fill-hover"
               onClick={() => {
-                setReview(item)
+                setReview(item.id)
                 setHistory(false)
               }}
             >
@@ -514,10 +491,12 @@ function RequestNotice({
             </button>
           ))}
         </div>
-      ) : null}
-      {review ? (
-        <RequestRecovery key={review.id} request={review} expanded />
-      ) : null}
+      </Collapse>
+      <Collapse open={Boolean(review)}>
+        {reviewed ? (
+          <RequestRecovery key={reviewed.id} request={reviewed} expanded />
+        ) : null}
+      </Collapse>
     </RecoveryNotice>
   )
 }
@@ -545,54 +524,68 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
     return Boolean(live && compactionAvailable(live.session, live.control?.actions ?? [],
       live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false))
   })
-  // The host classified the provider's text once; the panel says what the
-  // kind means for this provider and offers Send again only when it can work.
-  const failure =
-    request.status === "failed" && request.failure
-      ? describeProviderFailure(request.failure, harness ? harnessLabel(harness) : undefined)
-      : null
+  const recovery = describePromptRecovery(request, harness ? harnessLabel(harness) : undefined, recovered)
+  const failure = recovery.failure
   const label = failure
     ? failure.title
     : request.interruption
       ? interruptedLabel(request.interruption.reason, harness ? harnessLabel(harness) : "the provider")
       : request.status === "uncertain"
-        ? "Delivery unconfirmed"
+        ? recovery.title
         : request.status === "interrupted"
           ? "Stopped message"
           : "Message failed"
-  const retriable = request.status === "failed" && ((failure?.retriable ?? true) || recovered)
   // A failed request is re-sent as a new request carrying the same text and
   // attachments; the failed record stays, so nothing is replayed silently.
   const resend = async () => {
-    if (!conversationId || resent) return
+    if (!conversationId || resent || !idle || !recovery.resendLabel) return
     setResent("sending")
     const accepted = await sendTo(conversationId, request.text, request.attachments)
     setResent(accepted ? "sent" : null)
   }
   return (
-    <details open={expanded || undefined} className="py-2" data-request-recovery={request.id} data-failure={request.failure}>
-      <summary className={expanded ? "sr-only" : "pressable cursor-pointer"}>{continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message</summary>
-      {failure && request.failure !== "network" && request.failure !== "rate-limited" ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
+    <RecoveryBody expanded={expanded} summary={`${continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message`} request={request}>
+      {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
+      <p className="mt-2 text-foreground/80" data-delivery-evidence={request.nativeDelivery?.evidence.kind ?? "unknown"}>{recovery.delivery}</p>
       {request.error ? <p className={cn("mt-2", failure && "text-faint")}>{request.error}</p> : null}
       <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
       {request.status === "failed" && request.failure === "context-exhausted" ? <CompactionControl requestId={request.id} /> : null}
-      {recovered ? <p className="mt-2">Compaction completed. You can send the saved message again.</p> : null}
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-        {retriable && conversationId ? (
-          <button type="button" onClick={() => void resend()} disabled={resent !== null || !idle} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
-            {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : "Send again"}
+      {recovered && request.failure === "context-exhausted" ? <p className="mt-2">Compaction completed. You can send the saved message again.</p> : null}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {recovery.resendLabel && conversationId ? (
+          <button type="button" onClick={() => void resend()} disabled={resent !== null || !idle} className="pressable h-6 rounded-md bg-fill-hover px-2 text-foreground hover:bg-fill-selected disabled:opacity-45">
+            {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : recovery.resendLabel}
           </button>
         ) : null}
         {request.status === "failed" && request.failure !== "transport-limit" && conversationId ? (
-          <button type="button" disabled={resent !== null} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground disabled:opacity-50"
+          <button type="button" disabled={resent !== null} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground disabled:opacity-45"
             onClick={() => {
               setResent("sending")
               void acp.recoverFresh(conversationId, request.id).then((accepted) => setResent(accepted ? "sent" : null))
             }}>Use in new thread</button>
         ) : null}
-        <button type="button" onClick={() => void copy()} className="pressable rounded px-1 py-1 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
+        <button type="button" onClick={() => void copy()} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
       </div>
       {request.status === "failed" && request.failure !== "transport-limit" ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
-    </details>
+    </RecoveryBody>
+  )
+}
+
+/** A saved message's recovery: open in the notice that reviews it, folded in a list of them. */
+function RecoveryBody({ expanded, summary, request, children }: { expanded: boolean; summary: string; request: LiveRequest; children: ReactNode }) {
+  const data = { "data-request-recovery": request.id, "data-failure": request.failure }
+  if (expanded)
+    return (
+      <div className="py-1" {...data}>
+        <p className="sr-only">{summary}</p>
+        {children}
+      </div>
+    )
+  return (
+    <div className="py-1.5" {...data}>
+      <Disclosure summary={summary} tone={request.status === "failed" ? "danger" : "caution"}>
+        {children}
+      </Disclosure>
+    </div>
   )
 }

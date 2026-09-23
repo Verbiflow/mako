@@ -1,5 +1,7 @@
 import { useAcp, activeLiveAcp } from "@/state/acp"
+import { describeActionRecovery } from "../../../electron/contracts/operation-recovery"
 import { acknowledgeLiveAction } from "@/state/live-actions"
+import { Notice, NoticeAction, type NoticeTone } from "@/components/ui/notice"
 
 /** Commands change independently of streaming tokens. */
 export function LiveActionStatus({ history = false }: { history?: boolean }) {
@@ -15,43 +17,42 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
   )
     return null
   const state = action.state
-  const label =
-    action.input.kind === "steer" ? "Steering message" : "Compaction"
-  const status =
-    state.kind === "dispatching"
-      ? "awaiting confirmation"
-      : state.kind === "accepted"
-        ? action.input.kind === "compact" ? "in progress" : "accepted"
-        : state.kind === "completed"
-          ? "completed"
-          : state.kind === "not-accepted"
-            ? "not accepted"
-            : state.kind === "failed" ? "failed" : "outcome unknown"
+  const recovery = describeActionRecovery(action)
+  const troubled =
+    state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed"
+  const tone: NoticeTone =
+    state.kind === "completed" || (state.kind === "accepted" && action.input.kind === "steer")
+      ? "success"
+      : state.kind === "failed" || state.kind === "not-accepted"
+        ? "danger"
+        : state.kind === "uncertain"
+          ? "caution"
+          : "progress"
   return (
-    <details
-      className="shrink-0 border-t border-hairline px-3.5 py-2 text-label text-muted-foreground"
-      open={state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed"}
-    >
-      <summary className="pressable cursor-pointer">
-        {label} {status}
-      </summary>
-      {action.input.kind === "steer" ? (
-        <p className="mt-2 whitespace-pre-wrap">{action.input.text}</p>
-      ) : null}
-      {state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed" ? (
-        <p className="mt-2">{state.reason}</p>
-      ) : null}
-      {state.kind === "uncertain" ? (
-        <button
-          type="button"
-          className="pressable mt-2 rounded border border-hairline px-2 py-1 hover:bg-fill-hover"
-          onClick={() => void acknowledgeLiveAction(id, action.input.id)}
-        >
-          {action.input.kind === "compact"
-            ? "Disconnect and keep history"
-            : "Acknowledge without resending"}
-        </button>
-      ) : null}
-    </details>
+    <Notice
+      tone={tone}
+      surface={history ? "flush" : "card"}
+      className={history ? undefined : "mx-3 mb-2"}
+      data-action-recovery={action.input.id}
+      title={recovery.title}
+      description={recovery.guidance}
+      actions={
+        state.kind === "uncertain" ? (
+          <NoticeAction onClick={() => void acknowledgeLiveAction(id, action.input.id)}>
+            {action.input.kind === "compact"
+              ? "Disconnect and keep history"
+              : "Acknowledge without resending"}
+          </NoticeAction>
+        ) : null
+      }
+      details={
+        troubled || action.input.kind === "steer" ? (
+          <>
+            {troubled ? <p className="text-faint">{state.reason}</p> : null}
+            {action.input.kind === "steer" ? <p className="mt-1.5 whitespace-pre-wrap">{action.input.text}</p> : null}
+          </>
+        ) : undefined
+      }
+    />
   )
 }

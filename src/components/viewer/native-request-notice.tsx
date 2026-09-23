@@ -1,3 +1,4 @@
+import { Notice, NoticeAction } from "@/components/ui/notice"
 import { threads, useThreads } from "@/state/threads"
 
 export function NativeRequestNotice({ path }: { path: string }) {
@@ -9,37 +10,34 @@ export function NativeRequestNotice({ path }: { path: string }) {
   )
   if (!retained.length) return null
   return (
-    <div className="shrink-0 border-b border-hairline px-3.5 py-2 text-label text-muted-foreground">
-      {retained.slice(-10).map((request) => (
-        <details key={request.input.id}>
-          <summary className="pressable cursor-pointer">
-            {request.status === "uncertain"
-              ? "Unconfirmed native request"
-              : "Failed native request"}{" "}
-            · saved with {request.input.attachments.length} attachments
-          </summary>
-          <p className="mt-2">{request.error}</p>
-          <p className="contain-turn mt-2 whitespace-pre-wrap">
-            {request.input.text}
-          </p>
-          <div className="my-2 flex gap-3">
-            <button
-              type="button"
-              className="pressable underline"
-              onClick={() => void threads.retryNative(request)}
-            >
-              Send as a new request
-            </button>
-            <button
-              type="button"
-              className="pressable underline"
-              onClick={() => void threads.dismissNative(request.input.id)}
-            >
-              Dismiss
-            </button>
-          </div>
-        </details>
-      ))}
+    <div className="flex shrink-0 flex-col gap-1.5 px-3 pt-2">
+      {retained.slice(-10).map((request) => {
+        const attachments = request.input.attachments.length
+        return (
+          <Notice
+            key={request.input.id}
+            tone={request.status === "uncertain" ? "caution" : "danger"}
+            title={
+              request.status === "uncertain"
+                ? "Request not confirmed"
+                : "Request failed"
+            }
+            description={`Your message is saved${attachments ? ` with ${attachments === 1 ? "1 attachment" : `${attachments} attachments`}` : ""}.`}
+            onDismiss={() => void threads.dismissNative(request.input.id)}
+            actions={
+              <NoticeAction onClick={() => void threads.retryNative(request)}>
+                Send as a new request
+              </NoticeAction>
+            }
+            details={
+              <>
+                {request.error ? <p className="text-foreground/80">{request.error}</p> : null}
+                <p className="contain-turn mt-1.5 whitespace-pre-wrap">{request.input.text}</p>
+              </>
+            }
+          />
+        )
+      })}
     </div>
   )
 }
