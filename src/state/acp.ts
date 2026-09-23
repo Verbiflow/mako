@@ -28,7 +28,7 @@ import type {
   RewindPreview,
 } from "@/lib/types"
 import { activeIs, updateLive } from "@/state/acp-live"
-import { editQueuedPrompt, sendTo } from "@/state/acp-queue"
+import { sendTo } from "@/state/acp-queue"
 import {
   beginStart,
   failStart,
@@ -106,14 +106,16 @@ export const acp = {
         (item.status === "queued" || item.status === "held")
     )
     if (!live || !queued) return false
-    const accepted = await acp.steer(queued.text, queued.attachments)
-    if (!accepted) return false
-    await editQueuedPrompt(
-      { kind: "live", id: live.key },
-      { id: queued.id, text: queued.text, attachments: queued.attachments },
-      { kind: "remove" }
-    )
-    return true
+    const running = live.requests?.find((item) => item.status === "dispatching")
+    if (!running) return false
+    return performLiveAction(live.key, {
+      kind: "steer-queued",
+      id: crypto.randomUUID(),
+      requestId: running.id,
+      queuedRequestId: queued.id,
+      text: queued.text,
+      attachments: queued.attachments,
+    })
   },
 
   async steer(

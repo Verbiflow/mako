@@ -13,7 +13,7 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
   if (
     !history &&
     (action.state.kind === "completed" ||
-      (action.state.kind === "accepted" && action.input.kind === "steer"))
+      (action.state.kind === "accepted" && action.input.kind !== "compact"))
   )
     return null
   const state = action.state
@@ -21,7 +21,7 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
   const troubled =
     state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed"
   const tone: NoticeTone =
-    state.kind === "completed" || (state.kind === "accepted" && action.input.kind === "steer")
+    state.kind === "completed" || (state.kind === "accepted" && action.input.kind !== "compact")
       ? "success"
       : state.kind === "failed" || state.kind === "not-accepted"
         ? "danger"
@@ -46,10 +46,10 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
         ) : null
       }
       details={
-        troubled || action.input.kind === "steer" ? (
+        troubled || action.input.kind !== "compact" ? (
           <>
             {troubled ? <p className="text-faint">{state.reason}</p> : null}
-            {action.input.kind === "steer" ? <p className="mt-1.5 whitespace-pre-wrap">{action.input.text}</p> : null}
+            {action.input.kind !== "compact" ? <p className="mt-1.5 whitespace-pre-wrap">{action.input.text}</p> : null}
           </>
         ) : undefined
       }
