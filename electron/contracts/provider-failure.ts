@@ -36,7 +36,7 @@ export type ProviderFailureKind = (typeof PROVIDER_FAILURE_KINDS)[number]
 
 export interface ProviderFailure {
   kind: ProviderFailureKind
-  /** Whether sending the same message again can succeed. */
+  /** Whether an unchanged attempt may succeed. This is not delivery or replay-safety evidence. */
   retriable: boolean
   /** One sentence naming what happened, with the provider named where it matters. */
   title: string
@@ -72,7 +72,7 @@ const rules: Rule[] = [
   {
     kind: "auth",
     match:
-      /\b401\b|\b403\b|unauthori[sz]ed|authentication|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|(?:log|sign) in (?:again|to)|login required|credentials|token (?:has )?expired|expired token|subscription|billing|payment required|insufficient (?:permissions|scope|credits)|plan does not/i,
+      /\b401\b|\b403\b|unauthori[sz]ed|authentication|failed to authenticate|oauth session (?:has )?expired|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|(?:log|sign) in (?:again|to)|login required|credentials|token (?:has )?expired|expired token|subscription|billing|payment required|insufficient (?:permissions|scope|credits)|plan does not/i,
   },
   {
     kind: "rate-limited",
@@ -153,21 +153,21 @@ export function describeProviderFailure(
         kind,
         retriable: true,
         title: `${providerLabel} is over its rate limit or capacity`,
-        guidance: "The same message works once the limit resets. Nothing was lost.",
+        guidance: "Wait for capacity to return or choose another model.",
       }
     case "provider-unavailable":
       return {
         kind,
         retriable: true,
         title: `${providerLabel}'s service failed on its side`,
-        guidance: "Send the message again in a moment.",
+        guidance: "Wait for the service to recover before making another attempt.",
       }
     case "network":
       return {
         kind,
         retriable: true,
-        title: `The connection to ${providerLabel} dropped`,
-        guidance: "Send the message again; the session itself is intact.",
+        title: `The connection to ${providerLabel} failed or ended`,
+        guidance: "Review the conversation and connection before making another attempt.",
       }
     case "transport-limit":
       return {
@@ -187,7 +187,7 @@ export function describeProviderFailure(
       return {
         kind,
         retriable: false,
-        title: `${providerLabel} refused the message before running it`,
+        title: `${providerLabel} refused the message`,
         guidance: "Change the message, its attachments or the selected model and send it again.",
       }
     case "unknown":
@@ -195,7 +195,7 @@ export function describeProviderFailure(
         kind,
         retriable: true,
         title: `${providerLabel} did not finish this turn`,
-        guidance: "Send the message again. If it fails the same way, the provider's own error above says why.",
+        guidance: "Review the error and conversation before making another attempt.",
       }
   }
 }

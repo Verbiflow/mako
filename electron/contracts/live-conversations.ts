@@ -1,3 +1,4 @@
+import type { PromptDelivery } from "./prompt-delivery.js"
 import type {
   NativeAgentObservation,
   NativeAgentRoster,
@@ -76,6 +77,8 @@ export interface TurnContinuation {
 }
 
 export interface LiveRequest {
+  /** Native send evidence, independent of execution outcome; absent in older journals. */
+  nativeDelivery?: PromptDelivery
   targetBindingId?: string
   snapshots?: RunSnapshots
   tuning?: SessionSettings
@@ -98,8 +101,8 @@ export interface LiveRequest {
   interruption?: Interruption
   /**
    * What `error` means, decided once on the host from the provider's text.
-   * The renderer describes it with the provider's name and offers Send again
-   * only when the kind is retriable.
+   * Shared recovery combines this cause with nativeDelivery evidence;
+   * retriability alone does not establish safe replay.
    */
   failure?: ProviderFailureKind
   /** Set when this request continues an interrupted turn; see `TurnContinuation`. */

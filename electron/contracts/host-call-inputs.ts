@@ -683,11 +683,13 @@ export const hostCallInputs = {
       .optional(),
   ]),
   "mako:thread-open": z.tuple([z.string()]),
+  "mako:thread-owner-resolve": z.tuple([z.string()]),
   "mako:thread-page": z.tuple([
     z.string(),
     z.number().optional(),
     z.number().optional(),
   ]),
+  "mako:thread-preview": z.tuple([z.string()]),
   "mako:thread-remember-mode": z.tuple([z.string(), z.string()]),
   "mako:thread-run": z.tuple([z.string()]),
   "mako:thread-stop": z.tuple([

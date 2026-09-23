@@ -195,6 +195,9 @@ export function createMakoBridge(transport: BridgeTransport) {
         before,
         limit
       ),
+    /** The newest exchanges of a large record, before its full page is read. */
+    previewThread: (path: string) =>
+      invokeTrustedHost<ThreadPage | null>("mako:thread-preview", path),
     /** The complete block a viewer page trimmed (`outputLength`). */
     threadBlock: (path: string, at: BlockAddress) =>
       invokeTrustedHost<EntryBlock | null>("mako:thread-block", path, at),
@@ -206,6 +209,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<HarnessDescriptor[]>("mako:harness-descriptors"),
     resolveContinuation: (path: string) =>
       invokeTrustedHost<ContinuationResolution>("mako:thread-continuation-resolve", path),
+    resolveOwner: (path: string) =>
+      invokeTrustedHost<Extract<ContinuationResolution, { transport: "attached" }> | null>("mako:thread-owner-resolve", path),
     continuationPlan: (path: string) =>
       invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
     rememberThreadMode: (path: string, modeId: string) =>

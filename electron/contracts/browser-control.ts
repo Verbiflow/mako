@@ -1,3 +1,4 @@
+import { RecordingOptionsSchema } from "@mako/control/control/recording"
 import { ControlReadScopeSchema } from "@mako/control/control/scope"
 import { z } from "zod"
 
@@ -118,6 +119,15 @@ const PointerTargetSchema = z
 export const KeyModifierSchema = z.enum(["Alt", "Control", "Meta", "Shift"])
 
 export const BrowserCommandSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("recording"),
+      target: BrowserTargetSchema,
+      operation: z.enum(["start", "stop", "status"]),
+      id: z.string().optional(),
+      options: RecordingOptionsSchema.optional(),
+    })
+    .strict(),
   z.object({ action: z.literal("status") }).strict(),
   z.object({ action: z.literal("connect"), browser }).strict(),
   z
