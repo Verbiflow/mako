@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { WebSocketServer, type WebSocket } from "ws"
 import { z } from "zod"
-import type { LocalBrowser } from "./browser-discovery.js"
+import type { LocalBrowser } from "@mako/control-runtime/desktop"
 import type { JsonObject } from "./codex-app-json.js"
 
 /**

@@ -41,6 +41,8 @@ function localEnvironment(
       { name: "MAKO_CONTROL_URL", value: control.url },
       { name: "MAKO_CONTROL_TOKEN", value: control.token }
     )
+  if (controlServer && process.env.MAKO_CONTROL_MEDIA_ROOT)
+    environment.push({ name: "MAKO_CONTROL_MEDIA_ROOT", value: process.env.MAKO_CONTROL_MEDIA_ROOT })
   // The task id names the driver session and the artifact directory that
   // oversized program results are written to.
   if (controlServer && taskId)

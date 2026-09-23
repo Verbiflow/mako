@@ -1,16 +1,16 @@
 import { z } from "zod"
-import type { ComputerBackend } from "./control-session.js"
 import {
+  type ComputerBackend,
   connectMcpComputerDriver,
   type ComputerDriverClient,
   type ComputerDriverConnector,
-} from "./computer-driver-client.js"
-import type {
-  Appshot,
-  AppshotTarget,
-  AppshotWindow,
-} from "./contracts/appshots.js"
-import { ControlImageSchema } from "./contracts/control-preview.js"
+} from "@mako/control-runtime/host"
+import {
+  type Appshot,
+  type AppshotTarget,
+  type AppshotWindow,
+  ControlImageSchema,
+} from "@mako/control-runtime/contracts"
 
 const windowList = z.object({
   windows: z

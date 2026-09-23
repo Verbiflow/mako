@@ -5,13 +5,11 @@ import type { ControlPreviews } from "./control-previews.js"
 import {
   ComputerObservationSchema,
   ControlImageSchema,
-} from "./contracts/control-preview.js"
-import { BrowserTargetSchema } from "./contracts/browser-control.js"
-import { BrowserService } from "./browser-service.js"
-import {
+  BrowserTargetSchema,
   BrowserCommandSchema,
   BrowserFault,
-} from "./contracts/browser-control.js"
+} from "@mako/control-runtime/contracts"
+import { BrowserService } from "@mako/control-runtime/browser"
 
 export interface ControlCredentials {
   url: string

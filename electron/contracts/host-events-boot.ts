@@ -1,8 +1,10 @@
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
-import type { ControlActivity } from "./control-preview.js"
+import {
+  type ControlActivity,
+  type BrowserControlStatus,
+} from "@mako/control-runtime/contracts"
 import type { NativeRequest } from "./native-requests.js"
-import type { BrowserControlStatus } from "./browser-control.js"
 import type { LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
   ThreadEntry as CatalogThreadEntry,

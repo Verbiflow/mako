@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto"
-import type { BrowserService } from "./browser-service.js"
-import type { BrowserFrame } from "./browser-capture.js"
-import type { AppshotTarget } from "./contracts/appshots.js"
-import type { BrowserTarget } from "./contracts/browser-control.js"
 import {
+  type BrowserService,
+  type BrowserFrame,
+} from "@mako/control-runtime/browser"
+import {
+  type AppshotTarget,
+  type BrowserTarget,
   type ControlActivity,
   type ControlImage,
   type ControlPreview,
-} from "./contracts/control-preview.js"
+} from "@mako/control-runtime/contracts"
 
 interface PreviewEntry {
   preview: ControlPreview

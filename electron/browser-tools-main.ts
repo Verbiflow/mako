@@ -9,15 +9,15 @@ import { z } from "zod"
 import {
   BrowserCommandSchema,
   BrowserFault,
-} from "./contracts/browser-control.js"
-import { browserControlClient } from "./browser-control-client.js"
+} from "@mako/control-runtime/contracts"
 import {
+  browserControlClient,
   BROWSER_ACTIONS,
   actionNameOf,
   BrowserToolsRuntime,
   type BrowserCall,
-} from "./browser-tools-runtime.js"
-import { browserProtocolHelp } from "./browser-protocol-help.js"
+  browserProtocolHelp,
+} from "@mako/control-runtime/host"
 import {
   ControlProgramRequestSchema,
   ControlProgramInputSchema,

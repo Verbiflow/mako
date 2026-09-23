@@ -498,7 +498,7 @@ export async function managedMcpDefinitions(
         ...(process.platform === "win32"
           ? []
           : ["ELECTRON_RUN_AS_NODE=1", nodeExecutable]),
-        join(appPath, "dist-electron", "computer-tools-main.js"),
+        join(appPath, "node_modules", "@mako", "control-runtime", "dist", "computer-tools-main.js"),
         ...(cuaSocket && cuaPath
           ? ["--socket", cuaSocket, "--driver", cuaPath]
           : []),

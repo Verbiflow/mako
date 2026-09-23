@@ -120,13 +120,13 @@ const removeDevRendererRegistration = publishDevRendererRegistration(
 )
 
 // The renderer hot-reloads through Vite; the host cannot. Keeping the host
-// compiler running means an edit under electron/ is on disk by the time the
+// build watcher includes the shared Node packages, so their edits are on disk when the
 // window says "rebuilt", and Restart Mako loads it without leaving the desk.
 const compiler = spawn(
   process.execPath,
   [
     join(root, "node_modules", "typescript", "bin", "tsc"),
-    "-p",
+    "-b",
     "tsconfig.electron.json",
     "--watch",
     "--preserveWatchOutput",

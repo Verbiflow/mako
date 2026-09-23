@@ -89,6 +89,7 @@ export async function loadAutomations(cwd: string): Promise<Automation[]> {
   } catch {
     automations = []
   }
+  if (runtime?.cwd === cwd) syncFileWatcher(runtime)
   publish()
   return automations
 }
@@ -218,6 +219,7 @@ export async function saveAutomations(
   next: Automation[]
 ): Promise<Automation[]> {
   automations = next
+  if (runtime?.cwd === cwd) syncFileWatcher(runtime)
   publish()
   try {
     await mkdir(join(cwd, ".mako"), { recursive: true })
@@ -242,6 +244,7 @@ export function setEnabled(id: string, enabled: boolean): Automation[] {
       ? { ...entry, enabled }
       : entry
   )
+  if (runtime) syncFileWatcher(runtime)
   publish()
   return automations
 }
@@ -323,6 +326,7 @@ export async function fireAutomation(
   const automation = automations.find((entry) => entry.id === id)
   const state = runtime
   if (!automation || !state || !launch) return
+  if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return
   if (state.inFlight.has(id)) return
 
   const last = state.lastRun.get(id) ?? 0
@@ -379,7 +383,8 @@ export async function fireAutomation(
  *
  * One recursive watcher for the whole tree rather than one per pattern: the
  * patterns are matched here, and a watcher per rule would multiply the same
- * events by the number of rules.
+ * events by the number of rules. No subscription is needed until a file rule
+ * is enabled; native watcher registration and close can block on the OS.
  */
 export async function watchWorkspace(cwd: string) {
   stopWatching()
@@ -393,12 +398,27 @@ export async function watchWorkspace(cwd: string) {
   }
   runtime = current
   await loadAutomations(cwd)
-  if (runtime !== current) return
+}
+
+function syncFileWatcher(current: Runtime): void {
+  const enabled = new Set(automations.filter(entry => entry.enabled && entry.trigger.kind === "files").map(entry => entry.id))
+  for (const [id, timer] of current.timers) {
+    if (enabled.has(id)) continue
+    clearTimeout(timer)
+    current.timers.delete(id)
+  }
+  if (!enabled.size) {
+    const watcher = current.watcher
+    current.watcher = null
+    watcher?.close()
+    return
+  }
+  if (current.watcher) return
 
   try {
-    current.watcher = watch(cwd, { recursive: true }, (_event, filename) => {
-      if (!filename || runtime !== current) return
-      const path = relative(cwd, join(cwd, filename.toString()))
+    const watcher: FSWatcher = watch(current.cwd, { recursive: true }, (_event, filename) => {
+      if (!filename || runtime !== current || current.watcher !== watcher) return
+      const path = relative(current.cwd, join(current.cwd, filename.toString()))
         .split(sep)
         .join("/")
       if (!path || isIgnored(path)) return
@@ -412,13 +432,15 @@ export async function watchWorkspace(cwd: string) {
         clearTimeout(current.timers.get(automation.id))
         current.timers.set(
           automation.id,
-          setTimeout(
-            () => void fireAutomation(automation.id, "files"),
-            DEBOUNCE_MS
-          )
+          setTimeout(() => {
+            current.timers.delete(automation.id)
+            if (runtime === current && current.watcher === watcher)
+              void fireAutomation(automation.id, "files")
+          }, DEBOUNCE_MS)
         )
       }
     })
+    current.watcher = watcher
   } catch {
     // Recursive watching is unavailable on some platforms and some volumes.
     // File triggers simply do not fire there; manual ones still work.
@@ -454,7 +476,8 @@ export function noticeHead(head: string | undefined) {
 
 export function stopWatching() {
   if (!runtime) return
-  runtime.watcher?.close()
-  for (const timer of runtime.timers.values()) clearTimeout(timer)
+  const previous = runtime
   runtime = null
+  for (const timer of previous.timers.values()) clearTimeout(timer)
+  previous.watcher?.close()
 }

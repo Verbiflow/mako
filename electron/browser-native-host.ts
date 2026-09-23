@@ -1,9 +1,17 @@
-import { BROWSER_EXTENSION_PROTOCOL } from "./browser-extension-protocol.js"
+import {
+  BROWSER_EXTENSION_PROTOCOL,
+  ExtensionCommandSchema,
+  ExtensionRegistrationSchema,
+  ExtensionMessageSchema,
+  NativeMessageDecoder,
+  type ExtensionHostMessage,
+  type ExtensionMessage,
+} from "@mako/control-runtime/extension"
 import { nativeBrowserApplication } from "./browser-application.js"
 import {
   singleBrowserProfile,
   browserProfileName,
-} from "./browser-profile-name.js"
+} from "@mako/control-runtime/desktop"
 import { z } from "zod"
 import type { IncomingMessage } from "node:http"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -11,14 +19,6 @@ import { mkdir, chmod, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import { WebSocketServer, type WebSocket } from "ws"
-import {
-  ExtensionCommandSchema,
-  ExtensionRegistrationSchema,
-  ExtensionMessageSchema,
-  NativeMessageDecoder,
-  type ExtensionHostMessage,
-  type ExtensionMessage,
-} from "./browser-extension-protocol.js"
 
 interface BrowserClient {
   socket: WebSocket

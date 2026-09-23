@@ -8,7 +8,7 @@ import { RUNTIME_PROTOCOL } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo, RuntimeDisconnectedError } from "./runtime-connection.js"
 import { lstat, mkdir, stat, unlink } from "node:fs/promises"
-import { rmSync } from "node:fs"
+import { existsSync, rmSync } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
@@ -27,10 +27,12 @@ import type {
   NativeRequestInput,
 } from "./shared.js"
 import { startConversationMcp } from "./conversation-mcp.js"
-import { BrowserService } from "./browser-service.js"
-import { localBrowsers } from "./browser-discovery.js"
+import { BrowserService } from "@mako/control-runtime/browser"
+import {
+  localBrowsers,
+  publishDeskBrowserRegistration,
+} from "@mako/control-runtime/desktop"
 import { DeskBrowser } from "./desk-browser.js"
-import { publishDeskBrowserRegistration } from "./desk-browser-registration.js"
 import {
   watchDevRendererRegistration,
 } from "./dev-renderer-registration.js"
@@ -413,6 +415,11 @@ function preferredBrowserApplication() {
     .then((info) => info.path)
     .catch(() => undefined))
 }
+// The application owns checkout resources; the reusable Node runtime does not
+// infer workspace paths. Child control servers receive the same explicit root.
+const developmentMedia = join(app.getAppPath(), "vendor/control-media", `${process.platform}-${process.arch}`)
+if (!app.isPackaged && existsSync(developmentMedia))
+  process.env.MAKO_CONTROL_MEDIA_ROOT ??= developmentMedia
 const browserControl = new BrowserService(
   async () => {
     const defaultPath = await preferredBrowserApplication()

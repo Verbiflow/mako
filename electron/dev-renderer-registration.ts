@@ -18,7 +18,7 @@ import { z } from "zod"
 import {
   processRegistrationStartedAt,
   registeredProcessIsCurrentAsync,
-} from "./process-registration.js"
+} from "@mako/control-runtime/desktop"
 
 const FILE_NAME = "dev-renderer.json"
 const MAX_BYTES = 8_192
