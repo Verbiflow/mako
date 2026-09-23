@@ -1,4 +1,5 @@
 import { configureOpenCodePermissions } from "./permissions.js"
+import { prepareOpenCodeApprovals } from "./approval-observer.js"
 import { OpenCodeAgents } from "./agents.js"
 import { openCodeCheckpoint, openCodeResumeVerdict } from "./resume.js"
 import type { ProviderAcpSource } from "../acp-source.js"
@@ -10,6 +11,7 @@ import {
 
 export const openCodeAcpSource: ProviderAcpSource = {
   provider: "opencode",
+  approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Native v2 tool permission asked/replied events with exact scoped identities. Structured questions remain submission-only; retained observation is bounded and may have gaps." },
   async observeAgents(input) {
     const observer = new OpenCodeAgents(input)
     await observer.ready
@@ -40,6 +42,7 @@ export const openCodeAcpSource: ProviderAcpSource = {
       command: installation.command,
       args: ["acp"],
       configureEnvironment(env) { configureOpenCodePermissions(env, access) },
+      prepareApprovals: prepareOpenCodeApprovals,
     }
   },
 }

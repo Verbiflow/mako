@@ -33,6 +33,7 @@ function grokPermissionMode(tier: AccessTier): string | undefined {
 
 export const grokAcpSource: ProviderAcpSource = {
   provider: "grok",
+  approvalEvidence: { kind: "submission-only", reason: "ACP can forward requests if offered; tested native modes denied tools without an interactive ask. Exact decision observation and broader question coverage remain unverified." },
   async observeAgents({ env, ...input }) {
     const observer = new GrokAgents({ ...input, home: env.GROK_HOME ?? join(homedir(), ".grok") })
     await observer.ready
