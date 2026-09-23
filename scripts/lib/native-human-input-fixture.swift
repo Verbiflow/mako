@@ -45,7 +45,7 @@ final class Session: NSObject {
 }
 let output = CommandLine.arguments[1]
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)
 let window = NSWindow(contentRect: NSRect(x: 160, y: 240, width: 680, height: 370), styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "Mako — physical typing check"
 let title = NSTextField(wrappingLabelWithString: "Click Start, then type these two lines by hand. Use your Japanese input source for the first line; choose candidates and commit normally. Please do not paste.\n日本語の入力テストです。\nHuman typing stays here 12345.")
@@ -63,6 +63,14 @@ finish.frame = NSRect(x: 120, y: 40, width: 90, height: 30)
 for view in [title, text, label, start, finish] as [NSView] { window.contentView?.addSubview(view) }
 window.orderFrontRegardless()
 var previousFront: pid_t = -1
+// Keep activation notifications as well as periodic state. Sampling alone can
+// miss a brief focus theft and return between two 20 ms ticks.
+let activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+  forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+) { notification in
+  guard let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+  session.foreground.append(["pid": activated.processIdentifier, "at": Date().timeIntervalSince1970])
+}
 Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { _ in
   let front = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
   if front != previousFront {

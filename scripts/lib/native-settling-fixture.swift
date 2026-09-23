@@ -47,7 +47,7 @@ final class Handler: NSObject {
   }
 }
 let app=NSApplication.shared
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(CommandLine.arguments.contains("--regular") ? .regular : .accessory)
 let mainMenu=NSMenu()
 let appItem=NSMenuItem();let appMenu=NSMenu();appMenu.addItem(withTitle:"Quit fixture",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");appItem.submenu=appMenu;mainMenu.addItem(appItem)
 let editItem=NSMenuItem();editItem.title="Edit";let editMenu=NSMenu(title:"Edit")
