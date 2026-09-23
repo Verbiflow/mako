@@ -12,6 +12,7 @@
     "./computer": "./dist/computer/index.js",
     "./control": "./dist/control/index.js",
     "./control/scope": "./dist/control/scope.js",
+    "./control/recording": "./dist/control/recording.js",
     "./browser": "./dist/browser/index.js"
   },
   "files": [

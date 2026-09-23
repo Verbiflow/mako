@@ -155,9 +155,20 @@ export interface ThreadPage {
   start: number
   total: number
   hasEarlier: boolean
+  /**
+   * Read from the record's tail alone and cut at its first prompt, so a
+   * cold whale paints before the whole record is translated. `start` and
+   * block addresses are local to this page; the full page replaces it.
+   */
+  preview?: boolean
 }
 
 export interface ThreadPageOptions {
+  /**
+   * Answer from the last `PREVIEW_BYTES` of a large append-only record when
+   * the complete thread is not already translated; null otherwise.
+   */
+  preview?: boolean
   /**
    * Keep at most this many characters of each tool block's output, noting
    * the full length in `outputLength`. A viewer shows tool rows collapsed,
@@ -174,10 +185,20 @@ export interface ThreadPageOptions {
   maxChars?: number
 }
 
+type Attachments = Extract<ThreadEntry, { kind: "user" }>["attachments"]
+
+/** Inline images are most of a screenshot-heavy page; a flat 256 once let one weigh 10 MB. */
+function attachmentChars(attachments: Attachments): number {
+  let chars = 0
+  for (const attachment of attachments ?? [])
+    chars += 256 + (attachment.source.kind === "inline" ? attachment.source.data.length : 0)
+  return chars
+}
+
 /** Characters of content one entry carries, without serializing it. */
 export function entryChars(entry: ThreadEntry): number {
   if (entry.kind === "user")
-    return entry.text.length + (entry.attachments?.length ?? 0) * 256
+    return entry.text.length + attachmentChars(entry.attachments)
   if (entry.kind === "event")
     return entry.label.length + (entry.detail?.length ?? 0)
   let chars = 0
@@ -190,7 +211,7 @@ export function entryChars(entry: ThreadEntry): number {
         (block.input?.length ?? 0) +
         (block.output?.length ?? 0) +
         (block.details?.length ?? 0) * 256 +
-        (block.attachments?.length ?? 0) * 256 +
+        attachmentChars(block.attachments) +
         64
     else chars += 256
   }
@@ -204,9 +225,10 @@ export interface BlockAddress {
 }
 
 /**
- * The entries with each tool output beyond `chars` cut to its head. Entries
- * that lose nothing keep their identity, so a page of short outputs costs
- * no copies.
+ * The entries with each tool output beyond `chars` cut to its head, and
+ * inline images a collapsed row cannot show left for `block` to read when
+ * it opens. Entries that lose nothing keep their identity, so a page of
+ * short outputs costs no copies.
  */
 export function trimToolOutput(
   entries: ThreadEntry[],
@@ -217,18 +239,25 @@ export function trimToolOutput(
     if (entry.kind !== "assistant") return entry
     let touched = false
     const blocks = entry.blocks.map((block) => {
-      if (
-        block.type !== "tool" ||
-        block.output === undefined ||
-        block.output.length <= chars
+      if (block.type !== "tool") return block
+      const longOutput = block.output !== undefined && block.output.length > chars
+      const inline = block.attachments?.some(
+        (attachment) => attachment.source.kind === "inline" && attachment.source.data.length > chars
       )
-        return block
+      if (!longOutput && !inline) return block
       touched = true
-      return {
-        ...block,
-        output: block.output.slice(0, chars),
-        outputLength: block.output.length,
+      const next = { ...block }
+      if (longOutput && block.output !== undefined) {
+        next.output = block.output.slice(0, chars)
+        next.outputLength = block.output.length
       }
+      if (inline && block.attachments) {
+        next.attachments = block.attachments.filter(
+          (attachment) => attachment.source.kind !== "inline" || attachment.source.data.length <= chars
+        )
+        next.attachmentsOmitted = block.attachments.length - next.attachments.length
+      }
+      return next
     })
     if (!touched) return entry
     changed = true

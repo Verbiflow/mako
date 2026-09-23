@@ -73,11 +73,19 @@ interface HeldThread {
 }
 
 /**
- * Translated threads kept warm. The one on screen, the one the rail last
- * showed and a preview or two; a large thread's entries are tens of
- * megabytes of objects, so this stays small.
+ * Translated threads kept warm, bounded by the native bytes behind them: a
+ * large thread's entries are tens of megabytes of objects, but most sessions
+ * are a few megabytes, and switching back to one should not translate it
+ * again. A reader never translates more than 64 MB of one record.
  */
-const THREAD_CACHE_SIZE = 4
+const THREAD_CACHE_SIZE = 16
+const THREAD_CACHE_BYTES = 192 * 1024 * 1024
+const TRANSLATED_BYTES_CAP = 64 * 1024 * 1024
+
+/** Below this a record translates faster than a preview helps. */
+const PREVIEW_MIN_BYTES = 4 * 1024 * 1024
+/** Tail windows a preview widens through until one holds a prompt. */
+const PREVIEW_WINDOWS = [2, 8, 24].map((mb) => mb * 1024 * 1024)
 
 const WATCH_DEBOUNCE_MS = 24
 /**
@@ -155,6 +163,58 @@ function withWorkspace(ref: ThreadRef | null): ThreadRef | null {
   if (!ref) return null
   const workspace = workspaceOf(ref.cwd)
   return workspace && workspace !== ref.workspace ? { ...ref, workspace } : ref
+}
+
+/** A run of entries and the index of its first entry in the thread. */
+interface PageSlice {
+  entries: ThreadEntry[]
+  start: number
+}
+
+/**
+ * At most `limit` entries ending at `end`, tool output cut to its head, and
+ * earlier entries dropped once the page holds `maxChars`; the newest entry
+ * always stays.
+ */
+function pageSlice(
+  all: ThreadEntry[],
+  end: number,
+  limit: number,
+  options: ThreadPageOptions
+): PageSlice {
+  const size = Math.min(200, Math.max(1, limit))
+  let start = Math.max(0, end - size)
+  let entries = all.slice(start, end)
+  if (options.toolOutputChars !== undefined)
+    entries = trimToolOutput(entries, options.toolOutputChars)
+  if (options.maxChars !== undefined && entries.length > 1) {
+    let chars = 0
+    let keep = entries.length
+    while (keep > 0) {
+      chars += entryChars(entries[keep - 1]!)
+      if (chars > options.maxChars && keep < entries.length) break
+      keep -= 1
+    }
+    if (keep > 0) {
+      entries = entries.slice(keep)
+      start += keep
+    }
+  }
+  return { entries, start }
+}
+
+/**
+ * A tail window can start after the line that named the model its first
+ * turns ran on; those turns take the thread's model until the window names
+ * one itself.
+ */
+function withLeadingModel(entries: ThreadEntry[], model: string | undefined): ThreadEntry[] {
+  if (!model) return entries
+  const named = entries.findIndex((entry) => entry.kind === "assistant" && entry.model)
+  const until = named === -1 ? entries.length : named
+  return entries.map((entry, index) =>
+    index < until && entry.kind === "assistant" && !entry.model ? { ...entry, model } : entry
+  )
 }
 
 function withThreadWorkspace(thread: Thread | null): Thread | null {
@@ -392,9 +452,16 @@ export class SessionCatalog {
           revision: stamp.revision,
           thread: native,
         })
-        while (this.threadCache.size > THREAD_CACHE_SIZE) {
+        let bytes = 0
+        for (const held of this.threadCache.values())
+          bytes += Math.min(held.bytes, TRANSLATED_BYTES_CAP)
+        while (
+          this.threadCache.size > 1 &&
+          (this.threadCache.size > THREAD_CACHE_SIZE || bytes > THREAD_CACHE_BYTES)
+        ) {
           const oldest = this.threadCache.keys().next().value
           if (oldest === undefined) break
+          bytes -= Math.min(this.threadCache.get(oldest)?.bytes ?? 0, TRANSLATED_BYTES_CAP)
           this.threadCache.delete(oldest)
         }
       }
@@ -418,36 +485,59 @@ export class SessionCatalog {
     limit = 100,
     options: ThreadPageOptions = {}
   ): Promise<ThreadPage | null> {
+    if (options.preview) return this.preview(path, limit, options)
     const thread = await this.open(path)
     if (!thread) return null
     const total = thread.entries.length
     const end = Math.min(total, Math.max(0, before ?? total))
-    const size = Math.min(200, Math.max(1, limit))
-    let start = Math.max(0, end - size)
-    let entries = thread.entries.slice(start, end)
-    if (options.toolOutputChars !== undefined)
-      entries = trimToolOutput(entries, options.toolOutputChars)
-    if (options.maxChars !== undefined && entries.length > 1) {
-      let chars = 0
-      let keep = entries.length
-      while (keep > 0) {
-        chars += entryChars(entries[keep - 1]!)
-        if (chars > options.maxChars && keep < entries.length) break
-        keep -= 1
-      }
-      if (keep > 0) {
-        entries = entries.slice(keep)
-        start += keep
-      }
-    }
+    const slice = pageSlice(thread.entries, end, limit, options)
     return {
       ref: thread.ref,
       checkpoint: thread.checkpoint,
-      entries,
-      start,
+      entries: slice.entries,
+      start: slice.start,
       total,
-      hasEarlier: start > 0,
+      hasEarlier: slice.start > 0,
     }
+  }
+
+  /**
+   * The newest exchanges of a large record, translated from its tail alone.
+   * The window starts mid-record, so the page begins at the first prompt it
+   * holds: an exchange cut at its top would show tool results without the
+   * calls that made them. Null when the full thread is warm, the record is
+   * small or not append-only, or no window holds a prompt.
+   */
+  private async preview(
+    path: string,
+    limit: number,
+    options: ThreadPageOptions
+  ): Promise<ThreadPage | null> {
+    const provider = this.ownerOf(path)
+    const ref = this.byPath.get(path)?.ref
+    if (!provider?.tail || !ref) return null
+    const stamp = await nativeFileOf(provider, path)
+    if (!stamp || stamp.bytes < PREVIEW_MIN_BYTES) return null
+    const held = this.threadCache.get(path)
+    if (held && held.bytes === stamp.bytes && held.mtimeMs === stamp.mtimeMs && held.revision === stamp.revision)
+      return null
+    for (const window of PREVIEW_WINDOWS) {
+      if (window >= stamp.bytes) return null
+      const { entries } = await provider.tail(path, stamp.bytes - window)
+      const prompt = entries.findIndex((entry) => entry.kind === "user")
+      if (prompt === -1) continue
+      const aligned = withLeadingModel(entries.slice(prompt), ref.model)
+      const slice = pageSlice(aligned, aligned.length, limit, options)
+      return {
+        ref,
+        entries: slice.entries,
+        start: slice.start,
+        total: aligned.length,
+        hasEarlier: true,
+        preview: true,
+      }
+    }
+    return null
   }
 
   /** One complete block of an assistant entry, for what a trimmed page left out. */

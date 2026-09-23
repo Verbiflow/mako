@@ -96,6 +96,7 @@ export type DaemonRequestFrame =
       limit?: number
       toolOutput?: number
       maxChars?: number
+      preview?: boolean
     }
   | { id: number; op: "block"; path: string; entry: number; block: number }
   | { id: number; op: "follow"; path: string; fromByte: number }
@@ -226,7 +227,8 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       const limit = readNumber(record, "limit")
       const toolOutput = readNumber(record, "toolOutput")
       const maxChars = readNumber(record, "maxChars")
-      return path ? { id, op, path, before, limit, toolOutput, maxChars } : null
+      const preview = readBoolean(record, "preview")
+      return path ? { id, op, path, before, limit, toolOutput, maxChars, preview } : null
     }
     case "block": {
       const path = readString(record, "path")
@@ -386,6 +388,7 @@ function parseThreadPage(value: JsonValue | undefined): ThreadPage | null {
   const result: ThreadPage = { ref, entries, start, total, hasEarlier }
   const checkpoint = readNumber(value, "checkpoint")
   if (checkpoint !== undefined) result.checkpoint = checkpoint
+  if (readBoolean(value, "preview")) result.preview = true
   return result
 }
 

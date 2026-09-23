@@ -346,6 +346,7 @@ function catalogService(
               result: await catalog.page(frame.path, frame.before, frame.limit, {
                 toolOutputChars: frame.toolOutput,
                 maxChars: frame.maxChars,
+                preview: frame.preview,
               }),
             })
             return
@@ -713,6 +714,7 @@ async function connectDaemonLink(
         limit,
         toolOutput: options.toolOutputChars,
         maxChars: options.maxChars,
+        preview: options.preview,
       })
     })
 
