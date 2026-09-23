@@ -1,3 +1,4 @@
+import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
 import type {
@@ -62,6 +63,7 @@ interface Live {
   permissions: ClaudePermissions
   transcript: ClaudeTranscript
   emit: NonNullable<ProviderStartOptions["emit"]>
+  promptReceipt?: { id: string; dispatch: PromptDispatch }
   receipts: Map<string, Receipt>
   closed: boolean
   steered: boolean
@@ -95,6 +97,7 @@ function stop(live: Live): void {
     )
   }
   live.receipts.clear()
+  live.promptReceipt = undefined
 }
 
 function acknowledge(live: Live, message: SDKMessage): void {
@@ -104,6 +107,11 @@ function acknowledge(live: Live, message: SDKMessage): void {
     ids.add(message.user_message_uuid)
   if ("user_message_uuids" in message)
     for (const id of message.user_message_uuids ?? []) ids.add(id)
+  const prompt = live.promptReceipt
+  if (prompt && ids.has(prompt.id)) {
+    live.promptReceipt = undefined
+    prompt.dispatch.report({ kind: "accepted", source: "native-echo", referenceId: prompt.id })
+  }
   for (const id of ids) {
     const receipt = live.receipts.get(id)
     if (!receipt) continue
@@ -165,15 +173,16 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         ? undefined
         : await live.transcript.forkPoint(live.state.nativeId)
       if (live.closed) return
+      // SDK subtype "success" also carries API failures; is_error is authoritative.
+      const failure = message.is_error
+        ? (message.subtype === "success" ? message.result : message.errors.join("\n")).slice(0, 2000) || "Claude ended the turn with an error"
+        : undefined
       engine.patch(live, {
         nativePath: live.transcript.path,
         nativeForkId,
         status: message.is_error ? "failed" : "ready",
         lastStop: message.is_error ? "failed" : "completed",
-        error:
-          message.subtype === "success"
-            ? undefined
-            : message.errors.join("\n").slice(0, 2000),
+        error: failure,
       })
       live.finishing = false
       if (live.compaction) {
@@ -181,7 +190,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         live.compaction = undefined
         live.emit({ type: "live-action-result", id: live.state.id, actionId: compact.actionId,
           result: message.is_error
-            ? { kind: "failed", reason: message.subtype === "success" ? "Compaction failed" : message.errors.join("\n").slice(0, 2000) }
+            ? { kind: "failed", reason: failure ?? "Compaction failed" }
             : compact.confirmed ? { kind: "completed" }
               : { kind: "uncertain", reason: "The provider ended the turn without confirming compaction." } })
       }
@@ -386,16 +395,21 @@ export function createClaudeSdkDriver(
         startupWatch?.dispose()
       }
     },
-    async prompt(id, text, attachments, settings) {
-      const live = requireLive(id)
-      if (live.state.status === "running")
-        throw new Error("Claude is already working")
-      const content = await claudeInputContent(text, attachments)
-      await tune(live, settings)
-      const current = requireLive(id)
-      if (current !== live || current.state.status === "running")
-        throw new Error("Claude changed while preparing the prompt")
-      const uuid = randomUUID()
+    async prompt(id, text, attachments, settings, dispatch) {
+      const { live, content } = await preparePromptAsync(dispatch, async () => {
+        const live = requireLive(id)
+        if (live.state.status === "running")
+          throw new Error("Claude is already working")
+        const content = await claudeInputContent(text, attachments)
+        await tune(live, settings)
+        return { live, content }
+      })
+      preparePrompt(dispatch, () => {
+        const current = requireLive(id)
+        if (current !== live || current.state.status === "running")
+          throw new Error("Claude changed while preparing the prompt")
+      })
+      const uuid = dispatch.attemptId
       live.projection.reset()
       live.transcript.reset()
       engine.patch(live, {
@@ -406,6 +420,7 @@ export function createClaudeSdkDriver(
         error: undefined,
       })
       engine.emitUpdate(live, { kind: "user", text })
+      live.promptReceipt = { id: uuid, dispatch }
       live.input.send({
         type: "user",
         uuid,
@@ -413,6 +428,7 @@ export function createClaudeSdkDriver(
         parent_tool_use_id: null,
         message: { role: "user", content },
       })
+      dispatch.report({ kind: "submitted", source: "sdk-input", correlationId: uuid })
     },
     async steer(id, input) {
       const live = requireLive(id)
