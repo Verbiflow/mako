@@ -148,9 +148,8 @@ export function AppShell() {
           </div>
         </div>
         <CommandPalette />
-        {/* Settings floats as a large centered dialog under the palette's z-50:
-          the desk stays visible behind the scrim, and Radix owns Escape, the
-          scrim, and the focus trap. */}
+        {/* Settings takes the whole window under the palette's z-50, so the
+          palette can still open over it; Radix owns Escape and the focus trap. */}
         <SettingsDialog
           open={settingsOpen}
           section={settingsSection}
