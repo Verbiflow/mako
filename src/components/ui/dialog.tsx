@@ -34,7 +34,6 @@ function DialogTitle({
 
 const sizes = {
   md: "w-full max-w-content",
-  settings: "h-[min(100vh_-_92px,600px)] w-[min(100vw_-_32px,980px)]",
 } as const
 
 function DialogContent({

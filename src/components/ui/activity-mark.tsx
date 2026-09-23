@@ -1,5 +1,5 @@
-import { ThinkingOrb, type OrbState, type OrbSize } from "thinking-orbs"
-import { useOrbTheme } from "@/components/ui/use-orb-theme"
+import type { OrbState, OrbSize } from "thinking-orbs"
+import { Orb } from "@/components/ui/orb/orb"
 import { CheckIcon, CircleAlertIcon, PauseIcon, SearchIcon, PencilIcon, TerminalIcon, BrainIcon, TextCursorInputIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { AgentActivityKind } from "@/state/agent-activity"
@@ -33,6 +33,5 @@ export function ActivityMark({ className, state = "working", size }: { className
 }
 
 function ThinkingActivity({ state, kind, size, className }: { state: OrbState; kind: ActivityState; size: OrbSize; className?: string }) {
-  const theme = useOrbTheme()
-  return <ThinkingOrb state={state} size={size} theme={theme} data-size={size} data-state={kind} aria-hidden className={cn("activity-orb shrink-0", className)} />
+  return <Orb state={state} size={size} data-size={size} data-state={kind} className={className} />
 }

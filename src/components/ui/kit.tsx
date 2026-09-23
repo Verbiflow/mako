@@ -225,7 +225,7 @@ export function SettingRow({
   children?: ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between gap-8 py-4">
+    <div className="flex min-h-14 items-center justify-between gap-10 py-3">
       <div className="min-w-0">
         {htmlFor ? (
           <label htmlFor={htmlFor} className="block text-ui font-medium">
@@ -235,7 +235,7 @@ export function SettingRow({
           <div className="text-ui font-medium">{title}</div>
         )}
         {description ? (
-          <p className="text-ui leading-snug text-muted-foreground [margin-block:-2px]">
+          <p className="mt-0.5 max-w-[34rem] text-label leading-relaxed text-muted-foreground">
             {description}
           </p>
         ) : null}
@@ -250,7 +250,7 @@ export function ListCard({ className, children }: ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "rounded-lg bg-shell/40 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
+        "rounded-[10px] bg-shell/55 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
         className
       )}
     >
