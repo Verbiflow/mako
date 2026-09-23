@@ -13,14 +13,14 @@ import { versionBehind } from "../../electron/contracts/runtime-version"
  * words can be checked without a renderer.
  */
 export interface RuntimeRowView {
-  /** The installed version, or what stands in for it. */
-  version: string
+  /** The installed version, or what stands in for it; absent until first read. */
+  version?: string
   /** The reading's status in a few words, after the version. */
   detail: string
   /** The row's one control, when Mako can run something for this runtime. */
   action?: { label: string }
-  /** The version column shimmers while the first reading is taken. */
-  shimmer: boolean
+  /** The detail names work still in flight: a check or an update. */
+  busy: boolean
   /** A failed update's own words, under the row. */
   note?: string
   tone: "faint" | "muted" | "negative"
@@ -39,18 +39,18 @@ export function runtimeRowView(
     : undefined
   if (info.phase === "updating")
     return {
-      version: info.installed ?? "…",
+      version: info.installed,
       detail: "Updating…",
-      shimmer: false,
+      busy: true,
       tone: "muted",
     }
   if (!info.installed && info.phase === "checking")
-    return { version: "…", detail: "Checking…", shimmer: true, tone: "faint" }
+    return { detail: "Checking…", busy: true, tone: "faint" }
   if (info.error)
     return {
-      version: "—",
+      version: info.installed ?? "—",
       detail: info.error,
-      shimmer: false,
+      busy: false,
       tone: "negative",
       note,
     }
@@ -64,7 +64,7 @@ export function runtimeRowView(
       action: info.update
         ? { label: failed ? "Try again" : "Check and update" }
         : undefined,
-      shimmer: false,
+      busy: false,
       tone: "faint",
       note,
     }
@@ -79,7 +79,7 @@ export function runtimeRowView(
       action: info.update
         ? { label: failed ? "Try again" : info.update.label }
         : undefined,
-      shimmer: false,
+      busy: false,
       tone: "muted",
       note,
     }
@@ -93,7 +93,7 @@ export function runtimeRowView(
     return {
       version,
       detail: recent ?? (owner ? `Current · ${owner}` : "Current"),
-      shimmer: false,
+      busy: false,
       tone: "faint",
       note,
     }
@@ -107,21 +107,22 @@ export function runtimeRowView(
           ? "Latest version unknown"
           : "Checks with its own updater"),
       action: { label: failed ? "Try again" : "Check and update" },
-      shimmer: false,
+      busy: false,
       tone: "faint",
       note,
     }
+  const settled =
+    recent ??
+    owner ??
+    (info.latestError
+      ? "Latest version unknown"
+      : info.checkedAt
+        ? "No public version to compare"
+        : undefined)
   return {
     version,
-    detail:
-      recent ??
-      owner ??
-      (info.latestError
-        ? "Latest version unknown"
-        : info.checkedAt
-          ? "No public version to compare"
-          : "Checking…"),
-    shimmer: false,
+    detail: settled ?? "Checking…",
+    busy: settled === undefined,
     tone: "faint",
     note,
   }

@@ -7,6 +7,7 @@ export function terminalTheme(style: CSSStyleDeclaration): ITheme {
     cursor: style.getPropertyValue("--foreground"),
     cursorAccent: style.getPropertyValue("--surface"),
     selectionBackground: style.getPropertyValue("--fill-selected"),
+    overviewRulerBorder: "transparent",
     black: style.getPropertyValue("--background"),
     brightBlack: style.getPropertyValue("--faint"),
     white: style.getPropertyValue("--muted-foreground"),
