@@ -68,6 +68,13 @@ export function installCursor() {
 
 /** Visual acknowledgments never delay input. Hidden tabs send zero cursor CDP calls. */
 export class ExtensionCursor {
+  private readonly recording = new Set<string>()
+  async setRecording(targetId: string, active: boolean) {
+    if (active) {
+      this.recording.add(targetId)
+      await this.clear(targetId)
+    } else this.recording.delete(targetId)
+  }
   private readonly visible = new Set<number>()
   private refreshVersion = 0
   private readonly worlds = new Map<string, number>()
@@ -97,6 +104,7 @@ export class ExtensionCursor {
         this.visible.add(tab.id)
   }
   forget(targetId: string) {
+    this.recording.delete(targetId)
     this.worlds.delete(targetId)
     this.queued.delete(targetId)
     this.revisions.delete(targetId)
@@ -107,7 +115,12 @@ export class ExtensionCursor {
     method: string,
     params: ExtensionCommand["params"]
   ) {
-    if (tabId === undefined || !this.visible.has(tabId)) return
+    if (
+      tabId === undefined ||
+      !this.visible.has(tabId) ||
+      this.recording.has(targetId)
+    )
+      return
     if (
       ![
         "Input.dispatchMouseEvent",

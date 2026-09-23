@@ -143,11 +143,18 @@ export class ExtensionRouter {
     }
     if (command.method === "Page.captureScreenshot")
       await this.activity?.cursor.clear(attached.target.id)
+    if (command.method === "Page.startScreencast")
+      await this.activity?.cursor.setRecording(attached.target.id, true)
     const result = await this.api.debugger.sendCommand(
       { targetId: attached.target.id },
       command.method,
       command.params
-    )
+    ).catch(async error=>{
+      if(command.method === "Page.startScreencast") await this.activity?.cursor.setRecording(attached.target.id,false)
+      throw error
+    })
+    if (command.method === "Page.stopScreencast")
+      await this.activity?.cursor.setRecording(attached.target.id, false)
     this.activity?.cursor.action(
       attached.target.id,
       attached.target.tabId,
@@ -422,28 +429,39 @@ export class ExtensionRouter {
 
   async child(tab: chrome.tabs.Tab) {
     if (tab.id === undefined || tab.openerTabId === undefined) return
-    const createdParent = [...this.created.entries(), ...this.creating.entries()].find(
-      ([, t]) => t.tabId === tab.openerTabId
-    )
+    const createdParent = [
+      ...this.created.entries(),
+      ...this.creating.entries(),
+    ].find(([, t]) => t.tabId === tab.openerTabId)
     const attachedParent = [...this.attached.values()].find(
       (entry) => entry.target.tabId === tab.openerTabId
     )
     const tracked = this.activity?.tasks.get(tab.openerTabId)
-    const parent = createdParent ?? (attachedParent
-      ? [attachedParent.target.id, {
-          client: attachedParent.client,
-          tabId: tab.openerTabId,
-          owner: tracked?.owner ?? attachedParent.client,
-          name: tracked?.name ?? "Mako",
-          closeOnDisconnect: true,
-        }] as const
-      : undefined)
+    const parent =
+      createdParent ??
+      (attachedParent
+        ? ([
+            attachedParent.target.id,
+            {
+              client: attachedParent.client,
+              tabId: tab.openerTabId,
+              owner: tracked?.owner ?? attachedParent.client,
+              name: tracked?.name ?? "Mako",
+              closeOnDisconnect: true,
+            },
+          ] as const)
+        : undefined)
     if (!parent) return
     const tabId = tab.id
     this.running++
     try {
       await this.serial(async () => {
-        if (!createdParent && attachedParent && !this.attached.has(attachedParent.sessionId)) return
+        if (
+          !createdParent &&
+          attachedParent &&
+          !this.attached.has(attachedParent.sessionId)
+        )
+          return
         if (this.created.size + this.creating.size >= 512) return
         for (let attempt = 0; attempt < 20; attempt++) {
           const target = (await this.api.debugger.getTargets()).find(
@@ -451,7 +469,8 @@ export class ExtensionRouter {
           )
           if (target) {
             // onCreated and navigation attribution can describe the same child.
-            if (this.created.has(target.id) || this.creating.has(target.id)) return
+            if (this.created.has(target.id) || this.creating.has(target.id))
+              return
             const child = { ...parent[1], tabId, parent: parent[0] }
             if (!this.clients.has(child.client)) return
             this.created.set(target.id, child)

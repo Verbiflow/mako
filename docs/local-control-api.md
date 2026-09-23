@@ -244,3 +244,66 @@ returns its browser-issued ID and state. If still in progress, call
 copied into a unique subdirectory of `directory`; `browserPath` identifies the
 original. Extension ref-triggered downloads are unsupported because arbitrary
 page downloads cannot be safely attributed to a task tab.
+
+## Record a tab or window
+
+Recording is explicit and stays bound to the selected target and task:
+
+```js
+state.recording = await state.tab.record({
+  name: 'Checkout verification',
+  directory: '/absolute/path/to/evidence',
+  cursor: true,
+  maxDurationMs: 120000,
+  maxSide: 1600
+});
+return state.recording;
+```
+
+Use the same method on `state.window`. Actions continue through the ordinary
+handle. Recording does not add screenshots or video frames to observations or
+model context. It draws a separate cursor from known mouse dispatch positions;
+semantic actions without a dispatched pointer do not invent cursor movement.
+The human's pointer is excluded from exact-window recording. The updated native
+driver also records dispatched drag, move and scroll positions. Mac background
+scroll and Linux XTest foreground drag/scroll have live acceptance; Mac foreground
+drag, MPX and Wayland gesture recording still need separate evidence. Recording
+does not relax an operation's foreground requirement.
+
+```js
+return await state.recording.stop();
+// In a later cell, inspect completion without repeating stop or input:
+return await state.recording.status();
+```
+
+`stop()` begins finalization. Receipts report `recording`, `finalizing`,
+`finished`, `interrupted`, or `failed`. A finished receipt includes local MP4 and
+JSON timeline paths. An interrupted recording can retain valid video plus its
+reason. A failed receipt can leave partial source files in `directory` without
+claiming they form a usable video. Task end and target loss stop capture.
+
+The default duration limit is two minutes, configurable from one second to ten
+minutes. `maxSide` defaults to 1600 pixels and accepts 320–2560. Frames and disk
+usage are bounded; dropped browser frames are counted. Recording currently
+uses bundled `ffmpeg` and `ffprobe` in the new macOS arm64 package;
+development and Linux hosts require their runtime encoder dependencies. Native capture requires the updated
+shared driver; macOS uses ScreenCaptureKit and requires macOS 15 or later for
+video, and Linux X11 uses XComposite. Unsupported exact-window capture refuses
+before recording a desktop. A native window resize ends capture with an explicit
+interruption, retaining playable video when the encoder finalized it. Audio is
+not recorded by this API.
+
+`view.diff(previous)` only emits a delta for matching targets, document lineage,
+scope and complete coverage. It returns the full current view when those cannot
+be established, when order changes, or when the change budget is exceeded.
+Native drivers without a document lineage therefore return full views.
+
+The updated native driver adds optional `settling` to raw action results and
+bound-action receipts on macOS. Its
+`status` is `events_quiet`, `deadline`, or `unavailable`, with a
+`process_notifications` scope and elapsed milliseconds/event counts. It observes
+a 75 ms quiet interval, bounded to one second after the inner action returns.
+An observer that has not serviced its event queue cannot establish quiet.
+An app can omit
+notifications or schedule later work: use `expect()` or another explicit
+observation to verify a postcondition. Settling never upgrades `effect`.

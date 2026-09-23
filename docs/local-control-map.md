@@ -1,5 +1,227 @@
 # Local Control refactor wayfinder
 
+## Current follow-through: background accuracy (2026-09-22)
+
+Native +mako.12 is a scratch candidate; +mako.11 remains selected for new
+launches. The Mac raw-click route previously posted a defocus record to the
+user's foreground process. It now uses the keyboard route's target-only key-window
+preparation, refuses before mouse dispatch if preparation fails, and keeps the
+focus guard enabled. The unsafe helper was deleted. The candidate passed 375 Mac
+unit tests (two existing ignores) and a live raw-click/scroll/recording job:
+seven pointer samples, five independently received gesture events, and all
+56 foreground samples remained Aside. This fixes a concrete source of focus
+interference; it does not prove prevention of arbitrary app self-activation.
+Evidence: [target-only Mac job](audits/2026-09-22/local-control-next/mac-target-only/evidence.json).
+
+Packaged browser setup had a reproducible ASAR bug: `fs.cp` cannot traverse the
+virtual extension directory although individual file reads work. Publication now
+reads all source assets before mutation, writes assets atomically, and publishes
+the manifest last. Real signed-archive verification compares all five assets
+byte-for-byte. The regular extension directory now contains 0.3.2 and its native
+helper points at a separately staged signed host. Aside's running worker is still
+0.2.0 until reload; installed acceptance is therefore pending. The user was asked
+to coordinate that brief UI interruption because Aside was in active use.
+The running Mako app was not replaced. An older app can still republish its old
+files; permanent app deployment remains a separate gate.
+Evidence: [archive publication](audits/2026-09-22/local-control-next/browser-publication/).
+
+Broader Wayland acceptance now includes a real GNOME 46 headless compositor with
+AT-SPI and the installed helper. Ten Unicode writes to a minimized GTK window
+passed while another window retained compositor focus. Minimized capture and
+exact-window recording refused explicitly. The first visible screenshot also
+exposed the limits of desktop cropping under GNOME transforms/occlusion; an exact
+window-texture capture path is under implementation, not yet accepted.
+[Initial GNOME run](audits/2026-09-22/local-control-next/gnome-initial/evidence.json)
+is retained as input evidence, not an accurate-capture certification.
+
+Physical typing/IME still requires the user's coordinated participation. Automated
+Unicode writes are not composition tests. The reference Linux executable is still
+unavailable. No general parity claim is justified by these results.
+
+## Next parity work: active implementation
+
+The user renewed authorization to finish native settling/focus protection, IME and
+physical-input evidence, Wayland, gesture recordings, bundled media dependencies
+and installed Aside acceptance. Native changes are in the existing driver checkout;
+driver +mako.11 is now selected for new launches. Existing driver daemons and the
+running Mako app/extension remain unchanged. A new isolated signed host candidate
+is prepared at `/private/tmp/mako-local-control-release/release/local-control-final/mac-arm64/Mako.app`.
+
+Implemented: a bounded AXObserver subscription around native actions reports
+process-notification quiet/deadline/unavailable separately from action success;
+focus restoration rejects stale queued activations; recording scope now propagates
+through drag/scroll workers and actual pointer dispatches. The first live fixture exposed dropped settling metadata in the core public
+projection. The +mako.9 candidate makes this a typed optional result field. Its 631 core,
+45 contract and 374 Mac unit tests pass. Live notifications passed (8 events),
+but the strict locator exposed an unrelated AXIdentifier coverage bug. The
++mako.10 candidate fixes that optional-field accounting and adds Linux XTest
+cursor dispatch capture. The +mako.11 candidate also guards against a starved
+observer being mistaken for quiet. [Mac acceptance](audits/2026-09-22/local-control-completion/native-settling-final/README.md)
+passed complete observation, typed settling, explicit final-value verification,
+background scroll, cursor video and unchanged foreground. App timer batches
+can exceed the quiet interval; the retained counterexample explains why quiet
+must never imply completion. [Linux gesture acceptance](audits/2026-09-22/local-control-completion/linux-gestures10-focus/README.md)
+passed actual-event/cursor coordinate matching, covered-window recording and
+early-close video retention. Its gesture phase explicitly requests foreground
+delivery inside an isolated desktop; background drag remains refused. See the
+[native diagnosis](audits/2026-09-22/local-control-completion/native-settling-diagnosis/README.md). This does not yet provide busy-indicator detection,
+proactive focus-steal prevention or native observation lineage.
+
+Media binaries are built from pinned FFmpeg 8.0.1/x264 source with the existing
+H.264 quality settings. The 23 MB bundle includes source and license artifacts;
+`otool` reports system-only dynamic dependencies. Recording/cursor tests and
+packaged-versus-development resolver checks pass. The isolated host passes
+production build and full lint (five existing warnings); signed packaging and actual archive encoding with Homebrew excluded from PATH
+also pass. [Clean-source packaged evidence](audits/2026-09-22/local-control-completion/bundled-media-clean-source/README.md) includes native cursor/alpha composition and decoded video.
+
+[Native Wayland acceptance](audits/2026-09-22/local-control-completion/wayland/README.md)
+now passes ten exact Unicode updates on a hidden Sway workspace while a second
+window keeps compositor focus. Visible-window capture works. Hidden-window
+capture and exact-window recording refuse explicitly; those remain real backend
+gaps. This does not certify other compositors or physical user input. The initial
+fixture failures are retained with the successful run.
+
+Obsolete Rust debug caches from the earlier driver checkout were removed to restore
+14 GB of disk space; source and release artifacts were preserved.
+The user has been asked to coordinate the real physical-typing/IME fixture. An
+actual reference Linux executable is still unavailable.
+
+Final +mako.11 validation: 45 contract, 631 core and 376 Mac unit tests passed
+(two existing ignores). Signed Mac/Linux packages retain source and binary
+provenance. The final host passed build, lint, cold startup, quit/reopen and both
+browser-frame/native-video encoding from app.asar with only bundled encoders.
+The final Linux build repeated the Sway hidden-workspace job successfully. One
+X11 run failed before recording with an empty window-manager client list; a
+repeat passed. Setup now requires the WM to manage a real readiness window,
+and [three fresh complete gesture/recording jobs](audits/2026-09-22/local-control-completion/linux-ready11/README.md)
+passed. This improves the fixture's readiness gate; it does not prove the precise
+cause of the earlier intermittent empty list. Logs and package receipts are in
+[release11](audits/2026-09-22/local-control-completion/release11/README.md).
+
+## Renderer import repair found during harness verification
+
+2026-09-22: the [native-delivery recovery proof](audits/2026-09-22/native-delivery-validation/README.md) exposed browser loading of Node-only control code through `RecordingOptionsSchema`. The browser contract now imports the dedicated `@mako/control/control/recording` entry, and recording identity comparison uses typed target fields without `node:util`. Window/page/generation/lease and recording-ID mismatch tests pass. This preserves the recording API; it does not establish installed recording acceptance.
+
+## Completion work in progress: observations and recordings
+
+2026-09-22: shared host/API changes are implemented in this checkout; native source
+is `/private/tmp/mako-control-driver-platform`. Signed native release
+`0.28.2+mako.7` is built for Mac ARM64 and Linux ARM64. The Mac launcher now selects
+that version for new driver launches; existing daemons retain their executable.
+The running Mako host and extension have not received this iteration. Preserve
+concurrent provider/settings changes.
+
+Implemented: scope/lineage/coverage-safe observation diffs with full-view fallback;
+browser document lineage and navigation-during-read rejection; native screenshots
+without implicit AX reads; native AX walk deadline/cancellation and passive nodes.
+Core unit tests passed 630; Mac 371 with two existing ignores. Native lineage,
+event-driven readiness/invalidation, and scoped native read acceleration remain
+open. Native walk completeness/performance/cancellation need live acceptance.
+
+The public API provides `await handle.record(options)`, `recording.stop()` and
+`recording.status()`. MP4 and timeline paths stay outside model context. Shared
+host/driver ownership, exact target identity, lost-start-receipt cleanup and bounded
+capture are implemented. Browser frame streams bypass ordinary event history.
+Native cursor evidence uses actual dispatch coordinates, excluding off-screen
+activation primers. The newer candidate adds gesture dispatch hooks and the
+acceptance listed above; untested routes remain open. Semantic actions
+without mouse dispatch do not invent movement. Resize or target loss ends capture
+explicitly. A finalized early-ending native video is retained with an interruption
+reason. The new Mac ARM64 candidate bundles ffmpeg/ffprobe; Linux/development
+hosts require runtime encoders. Audio is not implemented.
+
+[Extension video evidence](audits/2026-09-22/local-control-completion/browser-recording/README.md)
+and [longer runs](audits/2026-09-22/local-control-completion/browser-recording-long/README.md):
+normal/2x cursor alignment, complete saved-form jobs, detach/reconnect/cancellation,
+and active-recording restricted-frame interruption passed. The longer sample passed
+300 baseline and 300 recorded server-confirmed saves. Recording retained 663 source
+frames with one drop over 42.303 seconds. Sequential baseline/recorded runs cannot
+establish a speedup. Extension 0.3.2 passed fresh-session checks; regular installed
+Aside and physical concurrent typing are separate acceptance gates.
+
+[Final Mac recording evidence](audits/2026-09-22/local-control-completion/mac-recording-final/README.md):
++mako.7 passed public API exact values, scoped forms, explicit screenshots and
+unchanged foreground app. The normal 10.773-second MP4 and the 0.567-second video
+retained after target closure both decoded successfully. Earlier cursor/early-close
+failures are retained in historical evidence; this version fixes those paths.
+
+[Linux video evidence](audits/2026-09-22/local-control-completion/linux-recording/README.md):
+release +mako.7 passed exact Unicode values, covered-window capture and early-close
+video retention through the public API. Four of five fresh release runs passed;
+one failed before recording because both driver and window manager reported no
+windows. After adding explicit X server/window-manager readiness, all five fresh jobs
+passed in [repeated acceptance](audits/2026-09-22/local-control-completion/linux-desktop-ready-repeated/README.md).
+The earlier failure is retained; passing repeats alone do not prove its cause.
+No X11 finding establishes Wayland behavior or reference-Linux parity.
+
+[Controlled reference Mac evidence](audits/2026-09-22/local-control-completion/reference-mac/README.md):
+exact value-setting and Unicode paste; menu selection and panel cancellation;
+reproducible Unicode loss through direct keyboard typing even after fixing the
+fixture's missing Edit menu. The initial interval has 10,085 foreground samples
+over 240 seconds without reference fixture activation. Physical human typing,
+actual IME composition and cross-process panel input are still untested. The actual
+reference Linux executable is absent; wrapper inspection cannot close that gap.
+
+Release preparation uses `/private/tmp/mako-local-control-release`, an isolated
+checkout containing Local Control changes. Production build and full lint passed
+(0 errors, five existing warnings), as did recording and installer suites. Final signed packaging passed cold startup, real host/preload/composer, client
+Quit/reopen and draft persistence checks. It includes the renderer import repair
+and strict native recording startup identity checks. The [packaged encoder
+check](audits/2026-09-22/local-control-completion/packaged-recording/README.md)
+loaded Sharp and recording code from the actual app archive, encoded and decoded
+video successfully. Read-only installation readiness reports active Mako/host
+processes, so no running application was replaced. The versioned native installer
+passed actual upgrade and repeat/ownership/failure tests. Media dependency packaging
+and installed host/extension acceptance remain open.
+
+Disk exhaustion during packaging stopped Docker. Cleaning this task's Rust debug
+outputs restored space, Docker and the four previously running containers were
+restarted, and affected Linux attempts are recorded as environment failures. The
+independent five-run release series above was performed after recovery.
+
+Remaining: event-driven native readiness and scoped reads; maintained focus,
+menu/cross-process panel handling and clipboard-consumption transactions; controlled
+IME and physical typing; Wayland runtime/capture; full native gesture cursor paths;
+media packaging; host/extension deployment and regular Aside acceptance. No overall
+parity or completion claim is made.
+
+## Detailed reference evidence review
+
+2026-09-22: reviewed `codex-cu-reference-evidence.md`, all six supporting files,
+shipped reference JavaScript and current Mako native/host code.
+[Corrections, comparison and reproducible probes](audits/2026-09-22/reference-evidence-review/README.md).
+
+Mako already implements PID-targeted input, exact mouse-window targeting,
+synthetic activation and Chromium accessibility enablement. The stronger remaining
+leads are maintained focus protection (including menus and cross-process panels),
+bounded complete native scopes and cancellable walks, event-driven readiness and
+invalidation, compatible observation diffs, and clipboard-consumption transactions.
+Current focus handling restores after activation; prevention throughout a complete
+job still needs evidence. Mac tree completeness remains deliberately false.
+
+A pure SDK probe reproduced an accuracy issue: diffing different scopes of the
+same unchanged target reports false removals/additions. Target equality alone is
+insufficient; scope, lineage and coverage compatibility need enforcement before
+delta optimization. This review records the issue; it does not implement the fix.
+
+The reference extension contains a foreign-extension-frame monitor that blanks
+frames; its presence does not establish successful Aside interference prevention.
+Its popup interceptor can also replace named top-level windows, and a substitute
+parent handle does not alone establish the child's `window.opener` behavior.
+Do not copy these semantics or generalize its narrow debugger-unattached retry
+into replay after uncertain delivery.
+
+Trace correction: 25/107 getApp-containing calls returned explicit errors, of which
+22 were timeouts (23.4% errors versus 20.6% timeouts). These are sampled whole-REPL
+calls, not native-action timings or a general task failure rate. Static symbols and
+the partial caller graph do not prove unconditional settling or background-input
+guarantees. Linux's 100 ms JavaScript delay does not establish native behavior.
+
+Next evidence: matched Mac input/focus/menu/panel/IME jobs and actual Linux runtime
+and isolation details. Current installation and regular Aside acceptance gates
+below remain unchanged. No deployment or live input experiment occurred in this
+review.
+
 ## Browser settings discovery and presentation repair
 
 2026-09-22: the reported “Mako (this app) / Unnamed profile” row came from the
