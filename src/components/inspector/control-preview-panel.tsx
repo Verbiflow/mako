@@ -1,4 +1,5 @@
 import { NativeControlPreview } from "./native-control-preview"
+import { ControlPreviewImage } from "./control-preview-image"
 import { useEffect } from "react"
 import { MonitorIcon, GlobeIcon } from "lucide-react"
 import { Blank } from "@/components/ui/kit"
@@ -94,11 +95,11 @@ export function ControlPreviewPanel() {
           />
         ) : frame ? (
           <figure className="m-0 overflow-hidden rounded-lg bg-background [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
-            <img
+            <ControlPreviewImage
+              key={`${conversationId}:${activity?.kind}:${activity?.target}`}
               className="block h-auto w-full object-contain"
-              src={`data:${frame.image.mimeType};base64,${frame.image.data}`}
-              alt={`${browser ? "Browser tab" : "Application window"} observed by this task`}
-              decoding="async"
+              frame={frame}
+              label={`${browser ? "Browser tab" : "Application window"} observed by this task`}
             />
           </figure>
         ) : null}

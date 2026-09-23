@@ -1,4 +1,5 @@
 import { NativeControlPreview } from "./native-control-preview"
+import { ControlPreviewImage } from "./control-preview-image"
 import { useEffect, useRef, useState } from "react"
 import { GlobeIcon, MonitorIcon, XIcon } from "lucide-react"
 import {
@@ -95,11 +96,11 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
           />
         ) : (
           frame && (
-            <img
-              src={`data:${frame.image.mimeType};base64,${frame.image.data}`}
-              alt="Live view of the tab this task is using"
+            <ControlPreviewImage
+              key={`${id}:${activity?.kind}:${activity?.target}`}
+              frame={frame}
+              label="Live view of the tab this task is using"
               className="block max-h-64 w-full object-contain"
-              decoding="async"
             />
           )
         )}
