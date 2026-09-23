@@ -22,8 +22,18 @@ cell cannot acquire a later cell's authority.
 Choose and connect a profile in Settings → MCP → Browser use. The shared host
 saves the preference for all providers. `await control.openTab({url})` opens a
 new task tab there; passing `browser` explicitly overrides the preference.
-No preference, an unavailable profile or a disconnected browser causes a refusal,
-not fallback or automatic connection. Existing handles keep their exact browser.
+No preference, an unavailable profile or a disconnected browser causes a refusal.
+Use `await control.connectBrowser(id)` to connect an exact discovered target;
+input never reconnects automatically or switches profiles. Existing handles keep
+their exact browser.
+
+For Mako development, match the `desk` browser’s `origin` and `sourceRoot` to the
+requested checkout, connect its ID, then open a task tab there. This creates a
+hidden view of that dev app without a Chromium extension or remote-debugging
+prompt. A dev host launched with `--web` has no visible native window: zero
+windows for its PID is expected, not a self-capture restriction. The hidden desk
+is a separate view; use the actual browser page/window when the task requires
+the user’s current visible state.
 
 `control.browsers()` includes `preferred`, `transport`, optional setup `guidance`
 and optional `lastInterruption`. Guidance is not a live compatibility test. A last
@@ -311,3 +321,16 @@ An observer that has not serviced its event queue cannot establish quiet.
 An app can omit
 notifications or schedule later work: use `expect()` or another explicit
 observation to verify a postcondition. Settling never upgrades `effect`.
+
+Mac action results may also include `focus_change` with `previous_pid`,
+`current_pid` (nullable), `restoration_attempted` and `input_activity_observed`.
+This reports an observed interruption, including one that was restored before
+return. Input-state activity is a conservative signal to stop restoration; it
+contains no key contents and does not prove a physical keypress. Restoration is
+reactive and can race a later user switch. An absent report does not guarantee
+uninterrupted focus.
+
+After `focus_change`, the shared host requires a new observation of the target
+before another unified mutation. Read the actual result before choosing what to
+do next; never repeat the previous input simply because focus changed. `guard`
+reports the bounded window-topology watcher, not focus isolation.

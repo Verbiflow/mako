@@ -47,16 +47,21 @@ are included in the distribution, not discarded to reduce its size.
 | Target | Evidence and packaging status |
 | --- | --- |
 | macOS ARM64 desktop | Signed app recipe, bundled media, startup and archive recording checks. Patched native executable is separately installed. |
-| macOS ARM64 native | +mako.12 signed and installed for new launches; 375 unit tests and scoped gesture/capture acceptance. |
-| Linux ARM64 native | +mako.12 packaged; 448 unit tests; X11, GNOME 46 and Sway acceptance. GNOME helper ships beside driver. FFmpeg still comes from the runtime image. |
-| Linux x64 native | Explicit architecture selection and separate Cargo cache implemented; no x64 acceptance claim. |
+| macOS ARM64 native | +mako.17 signed and installed for new launches; background settling/recording and three system-activation recovery trials pass. Existing daemons were not restarted. General proactive focus protection remains open. |
+| Linux ARM64 native | +mako.17 packaged with portal input/helper 10; four Sway scale/rotation/load workflows and forty hidden jobs pass. Earlier +mako.14 covers eleven transforms/scales. Prior GNOME/libei acceptance remains scoped to GNOME 46. FFmpeg comes from the runtime image. |
+| Linux x64 native | +mako.17 packaged; 30 exact-value jobs, 400/400 synthetic concurrent keystrokes and X11 gesture/recording/interruption acceptance pass under translation. Native Intel Xeon acceptance now passes on EC2: thirty jobs, 400/400 synthetic concurrent keystrokes, X11 gesture/recording and interruption retention. AMD and x64 Wayland remain untested. |
 | Linux desktop / Intel Mac / Windows desktop | Generic electron-builder declarations are not release evidence. Complete target-specific native/media bundling and acceptance are missing. |
 
 Linux packaging requires `--arch=arm64` or `--arch=x64`, applies the pinned patch
 to an immutable archive, checks the image's actual architecture, and keeps Cargo
 target volumes separate. `--image=` names the matching build image. The existing
 Linux development image contains build tools, Chromium and test desktops; its
-size is not the size of the shipped native executable.
+size is not the size of the shipped native executable. Final +mako.17 executable
+file sizes are 32,006,448 bytes (Mac ARM64), 47,732,752 bytes (Linux ARM64), and
+51,052,608 bytes (Linux x64). Source and executable hashes are retained in the
+[acceptance artifacts](audits/2026-09-23/local-control-focus15/packages17.json).
+The native Linux packages include the helper and license; these figures are
+executable bytes, not full desktop-app or container-image sizes.
 
 ## Further work
 
@@ -77,3 +82,18 @@ new extension worker and isolated shared-host acceptance do not mean the running
 desktop host has been updated. Physical IME/concurrent typing, general proactive
 Mac focus interception, remaining gesture routes and broader compositors remain
 separate acceptance requirements in the wayfinder.
+
+The +mako.14 continuation records target-specific binary hashes and sizes in
+[audit provenance](audits/2026-09-23/local-control-focus14/packages.json).
+It adds no runtime package dependency for output geometry or image transforms.
+
++mako.17 adds no runtime dependency for focus recovery or drag pacing. Compared
+with +mako.14, the Mac executable is 72,640 bytes smaller; Linux ARM64 grows by
+78,048 bytes and x64 by 37,632 bytes. These are measured artifact differences,
+not a claim of general runtime speedup. Focus interruption details appear only
+when a change is observed; normal actions acquire no screenshot or extra poll.
+
+The [cloud runtime design](local-control-runtime.md) separates the Node control
+service from the Electron desktop host. The native acceptance payload contains
+no Electron or provider runtime. Its test-only runtime image measured 1.44 GB;
+this is not a shipped cloud release or the size of Mako’s desktop app.

@@ -1,5 +1,229 @@
 # Local Control refactor wayfinder
 
+## Native x64 cloud acceptance, contributor CI and dev connection repair
+
+2026-09-23 continuation: +mako.17 passes native Intel Xeon execution on a disposable
+EC2 VM: thirty exact save jobs, 400/400 concurrent synthetic keystrokes, strict
+identity/modal/read-cap checks, gestures, covered recording and interruption
+retention. Median job time was 130.2 ms. The 87-frame recording has no reported
+drops; a decoded cursor frame was inspected. The instance and its dedicated
+network/key resources were removed after collection. This closes Intel native
+execution evidence, not physical Mac IME, AMD or x64 Wayland coverage.
+
+The reusable [contributor workflow](local-control-ci.md) uses GitHub-hosted
+runners, pinned actions, read-only permissions and no cloud/provider credentials.
+It is prepared locally, not published. A 56-file allowlisted payload avoids
+uploading the checkout, `.git`, secrets, profiles or CLI credentials. Desktop
+tests run without network as the caller UID/GID. Lockfile and desktop-startup
+failures were fixed and retained; the final archive collected successfully.
+
+`control.connectBrowser(id)` repairs a missing public connection operation.
+Browser discovery/input remain side-effect-free with respect to connecting;
+explicit connection does not invalidate unrelated native observations. The
+reported dev PID had zero windows because its host was launched with `--web`,
+not because the driver excludes itself. The exact dev desk now passes connection,
+rendered screenshot and recording through the shared API. Existing MCP processes
+need a fresh process to load this client change; no active provider was killed.
+The running dev host’s Settings bridge was used to connect that exact dev browser
+now, so its existing agent can open and capture it without restarting.
+
+The [runtime design](local-control-runtime.md) separates Electron’s desktop/desk
+adapter from the Node control service. The EC2 run contained no Electron. The
+full Mako `--web` host still uses Electron, and a standalone cloud launcher/release
+with complete crash/cancellation acceptance remains to be built. No new native
+driver package was released. General proactive Mac focus protection and physical
+IME/human typing remain open; the reference Linux executable is still unavailable.
+
+Full lint passes (five existing React Compiler warnings, zero errors), along with
+the control client, shared MCP, browser/desk and payload-boundary regressions.
+
+Evidence, failures and exact hashes: [cloud/dev audit](audits/2026-09-23/local-control-native-x64-cloud19/README.md).
+
+## Additional compositor acceptance and earlier Mac interception probes
+
+2026-09-23 continuation: the existing +mako.17 package now passes twenty complete
+background form/save jobs on Weston 13 and twenty on labwc 0.7.1 through the
+shared host. Two apps use identical window and control names. Independent GTK
+state proves exact Unicode values, one save per job, an untouched second app,
+and unchanged focus-notification histories throughout all forty jobs. These are
+native Wayland clients in isolated nested compositors on ARM64. Raw foreground
+input and unverifiable window capture refuse; this does not add gesture or
+exact-window capture support to those compositor families. Median three-action
+job calls were 495 ms on Weston and 388 ms on labwc in the concurrent final run.
+The repeatable test image is development-only; application bundles are unchanged.
+
+Earlier Mac event-tap locations were tested against deliberate system activation.
+HID/session taps saw no activation notification; the annotated tap dropped eleven
+matching notifications after activation had already been observed. All three
+trials allowed the scratch app to activate. This candidate is rejected, not
+shipped as proactive protection. The human-input fixture now records activation
+notifications too, so its check can catch interruptions between 20 ms samples.
+
+No new driver release or active-host replacement occurred. General proactive Mac
+prevention remains unresolved. Physical IME/human input and native Intel/AMD
+execution still need the requested person/hardware; neither was synthesized or
+claimed complete. Full lint and fixture compilation/syntax checks pass. See the
+[continuation evidence](audits/2026-09-23/local-control-continuation18/README.md)
+for versions, exact results, failed setup attempts and remaining limits.
+
+## +mako.17: Mac focus recovery and correct gesture timing
+
+2026-09-23: the signed Mac driver is installed for new launches. Existing daemons
+and the running desktop host were not restarted. The shared host/client changes
+are built and tested locally; this is not a replacement of the active Mako app.
+
+Two Mac bugs are fixed. The no-overlay daemon now services the main run loop,
+which NSWorkspace needs for notifications and fresh application state. Activation
+notifications can also precede its cached frontmost PID update; restoration now
+checks the actual WindowServer process identity. The deliberate system-activation
+regression passes all three trials through the shared API: the fixture observes
+activation and return to the original app, the receipt retains `focus_change`,
+and a second action refuses until a fresh observation without replaying input.
+The fixture's notification gaps are approximately 23–99 ms. This is reactive
+recovery, not prevention of every visible interruption.
+
+Intervening HID input-state activity disables restoration for that lease. No key
+contents, event tap, screenshot or polling timer is added. These counters can
+also include synthetic producers; neither the counters nor the unit tests prove
+physical typing or all intentional human-switch behavior. Missing `focus_change`
+is not a continuous-focus guarantee. The guard field concerns window topology.
+
+The Wayland virtual-pointer route now honors requested drag duration, retaining
+point spacing after delays instead of using a fixed eight milliseconds per point.
+The old package delivered a requested 400 ms drag in 216 ms. Final +mako.17 Sway
+acceptance passes normal scale, 150%, 150% plus 90° rotation, and two CPU workers
+inside a two-CPU container. Delivered durations are 483, 436, 458 and 489 ms, with
+13, 12, 15 and 19 received motion events. All four runs verify exact endpoints,
+screenshot geometry/corner color and ten hidden Unicode jobs each (40 total).
+This is not a guarantee that a compositor preserves every motion sample.
+
+The final Mac background settling/input/recording suite passes; its 14-second
+recording has 415 frames and zero reported drops, and an exported cursor frame
+was inspected. Eleven focus-lease tests, five strict native result-contract tests,
+the result-projection regression, control package and shared-host tests pass.
+Full lint passes with five existing warnings and no errors. Mac ARM64 and Linux
+ARM64 and Linux x64 packages match the reviewed patch and their provenance.
+The x64 package passes thirty exact save jobs, 400/400 concurrent synthetic
+keystrokes, gesture/cursor recording, covered capture and interruption retention
+under translation. Both exported Mac and Linux cursor frames were inspected.
+Two x64 attempts failed before driver startup because the readiness window stayed
+unmapped. The query now runs off GTK's UI thread and the final suites pass, but a
+separate slow-query comparison passed both versions: the original startup cause
+remains unproven. The acceptance checks were not weakened.
+
+General proactive focus prevention, physical IME/concurrent typing, more
+compositor families and native Intel/AMD execution remain open. The physical-input
+and hardware coordination questions remain unanswered. The reference Linux
+executable is still unavailable. Retained failed candidates and final results:
+[continuation audit](audits/2026-09-23/local-control-focus15/README.md).
+
+## +mako.14 continuation: geometry fixes and measured Mac focus limits
+
+2026-09-23: the 150% Sway probe reproduced wrong drag coordinates in +mako.13.
+The new shared Wayland route reads `xdg-output` logical dimensions instead of
+integer `wl_output` scale. Rotated screenshots exposed a second bug; native
+screencopy now applies the output rotation/mirror before cropping, using lossless
+pixel permutations. Final packaged acceptance passes in eleven Sway configurations: all eight
+rotation/mirror transforms, normal 150% and 200%, and combined 150% + 90°.
+Each checks exact drag endpoints, screenshot far-corner markers and ten hidden
+text jobs (110 total). All eight orientation mappings have unit coverage.
++mako.14 is packaged for Mac ARM64, Linux ARM64 and Linux x64, and is selected
+for new installed Mac launches. Existing daemons were not restarted. The signed
+Mac package passes the background settling/recording suite. The x64 package
+passes 30 jobs, 400/400 synthetic concurrent keystrokes, gesture/cursor recording,
+covered video and interruption retention under translation. Native hardware
+remains untested. A heavily loaded drag run failed continuity before the quieter
+matrix passed; that stress limitation and fixture failures are retained.
+
+Direct tests through the available Codex native API and Mako's shared MCP host
+now separate two cases. Both keep the original app frontmost when a scratch
+button calls `NSApp.activate`. Both fail when that button calls
+`NSRunningApplication.current.activate`: the target becomes frontmost, and the
+fixture's independent activation notification records it. Mako returned a
+background dispatch receipt in the failing case. Neither passing API dispatch
+nor reference symbol names establish general focus-steal prevention.
+
+A separate active event-tap experiment dropped type-21/subtype-2 notifications
+for the exact scratch PID; the app still took focus. This is a rejected
+implementation, not shipped protection. The earlier process-notification
+subtypes found in reference disassembly (16384/32768/61698) were not observed in
+these live probes. Proactive system activation, human-switch discrimination and
+cross-process dialogs remain unresolved.
+
+A manual `local-control-linux-x64.yml` CI workflow checks the host CPU and Docker
+architecture, reconstructs the pinned patch, packages the driver and retains
+complete-job/gesture/recording evidence. It is prepared, not executed. Local
+x64 builds still use translation. Physical Japanese IME and concurrent human
+input still require a person; the coordination question is pending.
+
+See [the continuation evidence](audits/2026-09-23/local-control-focus14/README.md)
+for failed approaches, direct comparison fixtures and final package status.
+
+## Previous +mako.13 acceptance
+
+2026-09-23: Mac foreground drag and recording now pass against the signed
+candidate. Exact key-window evidence fixes a refusal caused by a 66×20 transient
+window above the real target. The fixture independently received all 22 events;
+the recording retained 23 pointer samples, held the button through movement and
+released it at the endpoint. An exported frame was checked visually. This does
+not relax the refusal of background drag or prove proactive focus interception.
+
+Sway acceptance passes at 1× and 2×: requested drag endpoints and scrolling,
+exact screenshot dimensions plus a far-corner color marker, and ten hidden
+Unicode writes while the other window retains compositor focus. The first 2×
+run exposed half-distance pointer movement and a screenshot containing only half
+the window. Input now maps physical output pixels to logical coordinates;
+capture crops physical endpoints before resizing to the action coordinate frame.
+Unknown multiple-output layouts refuse. Fractional scale, rotation and other
+compositors are not covered by these results.
+
+The host and native guard now accept foreground Wayland input only with fresh
+exact PID/window evidence from Sway or GNOME helper 10. GNOME additionally checks
+Overview, modal state and lock state: MetaWindow focus alone did not establish
+input delivery. Its explicit activation route waits for Overview to close.
+Libei's dedicated worker now carries the exact recording target and emits pointer
+samples after dispatch, without relying on caller thread-local state. Final
+GNOME gesture/recording acceptance passes, including absolute endpoints
+after accounting for GTK client-side shadows. Both X11 routes now also retain
+held-button state through drag motion.
+
+Linux x64 passes 30 exact-value save jobs, all 400 tagged concurrent keystrokes,
+stale/modal refusals, capped-value honesty, drag/scroll and covered recording
+with interruption retention. Its 25 cursor samples include 21 held samples and
+an explicit release. The x64 binary runs under translation; this is functional
+acceptance, not native hardware performance.
+
+The Linux package explicitly enables and checks `portal-input`; the previous
+recipe omitted it despite source support. Final ARM64 builds and 632 core plus
+455 Linux unit tests passed (five Linux tests remain ignored). x64 builds use a
+separate Cargo cache and OrbStack's x86_64 translation on an ARM Mac, not native
+Intel/AMD hardware. +mako.13 is signed and selected for new installed Mac launches
+after the final
+Mac runtime check. The installer preserved existing daemons and the running host;
+rollback metadata is retained. Linux target checks use explicit packaged paths.
+
+The physical-input fixture records only its scratch window's marked-text
+composition, commits, keydown timing and focus. It requires exact final text,
+completed background writes/saves and actual timing overlap. The earlier
+15-minute participation wait expired with no input or background jobs; this is
+not IME evidence. The fixture is now a registered AppKit application for proper
+foreground identity. Reopen it when the person is ready to participate.
+
+General proactive Mac focus interception remains unimplemented: the current
+guard restores after activation. Reference symbols and disassembly identify
+per-process mouse taps, a system-process notification tap and a ViewBridge
+keyboard tap, but do not establish their filtering rules. The next implementation
+must distinguish a tool-caused activation from an intentional human switch,
+handle cross-process panels, release taps on cancellation and preserve keys
+already in flight. Test with a scratch app that attempts activation, a save/open
+panel and independently recorded physical typing; notification restoration alone
+cannot satisfy the criterion. The reference Linux executable remains unavailable.
+
+See the [acceptance report and counterexamples](audits/2026-09-22/local-control-acceptance13/README.md).
+The final full lint run passes (five existing ESLint warnings, zero errors and
+zero anti-slop findings); the concurrent terminal lint failure seen earlier was
+resolved. Foreground-guard tests and host TypeScript compilation pass.
+
 ## Packaging cleanup and installed Aside acceptance
 
 2026-09-22: the user confirmed retaining the patched Cua native driver. Browser
@@ -22,7 +246,8 @@ routes, 700 resolved host imports, source/signature checks, ASAR extension setup
 and packaged browser/native recording passed. Build and full lint pass (five
 pre-existing React Compiler warnings; zero lint errors and anti-slop findings).
 The Linux ARM64 executable was rechecked for version, ELF architecture and shared
-libraries; no library was missing. x64 was not built or certified.
+libraries; no library was missing. x64 was not built in that audit; the +mako.13 follow-up above now has scoped
+x64 functional acceptance.
 
 The existing Aside Work extension was reloaded through its Extensions UI from
 0.2.0 to 0.3.2, then the user's video/fullscreen was restored. Two installed-profile
@@ -35,14 +260,15 @@ measured. The first run sampled both Mako and Aside and makes no focus-continuit
 claim. [Evidence](audits/2026-09-22/local-control-packaging/README.md).
 
 The full installed desktop host has not been replaced while active. General
-proactive native focus interception, physical IME/concurrent typing, remaining
-native gestures, KDE/other compositors and Linux x64 acceptance are still open.
+proactive native focus interception, physical IME/concurrent typing, touch/pinch and other untested
+gesture routes, KDE/other compositors and native x64 hardware acceptance remain
+open. The +mako.13 follow-up above establishes translated Linux x64 acceptance.
 The physical-input coordination question remains unanswered; generated Unicode
 is explicitly not counted as IME evidence. The reference Linux binary remains
 unavailable. Packaging cleanup does not change these acceptance limits.
 
 
-## Current release: background accuracy (+mako.12)
+## Previous release: background accuracy (+mako.12)
 
 2026-09-22: +mako.12 is signed, packaged and selected for new Mac driver launches.
 Active daemons and the running Mako host were not restarted. The Linux ARM64
@@ -872,7 +1098,7 @@ LC-08, then LC-16 with controlled foreground typing, multi-window, popup, hidden
 window and clipboard tests. No focus guard was weakened to claim more support.
 
 
-## Background fixes in progress, 2026-09-22
+## Historical checkpoint: background fixes, 2026-09-22
 
 Work stays below the provider layer. Chromium discovery remains profile-based;
 all external-browser reproductions used the registered Aside profile. The current
@@ -947,7 +1173,7 @@ Current installed driver version was rechecked as 0.28.0. This re-review introdu
 no routing changes and did not rerun or claim a fresh matched live benchmark.
 
 
-## Release integration and complete-job acceptance in progress
+## Historical checkpoint: release integration and complete-job acceptance
 
 The user authorized shipping and acceptance on 2026-09-22. Driver fixes are now
 rebased on upstream `cua-driver-rs-v0.28.2` (`fc188250`), with a distinct
