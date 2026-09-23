@@ -1,3 +1,4 @@
+import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "./contracts/approval-response.js"
 import { PromptDeliverySchema } from "./contracts/prompt-delivery.js"
 import { NativeAgentRosterSchema } from "./contracts/native-agents.js"
 import {
@@ -28,9 +29,11 @@ export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
   name: z.string(),
   access: z.enum(ACCESS_TIER_NAMES).optional(),
-  enforcement: z.enum(["provider", "host", "launch"]).optional(),
+  enforcement: z.enum(["provider", "launch"]).optional(),
   description: z.string().optional(),
 })
+
+const LegacyHostModeSchema = z.object({ enforcement: z.literal("host") })
 
 const question = z.object({
   id: z.string(),
@@ -113,10 +116,13 @@ const MetadataSchema = z.object({
     cwd: z.string(),
     title: z.string().optional(),
     status: z.enum(["starting", "ready", "running", "failed", "closed"]),
-    // The full mode shape: a schema that kept only id and name once stripped
-    // every recovered session's tiers, so after Restart Mako the picker
-    // showed raw provider names with no order and no "Mako approves" detail.
-    modes: z.array(LiveSessionModeSchema),
+    // Retain old journals without restoring retired host-enforced choices.
+    modes: z.preprocess(
+      value => Array.isArray(value) ? value.filter(mode =>
+        !LegacyHostModeSchema.safeParse(mode).success
+      ) : value,
+      z.array(LiveSessionModeSchema)
+    ),
     currentMode: z.string().nullable(),
     configOptions: z.array(ModelOptionSchema),
     settings: SessionSettingsSchema.optional(),
@@ -128,6 +134,9 @@ const MetadataSchema = z.object({
   createdAt: z.number(),
   permissions: z.array(
     z.object({
+      origin: ApprovalOriginSchema.optional(),
+      native: NativeApprovalIdentitySchema.optional(),
+      observationId: z.string().optional(),
       id: z.string(),
       sessionId: z.string(),
       title: z.string(),

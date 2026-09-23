@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+import type { ApprovalSubmission, ApprovalEndSource } from "./contracts/approval-response.js"
 import type {
   LiveDriverEvent,
   LivePermissionRequest,
@@ -12,12 +14,12 @@ export interface EngineLive {
   state: LiveSessionState
   emit(event: LiveDriverEvent): void
   /** Present when the engine answers requests through a pending map. */
-  pendingPermissions?: Map<string, (response: LivePermissionResponse) => void>
+  pendingPermissions?: Map<string, (response: LivePermissionResponse, ended?: ApprovalEndSource) => void>
 }
 
 /** Sessions whose permission requests resolve through a pending map. */
 export interface PermittingLive extends EngineLive {
-  pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
+  pendingPermissions: Map<string, (response: LivePermissionResponse, ended?: ApprovalEndSource) => void>
 }
 
 export interface LiveEngineApi<Live extends EngineLive> {
@@ -34,7 +36,7 @@ export interface LiveEngineApi<Live extends EngineLive> {
    * left when the session stops.
    */
   ask(live: PermittingLive, request: LivePermissionRequest): Promise<LivePermissionResponse>
-  respondPermission(id: string, requestId: string, response: LivePermissionResponse): void
+  respondPermission(id: string, requestId: string, response: LivePermissionResponse): ApprovalSubmission
   /** Every request a stopping session leaves behind gets no choice. */
   release(live: PermittingLive): void
 }
@@ -81,12 +83,15 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
      * left when the session stops.
      */
     ask(live: PermittingLive, request: LivePermissionRequest): Promise<LivePermissionResponse> {
+      if (live.pendingPermissions.has(request.id)) throw new Error("Repeated pending permission request")
+      const observationId = randomUUID()
       return new Promise((resolve) => {
-        live.pendingPermissions.set(request.id, (response) => {
+        live.pendingPermissions.set(request.id, (response, ended) => {
           live.pendingPermissions.delete(request.id)
+          if (ended) live.emit({ type: "live-permission-ended", id: live.state.id, requestId: request.id, observationId, source: ended })
           resolve(response)
         })
-        live.emit({ type: "live-permission", request })
+        live.emit({ type: "live-permission", request: { ...request, observationId } })
       })
     },
 
@@ -94,14 +99,17 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
       id: string,
       requestId: string,
       response: LivePermissionResponse
-    ): void {
-      sessions.get(id)?.pendingPermissions?.get(requestId)?.(response)
+    ): ApprovalSubmission {
+      const respond = sessions.get(id)?.pendingPermissions?.get(requestId)
+      if (!respond) return { kind: "not-submitted", pending: false, reason: "request-ended" }
+      respond(response)
+      return { kind: "submitted", source: "callback" }
     },
 
     /** Every request a stopping session leaves behind gets no choice. */
     release(live: PermittingLive): void {
       for (const resolve of live.pendingPermissions.values())
-        resolve({ kind: "choice", optionId: null })
+        resolve({ kind: "choice", optionId: null }, "connection-close")
       live.pendingPermissions.clear()
     },
   }

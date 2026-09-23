@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { ComputerBackend } from "./computer-tools-main.js"
+import type { ComputerBackend } from "./control-session.js"
 import {
   connectMcpComputerDriver,
   type ComputerDriverClient,

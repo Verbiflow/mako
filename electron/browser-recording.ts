@@ -1,20 +1,9 @@
-import { z } from "zod"
+import type { BrowserCapture } from "./browser-capture.js"
 import { ControlRecording } from "./control-recording.js"
 import type { BrowserConnection } from "./browser-connection.js"
 import type { BrowserTarget } from "./contracts/browser-control.js"
 import type { RecordingOptions } from "@mako/control/control"
 
-const frame = z.object({
-  sessionId: z.number(),
-  data: z.string(),
-  metadata: z.object({
-    deviceWidth: z.number().positive(),
-    deviceHeight: z.number().positive(),
-    pageScaleFactor: z.number().positive(),
-    offsetTop: z.number().finite(),
-    timestamp: z.number().finite().optional(),
-  }),
-})
 export class BrowserRecordings {
   private readonly pending = new Map<
     string,
@@ -33,7 +22,8 @@ export class BrowserRecordings {
     >,
     sessionId: string,
     options: RecordingOptions,
-    signal: AbortSignal
+    signal: AbortSignal,
+    capture: BrowserCapture
   ) {
     if (
       [...this.recordings.values()].some(
@@ -57,10 +47,16 @@ export class BrowserRecordings {
       throw new Error(
         "Recording history is full for this host; finish existing recordings first"
       )
-    let ended = false
-    let unsubscribe = () => {},
-      uninput = () => {},
-      unclose = () => {}
+    let unsubscribe: (() => Promise<void>) | undefined
+    let uninput = () => {}
+    let frameReceived = () => {}
+    let frameFailed: (error: Error) => void = () => {}
+    const firstFrame = new Promise<void>((resolve, reject) => {
+      frameReceived = resolve
+      frameFailed = reject
+    })
+    // Teardown can arrive during asynchronous startup, before the caller awaits readiness.
+    void firstFrame.catch(() => {})
     const key = JSON.stringify(target)
     if (this.pending.has(key))
       throw new Error("This tab is already starting a recording")
@@ -72,28 +68,9 @@ export class BrowserRecordings {
       async () => {
         uninput()
         try {
-          if (ended) return
-          try {
-            await connection.send(
-              "Page.stopScreencast",
-              {},
-              AbortSignal.timeout(2000),
-              sessionId
-            )
-          } catch {
-            if (ended) return
-            // Stop is idempotent. Releasing this exact attachment is the final
-            // cleanup path; never reconnect or replay an input operation.
-            await connection.send(
-              "Target.detachFromTarget",
-              { sessionId },
-              AbortSignal.timeout(2000)
-            )
-            return "Capture stop failed; the exact tab attachment was released to end recording"
-          }
-        } finally {
-          unsubscribe()
-          unclose()
+          await unsubscribe?.()
+        } catch (error) {
+          return error instanceof Error ? error.message : "Capture stop failed"
         }
       }
     ).catch((error) => {
@@ -108,77 +85,55 @@ export class BrowserRecordings {
       throw new Error("Recording target lease ended before capture started")
     }
     this.recordings.set(recording.id, { owner, target, recording })
-    unsubscribe = connection.onEvent((event) => {
-      if (
-        (event.method === "Target.detachedFromTarget" &&
-          event.params.sessionId === sessionId) ||
-        (event.method === "Target.targetDestroyed" &&
-          event.params.targetId === target.tab)
-      ) {
-        ended = true
-        void recording.stop("Recording target detached")
-        return
-      }
-      if (event.sessionId !== sessionId) return
-      if (event.method === "Page.screencastFrame") {
-        const value = frame.safeParse(event.params)
-        if (!value.success) {
-          void recording.stop("The browser returned an invalid video frame")
-          return
-        }
-        // Always acknowledge, including frames dropped under disk backpressure.
-        void recording
-          .frame(
-            value.data.data,
-            value.data.metadata.deviceWidth,
-            value.data.metadata.deviceHeight,
-            {
-              pageScaleFactor: value.data.metadata.pageScaleFactor,
-              offsetTop: value.data.metadata.offsetTop,
-              capturedAt:
-                value.data.metadata.timestamp === undefined
-                  ? undefined
-                  : value.data.metadata.timestamp * 1000,
-            }
-          )
-          .finally(() => {
-            void connection
-              .send(
-                "Page.screencastFrameAck",
-                { sessionId: value.data.sessionId },
-                AbortSignal.timeout(2000),
-                sessionId
-              )
-              .catch(() => {})
-          })
-      }
-    })
     uninput = connection.onInput((event) => {
       if (event.sessionId === sessionId) recording.pointer(event)
     })
-    unclose = connection.onClose(() => {
-      ended = true
-      void recording.stop("Browser connection ended")
-    })
     try {
-      await connection.send(
-        "Page.startScreencast",
-        {
-          format: "jpeg",
-          quality: 90,
-          maxWidth: options.maxSide ?? 1600,
-          maxHeight: options.maxSide ?? 1600,
-          everyNthFrame: 1,
+      signal.throwIfAborted()
+      unsubscribe = await capture.subscribe({
+        frame: (value) => {
+          void recording
+            .frame(value.data, value.viewportWidth, value.viewportHeight, {
+              pageScaleFactor: value.pageScaleFactor,
+              offsetTop: value.offsetTop,
+              capturedAt: value.capturedAt,
+            })
+            .then(() => {
+              if (recording.receipt().frames > 0) frameReceived()
+              else if (recording.receipt().status !== "recording")
+                frameFailed(
+                  new Error("The first recording frame could not be stored")
+                )
+            })
         },
-        signal,
-        sessionId
-      )
+        ended: (reason) => {
+          frameFailed(new Error(reason))
+          void recording.stop(reason)
+        },
+      })
       if (!admission.active || recording.receipt().status !== "recording") {
-        await connection
-          .send("Page.stopScreencast", {}, AbortSignal.timeout(2000), sessionId)
-          .catch(() => {})
+        await unsubscribe()
         await recording.stop("Recording was stopped during startup")
         throw new Error("Recording ended during startup")
+      }
+      const onAbort = () =>
+        frameFailed(new Error("Recording startup was cancelled"))
+      signal.addEventListener("abort", onAbort, { once: true })
+      if (signal.aborted) onAbort()
+      const timeout = setTimeout(
+        () =>
+          frameFailed(
+            new Error(
+              "The browser supplied no video frames within five seconds. This tab may not be painting in the background. Capture was stopped; the tab was not activated or moved. For an owned headless browser, create a separate background window before recording."
+            )
+          ),
+        5000
+      )
+      try {
+        await firstFrame
+      } finally {
+        clearTimeout(timeout)
+        signal.removeEventListener("abort", onAbort)
       }
       return recording.receipt()
     } catch (error) {
@@ -205,6 +160,14 @@ export class BrowserRecordings {
     for (const entry of this.recordings.values())
       if (entry.owner === owner && entry.target.lease === target.lease)
         void entry.recording.stop(reason)
+  }
+  async finishOwner(owner: string) {
+    this.stopOwner(owner)
+    await Promise.all(
+      [...this.recordings.values()]
+        .filter((entry) => entry.owner === owner)
+        .map((entry) => entry.recording.settled())
+    )
   }
   stopOwner(owner: string) {
     for (const admission of this.pending.values())

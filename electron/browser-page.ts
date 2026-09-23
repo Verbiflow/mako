@@ -93,16 +93,17 @@ export async function screenshotGeometry(
             width: visible.clientWidth,
             height: visible.clientHeight,
           }
-  const density = z
-    .object({ result: z.object({ value: z.number().positive().max(16) }) })
+  const capturedViewport = z
+    .object({ result: z.object({ value: z.object({ density: z.number().positive().max(16), width: z.number().positive(), height: z.number().positive() }) }) })
     .parse(
       await connection.send(
         "Runtime.evaluate",
-        { expression: "window.devicePixelRatio", returnByValue: true },
+        { expression: "({density: window.devicePixelRatio, width: window.innerWidth, height: window.innerHeight})", returnByValue: true },
         signal,
         sessionId
       )
     ).result.value
+  const density = capturedViewport.density
   const longest = Math.max(area.width, area.height)
   const scale = Math.min(
     1 / density,
@@ -114,6 +115,8 @@ export async function screenshotGeometry(
     viewport: visible,
     content,
     devicePixelRatio: density,
+    captureWidth: capturedViewport.width,
+    captureHeight: capturedViewport.height,
   }
 }
 

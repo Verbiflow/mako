@@ -2,6 +2,7 @@ import { z } from "zod"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { toolResultData, toolResultError } from "@mako/control/computer"
 import {
+  ControlFault,
   type RecordingOptions,
   type WindowControlTarget,
 } from "@mako/control/control"
@@ -51,15 +52,28 @@ export class NativeRecordings {
     session: string,
     signal: AbortSignal
   ) {
-    if (this.closed) throw new Error("Recording task has ended")
+    if (this.closed)
+      throw new ControlFault(
+        "session-closed",
+        "Recording task has ended",
+        "not-dispatched"
+      )
+    if ((options.fps ?? 30) > 30)
+      throw new ControlFault(
+        "unsupported",
+        "The native window recorder supports up to 30 fps; no capture was started.",
+        "not-dispatched"
+      )
     if (
       this.starting ||
       [...this.recordings.values()].some((recording) =>
         ["recording", "finalizing"].includes(recording.receipt().status)
       )
     )
-      throw new Error(
-        "Finish the current native recording before starting another"
+      throw new ControlFault(
+        "target-busy",
+        "Finish the current native recording before starting another",
+        "not-dispatched"
       )
     const start = tools.find((tool) => tool.name === "start_recording")
     const stop = tools.find((tool) => tool.name === "stop_recording")
@@ -67,8 +81,10 @@ export class NativeRecordings {
       !start?.inputSchema.properties?.window_target ||
       !stop?.inputSchema.properties?.recording_id
     )
-      throw new Error(
-        "The installed native driver does not support task-owned window recording. Update the shared driver before recording this window."
+      throw new ControlFault(
+        "unsupported",
+        "The installed native driver does not support task-owned window recording. Update the shared driver before recording this window.",
+        "not-dispatched"
       )
     for (const [id, recording] of this.recordings) {
       if (this.recordings.size < 64) break
@@ -201,7 +217,7 @@ export class NativeRecordings {
     this.closed = true
     await Promise.all(
       [...this.recordings.values()].map((recording) =>
-        recording.release("Task ended")
+        recording.release("Task ended").then(() => recording.settled())
       )
     )
   }

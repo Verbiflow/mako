@@ -27,7 +27,7 @@ const conversationCalls = new Set([
   "mako:live-mode", "mako:live-cancel", "mako:live-close", "mako:live-edit-queued",
   "mako:live-clear-queue", "mako:live-earlier", "mako:live-bind", "mako:read-live-file",
   "mako:live-delegate", "mako:live-child-cancel", "mako:live-merge-fork",
-  "mako:live-rewind-preview", "mako:live-rewind", "mako:live-action",
+  "mako:live-rewind-preview", "mako:live-rewind", "mako:live-action", "mako:live-steer-queued",
   "mako:live-action-acknowledge", "mako:live-fork", "mako:live-transfer",
 ])
 

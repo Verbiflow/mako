@@ -1,3 +1,5 @@
+import type { ApprovalSubmission } from "./contracts/approval-response.js"
+import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
@@ -7,9 +9,9 @@ import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction } from "./acp-compaction.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
-import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "./acp-access.js"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpObservedMode, acpNativeModes, acpSessionModes } from "./acp-access.js"
 import type { AcpLaunchOptions, AcpAgentObserver } from "./providers/acp-source.js"
-import { accessTierOfModeId, hostAccessDecision, type AccessTier } from "./contracts/access.js"
+import { accessTierOfModeId, type AccessTier } from "./contracts/access.js"
 /**
  * Interactive foreign agents, over ACP.
  *
@@ -60,7 +62,7 @@ import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { trackProviderChild } from "./provider-children.js"
 import { errorMessage } from "./live-runtime.js"
-import { basename } from "node:path"
+import { basename, join } from "node:path"
 import { acpObservedSettings, applyAcpSettings } from "./acp-config.js"
 import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { forward } from "./acp-notifications.js"
@@ -113,12 +115,8 @@ interface Live {
   configOptions: SessionConfigOption[]
   mcpServers: McpServer[]
   turn: AcpPromptTurn | null
-  /** The tier the host enforces by answering permission requests. */
-  hostAccess: AccessTier | null
   /** The tier the process was launched with, for providers that read it at start. */
   launchAccess: AccessTier | null
-  /** The provider's own current mode, as it last reported it. */
-  nativeMode: string | null
 }
 
 const engine = createLiveEngine<Live>()
@@ -182,10 +180,19 @@ export function acpState(id: string): LiveSessionState | null {
  * this, which makes "keep working on this exact session, interactively" real
  * rather than a transcript hand-off.
  */
-export async function liveStart(
+export function liveStart(
   harness: string,
   cwd: string,
   options: ProviderStartOptions
+): Promise<LiveSessionState> {
+  return traceProviderLaunch(harness, options.conversationId, trace => startAcp(harness, cwd, options, trace))
+}
+
+async function startAcp(
+  harness: string,
+  cwd: string,
+  options: ProviderStartOptions,
+  trace: ProviderLaunchTrace
 ): Promise<LiveSessionState> {
   const source = providerHost.acpSources.get(harness)
   const policy = source?.access
@@ -199,7 +206,7 @@ export async function liveStart(
       : policy?.default
   const launchAccess =
     launchTier && policy?.launch?.includes(launchTier) ? launchTier : null
-  const env = await accountEnv(harness, process.env)
+  const env = await trace.step("account", () => accountEnv(harness, process.env))
   const launchOptions: AcpLaunchOptions = {
     appPath: app.getAppPath(),
     execPath: process.execPath,
@@ -209,12 +216,15 @@ export async function liveStart(
     tuning: options.tuning,
   }
   if (launchAccess) launchOptions.access = launchAccess
-  const spec = await source?.launch(launchOptions)
+  const spec = await trace.step("runtime-discovery", () => source?.launch(launchOptions))
   if (!spec) throw new Error(`${harness} does not speak ACP here yet`)
 
   const id = options.conversationId
+  // The owner supplies a generation-fenced sink. Old connection events must
+  // not mutate a replacement owner or undo deliberate hibernation.
+  const send = options.emit ?? ((event: LiveDriverEvent) => emit(event))
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
-  const mcpSnapshot = await (options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir, app.getAppPath()))
+  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir, app.getAppPath()))
 
   // The nested-session guard: Claude Code refuses to start inside another
   // Claude Code. Mako is not one, but it may have been *launched from* one,
@@ -234,14 +244,20 @@ export async function liveStart(
   } : null
   const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"], options.conversationTools?.control, id)
   if (conversationMcp) preparedServers.push(conversationMcp)
-  const disposeMcp = await spec.prepareMcp?.(preparedServers, env)
-  const child = spawn(executable, spec.args, {
+  const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
+  const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
+    root: join(app.getPath("userData"), "approval-evidence"), env,
+    previous: options.observedApprovals ?? [],
+    publish: decision => send({ type: "live-approval-decision", id, decision }),
+  }))
+  const child = trace.sync("spawn", () => spawn(executable, spec.args, {
     cwd: workingDir,
     stdio: ["pipe", "pipe", "pipe"],
     env: environmentForExecutable(executable, env),
-  })
+  }))
 
   child.once("close", () => {
+    void approvals?.dispose().catch(() => hostWarn("acp", "Approval observation cleanup failed", { harness, conversation: id }))
     void disposeMcp?.().catch(() => console.error("Provider MCP configuration cleanup failed"))
   })
 
@@ -269,10 +285,8 @@ export async function liveStart(
     configOptions: [],
     mcpServers: [],
     turn: null,
-    hostAccess: null,
     launchAccess,
-    nativeMode: null,
-    emit: (event) => emit(event),
+    emit: send,
   }
   sessions.set(id, live)
 
@@ -318,18 +332,10 @@ export async function liveStart(
 
   const client: Client = {
     async requestPermission(params: RequestPermissionRequest) {
-      // The selected access tier answers first. It never answers a question
-      // (options outside allow/reject) and prefers once-scoped grants, so a
-      // stricter tier chosen later is honoured by the agent's next ask.
-      const decided = hostAccessDecision(live.hostAccess, {
-        toolKind: params.toolCall?.kind ?? undefined,
-        options: params.options,
-      })
-      if (decided !== null)
-        return { outcome: { outcome: "selected" as const, optionId: decided } }
       const requestId = `${id}-perm-${live.pendingPermissions.size}-${Date.now()}`
       const request: LivePermissionRequest = {
         id: requestId,
+        native: await approvals?.identify(params).catch(() => undefined),
         sessionId: id,
         title:
           params.toolCall?.title ??
@@ -354,7 +360,11 @@ export async function liveStart(
       if (live.sessionId && params.sessionId !== live.sessionId) return
       if (live.agents?.observe(params) === "child") return
       live.compaction?.observe(params.update)
-      if (params.update.sessionUpdate === "config_option_update") live.configOptions = params.update.configOptions
+      if (params.update.sessionUpdate === "config_option_update") {
+        live.configOptions = params.update.configOptions
+        const native = acpNativeModes(live.configOptions)
+        if (native) acpObserveNativeMode(id, native.currentModeId)
+      }
       if (params.update.sessionUpdate === "current_mode_update") {
         acpObserveNativeMode(id, params.update.currentModeId)
         return
@@ -394,7 +404,7 @@ export async function liveStart(
   live.connection = connection
 
   try {
-    const initialized = await watch.step("initialize", connection.initialize({
+    const initialized = await trace.step("handshake", () => watch.step("initialize", connection.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
@@ -402,7 +412,7 @@ export async function liveStart(
           elicitation: { form: {} },
           ...providerHost.acpSources.get(harness)?.clientCapabilities,
         },
-      }))
+      })))
     live.promptCapabilities =
       initialized.agentCapabilities?.promptCapabilities ?? {}
     const mcpCapabilities = initialized.agentCapabilities?.mcpCapabilities
@@ -419,6 +429,7 @@ export async function liveStart(
         )
       : []
     if (conversationMcp && mcpCapabilities?.http) live.mcpServers.push(conversationMcp)
+    const resume = options.resume
     const session = await openAuthenticatedSession({
       methods: initialized.authMethods ?? [],
       signal: live.startup.signal,
@@ -429,50 +440,50 @@ export async function liveStart(
           title: `${harness} requires sign-in before opening this session. Choose the provider's sign-in method to continue.`,
           options: methods.map((method) => ({ optionId: method.id, name: method.name, kind: "allow_once" })),
         }
-        const response = await engine.ask(live, request)
+        const response = await trace.step("human-sign-in", () => engine.ask(live, request))
         return response.kind === "choice" ? response.optionId : null
       },
       authenticate: async (methodId) => {
-        await connection.authenticate({ methodId })
+        await trace.step("human-sign-in", () => connection.authenticate({ methodId }))
       },
-      open: async () => options.resume
+      open: async () => resume
         ? parseLoadedAcpSession(
-            await watch.step("session/load", connection.loadSession(
+            await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
                 loadSessionRequest(
-                  options.resume,
+                  resume,
                   workingDir,
                   harness,
                   options.tuning,
                   live.mcpServers
                 )
-              )),
-            options.resume
+              ))),
+            resume
           )
         : parseNewAcpSession(
-            await watch.step("session/new", connection.newSession(
+            await trace.step("session-open", () => watch.step("session/new", connection.newSession(
                 newSessionRequest(
                   workingDir,
                   harness,
                   options.tuning,
                   live.mcpServers
                 )
-              ))
+              )))
           ),
     })
     live.sessionId = session.sessionId
-    live.agents = await source?.observeAgents?.({
+    live.agents = await trace.step("observation", () => source?.observeAgents?.({
       nativeId: session.sessionId, cwd: workingDir, env, observedAgents: options.observedAgents,
       publish: (agent) => {
         if (!live.startup.signal.aborted) engine.emitAgent(live, agent)
       },
-    })
+    }))
     if (live.startup.signal.aborted) {
       live.agents?.dispose()
       throw new Error("Provider disconnected while restoring child observations")
     }
     live.configOptions = session.configOptions
     live.state.settings = acpObservedSettings(live.configOptions, session.model)
-    const applied = await applyTuning(live, options.tuning, true)
+    const applied = await trace.step("settings", () => applyTuning(live, options.tuning, true))
     // Providers that moved their mode vocabulary to a config option send no
     // session.modes; the option is the same fact in another field.
     const sessionModes = session.modes ?? acpNativeModes(live.configOptions)
@@ -481,23 +492,25 @@ export async function liveStart(
       options.modeId && modes.some((mode) => mode.id === options.modeId)
         ? options.modeId
         : acpDefaultMode(policy)
-    const selection = acpInitialSelection(policy, modes, sessionModes, effectiveModeId)
-    live.nativeMode = sessionModes?.currentModeId ?? null
-    live.hostAccess = selection.hostTier
-    // A host-enforced tier runs on the provider's base mode; a session that
-    // opened elsewhere (a resumed plan-mode session, say) is moved there first.
-    if (selection.hostTier && policy?.base && live.nativeMode !== policy.base) {
-      await connection.setSessionMode({ sessionId: session.sessionId, modeId: policy.base })
-      live.nativeMode = policy.base
+    if (effectiveModeId) {
+      const change = acpModeChange(policy, modes, effectiveModeId, launchAccess, harness)
+      if (change.kind === "native" && change.nativeModeId !== sessionModes?.currentModeId) {
+        await trace.step("settings", () => watch.step("session/set_mode", connection.setSessionMode({ sessionId: session.sessionId, modeId: change.nativeModeId })))
+        if (sessionModes) sessionModes.currentModeId = change.nativeModeId
+        live.configOptions = live.configOptions.map(option =>
+          option.type === "select" && (option.category === "mode" || option.id === "mode")
+            ? { ...option, currentValue: change.nativeModeId } : option)
+      }
     }
+    const selection = acpInitialSelection(policy, modes, sessionModes, effectiveModeId)
     update(live, {
       nativeId: session.sessionId,
       status: "ready",
       connection: "connected",
       modes,
       currentMode: selection.currentMode,
-      configOptions: normalizeAcpOptions(applied.options),
-      settings: applied.settings,
+      configOptions: normalizeAcpOptions(live.configOptions),
+      settings: { ...applied.settings, options: { ...applied.settings.options, ...acpObservedSettings(live.configOptions).options } },
     })
     watch.dispose()
     hostLog("acp", "ready", {
@@ -740,49 +753,35 @@ export function acpRespondPermission(
   id: string,
   requestId: string,
   response: LivePermissionResponse
-): void {
-  engine.respondPermission(id, requestId, response)
+): ApprovalSubmission {
+  return engine.respondPermission(id, requestId, response)
 }
 
 export async function liveSetMode(id: string, modeId: string): Promise<void> {
   const live = sessions.get(id)
   if (!live?.sessionId || !live.connection) return
   const policy = providerHost.acpSources.get(live.harness)?.access
-  const change = acpModeChange(policy, live.state.modes, modeId, live.launchAccess, live.nativeMode, live.harness)
+  const change = acpModeChange(policy, live.state.modes, modeId, live.launchAccess, live.harness)
   if (change.kind === "unchanged") {
-    // Back on the tier the process was launched with: the provider enforces
-    // it alone again, so the host stops answering on the user's behalf.
-    live.hostAccess = null
     update(live, { currentMode: change.modeId })
     return
   }
-  const nativeMode = change.kind === "native" ? change.modeId : change.baseMode
+  const nativeMode = change.nativeModeId
   if (nativeMode) {
     await live.connection.setSessionMode({ sessionId: live.sessionId, modeId: nativeMode })
-    live.nativeMode = nativeMode
     live.configOptions = live.configOptions.map((option) =>
       option.type === "select" && (option.category === "mode" || option.id === "mode")
         ? { ...option, currentValue: nativeMode } : option
     )
   }
-  live.hostAccess = change.hostTier
   update(live, { currentMode: change.modeId, configOptions: normalizeAcpOptions(live.configOptions), settings: acpObservedSettings(live.configOptions, live.state.settings?.model) })
 }
 
-/**
- * The agent reported its own mode. While the host enforces a tier on top of
- * the provider's base mode that report is the base and the shown mode stays;
- * any other native switch (the agent entered plan mode, say) ends the host's
- * tier so the picker never shows an access level nobody enforces.
- */
+/** Project the mode reported by the native runtime. */
 export function acpObserveNativeMode(id: string, nativeMode: string): void {
   const live = sessions.get(id)
   if (!live) return
-  live.nativeMode = nativeMode
-  const base = providerHost.acpSources.get(live.harness)?.access?.base
-  if (live.hostAccess && nativeMode === base) return
-  live.hostAccess = null
-  update(live, { currentMode: nativeMode })
+  update(live, { currentMode: acpObservedMode(providerHost.acpSources.get(live.harness)?.access, nativeMode, live.launchAccess) })
 }
 
 export async function liveCancel(id: string): Promise<void> {

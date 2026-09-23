@@ -152,10 +152,24 @@ export class LiveActions {
     const action = this.host
       .control(resident)
       .actions?.find((item) => item.input.id === actionId)
+    if (action?.state.kind === "acknowledged") return
     if (!action || action.state.kind !== "uncertain")
       throw new Error("This action does not need acknowledgement")
+    const outcome = action.state
     if (action.input.kind === "compact") {
-      await this.host.close(id)
+      const closing = this.host.close(id)
+      // Closing advances the generation itself. A further change retires us.
+      const generation = resident.generation
+      await closing
+      if (resident.generation !== generation)
+        throw new Error("The action owner changed; reload its saved receipt before continuing")
+      const current = this.host.control(resident).actions?.find(item => item.input.id === actionId)
+      if (current?.state.kind === "acknowledged") return
+      // A native result may arrive while the connection is closing.
+      if (current?.state.kind !== "uncertain") return
+    }
+    const previous = resident.snapshot
+    if (action.input.kind === "compact") {
       resident.snapshot = {
         ...resident.snapshot,
         session: {
@@ -165,7 +179,16 @@ export class LiveActions {
         },
       }
     }
-    this.state(resident, actionId, { kind: "acknowledged" })
+    try {
+      this.state(resident, actionId, {
+        kind: "acknowledged",
+        receipt: { at: Date.now(), outcome },
+      })
+    } catch (error) {
+      resident.snapshot = previous
+      this.host.storageFailed(resident, { error })
+      throw error
+    }
     this.host.drain(resident)
   }
 
@@ -298,6 +321,8 @@ export class LiveActions {
     const previous = resident.snapshot
     resident.snapshot = {
       ...previous,
+      // The action takes ownership before the provider write. Keep the source
+      // record, but make it ineligible for the normal queue drain.
       requests: queued ? previous.requests.map((item) => item.id === queued.id ? { ...item, status: "canceled" } : item) : previous.requests,
       control: { ...control, actions: [...(control.actions ?? []), action] },
     }

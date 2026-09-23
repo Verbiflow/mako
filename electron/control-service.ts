@@ -190,7 +190,7 @@ export async function startControlService(
         )
         if (bound && command.action !== "close")
           previews?.browserTarget(scope.conversationId, bound, () =>
-            assertScope(token, scope)
+            assertScope(token, scope), scope.bindingId
           )
       }
       response

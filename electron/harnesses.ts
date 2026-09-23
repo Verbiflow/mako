@@ -20,7 +20,7 @@ export { devinExecutable } from "./providers/devin/executable.js"
 export {
   openCodeExecutable,
   resolveOpenCodeInstallation,
-  openCodeSessionGeneration,
+  verifyOpenCodeSession,
   type OpenCodeInstallation,
 } from "./providers/opencode/installation.js"
 

@@ -1,5 +1,5 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net"
-import { mkdir, chmod, readFile, rename, unlink, writeFile } from "node:fs/promises"
+import { mkdir, chmod, lstat, readFile, rename, unlink, writeFile } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { spawn as spawnPty, type IDisposable, type IPty } from "@lydell/node-pty"
@@ -93,6 +93,7 @@ const historyFile = join(stateDir, "sessions.json")
 const historyTemp = join(stateDir, "sessions.tmp")
 const sessions = new Map<string, LiveSession>()
 const clients = new Set<ClientConnection>()
+const ENDPOINT_CHECK_MS = 5_000
 let server: Server | null = null
 let dirty = false
 let saving: Promise<void> | null = null
@@ -618,18 +619,41 @@ async function startServer() {
     await listen(instance)
   }
   server = instance
-  if (process.platform !== "win32") await chmod(endpoint, 0o600)
+  if (process.platform !== "win32") {
+    await chmod(endpoint, 0o600)
+    watchEndpoint((await lstat(endpoint)).ino)
+  }
   setInterval(() => void persist(), 2_000)
 }
 
-async function shutdown(code: number) {
+/**
+ * A daemon whose socket path was unlinked or rebound by a successor can
+ * never be reached again, yet it kept its shells, its CPU and a timer that
+ * rewrote the successor's history file every two seconds. It leaves instead,
+ * without touching the files that now belong to the new owner.
+ */
+function watchEndpoint(inode: number) {
+  const timer = setInterval(() => {
+    void lstat(endpoint)
+      .then((info) => info.ino !== inode)
+      .catch((error) => errnoSchema.safeParse(error).data?.code === "ENOENT")
+      .then((orphaned) => {
+        if (orphaned) void shutdown(0, "orphaned")
+      })
+  }, ENDPOINT_CHECK_MS)
+  timer.unref()
+}
+
+async function shutdown(code: number, reason: "stop" | "orphaned" = "stop") {
   if (stopping) return
   stopping = true
-  await persist(true).catch(() => undefined)
+  const owned = reason === "stop"
+  if (owned) await persist(true).catch(() => undefined)
   for (const session of sessions.values()) terminateSession(session)
   for (const client of clients) client.socket.destroy()
-  server?.close()
-  if (process.platform !== "win32") await unlink(endpoint).catch(() => undefined)
+  // Closing a Unix socket server unlinks its path, which a successor may own.
+  if (owned) server?.close()
+  if (owned && process.platform !== "win32") await unlink(endpoint).catch(() => undefined)
   process.exit(code)
 }
 

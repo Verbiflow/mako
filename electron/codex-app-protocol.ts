@@ -609,8 +609,8 @@ export function sendRpcResult(
   context: ProtocolContext,
   id: JsonRpcId,
   result: JsonValue
-): void {
-  sendRpc(context, { jsonrpc: "2.0", id, result })
+): boolean {
+  return sendRpc(context, { jsonrpc: "2.0", id, result })
 }
 
 export function sendRpcError(

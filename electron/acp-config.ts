@@ -67,8 +67,8 @@ export async function applyAcpSettings(input: ApplyAcpSettingsInput): Promise<{
   }
   const applied = { ...input.observed.options }
   for (const [id, value] of Object.entries(input.settings.options ?? {})) {
-    // Host-only access ids are answered on permission requests. Cursor's
-    // native mode option is agent/plan/ask; sending `access:full` is refused.
+    // Normalized access ids go through provider mode selection, not through
+    // the native config-option vocabulary.
     const modeId = z.string().safeParse(value)
     if (modeId.success && accessTierOfModeId(modeId.data)) continue
     const normalized = normalizeAcpOptions(options).find(

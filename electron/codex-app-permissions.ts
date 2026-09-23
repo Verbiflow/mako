@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+import type { ApprovalSubmission } from "./contracts/approval-response.js"
 import {
   booleanValue,
   boundedText,
@@ -104,6 +106,8 @@ export type PendingServerRequest<
   M extends ServerRequestMethod = ServerRequestMethod,
 > = {
   method: M
+  observationId: string
+  answered?: boolean
   rpcId: JsonRpcId
   turnId: string | null
   choices: Map<string, ServerRequestResults[M]>
@@ -118,7 +122,7 @@ export interface PermissionContext {
 
 export interface PermissionCallbacks<C extends PermissionContext> {
   emit(context: C, event: LiveDriverEvent): void
-  sendResult(context: C, id: JsonRpcId, result: ServerRequestResult): void
+  sendResult(context: C, id: JsonRpcId, result: ServerRequestResult): boolean
   sendError(context: C, id: JsonRpcId, code: number, message: string): void
 }
 
@@ -175,39 +179,22 @@ export function resolvePermission<C extends PermissionContext>(
   callbacks: PermissionCallbacks<C>,
   requestId: string,
   response: LivePermissionResponse
-): void {
+): ApprovalSubmission {
   const pending = context.serverRequests.get(requestId)
-  if (!pending) return
-  context.serverRequests.delete(requestId)
-  if (
-    pending.method === "item/tool/requestUserInput" &&
-    pending.questionIds &&
-    response.kind === "answers"
-  ) {
+  if (!pending || pending.answered) return { kind: "not-submitted", pending: false, reason: "request-ended" }
+  let result: ServerRequestResult | undefined
+  if (pending.method === "item/tool/requestUserInput" && pending.questionIds && response.kind === "answers") {
     const answers = validatedAnswers(response.answers, pending.questionIds)
-    if (!answers) {
-      callbacks.sendError(context, pending.rpcId, -32602, "Invalid answers")
-      return
-    }
-    callbacks.sendResult(context, pending.rpcId, { answers })
-    return
+    if (answers) result = { answers }
+  } else if (response.kind === "choice") {
+    result = response.optionId === null ? pending.cancel : pending.choices.get(response.optionId)
   }
-  const result =
-    response.kind === "choice"
-      ? response.optionId === null
-        ? pending.cancel
-        : pending.choices.get(response.optionId)
-      : undefined
-  if (result === undefined) {
-    callbacks.sendError(
-      context,
-      pending.rpcId,
-      -32602,
-      "Unknown permission option"
-    )
-    return
-  }
-  callbacks.sendResult(context, pending.rpcId, result)
+  // Validation has not written anything. Keep the native question answerable.
+  if (result === undefined) return { kind: "not-submitted", pending: true, reason: "invalid-answer" }
+  pending.answered = true
+  return callbacks.sendResult(context, pending.rpcId, result)
+    ? { kind: "submitted", source: "transport-write" }
+    : { kind: "uncertain", reason: "The answer could not be confirmed as written to the agent connection." }
 }
 
 function validatedAnswers(
@@ -228,11 +215,17 @@ function validatedAnswers(
   return Object.keys(answers).length === questionIds.size ? answers : null
 }
 
-export function resolveServerRequest(
-  context: PermissionContext,
+export function resolveServerRequest<C extends PermissionContext>(
+  context: C,
+  callbacks: PermissionCallbacks<C>,
   id: JsonRpcId
 ): void {
-  context.serverRequests.delete(String(id))
+  const requestId = String(id)
+  const pending = context.serverRequests.get(requestId)
+  if (!pending) return
+  context.serverRequests.delete(requestId)
+  callbacks.emit(context, { type: "live-permission-ended", id: context.id, requestId,
+    observationId: pending.observationId, source: "native-resolution" })
 }
 
 export function clearTurnServerRequests(
@@ -276,7 +269,7 @@ function requestCommandApproval<C extends PermissionContext>(
     })
   )
   const title =
-    params.reason || params.command || "Codex wants to run a command"
+    params.command || params.reason || "Codex wants to run a command"
   registerServerRequest(
     context,
     callbacks,
@@ -473,6 +466,7 @@ function registerServerRequest<
   }
   const pending: PendingServerRequest<M> = {
     method,
+    observationId: randomUUID(),
     rpcId,
     turnId,
     choices: new Map(choices.map((choice) => [choice.optionId, choice.result])),
@@ -484,6 +478,7 @@ function registerServerRequest<
   context.serverRequests.set(requestId, pending)
   const request: LivePermissionRequest = {
     id: requestId,
+    observationId: pending.observationId,
     sessionId: context.id,
     title: boundedText(title, 1000),
     kind,

@@ -113,8 +113,27 @@ export class LiveTransfers {
   }
 
   start(resident: Resident): void {
-    if (resident.transferOperation) return
-    const operation = this.perform(resident)
+    const transfer = this.pending(resident)
+    if (
+      !transfer ||
+      resident.transferOperation ||
+      resident.storageFault ||
+      resident.hibernating ||
+      resident.waking ||
+      resident.transferring ||
+      resident.closing ||
+      resident.checkpointing ||
+      resident.rewinding ||
+      resident.opening ||
+      resident.snapshot.session.status === "running" ||
+      resident.snapshot.requests.some(
+        (request) => request.status === "dispatching"
+      )
+    )
+      return
+    // A blocked switch has no operation to finish. Scheduling one here would
+    // make its completion drain the same blocked switch forever in microtasks.
+    const operation = this.perform(resident, transfer)
     resident.transferOperation = operation
     void operation.finally(() => {
       if (resident.transferOperation === operation) {
@@ -148,21 +167,10 @@ export class LiveTransfers {
     this.host.flush(resident)
   }
 
-  async perform(resident: Resident): Promise<void> {
-    const transfer = this.pending(resident)
-    if (
-      !transfer ||
-      resident.transferring ||
-      resident.closing ||
-      resident.checkpointing ||
-      resident.rewinding ||
-      resident.opening ||
-      resident.snapshot.session.status === "running" ||
-      resident.snapshot.requests.some(
-        (request) => request.status === "dispatching"
-      )
-    )
-      return
+  private async perform(
+    resident: Resident,
+    transfer: ContextTransfer
+  ): Promise<void> {
     resident.transferring = true
     const generation = resident.generation
     let prepared: ProviderConnection | null = null
@@ -302,6 +310,9 @@ export class LiveTransfers {
           threadPath: prior?.path,
           observedAgents: prior?.nativeId && !nativeFork
             ? source.nativeAgents?.agents.filter((agent) => agent.bindingId === prior.id && agent.provider === prior.provider)
+            : undefined,
+          observedApprovals: prior?.nativeId && !nativeFork
+            ? source.control?.approvalResponses?.flatMap(receipt => receipt.origin.bindingId === prior.id && receipt.origin.native && !receipt.nativeDecision ? [receipt.origin.native] : [])
             : undefined,
           fork: nativeFork,
           conversationTools: this.host.dependencies.tools?.(

@@ -1,3 +1,4 @@
+import { BrowserCapture, type BrowserFrame } from "./browser-capture.js"
 import { BrowserRecordings } from "./browser-recording.js"
 import { BrowserPreferences } from "./browser-preference.js"
 import {
@@ -9,6 +10,7 @@ import { copyFile, mkdtemp, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { z } from "zod"
 import { imageSize } from "image-size"
+import sharp from "sharp"
 import {
   BrowserConnection,
   type BrowserProtocolEvent,
@@ -28,6 +30,7 @@ import {
 import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
 import {
   BrowserFault,
+  browserCommandEffect,
   type BrowserCommand,
   type BrowserControlStatus,
   type BrowserTarget,
@@ -241,6 +244,7 @@ function visualView(
 }
 
 interface Binding {
+  capture: BrowserCapture
   owner: string
   target: BrowserTarget
   connection: BrowserConnection
@@ -249,6 +253,8 @@ interface Binding {
   lineage: string
   intentionalDetach?: boolean
   uncertain: boolean
+  mutationRevision: number
+  mutations: number
   running: number
   tail: Promise<void>
   refs: Map<string, number>
@@ -268,6 +274,7 @@ interface BrowserEntry {
   connecting?: Promise<BrowserConnection>
   connectAbort?: AbortController
   selections: Promise<void>
+  endpoint?: string
 }
 interface OwnedTarget {
   owner: string
@@ -363,6 +370,18 @@ export class BrowserService {
    * discovered browsers until their connection closes with the process.
    */
   private readonly attached = new Map<string, LocalBrowser>()
+  private readonly attachmentOwners = new Map<string, string>()
+  private readonly profileMutations = new Set<string>()
+  private readonly uncertainProfiles = new Set<string>()
+  private readonly browserOperations = new Map<string, number>()
+
+  private authorizeBrowser(owner: string, browser: string): void {
+    const attachedOwner = this.attachmentOwners.get(browser)
+    if (attachedOwner && attachedOwner !== owner)
+      fault("target-busy", "This attached application browser belongs to another task.")
+    if (this.profileMutations.has(browser))
+      fault("target-busy", "A profile-wide cookie operation is pending. Wait for it before using this browser.")
+  }
 
   constructor(
     definitions?:
@@ -623,6 +642,9 @@ export class BrowserService {
     try {
       const endpoint = await entry.definition.endpoint()
       abort.signal.throwIfAborted()
+      if ([...this.browsers.values()].some((other) => other !== entry && other.endpoint === endpoint))
+        fault("target-busy", "This browser endpoint is already registered. Use its existing browser ID; aliases cannot create independent ownership.")
+      entry.endpoint = endpoint
       entry.status = {
         ...entry.status,
         connection:
@@ -656,14 +678,18 @@ export class BrowserService {
             binding.target,
             "Tab lease ended"
           )
+          this.bindings.get(key)?.capture.end("Tab binding ended")
           this.bindings.delete(key)
         }
         for (const [key, target] of this.ownedTargets)
           if (target.connection === connection) this.ownedTargets.delete(key)
         // An attached application that closed its endpoint has exited; its
         // row would otherwise offer a connection to nothing.
-        if (this.attached.delete(entry.definition.id))
+        if (this.attached.delete(entry.definition.id)) {
           this.browsers.delete(entry.definition.id)
+          this.attachmentOwners.delete(entry.definition.id)
+          this.uncertainProfiles.delete(entry.definition.id)
+        }
         this.changed()
       })
       connection.onEvent((event) => this.event(connection, event))
@@ -742,7 +768,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.delete(key)
+        this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.bindings.delete(key)
         this.ownedTargets.delete(key)
         continue
       }
@@ -769,7 +796,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.delete(key)
+        this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.bindings.delete(key)
         continue
       }
       if (event.sessionId !== binding.sessionId) continue
@@ -871,7 +899,7 @@ export class BrowserService {
     if (!connection)
       fault(
         "disconnected",
-        "Connect this browser first. Actions never initiate or retry a browser connection."
+        "Call control.connectBrowser(id) for this exact browser first. Discovery and actions never initiate or retry a connection."
       )
     return connection
   }
@@ -889,6 +917,7 @@ export class BrowserService {
     const entry = this.entry(browser)
     const result = entry.selections.then(() => {
       signal.throwIfAborted()
+      this.authorizeBrowser(owner, browser)
       return this.attach(owner, browser, tab, takeover, signal)
     })
     entry.selections = result.then(
@@ -973,7 +1002,8 @@ export class BrowserService {
         existing.target,
         "Tab lease ended"
       )
-      this.bindings.delete(key)
+      this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.bindings.delete(key)
     }
     const attachParameters: JsonObject = { targetId: tab, flatten: true }
     if (this.entry(browser).definition.transport === "extension")
@@ -992,13 +1022,16 @@ export class BrowserService {
           sessionId
         )
       this.bindings.set(key, {
+        capture: new BrowserCapture(connection, sessionId),
         owner,
         target,
         connection,
         sessionId,
         focusEmulated,
         lineage: randomUUID(),
-        uncertain: false,
+        uncertain: this.uncertainProfiles.has(browser),
+        mutationRevision: 0,
+        mutations: 0,
         running: 0,
         tail: Promise.resolve(),
         refs: new Map(),
@@ -1023,42 +1056,16 @@ export class BrowserService {
     return target
   }
 
-  /** UI-only capture does not acknowledge uncertain agent input or refresh agent refs. */
-  async preview(
-    owner: string,
-    target: BrowserTarget,
-    signal: AbortSignal,
-    authorize: () => void
-  ): Promise<JsonValue> {
+  /** UI consumers share the tab's compositor stream, independent of agent observations. */
+  async previewStream(
+    owner: string, target: BrowserTarget, authorize: () => void,
+    frame: (value: BrowserFrame) => void, ended: (reason: string) => void
+  ) {
     authorize()
     const binding = this.binding(owner, target)
-    if (binding.running)
-      fault("target-busy", "The target is executing an agent command")
-    binding.running++
-    try {
-      const geometry = await screenshotGeometry(
-        binding.connection,
-        binding.sessionId,
-        { fullPage: false, maxSide: 640 },
-        signal
-      )
-      const result = z.object({ data: z.string().max(512 * 1024) }).parse(
-        await binding.connection.send(
-          "Page.captureScreenshot",
-          {
-            format: "jpeg",
-            quality: 55,
-            captureBeyondViewport: false,
-            clip: geometry.clip,
-          },
-          signal,
-          binding.sessionId
-        )
-      )
-      return { mimeType: "image/jpeg", data: result.data }
-    } finally {
-      binding.running--
-    }
+    return binding.capture.subscribe({
+      frame: value => { authorize(); frame(value) }, ended,
+    })
   }
 
   async execute(
@@ -1069,12 +1076,45 @@ export class BrowserService {
   ): Promise<JsonValue> {
     authorize()
     signal.throwIfAborted()
+    if (command.action === "open" && !command.browser) {
+      await this.preference.load()
+      command = { ...command, browser: this.preference.value?.id }
+    }
+    const browser = "target" in command ? undefined
+      : "browser" in command ? command.browser
+        : "id" in command ? command.id : undefined
+    if (browser) {
+      this.authorizeBrowser(owner, browser)
+      this.browserOperations.set(browser, (this.browserOperations.get(browser) ?? 0) + 1)
+    }
+    try { return await this.executeCommand(owner, command, signal, authorize) }
+    finally {
+      if (browser) {
+        const remaining = (this.browserOperations.get(browser) ?? 1) - 1
+        if (remaining) this.browserOperations.set(browser, remaining)
+        else this.browserOperations.delete(browser)
+      }
+    }
+  }
+
+  private async executeCommand(
+    owner: string,
+    command: BrowserCommand,
+    signal: AbortSignal,
+    authorize: () => void
+  ): Promise<JsonValue> {
+    authorize()
+    signal.throwIfAborted()
     if (command.action === "status")
       return (await this.refresh()).map(({ icon, ...status }) => {
         // Native app icons belong to Settings, not model context.
         void icon
         return { ...status, connection: { ...status.connection } }
       })
+    const browserId = "target" in command ? command.target.browser
+      : "browser" in command ? command.browser
+        : "id" in command ? command.id : undefined
+    if (browserId) this.authorizeBrowser(owner, browserId)
     if (command.action === "connect") {
       if (!this.browsers.has(command.browser)) await this.refresh()
       await this.connect(command.browser)
@@ -1093,6 +1133,7 @@ export class BrowserService {
           "invalid-request",
           `Application browser "${command.id}" is already attached. Detach that exact generation before reusing its id.`
         )
+      this.attachmentOwners.set(command.id, owner)
       this.attached.set(command.id, {
         id: command.id,
         name: command.name,
@@ -1104,6 +1145,7 @@ export class BrowserService {
         await this.connect(command.id)
       } catch (error) {
         this.attached.delete(command.id)
+        this.attachmentOwners.delete(command.id)
         this.browsers.delete(command.id)
         this.changed()
         throw error
@@ -1123,11 +1165,14 @@ export class BrowserService {
             binding.target,
             "Tab lease ended"
           )
+          this.bindings.get(key)?.capture.end("Tab binding ended")
           this.bindings.delete(key)
         }
       for (const [key, target] of this.ownedTargets)
         if (target.browser === command.id) this.ownedTargets.delete(key)
       this.attached.delete(command.id)
+      this.attachmentOwners.delete(command.id)
+      this.uncertainProfiles.delete(command.id)
       this.browsers.delete(command.id)
       this.changed()
       return { id: command.id, detached: true }
@@ -1176,6 +1221,7 @@ export class BrowserService {
           "Choose a preferred browser in Settings, or pass an explicit browser ID."
         )
       const url = pageUrl(command.url)
+      this.authorizeBrowser(owner, browser)
       const connection = this.connection(browser)
       if (command.context === "isolated" && command.lifetime === "persistent")
         fault(
@@ -1205,7 +1251,7 @@ export class BrowserService {
       let targetId: string
       try {
         const targetParameters: JsonObject = {
-          url: "about:blank",
+          url: this.entry(browser).definition.kind === "desk" ? url : "about:blank",
           background: command.background,
           newWindow: command.disposition === "window",
         }
@@ -1297,17 +1343,11 @@ export class BrowserService {
     const run = async () => {
       authorize()
       this.binding(owner, command.target)
+      this.authorizeBrowser(owner, command.target.browser)
       signal.throwIfAborted()
-      const observation = [
-        "recording",
-        "observe",
-        "screenshot",
-        "events",
-        "children",
-        "capabilities",
-        "downloadStatus",
-        "release",
-      ].includes(command.action)
+      const effect = browserCommandEffect(command)
+      const observation =
+        effect === "read" || effect === "observe" || effect === "release"
       const view = visualView(command)
       if (view !== undefined && binding.view !== view)
         throw new BrowserFault({
@@ -1316,7 +1356,12 @@ export class BrowserService {
             "These coordinates belong to an earlier visual view of this tab. Capture it again and use the new view token.",
           outcome: "not-dispatched",
         })
-      if (binding.uncertain && !observation)
+      const answeringDialog =
+        command.action === "dialog" &&
+        command.respond !== undefined &&
+        command.auto === undefined &&
+        binding.dialog !== null
+      if (binding.uncertain && !observation && !answeringDialog)
         throw new BrowserFault({
           code: "outcome-unknown",
           message:
@@ -1334,6 +1379,29 @@ export class BrowserService {
           message: `A ${binding.dialog.type} dialog is open on this tab: "${binding.dialog.message.slice(0, 200)}". Answer it with the dialog tool (respond accept or dismiss) before other actions; set auto to answer future dialogs automatically.`,
           outcome: "not-dispatched",
         })
+      if (effect === "observe" && binding.mutations > 0)
+        fault("target-busy", "Wait for this tab's pending mutation before observing it.")
+      const revision = binding.mutationRevision
+      const mutating = effect === "mutate" || effect === "release"
+      if (mutating) {
+        binding.mutationRevision++
+        binding.mutations++
+      }
+      const profileMutation = command.action === "cookies" && command.operation !== "list"
+      if (profileMutation) {
+        const peers = [...this.bindings.values()].filter((peer) => peer.target.browser === binding.target.browser)
+        const foreignTarget = [...this.ownedTargets.values()].some((target) => target.browser === binding.target.browser && target.owner !== owner)
+        if (this.browserOperations.has(binding.target.browser) || foreignTarget || peers.some((peer) => peer.owner !== owner || peer.running > 0)) {
+          if (mutating) binding.mutations--
+          fault("target-busy", "Cookie writes affect the browser profile. Other tasks own tabs or actions are pending; use a separately owned browser for this operation.")
+        }
+        this.profileMutations.add(binding.target.browser)
+        for (const peer of peers) {
+          peer.refs.clear()
+          peer.view = undefined
+          peer.observation = undefined
+        }
+      }
       binding.running++
       try {
         const value = await this.withActionFocus(binding, command, signal, () =>
@@ -1349,22 +1417,26 @@ export class BrowserService {
               "The exact tab closed after the command was dispatched. Its outcome is unknown; no command was retried and no other tab was selected.",
             outcome: "unknown",
           })
-        if (command.action === "observe" || command.action === "screenshot")
+        if (!observation && signal.aborted)
+          throw new BrowserFault({
+            code: "cancelled",
+            message: "The command completed after cancellation. Observe this exact tab before continuing.",
+            outcome: "unknown",
+          })
+        if (effect === "observe") {
+          if (binding.mutations > 0 || binding.mutationRevision !== revision) {
+            binding.uncertain = true
+            binding.view = undefined
+            binding.refs.clear()
+            throw new BrowserFault({
+              code: "outcome-unknown",
+              message: "This observation overlapped a mutation. Read the exact tab again after its pending action completes.",
+              outcome: "unknown",
+            })
+          }
           binding.uncertain = false
-        if (
-          ![
-            "recording",
-            "observe",
-            "screenshot",
-            "events",
-            "frames",
-            "wait",
-            "capabilities",
-            "children",
-            "downloadStatus",
-          ].includes(command.action)
-        )
-          binding.view = undefined
+        }
+        if (effect === "mutate" || effect === "release") binding.view = undefined
         return value
       } catch (error) {
         if (
@@ -1378,26 +1450,33 @@ export class BrowserService {
             binding.target,
             "Tab lease ended"
           )
+          binding.capture.end("Tab binding ended")
           this.bindings.delete(this.key(binding.target))
           throw new BrowserFault({
             code: "target-closed",
             message:
               "The exact tab session closed. No command was retried and no other tab was selected.",
-            outcome: "rejected",
+            outcome: error.detail.outcome,
           })
         }
         if (
           !observation &&
-          error instanceof BrowserFault &&
-          error.detail.outcome === "unknown"
+          (!(error instanceof BrowserFault) || error.detail.outcome === "unknown")
         ) {
           binding.uncertain = true
           binding.view = undefined
+          if (profileMutation) {
+            this.uncertainProfiles.add(binding.target.browser)
+            for (const peer of this.bindings.values())
+              if (peer.target.browser === binding.target.browser) peer.uncertain = true
+          }
         }
         throw error
       } finally {
         binding.intentionalDetach = false
         binding.running--
+        if (mutating) binding.mutations--
+        if (profileMutation) this.profileMutations.delete(binding.target.browser)
       }
     }
     // Explicit concurrent CDP lets a task answer paused Fetch requests or dialogs
@@ -1587,7 +1666,8 @@ export class BrowserService {
               binding.connection,
               binding.sessionId,
               command.options ?? {},
-              signal
+              signal,
+              binding.capture
             )
           )
       }
@@ -1796,10 +1876,16 @@ export class BrowserService {
           },
           signal
         )
+        const visible = geometry.viewport
+        const area = geometry.clip
+        const inViewport = !command.fullPage && area.x >= visible.pageX && area.y >= visible.pageY &&
+          area.x + area.width <= visible.pageX + visible.clientWidth && area.y + area.height <= visible.pageY + visible.clientHeight
         const result = z
           .object({ data: z.string().max(24 * 1024 * 1024) })
           .parse(
-            await send("Page.captureScreenshot", {
+            await (inViewport ? send("Page.captureScreenshot", {
+              format: "png", optimizeForSpeed: true, captureBeyondViewport: false,
+            }) : binding.capture.screenshot(() => send("Page.captureScreenshot", {
               format: command.format,
               ...(command.format === "jpeg"
                 ? { quality: command.quality }
@@ -1807,8 +1893,30 @@ export class BrowserService {
               captureBeyondViewport:
                 command.fullPage || Boolean(box || command.region),
               clip: geometry.clip,
-            })
+            })))
           )
+        if (inViewport) {
+          // CDP clips resize Chromium's capture surface and can leak those pixels
+          // into a concurrent screencast. Crop the returned full-view pixels instead.
+          const pixels = Buffer.from(result.data, "base64")
+          const size = imageSize(pixels)
+          if (size.width * size.height > 16_000_000)
+            fault("invalid-request", "The browser viewport exceeds the screenshot pixel budget.")
+          const sx = size.width / geometry.captureWidth, sy = size.height / geometry.captureHeight
+          if (Math.abs(size.width * geometry.captureHeight - size.height * geometry.captureWidth) > 2 * Math.max(size.width, size.height, geometry.captureWidth, geometry.captureHeight))
+            fault("invalid-request", "The viewport changed during capture. Read its geometry again before using screenshot coordinates.")
+          const left = Math.floor((area.x - visible.pageX) * sx), top = Math.floor((area.y - visible.pageY) * sy)
+          const right = Math.min(size.width, Math.ceil((area.x + area.width - visible.pageX) * sx))
+          const bottom = Math.min(size.height, Math.ceil((area.y + area.height - visible.pageY) * sy))
+          let image = sharp(pixels, { limitInputPixels: 16_000_000 }).extract({ left, top, width: right - left, height: bottom - top }).resize({
+            width: Math.max(1, Math.round(area.width * area.scale * geometry.devicePixelRatio)),
+            height: Math.max(1, Math.round(area.height * area.scale * geometry.devicePixelRatio)),
+            fit: "inside", withoutEnlargement: true,
+          })
+          image = command.format === "png" ? image.png() : image.jpeg({ quality: command.quality })
+          result.data = (await image.toBuffer()).toString("base64")
+          geometry.clip = { ...area, x: visible.pageX + left / sx, y: visible.pageY + top / sy, width: (right - left) / sx, height: (bottom - top) / sy }
+        }
         const { width, height } = imageSize(Buffer.from(result.data, "base64"))
         const coordinates = {
           units: "CSS pixels",
@@ -1918,7 +2026,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.delete(key)
+        this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.bindings.delete(key)
         this.ownedTargets.delete(key)
         return result
       }
@@ -1934,10 +2043,20 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.delete(this.key(binding.target))
+        binding.capture.end("Tab binding ended")
+          this.bindings.delete(this.key(binding.target))
         return result
       }
       case "cdp": {
+        if ((command.method.startsWith("Browser.") && command.method !== "Browser.getVersion") ||
+            (command.method.startsWith("SystemInfo.") && !["SystemInfo.getInfo", "SystemInfo.getProcessInfo"].includes(command.method)) ||
+            command.method.startsWith("Storage.") ||
+            ["Network.setCookie", "Network.setCookies", "Network.deleteCookies", "Network.clearBrowserCookies", "Network.clearBrowserCache"].includes(command.method))
+          fault("invalid-request", "This raw command changes browser/profile state outside the tab lease. Use cookies for profile cookie operations and managed open/release/close for target lifecycle. Browser-wide administration belongs to the owning supervisor.")
+        if (["Page.startScreencast", "Page.stopScreencast", "Page.screencastFrameAck"].includes(command.method))
+          fault("invalid-request", "Use tab.record() for capture; recording and live preview share this tab's stream.")
+        if (command.method === "Page.captureScreenshot")
+          return binding.capture.screenshot(() => send(command.method, command.params))
         // Target lifecycle stays in the owner so raw protocol calls cannot silently change its bindings.
         if (
           command.method.startsWith("Target.") &&
@@ -2738,11 +2857,12 @@ export class BrowserService {
   }
 
   /** End one task's leases and close every task-lifetime target it created. */
-  async releaseOwner(owner: string): Promise<{
+  async releaseOwner(owner: string, options: { finalizeRecordings?: boolean } = {}): Promise<{
     released: number
     closed: number
   }> {
     this.recordings.stopOwner(owner)
+    if (options.finalizeRecordings) await this.recordings.finishOwner(owner)
     let released = 0
     let closed = 0
     const bindings = [...this.bindings.values()].filter(
@@ -2775,7 +2895,8 @@ export class BrowserService {
         binding.target,
         "Tab lease ended"
       )
-      this.bindings.delete(key)
+      this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.bindings.delete(key)
       released++
     }
     const targets = [...this.ownedTargets.entries()].filter(
@@ -2799,6 +2920,15 @@ export class BrowserService {
         )
       if (didClose) closed++
     }
+    for (const [id, attachedOwner] of this.attachmentOwners) {
+      if (attachedOwner !== owner) continue
+      this.disconnect(id)
+      this.attached.delete(id)
+      this.attachmentOwners.delete(id)
+      this.uncertainProfiles.delete(id)
+      this.browsers.delete(id)
+      this.changed()
+    }
     return { released, closed }
   }
 
@@ -2817,7 +2947,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.delete(key)
+        this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.bindings.delete(key)
       }
     for (const [key, target] of this.ownedTargets)
       if (target.browser === id) this.ownedTargets.delete(key)
@@ -2827,6 +2958,12 @@ export class BrowserService {
   close(): void {
     this.closing = true
     for (const id of this.browsers.keys()) this.disconnect(id)
+    for (const binding of this.bindings.values()) binding.capture.end("Browser service closed")
     this.bindings.clear()
+    this.attachmentOwners.clear()
+    this.attached.clear()
+    this.profileMutations.clear()
+    this.uncertainProfiles.clear()
+    this.browserOperations.clear()
   }
 }

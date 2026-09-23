@@ -477,10 +477,10 @@ const controlPreviews = new ControlPreviews(
     return {
       data: decoded
         .resize({
-          width: Math.min(960, decoded.getSize().width),
+          width: Math.min(1440, decoded.getSize().width),
           quality: "good",
         })
-        .toJPEG(55)
+        .toJPEG(85)
         .toString("base64"),
       mimeType: "image/jpeg",
     }
@@ -1491,6 +1491,12 @@ function bindIpc() {
   )
   handle("mako:live-rewind-recover", () => liveConversations.recoverRewinds())
   handle("mako:live-action", (_event, id: string, input: LiveActionInput) =>
+    liveConversations.act(id, input)
+  )
+  // A separate method advertises atomic queued steering to clients whose UI
+  // can update while the shared host remains alive. Keep live-action for
+  // existing clients and receipts written before this capability was named.
+  handle("mako:live-steer-queued", (_event, id: string, input: Extract<LiveActionInput, { kind: "steer-queued" }>) =>
     liveConversations.act(id, input)
   )
   handle(

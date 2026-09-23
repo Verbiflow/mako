@@ -1,5 +1,7 @@
+import type { ApprovalSubmission } from "./contracts/approval-response.js"
 import { preparePrompt, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
+import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./providers/codex/agents.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -108,25 +110,33 @@ export function codexAppState(id: string): LiveSessionState | null {
   return engine.state(id)
 }
 
-export async function codexAppStart(
+export function codexAppStart(
   cwd: string,
   options: ProviderStartOptions
 ): Promise<LiveSessionState> {
+  return traceProviderLaunch("codex", options.conversationId, trace => startCodex(cwd, options, trace))
+}
+
+async function startCodex(
+  cwd: string,
+  options: ProviderStartOptions,
+  trace: ProviderLaunchTrace
+): Promise<LiveSessionState> {
   const id = options.conversationId
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
-  const mcpSnapshot = await (options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir, app.getAppPath()))
-  const env = await accountEnv("codex", process.env)
+  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir, app.getAppPath()))
+  const env = await trace.step("account", () => accountEnv("codex", process.env))
   if (options.conversationTools)
     env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
-  const executable = await resolveCodexExecutable(env)
+  const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
   if (!executable) throw new Error("Codex is not installed")
-  const child = spawn(executable, ["app-server"], {
+  const child = trace.sync("spawn", () => spawn(executable, ["app-server"], {
     cwd: workingDir,
     env: environmentForExecutable(executable, env),
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
-  })
+  }))
   trackProviderChild(child, { kind: "codex:app-server", owner: id })
   const live: Live = {
     id,
@@ -182,7 +192,7 @@ export async function codexAppStart(
       },
       handleServerRequest: (rpcId, method, params) =>
         handleServerRequest(live, permissionCallbacks, rpcId, method, params),
-      resolveServerRequest: (rpcId) => resolveServerRequest(live, rpcId),
+      resolveServerRequest: (rpcId) => resolveServerRequest(live, permissionCallbacks, rpcId),
       clearTurnServerRequests: (turnId) =>
         clearTurnServerRequests(live, turnId),
     },
@@ -199,7 +209,7 @@ export async function codexAppStart(
   })
   live.startupWatch = watch
   try {
-    const response = await openThread(live, watch, options.resume, options.fork)
+    const response = await openThread(live, watch, trace, options.resume, options.fork)
     clearStartupWatch(live)
     live.threadId = response.thread.id
     if (options.resume === response.thread.id && !options.fork)
@@ -320,10 +330,10 @@ export function codexAppPermission(
   id: string,
   requestId: string,
   response: LivePermissionResponse
-): void {
+): ApprovalSubmission {
   const live = sessions.get(id)
-  if (!live) return
-  resolvePermission(live, permissionCallbacks, requestId, response)
+  if (!live) return { kind: "not-submitted", pending: false, reason: "request-ended" }
+  return resolvePermission(live, permissionCallbacks, requestId, response)
 }
 
 export async function codexAppCancel(id: string): Promise<void> {
@@ -412,13 +422,14 @@ export function stopCodexApps(): void {
 async function openThread(
   live: Live,
   watch: ProviderStartupWatch,
+  trace: ProviderLaunchTrace,
   resume?: string,
   fork?: { nativeId: string; runId: string }
 ): Promise<ThreadResponse> {
-  await watch.step("initialize", rpcRequest(live, "initialize", {
+  await trace.step("handshake", () => watch.step("initialize", rpcRequest(live, "initialize", {
     clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
     capabilities: { experimentalApi: true, requestAttestation: false },
-  }))
+  })))
   sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
   const tuning = threadTuning(
     live.tuning,
@@ -430,19 +441,19 @@ async function openThread(
     )
   )
   if (fork)
-    return watch.step("thread/fork", rpcRequest(live, "thread/fork", {
+    return trace.step("session-fork", () => watch.step("thread/fork", rpcRequest(live, "thread/fork", {
       threadId: fork.nativeId,
       lastTurnId: fork.runId,
       cwd: live.cwd,
       ...tuning,
-    }))
+    })))
   return resume
-    ? watch.step("thread/resume", rpcRequest(live, "thread/resume", {
+    ? trace.step("session-resume", () => watch.step("thread/resume", rpcRequest(live, "thread/resume", {
         threadId: resume,
         cwd: live.cwd,
         ...tuning,
-      }))
-    : watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning }))
+      })))
+    : trace.step("session-open", () => watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning })))
 }
 
 function threadTuning(

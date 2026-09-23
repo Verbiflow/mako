@@ -31,6 +31,8 @@ interface Frame {
   at: number
   width: number
   height: number
+  viewportWidth?: number
+  viewportHeight?: number
   pageScaleFactor?: number
   offsetTop?: number
   capturedAt?: number
@@ -40,6 +42,12 @@ interface Pointer {
   x: number
   y: number
   pressed: boolean
+}
+interface IncomingFrame {
+  data: string
+  width: number
+  height: number
+  metadata: { pageScaleFactor?: number; offsetTop?: number; capturedAt?: number }
 }
 const pointerArtwork = Buffer.from(
   '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32" viewBox="0 0 28 32"><path d="M5 4v21l6-6 4 9 4-2-4-9h8L5 4Z" fill="#302c27" stroke="#fffaf3" stroke-width="1.7" stroke-linejoin="round"/></svg>'
@@ -58,6 +66,10 @@ export class ControlRecording {
   private bytes = 0
   private dropped = 0
   private writing: Promise<void> | undefined
+  private pendingFrame: IncomingFrame | undefined
+  private frameTimer: ReturnType<typeof setTimeout> | undefined
+  private nextWriteAt = -Infinity
+  private sampled = 0
   private finishing: Promise<void> | undefined
   private captureStopped: Promise<void | string> | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -65,14 +77,15 @@ export class ControlRecording {
   private sourceFrames: number | undefined
   private video: string | undefined
   private timeline: string | undefined
+  private dimensions: RecordingReceipt["dimensions"]
   readonly target: ControlTarget
   readonly directory: string
-  private readonly options: ReturnType<typeof RecordingOptionsSchema.parse>
+  private readonly options: ReturnType<typeof RecordingOptionsSchema.parse> & { fps: number }
   private readonly onStop: () => Promise<void | string>
   private constructor(
     target: ControlTarget,
     directory: string,
-    options: ReturnType<typeof RecordingOptionsSchema.parse>,
+    options: ReturnType<typeof RecordingOptionsSchema.parse> & { fps: number },
     onStop: () => Promise<void | string>
   ) {
     this.target = target
@@ -86,8 +99,11 @@ export class ControlRecording {
     input: RecordingOptions,
     onStop: () => Promise<void | string>
   ) {
-    const options = RecordingOptionsSchema.parse(input)
-    const root = options.directory ?? join(tmpdir(), "mako-recordings")
+    const parsed = RecordingOptionsSchema.parse(input)
+    const options = { ...parsed, fps: parsed.fps ?? (target.kind === "page" ? 60 : 30) }
+    const root = options.directory ?? (process.env.MAKO_CONTROL_ARTIFACTS
+      ? join(process.env.MAKO_CONTROL_ARTIFACTS, "recordings")
+      : join(tmpdir(), "mako-recordings"))
     if (!isAbsolute(root))
       throw new Error("Recording directory must be absolute")
     // Preflight before the capture stream starts; no silent screenshots-only fallback.
@@ -115,9 +131,11 @@ export class ControlRecording {
       durationMs: this.endedAt ?? performance.now() - this.start,
       frames: this.sourceFrames ?? this.frames.length,
       droppedFrames: this.dropped,
+      sampledFrames: this.sampled,
     }
     if (this.video) receipt.video = this.video
     if (this.timeline) receipt.timeline = this.timeline
+    if (this.dimensions) receipt.dimensions = this.dimensions
     if (this.error) receipt.error = this.error
     return receipt
   }
@@ -262,10 +280,34 @@ export class ControlRecording {
     } = {}
   ): Promise<void> {
     if (this.state !== "recording") return Promise.resolve()
-    if (this.writing) {
-      this.dropped++
+    if (this.pendingFrame) this.sampled++
+    this.pendingFrame = { data, width, height, metadata: { ...metadata, capturedAt: metadata.capturedAt ?? Date.now() } }
+    return this.flushFrame()
+  }
+  private flushFrame(): Promise<void> {
+    if (this.writing) return this.writing
+    if (this.state !== "recording" || !this.pendingFrame) return Promise.resolve()
+    const remaining = this.nextWriteAt - performance.now()
+    if (remaining > 0) {
+      if (!this.frameTimer) this.frameTimer = setTimeout(() => {
+        this.frameTimer = undefined
+        void this.flushFrame()
+      }, Math.ceil(remaining))
       return Promise.resolve()
     }
+    const pending = this.pendingFrame
+    this.pendingFrame = undefined
+    clearTimeout(this.frameTimer)
+    this.frameTimer = undefined
+    return this.storeFrame(pending)
+  }
+  private storeFrame({ data, width, height, metadata }: IncomingFrame): Promise<void> {
+    const interval = 1000 / this.options.fps
+    // Keep cadence when a timer fires late; never queue old frames to catch up.
+    const now = performance.now()
+    this.nextWriteAt = this.nextWriteAt === -Infinity
+      ? now + interval
+      : Math.max(this.nextWriteAt + interval, now)
     if (
       data.length > 12_000_000 ||
       this.bytes > 512 * 1024 * 1024 ||
@@ -304,7 +346,7 @@ export class ControlRecording {
         flag: "wx",
         mode: 0o600,
       })
-      this.frames.push({ file, at, width, height, ...metadata })
+      this.frames.push({ file, at, width: imageMetadata.width, height: imageMetadata.height, viewportWidth: width, viewportHeight: height, ...metadata })
       this.bytes += bytes.length
     })()
       .catch((error) => {
@@ -314,6 +356,7 @@ export class ControlRecording {
       })
       .finally(() => {
         this.writing = undefined
+        void this.flushFrame()
       })
     return this.writing
   }
@@ -323,17 +366,21 @@ export class ControlRecording {
     this.state = "finalizing"
     this.error = reason
     clearTimeout(this.timer)
+    clearTimeout(this.frameTimer)
     this.finishing = (async () => {
       this.captureStopped = this.onStop()
       const cleanup = await this.captureStopped
       if (cleanup && !this.error) this.error = cleanup
       await this.writing
+      const pending = this.pendingFrame
+      this.pendingFrame = undefined
+      if (pending) await this.storeFrame(pending)
       this.timeline = join(this.directory, "timeline.json")
       await writeFile(
         this.timeline,
         JSON.stringify(
           {
-            version: 1,
+            version: 2,
             name: this.options.name,
             target: this.target,
             pointerTiming: this.sourceVideo
@@ -344,6 +391,8 @@ export class ControlRecording {
             frames: this.frames,
             pointer: this.pointers,
             droppedFrames: this.dropped,
+            sampledFrames: this.sampled,
+            fps: this.options.fps,
             interruption: this.error ?? null,
           },
           null,
@@ -372,7 +421,8 @@ export class ControlRecording {
     const first = this.frames[0]
     if (!first)
       throw new Error("No video frames were received; no video was produced")
-    const metadata = await sharp(join(this.directory, first.file)).metadata()
+    const best = this.frames.reduce((a, b) => a.width * a.height >= b.width * b.height ? a : b)
+    const metadata = await sharp(join(this.directory, best.file)).metadata()
     const sizeScale = Math.min(
       1,
       this.options.maxSide /
@@ -388,6 +438,7 @@ export class ControlRecording {
         (width * (metadata.height ?? 1000)) / (metadata.width ?? 1600) / 2
       ) * 2
     )
+    this.dimensions = { width, height }
     // Include action moments even when a static page emits no new screencast frame.
     const times = [
       ...new Set([
@@ -434,16 +485,18 @@ export class ControlRecording {
         })
         const overlays: OverlayOptions[] = []
         if (pointer) {
-          const scale = Math.min(width / frame.width, height / frame.height)
+          const viewportWidth = frame.viewportWidth ?? frame.width
+          const viewportHeight = frame.viewportHeight ?? frame.height
+          const scale = Math.min(width / viewportWidth, height / viewportHeight)
           const x = Math.round(
             pointer.x * (frame.pageScaleFactor ?? 1) * scale +
-              (width - frame.width * scale) / 2
+              (width - viewportWidth * scale) / 2
           )
           const y = Math.round(
             (pointer.y * (frame.pageScaleFactor ?? 1) +
               (frame.offsetTop ?? 0)) *
               scale +
-              (height - frame.height * scale) / 2
+              (height - viewportHeight * scale) / 2
           )
           if (x >= 0 && y >= 0 && x < width && y < height) {
             const addOverlay = async (
@@ -537,9 +590,9 @@ export class ControlRecording {
             ...(this.sourceVideo
               ? [
                   "-filter_complex",
-                  `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=30`,
+                  `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
                 ]
-              : ["-vf", "fps=30"]),
+              : ["-vf", `fps=${this.options.fps}`]),
             "-c:v",
             "libx264",
             "-preset",

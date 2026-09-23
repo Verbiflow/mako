@@ -4,7 +4,6 @@ import {
   accessModeId,
   accessTierInfo,
   accessTierOfModeId,
-  hostEnforceable,
   type AccessTier,
 } from "./contracts/access.js"
 import type { LiveSessionMode } from "./shared.js"
@@ -12,14 +11,12 @@ import type { LiveSessionMode } from "./shared.js"
 /**
  * How one ACP provider's modes sit on the shared access ladder.
  *
- * `native` names the provider mode that implements a tier. `host` lists tiers
- * the host makes true by answering the provider's permission requests, on top
- * of `base`. `launch` lists tiers the provider reads from its launch flags or
+ * `native` names the provider mode that implements a tier.
+ * `launch` lists tiers the provider reads from its launch flags or
  * environment; a running session keeps the tier it started with.
  */
 export interface AcpAccessPolicy {
   native?: Partial<Record<AccessTier, string>>
-  host?: readonly AccessTier[]
   launch?: readonly AccessTier[]
   base?: string
   /**
@@ -39,7 +36,7 @@ export function acpDefaultMode(policy: AcpAccessPolicy | undefined): string | un
 
 /**
  * Providers that moved their mode vocabulary to a config option (OpenCode
- * 1.18 reports `mode` there and sends no `session.modes`) still say what a
+ * v2 reports `mode` there and sends no `session.modes`) still say what a
  * session runs under — read it back so the ladder and the current mode stay
  * true on those agents.
  */
@@ -67,8 +64,6 @@ export function acpNativeModes(
 export interface AcpAccessSelection {
   /** The mode id shown as current. */
   currentMode: string | null
-  /** The tier the host enforces by answering permission requests, if any. */
-  hostTier: AccessTier | null
 }
 
 export function acpSessionModes(
@@ -93,7 +88,7 @@ export function acpSessionModes(
     modes.push(entry)
   }
   const covered = new Set(modes.map((mode) => mode.access))
-  for (const tier of [...(policy?.host ?? []), ...(policy?.launch ?? [])]) {
+  for (const tier of policy?.launch ?? []) {
     if (covered.has(tier)) continue
     covered.add(tier)
     const info = accessTierInfo(tier)
@@ -102,7 +97,7 @@ export function acpSessionModes(
       name: info.label,
       description: info.summary,
       access: tier,
-      enforcement: policy?.host?.includes(tier) ? "host" : "launch",
+      enforcement: "launch",
     })
   }
   return modes
@@ -118,15 +113,13 @@ export function acpInitialSelection(
   const requested = requestedModeId ? modes.find((mode) => mode.id === requestedModeId) : undefined
   const tier = requested?.access ?? null
   if (!requested || !tier || requested.enforcement === "provider")
-    return { currentMode: native?.currentModeId ?? null, hostTier: null }
-  const hostTier = policy?.host?.includes(tier) && hostEnforceable(tier) ? tier : null
-  if (hostTier || policy?.launch?.includes(tier)) return { currentMode: requested.id, hostTier }
-  return { currentMode: native?.currentModeId ?? null, hostTier: null }
+    return { currentMode: native?.currentModeId ?? null }
+  if (policy?.launch?.includes(tier)) return { currentMode: requested.id }
+  return { currentMode: native?.currentModeId ?? null }
 }
 
 export type AcpModeChange =
-  | { kind: "native"; modeId: string; hostTier: null }
-  | { kind: "host"; modeId: string; hostTier: AccessTier; baseMode: string | null }
+  | { kind: "native"; modeId: string; nativeModeId: string }
   | { kind: "unchanged"; modeId: string }
 
 /**
@@ -139,19 +132,23 @@ export function acpModeChange(
   modes: readonly LiveSessionMode[],
   modeId: string,
   launchedTier: AccessTier | null,
-  nativeCurrent: string | null,
   harness: string
 ): AcpModeChange {
   const tier = accessTierOfModeId(modeId)
-  if (!tier) return { kind: "native", modeId, hostTier: null }
+  if (!tier) return { kind: "native", modeId, nativeModeId: modeId }
   const mode = modes.find((item) => item.id === modeId)
   if (!mode) throw new Error(`${harness} does not offer that access level`)
-  if (mode.enforcement === "host" || (policy?.host?.includes(tier) && hostEnforceable(tier))) {
-    const baseMode = policy?.base && nativeCurrent !== policy.base ? policy.base : null
-    return { kind: "host", modeId, hostTier: tier, baseMode }
-  }
-  if (tier === launchedTier) return { kind: "unchanged", modeId }
+  if (policy?.launch?.includes(tier) && tier === launchedTier)
+    return policy.base
+      ? { kind: "native", modeId, nativeModeId: policy.base }
+      : { kind: "unchanged", modeId }
   throw new Error(
     `${harness} reads ${accessTierInfo(tier).label} when its session starts. It will apply to the next conversation you start with ${harness}; this session keeps ${launchedTier ? accessTierInfo(launchedTier).label : "its current level"}.`
   )
+}
+
+/** Native base-mode observations retain the preset supplied at launch. */
+export function acpObservedMode(policy: AcpAccessPolicy | undefined, nativeMode: string, launchedTier: AccessTier | null): string {
+  return policy?.base === nativeMode && launchedTier && policy.launch?.includes(launchedTier)
+    ? accessModeId(launchedTier) : nativeMode
 }

@@ -17,6 +17,7 @@ const windows = z.object({
         pid: z.number().int(),
         window_id: z.number().int(),
         z_index: z.number().nullable(),
+        focused: z.boolean().nullable().optional(),
         is_on_screen: z.boolean(),
       })
     ),
@@ -47,7 +48,7 @@ export async function verifyForegroundInput(
       "list_windows", { pid: expected.pid, on_screen_only: true },
       { signal, timeout: 5000 }
     ))
-    if (!result.success || result.data.structuredContent.backend !== "x11" ||
+    if (!result.success ||
       !result.data.structuredContent.windows.some((window) =>
         window.pid === expected.pid && window.window_id === expected.window_id &&
         window.is_on_screen && window.focused === true))
@@ -75,6 +76,15 @@ export async function verifyForegroundInput(
       )
     )
     .structuredContent.windows.filter((window) => window.is_on_screen)
+  // New native drivers attest AX key-window identity plus WindowServer focus.
+  // A tooltip can rank above the key window without becoming an input target.
+  if (visible.some(window => window.focused !== undefined)) {
+    if (!visible.some(window => window.pid === expected.pid && window.window_id === expected.window_id && window.focused === true))
+      throw new Error("Foreground input was not sent: the exact window's keyboard focus could not be verified.")
+    return
+  }
+  // Older running daemons have no focus field; retain their conservative guard
+  // until the host next starts the installed driver.
   const front = visible.reduce<(typeof visible)[number] | null>(
     (current, window) =>
       window.z_index !== null &&
@@ -85,7 +95,7 @@ export async function verifyForegroundInput(
         : current,
     null
   )
-  if (front?.window_id !== expected.window_id)
+  if (front?.pid !== expected.pid || front.window_id !== expected.window_id)
     throw new Error(
       "Foreground input was not sent: the selected window is not frontmost. Observe the intended window before continuing."
     )

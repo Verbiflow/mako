@@ -1,3 +1,4 @@
+import { LiveApprovals } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
@@ -82,6 +83,7 @@ export const PROVIDER_WARM_LIMIT = 2
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
   private readonly checkpoints: LiveCheckpoints
+  private readonly approvals: LiveApprovals
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
   private readonly children: LiveChildren
@@ -129,6 +131,7 @@ export class LiveConversations {
     this.checkpoints = new LiveCheckpoints(access, (id, input) =>
       this.fork(id, input)
     )
+    this.approvals = new LiveApprovals(access)
     this.actions = new LiveActions(access)
     this.transfers = new LiveTransfers(access)
     this.children = new LiveChildren(access)
@@ -740,6 +743,7 @@ export class LiveConversations {
                   status: "failed",
                   error: errorMessage({ error }),
                   failure: classifyStartFailure(errorMessage({ error }), options.resume !== undefined),
+                  nativeDelivery: this.unsentStartupDelivery(resident, request, errorMessage({ error })),
                 }
               : request
           ),
@@ -776,6 +780,18 @@ export class LiveConversations {
         binding: bindingId,
         error: errorMessage({ error }),
       })
+    }
+  }
+
+  private unsentStartupDelivery(resident: Resident, request: LiveRequest, reason: string): NonNullable<LiveRequest["nativeDelivery"]> {
+    // Only queued requests reach this path: opening/waking blocks drain before
+    // prompt dispatch. Preserve any earlier attempt's evidence rather than
+    // converting a retained ambiguous receipt into a proven refusal.
+    return request.nativeDelivery ?? {
+      attemptId: randomUUID(),
+      bindingId: this.control(resident).activeBindingId,
+      ownerEpoch: this.epoch,
+      evidence: { kind: "not-accepted", source: "preflight", reason },
     }
   }
 
@@ -1056,6 +1072,7 @@ export class LiveConversations {
                 status: "failed",
                 error: message,
                 failure: classifyStartFailure(message, true),
+                nativeDelivery: this.unsentStartupDelivery(resident, request, message),
               }
             : request
         ),
@@ -1100,6 +1117,7 @@ export class LiveConversations {
         conversationId: binding.id,
         resume: binding.nativeId,
         observedAgents: resident.snapshot.nativeAgents?.agents.filter((agent) => agent.bindingId === binding.id && agent.provider === binding.provider),
+        observedApprovals: this.control(resident).approvalResponses?.flatMap(receipt => receipt.origin.bindingId === binding.id && receipt.origin.native && !receipt.nativeDecision ? [receipt.origin.native] : []),
         threadPath: binding.path,
         title: resident.snapshot.session.title,
         tuning,
@@ -1236,6 +1254,7 @@ export class LiveConversations {
                 status: "failed",
                 error: message,
                 failure: classifyStartFailure(message, true),
+                nativeDelivery: this.unsentStartupDelivery(resident, request, message),
               }
             : request
         ),
@@ -1299,7 +1318,9 @@ export class LiveConversations {
           ? event.request.sessionId
           : event.id
     const resident = this.records.get(id)
-    if (!resident?.driver) return
+    // A reconnect may recover retained evidence before the new driver is ready.
+    // Its generation-fenced callback and exact saved native occurrence own admission.
+    if (!resident || (!resident.driver && event.type !== "live-approval-decision")) return
     if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
       const finishedRequest = resident.snapshot.requests.find(
@@ -1339,8 +1360,10 @@ export class LiveConversations {
         void this.revokeTools(bindingId, id)
       }
       if ((previousStatus === "running" && event.session.status !== "running") ||
-        event.session.connection === "disconnected" || event.session.status === "closed")
+        event.session.connection === "disconnected" || event.session.status === "closed") {
         this.actions.settle(resident, bindingId)
+        this.approvals.settle(resident, bindingId)
+      }
       if (previousStatus === "running" && event.session.status !== "running") {
         resident.snapshot = {
           ...resident.snapshot,
@@ -1371,16 +1394,12 @@ export class LiveConversations {
           observedAt: Date.now(),
         }),
       }
+    } else if (event.type === "live-approval-decision") {
+      this.approvals.decision(resident, bindingId, event.decision)
+    } else if (event.type === "live-permission-ended") {
+      this.approvals.end(resident, bindingId, event)
     } else if (event.type === "live-permission") {
-      resident.snapshot = {
-        ...resident.snapshot,
-        permissions: [
-          ...resident.snapshot.permissions.filter(
-            (request) => request.id !== event.request.id
-          ),
-          event.request,
-        ],
-      }
+      this.approvals.observe(resident, event.request)
     } else if (!(
       resident.opening &&
       (resident.snapshot.base || resident.snapshot.blocks.length)
@@ -1422,7 +1441,7 @@ export class LiveConversations {
       }
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
-    if (event.type === "live-session" || event.type === "live-permission" || event.type === "live-agent")
+    if (event.type === "live-session" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent")
       this.flush(resident)
     else this.schedule(resident)
     if (event.type === "live-session" || event.type === "live-agent") {
@@ -2258,24 +2277,7 @@ export class LiveConversations {
     requestId: string,
     response: LivePermissionResponse
   ): Promise<void> {
-    const resident = this.require(id)
-    const request = resident.snapshot.permissions.find(
-      (candidate) => candidate.id === requestId
-    )
-    if (!request || !resident.driver)
-      throw new Error("That permission request is no longer pending")
-    await resident.driver.permission(
-      this.control(resident).activeBindingId,
-      requestId,
-      response
-    )
-    resident.snapshot = {
-      ...resident.snapshot,
-      permissions: resident.snapshot.permissions.filter(
-        (candidate) => candidate.id !== requestId
-      ),
-    }
-    this.flush(resident)
+    await this.approvals.respond(id, requestId, response)
   }
 
   activeRequest(id: string): string | null {
@@ -2472,6 +2474,7 @@ export class LiveConversations {
           : request
       ),
     }
+    this.approvals.settle(resident, activeBindingId)
     this.flush(resident)
     try {
       await Promise.all(
@@ -3012,6 +3015,12 @@ export class LiveConversations {
       control: previous.control
         ? {
             ...previous.control,
+            approvalResponses: previous.control.approvalResponses?.map(receipt =>
+              receipt.state.kind === "dispatching" ? { ...receipt, state: {
+                kind: "uncertain" as const,
+                reason: "The host restarted before approval submission was confirmed. It will not be sent again automatically.",
+              } } : receipt
+            ),
             actions: previous.control.actions?.map((action) =>
               action.state.kind === "dispatching" ||
               (action.input.kind === "compact" &&

@@ -221,7 +221,10 @@ export class RuntimeUpdates {
 
   /** What is known now. Sync so a window paints before any probe answers. */
   snapshot(): HarnessUpdates {
-    return structuredClone(this.updates)
+    const sources = new Map(this.sources().map(source => [source.key, source]))
+    return structuredClone(Object.fromEntries(Object.entries(this.updates).filter(([key, info]) =>
+      !info.installed || sources.get(key)?.supportsVersion?.(info.installed) !== false
+    )))
   }
 
   /**
@@ -314,6 +317,8 @@ export class RuntimeUpdates {
         const real = await (this.options.realpath ?? realpath)(binary).catch(
           () => binary
         )
+        if (installed.version && source.supportsVersion?.(installed.version) === false)
+          throw new Error(`${source.label ?? source.provider} does not support this installed version`)
         if (installed.version && source.release) {
           policy = {
             ...source,
