@@ -1,5 +1,5 @@
-import { realpathSync } from "node:fs"
-import { basename } from "node:path"
+import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs"
+import { basename, dirname, join } from "node:path"
 import { resolveExecutable } from "../../executable.js"
 import type { ProviderUpdateSource, RuntimeRelease } from "../update-source.js"
 import { openCodeExecutable } from "./installation.js"
@@ -29,13 +29,15 @@ export function openCodeUpdateBinary(
       : name === "opencode2"
         ? env.OPENCODE2_BIN_PATH
         : env.OPENCODE1_BIN_PATH
-  return resolveExecutable(override ?? name, env)
+  const binary = resolveExecutable(override ?? name, env)
+  return binary ? openCodeBinaryTarget(binary) : null
 }
 
 export function openCodeRelease(
   version: string,
   binary: string,
-  real: string
+  real: string,
+  env: NodeJS.ProcessEnv = process.env
 ): RuntimeRelease {
   const generation = openCodeVersionGeneration(version)
   const prerelease = version.match(/^0\.0\.0-(beta|next|dev)-\d+$/)?.[1]
@@ -46,19 +48,22 @@ export function openCodeRelease(
       : generation === "v1"
         ? "OpenCode 1"
         : "OpenCode"
-  const description =
-    binary === openCodeExecutable()
-      ? "Used for new sessions"
-      : generation === "v1"
-        ? "Available for V1 sessions"
-        : "Additional installation"
+  const selected = openCodeExecutable(env)
+  const primary = Boolean(
+    selected && sameOpenCodeBinary(openCodeBinaryTarget(selected), binary)
+  )
+  const description = primary
+    ? "Used for new sessions"
+    : generation === "v1"
+      ? "Available for V1 sessions"
+      : "Additional installation"
   // The beta's native installer publishes to a different repository from V1.
   // Package-manager installations must compare against their own package tag.
   return {
     label,
     description,
     pinVersion: true,
-    primary: binary === openCodeExecutable(),
+    primary,
     npmPackage:
       generation === "v1"
         ? "opencode-ai"
@@ -107,4 +112,39 @@ export const openCodeUpdateSource: ProviderUpdateSource = {
       release: openCodeRelease,
     },
   ],
+}
+
+/** Only unwrap the known, argument-preserving sibling shim. Never evaluate shell code,
+ * infer identity from equal versions, or discard wrappers that change the environment.
+ */
+export function openCodeBinaryTarget(binary: string): string {
+  const real = realpathSync(binary)
+  if (statSync(real).size > 512) return binary
+  const fd = openSync(real, "r")
+  let script: string
+  try {
+    const bytes = Buffer.alloc(512)
+    script = bytes
+      .subarray(0, readSync(fd, bytes, 0, bytes.length, 0))
+      .toString("utf8")
+  } finally {
+    closeSync(fd)
+  }
+  if (
+    /^#!\/bin\/sh\r?\nexec "\$\(dirname "\$0"\)\/opencode" "\$@"\r?\n?$/.test(
+      script
+    )
+  ) {
+    const target = resolveExecutable(join(dirname(binary), "opencode"))
+    if (target) return target
+  }
+  return binary
+}
+
+function sameOpenCodeBinary(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right)
+  } catch {
+    return left === right
+  }
 }
