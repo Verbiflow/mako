@@ -1,3 +1,4 @@
+import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } from "./providers/live-driver.js"
@@ -624,36 +625,41 @@ async function setLegacySessionModel(
   )
 }
 
-/** Send the next message. Resolves when the provider accepts the turn. */
+/** Begin dispatch; the correlated ACP response reports delivery asynchronously. */
 export async function livePrompt(
   id: string,
   text: string,
-  attachments: PromptAttachment[] = [],
-  tuning?: AcpTuning
+  attachments: PromptAttachment[],
+  tuning: AcpTuning | undefined,
+  dispatch: PromptDispatch
 ): Promise<void> {
-  const live = sessions.get(id)
-  if (!live?.sessionId || !live.connection)
-    throw new Error("This interactive session is not running")
-  if (live.state.status === "running")
-    throw new Error("The agent is already working")
-  if (live.compaction)
-    throw new Error("Compaction is unconfirmed. End the live session before sending again.")
+  const { live, connection, sessionId } = preparePrompt(dispatch, () => {
+    const live = sessions.get(id)
+    if (!live?.sessionId || !live.connection)
+      throw new Error("This interactive session is not running")
+    if (live.state.status === "running")
+      throw new Error("The agent is already working")
+    if (live.compaction)
+      throw new Error("Compaction is unconfirmed. End the live session before sending again.")
+    return { live, connection: live.connection, sessionId: live.sessionId }
+  })
   const compact = providerHost.acpSources.get(live.harness)?.compaction
   if (compact?.kind === "supported" && text.trim() === compact.command && attachments.length === 0) {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     await liveCompact(id, randomUUID())
     return
   }
-  const connection = live.connection
-  const sessionId = live.sessionId
   let applied: Awaited<ReturnType<typeof applyTuning>>
   try {
-    applied = await applyTuning(live, tuning)
+    applied = await preparePromptAsync(dispatch, () => applyTuning(live, tuning))
   } catch (error) {
     hostWarn("acp", "settings refused", { harness: live.harness, conversation: id, error: errorMessage({ error }) })
     throw error
   }
-  if (live.state.status === "closed" || live.turn?.acceptsSteering)
-    throw new Error("The session changed while preparing the prompt")
+  preparePrompt(dispatch, () => {
+    if (live.state.status === "closed" || live.turn?.acceptsSteering)
+      throw new Error("The session changed while preparing the prompt")
+  })
   const turn = new AcpPromptTurn((result) => {
     if (live.turn !== turn || live.state.status === "closed" || live.state.connection === "disconnected") return
     const verdict = turnVerdict(result)
@@ -670,7 +676,11 @@ export async function livePrompt(
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
   engine.emitUpdate(live, { kind: "user", text })
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
-  void turn.send(() => connection.prompt({ sessionId, prompt })).catch(() => {})
+  dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
+  void turn.send(() => connection.prompt({ sessionId, prompt })).then(
+    () => dispatch.report({ kind: "accepted", source: "native-response" }),
+    (error: Error) => dispatch.report({ kind: "uncertain", reason: error.message })
+  )
   await Promise.resolve()
 }
 

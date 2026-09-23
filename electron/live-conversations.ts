@@ -1,3 +1,4 @@
+import { advancePromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import type {
@@ -2752,8 +2753,16 @@ export class LiveConversations {
     const pendingMerges = control.merges.filter(
       (merge) => merge.status === "pending"
     )
+    const attemptId = randomUUID()
+    const bindingId = control.activeBindingId
     const current = {
       ...request,
+      nativeDelivery: {
+        attemptId,
+        bindingId,
+        ownerEpoch: this.epoch,
+        evidence: { kind: "prepared" as const },
+      },
       status: "dispatching" as const,
       context: [
         ...(request.context ?? []),
@@ -2812,6 +2821,25 @@ export class LiveConversations {
     }
     const generation = resident.generation
     const driver = resident.driver
+    const report = (evidence: PromptDeliveryEvidence): void => {
+      if (resident.generation !== generation || this.control(resident).activeBindingId !== bindingId) return
+      const target = resident.snapshot.requests.find((item) => item.id === request.id)
+      if (!target?.nativeDelivery || target.nativeDelivery.attemptId !== attemptId) return
+      const delivery = target.nativeDelivery
+      const next = advancePromptDelivery(delivery.evidence, evidence)
+      if (next === delivery.evidence) return
+      resident.snapshot = {
+        ...resident.snapshot,
+        requests: resident.snapshot.requests.map((item) =>
+          item === target ? { ...item, nativeDelivery: { ...delivery, evidence: next } } : item
+        ),
+      }
+      try {
+        this.flush(resident)
+      } catch (error) {
+        this.storageFailed(resident, { error })
+      }
+    }
     void this.checkpoints
       .prompt(resident, current, () =>
         driver.prompt(
@@ -2821,10 +2849,12 @@ export class LiveConversations {
             request.text
           ),
           request.attachments,
-          request.tuning
+          request.tuning,
+          { operationId: request.id, attemptId, report }
         )
       )
       .catch((error) => {
+        report({ kind: "uncertain", reason: errorMessage({ error }) })
         if (
           generation !== resident.generation ||
           !resident.snapshot.requests.some(
@@ -3086,6 +3116,9 @@ function settleRequest(request: LiveRequest, session: LiveSessionState): LiveReq
   const status = stopped || dropped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
   const settled: LiveRequest = {
     ...request,
+    nativeDelivery: request.nativeDelivery && status !== "completed"
+      ? { ...request.nativeDelivery, evidence: advancePromptDelivery(request.nativeDelivery.evidence, { kind: "uncertain", reason: session.error ?? "The turn ended without a delivery receipt" }) }
+      : request.nativeDelivery,
     status,
     error: session.error,
     nativeRun:
@@ -3123,6 +3156,9 @@ function interruptRequests(
     request.status === "dispatching"
       ? {
           ...request,
+          nativeDelivery: request.nativeDelivery
+            ? { ...request.nativeDelivery, evidence: advancePromptDelivery(request.nativeDelivery.evidence, { kind: "uncertain", reason: error }) }
+            : undefined,
           status: reason === "host-quit" ? "interrupted" : "uncertain",
           error,
           interruption: { reason, at },

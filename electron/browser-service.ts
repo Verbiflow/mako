@@ -1,3 +1,4 @@
+import { BrowserRecordings } from "./browser-recording.js"
 import { BrowserPreferences } from "./browser-preference.js"
 import {
   asideSelectionGuidance,
@@ -245,6 +246,7 @@ interface Binding {
   connection: BrowserConnection
   sessionId: string
   focusEmulated: boolean
+  lineage: string
   intentionalDetach?: boolean
   uncertain: boolean
   running: number
@@ -342,6 +344,7 @@ function browserStatus(
 
 /** Host-owned transport; task-owned bindings. No implicit current tab exists. */
 export class BrowserService {
+  private readonly recordings = new BrowserRecordings()
   private readonly browsers: Map<string, BrowserEntry>
   private readonly bindings = new Map<string, Binding>()
   private readonly ownedTargets = new Map<string, OwnedTarget>()
@@ -648,6 +651,11 @@ export class BrowserService {
             message:
               "The browser connection ended. An in-flight action may have completed. Reconnect, claim the exact tab and observe before deciding what to do; no action was replayed.",
           }
+          this.recordings.stopTarget(
+            binding.owner,
+            binding.target,
+            "Tab lease ended"
+          )
           this.bindings.delete(key)
         }
         for (const [key, target] of this.ownedTargets)
@@ -695,6 +703,8 @@ export class BrowserService {
     connection: BrowserConnection,
     event: BrowserProtocolEvent
   ): void {
+    if (event.method === "Page.screencastFrame") return
+
     if (event.method === "Target.targetCreated") {
       const child = z.object({ targetInfo }).safeParse(event.params)
       if (child.success && child.data.targetInfo.makoTaskLifetime) {
@@ -727,6 +737,11 @@ export class BrowserService {
         event.method === "Target.targetDestroyed" &&
         event.params.targetId === binding.target.tab
       ) {
+        this.recordings.stopTarget(
+          binding.owner,
+          binding.target,
+          "Tab lease ended"
+        )
         this.bindings.delete(key)
         this.ownedTargets.delete(key)
         continue
@@ -749,6 +764,11 @@ export class BrowserService {
           }
           this.changed()
         }
+        this.recordings.stopTarget(
+          binding.owner,
+          binding.target,
+          "Tab lease ended"
+        )
         this.bindings.delete(key)
         continue
       }
@@ -759,6 +779,7 @@ export class BrowserService {
       if (event.method === "Page.frameNavigated") {
         const frame = mainFrame.safeParse(event.params)
         if (!frame.success || frame.data.frame.parentId === undefined) {
+          binding.lineage = randomUUID()
           binding.refs.clear()
           binding.view = undefined
           binding.observation = undefined
@@ -947,6 +968,11 @@ export class BrowserService {
       } finally {
         existing.intentionalDetach = false
       }
+      this.recordings.stopTarget(
+        existing.owner,
+        existing.target,
+        "Tab lease ended"
+      )
       this.bindings.delete(key)
     }
     const attachParameters: JsonObject = { targetId: tab, flatten: true }
@@ -971,6 +997,7 @@ export class BrowserService {
         connection,
         sessionId,
         focusEmulated,
+        lineage: randomUUID(),
         uncertain: false,
         running: 0,
         tail: Promise.resolve(),
@@ -1090,7 +1117,14 @@ export class BrowserService {
       entry.connectAbort?.abort()
       entry.connection?.close()
       for (const [key, binding] of this.bindings)
-        if (binding.target.browser === command.id) this.bindings.delete(key)
+        if (binding.target.browser === command.id) {
+          this.recordings.stopTarget(
+            binding.owner,
+            binding.target,
+            "Tab lease ended"
+          )
+          this.bindings.delete(key)
+        }
       for (const [key, target] of this.ownedTargets)
         if (target.browser === command.id) this.ownedTargets.delete(key)
       this.attached.delete(command.id)
@@ -1244,12 +1278,28 @@ export class BrowserService {
         return { ...target, navigation: { fault: error.detail } }
       }
     }
+    if (command.action === "recording" && command.operation !== "start") {
+      authorize()
+      const recording = this.recordings.get(
+        owner,
+        command.target,
+        z.string().parse(command.id)
+      )
+      return z
+        .json()
+        .parse(
+          command.operation === "stop"
+            ? await recording.stop()
+            : recording.receipt()
+        )
+    }
     const binding = this.binding(owner, command.target)
     const run = async () => {
       authorize()
       this.binding(owner, command.target)
       signal.throwIfAborted()
       const observation = [
+        "recording",
         "observe",
         "screenshot",
         "events",
@@ -1275,7 +1325,9 @@ export class BrowserService {
         })
       if (
         binding.dialog &&
-        !["dialog", "events", "release", "close"].includes(command.action)
+        !["dialog", "events", "release", "close", "recording"].includes(
+          command.action
+        )
       )
         throw new BrowserFault({
           code: "target-busy",
@@ -1301,6 +1353,7 @@ export class BrowserService {
           binding.uncertain = false
         if (
           ![
+            "recording",
             "observe",
             "screenshot",
             "events",
@@ -1320,6 +1373,11 @@ export class BrowserService {
             error.message
           )
         ) {
+          this.recordings.stopTarget(
+            binding.owner,
+            binding.target,
+            "Tab lease ended"
+          )
           this.bindings.delete(this.key(binding.target))
           throw new BrowserFault({
             code: "target-closed",
@@ -1476,6 +1534,13 @@ export class BrowserService {
               }
             : { url: true, ref: true, completion: "protocol-events" },
           cursor: extension,
+          recording: {
+            state: "preflight-required",
+            scope: "exact-tab",
+            cursor: "dispatched-pointer",
+            requires: ["ffmpeg", "ffprobe"],
+            completion: "record().stop() then recording.status()",
+          },
           taskGroups: extension,
           isolatedContexts: !extension,
         }
@@ -1512,7 +1577,22 @@ export class BrowserService {
         this.ownedTargets.delete(key)
         return { retained: true, name: command.name, target: binding.target }
       }
+      case "recording": {
+        return z
+          .json()
+          .parse(
+            await this.recordings.start(
+              binding.owner,
+              binding.target,
+              binding.connection,
+              binding.sessionId,
+              command.options ?? {},
+              signal
+            )
+          )
+      }
       case "observe": {
+        const lineage = binding.lineage
         const info = await root("Target.getTargetInfo", {
           targetId: binding.target.tab,
         })
@@ -1643,6 +1723,11 @@ export class BrowserService {
               }
             : undefined,
         })
+        if (binding.lineage !== lineage)
+          fault(
+            "stale-target",
+            "The document changed during observation. Read this tab again."
+          )
         const semanticNodes = observation.value.nodes.map((node) => {
           const semantic = { ...node }
           delete semantic.ref
@@ -1672,6 +1757,7 @@ export class BrowserService {
             return {
               target: { ...binding.target },
               observation: binding.observation.token,
+              lineage,
               unchanged: true,
             }
           }
@@ -1683,7 +1769,7 @@ export class BrowserService {
           digest,
           refs: [...observation.refs.keys()],
         }
-        return { ...observation.value, observation: token }
+        return { ...observation.value, observation: token, lineage }
       }
       case "screenshot": {
         if (
@@ -1827,6 +1913,11 @@ export class BrowserService {
           : await root("Target.closeTarget", {
               targetId: binding.target.tab,
             })
+        this.recordings.stopTarget(
+          binding.owner,
+          binding.target,
+          "Tab lease ended"
+        )
         this.bindings.delete(key)
         this.ownedTargets.delete(key)
         return result
@@ -1838,6 +1929,11 @@ export class BrowserService {
         const result = await root("Target.detachFromTarget", {
           sessionId: binding.sessionId,
         })
+        this.recordings.stopTarget(
+          binding.owner,
+          binding.target,
+          "Tab lease ended"
+        )
         this.bindings.delete(this.key(binding.target))
         return result
       }
@@ -2646,6 +2742,7 @@ export class BrowserService {
     released: number
     closed: number
   }> {
+    this.recordings.stopOwner(owner)
     let released = 0
     let closed = 0
     const bindings = [...this.bindings.values()].filter(
@@ -2673,6 +2770,11 @@ export class BrowserService {
           signal
         )
         .catch(() => {})
+      this.recordings.stopTarget(
+        binding.owner,
+        binding.target,
+        "Tab lease ended"
+      )
       this.bindings.delete(key)
       released++
     }
@@ -2709,7 +2811,14 @@ export class BrowserService {
     entry.connection = undefined
     entry.status = { ...entry.status, connection: { status: "disconnected" } }
     for (const [key, binding] of this.bindings)
-      if (binding.target.browser === id) this.bindings.delete(key)
+      if (binding.target.browser === id) {
+        this.recordings.stopTarget(
+          binding.owner,
+          binding.target,
+          "Tab lease ended"
+        )
+        this.bindings.delete(key)
+      }
     for (const [key, target] of this.ownedTargets)
       if (target.browser === id) this.ownedTargets.delete(key)
     connection?.close()

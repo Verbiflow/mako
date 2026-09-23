@@ -19,8 +19,12 @@ export interface ContinuationDependencies<Snapshot = unknown> {
   external(path: string): ExternalThreadActivity["status"] | null
 }
 
+export type AttachedResolution<Snapshot = unknown> = Extract<ContinuationResolution<Snapshot>, { transport: "attached" }>
+
 export interface ContinuationPlanner<Snapshot = unknown> {
   resolve(path: string): Promise<ContinuationResolution<Snapshot>>
+  /** Only the Mako owner, for viewing: no process probe and no read of the native record. */
+  owner(path: string): Promise<AttachedResolution<Snapshot> | null>
   plan(path: string): Promise<ContinuationPlan>
   /** Throws unless the plan reopens `path` live on `provider` as `nativeId`. */
   assertLive(path: string, provider: string, nativeId: string): Promise<void>
@@ -62,8 +66,17 @@ export function createContinuationPlanner<Snapshot>(
       ? { transport: "attached", provider: result.provider, conversationId: result.conversationId }
       : result
   }
+  const owner = async (path: string): Promise<AttachedResolution<Snapshot> | null> => {
+    const ref = await dependencies.ref(path)
+    if (!ref || ref.archived) return null
+    const found = await dependencies.resolveOwner?.(ref)
+    return found?.kind === "attached"
+      ? { transport: "attached", provider: found.provider, conversationId: found.conversationId, snapshot: found.snapshot, bindingId: found.bindingId }
+      : null
+  }
   return {
     resolve,
+    owner,
     plan,
     async assertLive(path, provider, nativeId) {
       const decided = await plan(path)

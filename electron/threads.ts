@@ -765,6 +765,19 @@ export function viewThreadPage(
   })
 }
 
+/**
+ * The newest exchanges of a large record read from its tail, shaped like a
+ * viewer page; the full page replaces it. Null when there is nothing to gain
+ * over the full page.
+ */
+export function viewThreadPreview(path: string): Promise<ThreadPage | null> {
+  return pageThread(path, undefined, undefined, {
+    toolOutputChars: VIEWER_TOOL_OUTPUT_CHARS,
+    maxChars: VIEWER_PAGE_CHARS,
+    preview: true,
+  })
+}
+
 export async function threadBlock(
   path: string,
   at: BlockAddress

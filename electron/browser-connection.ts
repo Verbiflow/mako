@@ -21,6 +21,11 @@ export interface BrowserProtocolEvent {
 }
 
 /** Exactly one upstream connection. Requests are never retried or retargeted. */
+const mousePointSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+})
+
 export class BrowserConnection {
   readonly generation = randomUUID()
   private sequence = 0
@@ -34,6 +39,29 @@ export class BrowserConnection {
   private readonly listeners = new Set<(event: BrowserProtocolEvent) => void>()
   private readonly closedListeners = new Set<() => void>()
 
+  private readonly inputListeners = new Set<
+    (event: {
+      sessionId?: string
+      x: number
+      y: number
+      dispatchedAt: number
+      pressed: boolean
+    }) => void
+  >()
+  onInput(
+    listener: (event: {
+      sessionId?: string
+      x: number
+      y: number
+      dispatchedAt: number
+      pressed: boolean
+    }) => void
+  ) {
+    this.inputListeners.add(listener)
+    return () => {
+      this.inputListeners.delete(listener)
+    }
+  }
   private readonly socket: WebSocket
   private constructor(socket: WebSocket) {
     this.socket = socket
@@ -53,12 +81,16 @@ export class BrowserConnection {
           value.error
             ? new BrowserFault({
                 code: "protocol-error",
-                message: /detached while handling command/i.test(value.error.message)
+                message: /detached while handling command/i.test(
+                  value.error.message
+                )
                   ? `${value.error.message} Read browser status for interruption details, and check the exact page before repeating this action.`
                   : value.error.message,
                 // A debugger can detach after input has reached the renderer.
                 // The protocol error is not proof that dispatch was rejected.
-                outcome: /detached while handling command/i.test(value.error.message)
+                outcome: /detached while handling command/i.test(
+                  value.error.message
+                )
                   ? "unknown"
                   : "rejected",
               })
@@ -169,6 +201,7 @@ export class BrowserConnection {
           outcome: "not-dispatched",
         })
       )
+    const dispatchedAt = performance.now()
     const id = ++this.sequence
     return new Promise((resolve, reject) => {
       const finish = (error: BrowserFault | null, result: JsonObject = {}) => {
@@ -176,7 +209,27 @@ export class BrowserConnection {
         clearTimeout(timer)
         signal.removeEventListener("abort", abort)
         if (error) reject(error)
-        else resolve(result)
+        else {
+          const point =
+            method === "Input.dispatchMouseEvent"
+              ? mousePointSchema.safeParse(params)
+              : undefined
+          if (point?.success)
+            for (const listener of this.inputListeners) {
+              try {
+                listener({
+                  sessionId,
+                  dispatchedAt,
+                  x: point.data.x,
+                  y: point.data.y,
+                  pressed: params.type === "mousePressed",
+                })
+              } catch {
+                /* Media feedback cannot change the outcome of delivered input. */
+              }
+            }
+          resolve(result)
+        }
       }
       const abort = () =>
         finish(

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto"
 import {
   chmod,
-  cp,
   lstat,
   mkdir,
   readFile,
@@ -10,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import { headlessNodeExecutable } from "./headless-node.js"
 
@@ -20,6 +19,43 @@ export interface BrowserExtensionSetup {
 }
 
 const manifestSchema = z.object({ key: z.string().min(1) })
+
+/** Electron can read ASAR entries, but fs.cp cannot traverse virtual directories. */
+async function extensionFiles(source: string) {
+  const files: { path: string; body: Buffer }[] = []
+  async function collect(relative: string) {
+    for (const entry of await readdir(join(source, relative), {
+      withFileTypes: true,
+    })) {
+      const path = join(relative, entry.name)
+      if (entry.isDirectory()) await collect(path)
+      else if (entry.isFile())
+        files.push({ path, body: await readFile(join(source, path)) })
+      else throw new Error(`Unsupported browser extension resource: ${path}`)
+    }
+  }
+  await collect("")
+  // Publish the version last: the idle updater must not reload partial assets.
+  files.sort(
+    (left, right) =>
+      Number(left.path === "manifest.json") -
+      Number(right.path === "manifest.json")
+  )
+  return files
+}
+
+async function publishExtension(
+  files: Awaited<ReturnType<typeof extensionFiles>>,
+  directory: string
+) {
+  for (const { path, body } of files) {
+    const target = join(directory, path)
+    await mkdir(dirname(target), { recursive: true })
+    const temporary = `${target}.${process.pid}.tmp`
+    await writeFile(temporary, body, { mode: 0o600 })
+    await rename(temporary, target)
+  }
+}
 const chromiumLocalStateSchema = z
   .object({
     browser: z
@@ -116,6 +152,8 @@ export async function prepareBrowserExtension(
   const manifest = manifestSchema.parse(
     JSON.parse(await readFile(join(source, "manifest.json"), "utf8"))
   )
+  // Read every packaged asset before changing the live helper or extension.
+  const files = await extensionFiles(source)
   const extensionId = createHash("sha256")
     .update(Buffer.from(manifest.key, "base64"))
     .digest("hex")
@@ -126,7 +164,6 @@ export async function prepareBrowserExtension(
   const directory = join(home, ".mako", "browser-extension-package")
   const bin = join(home, ".mako", "bin")
   await mkdir(bin, { recursive: true, mode: 0o700 })
-  await cp(source, directory, { recursive: true })
   const helper = join(bin, "mako-browser-host")
   const temporary = `${helper}.${process.pid}.tmp`
   const nodeExecutable = headlessNodeExecutable(executable)
@@ -178,5 +215,6 @@ export async function prepareBrowserExtension(
     )
     await rename(manifestTemporary, manifest)
   }
+  await publishExtension(files, directory)
   return { directory, extensionId }
 }

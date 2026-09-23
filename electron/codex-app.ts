@@ -1,3 +1,4 @@
+import { preparePrompt, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
 import { CodexAgents } from "./providers/codex/agents.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
@@ -249,19 +250,23 @@ export async function codexAppStart(
 export async function codexAppPrompt(
   id: string,
   text: string,
-  attachments: PromptAttachment[] = [],
-  tuning?: Tuning
+  attachments: PromptAttachment[],
+  tuning: Tuning | undefined,
+  dispatch: PromptDispatch
 ): Promise<void> {
-  const live = sessions.get(id)
-  if (!live?.threadId || live.exited)
-    throw new Error("This Codex session is not running")
-  if (live.state.status === "running")
-    throw new Error("Codex is already working")
-  if (!text.trim() && !attachments.length)
-    throw new Error("A prompt cannot be empty")
-  if (text.length > MAX_PROMPT_CHARS)
-    throw new Error("The prompt is too large for the Codex app-server adapter")
+  const { live, threadId } = preparePrompt(dispatch, () => {
+    const live = sessions.get(id)
+    if (!live?.threadId || live.exited)
+      throw new Error("This Codex session is not running")
+    if (live.state.status === "running")
+      throw new Error("Codex is already working")
+    if (!text.trim() && !attachments.length)
+      throw new Error("A prompt cannot be empty")
+    if (text.length > MAX_PROMPT_CHARS)
+      throw new Error("The prompt is too large for the Codex app-server adapter")
 
+    return { live, threadId: live.threadId }
+  })
   const sequence = ++live.promptSequence
   updateState(live, {
     status: "running",
@@ -271,13 +276,15 @@ export async function codexAppPrompt(
   })
   emitUpdate(live, { kind: "user", text })
   try {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     const result = await rpcRequest(live, "turn/start", {
-      threadId: live.threadId,
+      threadId,
       input: codexInput(text, attachments),
       cwd: live.cwd,
       ...codexWireSettings(tuning),
       ...codexTurnAccess(live.access),
     })
+    dispatch.report({ kind: "accepted", source: "native-response", referenceId: result.turn.id })
     if (live.promptSequence === sequence) {
       const settings: SessionSettings = {
         ...live.state.settings,

@@ -43,6 +43,8 @@ import {
 } from "@mako/control/computer"
 import {
   scopeControlNodes,
+  NativeSettlingSchema,
+  type NativeSettling,
   ControlDispatchRequestSchema,
   ControlRawRequestSchema,
   ControlEventsRequestSchema,
@@ -80,6 +82,8 @@ import {
   ControlImageSchema,
   type ControlImage,
 } from "./contracts/control-preview.js"
+import { NativeRecordings } from "./native-recording.js"
+import { RecordingOptionsSchema } from "@mako/control/control"
 import { randomUUID } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
 import { parseArgs } from "node:util"
@@ -161,6 +165,7 @@ const controlHelpInputSchema = z
         "target",
         "observations",
         "assertions",
+        "recording",
         "page",
         "native",
         "output",
@@ -444,9 +449,12 @@ const nativeElementSchema = ElementSchema.extend({
 const nativeViewSchema = z.looseObject({
   snapshot_id: z.string(),
   elements: z.array(z.json()).default([]),
+  total_element_count: z.number().int().nonnegative().optional(),
+  menu_bar_elements_omitted: z.number().int().nonnegative().default(0),
 })
 const pageViewSchema = z.looseObject({
   observation: z.string(),
+  lineage: z.string().optional(),
   // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Zod schema composition API.
   nodes: ControlObservationSchema.shape.nodes.default([]),
   viewport: z.json().nullable().optional(),
@@ -638,6 +646,7 @@ export function createComputerToolsServer(
   const toolPrefix = unified ? "mako_control" : "mako_computer"
   const namespace = unified ? "control" : "computer"
   const observations = new ComputerObservationClient()
+  const nativeRecordings = new NativeRecordings()
   const artifacts = controlArtifactsDirectory(namespace, taskId)
   let client: ComputerDriverClient | undefined
   let closed = false
@@ -829,6 +838,7 @@ export function createComputerToolsServer(
       controlVisuals.clear()
       connection.onClose(() => {
         if (client !== connection) return
+        nativeRecordings.connectionEnded()
         starting = undefined
         void runtime?.close()
         runtime = undefined
@@ -1009,7 +1019,9 @@ export function createComputerToolsServer(
       } catch (error) {
         throw new ControlFault(
           "foreground-unavailable",
-          error instanceof Error ? error.message : "Target focus could not be verified.",
+          error instanceof Error
+            ? error.message
+            : "Target focus could not be verified.",
           "not-dispatched"
         )
       }
@@ -1286,7 +1298,7 @@ export function createComputerToolsServer(
     const exact = windows.find(
       (window) => window.window_id === target.window_id
     )
-    return windowCapabilities({
+    const capabilities = windowCapabilities({
       platform: process.platform,
       target,
       documentWindows: windows.filter((window) => window.kind === "document")
@@ -1294,6 +1306,20 @@ export function createComputerToolsServer(
       onScreen: exact?.is_on_screen ?? null,
       pageBrowser: pageRoutes.get(target.pid)?.browser ?? undefined,
     })
+    const available = await tools()
+    const recording = available.find((tool) => tool.name === "start_recording")
+    return {
+      ...capabilities,
+      recording: {
+        state: recording?.inputSchema.properties?.window_target
+          ? "preflight-required"
+          : "driver-update-required",
+        scope: "exact-window",
+        cursor: "dispatched-pointer",
+        requires: ["ffmpeg", "ffprobe", "supported native window capture"],
+        completion: "record().stop() then recording.status()",
+      },
+    }
   }
   const controlTargets = async (
     raw: ComputerArguments,
@@ -1396,12 +1422,14 @@ export function createComputerToolsServer(
         target: request.target,
         route: "page",
         observation: value.observation,
+        lineage: value.lineage ?? null,
         lines,
         nodes,
         coverage,
         scope,
         viewport: value.viewport ?? null,
       }
+      if (value.lineage === undefined) delete result.lineage
       if (value.matched !== undefined) result.matched = value.matched
       if (value.nextOffset !== undefined) result.nextOffset = value.nextOffset
       if (value.omitted !== undefined) result.omitted = value.omitted
@@ -1500,7 +1528,7 @@ export function createComputerToolsServer(
       if (remembered) remembered.webText = true
     }
     controlUncertain.delete(key)
-    return ControlObservationSchema.parse({
+    const observation = ControlObservationSchema.parse({
       target: request.target,
       observation: state.snapshot_id,
       scope,
@@ -1512,17 +1540,17 @@ export function createComputerToolsServer(
           scoped.length <= request.max &&
           !request.query &&
           !request.interactive,
-        omitted: z.number().safeParse(state.total_element_count).success
-          ? Math.max(
-              0,
-              z.number().parse(state.total_element_count) -
-                state.elements.length +
-                Math.max(0, scoped.length - nodes.length)
-            )
-          : null,
+        omitted: state.total_element_count === undefined ? null : Math.max(
+          0,
+          state.total_element_count - state.elements.length - state.menu_bar_elements_omitted +
+            Math.max(0, scoped.length - nodes.length)
+        ),
         textComplete: state.truncated !== true,
       },
     })
+    const lineage = z.string().optional().parse(state.lineage)
+    if (lineage !== undefined) observation.lineage = lineage
+    return observation
   }
   const dispatchControlOperation = async (
     target: ControlTarget | undefined,
@@ -1840,6 +1868,7 @@ export function createComputerToolsServer(
     validateControlRefs(request.target, request.operation)
     if (key) invalidateControlTarget(key)
     let result: JsonValue
+    let settling: NativeSettling | undefined
     try {
       result = z
         .json()
@@ -1850,6 +1879,8 @@ export function createComputerToolsServer(
             signal
           )
         )
+      if (request.target?.kind === "window")
+        settling = z.object({ settling: NativeSettlingSchema.optional() }).parse(result).settling
     } catch (error) {
       const detail = controlFaultData(error)
       if (key && (!detail || detail.outcome === "unknown"))
@@ -1894,6 +1925,7 @@ export function createComputerToolsServer(
       verification: "not-requested",
       guard,
     }
+    if (settling) receipt.settling = settling
     if (request.operation.kind === "command") receipt.result = result
     return receipt
   }
@@ -1999,6 +2031,7 @@ export function createComputerToolsServer(
           pid: request.target.pid,
           window_id: request.target.window_id,
           include_screenshot: true,
+          include_accessibility_tree: false,
         },
         signal
       )
@@ -2034,6 +2067,7 @@ export function createComputerToolsServer(
     "dispatch",
     "events",
     "capture",
+    "recording",
     "native",
     "page",
   ] as const
@@ -2060,11 +2094,13 @@ export function createComputerToolsServer(
       handles:
         "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across cells. App windows are selected explicitly; no implicit first window.",
       target:
-        "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard}; refs expire after mutation or observation.",
+        "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?}; native settling reports notification quiet/deadline/unavailable, never action success. Refs expire after mutation or observation.",
       observations:
         "Observation has nodes, lines, coverage, get({role,name,within?}) for exactly one observed node, select({text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. No app-specific instructions are assumed.",
       assertions:
         "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial.",
+      recording:
+        "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?}) starts explicit video capture of this tab or window. Save the returned handle in state. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video and timeline paths when ready. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
       page: "tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot(options?), upload(ref,files), dialog({auto?,respond?,promptText?}), children(), retain(name), download({directory,ref?|url?,timeoutMs?}), downloadStatus(id,{timeoutMs?}), close(), release(), cdp(method,params?). tab.raw(name,args?) is the explicit page escape hatch; call help({domain,method}) for pinned CDP schemas. Profile/task/background defaults. name labels the task group; retain(name) keeps a result after task cleanup. children() returns {children:[{browser,tab,title,url}],note}; pass a child to control.claimTab(child). Extension downloads accept an explicit http(s) URL, await the browser-issued ID, and copy the completed file into a unique subdirectory of directory; browserPath retains the original. In-progress results have an id for downloadStatus, never repeat the start. Ref-triggered download routing and isolated contexts require direct CDP.",
       native:
         "window.screenshot({screenshot_out_file?}) returns a view token; coordinates require {x,y,view}, window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
@@ -2114,6 +2150,53 @@ export function createComputerToolsServer(
       if (action === "dispatch") return controlDispatch(args, signal)
       if (action === "events") return controlEventValue(args, signal)
       if (action === "capture") return controlCapture(args, signal)
+      if (action === "recording") {
+        const request = z
+          .object({
+            target: ControlTargetSchema,
+            operation: z.enum(["start", "stop", "status"]),
+            id: z.string().optional(),
+            options: computerArgumentsSchema.optional(),
+          })
+          .strict()
+          .parse(args)
+        if (request.target.kind === "window") {
+          if (request.operation !== "start") {
+            const recording = nativeRecordings.get(
+              request.target,
+              z.string().min(1).parse(request.id)
+            )
+            return request.operation === "stop"
+              ? recording.stop()
+              : nativeRecordings.status(
+                  request.target,
+                  recording.id,
+                  client,
+                  session
+                )
+          }
+          const available = await tools()
+          if (!client)
+            throw new Error("Native recording requires a connected driver")
+          return nativeRecordings.start(
+            request.target,
+            RecordingOptionsSchema.parse(request.options ?? {}),
+            client,
+            available,
+            session,
+            signal
+          )
+        }
+        if (!browserCall) throw new Error("Browser recording needs a Mako task")
+        return browserCall(
+          BrowserCommandSchema.parse({
+            ...request,
+            action: "recording",
+            target: pageTarget(request.target),
+          }),
+          signal
+        )
+      }
       return controlRaw(action, args, signal)
     }
     // Explicit concurrent CDP is needed to release a paused request or dialog.
@@ -2202,6 +2285,7 @@ export function createComputerToolsServer(
     override async close(): Promise<void> {
       closed = true
       observations.close()
+      await nativeRecordings.close()
       await super.close()
       await runtime?.close()
       await browserCall?.close?.()
@@ -2223,12 +2307,12 @@ export function createComputerToolsServer(
     }
   )
   server.onclose = () => {
+    void nativeRecordings.close().finally(() => client?.close())
     closed = true
     observations.close()
     void runtime?.close()
     void browserCall?.close?.()
     void closePageRoutes()
-    void client?.close()
   }
   const reference = async () => {
     try {

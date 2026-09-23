@@ -1,3 +1,4 @@
+import { PromptDeliverySchema } from "./contracts/prompt-delivery.js"
 import { NativeAgentRosterSchema } from "./contracts/native-agents.js"
 import {
   ModelOptionSchema,
@@ -51,6 +52,7 @@ const question = z.object({
   defaultValues: z.array(z.string()).optional(),
 })
 export const LiveRequestSchema = z.object({
+  nativeDelivery: PromptDeliverySchema.optional(),
   targetBindingId: z.string().optional(),
   snapshots: RunSnapshotsSchema.optional(),
   tuning: SessionSettingsSchema.optional(),

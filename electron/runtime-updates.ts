@@ -317,7 +317,7 @@ export class RuntimeUpdates {
         if (installed.version && source.release) {
           policy = {
             ...source,
-            ...source.release(installed.version, binary, real),
+            ...source.release(installed.version, binary, real, env),
           }
           next.label = policy.label
           next.description = policy.description
@@ -333,6 +333,13 @@ export class RuntimeUpdates {
     } catch (error) {
       next.error = error instanceof Error ? error.message : String(error)
     }
+    if (
+      !this.updating.has(provider) &&
+      previous?.installed &&
+      next.installed &&
+      previous.installed !== next.installed
+    )
+      delete next.result
     next.releaseSource = policy.githubRelease
       ? `github:${policy.githubRelease}`
       : policy.npmPackage
@@ -539,24 +546,10 @@ export class RuntimeUpdates {
         provider,
         current,
         plan,
-        env,
+        source.updateEnvironment?.(env) ?? env,
         lockKey
       )
-      if (failure !== null) {
-        const failed = withoutPhase({
-          ...(this.updates[provider] ?? current),
-          result: {
-            at: startedAt,
-            outcome: "failed",
-            from: current.installed,
-            message: failure,
-          },
-        })
-        this.updating.delete(provider)
-        this.publish(provider, failed)
-        await this.persist()
-        return failed
-      }
+      if (failure !== null) throw new Error(failure)
       // A reading already in flight predates the update; wait it out, then read again.
       await this.checking.get(provider)?.catch(() => undefined)
       const after = await this.check(provider, { force: true, latest: true })
@@ -564,6 +557,14 @@ export class RuntimeUpdates {
       if (!to || after.error)
         throw new Error(
           after.error ?? "The updated executable did not report a version"
+        )
+      if (
+        current.installed === to &&
+        current.latest &&
+        compareVersions(to, current.latest) < 0
+      )
+        throw new Error(
+          `The updater finished, but this installation is still ${to}. Version ${current.latest} is available. Check the installation details and try again.`
         )
       const outcome =
         to && current.installed && compareVersions(to, current.installed) === 0
@@ -583,6 +584,20 @@ export class RuntimeUpdates {
       this.publish(provider, done)
       await this.persist()
       return done
+    } catch (error) {
+      const failed = withoutPhase({
+        ...(this.updates[provider] ?? current),
+        result: {
+          at: startedAt,
+          outcome: "failed",
+          from: current.installed,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      })
+      this.updating.delete(provider)
+      this.publish(provider, failed)
+      await this.persist()
+      return failed
     } finally {
       this.updating.delete(provider)
     }

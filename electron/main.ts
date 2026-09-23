@@ -140,6 +140,7 @@ import {
   pageThread,
   threadBlock,
   viewThreadPage,
+  viewThreadPreview,
   readThreadFile,
   stopThreads,
   transcriptArtifactFor,
@@ -1016,6 +1017,7 @@ function bindIpc() {
     (_e, path: string, before?: number, limit?: number) =>
       viewThreadPage(path, before, limit)
   )
+  handle("mako:thread-preview", (_e, path: string) => viewThreadPreview(path))
   handle("mako:thread-block", (_e, path: string, at: BlockAddress) =>
     threadBlock(path, at)
   )
@@ -1068,6 +1070,7 @@ function bindIpc() {
     external: (path) => threadActivitySnapshot()[path]?.status ?? null,
   })
   handle("mako:thread-continuation-resolve", (_event, path: string) => continuation.resolve(path))
+  handle("mako:thread-owner-resolve", (_event, path: string) => continuation.owner(path))
   handle("mako:thread-continuation-plan", (_event, path: string) => continuation.plan(path))
   handle("mako:live-locate", (_event, provider: string, nativeId: string) =>
     liveConversations.connectedSession(provider, nativeId))

@@ -1,13 +1,45 @@
 import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
-import { stat } from "node:fs/promises"
+import { open, stat } from "node:fs/promises"
 import { compareNativeCheckpoint, resumable, type ProviderBinding, type ResumeVerdict } from "./contracts/conversation-control.js"
 import type { ProviderProcessProbe } from "./providers/process-probe.js"
 
-/** Streaming fingerprints cover the entire native record without retaining it in memory. */
+const TAIL_BYTES = 64 * 1024
+const LEGACY_DIGEST = /^[0-9a-f]{64}$/
+
+/**
+ * Identity plus the record's last 64 KB. A native store only grows, so any
+ * append moves the size and the stamp; the tail digest catches a same-size
+ * rewrite inside one clock tick. Hashing whole records once took ten seconds
+ * for a 3.7 GB Codex session on every thread click.
+ */
 export async function nativeCheckpoint(
-  path: string
+  path: string,
+  previous?: string
 ): Promise<string | undefined> {
+  if (previous && LEGACY_DIGEST.test(previous)) return legacyDigest(path)
+  try {
+    const handle = await open(path, "r")
+    try {
+      const before = await handle.stat({ bigint: true })
+      if (!before.isFile()) return undefined
+      const length = Number(before.size < BigInt(TAIL_BYTES) ? before.size : BigInt(TAIL_BYTES))
+      const tail = Buffer.alloc(length)
+      await handle.read(tail, 0, length, Number(before.size) - length)
+      const after = await handle.stat({ bigint: true })
+      if (before.size !== after.size || before.mtimeNs !== after.mtimeNs) return undefined
+      const digest = createHash("sha256").update(tail).digest("hex").slice(0, 32)
+      return `v2:${before.size}:${before.mtimeNs}:${before.ctimeNs}:${before.ino}:${digest}`
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/** Bindings saved before v2 hold a whole-record digest; only those pay for one. */
+async function legacyDigest(path: string): Promise<string | undefined> {
   try {
     const before = await stat(path)
     if (!before.isFile()) return undefined
@@ -34,7 +66,7 @@ export type NativeResumeRecord =
 export type NativeResumeReader = (binding: ProviderBinding) => Promise<NativeResumeRecord>
 
 const readNativeFile: NativeResumeReader = async (binding) => {
-  const current = binding.path ? await nativeCheckpoint(binding.path) : undefined
+  const current = binding.path ? await nativeCheckpoint(binding.path, binding.checkpoint) : undefined
   return current === undefined
     ? { kind: "unavailable", reason: "The native record is missing or changed while it was being read." }
     : { kind: "available", checkpoint: current }
