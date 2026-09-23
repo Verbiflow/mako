@@ -1,7 +1,24 @@
 import { z } from "zod"
 
+/** Provider-owned occurrence, scoped to the native observer's lifetime. */
+export const NativeApprovalIdentitySchema = z.object({
+  scope: z.string().uuid(),
+  sessionId: z.string().min(1).max(512),
+  requestId: z.string().min(1).max(512),
+})
+export type NativeApprovalIdentity = z.infer<typeof NativeApprovalIdentitySchema>
+
+/** The native runtime recorded this decision. It does not prove tool execution. */
+export const NativeApprovalDecisionSchema = z.object({
+  identity: NativeApprovalIdentitySchema,
+  answerDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  observedAt: z.number().finite(),
+})
+export type NativeApprovalDecision = z.infer<typeof NativeApprovalDecisionSchema>
+
 /** Host-owned identity; native request IDs can be reused by later connections. */
 export const ApprovalOriginSchema = z.object({
+  native: NativeApprovalIdentitySchema.optional(),
   nativeRequestId: z.string(),
   observationId: z.string().optional(),
   bindingId: z.string(),
@@ -30,6 +47,7 @@ export const ApprovalResponseSchema = z.object({
   digest: z.string(),
   createdAt: z.number(),
   ended: z.object({ source: ApprovalEndSourceSchema, observedAt: z.number() }).optional(),
+  nativeDecision: NativeApprovalDecisionSchema.optional(),
   state: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("dispatching") }),
     // Only the adapter call returned. This does not prove native acceptance.
@@ -37,10 +55,16 @@ export const ApprovalResponseSchema = z.object({
     z.object({ kind: z.literal("not-submitted"), pending: z.boolean(), reason: z.enum(["request-ended", "invalid-answer"]) }),
     z.object({ kind: z.literal("uncertain"), reason: z.string() }),
   ]),
+}).superRefine((receipt, context) => {
+  if (receipt.nativeDecision && !sameNativeApproval(receipt.origin.native, receipt.nativeDecision.identity))
+    context.addIssue({ code: "custom", path: ["nativeDecision"], message: "Native decision belongs to another approval occurrence" })
 })
 export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>
 
 export function describeApprovalResponse(receipt: ApprovalResponse, questionAvailable = false) {
+  if (receipt.nativeDecision) return receipt.nativeDecision.answerDigest === receipt.digest
+    ? { title: "Agent recorded your answer", guidance: "The agent confirmed this decision for this approval. This does not confirm that the operation finished.", tone: "info" as const }
+    : { title: "Agent recorded a different decision", guidance: "This approval was resolved with a different decision. Mako won’t resend your answer. Check the conversation before continuing.", tone: "caution" as const }
   switch (receipt.state.kind) {
     case "dispatching":
       return { title: "Sending your answer", guidance: "Your answer is saved. Waiting for the connection to confirm submission.", tone: "progress" as const }
@@ -60,6 +84,10 @@ export function describeApprovalResponse(receipt: ApprovalResponse, questionAvai
 }
 
 export function sameApprovalOrigin(a: ApprovalOrigin, b: ApprovalOrigin): boolean {
-  return a.nativeRequestId === b.nativeRequestId && a.observationId === b.observationId && a.bindingId === b.bindingId && a.epoch === b.epoch &&
+  return sameNativeApproval(a.native, b.native) && a.nativeRequestId === b.nativeRequestId && a.observationId === b.observationId && a.bindingId === b.bindingId && a.epoch === b.epoch &&
     a.generation === b.generation && a.connectionGeneration === b.connectionGeneration && a.runId === b.runId
+}
+
+export function sameNativeApproval(a: NativeApprovalIdentity | undefined, b: NativeApprovalIdentity | undefined): boolean {
+  return a === undefined ? b === undefined : b !== undefined && a.scope === b.scope && a.sessionId === b.sessionId && a.requestId === b.requestId
 }

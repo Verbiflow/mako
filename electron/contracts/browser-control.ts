@@ -728,3 +728,55 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
     .strict(),
 ])
 export type BrowserCommand = z.infer<typeof BrowserCommandSchema>
+
+/** Page evidence is invalidated by effects, not by using the raw transport. */
+export function browserCommandEffect(
+  command: BrowserCommand
+): "read" | "observe" | "mutate" | "release" {
+  switch (command.action) {
+    case "observe":
+    case "screenshot":
+      return "observe"
+    case "status":
+    case "tabs":
+    case "capabilities":
+    case "events":
+    case "children":
+    case "downloadStatus":
+    case "frames":
+    case "wait":
+    case "pdf":
+    case "recording":
+    case "retain":
+      return "read"
+    case "cookies":
+      return command.operation === "list" ? "read" : "mutate"
+    case "dialog":
+      return command.respond || command.auto ? "mutate" : "read"
+    case "release":
+    case "close":
+      return "release"
+    case "connect":
+    case "attach":
+    case "detach":
+    case "open":
+    case "select":
+    case "evaluate":
+    case "cdp":
+    case "navigate":
+    case "click":
+    case "hover":
+    case "scroll":
+    case "type":
+    case "press":
+    case "download":
+    case "history":
+    case "selectOption":
+    case "upload":
+      return "mutate"
+    default: {
+      const exhaustive: never = command
+      return exhaustive
+    }
+  }
+}

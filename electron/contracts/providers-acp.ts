@@ -164,6 +164,8 @@ export interface LiveInputQuestion {
 }
 
 export interface LivePermissionRequest {
+  /** Present only when the adapter established an exact native occurrence. */
+  native?: import("./approval-response.js").NativeApprovalIdentity
   /** Adapter-minted occurrence, echoed by request-end evidence. Never a native ID. */
   observationId?: string
   /** Assigned by the host; absent on native events and legacy records. */
