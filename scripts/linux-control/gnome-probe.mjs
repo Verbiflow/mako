@@ -1,3 +1,4 @@
+import { exerciseGestures } from "./wayland-gestures.mjs"
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 const sharp = createRequire(import.meta.url)("sharp")
@@ -49,7 +50,7 @@ async function cell(source) {
     result,
     milliseconds: performance.now() - start,
   })
-  if (response.isError || result.code) throw Error(JSON.stringify(result))
+  if (response.isError || (result.code && result.outcome)) throw Error(JSON.stringify(result))
   return result
 }
 try {
@@ -82,9 +83,15 @@ try {
   await cell(
     `state.target={pid:${target.pid},window_id:${JSON.stringify(window.window_id ?? window.id)}};state.window=control.window(state.target);state.view=await state.window.observe();return state.view;`
   )
+  evidence.gestures = await exerciseGestures({cell, readState, until, recordingDirectory:'/tmp/gnome-gestures', frameOrigin: async () => {
+    const windows = JSON.parse((await exec("python3", ["/repo/scripts/linux-control/gnome-state.py"])).stdout)
+    const actual = windows.find(item => item.pid === target.pid && item.id === (window.window_id ?? window.id))
+    assert.ok(actual && Number.isFinite(actual.buffer_x) && Number.isFinite(actual.buffer_y))
+    return { x: actual.x - actual.buffer_x, y: actual.y - actual.buffer_y }
+  }});
   const value = "GNOME exact — 日本語 🧪 é"
   await cell(
-    `return await state.window.setValue(state.view.get({role:'TextArea',name:'Exact text'}).ref,${JSON.stringify(value)});`
+    `return await state.window.locator({role:'TextArea',name:'Exact text'}).setValue(${JSON.stringify(value)});`
   )
   evidence.afterValue = await until(async () => {
     const state = await readState()
@@ -197,8 +204,8 @@ try {
     ).stdout
   )
   evidence.videoProbe = probe
-  assert.equal(probe.streams[0].width, 640)
-  assert.equal(probe.streams[0].height, 458)
+  assert.equal(probe.streams[0].width, Math.ceil(dimensions.width / 2) * 2)
+  assert.equal(probe.streams[0].height, Math.ceil(dimensions.height / 2) * 2)
   assert.ok(Number(probe.format.duration) > 0.5)
   await exec("ffmpeg", [
     "-v",

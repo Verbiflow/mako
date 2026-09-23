@@ -1,0 +1,12 @@
+{
+  "name": "mako-local-control-acceptance",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@mako/control": "file:packages/control",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "sharp": "0.35.3",
+    "zod": "4.4.3"
+  }
+}

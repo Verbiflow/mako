@@ -7,5 +7,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:24-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+RUN npm install --prefix /opt/mako-test --no-save --ignore-scripts sharp@0.35.3
 ENV CUA_DRIVER_RS_TELEMETRY_ENABLED=0 NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge
 WORKDIR /driver

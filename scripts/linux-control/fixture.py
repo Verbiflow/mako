@@ -1,4 +1,4 @@
-import gi, json, os, sys
+import gi, json, os, sys, time
 from pathlib import Path
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib
@@ -21,6 +21,11 @@ decoy = None
 replaced = False
 reordered_again = False
 dialog = None
+focus_changes = []
+
+def focus_changed(widget, _):
+    focus_changes.append(dict(active=widget.is_active(), at_ns=time.monotonic_ns()))
+window.connect('notify::is-active', focus_changed)
 
 def save(_):
     global saves
@@ -64,7 +69,7 @@ def report():
         except (FileNotFoundError, json.JSONDecodeError):
             pass
     buf = text.get_buffer()
-    data = dict(pid=os.getpid(), entry=entry.get_text(), text=buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True), saves=saves, active=window.is_active(), decoy=decoy.get_text() if decoy else None, replaced=replaced, modal=dialog is not None)
+    data = dict(pid=os.getpid(), entry=entry.get_text(), text=buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True), saves=saves, active=window.is_active(), focus_changes=focus_changes, decoy=decoy.get_text() if decoy else None, replaced=replaced, modal=dialog is not None)
     Path(output + '.tmp').write_text(json.dumps(data))
     os.replace(output + '.tmp', output)
     return True

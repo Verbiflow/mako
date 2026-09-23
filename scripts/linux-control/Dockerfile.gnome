@@ -3,7 +3,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gnome-shell dbus-x11 dbus-user-session python3-gi python3-gi-cairo \
     gir1.2-gtk-3.0 at-spi2-core fonts-noto-cjk fonts-noto-color-emoji \
-    libxkbcommon0 libxtst6 libxi6 libssl3 ffmpeg ca-certificates \
+    libxkbcommon0 libxtst6 libxi6 libssl3 ffmpeg pipewire ca-certificates \
     mesa-utils libgl1-mesa-dri && rm -rf /var/lib/apt/lists/*
 COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:24-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules

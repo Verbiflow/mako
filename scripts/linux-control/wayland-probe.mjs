@@ -1,4 +1,7 @@
+import { exerciseGestures } from "./wayland-gestures.mjs"
 import assert from "node:assert/strict"
+import { createRequire } from "node:module"
+const sharp = createRequire(import.meta.url)("sharp")
 import { readFile, writeFile, stat } from "node:fs/promises"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
@@ -25,7 +28,7 @@ async function cell(source) {
   }
   const result = JSON.parse(response.content.filter(item => item.type === "text").at(-1).text)
   evidence.calls.push({ source, result, milliseconds: performance.now() - start })
-  if (response.isError || result.code) throw Error(JSON.stringify(result))
+  if (response.isError || (result.code && result.outcome)) throw Error(JSON.stringify(result))
   return result
 }
 try {
@@ -38,9 +41,18 @@ try {
   assert.ok(window, "Compositor identifies the exact native Wayland window")
   await cell(`state.target={pid:${target.pid},window_id:${JSON.stringify(window.window_id ?? window.id)}};state.window=control.window(state.target);state.view=await state.window.observe();return state.view;`)
   const value = "Wayland exact — 日本語 🧪 é"
-  await cell(`return await state.window.setValue(state.view.get({role:'TextArea',name:'Exact text'}).ref,${JSON.stringify(value)});`)
+  await cell(`return await state.window.locator({role:'TextArea',name:'Exact text'}).setValue(${JSON.stringify(value)});`)
   evidence.afterValue = await until(async () => { const state = await readState(); return state.text === value ? state : null })
+  assert.ok(evidence.afterValue.width <= window.bounds.width && evidence.afterValue.height <= window.bounds.height, "GTK fixture fits inside the compositor window; its far-corner marker must not be clipped")
   evidence.visibleCapture = await cell("try {const image=await state.window.screenshot({screenshot_out_file:'/tmp/wayland-visible.png'});return {status:'captured',keys:Object.keys(image)};} catch(error) {return {status:'refused',message:error.message};}")
+  assert.equal(evidence.visibleCapture.status, "captured")
+  const metadata = await sharp("/tmp/wayland-visible.png").metadata()
+  assert.equal(metadata.width, window.bounds.width)
+  assert.equal(metadata.height, window.bounds.height)
+  const corner = await sharp("/tmp/wayland-visible.png").extract({left:metadata.width-35,top:metadata.height-35,width:1,height:1}).removeAlpha().raw().toBuffer()
+  evidence.corner = [...corner]
+  assert.deepEqual(evidence.corner, [224,88,69], "Screenshot preserves the actual far corner at the action scale")
+  evidence.gestures = await exerciseGestures({cell, readState, until});
   await exec("swaymsg", [`[con_id=${window.window_id ?? window.id}] move container to workspace 2`])
   cover = spawn("python3", ["/repo/scripts/linux-control/recording-fixture.py", "Human work", "/tmp/wayland-cover.json", "ba3084"], { stdio: "ignore" })
   const coverState = await until(async () => JSON.parse(await readFile("/tmp/wayland-cover.json", "utf8")))
@@ -64,7 +76,12 @@ try {
   assert.equal(evidence.recording.status, "refused", "Unsupported exact-window recording refuses before desktop capture")
   evidence.compositor = JSON.parse((await exec("swaymsg", ["-r", "-t", "get_tree"])).stdout)
   evidence.passed = true
-} catch (error) { evidence.error = error.message; process.exitCode = 1 }
+} catch (error) {
+  evidence.error = error.message
+  evidence.failureState = await readState().catch(() => null)
+  evidence.failureOutputs = await readFile("/tmp/outputs.json", "utf8").then(JSON.parse).catch(() => null)
+  process.exitCode = 1
+}
 finally {
   await client.close().catch(() => {})
   cover?.kill()

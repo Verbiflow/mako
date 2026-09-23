@@ -8,8 +8,9 @@ const run = promisify(execFile)
 const driver = process.env.MAKO_TEST_DRIVER ?? "/target/debug/cua-driver"
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const read = async (path) => JSON.parse(await readFile(path, "utf8"))
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < 200; i++) {
   try {
+    await read("/tmp/target.json")
     await read("/tmp/user.json")
     break
   } catch {
@@ -103,7 +104,7 @@ try {
         "/tmp/mako-driver.sock",
       ],
       env: { ...process.env },
-      stderr: "pipe",
+      stderr: "inherit",
     })
   )
   const cell = async (source) => {

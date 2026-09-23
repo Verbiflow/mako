@@ -11,6 +11,7 @@ exec dbus-run-session -- sh -c '
  gsettings set org.gnome.shell disable-user-extensions false
  gsettings set org.gnome.shell welcome-dialog-last-shown-version "46"
  gsettings set org.gnome.desktop.interface enable-animations false
+ pipewire >/tmp/pipewire.log 2>&1 &
  gnome-shell --wayland --headless --no-x11 --virtual-monitor 1280x900 >/tmp/gnome-shell.log 2>&1 &
  ready=0
  for n in $(seq 1 150); do
@@ -21,6 +22,13 @@ exec dbus-run-session -- sh -c '
    sleep .1
  done
  gdbus call --session --dest org.cua.WinRects --object-path /org/cua/WinRects --method org.cua.WinRects.GetVersion
+ export LIBEI_SOCKET="$XDG_RUNTIME_DIR/mako-eis.sock"
+ python3 /repo/scripts/linux-control/gnome-eis-fixture.py "$LIBEI_SOCKET" >/tmp/eis-fixture.log 2>&1 &
+ for n in $(seq 1 100); do
+   [ ! -S "$LIBEI_SOCKET" ] || break
+   sleep .1
+ done
+ [ -S "$LIBEI_SOCKET" ] || { cat /tmp/eis-fixture.log; exit 1; }
  python3 /repo/scripts/linux-control/recording-fixture.py "Mako GNOME target" /tmp/gnome-target.json 2b5f8f >/tmp/fixture.log 2>&1 &
  "$MAKO_RECORDING_DRIVER" serve --no-overlay --dangerously-bypass-approvals --socket /tmp/mako-driver.sock >/tmp/driver.log 2>&1 &
  node /repo/scripts/linux-control/gnome-probe.mjs
