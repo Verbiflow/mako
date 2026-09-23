@@ -187,6 +187,15 @@ and images. `state` is task-local memory, not durable storage.
 
 ## Failures and escape hatches
 
+Invalid caller input returns `code:'invalid-request', outcome:'not-dispatched'`
+with a bounded field correction and example. Locators report `target-ambiguous`,
+`target-not-found`, `incomplete-observation` or `target-not-actionable` before input.
+These outcomes describe the failed operation, not earlier steps in a program:
+correct that step without replaying prior writes. Backend failures after dispatch
+remain unknown even if their cause is a response-schema error. Common examples
+are available in `mako_control_help({topic:'examples'})`; replace example labels
+with exact names from your observation.
+
 Control failures preserve a `code` and an `outcome` across worker and MCP
 boundaries: `not-dispatched`, `rejected`, or `unknown`. An unknown outcome may
 have changed the UI. Observe the affected target before deciding what to do;

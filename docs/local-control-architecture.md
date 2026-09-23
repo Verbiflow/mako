@@ -42,24 +42,24 @@ a wrapper that only forwards methods does not earn another layer.
 
 ## Start with the actual seams
 
-- [`createControlSession`](../electron/control-session.ts) owns program/session
-  state and host policy. [`createComputerToolsServer`](../electron/computer-tools-main.ts)
+- [`createControlSession`](../packages/control-runtime/src/control-session.ts) owns program/session
+  state and host policy. [`createComputerToolsServer`](../packages/control-runtime/src/computer-tools-main.ts)
   owns MCP registration/formatting; the CLI socket adapter calls the same session.
   Browser capture, native dispatch and recovery have no second CLI implementation.
 - [`startControlService`](../electron/control-service.ts) is an existing authorized
   HTTP bridge for browser/preview work. It is not already the extracted cross-
   platform session engine. Preserve its binding-versus-conversation distinction;
   the prior preview owner bug is a regression case for this boundary.
-- [`BrowserService`](../electron/browser-service.ts) and the
-  [native driver connection](../electron/computer-driver-client.ts) are real
+- [`BrowserService`](../packages/control-runtime/src/browser-service.ts) and the
+  [native driver connection](../packages/control-runtime/src/computer-driver-client.ts) are real
   backend seams. Reuse them; do not force both into a giant interface of optional
   methods. Backend-specific capability variants remain explicit and validated.
-- [`BrowserCapture`](../electron/browser-capture.ts) already centralizes tab stream
+- [`BrowserCapture`](../packages/control-runtime/src/browser-capture.ts) already centralizes tab stream
   ownership. Extend the media seam behind it without making preview components
   start another CDP screencast. Native capture has different source/lifecycle
   behavior; share only the metadata, ownership and consumer contracts it can honor.
-- The [cloud worker](../electron/cloud-control-worker.ts) and
-  [launcher](../electron/cloud-control-main.ts) demonstrate a non-Electron owner.
+- The [cloud worker](../packages/control-runtime/src/cloud-control-worker.ts) and
+  [launcher](../packages/control-runtime/src/cloud-control-main.ts) demonstrate a non-Electron owner.
   Keep the desktop and isolated-job lifecycle policies explicit. A broken viewer
   connection is not automatically a request to destroy its running job.
 

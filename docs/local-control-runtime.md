@@ -17,8 +17,8 @@ Electron runtime. Do not package the whole Mako app merely to run these files.
 | Component | Owner and dependencies | Evidence / remaining work |
 | --- | --- | --- |
 | Public API and program worker | `packages/control`; Node and Zod | Shared across providers; no Electron import. |
-| Shared session and MCP adapter | `electron/control-session.ts` owns native policy/state; `electron/computer-tools-main.ts` owns MCP; Node and MCP SDK | Executed on native Intel EC2 without Electron. |
-| Browser transport, targets and recording | `electron/browser-service.ts`; Node, ws, image decoding and FFmpeg when recording | Can be composed directly with the MCP adapter using `browserCall`; this turn’s dev capture used that composition under Node. |
+| Shared session and MCP adapter | `packages/control-runtime/src/control-session.ts` owns native policy/state; `packages/control-runtime/src/computer-tools-main.ts` owns MCP; Node and MCP SDK | Executed on native Intel EC2 without Electron. |
+| Browser transport, targets and recording | `packages/control-runtime/src/browser-service.ts`; Node, ws, image decoding and FFmpeg when recording | Can be composed directly with the MCP adapter using `browserCall`; this turn’s dev capture used that composition under Node. |
 | Native driver | Patched Cua executable | Separate process. macOS uses the desktop host’s responsibility/permission chain; Linux uses the job’s display and accessibility bus. |
 | Hidden Mako desk | Electron `BrowserWindow` adapter | Only needed to inspect Mako itself. Dev screenshot and recording pass after renderer readiness. |
 | Cloud launcher and release | `cloud-control-main.ts` supervises a job worker and its process group; target-specific package graph | Eleven lifecycle scenarios passed on ARM64 and native Intel x64. Locally prepared, not published. |
@@ -93,7 +93,10 @@ Eleven standalone lifecycle scenarios passed on ARM64 and native Intel x64, incl
 
 ## Build and run the standalone package
 
-From a built checkout, prepare only the target's reviewed inputs:
+The engine is the reusable `@mako/control-runtime` Node package; see
+[its public imports and CLI examples](../packages/control-runtime/README.md).
+`runtime/control` only assembles deployment dependencies. It has no second engine.
+Run `npm run build:control-runtime`, then prepare the target's reviewed inputs:
 
 ```sh
 node scripts/package-control-runtime.mjs --platform=linux-x64 \
@@ -121,7 +124,7 @@ A trusted configuration names a fresh absolute output path and explicit backends
 }
 ```
 
-Launch `node dist-electron/cloud-control-main.js --config /absolute/job.json`
+Launch `./node_modules/.bin/mako-control-mcp --config /absolute/job.json`
 inside the disposable job boundary and connect MCP over stdio. Omit unused
 backends. Browser sandboxing defaults on; `sandbox:false` is an explicit trusted
 runner choice, used only inside the isolated acceptance container. Do not forward

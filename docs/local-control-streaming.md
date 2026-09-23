@@ -29,7 +29,7 @@ Neither article proves Mako needs Go, a particular codec, or a new agent runtime
 
 ## What the Mako inspection shows
 
-- [BrowserCapture](../electron/browser-capture.ts) already shares one CDP stream
+- [BrowserCapture](../packages/control-runtime/src/browser-capture.ts) already shares one CDP stream
   per attachment and ACKs independently of consumers. It receives complete JPEG
   frames; this is not an unchanged-region capture/encode implementation.
 - [ControlPreviews](../electron/control-previews.ts) bounds delivery to the newest
@@ -38,7 +38,7 @@ Neither article proves Mako needs Go, a particular codec, or a new agent runtime
 - [Renderer preview state](../src/state/control-preview.ts) shares native video
   capture between viewers. The [native component](../src/components/inspector/native-control-preview.tsx)
   consumes a local MediaStream; that is not a remote WebRTC service.
-- [Recording](../electron/control-recording.ts) retains source frames and finalizes
+- [Recording](../packages/control-runtime/src/control-recording.ts) retains source frames and finalizes
   files separately. Preview presentation and recorded evidence have different
   lifetimes and quality requirements.
 - Existing measurements count host deliveries and decoded recording frames.

@@ -63,6 +63,13 @@ file sizes are 32,006,448 bytes (Mac ARM64), 47,732,752 bytes (Linux ARM64), and
 The native Linux packages include the helper and license; these figures are
 executable bytes, not full desktop-app or container-image sizes.
 
+## Reusable package boundaries
+
+See [LC-28](local-control-map.md#lc-28--reusable-packages-and-public-entrypoints)
+and the [source audit](package-boundaries.md). The current standalone runtime
+assembles a tested application payload; an independently importable Node engine
+with clean-install type/worker/media checks remains a separate work item.
+
 ## Further work
 
 The native executable still links upstream browser helpers, policy evaluation,
@@ -113,3 +120,15 @@ module; its packages contain 67 files. These numbers exclude npm dependencies an
 OS image layers, so they are not total installed sizes. See the runtime guide and
 exact release manifests. Initial native ARM64 and Intel x64 lifecycle acceptance
 passed; the capture21 evidence identifies subsequent tested builds separately.
+
+
+## Reusable Node package extraction
+
+LC-28 now ships source packages `@mako/control` and `@mako/control-runtime`; the
+Linux deployment recipe installs those same packages. The CLI, MCP adapter and
+application share their engine. Archives include declarations and licenses, omit
+maps/caches/binaries, and pass a strict external-consumer check. Desktop packaging
+omits package declarations. Docker installs complete prepared packages before
+creating CLI links. See [measured sizes and acceptance](local-control-package-evidence.md).
+Full native/mixed image totals, the newly packaged desktop and publication remain
+separate gates; the small npm archives do not represent installed Chromium size.

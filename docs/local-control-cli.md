@@ -8,10 +8,10 @@ the [issue ledger](local-control-agent-issues.md) tracks the original agent fail
 
 ## One session across commands
 
-[`createControlSession`](../electron/control-session.ts) owns the runtime, target
+[`createControlSession`](../packages/control-runtime/src/control-session.ts) owns the runtime, target
 references, recovery state, native policy, recordings and cleanup.
-[`createComputerToolsServer`](../electron/computer-tools-main.ts) is its MCP adapter.
-The [CLI](../electron/control-cli.ts) uses that same session through a private Unix
+[`createComputerToolsServer`](../packages/control-runtime/src/computer-tools-main.ts) is its MCP adapter.
+The [CLI](../packages/control-runtime/src/control-cli.ts) uses that same session through a private Unix
 socket. It does not start another browser, input engine or reference cache for
 each command. MCP and CLI share script `state`, exact target leases and recordings.
 
@@ -25,7 +25,7 @@ Untrusted cloud jobs still need the VM/container boundary.
 
 ## Use it
 
-In a built checkout, run `node /absolute/mako/dist-electron/control-cli.js`.
+In a built checkout, run `node /absolute/mako/packages/control-runtime/dist/control-cli.js`.
 The standalone package provides `mako-control`; `mako-control-mcp` is the separate
 MCP stdio launcher. The installed Mako app has not yet received this update.
 

@@ -15,6 +15,7 @@ parity has not been established.
   Shell verbs and the shared session engine are implemented and locally tested; installation is pending.
 - **Interactive streaming:** [reference findings, transport experiments and local/remote scope](local-control-streaming.md).
 - **Using the existing API:** [API reference](local-control-api.md).
+- **Reusable packages:** [Node package ownership and consumer checks](package-boundaries.md); [LC-28](#lc-28--reusable-packages-and-public-entrypoints).
 - **Build, cloud and contributors:** [runtime](local-control-runtime.md),
   [packaging](local-control-packaging.md), [CI](local-control-ci.md).
 - **Earlier decisions, experiments and failures:** [history](local-control-history.md).
@@ -157,6 +158,16 @@ publish the current 30 fps limit; known startup refusals are `not-dispatched`.
 Stale image/reference CLI faults use the recovery exit code. These close scoped
 contract bugs, not general discovery/usability acceptance.
 
+Shared input boundaries now return bounded `invalid-request/not-dispatched` faults
+for common target, selector, read, action, screenshot and recording mistakes.
+Misspelled click options cannot fall through to a default left click. Ambiguous,
+missing and incomplete locator results carry explicit pre-dispatch faults. MCP
+recovery warns that earlier program steps may already have completed; response
+validation after a write still preserves unknown outcomes and the recovery guard.
+Public scoped-edit/screenshot help examples pass against duplicate controls in
+real Linux Chromium. [Evidence](audits/2026-09-23/local-control-input-contract.md).
+This is executable-help acceptance, not a fresh-agent usability pass.
+
 Next: finish capability/result typing, understandable validation and recovery,
 consistent role/name/text semantics, and consolidated executable help examples.
 Distinguish a disconnected browser, unsupported operation, no native windows and
@@ -286,6 +297,32 @@ size breakdown, no private credentials or wrong-target dependencies, and runtime
 capture/input/lifecycle acceptance. Any reduction must preserve those results.
 Generic build declarations do not certify Intel Mac, Windows or Linux desktop releases.
 
+## LC-28 — Reusable packages and public entrypoints
+
+**Status: Node runtime extraction implemented; clean packed-consumer and ARM64 jobs validated locally.**
+[Ownership and imports](package-boundaries.md). Session search is explicitly out
+of scope; the user approved Node packages plus composable CLIs.
+
+`@mako/control` remains lightweight. `@mako/control-runtime` now owns the shared
+session/browser/native/capture implementation and CLI/MCP entrypoints. Desktop,
+extension, build and deployment callers use the new package; old source and
+compiled entrypoints are removed. Standalone configuration is explicit, worker
+paths resolve within packages, and engine identity survives relocation. Strict
+external TypeScript checks also exposed and fixed invalid inferred observation
+declarations. A pending native connection is disposed when its owner closes.
+
+`npm run test:control-packages` verifies real archives without workspace links,
+public types, separate CLI processes sharing worker state, capture, correction
+errors, artifact spill, lifecycle and release boundaries. Real ARM64 Chromium and
+GTK jobs preserve targeting, media and cleanup. See
+[extraction evidence](local-control-package-evidence.md) for exact scope,
+measurements and limitations; LC-26 owns full installed size per target.
+
+Next: public distribution/versioning and installed desktop/Aside acceptance;
+run this package revision on the native x64 contributor runner. These are not
+implied by a local source move or ARM64 container run. Physical input and broader
+compositor coverage remain in LC-24/25.
+
 ## LC-27 — Complete-job accuracy, performance and harness evaluation
 
 **Status: substantial fixture evidence; broad comparative acceptance remains open.**
@@ -329,6 +366,6 @@ The user explicitly prioritizes maintainable abstraction, debuggability and fast
 feature iteration. The architecture contract therefore requires one owner per
 resource, correlated bounded diagnostics, fault injection at shared seams and
 backend/transport change tests. Interface count alone is not progress.
-No new user choice currently blocks the CLI or capture implementation. Physical
+LC-28's Node-package/CLI decision is settled; session search is out of scope. Physical
 input participation, safe installed-app handoff and unavailable comparison hardware
 or binaries are specific acceptance dependencies, not blanket project blockers.
