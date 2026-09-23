@@ -1,4 +1,5 @@
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
+import { ApprovalEvidenceCapabilitySchema, type ApprovalEvidenceCapability } from "./approval-capability.js"
 import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -40,6 +41,8 @@ export interface ConversationTools {
 
 /** Host-only launch credentials. Never included in the renderer wire contract or journals. */
 export interface ProviderStartOptions extends LiveStartOptions {
+  /** Exact unresolved native occurrences from this binding; observe only, never answer again. */
+  observedApprovals?: import("../contracts/approval-response.js").NativeApprovalIdentity[]
   /** Prior child identities for this exact resumed binding; states require fresh evidence. */
   observedAgents?: NativeAgentObservation[]
   emit?: (event: LiveDriverEvent) => void
@@ -49,6 +52,7 @@ export interface ProviderStartOptions extends LiveStartOptions {
 }
 
 export interface ProviderLiveDriver extends ProviderCapability {
+  approvalEvidence: ApprovalEvidenceCapability
   observesNativeAgents?: true
   steer?(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult>
   /** Required with `steer`; says what the provider does with the message. */
@@ -101,6 +105,9 @@ export type ProviderSteerResult =
  * at startup rather than at a call site months later.
  */
 export function validateLiveDriver(driver: ProviderLiveDriver): void {
+  ApprovalEvidenceCapabilitySchema.parse(driver.approvalEvidence)
+  if (driver.approvalEvidence.kind === "no-interactive-requests" && driver.modes?.some(mode => mode.access === "ask" || mode.access === "edits"))
+    throw new Error(`${driver.provider}: an asking mode requires native interactive requests`)
   if (Boolean(driver.steer) !== Boolean(driver.steering))
     throw new Error(`${driver.provider}: steer and steering are declared together or not at all`)
   for (const mode of driver.modes ?? [])

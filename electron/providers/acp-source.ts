@@ -6,6 +6,7 @@ import type { ProviderLiveDriver } from "./live-driver.js"
 import type { RequestPermissionRequest, NewSessionRequest } from "@agentclientprotocol/sdk"
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "../acp-access.js"
+import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contracts/approval-response.js"
 
 export type AcpTuning = SessionSettings
 
@@ -32,10 +33,22 @@ export interface AcpLaunch {
   configureEnvironment(env: NodeJS.ProcessEnv): void
   prepareMcp?(servers: readonly McpServer[], env: NodeJS.ProcessEnv): Promise<() => Promise<void>>
   permissionTitle?(request: RequestPermissionRequest): string | undefined
+  /** Observe native decisions without taking over the provider's permission policy. */
+  prepareApprovals?(input: {
+    root: string
+    env: NodeJS.ProcessEnv
+    previous: readonly NativeApprovalIdentity[]
+    publish(decision: NativeApprovalDecision): void
+  }): Promise<AcpApprovalObserver>
+}
+
+export interface AcpApprovalObserver {
+  identify(request: RequestPermissionRequest): Promise<NativeApprovalIdentity | undefined>
+  dispose(): Promise<void>
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict"> {
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict" | "approvalEvidence"> {
   /** Native tool identity supplied by provider extensions to ACP metadata. */
   toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
   /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */

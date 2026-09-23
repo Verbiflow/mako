@@ -6,6 +6,7 @@ import type { ProviderLiveDriver } from "./live-driver.js"
 export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
   return {
     provider: source.provider,
+    approvalEvidence: source.approvalEvidence,
     observesNativeAgents: source.observeAgents ? true : undefined,
     canResume: source.canResume,
     compaction: source.compaction?.kind === "supported"
