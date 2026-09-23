@@ -1,4 +1,5 @@
 import type { ComponentType } from "react"
+import type { LucideIcon } from "lucide-react"
 
 /** The five nav groups, in the order the rail lists them. */
 export const SETTINGS_GROUPS = [
@@ -21,6 +22,7 @@ export interface SettingsSection {
   readonly id: string
   readonly title: string
   readonly group: SettingsGroup
+  readonly icon: LucideIcon
   readonly keywords: readonly string[]
   readonly Component: ComponentType
 }

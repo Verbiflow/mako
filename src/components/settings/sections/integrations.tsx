@@ -1,3 +1,4 @@
+import { PlugIcon } from "lucide-react"
 import { IntegrationsSection } from "@/components/settings/integrations-section"
 import type { SettingsSection } from "./manifest"
 
@@ -5,6 +6,7 @@ export const section = {
   id: "integrations",
   title: "Integrations",
   group: "Extensions",
+  icon: PlugIcon,
   keywords: [
     "slack",
     "gmail",

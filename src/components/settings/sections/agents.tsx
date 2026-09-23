@@ -1,3 +1,4 @@
+import { BotIcon } from "lucide-react"
 import { AgentsSection } from "@/components/settings/agents-section"
 import type { SettingsSection } from "./manifest"
 
@@ -5,6 +6,7 @@ export const section = {
   id: "agents",
   title: "Agents",
   group: "Providers",
+  icon: BotIcon,
   keywords: [
     "login",
     "capture",

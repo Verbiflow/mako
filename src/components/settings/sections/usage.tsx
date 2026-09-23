@@ -1,3 +1,4 @@
+import { GaugeIcon } from "lucide-react"
 import { UsageSection } from "@/components/settings/usage-section"
 import type { SettingsSection } from "./manifest"
 
@@ -5,6 +6,7 @@ export const section = {
   id: "usage",
   title: "Usage",
   group: "Providers",
+  icon: GaugeIcon,
   keywords: [
     "cost",
     "spend",

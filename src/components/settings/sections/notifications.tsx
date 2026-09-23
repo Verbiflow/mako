@@ -1,3 +1,4 @@
+import { BellIcon } from "lucide-react"
 import { NotificationsSection } from "@/components/settings/notifications-section"
 import type { SettingsSection } from "./manifest"
 
@@ -5,6 +6,7 @@ export const section = {
   id: "notifications",
   title: "Notifications",
   group: "Desk",
+  icon: BellIcon,
   keywords: [
     "notifications",
     "alerts",
