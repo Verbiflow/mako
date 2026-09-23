@@ -68,7 +68,7 @@ interface Options {
   reasoning: string | undefined
   runs: number
   maxTurns: number
-  transport: "mcp" | "direct-sdk"
+  transport: "mcp"
   surface: "legacy" | "unified"
   images: boolean
   tasksFile: string | undefined
@@ -124,11 +124,6 @@ function parseArguments(argv: readonly string[]): Options {
         break
       case "--max-turns":
         options.maxTurns = Number(next(index++, flag))
-        break
-      case "--transport":
-        options.transport = z
-          .enum(["mcp", "direct-sdk"])
-          .parse(next(index++, flag))
         break
       case "--surface":
         options.surface = z
@@ -476,7 +471,6 @@ interface Surface {
 
 async function openSurface(
   root: string,
-  cuaTransport: Options["transport"],
   surface: Options["surface"]
 ): Promise<Surface> {
   const socket = await ensureCuaEmbedded(
@@ -504,7 +498,6 @@ async function openSurface(
     env: {
       ...getDefaultEnvironment(),
       MAKO_TASK_ID: `agent-benchmark-${randomUUID()}`,
-      MAKO_CUA_TRANSPORT: cuaTransport,
     },
     stderr: "pipe",
   })
@@ -1128,11 +1121,11 @@ if (!options.live) {
   process.env.MAKO_CONTROL_ARTIFACTS ??= join(root, "artifacts")
   const out = options.out ?? join(root, "results.jsonl")
   await writeFile(out, "")
-  const surface = await openSurface(root, options.transport, options.surface)
+  const surface = await openSurface(root, options.surface)
   const administration =
     options.surface === "legacy"
       ? surface
-      : await openSurface(root, options.transport, "legacy")
+      : await openSurface(root, "legacy")
   await administration.exec(
     "await computer.start_session({capture_scope: 'window'}); return 1"
   )

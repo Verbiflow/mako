@@ -116,7 +116,7 @@ async function review() {
   )
   await until("document.body.textContent.includes('0.0.0-beta-19425')")
   assert.equal(
-    await evaluate("document.querySelectorAll('[role=table]').length"),
+    await evaluate("document.querySelectorAll('[role=list]').length"),
     1
   )
   assert.equal(
@@ -127,7 +127,9 @@ async function review() {
   await fixture("f.theme('light')")
   await screenshot("agents-light.png")
   await fixture("f.theme('dark')")
-  await click("Sign in")
+  await evaluate(
+    `document.querySelector('[aria-label="Manage Cursor"]').click()`
+  )
   await click("Paste API key")
   await until("document.activeElement?.type === 'password'")
   await page.debugger.sendCommand("Input.insertText", { text: "fixture-key" })
@@ -143,17 +145,18 @@ async function review() {
   await screenshot("agents-auth-error.png")
   await click("Cancel")
   await click("Close")
-  await click("Manage")
+  await evaluate(
+    `document.querySelector('[aria-label="Manage OpenCode"]').click()`
+  )
   await until("document.body.textContent.includes('OpenCode credentials')")
   assert.equal(
-    await evaluate("document.querySelectorAll('[role=table]').length"),
+    await evaluate("document.querySelectorAll('[role=list]').length"),
     1
   )
   await evaluate(
     "document.querySelector('#provider-opencode-accounts').scrollIntoView({block:'center'})"
   )
   await screenshot("agents-opencode-credentials.png")
-  await click("Close")
   await evaluate(
     "document.querySelector('[aria-label=\"Update OpenCode 1\"]').scrollIntoView({block:'center'})"
   )
@@ -177,15 +180,23 @@ async function review() {
   )
   await screenshot("agents-update-error.png")
   await evaluate(
-    "document.querySelector('[role=table]').parentElement.style.width='480px'"
+    "document.querySelector('[role=list]').parentElement.style.width='480px'"
   )
   await screenshot("agents-narrow.png")
   assert.equal(
     await evaluate(
-      "(() => {const t=document.querySelector('[role=table]');return t.scrollWidth <= t.clientWidth+1})()"
+      "(() => {const t=document.querySelector('[role=list]');return t.scrollWidth <= t.clientWidth+1})()"
     ),
     true
   )
+  await evaluate(`document.querySelector('[role="listitem"][aria-label="Grok"]').scrollIntoView({block:'center'})`)
+  await click("Sign in")
+  await until("document.body.textContent.includes('Complete sign-in in your browser')")
+  await until("document.body.textContent.includes('using Grok’s CLI login')")
+  assert.equal(await evaluate(`document.querySelector('#provider-grok-accounts').textContent.includes('Paste API key')`), false)
+  assert.equal(await evaluate(`document.querySelector('#provider-grok-accounts').textContent.includes('system key store is unavailable')`), false)
+  assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser"])
+  await screenshot("agents-grok-connected.png")
   assert.deepEqual(errors, [])
   clearTimeout(watchdog)
   window.destroy()

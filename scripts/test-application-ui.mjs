@@ -94,6 +94,14 @@ async function review() {
     }
   }
   const click = async (text) => {
+    // A closing modal remains over the page during its exit animation. Text
+    // being present underneath it does not make that button clickable yet.
+    await until(`(() => {
+      const button = [...document.querySelectorAll('button')].filter(b => b.getBoundingClientRect().width && b.textContent.trim() === ${JSON.stringify(text)}).at(-1);
+      if (!button || button.disabled) return false;
+      const r = button.getBoundingClientRect();
+      return button.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+    })()`)
     const point = await evaluate(
       `(() => { const buttons = [...document.querySelectorAll('button')].filter(b => b.getBoundingClientRect().width && b.textContent.trim() === ${JSON.stringify(text)}); const button = buttons.at(-1); if (!button) throw new Error('Missing button: ' + ${JSON.stringify(text)}); const r = button.getBoundingClientRect(); return {x: r.x + r.width / 2, y: r.y + r.height / 2}; })()`
     )
@@ -161,7 +169,7 @@ async function review() {
   assert.equal(await fixture("return f.calls.stopped"), 0)
   await until("!document.querySelector('.application-dialog')")
   await key("Escape", 27)
-  await until("!document.querySelector('[data-slot=dialog-content]')")
+  await until("!document.querySelector('[role=dialog]')")
   await click("Cancel update")
   await until("!document.body.textContent.includes('Cancel update')")
   await key("q", 81, 4)

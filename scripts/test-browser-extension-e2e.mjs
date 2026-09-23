@@ -234,11 +234,15 @@ try {
   for (let round = 0; round < 2; round++) {
     const browserArgs = [
       `--user-data-dir=${join(root, "profile")}`,
-      ...(process.argv.includes("--recovery") ? ["--remote-debugging-port=0"] : []),
+      ...(process.argv.includes("--recovery")
+        ? ["--remote-debugging-port=0"]
+        : []),
       `--load-extension=${extension},${companion}`,
       `--disable-extensions-except=${extension},${companion}`,
       ...(windowed ? [] : ["--headless=new"]),
-      ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : []),
+      ...(process.platform === "linux" && process.getuid?.() === 0
+        ? ["--no-sandbox"]
+        : []),
       "--no-first-run",
       "--no-default-browser-check",
       process.argv.includes("--local-update")
@@ -316,7 +320,9 @@ try {
     }
     assert.equal(
       value.applicationPath,
-      process.platform === "darwin" ? dirname(dirname(dirname(executable))) : executable,
+      process.platform === "darwin"
+        ? dirname(dirname(dirname(executable)))
+        : executable,
       "Native messaging resolves actual browser application without a debugging port"
     )
     if (process.argv.includes("--profile-metadata")) {
@@ -395,6 +401,18 @@ try {
         target,
         url: `http://127.0.0.1:${page.address().port}`,
       })
+      if (process.argv.includes("--recording")) {
+        const { validateBrowserRecording } =
+          await import("./lib/browser-recording-fixture.mjs")
+        await validateBrowserRecording({
+          run,
+          service,
+          target,
+          root,
+          round,
+          fixtureSaves,
+        })
+      }
       await run({ action: "click", target, at: { x: 40, y: 20 } })
       await run({ action: "type", target, text: `round-${round}` })
       const typed = await run({
@@ -638,6 +656,20 @@ try {
         target: restricted,
         url: `http://127.0.0.1:${page.address().port}`,
       })
+      let interruptedRecording
+      if (process.argv.includes("--recording")) {
+        interruptedRecording = await run({
+          action: "recording",
+          target: restricted,
+          operation: "start",
+          options: {
+            directory: root,
+            name: "Restricted-frame interruption",
+            maxDurationMs: 10000,
+          },
+        })
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
       await assert.rejects(
         run({
           action: "cdp",
@@ -650,6 +682,25 @@ try {
         }),
         (error) => error.detail?.outcome === "unknown"
       )
+      if (interruptedRecording) {
+        let receipt
+        for (let n = 0; n < 300; n++) {
+          receipt = await run({
+            action: "recording",
+            target: restricted,
+            operation: "status",
+            id: interruptedRecording.id,
+          })
+          if (!["recording", "finalizing"].includes(receipt.status)) break
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        assert.equal(receipt.status, "interrupted", receipt.error)
+        assert.ok(receipt.video, "detachment retains already-captured video")
+        await writeFile(
+          join(receipt.directory, "interruption.json"),
+          JSON.stringify(receipt, null, 2)
+        )
+      }
       const detachedCleanup = await service.releaseOwner("extension-e2e")
       assert.equal(
         detachedCleanup.closed,
@@ -739,20 +790,56 @@ try {
       )
       await run({ action: "close", target: reclaimed })
       if (process.argv.includes("--recovery") && round === 0) {
-        const interrupted = BrowserTargetSchema.parse(await run({action:"open", browser:value.id, background:true}))
-        await run({action:"navigate",target:interrupted,url:`http://127.0.0.1:${page.address().port}`})
-        await run({action:"click",target:interrupted,at:{x:40,y:20}})
-        await run({action:"type",target:interrupted,text:"before-reload"})
-        const proof=await reloadExtensionFixture(join(root,"profile"),extensionId,()=>registration(1),value.endpoint)
-        value=proof.registration
-        await assert.rejects(run({action:"type",target:interrupted,text:"must-not-replay"}))
-        await run({action:"connect",browser:value.id})
-        const fresh=BrowserTargetSchema.parse(await run({action:"select",browser:value.id,tab:interrupted.tab}))
-        const inspected=await run({action:"evaluate",target:fresh,expression:'document.querySelector("input").value'})
-        assert.equal(inspected.result.value,"before-reload")
-        await run({action:"close",target:fresh})
-        await writeFile(join(root,"forced-reload.json"),JSON.stringify(proof.recovery,null,2))
-        console.log("Forced extension reload: durable interruption, preserved page, stale lease refusal and fresh inspection without replay passed")
+        const interrupted = BrowserTargetSchema.parse(
+          await run({ action: "open", browser: value.id, background: true })
+        )
+        await run({
+          action: "navigate",
+          target: interrupted,
+          url: `http://127.0.0.1:${page.address().port}`,
+        })
+        await run({
+          action: "click",
+          target: interrupted,
+          at: { x: 40, y: 20 },
+        })
+        await run({
+          action: "type",
+          target: interrupted,
+          text: "before-reload",
+        })
+        const proof = await reloadExtensionFixture(
+          join(root, "profile"),
+          extensionId,
+          () => registration(1),
+          value.endpoint
+        )
+        value = proof.registration
+        await assert.rejects(
+          run({ action: "type", target: interrupted, text: "must-not-replay" })
+        )
+        await run({ action: "connect", browser: value.id })
+        const fresh = BrowserTargetSchema.parse(
+          await run({
+            action: "select",
+            browser: value.id,
+            tab: interrupted.tab,
+          })
+        )
+        const inspected = await run({
+          action: "evaluate",
+          target: fresh,
+          expression: 'document.querySelector("input").value',
+        })
+        assert.equal(inspected.result.value, "before-reload")
+        await run({ action: "close", target: fresh })
+        await writeFile(
+          join(root, "forced-reload.json"),
+          JSON.stringify(proof.recovery, null, 2)
+        )
+        console.log(
+          "Forced extension reload: durable interruption, preserved page, stale lease refusal and fresh inspection without replay passed"
+        )
       }
       console.log(
         `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership, disconnect/reconnect lifetime cleanup, cancellation without replay and stale-handle refusal passed`

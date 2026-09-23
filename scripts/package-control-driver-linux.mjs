@@ -2,14 +2,22 @@ import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash } from "node:crypto"
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { tmpdir } from "node:os"
 
 const run = promisify(execFile)
 const source = process.argv[2]
+const options = process.argv.slice(3)
+assert.ok(options.every((arg) => /^--(?:arch|image)=.+$/.test(arg)), "Use --arch=arm64|x64 and --image=<build-image>")
+const arch = options.find((arg) => arg.startsWith("--arch="))?.slice(7)
+assert.ok(arch === "arm64" || arch === "x64", "Specify the release target explicitly: --arch=arm64 or --arch=x64")
+const image = options.find((arg) => arg.startsWith("--image="))?.slice(8) ?? "mako-control-linux:platform-v2"
+const dockerPlatform = arch === "arm64" ? "linux/arm64" : "linux/amd64"
+const platform = `linux-${arch}`
 assert.ok(
   source,
-  "Usage: node scripts/package-control-driver-linux.mjs <pinned source checkout>"
+  "Usage: node scripts/package-control-driver-linux.mjs <pinned source checkout> --arch=arm64|x64 [--image=<build-image>]"
 )
 const root = resolve(source)
 const manifest = JSON.parse(
@@ -25,7 +33,15 @@ async function verifySource() {
     (
       await run(
         "git",
-        ["-C", root, "diff", "HEAD", "--", "libs/cua-driver/rust"],
+        [
+          "-C",
+          root,
+          "diff",
+          "HEAD",
+          "--",
+          "libs/cua-driver/rust",
+          "libs/cua-driver/wayland-helper",
+        ],
         { maxBuffer: 8 * 1024 * 1024 }
       )
     ).stdout,
@@ -33,98 +49,146 @@ async function verifySource() {
   )
 }
 await verifySource()
-const image = "mako-control-linux:platform-v2"
-await run("docker", ["image", "inspect", image])
-const architecture = (
-  await run("docker", ["run", "--rm", image, "uname", "-m"])
-).stdout.trim()
-assert.ok(["aarch64", "x86_64"].includes(architecture))
-const platform = architecture === "aarch64" ? "linux-arm64" : "linux-x64"
-const volume = "mako-control-linux-target"
-const mounts = ["--mount", `type=volume,source=${volume},target=/target`]
-await run(
-  "docker",
-  [
-    "run",
-    "--rm",
-    ...mounts,
-    "--mount",
-    `type=bind,source=${join(root, "libs/cua-driver")},target=/source,readonly`,
-    "--mount",
-    "type=volume,source=mako-control-linux-cargo,target=/usr/local/cargo/registry",
-    "-e",
-    "CARGO_TARGET_DIR=/target",
-    "-e",
-    "CARGO_BUILD_JOBS=4",
-    "-w",
-    "/source/rust",
-    image,
-    "cargo",
-    "build",
-    "--release",
-    "--locked",
-    "-p",
-    "cua-driver",
-  ],
-  { timeout: 1800000, maxBuffer: 16 * 1024 * 1024 }
-)
-await verifySource()
-const version = (
-  await run("docker", [
-    "run",
-    "--rm",
-    ...mounts,
-    image,
-    "/target/release/cua-driver",
-    "--version",
-  ])
-).stdout.trim()
-assert.equal(version, `cua-driver ${manifest.version}`)
-const output = resolve("release/control-driver", manifest.version, platform)
-await mkdir(resolve(output, ".."), { recursive: true })
-await mkdir(output)
-const container = (
-  await run("docker", ["create", ...mounts, image, "true"])
-).stdout.trim()
+// Build an immutable archive reconstructed from the pinned base and reviewed
+// patch. Live bind-mounted source can change (or expose partial reads) mid-build.
+const snapshot = await mkdtemp(join(tmpdir(), "mako-linux-driver-source-"))
+const sourceArchive = join(snapshot, "source.tar")
 try {
-  await run("docker", [
-    "cp",
-    `${container}:/target/release/cua-driver`,
-    join(output, "cua-driver"),
+  await run("git", [
+    "-C",
+    root,
+    "archive",
+    "--format=tar",
+    `--output=${join(snapshot, "base.tar")}`,
+    manifest.base,
+    "libs/cua-driver",
   ])
+  await run("tar", ["-xf", join(snapshot, "base.tar"), "-C", snapshot])
+  await writeFile(join(snapshot, "release.patch"), patch)
+  await run("git", ["apply", join(snapshot, "release.patch")], {
+    cwd: snapshot,
+  })
+  await run("tar", [
+    "-cf",
+    sourceArchive,
+    "-C",
+    join(snapshot, "libs/cua-driver"),
+    "rust",
+    "wayland-helper",
+  ])
+  await run("docker", ["image", "inspect", image])
+  const architecture = (
+    await run("docker", ["run", "--rm", "--platform", dockerPlatform, image, "uname", "-m"])
+  ).stdout.trim()
+  assert.equal(architecture, arch === "arm64" ? "aarch64" : "x86_64", "Build image does not match requested release target")
+  const volume = `mako-control-linux-target-${arch}`
+  const mounts = ["--platform", dockerPlatform, "--mount", `type=volume,source=${volume},target=/target`]
+  await run(
+    "docker",
+    [
+      "run",
+      "--rm",
+      ...mounts,
+      "--mount",
+      `type=bind,source=${sourceArchive},target=/source.tar,readonly`,
+      "--mount",
+      "type=volume,source=mako-control-linux-cargo,target=/usr/local/cargo/registry",
+      "-e",
+      "CARGO_TARGET_DIR=/target",
+      "-e",
+      "CARGO_BUILD_JOBS=4",
+      image,
+      "sh",
+      "-c",
+      "mkdir -p /build && tar -xf /source.tar -C /build && cd /build/rust && cargo build --release --locked -p cua-driver",
+    ],
+    { timeout: 1800000, maxBuffer: 16 * 1024 * 1024 }
+  )
+  await verifySource()
+  const version = (
+    await run("docker", [
+      "run",
+      "--rm",
+      ...mounts,
+      image,
+      "/target/release/cua-driver",
+      "--version",
+    ])
+  ).stdout.trim()
+  assert.equal(version, `cua-driver ${manifest.version}`)
+  const elf = (await run("docker", ["run", "--rm", ...mounts, image, "readelf", "-h", "/target/release/cua-driver"])).stdout
+  assert.match(elf, arch === "arm64" ? /Machine:\s+AArch64/ : /Machine:\s+Advanced Micro Devices X86-64/, "Executable architecture differs from release target")
+  const output = resolve("release/control-driver", manifest.version, platform)
+  await mkdir(resolve(output, ".."), { recursive: true })
+  await mkdir(output)
+  const container = (
+    await run("docker", ["create", ...mounts, image, "true"])
+  ).stdout.trim()
+  try {
+    await run("docker", [
+      "cp",
+      `${container}:/target/release/cua-driver`,
+      join(output, "cua-driver"),
+    ])
+  } finally {
+    await run("docker", ["rm", container])
+  }
+  await cp(join(root, "LICENSE.md"), join(output, "LICENSE-Cua.md"))
+  await cp(
+    join(snapshot, "libs/cua-driver/wayland-helper"),
+    join(output, "wayland-helper"),
+    { recursive: true }
+  )
+  const hash = (data) => createHash("sha256").update(data).digest("hex")
+  const imageId = (
+    await run("docker", ["image", "inspect", "--format", "{{.Id}}", image])
+  ).stdout.trim()
+  const libraries = (
+    await run("docker", [
+      "run",
+      "--rm",
+      ...mounts,
+      image,
+      "ldd",
+      "/target/release/cua-driver",
+    ])
+  ).stdout
+  assert.ok(!libraries.includes("not found"), "Native runtime is missing a shared library")
+  await writeFile(
+    join(output, "provenance.json"),
+    JSON.stringify(
+      {
+        base: manifest.base,
+        version: manifest.version,
+        platform,
+        elf,
+        imageId,
+        patchSha256: hash(patch),
+        sourceArchiveSha256: hash(await readFile(sourceArchive)),
+        binarySha256: hash(await readFile(join(output, "cua-driver"))),
+        gnomeHelper: {
+          api: 9,
+          files: Object.fromEntries(
+            await Promise.all(
+              ["extension.js", "metadata.json"].map(async (file) => [
+                file,
+                hash(
+                  await readFile(
+                    join(output, "wayland-helper/winrects@cua", file)
+                  )
+                ),
+              ])
+            )
+          ),
+        },
+        libraries,
+        builtAt: new Date().toISOString(),
+      },
+      null,
+      2
+    ) + "\n"
+  )
+  console.log(output)
 } finally {
-  await run("docker", ["rm", container])
+  await rm(snapshot, { recursive: true, force: true })
 }
-await cp(join(root, "LICENSE.md"), join(output, "LICENSE-Cua.md"))
-const hash = (data) => createHash("sha256").update(data).digest("hex")
-const imageId = (
-  await run("docker", ["image", "inspect", "--format", "{{.Id}}", image])
-).stdout.trim()
-const libraries = (
-  await run("docker", [
-    "run",
-    "--rm",
-    ...mounts,
-    image,
-    "ldd",
-    "/target/release/cua-driver",
-  ])
-).stdout
-await writeFile(
-  join(output, "provenance.json"),
-  JSON.stringify(
-    {
-      base: manifest.base,
-      version: manifest.version,
-      platform,
-      imageId,
-      patchSha256: hash(patch),
-      binarySha256: hash(await readFile(join(output, "cua-driver"))),
-      libraries,
-      builtAt: new Date().toISOString(),
-    },
-    null,
-    2
-  ) + "\n"
-)
-console.log(output)

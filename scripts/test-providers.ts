@@ -317,7 +317,7 @@ const providers = providerHost.profiles.list().map((loader) => loader.provider)
 assert.ok(providers.length > 0)
 assert.equal(new Set(providers).size, providers.length)
 // Cursor has one transport, the SDK: no headless CLI runner and no ACP
-// source, and it is the one provider with a sign-in of its own.
+// source. Cursor and Grok expose provider-owned sign-in.
 assert.deepEqual(
   providerHost.nativeRunners.list().map((runner) => runner.provider),
   providers.filter((provider) => provider !== "cursor")
@@ -326,7 +326,7 @@ assert.equal(providerHost.liveDrivers.get("cursor")?.canResume, true)
 assert.equal(providerHost.liveDrivers.get("cursor")?.steering, "interrupt")
 assert.deepEqual(
   providerHost.connections.list().map((connection) => connection.provider),
-  ["cursor"]
+  ["cursor", "grok"]
 )
 assert.deepEqual(
   providerHost.mcpSources.list().map((source) => source.provider),

@@ -1,3 +1,4 @@
+import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
@@ -80,9 +81,20 @@ await driver.start("/tmp", {
   conversationId: "sdk-fixture",
   emit: (event) => events.push(event),
 })
-await driver.prompt("sdk-fixture", "Begin", [])
+const delivery: PromptDeliveryEvidence[] = []
+const attemptId = randomUUID()
+await driver.prompt("sdk-fixture", "Begin", [], undefined, { operationId: randomUUID(), attemptId, report: (evidence) => delivery.push(evidence) })
+assert.equal(delivery.at(-1)?.kind, "submitted", "SDK enqueue does not acknowledge delivery")
 const original = await input?.next()
 assert.equal(original?.value?.message.content[0].text, "Begin")
+assert.equal(original?.value?.uuid, attemptId)
+assert.ok(original?.value)
+output.send({ ...original.value, uuid: randomUUID() })
+await new Promise<void>((resolve) => setImmediate(resolve))
+assert.equal(delivery.at(-1)?.kind, "submitted", "unrelated native echo cannot acknowledge input")
+output.send(original.value)
+await new Promise<void>((resolve) => setImmediate(resolve))
+assert.deepEqual(delivery.at(-1), { kind: "accepted", source: "native-echo", referenceId: attemptId })
 const running = events.findLast(
   (event) => event.type === "live-session" && event.session.status === "running"
 )
@@ -122,7 +134,7 @@ assert.equal(
   "live-session"
 )
 await assert.rejects(
-  driver.prompt("sdk-fixture", "After stop", []),
+  driver.prompt("sdk-fixture", "After stop", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} }),
   /disconnected/
 )
 
@@ -229,6 +241,31 @@ for (const confirmed of [true, false]) {
   assert.ok(final?.type === "live-action-result")
   assert.equal(final.actionId, "compact-action")
   assert.equal(final.result.kind, confirmed ? "completed" : "uncertain")
+  if (confirmed) {
+    const authError = "Failed to authenticate: OAuth session expired and could not be refreshed"
+    const promptAttempt = randomUUID()
+    const receipts: PromptDeliveryEvidence[] = []
+    await compactDriver.prompt("compact-fixture", "Fixture prompt", [], undefined, {
+      operationId: randomUUID(), attemptId: promptAttempt, report: (evidence) => receipts.push(evidence),
+    })
+    messages.send({ ...result, uuid: randomUUID(), user_message_uuid: promptAttempt, is_error: true, result: authError })
+    await delay(0)
+    const failed = compactEvents.findLast((event) => event.type === "live-session")
+    assert.ok(failed?.type === "live-session")
+    assert.equal(failed.session.status, "failed")
+    assert.equal(failed.session.error, authError, "success subtype must not discard is_error result text")
+    assert.equal(receipts.at(-1)?.kind, "accepted", "API failure does not undo SDK acknowledgement")
+    const nextAttempt = randomUUID()
+    await compactDriver.prompt("compact-fixture", "Next prompt", [], undefined, {
+      operationId: randomUUID(), attemptId: nextAttempt, report() {},
+    })
+    messages.send({ ...result, uuid: randomUUID(), user_message_uuid: nextAttempt, result: authError })
+    await delay(0)
+    const success = compactEvents.findLast((event) => event.type === "live-session")
+    assert.ok(success?.type === "live-session")
+    assert.equal(success.session.status, "ready", "ordinary answer text cannot establish a failure")
+    assert.equal(success.session.error, undefined)
+  }
   compactDriver.close("compact-fixture")
 }
 console.log("PASS: Claude compaction requires a manual boundary and the matching SDK result")

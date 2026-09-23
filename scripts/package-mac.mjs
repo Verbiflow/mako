@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { build, Platform, Arch } from "electron-builder"
 import { extractFile } from "@electron/asar"
+import { auditPackage } from "./audit-package.mjs"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
 import { localMacConfig, resolveLocalIdentity, verifyLocalSignature } from "./mac-local-signing.mjs"
 
@@ -50,7 +51,8 @@ const inputs = [
   "build/Mako.icns",
   "build/entitlements.mac.plist",
   "build/mako-notification-status",
-  "vendor/kiri",
+  "vendor/kiri/darwin-arm64",
+  "vendor/control-media/darwin-arm64",
 ]
 async function digest(path) {
   const hash = createHash("sha256")
@@ -90,6 +92,11 @@ try {
   // The notification authorization helper ships beside the executable; see
   // electron/notification-authorization.ts for why it must live there.
   execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
+  const mediaRoot = join(project, "vendor/control-media/darwin-arm64")
+  const mediaProvenance = JSON.parse(await readFile(join(mediaRoot, "provenance.json"), "utf8"))
+  for (const name of ["ffmpeg", "ffprobe"]) {
+    assert.equal(await digest(join(mediaRoot, name)), mediaProvenance.binaries[name], `Unreviewed recording binary: ${name}`)
+  }
   const before = await manifest(project)
   await Promise.all(inputs.map(async (path) => {
     await mkdir(dirname(join(stage, path)), { recursive: true })
@@ -135,6 +142,15 @@ try {
         buildResources: join(stage, "build"),
       },
       files: [
+        // A positive root pattern prevents electron-builder from adding **/*
+        // when the root matcher otherwise contains only exclusions.
+        "package.json",
+        // Dependency collection ignores filters on external staging FileSets.
+        // Root exclusions are required to keep dependency source maps out too.
+        "!**/*.map",
+        "!**/__pycache__/**",
+        "!**/*.pyc",
+        "!**/*.pyo",
         {
           from: stage,
           to: ".",
@@ -153,13 +169,15 @@ try {
           filter: ["package.json", "dist/**", "!**/*.map"],
         })),
       ],
-      extraResources: [...(buildConfig.extraResources ?? []), { from: join(stage, "vendor/kiri"), to: "kiri" }],
+      extraResources: [...(buildConfig.extraResources ?? []), { from: join(stage, "vendor/kiri"), to: "kiri" }, { from: join(stage, "vendor/control-media"), to: "control-media" }],
       extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }],
       mac: {
         ...buildConfig.mac,
         binaries: [
           ...(buildConfig.mac?.binaries ?? []),
           "Contents/Resources/kiri/darwin-arm64/kiri-engine",
+          "Contents/Resources/control-media/darwin-arm64/ffmpeg",
+          "Contents/Resources/control-media/darwin-arm64/ffprobe",
           "Contents/MacOS/mako-notification-status",
         ],
         icon: join(stage, "build/Mako.icns"),
@@ -184,6 +202,19 @@ try {
     assert.deepEqual(metadata[key], value, `Packaged metadata differs from the frozen configuration: ${key}`)
   const verified = []
   for (const file of before) {
+    if (file.path.startsWith("vendor/control-media/")) {
+      const target = join(app, "Contents/Resources", file.path.slice("vendor/".length))
+      if (/\/(ffmpeg|ffprobe)$/.test(file.path)) {
+        // Signing changes Mach-O bytes; verify the executable and its dependency closure.
+        const version = execFileSync(target, ["-version"], { encoding: "utf8" })
+        assert.match(version, /version 8\.0\.1/)
+        const dependencies = execFileSync("otool", ["-L", target], { encoding: "utf8" })
+        for (const line of dependencies.split("\n").slice(1).filter((line) => line.trim()))
+          assert.match(line.trim(), /^(\/usr\/lib\/|\/System\/Library\/)/)
+      } else assert.equal(await digest(target), file.sha256, `Packaged recording resource differs: ${file.path}`)
+      verified.push({ path: target, sha256: await digest(target) })
+      continue
+    }
     if (file.path.startsWith("vendor/kiri/")) {
       const target = join(app, "Contents/Resources", file.path.slice("vendor/".length))
       if (file.path.endsWith("/kiri-engine")) {
@@ -215,6 +246,7 @@ try {
     )
     verified.push({ path: target, sha256: file.sha256 })
   }
+  await auditPackage(app, "darwin-arm64", join(output, "package-size.json"))
   const imports = assertPackagedImports(app)
   const signature = localIdentity ? await verifyLocalSignature(app, localIdentity) : null
   execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app], { cwd: project, stdio: "inherit", timeout: 180_000 })

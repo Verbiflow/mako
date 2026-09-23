@@ -89,16 +89,17 @@ async function check() {
       await evaluate(`import('/src/state/prefs.ts').then(({setPref}) => setPref('theme', ${JSON.stringify(theme)}))`)
       await until(`document.documentElement.classList.contains('light') === ${JSON.stringify(theme === "light")}`)
       for (const profile of profiles.slice(0, theme === "dark" ? profiles.length : 1)) {
-        await click('[data-composer] button[aria-label^="Agent:"]')
-        await until(`Boolean([...document.querySelectorAll('[role="dialog"] button')].find(node => node.textContent.startsWith(${JSON.stringify(profile.label)})))`)
-        await click('[role="dialog"] button', profile.label)
+        await click('[data-composer] [data-model-picker]')
+        await until(`Boolean([...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find(node => node.textContent.startsWith(${JSON.stringify(profile.label)})))`)
+        await click('[role="menu"] [role="menuitem"]', profile.label)
+        await key("Escape", "Escape", 27)
         try {
-          await until("!document.querySelector('[role=\"dialog\"]')", 5_000)
+          await until(`Boolean(document.querySelector('[data-composer] [data-model-picker][data-harness=${JSON.stringify(profile.id)}]'))`, 5_000)
         } catch {
-          // A provider whose row needs a sign-in flow keeps the picker open; it is not this menu's concern.
-          console.error(`UNVERIFIED: ${profile.id}: the agent picker did not accept the selection`)
+          // A provider whose row needs a sign-in flow opens Settings instead; it is not this menu's concern.
+          console.error(`UNVERIFIED: ${profile.id}: the model picker did not accept the selection`)
           await key("Escape", "Escape", 27)
-          await until("!document.querySelector('[role=\"dialog\"]')")
+          await until("!document.querySelector('[role=\"menu\"]')")
           continue
         }
         await click(".composer-input")
@@ -110,8 +111,8 @@ async function check() {
         await capture(`${theme}-${profile.id}-dollar.png`)
         const listed = await rows()
         const header = await evaluate(`${menu("$")}.getAttribute('aria-label')`)
-        const selected = await evaluate("document.querySelector('[data-composer] button[aria-label^=\"Agent:\"]').getAttribute('aria-label').slice(7)")
-        assert.equal(selected, profile.label, "the picker took the selection")
+        const selected = await evaluate("document.querySelector('[data-composer] [data-model-picker]').getAttribute('data-harness')")
+        assert.equal(selected, profile.id, "the picker took the selection")
         assert.ok(header.includes(profile.label), `header names the selected provider: ${header}`)
         assert.ok(listed.some((row) => row.builtIn && row.group === "MCP servers"), "a built-in Mako server wears the fin")
         assert.ok(listed.some((row) => row.title === "mako-conversations"), "the launch-attached conversation tools are listed")

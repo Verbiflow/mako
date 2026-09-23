@@ -130,7 +130,7 @@ try {
   await a.send("Page.reload")
   await until(()=>a.evaluate("document.querySelector('.composer-input')?.value").catch(()=>null),value=>value==="Draft A remains private","reloaded draft")
   assert.equal(await b.evaluate("document.querySelector('.composer-input').value"),"Draft B remains private")
-  assert.equal(await a.evaluate(`Boolean(document.querySelector('[aria-label="Agent: Devin"]'))`),true,"Reload must retain the active conversation's provider")
+  assert.equal(await a.evaluate(`Boolean(document.querySelector('[data-model-picker][data-harness="devin"]'))`),true,"Reload must retain the active conversation's provider")
   assert.equal((await snapshot()).session.nativeId,waiting.session.nativeId)
   assert.equal(Number((await readFile(join(homedir(),".local/share/devin/cli/session_locks",`${waiting.session.nativeId}.lock`),"utf8")).trim()),providerPid)
   await a.capture("before-closing-clients.png")

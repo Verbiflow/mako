@@ -10,6 +10,8 @@ import { resolveLocalIdentity } from "./mac-local-signing.mjs"
 // PATH entry, permissions or running process is changed by packaging.
 const run = promisify(execFile)
 const source = process.argv[2]
+assert.equal(process.platform, "darwin", "The Mac driver recipe requires macOS")
+assert.equal(process.arch, "arm64", "This recipe is validated for macOS ARM64; use a separately validated recipe for Intel Mac")
 assert.ok(
   source,
   "Usage: node scripts/package-control-driver.mjs <source checkout>"
@@ -27,7 +29,15 @@ assert.equal(
 )
 const { stdout: diff } = await run(
   "git",
-  ["-C", root, "diff", "HEAD", "--", "libs/cua-driver/rust"],
+  [
+    "-C",
+    root,
+    "diff",
+    "HEAD",
+    "--",
+    "libs/cua-driver/rust",
+    "libs/cua-driver/wayland-helper",
+  ],
   { maxBuffer: 8 * 1024 * 1024 }
 )
 const patch = await readFile(join(vendor, manifest.patch), "utf8")
@@ -49,6 +59,7 @@ await run("cargo", ["build", "--release", "--locked", "-p", "cua-driver"], {
 })
 const binary = join(workspace, "target/release/cua-driver")
 await stat(binary)
+assert.equal((await run("lipo", ["-archs", binary])).stdout.trim(), "arm64", "Driver binary does not match the package target")
 const identity = await resolveLocalIdentity(
   process.env.MAKO_LOCAL_SIGNING_IDENTITY
 )
@@ -120,6 +131,7 @@ await writeFile(
   JSON.stringify(
     {
       ...manifest,
+      platform: "darwin-arm64",
       identity,
       patchSha256: sha256(patch),
       binarySha256: sha256(

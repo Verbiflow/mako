@@ -88,7 +88,7 @@ try {
   const offline = await runtime.check("opencode:opencode2", { latest: true })
   assert.equal(offline.installed, "0.0.0-beta-19426")
   assert.equal(offline.update, undefined)
-  assert.equal(runtimeRowView(offline).detail, "Latest version unknown")
+  assert.equal(runtimeRowView(offline).detail, "Couldn’t check for updates")
   const npm = openCodeRelease(
     "0.0.0-beta-19425",
     "/tmp/opencode2",
@@ -141,6 +141,34 @@ try {
   assert.equal(replaced.latest, "0.0.0-beta-19425")
   assert.equal(replaced.label, "OpenCode 2 · beta")
   assert.equal(replaced.releaseSource, "github:anomalyco/opencode-beta")
+  await writeFile(v2, '#!/bin/sh\nexec "$(dirname "$0")/opencode" "$@"\n', {
+    mode: 0o755,
+  })
+  assert.equal(
+    await openCodeUpdateSource.installations?.[0].binary(env),
+    null,
+    "the argument-preserving wrapper is the same installation"
+  )
+  assert.equal(
+    openCodeRelease("2.0.1", v1, v1, env).primary,
+    true,
+    "wrapper-selected runtime remains primary"
+  )
+  const deduplicated = await runtime.refresh()
+  assert.equal(
+    deduplicated["opencode:opencode2"].binary,
+    undefined,
+    "old persisted duplicate is retired"
+  )
+  await writeFile(
+    v2,
+    '#!/bin/sh\nexport OPENCODE_DB=other.db\nexec "$(dirname "$0")/opencode" "$@"\n'
+  )
+  assert.equal(
+    await openCodeUpdateSource.installations?.[0].binary(env),
+    v2,
+    "a wrapper changing configuration remains distinct"
+  )
   await rm(v1)
   await symlink(v2, v1)
   assert.equal(

@@ -1,3 +1,4 @@
+import { verifyNativeDelivery } from "./provider-delivery-fixture.mjs"
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
 import {
   sampleFrontmost,
@@ -259,7 +260,8 @@ async function runElectron() {
         throw new Error(snapshot.session.error ?? "Provider failed")
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    throw new Error("Provider did not complete within the test deadline")
+    const timedOut = owner.snapshot(id)
+    throw new Error(`Provider deadline: ${JSON.stringify({ status: timedOut?.session.status, connection: timedOut?.session.connection, requests: timedOut?.requests.map(request => ({ id: request.id, status: request.status, delivery: request.nativeDelivery?.evidence.kind })) })}`)
   }
   try {
     for (const driver of process.argv.includes("--browser-only") ||
@@ -357,6 +359,33 @@ async function runElectron() {
             join(root, "results.json"),
             JSON.stringify(results, null, 2)
           )
+          continue
+        }
+        if (process.argv.includes("--delivery")) {
+          const checked = await verifyNativeDelivery({
+            owner, id, nonce, catalog, waitFor,
+            restart: async (binding) => {
+              owner.stop()
+              stopAcp()
+              stopCodexApps()
+              mcp.close()
+              const deadline = Date.now() + 30_000
+              while (!resumable(await resumeVerdict(binding))) {
+                if (Date.now() > deadline) throw new Error("Native session did not become safe to reopen")
+                await new Promise((resolve) => setTimeout(resolve, 250))
+              }
+              owner = new LiveConversations(dependencies)
+              mcp = await startConversationMcp(owner)
+              return owner
+            },
+          })
+          const { snapshot, ...evidence } = checked
+          result.status = "passed"
+          result.nativeId = checked.nativeId
+          result.delivery = evidence
+          await writeFile(join(root, `${driver.provider}.json`), JSON.stringify(snapshot, null, 2))
+          console.log(JSON.stringify(result))
+          await writeFile(join(root, "results.json"), JSON.stringify(results, null, 2))
           continue
         }
         const requestId = randomUUID()

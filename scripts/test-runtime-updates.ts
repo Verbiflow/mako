@@ -314,6 +314,12 @@ try {
   assert.deepEqual(next.spawned, [], "the persisted signature spares the spawn")
   assert.deepEqual(next.changed, [])
 
+  next.runResult = { code: 0, output: "success without replacing the selected installation" }
+  const wrongCopy = await second.update("codex")
+  assert.equal(wrongCopy.result?.outcome, "failed", "updating a different copy cannot claim this one is current")
+  assert.match(wrongCopy.result?.message ?? "", /still 0.154.0/)
+  next.ran.length = 0
+
   // An update: the plan runs under the channel lock, the binary is read again, the receipt names both versions.
   next.runResult = { code: 0, output: "\nchanged 2 packages in 3s\n" }
   const codexBinary = "/Users/me/.nvm/versions/node/v24.19.0/bin/codex"
@@ -405,6 +411,12 @@ try {
     "start @anthropic-ai/claude-code@latest",
     "end @anthropic-ai/claude-code@latest",
   ])
+  next.runResult = { code: 1, output: "Temporary update error" }
+  await second.update("codex")
+  next.stats[codexBinary] = { mtimeMs: 10_000, size: 14 }
+  next.versions[codexBinary] = "codex-cli 0.156.0"
+  const externalUpdate = await second.check("codex")
+  assert.equal(externalUpdate.result, undefined, "a detected external update clears the old failure receipt")
   third.stop()
   gated.stop()
   second.stop()
@@ -423,16 +435,16 @@ assert.deepEqual(
 )
 assert.equal(
   runtimeRowView({ installed: "0.147.0", latest: "0.154.0", channel: "app", managedBy: "ChatGPT.app" }, now).detail,
-  "0.154.0 available · Updates come with ChatGPT.app"
+  "0.154.0 available · Included with ChatGPT"
 )
 assert.equal(runtimeRowView({ installed: "0.154.0", latest: "0.154.0", channel: "npm" }, now).detail, "Current")
 assert.equal(runtimeRowView({ installed: "0.154.0", latest: "0.154.0", channel: "npm" }, now).action, undefined)
-assert.equal(runtimeRowView({ installed: "0.154.0-alpha.6.2", latest: "0.154.0", channel: "app", managedBy: "ChatGPT.app" }, now).detail, "0.154.0 available · Updates come with ChatGPT.app", "a prerelease is behind its release")
-assert.equal(runtimeRowView({ installed: "3000.6.14", channel: "managed", managedBy: "Zed", checkedAt: now }, now).detail, "Updates come from Zed")
+assert.equal(runtimeRowView({ installed: "0.154.0-alpha.6.2", latest: "0.154.0", channel: "app", managedBy: "ChatGPT.app" }, now).detail, "0.154.0 available · Included with ChatGPT", "a prerelease is behind its release")
+assert.equal(runtimeRowView({ installed: "3000.6.14", channel: "managed", managedBy: "Zed", checkedAt: now }, now).detail, "Update through Zed")
 const cursorRow = runtimeRowView({ installed: "2026.09.10-fd3934a", channel: "self", update: { label: "Update Cursor Agent", command: "cursor-agent", args: ["update"] }, checkedAt: now }, now)
-assert.deepEqual(cursorRow.action, { label: "Check for updates" }, "no public version: the CLI's own updater is the check")
+assert.deepEqual(cursorRow.action, { label: "Check and update" }, "no public version: the CLI's own updater is the check")
 assert.equal(cursorRow.detail, "Checks with its own updater")
-assert.equal(runtimeRowView({ installed: "0.154.0", channel: "npm", latestError: "npm registry answered 503", checkedAt: now }, now).detail, "Latest version unknown")
+assert.equal(runtimeRowView({ installed: "0.154.0", channel: "npm", latestError: "npm registry answered 503", checkedAt: now }, now).detail, "Couldn’t check for updates")
 assert.equal(runtimeRowView({ installed: "0.154.0", channel: "brew", managedBy: "Homebrew", checkedAt: now }, now).detail, "Installed with Homebrew")
 const updating = runtimeRowView({ installed: "0.147.0", latest: "0.154.0", phase: "updating", update: { label: "Update with npm", command: "npm", args: [] } }, now)
 assert.equal(updating.detail, "Updating…")

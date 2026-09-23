@@ -21,6 +21,7 @@ const cases: [string, string][] = [
   ["This model's maximum context length is 128000 tokens", "context-exhausted"],
   ["401 Unauthorized: invalid api key", "auth"],
   ["auth_required", "auth"],
+  ["Failed to authenticate: OAuth session expired and could not be refreshed", "auth"],
   ["Not logged in. Run `cursor-agent login`.", "auth"],
   ["Your plan does not include this model", "auth"],
   ["429 Too Many Requests", "rate-limited"],

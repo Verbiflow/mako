@@ -76,10 +76,14 @@ const firstView = threadViewingActions.view(ref)
 while (!waiting.has(ref.path)) await new Promise((resolve) => setTimeout(resolve, 1))
 const secondView = threadViewingActions.view({ ...ref, path: second.threadPath, nativeId: "native-second" })
 while (!waiting.has(second.threadPath)) await new Promise((resolve) => setTimeout(resolve, 1))
+await Promise.all([firstView, secondView])
+assert.ok(threadsStore.get().opening || threadsStore.get().viewing, "a click paints the saved thread before its owner answers")
 waiting.get(second.threadPath)!(second)
-await secondView
+for (let attempt = 0; attempt < 100 && acpStore.get().activeKey !== second.session.id; attempt++)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+assert.equal(acpStore.get().activeKey, second.session.id, "the selected thread's owner takes over when it answers")
 waiting.get(ref.path)!(snapshot)
-await firstView
+await new Promise((resolve) => setTimeout(resolve, 20))
 assert.equal(acpStore.get().activeKey, second.session.id, "a late peer snapshot cannot steal selection from a newer click")
 console.log("Shared thread selection: a stale local binding cannot capture sends, and out-of-order owner replies preserve the selected thread")
 

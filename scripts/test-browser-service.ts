@@ -252,6 +252,7 @@ try {
   const firstObservation = z
     .object({
       observation: z.string(),
+      lineage: z.string(),
       nodes: z.array(z.object({ ref: z.string() })),
     })
     .parse(await run("task-a", { action: "observe", target: a }))
@@ -264,6 +265,7 @@ try {
   assert.deepEqual(unchanged, {
     target: a,
     observation: firstObservation.observation,
+    lineage: firstObservation.lineage,
     unchanged: true,
   })
   await run("task-a", {

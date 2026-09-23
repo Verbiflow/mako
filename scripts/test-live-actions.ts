@@ -247,6 +247,39 @@ try {
   assert.equal(compactionCalls, dispatched, "restart cannot repeat compaction")
   console.log("PASS: failed compaction holds queued work; restart preserves an unknown outcome without replay")
 
+  for (const ended of [
+    { status: "ready", connection: "connected", lastStop: "cancelled" },
+    { status: "failed", connection: "connected", error: "Provider failed" },
+    { status: "ready", connection: "disconnected" },
+  ] as const) {
+    owner.stop()
+    owner = new LiveConversations({ ...dependencies, root: join(root, randomUUID()) })
+    await owner.start("fixture", root, { conversationId: id })
+    await connected(id)
+    const requestId = randomUUID()
+    owner.submit(id, requestId, "turn that will end without a steering receipt")
+    const late = Promise.withResolvers<ProviderSteerResult>()
+    answer = () => late.promise
+    const action = steering(requestId)
+    const pendingAction = owner.act(id, action)
+    const queuedId = randomUUID()
+    owner.submit(id, queuedId, "preserve this follow-up")
+    const before = sent.length
+    const state = states.get(id)
+    assert.ok(state)
+    owner.observe({ type: "live-session", session: { ...state, ...ended } })
+    assert.equal(owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind, "uncertain")
+    assert.equal(owner.snapshot(id)?.requests.find(request => request.id === queuedId)?.status, "held")
+    assert.deepEqual(owner.lifecycleWork(), [], "An ended turn and paused queue do not prevent restart")
+    assert.equal(sent.length, before, "Settling an unknown steer must not replay queued work")
+    late.resolve({ kind: "accepted" })
+    assert.equal((await pendingAction).state.kind, "uncertain", "A late receipt cannot release an interrupted queue")
+    assert.equal(sent.length, before)
+    await owner.acknowledgeAction(id, action.id)
+    assert.equal(sent.length, before, "Acknowledgement preserves the paused queue")
+  }
+  console.log("PASS: cancelled, failed and disconnected turns settle unconfirmed steering, retain queued input and release lifecycle work")
+
   const blocks = reduceLiveUpdates(
     [],
     [

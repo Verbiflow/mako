@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -73,6 +74,18 @@ try {
     "a record that moved is still the same unowned session for a reconnect"
   )
   assert.equal((await resumeVerdict(binding, undefined)).kind, "unavailable", "no probe means ownership cannot be answered")
+  assert.match(checkpoint, /^v2:/, "a checkpoint reads identity and the tail, not the whole record")
+  const saved = createHash("sha256").update(await readFile(path)).digest("hex")
+  assert.deepEqual(
+    await resumeVerdict({ ...binding, checkpoint: saved }, idle),
+    { kind: "resumable", record: "same" },
+    "a binding saved with a whole-record digest still compares unchanged"
+  )
+  const large = join(root, "large.jsonl")
+  await writeFile(large, `${"x".repeat(200_000)}\nend-a\n`)
+  const largeBefore = await nativeCheckpoint(large)
+  await writeFile(large, `${"x".repeat(200_000)}\nend-b\n`)
+  assert.notEqual(await nativeCheckpoint(large), largeBefore, "a same-size rewrite of the tail moves the checkpoint")
   await rm(path)
   assert.equal((await resumeVerdict(binding, idle)).kind, "unavailable")
   assert.equal(await nativeCheckpoint(root), undefined)

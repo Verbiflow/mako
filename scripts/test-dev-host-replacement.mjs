@@ -3,6 +3,7 @@ import { replaceDevHost } from "../electron/dev-host-replacement.mjs"
 
 const old = { instanceId: "old", devBuild: "old-checkout" }
 const fresh = { instanceId: "new", devBuild: "current-checkout" }
+const waiting = { operation: { kind: "waiting", action: "quit" }, work: [{ id: "queued-id", provider: "cursor", title: "Pending follow-up", status: "queued" }] }
 function fixture(states) {
   const commands = []
   let starts = 0
@@ -13,7 +14,8 @@ function fixture(states) {
     input: {
       original: old,
       probe: async () => states.length > 1 ? states.shift() : states[0],
-      command: async (command) => { commands.push(command) },
+      command: async (command) => { commands.push(command); return waiting },
+      readState: async () => waiting,
       start: async () => { starts++; return { info: fresh } },
       compatible: (info) => info.devBuild === fresh.devBuild,
       sleep: async (ms) => { time += ms },
@@ -30,9 +32,27 @@ function fixture(states) {
 }
 {
   const test = fixture([{ state: "ready", info: old }])
-  await assert.rejects(replaceDevHost(test.input), /still finishing work/)
+  await assert.rejects(replaceDevHost(test.input), /cursor: Pending follow-up \(queued, queued-id\)/)
   assert.deepEqual(test.commands, [{ kind: "wait", action: "quit" }, { kind: "cancel" }])
   assert.equal(test.starts, 0, "A busy host must not get a competing replacement")
+}
+{
+  const test = fixture([{ state: "ready", info: old }])
+  test.input.readState = async () => ({ operation: { kind: "error", action: "quit", message: "A window did not save its draft" }, work: [] })
+  await assert.rejects(replaceDevHost(test.input), /A window did not save its draft/)
+  assert.equal(test.commands.length, 1, "Preserve the real shutdown error instead of cancelling and blaming agents")
+}
+{
+  const test = fixture([{ state: "ready", info: old }])
+  test.input.readState = async () => ({ operation: { kind: "idle" }, work: [] })
+  await assert.rejects(replaceDevHost(test.input), /cancelled in another Mako client/)
+  assert.equal(test.commands.length, 1)
+}
+{
+  const test = fixture([{ state: "ready", info: old }])
+  test.input.readState = async () => ({ operation: { kind: "applying", action: "quit" }, work: [] })
+  await assert.rejects(replaceDevHost(test.input), /no active agents/)
+  assert.equal(test.commands.length, 1, "Applying shutdown cannot be cancelled")
 }
 {
   const test = fixture([{ state: "ready", info: fresh }])

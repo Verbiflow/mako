@@ -158,6 +158,14 @@ return {receipt,proof:await state.window.expect({role:'TextField',name:'Proof',v
   assert.equal(nativeProof.receipt.verification, "not-requested")
   assert.equal(nativeProof.proof.status, "matched")
   await until(async () => (await read(status)).input === "native-v2")
+  if (process.argv.includes("--recording")) {
+    await cell(
+      `state.recording=await state.window.record({directory:${JSON.stringify(root)},name:'Native exact-value job',maxDurationMs:30000});return state.recording;`
+    )
+    await cell(
+      `const image=await state.window.screenshot();await state.window.click({x:30,y:70,view:image.view});return true;`
+    )
+  }
   await cell(
     `const view=await state.window.observe(); await state.window.click(view.get({role:'Button',name:'Verify proof'}).ref); emitImage(await state.window.screenshot()); return true;`,
     true
@@ -172,6 +180,49 @@ return {proof,negative};`)
     assert.equal(exact.proof.evidence.value, value)
     assert.equal(exact.negative, true)
     await until(async () => (await read(status)).input === value)
+  }
+  if (process.argv.includes("--recording")) {
+    await cell("return await state.recording.stop()")
+    let recording
+    const deadline = Date.now() + 120_000
+    do {
+      recording = await cell("return await state.recording.status()")
+      if (recording.status !== "finalizing") break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    } while (Date.now() < deadline)
+    assert.equal(recording.status, "finished", recording.error)
+    const probe = JSON.parse(
+      (
+        await run("ffprobe", [
+          "-v",
+          "error",
+          "-show_streams",
+          "-show_format",
+          "-of",
+          "json",
+          recording.video,
+        ])
+      ).stdout
+    )
+    const timeline = await read(recording.timeline)
+    assert.ok(
+      timeline.pointer.length > 0,
+      "native pointer dispatch reaches the video timeline"
+    )
+    assert.ok(Number(probe.format.duration) > 0)
+    assert.equal(probe.streams[0].codec_name, "h264")
+    await run("ffmpeg", [
+      "-v",
+      "error",
+      "-sseof",
+      "-0.5",
+      "-i",
+      recording.video,
+      "-frames:v",
+      "1",
+      join(recording.directory, "decoded.png"),
+    ])
+    evidence.recording = { ...recording, probe, pointer: timeline.pointer }
   }
   const launched = await cell(
     `return await control.native('launch_app',{app_path:${JSON.stringify(resolve("node_modules/electron/dist/Electron.app"))},additional_arguments:[${JSON.stringify(page.main)}],page_route:true});`
@@ -251,6 +302,21 @@ const proof=await state.tab.expect({role:'textbox',name:'Proof',value:'page-v2'}
     await until(async () => (await read(page.status)).input === value)
   }
   await cell("await state.tab.release(); return true")
+  if (process.argv.includes("--recording")) {
+    await cell(`state.failureRecording=await state.window.record({directory:${JSON.stringify(root)},name:'Closed native window',maxDurationMs:10000});return state.failureRecording;`)
+    await new Promise(resolve=>setTimeout(resolve,500))
+    native.kill("SIGTERM")
+    let receipt
+    for (let i=0;i<300;i++) {
+      receipt=await cell("return await state.failureRecording.status()")
+      if (!["recording","finalizing"].includes(receipt.status)) break
+      await new Promise(resolve=>setTimeout(resolve,100))
+    }
+    assert.equal(receipt.status,"interrupted",receipt.error)
+    assert.ok(receipt.video,"closed-window interruption retains finalized video")
+    assert.match(receipt.error,/closed|owner|resized|ended/i)
+    evidence.interruption=receipt
+  }
   const seen = await samples.stop()
   samples = undefined
   assert.deepEqual(

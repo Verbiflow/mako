@@ -124,12 +124,14 @@ async function checkComposer() {
         console.error(`UNVERIFIED: ${id}: ${result.error ?? "no effective model reported"}`)
         continue
       }
-      await click('[data-composer] button[aria-label^="Agent:"]')
-      await until(`Boolean([...document.querySelectorAll('[role="dialog"] button')].find(node => node.textContent.startsWith(${JSON.stringify(label)})))`)
-      await click('[role="dialog"] button', label)
-      await until(`Boolean(document.querySelector(${JSON.stringify(`[data-composer] button[aria-label="Model: ${result.modelLabel}"]`)}))`)
-      await until("!document.querySelector('[role=\"dialog\"]')")
-      for (const expected of result.expectedControls.filter(Boolean)) await until(`Boolean(document.querySelector(${JSON.stringify(`[data-composer] button[aria-label="${expected}"]`)}))`)
+      await click('[data-composer] [data-model-picker]')
+      await until(`Boolean([...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find(node => node.textContent.startsWith(${JSON.stringify(label)})))`)
+      await click('[role="menu"] [role="menuitem"]', label)
+      await key("Escape", "Escape", 27)
+      await until(`Boolean(document.querySelector(${JSON.stringify(`[data-composer] [data-model-picker][data-harness="${id}"][aria-label="Model: ${result.modelLabel}"]`)}))`)
+      await until("!document.querySelector('[role=\"menu\"]')")
+      // Reasoning and speed ride in the one picker: its face names the effort, and a zap marks Fast.
+      for (const expected of result.expectedControls.filter(Boolean)) await until(`(() => { const picker = document.querySelector('[data-composer] [data-model-picker]'); const expected = ${JSON.stringify(expected)}; return expected.endsWith(' reasoning') ? picker.textContent.includes(expected.slice(0, -' reasoning'.length)) : expected !== 'Fast' || Boolean(picker.querySelector('[aria-label="Fast"]')) })()`)
       result.controls = await evaluate("[...document.querySelectorAll('[data-composer] button[aria-label]')].map(node => node.getAttribute('aria-label'))")
       assert.ok(!result.controls.some((label) => /Provider default|: unknown/.test(label)))
       assert.equal(await inputValue(), "")
