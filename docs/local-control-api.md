@@ -171,9 +171,15 @@ emitImage(state.shot);
 // await state.window.click({x: 100, y: 80, view: state.shot.view});
 ```
 
-Image output retains its view token and coordinate metadata. Native coordinates
-are window-local capture pixels; browser captures supply their coordinate
-metadata. New observations, captures, mutations, raw calls and known topology
+Image output retains its view token and coordinate metadata. Native
+`window.screenshot({format:'jpeg',quality:90,maxSide:1024})` supports PNG/JPEG,
+JPEG quality 1–100 and a 256–4096 pixel longest-side cap. The cap never enlarges
+the source. Defaults preserve the driver's original image bytes. Unknown options
+are rejected. `screenshot_out_file` remains available for an explicit native file.
+Native click coordinates use the returned image pixels and its view token; the
+engine maps them to the original driver capture. Do not rescale coordinates yourself.
+Resizing does not enable an unsupported background input route. Browser captures
+supply their own coordinate metadata. New observations, captures, mutations, raw calls and known topology
 changes invalidate the relevant prior refs/views. Obtain fresh refs after input.
 Oversized output spills to recoverable artifacts under the existing output
 budgets. `checkpoint`/`recall` retain bounded JSON facts; use artifacts for trees
@@ -334,3 +340,73 @@ After `focus_change`, the shared host requires a new observation of the target
 before another unified mutation. Read the actual result before choosing what to
 do next; never repeat the previous input simply because focus changed. `guard`
 reports the bounded window-topology watcher, not focus isolation.
+
+## Capture and composable commands update (2026-09-23)
+
+`view.select({role,name})` uses the same exact semantic fields as `get` and
+`locator`. `text` still searches accessibility role/name/value, not arbitrary
+visible DOM text. Selectors use strings, not regular expressions.
+
+```js
+emitImage(await state.tab.locator({role:'button',name:'Save'}).screenshot({maxSide:2048}))
+state.recording = await state.tab.record({name:'Save workflow',fps:60,maxSide:2560})
+return await state.recording.stop()
+```
+
+Recording start requires a real persisted frame. No-frame startup refuses without
+activating or moving the tab. `stop()` begins finalization; poll `status()` until
+finished/interrupted/failed, then use its file paths and encoded `dimensions`.
+`sampledFrames` counts intentional fps sampling separately from `droppedFrames`.
+Timeline v2 records actual pixel dimensions separately from viewport geometry.
+`maxSide` is a cap, not a source-resolution or devicePixelRatio override. Browser
+sampling/output supports 1–60 fps and defaults to 60; native capture defaults to 30 and currently refuses higher rates. Preview delivery also targets 60 fps. Actual source cadence and renderer presentation can be lower; output fps alone does not prove distinct captured frames.
+
+Opening an unsupported external URL in a desk browser refuses before creating a
+window. When creation succeeds but navigation fails, `TabNavigationError.target`
+retains the exact owned target for `control.tab(error.target)`. Do not repeat
+`openTab` to recover it. A hidden desk remains a live client of the real app;
+it is not a sandbox for stubbing side-effecting modules.
+
+The [composable CLI design](local-control-cli.md) shares this engine. The current
+Linux executable launches MCP stdio; the proposed shell verbs are not yet shipped.
+
+## Recovery after interrupted actions
+
+An unknown outcome means input may already have reached the app. Mako does not
+replay it. Observe or capture that exact target successfully before continuing;
+a failed screenshot or a reconnected native driver does not count as evidence.
+If a raw native call did not identify a window, observe the intended window and
+continue through `control.window({pid, window_id})`. Reading one window cannot
+clear uncertainty for other windows or authorize another unspecified destination.
+
+Read-only helpers such as `tab.children()`, download status and dialog inspection
+preserve existing refs. Mutations invalidate the affected target's refs. An
+observation overlapping an explicit concurrent CDP mutation is rejected; wait for
+the mutation, then observe again. Dialog replies and event reads can run while
+navigation is waiting. Answering a currently open dialog does not verify or retry
+the preceding action.
+
+Cancelling a wait for a yielded cell leaves its receipt available. Collect the
+same cell before submitting another program. Cancelling the program itself stops
+its worker; any dispatched action still needs observation before further input.
+
+## Shared shell session and browser-wide ownership
+
+[Composable CLI commands](local-control-cli.md) share `createControlSession` with
+MCP. The updated MCP status returns `sessionFile` for its private Unix socket.
+Shell commands preserve the same target generations, refs, recordings and script
+state. `diagnostics` returns bounded command/request metadata without arguments
+or page contents. A normal shell command exiting does not close the engine.
+
+Cookie mutations affect the browser profile. They refuse while another task owns
+tabs or target acquisition/actions are pending; reads never silently grant a
+profile write. A pending cookie write blocks concurrent browser work. An unknown
+write invalidates evidence for every affected tab, including later claims, until
+each exact tab is observed. Raw `Browser` administration, `Storage`, profile cookie/
+cache mutation and unmanaged `Target` lifecycle commands are refused through a
+tab CDP handle. Use managed cookies and open/claim/release/close instead.
+
+Dynamically attached app browsers belong to the attaching task. Other tasks
+cannot connect to, claim through or detach them; aliases for an already registered
+endpoint are refused. Task teardown releases those connections. Discovered regular
+browsers remain shared, and website-side profile state is not a security boundary.

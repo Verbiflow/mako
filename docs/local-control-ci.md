@@ -13,7 +13,7 @@ published. Contributors do not need AWS or Vercel accounts.
 Native Intel Xeon acceptance passed on a disposable EC2 VM on 2026-09-23.
 The GitHub workflow is prepared locally; that is not a published workflow run.
 The [runtime design](local-control-runtime.md) distinguishes this test package
-from the remaining standalone cloud-service launcher.
+from the standalone cloud-service launcher, which now has its own lifecycle suite.
 
 ## What a pass establishes
 
@@ -22,6 +22,9 @@ from the remaining standalone cloud-service launcher.
   refusal checks.
 - Native gestures, recorded cursor paths, covered-window recording and retained
   playable video after interruption.
+- Separate CLI browser/native jobs on the prepared runtime: exact form values,
+  screenshots, recordings, concurrent script state and supervisor cleanup. These
+  new CLI steps are prepared locally; a prior x64 pass does not cover them.
 - Native x64 execution, checked against the host's CPU/vendor and Docker
   architecture before tests start. The evidence records the driver and payload
   hashes. ARM translation does not pass this runner's preflight.

@@ -17,11 +17,11 @@ Electron runtime. Do not package the whole Mako app merely to run these files.
 | Component | Owner and dependencies | Evidence / remaining work |
 | --- | --- | --- |
 | Public API and program worker | `packages/control`; Node and Zod | Shared across providers; no Electron import. |
-| MCP adapter and native policy | `electron/computer-tools-main.ts`; Node and MCP SDK | Executed on native Intel EC2 without Electron. |
+| Shared session and MCP adapter | `electron/control-session.ts` owns native policy/state; `electron/computer-tools-main.ts` owns MCP; Node and MCP SDK | Executed on native Intel EC2 without Electron. |
 | Browser transport, targets and recording | `electron/browser-service.ts`; Node, ws, image decoding and FFmpeg when recording | Can be composed directly with the MCP adapter using `browserCall`; this turn’s dev capture used that composition under Node. |
 | Native driver | Patched Cua executable | Separate process. macOS uses the desktop host’s responsibility/permission chain; Linux uses the job’s display and accessibility bus. |
 | Hidden Mako desk | Electron `BrowserWindow` adapter | Only needed to inspect Mako itself. Dev screenshot and recording pass after renderer readiness. |
-| Cloud launcher and release | Not yet a finished standalone product | Acceptance scripts provide test startup/teardown, not a released general-purpose supervisor. |
+| Cloud launcher and release | `cloud-control-main.ts` supervises a job worker and its process group; target-specific package graph | Eleven lifecycle scenarios passed on ARM64 and native Intel x64. Locally prepared, not published. |
 
 The screenshot test initially captured an empty page during renderer startup.
 A valid PNG or successful transport call does not establish application readiness.
@@ -89,12 +89,63 @@ The launcher must:
 5. Leave result files for the runner to collect, then remove the sandbox. Limit
    artifact duration, dimensions and storage; do not stream unrequested images.
 
-Required release acceptance includes browser-only and native-only startup with
-no Electron executable installed, mixed complete jobs, concurrent isolated jobs,
-EOF/SIGTERM/deadline cleanup, child crashes, cancellation during held input,
-recording finalization and stale-handle refusal after restart. The current EC2
-suite proves native functional execution and test-container cleanup, not all of
-these production lifecycle cases.
+Eleven standalone lifecycle scenarios passed on ARM64 and native Intel x64, including browser/native-only startup, concurrent isolated jobs, EOF/SIGTERM/deadline cleanup, backend and supervisor crashes, cancellation during held input, recording finalization and stale-handle refusal. See the [exact tested package evidence](audits/2026-09-23/local-control-standalone20/README.md); these runs preceded the capture21 changes. The contributor workflow reruns the same launcher acceptance. This is a locally prepared release, not a published package.
+
+## Build and run the standalone package
+
+From a built checkout, prepare only the target's reviewed inputs:
+
+```sh
+node scripts/package-control-runtime.mjs --platform=linux-x64 \
+  --driver=release/control-driver/0.28.2+mako.17/linux-x64 \
+  --output=release/cloud-control-linux-x64
+docker build -f runtime/control/Dockerfile --target mixed \
+  -t mako-control:local release/cloud-control-linux-x64
+```
+
+Choose the `browser`, `native` or `mixed` image target; `acceptance` additionally
+installs test-only GTK/Python fixtures. Browser-only packages can omit `--driver`.
+Each prepared directory has an exact file/hash manifest. Node 24, FFmpeg/FFprobe
+and the selected backend executables are runtime dependencies; Electron is absent.
+
+A trusted configuration names a fresh absolute output path and explicit backends:
+
+```json
+{
+  "output": "/results/job-001",
+  "browser": { "executable": "/usr/bin/chromium" },
+  "native": { "driver": "/opt/mako-control/native/cua-driver" },
+  "timeoutMs": 3600000,
+  "startupMs": 30000,
+  "shutdownMs": 30000
+}
+```
+
+Launch `node dist-electron/cloud-control-main.js --config /absolute/job.json`
+inside the disposable job boundary and connect MCP over stdio. Omit unused
+backends. Browser sandboxing defaults on; `sandbox:false` is an explicit trusted
+runner choice, used only inside the isolated acceptance container. Do not forward
+cloud credentials, the host display or a person's browser profile into the job.
+
+The launcher creates an owner-only runtime directory. It clears inherited provider
+credentials, starts only requested backends, waits for readiness and preserves
+artifacts outside the runtime directory. `ready.json`, `worker.json` and
+`launcher.json` report readiness, interruption and cleanup. EOF/SIGTERM/interrupt
+start bounded finalization; hard failure kills the job's process group. A worker
+observes parent IPC loss too, so a killed launcher does not strand its children.
+A VM/container lifetime is still the boundary for untrusted agent code and a final
+cleanup backstop. This runtime does not claim to sandbox arbitrary JavaScript.
+
+For an owned headless browser that must paint continuously, open an explicit
+background window with `control.openTab({disposition:'window',background:true})`.
+Chrome 153 on the test Mac streamed that window but produced no frames for an
+inactive tab. Recording now waits for its first real frame and refuses if none
+arrives; it never activates or moves an existing tab to make recording work.
+Regular-profile extension behavior needs separate installed acceptance.
+
+The shell interface is implemented through the [shared session and CLI](local-control-cli.md).
+`mako-control` provides the shell verbs; `mako-control-mcp` provides MCP stdio.
+Both reuse this session engine and capture implementation.
 
 ## Reference comparison
 
@@ -106,3 +157,10 @@ intent. Their Linux executable remains unavailable for direct comparison.
 
 See [disposable-machine acceptance](local-control-ci.md) for contributor CI and
 [packaging](local-control-packaging.md) for target-specific artifact status.
+
+Latest capture package acceptance (2026-09-23): `release/cloud-runtime21-paced-arm64`
+and `release/cloud-runtime21-paced-x64` pass all eleven lifecycle scenarios, including
+whole-process-group cleanup. Both use +mako.17; browser recording defaults to 60 fps.
+The packages contain 67 allowlisted files: 48,325,239 bytes on ARM64 and 51,645,064
+bytes on x64, before npm runtime dependencies and the container's system packages.
+See [capture and lifecycle evidence](audits/2026-09-23/local-control-capture21/README.md).

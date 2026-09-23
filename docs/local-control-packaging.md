@@ -97,3 +97,19 @@ The [cloud runtime design](local-control-runtime.md) separates the Node control
 service from the Electron desktop host. The native acceptance payload contains
 no Electron or provider runtime. Its test-only runtime image measured 1.44 GB;
 this is not a shipped cloud release or the size of Mako’s desktop app.
+
+## Standalone service package (2026-09-23)
+
+`runtime/control` supplies an exact public npm lock and separate browser/native/mixed
+image targets. `scripts/package-control-runtime.mjs` copies the compiled Node
+entry-point graph plus the dynamic program worker, licenses and only the selected
+reviewed driver. It excludes Electron, provider runtimes, caches, bytecode,
+credentials and unrelated source. Package boundaries and hashes are regression
+tested. FFmpeg is supplied by the runtime image, not copied into source control.
+
+Initial ARM64/x64 packages contain 66 files and 48,304,040 / 51,623,865 bytes,
+including the platform-specific native driver. Capture21 adds one shared capture
+module; its packages contain 67 files. These numbers exclude npm dependencies and
+OS image layers, so they are not total installed sizes. See the runtime guide and
+exact release manifests. Initial native ARM64 and Intel x64 lifecycle acceptance
+passed; the capture21 evidence identifies subsequent tested builds separately.
