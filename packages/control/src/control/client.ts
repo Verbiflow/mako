@@ -1,4 +1,11 @@
 import {
+  RecordingHandle,
+  RecordingOptionsSchema,
+  RecordingReceiptSchema,
+  recordingReceipt,
+  type RecordingOptions,
+} from "./recording.js"
+import {
   ControlSelectorSchema,
   ControlReadScopeSchema,
   scopeControlNodes,
@@ -34,6 +41,7 @@ export type ControlCall = (
 export const ControlObservationSchema = z.object({
   target: ControlTargetSchema,
   observation: z.string(),
+  lineage: z.string().min(1).optional(),
   nodes: z.array(PageObservationNodeSchema),
   lines: z.array(z.string()),
   scope: ControlReadScopeSchema.optional(),
@@ -115,31 +123,82 @@ export class ControlObservation {
   diff(previous: ControlObservation) {
     if (JSON.stringify(previous.target) !== JSON.stringify(this.target))
       throw new Error("Cannot diff different targets")
-    // A multiset comparison ignores snapshot addresses, never carries them into a new view.
-    const key = (line: string) => line.replace(/^[A-Za-z0-9_-]+:\d+ /, "")
+    const full = (reason: string) => ({
+      kind: "full" as const,
+      reason,
+      ...this.toJSON(),
+    })
+    const scope = (view: ControlObservation) =>
+      ControlReadScopeSchema.parse(view.data.scope ?? {})
+    if (JSON.stringify(scope(previous)) !== JSON.stringify(scope(this)))
+      return full("scope-changed")
+    if (!this.data.lineage || !previous.data.lineage)
+      return full("lineage-unavailable")
+    if (this.data.lineage !== previous.data.lineage)
+      return full("lineage-changed")
+    if (
+      !this.coverage.complete ||
+      !previous.coverage.complete ||
+      !this.coverage.textComplete ||
+      !previous.coverage.textComplete
+    )
+      return full("incomplete-observation")
+    // Compare structured values and ancestry, not the display's shortened text.
+    // Order changes require a full view: a multiset cannot describe reordering.
+    const key = (node: ControlObservationData["nodes"][number]) =>
+      JSON.stringify(
+        Object.entries(node)
+          .filter(([name]) => name !== "ref")
+          .sort(([a], [b]) => a.localeCompare(b))
+      )
+    const current = this.nodes.map(key)
+    const before = previous.nodes.map(key)
     const subtract = (left: string[], right: string[]) => {
       const counts = new Map<string, number>()
-      for (const line of right)
-        counts.set(key(line), (counts.get(key(line)) ?? 0) + 1)
-      return left.filter((line) => {
-        const n = counts.get(key(line)) ?? 0
-        if (!n) return true
-        counts.set(key(line), n - 1)
-        return false
+      for (const item of right) counts.set(item, (counts.get(item) ?? 0) + 1)
+      return left.flatMap((item, index) => {
+        const count = counts.get(item) ?? 0
+        if (!count) return [index]
+        counts.set(item, count - 1)
+        return []
       })
     }
-    return {
+    const added = subtract(current, before)
+    const removed = subtract(before, current)
+    if (
+      !added.length &&
+      !removed.length &&
+      JSON.stringify(current) !== JSON.stringify(before)
+    )
+      return full("order-changed")
+    const result = {
+      kind: "delta" as const,
       target: this.target,
       observation: this.observation,
+      lineage: this.data.lineage,
+      scope: this.data.scope,
       coverage: this.coverage,
-      added: subtract(this.lines, previous.lines),
-      removed: subtract(previous.lines, this.lines).map(key),
+      added: pageNodeLines(added.map((index) => this.nodes[index]!)),
+      removed: pageNodeLines(
+        removed.map((index) => {
+          const node = { ...previous.nodes[index]! }
+          delete node.ref
+          return node
+        })
+      ),
     }
+    if (
+      added.length + removed.length > 120 ||
+      JSON.stringify(result).length > 16_000
+    )
+      return full("change-budget-exceeded")
+    return result
   }
   toJSON() {
     return {
       target: this.target,
       observation: this.observation,
+      lineage: this.data.lineage,
       lines: this.lines,
       coverage: this.coverage,
       scope: this.data.scope,
@@ -147,12 +206,23 @@ export class ControlObservation {
   }
 }
 
+/** Quiet notifications are timing information, not action verification. */
+export const NativeSettlingSchema = z.object({
+  status: z.enum(["events_quiet", "deadline", "unavailable"]),
+  scope: z.literal("process_notifications"),
+  elapsed_ms: z.number().int().nonnegative(),
+  events: z.number().int().nonnegative(),
+  subscriptions: z.number().int().nonnegative(),
+}).strict()
+export type NativeSettling = z.infer<typeof NativeSettlingSchema>
+
 export const ExecutionReceiptSchema = z.object({
   status: z.literal("dispatched"),
   actionId: z.string(),
   route: z.string(),
   delivery: z.enum(["background", "foreground", "none"]),
   verification: z.literal("not-requested"),
+  settling: NativeSettlingSchema.optional(),
   guard: z.record(z.string(), z.json()),
   result: z.json().optional(),
 })
@@ -186,6 +256,19 @@ export class ControlHandle {
     return new ControlObservation(
       await this.call("observe", { ...options, target: this.target })
     )
+  }
+  async record(options: RecordingOptions = {}) {
+    const receipt = recordingReceipt(
+      RecordingReceiptSchema.parse(
+        await this.call("recording", {
+          operation: "start",
+          target: this.target,
+          options: RecordingOptionsSchema.parse(options),
+        })
+      ),
+      this.target
+    )
+    return new RecordingHandle(this.call, receipt)
   }
   capabilities() {
     return this.call("capabilities", { target: this.target })

@@ -38,6 +38,8 @@ export {
   ControlObservation,
   ControlObservationSchema,
   ExecutionReceiptSchema,
+  NativeSettlingSchema,
+  type NativeSettling,
   type ControlCall,
   type ControlObservationData,
   type ExecutionReceipt,
@@ -60,3 +62,11 @@ export {
   type ControlSelector,
   type ControlReadScope,
 } from "./scope.js"
+
+export {
+  RecordingHandle,
+  RecordingOptionsSchema,
+  RecordingReceiptSchema,
+  type RecordingOptions,
+  type RecordingReceipt,
+} from "./recording.js"
