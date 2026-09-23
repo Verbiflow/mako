@@ -1,0 +1,6 @@
+FROM mako-control-linux:recording
+RUN apt-get update && apt-get install -y --no-install-recommends sway grim wayland-utils && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --uid 1000 control
+RUN npm install --prefix /opt/mako-test --no-save --ignore-scripts sharp@0.35.3
+USER control
+ENV NODE_PATH=/opt/mako-test/node_modules XDG_RUNTIME_DIR=/tmp/mako-wayland-runtime XDG_SESSION_TYPE=wayland GDK_BACKEND=wayland WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman CUA_DRIVER_RS_ENABLE_WAYLAND=1
