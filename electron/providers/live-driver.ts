@@ -1,3 +1,4 @@
+import type { ApprovalSubmission } from "../contracts/approval-response.js"
 import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -75,7 +76,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   permission(
     id: string,
     requestId: string,
-    response: LivePermissionResponse
+    response: LivePermissionResponse,
+    dispatch: ApprovalDispatch
   ): Promise<void>
   cancel(id: string): Promise<void>
   close(id: string): void | Promise<void>
@@ -102,8 +104,14 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   if (Boolean(driver.steer) !== Boolean(driver.steering))
     throw new Error(`${driver.provider}: steer and steering are declared together or not at all`)
   for (const mode of driver.modes ?? [])
-    if (mode.access && !mode.enforcement)
+    if (mode.access && mode.enforcement !== "provider" && mode.enforcement !== "launch")
       throw new Error(`${driver.provider}: mode ${mode.id} names a tier with no enforcer`)
   if (driver.defaultMode && !driver.modes?.some((mode) => mode.id === driver.defaultMode))
     throw new Error(`${driver.provider}: defaultMode ${driver.defaultMode} is not one of its declared modes`)
+}
+
+/** Call immediately before answering a native request, after any adapter awaits. */
+export interface ApprovalDispatch {
+  assertCurrent(): void
+  report(result: ApprovalSubmission): void
 }

@@ -26,8 +26,10 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       source.nativeModes ? { availableModes: [...source.nativeModes] } : null
     ),
     defaultMode: acpDefaultMode(source.access),
-    permission: async (...args) => {
-      ;(await import("../acp.js")).acpRespondPermission(...args)
+    permission: async (id, requestId, response, dispatch) => {
+      const { acpRespondPermission } = await import("../acp.js")
+      dispatch.assertCurrent()
+      dispatch.report(acpRespondPermission(id, requestId, response))
     },
     cancel: async (id) => (await import("../acp.js")).liveCancel(id),
     close: async (id) => (await import("../acp.js")).liveClose(id),

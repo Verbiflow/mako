@@ -19,6 +19,8 @@ export interface RuntimeUpdateSource {
   primary?: boolean
   /** Require the verified release, including for package-manager updates. */
   pinVersion?: boolean
+  /** Supported installed versions. Retired versions are omitted from Settings, including cached readings. */
+  supportsVersion?(version: string): boolean
   /** Resolve release policy from the version the host read, never from a filename. */
   release?(
     version: string,
