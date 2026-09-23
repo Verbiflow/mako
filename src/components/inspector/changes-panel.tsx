@@ -17,6 +17,7 @@ import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { ChangeList } from "@/components/inspector/change-list"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
+import { Collapse } from "@/components/ui/collapse"
 import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { viewer } from "@/state/viewer"
 import type { GitDiff, GitFile, GitStatus } from "@/lib/types"
@@ -538,27 +539,28 @@ function CommitsSection({
   const branch = useSession((state) => state.git?.branch)
   if (!hasRepo) return null
   return (
-    <div className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline", open && "max-h-[38%]")}>
+    <div className="flex min-h-0 shrink-0 flex-col border-t border-hairline">
       <div className="flex h-8 shrink-0 items-center px-1.5">
         <button
           type="button"
           aria-expanded={open}
           aria-label={branch ? `History on ${branch}` : "History"}
           onClick={() => setOpen((value) => !value)}
-          className="flex h-6 min-w-0 items-center gap-1.5 rounded px-1 text-label text-faint transition-colors hover:bg-foreground/5 hover:text-foreground"
+          className="pressable flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-label text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         >
           <ChevronRightIcon
-            className={cn("size-3 shrink-0 transition-transform duration-200 ease-out", open && "rotate-90")}
+            className={cn("size-3 shrink-0 text-faint transition-transform duration-200 ease-[var(--ease-out)]", open && "rotate-90")}
           />
           <span className="truncate">History</span>
+          {branch ? <span className="truncate font-mono text-faint">{branch}</span> : null}
         </button>
         <span className="flex-1" />
       </div>
-      {open ? (
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <Collapse open={open}>
+        <div className="max-h-[36vh] overflow-y-auto overscroll-contain">
           <GitLog onPickFile={onPickFile} onPickCommit={onPickCommit} />
         </div>
-      ) : null}
+      </Collapse>
     </div>
   )
 }

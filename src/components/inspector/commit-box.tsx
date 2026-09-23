@@ -9,16 +9,15 @@ import {
   type ReactNode,
 } from "react"
 import { Action, IconAction, Keys, Segmented } from "@/components/ui/kit"
-import { cn } from "@/lib/utils"
+import { Notice as SharedNotice } from "@/components/ui/notice"
 import { formatChord } from "@/extend/commands"
 import { git } from "@/state/git"
 import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon, XIcon } from "lucide-react"
-import { ThinkingOrb } from "thinking-orbs"
-import { useOrbTheme } from "@/components/ui/use-orb-theme"
+import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon } from "lucide-react"
+import { Orb } from "@/components/ui/orb/orb"
 import {
   Popover,
   PopoverContent,
@@ -362,20 +361,19 @@ function Notice({
   role?: "alert" | "status"
   children?: ReactNode
 }) {
-  const color = { neutral: "text-foreground", negative: "text-negative", caution: "text-caution" }[tone]
   return (
-    <div role={role} data-commit-notice={tone} className="border-t border-hairline px-3 pt-2 pb-2.5">
-      <div className="flex h-6 items-center gap-2">
-        <span className={cn("min-w-0 flex-1 truncate text-label font-medium", color)}>{label}</span>
-        {action}
-        {onDismiss ? (
-          <IconAction size="xs" label="Dismiss" onClick={onDismiss} className="-mr-1.5">
-            <XIcon />
-          </IconAction>
-        ) : null}
-      </div>
+    <SharedNotice
+      surface="flush"
+      tone={tone === "negative" ? "danger" : tone === "caution" ? "caution" : "success"}
+      title={label}
+      trailing={action}
+      onDismiss={onDismiss}
+      role={role}
+      className="mx-1 rounded-none border-t border-hairline"
+      data-commit-notice={tone}
+    >
       {children}
-    </div>
+    </SharedNotice>
   )
 }
 
@@ -389,10 +387,9 @@ function Notice({
  * and under reduced motion.
  */
 function DraftMark({ active = false }: { active?: boolean }) {
-  const theme = useOrbTheme()
   return (
     <span aria-hidden className="flex size-4 shrink-0 items-center justify-center">
-      <ThinkingOrb state="shaping" size={20} theme={theme} paused={!active} className="activity-orb" />
+      <Orb state="shaping" size={20} paused={!active} />
     </span>
   )
 }
@@ -500,11 +497,11 @@ export function GitRemoteNotice({ cwd, branch }: { cwd: string; branch: string }
 }
 
 function GitRemoteProblem({ message, detail, copyContext }: { message: string; detail?: string; copyContext: boolean }) {
-  return <div data-git-remote-notice className="px-2.5 py-1.5 text-label text-muted-foreground">
-    <div className="flex min-h-6 items-start gap-1">
-      <p role="status" className="min-w-0 flex-1 py-0.5 leading-5">{message}</p>
-      {copyContext ? <CopyGitContextButton /> : null}
-      {detail ? <GitDetailsButton detail={detail} /> : null}
-    </div>
-  </div>
+  return <SharedNotice
+    tone="caution"
+    title={message}
+    className="mx-2 mb-2"
+    data-git-remote-notice
+    trailing={copyContext || detail ? <>{copyContext ? <CopyGitContextButton /> : null}{detail ? <GitDetailsButton detail={detail} /> : null}</> : undefined}
+  />
 }
