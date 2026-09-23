@@ -3,11 +3,10 @@
  *
  * Every provider describes its permission behaviour in its own vocabulary:
  * Claude has `acceptEdits` and `bypassPermissions`, Codex has an approval
- * policy plus a sandbox, Cursor advertises `agent`/`plan`/`ask` over ACP and
- * nothing else, Devin advertises `bypass`, Grok takes a launch flag. The desk
+ * policy plus a sandbox, Cursor's local SDK exposes Agent, Devin advertises
+ * `bypass`, and Grok takes a launch flag. The desk
  * shows one ladder. A provider mode carries the tier it implements; a tier the
- * provider cannot implement is either synthesized by the host (it answers the
- * agent's permission requests) or absent.
+ * provider cannot implement is absent. Native policy details remain provider-owned.
  */
 export const ACCESS_TIER_NAMES = ["plan", "chat", "ask", "edits", "auto", "full", "deny"] as const
 export type AccessTier = (typeof ACCESS_TIER_NAMES)[number]
@@ -16,8 +15,6 @@ export type AccessTier = (typeof ACCESS_TIER_NAMES)[number]
 export type AccessEnforcement =
   /** The provider enforces it natively. */
   | "provider"
-  /** The host answers the provider's permission requests on the user's behalf. */
-  | "host"
   /** The provider reads it when its process starts; a running session keeps its launch tier. */
   | "launch"
 
@@ -54,46 +51,4 @@ export function accessTierOfModeId(id: string): AccessTier | null {
   const name = id.slice("access:".length)
   const info = ACCESS_TIERS.find((item) => item.tier === name)
   return info ? info.tier : null
-}
-
-/** Tool-call kinds an "Accept edits" tier runs without asking, per the ACP tool-kind vocabulary. */
-const EDIT_TIER_KINDS = new Set(["read", "edit", "search", "think"])
-
-export interface AccessPermissionOption {
-  optionId: string
-  kind?: string
-}
-
-/**
- * The option the host selects on the user's behalf, or null when the request
- * must reach the user. A request whose options are not all allow/reject
- * choices is a question, never auto-answered. Once-scoped grants are preferred
- * so the agent keeps asking and a later, stricter tier is honoured.
- */
-export function hostAccessDecision(
-  tier: AccessTier | null,
-  request: { toolKind?: string; options: readonly AccessPermissionOption[]; questions?: boolean }
-): string | null {
-  if (!tier || request.questions) return null
-  if (request.options.length === 0) return null
-  const answerable = request.options.every(
-    (option) =>
-      option.kind === "allow_once" ||
-      option.kind === "allow_always" ||
-      option.kind === "reject_once" ||
-      option.kind === "reject_always"
-  )
-  if (!answerable) return null
-  const permitted =
-    tier === "full" ||
-    (tier === "edits" && request.toolKind !== undefined && EDIT_TIER_KINDS.has(request.toolKind))
-  if (!permitted) return null
-  const once = request.options.find((option) => option.kind === "allow_once")
-  const always = request.options.find((option) => option.kind === "allow_always")
-  return once?.optionId ?? always?.optionId ?? null
-}
-
-/** Tiers the host can enforce by answering permission requests. */
-export function hostEnforceable(tier: AccessTier): boolean {
-  return tier === "full" || tier === "edits"
 }

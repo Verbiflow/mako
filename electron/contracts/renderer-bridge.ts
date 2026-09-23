@@ -287,7 +287,7 @@ export function createMakoBridge(transport: BridgeTransport) {
         position
       ),
     liveAction: (id: string, input: LiveActionInput) =>
-      invokeTrustedHost<LiveAction>("mako:live-action", id, input),
+      invokeTrustedHost<LiveAction>(input.kind === "steer-queued" ? "mako:live-steer-queued" : "mako:live-action", id, input),
     liveAcknowledgeAction: (id: string, actionId: string) =>
       invokeTrustedHost<void>("mako:live-action-acknowledge", id, actionId),
     liveRewind: (id: string, input: RewindInput) =>

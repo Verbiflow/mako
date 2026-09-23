@@ -29,7 +29,9 @@ export function describeActionRecovery(action: LiveAction) {
         ? "Compaction may still be running. Disconnecting releases this blocked connection; it does not confirm completion or repeat compaction."
         : "The steering message may have reached the agent. Acknowledging this notice does not resend it or confirm completion." }
     case "acknowledged":
-      return { title: `${label} uncertainty acknowledged`, guidance: "The uncertainty was acknowledged. This is not a completion receipt." }
+      return { title: `${label} uncertainty acknowledged`, guidance: state.receipt
+        ? "The uncertainty was acknowledged. The original explanation is saved in Details. This is not a completion receipt."
+        : "The uncertainty was acknowledged. Its original explanation was not retained by this version of Mako. This is not a completion receipt." }
   }
 }
 

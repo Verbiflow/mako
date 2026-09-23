@@ -1,3 +1,4 @@
+import type { ApprovalOrigin } from "./approval-response.js"
 import type { AccessEnforcement, AccessTier } from "./access.js"
 
 /**
@@ -163,6 +164,10 @@ export interface LiveInputQuestion {
 }
 
 export interface LivePermissionRequest {
+  /** Adapter-minted occurrence, echoed by request-end evidence. Never a native ID. */
+  observationId?: string
+  /** Assigned by the host; absent on native events and legacy records. */
+  origin?: ApprovalOrigin
   id: string
   sessionId: string
   title: string

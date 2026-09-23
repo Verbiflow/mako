@@ -364,6 +364,25 @@ export const hostCallInputs = {
     }),
   ]),
   "mako:live-state": z.tuple([z.string()]),
+  "mako:live-steer-queued": z.tuple([
+    z.string(),
+    z.object({
+      kind: z.literal("steer-queued"),
+      id: z.string(),
+      requestId: z.string(),
+      queuedRequestId: z.string(),
+      text: z.string(),
+      attachments: z.array(
+        z.object({
+          name: z.string(),
+          mimeType: z.string(),
+          size: z.number(),
+          data: z.string().optional(),
+          path: z.string().optional(),
+        })
+      ),
+    }),
+  ]),
   "mako:live-transfer": z.tuple([
     z.string(),
     z.object({

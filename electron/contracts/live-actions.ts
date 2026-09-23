@@ -40,7 +40,14 @@ export const LiveActionSchema = z.object({
     z.object({ kind: z.literal("failed"), reason: z.string() }),
     z.object({ kind: z.literal("not-accepted"), reason: z.string() }),
     z.object({ kind: z.literal("uncertain"), reason: z.string() }),
-    z.object({ kind: z.literal("acknowledged") }),
+    z.object({
+      kind: z.literal("acknowledged"),
+      // Older journals stored only the kind; never invent their lost outcome.
+      receipt: z.object({
+        at: z.number().finite(),
+        outcome: z.object({ kind: z.literal("uncertain"), reason: z.string() }),
+      }).optional(),
+    }),
   ]),
 })
 export type LiveAction = z.infer<typeof LiveActionSchema>

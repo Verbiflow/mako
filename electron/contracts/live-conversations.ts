@@ -156,6 +156,7 @@ export interface LiveBatch {
 }
 
 export type LiveDriverEvent =
+  | { type: "live-permission-ended"; id: string; requestId: string; observationId: string; source: import("./approval-response.js").ApprovalEndSource }
   | { type: "live-action-result"; id: string; actionId: string; result: import("./live-actions.js").LiveActionResult }
   | { type: "live-agent"; id: string; agent: NativeAgentObservation }
   | { type: "live-session"; session: LiveSessionState }

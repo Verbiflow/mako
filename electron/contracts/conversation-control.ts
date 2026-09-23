@@ -1,3 +1,4 @@
+import { ApprovalResponseSchema } from "./approval-response.js"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
 import { z } from "zod"
 import { LiveActionSchema } from "./live-actions.js"
@@ -117,6 +118,7 @@ export const DelegateInputSchema = z.object({
 })
 export type DelegateInput = z.infer<typeof DelegateInputSchema>
 export const ConversationControlSchema = z.object({
+  approvalResponses: z.array(ApprovalResponseSchema).optional(),
   actions: z.array(LiveActionSchema).optional(),
   merges: z
     .array(
