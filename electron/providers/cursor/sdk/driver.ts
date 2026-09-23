@@ -549,8 +549,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       }
       return { kind: "not-accepted", reason: "Cursor could not fold the message into the running turn" }
     },
-    async permission(id, requestId, response) {
-      engine.respondPermission(id, requestId, response)
+    async permission(id, requestId, response, dispatch) {
+      dispatch.assertCurrent()
+      dispatch.report(engine.respondPermission(id, requestId, response))
     },
     async setMode(id, modeId) {
       const live = requireLive(id)
@@ -565,13 +566,19 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       const turn = live.turn
       try {
         await live.client.request("cancel", undefined)
-      } finally {
-        // The run's own `cancelled` result normally lands first; if the
-        // child never reports one, Stop is still definitive here.
-        if (live.turn === turn && live.state.status === "running") {
-          settleTurn(engine, live, "cancelled")
-          engine.patch(live, { status: "ready", lastStop: "cancelled", error: undefined })
-        }
+      } catch (error) {
+        // A missing cancellation acknowledgement is not a stopped run. End
+        // this provider process and let its exit mark the session disconnected
+        // before another continuation can acquire the native session.
+        await live.client.close(5_000).catch(() => live.client.kill())
+        await live.client.exited
+        throw error
+      }
+      // A successful cancellation acknowledgement may arrive before the
+      // run's terminal event. Both establish that this turn has stopped.
+      if (live.turn === turn && live.state.status === "running") {
+        settleTurn(engine, live, "cancelled")
+        engine.patch(live, { status: "ready", lastStop: "cancelled", error: undefined })
       }
     },
     async close(id) {

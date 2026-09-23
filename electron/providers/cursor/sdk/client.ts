@@ -170,7 +170,10 @@ export class CursorSdkClient {
     const line: SdkRequest = params === undefined ? ({ id, method } as SdkRequest) : ({ id, method, params } as SdkRequest)
     const schema = SdkResultSchemas[method]
     return new Promise<SdkResult<Method>>((resolve, reject) => {
-      const timeout = this.options.requestTimeoutMs ?? 60_000
+      const requestedTimeout = this.options.requestTimeoutMs ?? 60_000
+      // Stop must reach its process-close fallback promptly when the SDK is
+      // wedged; ordinary sends retain their longer request deadline.
+      const timeout = method === "cancel" ? Math.min(requestedTimeout, 5_000) : requestedTimeout
       const timer = !bounded || UNBOUNDED.has(method)
         ? undefined
         : setTimeout(() => {

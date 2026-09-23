@@ -74,6 +74,7 @@ interface ActiveTurn {
 
 let agent: OpenAgent | undefined
 let active: ActiveTurn | undefined
+let sending = false
 let closing = false
 
 function write(line: SdkChildLine): void {
@@ -297,7 +298,8 @@ async function pump(turn: string, run: Run): Promise<void> {
 async function send(params: SendParams): Promise<SdkResult<"send">> {
   const open = agent
   if (!open) throw new ConfigurationError("No agent is open in this child")
-  if (active) throw new AgentBusyError("A turn is already running in this session")
+  if (active || sending) throw new AgentBusyError("A turn is already running in this session")
+  if (closing) throw new ConfigurationError("This session is closing")
   if (params.model) open.model = params.model
   const message = { text: params.text, images: params.images }
   const onDelta = ({ update }: { update: { type: string; text?: string } }) => {
@@ -315,19 +317,27 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
     }
   }
   const options = { model: params.model, mode: "agent" as const, onDelta }
-  let run: Run
+  sending = true
   try {
-    run = await open.handle.send(message, options)
-  } catch (cause) {
-    // A run the store still calls active belongs to a process that died with
-    // it; this child is the only writer now, so expiring it is safe.
-    if (!(cause instanceof AgentBusyError)) throw cause
-    log("warn", "expired a run left active by an earlier process")
-    run = await open.handle.send(message, { ...options, local: { force: true } })
+    let run: Run
+    try {
+      run = await open.handle.send(message, options)
+    } catch (cause) {
+      // SDK 1.0.31 wraps this SQLite preflight refusal as UnknownAgentError,
+      // not AgentBusyError. Match only this agent's persisted-run refusal:
+      // other failures may follow delivery and must never resend a prompt.
+      // Mako acquires the native-session hold before opening this child;
+      // active/sending exclude a run belonging to this process.
+      if (!(cause instanceof Error) || cause.message !== `Agent ${open.agentId} already has active run`) throw cause
+      run = await open.handle.send(message, { ...options, local: { force: true } })
+      log("warn", "recovered a run left active by an earlier process")
+    }
+    active = { turn: params.turn, run }
+    void pump(params.turn, run)
+    return { runId: run.id }
+  } finally {
+    sending = false
   }
-  active = { turn: params.turn, run }
-  void pump(params.turn, run)
-  return { runId: run.id }
 }
 
 async function steer(text: string): Promise<SdkResult<"steer">> {
