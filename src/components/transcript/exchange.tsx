@@ -2,6 +2,7 @@ import { PlanContextChips } from "@/components/composer/plan-context"
 import { appendPlanContext, parsePlanContext } from "@/lib/proposed-plan"
 import { ProposedPlanCard } from "./proposed-plan"
 import { ChangingLabel } from "@/components/ui/changing-label"
+import { Collapse } from "@/components/ui/collapse"
 import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
 import { copyPromptSelection } from "./prompt-clipboard"
@@ -401,40 +402,45 @@ function WorkSection({
     [messages, startedAt]
   )
   const folded = work.tools >= 3
-  const showWork = live || open
+  // One tree whether or not the log folds, so a turn crossing the fold
+  // threshold mid-stream keeps its rows mounted.
+  const summarized = folded && !live
   return (
-    <div className="flex flex-col gap-2.5">
-      {folded && !live ? (
+    <div className="flex flex-col">
+      {summarized ? (
         <WorkSummary
           work={work}
-          live={live}
           interrupted={interrupted}
           failed={failed}
-          open={showWork}
-          onToggle={() => {
-            if (!live) setOpen((value) => !value)
-          }}
+          open={open}
+          onToggle={() => setOpen((value) => !value)}
         />
       ) : null}
-      {!folded || showWork
-        ? messages.map((message) => (
+      <Collapse open={!summarized || open}>
+        <div
+          data-work-log
+          className={cn(
+            "flex flex-col gap-2.5",
+            summarized && "mt-2 ml-[5px] border-l border-hairline pb-1 pl-4"
+          )}
+        >
+          {messages.map((message) => (
             <Response key={message.id} message={message} showWork />
-          ))
-        : null}
+          ))}
+        </div>
+      </Collapse>
     </div>
   )
 }
 
 function WorkSummary({
   work,
-  live,
   interrupted,
   failed,
   open,
   onToggle,
 }: {
   work: WorkSummaryData
-  live: boolean
   interrupted: boolean
   failed: boolean
   open: boolean
@@ -468,54 +474,58 @@ function WorkSummary({
     const amount = Number.parseInt(piece, 10)
     return count + (Number.isNaN(amount) ? 0 : amount)
   }, 0)
-  const pieces = [
-    live
-      ? "Working"
-      : interrupted
-        ? elapsed
-          ? `Interrupted after ${elapsed}`
-          : "Interrupted"
-        : failed
-          ? elapsed
-            ? `Failed after ${elapsed}`
-            : "Failed"
-          : elapsed
-            ? `Worked for ${elapsed}`
-            : "Work log",
+  const head = interrupted
+    ? elapsed
+      ? `Interrupted after ${elapsed}`
+      : "Interrupted"
+    : failed
+      ? elapsed
+        ? `Failed after ${elapsed}`
+        : "Failed"
+      : elapsed
+        ? `Worked for ${elapsed}`
+        : "Work log"
+  const detail = [
     ...(activity.length > 0 ? activity.slice(0, 4) : [`${work.tools} tools`]),
     hiddenActions > 0 ? `${hiddenActions} more` : null,
-    work.failed > 0 ? `${work.failed} failed` : null,
   ].filter((piece): piece is string => piece !== null)
+  const troubled = interrupted || failed
   return (
     <button
       type="button"
       onClick={onToggle}
       aria-expanded={open}
+      data-work-summary
       className={cn(
-        "pressable flex h-7 max-w-full items-center gap-1.5 rounded-md bg-raised px-2 text-label transition-colors duration-100 hover:text-muted-foreground",
+        "pressable group/work -mx-1 flex h-6 max-w-full items-center gap-1.5 self-start rounded-md px-1 text-label transition-colors duration-100",
         interrupted
           ? "text-caution"
           : failed
             ? "text-negative"
-            : live
-              ? "text-muted-foreground"
-              : "text-faint"
+            : "text-muted-foreground hover:text-foreground"
       )}
     >
-      {live ? (
-        <span className="animate-live size-1.5 rounded-full bg-ember" />
-      ) : interrupted || failed ? (
-        <TriangleAlertIcon className="size-3" />
-      ) : null}
+      {troubled ? (
+        <TriangleAlertIcon className="size-3 shrink-0" />
+      ) : (
+        <span aria-hidden className="size-[5px] shrink-0 rounded-full bg-current opacity-50" />
+      )}
+      <span className="flex min-w-0 items-baseline gap-1.5 truncate">
+        <span className="shrink-0">{head}</span>
+        <span className={cn("truncate", troubled ? "opacity-70" : "text-faint group-hover/work:text-muted-foreground")}>
+          <ChangingLabel text={detail.join(" · ")} />
+        </span>
+        {work.failed > 0 ? (
+          <span className="shrink-0 text-negative">{work.failed} failed</span>
+        ) : null}
+      </span>
       <ChevronRightIcon
+        aria-hidden
         className={cn(
-          "size-3 [transition:transform_150ms_var(--ease-out)]",
-          open && "rotate-90"
+          "size-3 shrink-0 transition-[transform,opacity] duration-200 ease-[var(--ease-out)]",
+          open ? "rotate-90 opacity-80" : "opacity-40 group-hover/work:opacity-80"
         )}
       />
-      <span className="truncate">
-        <ChangingLabel text={pieces.join(" · ")} />
-      </span>
     </button>
   )
 }

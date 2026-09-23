@@ -19,13 +19,12 @@ import {
   NAVIGATOR_WIDTH,
   TurnNavigator,
 } from "@/components/transcript/turn-navigator"
-import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { LEAD_EXCHANGE_ID, type Exchange as ExchangeData } from "@/lib/exchanges"
 import type { TurnStop } from "@/state/prompt-delivery"
 import type { TurnContinuation } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { ArrowDownIcon } from "lucide-react"
-import { ThinkingOrb } from "thinking-orbs"
+import { Orb } from "@/components/ui/orb/orb"
 
 const NEAR_BOTTOM = 96
 
@@ -134,7 +133,6 @@ function HistoryEdge({
   state: HistoryEdgeState
   ref: Ref<HTMLDivElement>
 }) {
-  const theme = useOrbTheme()
   return (
     <div
       ref={ref}
@@ -144,13 +142,7 @@ function HistoryEdge({
     >
       {state === "loading" ? (
         <span className="animate-enter mx-auto flex items-center gap-2">
-          <ThinkingOrb
-            state="breathing"
-            size={20}
-            theme={theme}
-            aria-hidden
-            className="activity-orb shrink-0"
-          />
+          <Orb state="breathing" size={20} />
           <span>Loading earlier turns…</span>
         </span>
       ) : state === "start" ? (

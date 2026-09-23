@@ -74,6 +74,31 @@ const EMPTY_SKILLS = new Map<string, SkillAppendixEntry>()
 const PromptSkillsContext =
   createContext<ReadonlyMap<string, SkillAppendixEntry>>(EMPTY_SKILLS)
 
+/**
+ * Settled prose, rendered once per text. `Markdown` is a pure function of
+ * its input, and the elements it returns read references and the transcript
+ * source from context when they render, so a thread switched back to or a
+ * turn scrolled back into view reuses them instead of parsing again.
+ */
+const SETTLED_PROSE_ENTRIES = 600
+const SETTLED_PROSE_CHARS = 6_000_000
+const settledProse = new Map<string, ReactElement>()
+let settledProseChars = 0
+
+function rememberSettledProse(text: string, element: ReactElement) {
+  settledProse.set(text, element)
+  settledProseChars += text.length
+  while (
+    settledProse.size > SETTLED_PROSE_ENTRIES ||
+    settledProseChars > SETTLED_PROSE_CHARS
+  ) {
+    const oldest = settledProse.keys().next().value
+    if (oldest === undefined) break
+    settledProse.delete(oldest)
+    settledProseChars -= oldest.length
+  }
+}
+
 export const Prose = memo(function Prose({
   text,
   streaming,
@@ -129,26 +154,30 @@ export const Prose = memo(function Prose({
     Parameters<typeof Markdown>[0]["rehypePlugins"]
   >(() => (tree ? [[reuseParsedProse, tree]] : undefined), [tree])
 
-  const rendered = useMemo(
-    () => (
-      <Markdown
-        remarkPlugins={plugins}
-        rehypePlugins={rehypePlugins}
-        components={components}
-        urlTransform={(url) =>
-          referenceMap.has(url) ||
-          decodeFileCitation(url) ||
-          markdownFileTarget(url) ||
-          previewableMediaUrl(url)
-            ? url
-            : (urlTransform?.(url) ?? defaultUrlTransform(url))
-        }
-      >
-        {source}
-      </Markdown>
-    ),
-    [source, plugins, referenceMap, urlTransform, rehypePlugins]
-  )
+  const settled = !streaming && !referenceInput && !urlTransform && !hasTree
+  const rendered = useMemo(() => {
+    const cached = settled ? settledProse.get(source) : undefined
+    if (cached) {
+      settledProse.delete(source)
+      settledProse.set(source, cached)
+      return cached
+    }
+    const element = Markdown({
+      remarkPlugins: plugins,
+      rehypePlugins,
+      components,
+      urlTransform: (url) =>
+        referenceMap.has(url) ||
+        decodeFileCitation(url) ||
+        markdownFileTarget(url) ||
+        previewableMediaUrl(url)
+          ? url
+          : (urlTransform?.(url) ?? defaultUrlTransform(url)),
+      children: source,
+    })
+    if (settled) rememberSettledProse(source, element)
+    return element
+  }, [source, plugins, referenceMap, urlTransform, rehypePlugins, settled])
 
   return (
     <div

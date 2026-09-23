@@ -116,8 +116,8 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
           ) : null}
           {rest ? (
             <p className="shimmer px-2.5 pb-2 text-label">
-              Reading the rest of this output ·{" "}
-              {rest.length.toLocaleString()} characters
+              Reading the rest of this output
+              {rest.length ? ` · ${rest.length.toLocaleString()} characters` : null}
             </p>
           ) : null}
         </div>
