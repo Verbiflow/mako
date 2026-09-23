@@ -6,7 +6,10 @@
   "type": "module",
   "description": "Job-scoped Linux Local Control service without Electron",
   "engines": { "node": ">=24" },
-  "bin": { "mako-control": "dist-electron/cloud-control-main.js" },
+  "bin": {
+    "mako-control": "dist-electron/control-cli.js",
+    "mako-control-mcp": "dist-electron/cloud-control-main.js"
+  },
   "dependencies": {
     "@mako/control": "file:packages/control",
     "@modelcontextprotocol/sdk": "1.30.0",
