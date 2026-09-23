@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..da2aaf8 100644
+index a91f724..f43e5b3 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..da2aaf8 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..a03bbb7 100644
+index 351b086..7beddd2 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,38 +128,53 @@ index 351b086..a03bbb7 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.12"
++version = "0.28.2+mako.17"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
-index ef089ba..193ef6c 100644
+index ef089ba..5411529 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
-@@ -42,13 +42,13 @@ pub use outputs::{
+@@ -42,12 +42,13 @@ pub use outputs::{
      advertised_output_schema, conforming_error_envelope, is_refusal_envelope,
      refusal_envelope_schema, ActionDelivery, ActionDeliveryMode, ActionEffect, ActionEscalation,
      ActionEscalationReason, ActionEscalationTarget, ActionEvidence, ActionEvidenceKind,
 -    ActionResult, ActionResultValidationError, ActionRoute, ClipboardReadOutput,
-+    ActionResult, ActionResultValidationError, ActionRoute, ActionSettling, ClipboardReadOutput,
-     ClipboardWriteOutput, CursorMotionOutput, CursorPointOutput, CursorPositionOutput,
-     CursorThemeOutput, CursorVisualOutput, DesktopStateOutput, EffectiveScope, EndSessionOutput,
-     GetAgentCursorStateOutput, ListSessionsOutput, ScreenSizeOutput, SessionClientKindOutput,
-     SessionLifecycleState, SessionOutput, SessionStateOutput, SessionTransportOutput,
-     SetAgentCursorEnabledOutput, SetAgentCursorMotionOutput, SetAgentCursorThemeOutput,
--    StartSessionOutput, ToolOutput, TOOL_INVOCATION_FAILED_CODE,
-+    SettlingScope, SettlingStatus, StartSessionOutput, ToolOutput, TOOL_INVOCATION_FAILED_CODE,
+-    ClipboardWriteOutput, CursorMotionOutput, CursorPointOutput, CursorPositionOutput,
+-    CursorThemeOutput, CursorVisualOutput, DesktopStateOutput, EffectiveScope, EndSessionOutput,
+-    GetAgentCursorStateOutput, ListSessionsOutput, ScreenSizeOutput, SessionClientKindOutput,
+-    SessionLifecycleState, SessionOutput, SessionStateOutput, SessionTransportOutput,
+-    SetAgentCursorEnabledOutput, SetAgentCursorMotionOutput, SetAgentCursorThemeOutput,
++    ActionFocusChange, ActionResult, ActionResultValidationError, ActionRoute, ActionSettling,
++    ClipboardReadOutput, ClipboardWriteOutput, CursorMotionOutput, CursorPointOutput,
++    CursorPositionOutput, CursorThemeOutput, CursorVisualOutput, DesktopStateOutput,
++    EffectiveScope, EndSessionOutput, GetAgentCursorStateOutput, ListSessionsOutput,
++    ScreenSizeOutput, SessionClientKindOutput, SessionLifecycleState, SessionOutput,
++    SessionStateOutput, SessionTransportOutput, SetAgentCursorEnabledOutput,
++    SetAgentCursorMotionOutput, SetAgentCursorThemeOutput, SettlingScope, SettlingStatus,
+     StartSessionOutput, ToolOutput, TOOL_INVOCATION_FAILED_CODE,
  };
  pub use verification::{
-     BoundsExpectation, ElementPredicate, ElementSelector, PredicateOutcome, StatePredicate,
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
-index 0933fb5..1095763 100644
+index 0933fb5..c66677d 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
-@@ -538,6 +538,29 @@ pub struct ActionEscalation {
+@@ -538,6 +538,40 @@ pub struct ActionEscalation {
      pub reason: ActionEscalationReason,
  }
  
++/// A focus interruption observed within a bounded background action lease.
++/// Restoration is reactive and an attempted restore is not proof of success.
++#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, uniffi::Record)]
++#[serde(deny_unknown_fields)]
++pub struct ActionFocusChange {
++    pub previous_pid: i32,
++    pub current_pid: Option<i32>,
++    pub restoration_attempted: bool,
++    pub input_activity_observed: bool,
++}
++
 +/// Activity after dispatch is not evidence of action success.
 +#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, uniffi::Record)]
 +#[serde(deny_unknown_fields)]
@@ -186,24 +201,27 @@ index 0933fb5..1095763 100644
  #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, uniffi::Record)]
  #[serde(deny_unknown_fields)]
  pub struct ActionResult {
-@@ -549,6 +572,8 @@ pub struct ActionResult {
+@@ -549,6 +583,10 @@ pub struct ActionResult {
      pub evidence: Option<Vec<ActionEvidence>>,
      #[serde(default, skip_serializing_if = "Option::is_none")]
      pub escalation: Option<ActionEscalation>,
 +    #[serde(default, skip_serializing_if = "Option::is_none")]
 +    pub settling: Option<ActionSettling>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub focus_change: Option<ActionFocusChange>,
  }
  
  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-@@ -688,6 +713,7 @@ mod tests {
+@@ -688,6 +726,8 @@ mod tests {
                  kind: ActionEvidenceKind::ValueReadback,
              }]),
              escalation: None,
 +            settling: None,
++            focus_change: None,
          }
      }
  
-@@ -700,7 +726,14 @@ mod tests {
+@@ -700,7 +740,15 @@ mod tests {
          let properties = schema["properties"].as_object().expect("properties");
          assert_eq!(
              properties.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -213,6 +231,7 @@ index 0933fb5..1095763 100644
 +                "effect",
 +                "escalation",
 +                "evidence",
++                "focus_change",
 +                "route",
 +                "settling"
 +            ]
@@ -234,14 +253,15 @@ index 49dea44..6e79342 100644
      pub depth: u32,
      #[serde(default, skip_serializing_if = "Option::is_none")]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
-index 1800450..f07e140 100644
+index 1800450..70b1988 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
-@@ -324,6 +324,7 @@ impl ActionExecutionRecord {
+@@ -324,6 +324,8 @@ impl ActionExecutionRecord {
      ) -> Result<cua_driver_contract::ActionResult, ActionRecordValidationError> {
          let projection = self.stable_projection()?;
          Ok(cua_driver_contract::ActionResult {
 +            settling: None,
++            focus_change: None,
              effect: match projection.effect {
                  ActionEffect::Confirmed => cua_driver_contract::ActionEffect::Confirmed,
                  ActionEffect::Partial => cua_driver_contract::ActionEffect::Partial,
@@ -306,10 +326,10 @@ index cfd35d2..c8dec05 100644
      /// requested while sibling window B is the process's focused/eligible
      /// window. Process-scoped keyboard must refuse before dispatch — an
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/protocol.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/protocol.rs
-index ec46f81..8879956 100644
+index ec46f81..64e0292 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/protocol.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/protocol.rs
-@@ -306,6 +306,10 @@ pub struct ToolResult {
+@@ -306,6 +306,12 @@ pub struct ToolResult {
      /// the MCP result envelope or its legacy structured payload.
      #[serde(skip)]
      pub action_record: Option<crate::action_record::ActionExecutionRecord>,
@@ -317,11 +337,13 @@ index ec46f81..8879956 100644
 +    /// as evidence that input succeeded.
 +    #[serde(skip)]
 +    pub settling: Option<cua_driver_contract::ActionSettling>,
++    #[serde(skip)]
++    pub focus_change: Option<cua_driver_contract::ActionFocusChange>,
  }
  
  impl ToolResult {
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
-index d3db85f..60f140d 100644
+index d3db85f..57a15e3 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
 @@ -141,12 +141,14 @@ struct TurnCapture {
@@ -348,7 +370,7 @@ index d3db85f..60f140d 100644
              return;
          }
          let mut retained = scope.capture.lock().unwrap();
-@@ -180,6 +182,74 @@ pub fn capture_dispatch_click_target(
+@@ -180,6 +182,90 @@ pub fn capture_dispatch_click_target(
      });
  }
  
@@ -392,38 +414,54 @@ index d3db85f..60f140d 100644
 +    Some((scope.window_id, scope.pid))
 +}
 +
-+/// Called after a native mouse event is posted. Coordinates are normalized to
-+/// the exact window content. This records dispatch, not application acceptance.
++/// An owned dispatch recorder that can cross a dedicated native worker queue.
++/// Capturing it performs no image or geometry IO and never creates a recording.
++#[derive(Clone)]
++pub struct PointerRecorder(Arc<DispatchClickScope>);
++
++impl PointerRecorder {
++    pub fn capture(window_id: u64, pid: i64) -> Option<Self> {
++        let scope = BLOCKING_DISPATCH_SCOPE
++            .with(|slot| slot.borrow().clone())
++            .or_else(|| DISPATCH_CLICK_SCOPE.try_with(Clone::clone).ok().flatten())?;
++        ((scope.window_id, scope.pid) == (window_id, pid)).then_some(Self(scope))
++    }
++
++    /// Record native dispatch, not confirmation that an application accepted it.
++    pub fn record(&self, x: f64, y: f64, pressed: bool) {
++        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
++            return;
++        }
++        let dispatched_at = now_ms();
++        let mut capture = self.0.capture.lock().unwrap();
++        if capture.pointer_dispatches.len() < 2048 {
++            capture
++                .pointer_dispatches
++                .push(serde_json::json!({"at_ms":dispatched_at,"x":x,"y":y,"pressed":pressed}));
++        }
++    }
++}
++
++/// Called after a native mouse event is posted. Geometry is evaluated only for
++/// the exact window owned by an active recording.
 +pub fn record_pointer_dispatch(
 +    window_id: u64,
 +    pid: i64,
 +    point: impl FnOnce() -> Option<(f64, f64)>,
 +    pressed: bool,
 +) {
-+    let scope = BLOCKING_DISPATCH_SCOPE
-+        .with(|slot| slot.borrow().clone())
-+        .or_else(|| DISPATCH_CLICK_SCOPE.try_with(Clone::clone).ok().flatten());
-+    let Some(scope) = scope else { return };
-+    if (scope.window_id, scope.pid) != (window_id, pid) {
++    let Some(recorder) = PointerRecorder::capture(window_id, pid) else {
 +        return;
-+    }
-+    let dispatched_at = now_ms();
-+    let Some((x, y)) = point() else { return };
-+    if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
-+        return;
-+    }
-+    let mut capture = scope.capture.lock().unwrap();
-+    if capture.pointer_dispatches.len() < 2048 {
-+        capture
-+            .pointer_dispatches
-+            .push(serde_json::json!({"at_ms":dispatched_at,"x":x,"y":y,"pressed":pressed}));
++    };
++    if let Some((x, y)) = point() {
++        recorder.record(x, y, pressed);
 +    }
 +}
 +
  fn point_in_image(png: &[u8], x: f64, y: f64) -> bool {
      image::load_from_memory_with_format(png, image::ImageFormat::Png).is_ok_and(|image| {
          let (width, height) = (image.width(), image.height());
-@@ -233,18 +303,13 @@ pub struct RecordingSession {
+@@ -233,18 +319,13 @@ pub struct RecordingSession {
  struct RecordingInner {
      enabled: bool,
      generation: u64,
@@ -448,7 +486,7 @@ index d3db85f..60f140d 100644
      output_dir: Option<PathBuf>,
      next_turn: u32,
      session_start_ms: u64,
-@@ -273,6 +338,7 @@ struct RecordingInner {
+@@ -273,6 +354,7 @@ struct RecordingInner {
  /// Snapshot of the current recording state (cheap to clone).
  #[derive(Debug, Clone)]
  pub struct RecordingState {
@@ -456,7 +494,7 @@ index d3db85f..60f140d 100644
      pub enabled: bool,
      pub output_dir: Option<String>,
      pub next_turn: u32,
-@@ -289,6 +355,8 @@ pub struct RecordingState {
+@@ -289,6 +371,8 @@ pub struct RecordingState {
      /// drives ownership via `session_end` (it already knows its own id) rather
      /// than reading this back.
      pub owner: Option<String>,
@@ -465,7 +503,7 @@ index d3db85f..60f140d 100644
  }
  
  impl RecordingSession {
-@@ -299,6 +367,10 @@ impl RecordingSession {
+@@ -299,6 +383,10 @@ impl RecordingSession {
                  enabled: false,
                  generation: 0,
                  owner: None,
@@ -476,7 +514,7 @@ index d3db85f..60f140d 100644
                  output_dir: None,
                  next_turn: 1,
                  session_start_ms: 0,
-@@ -346,6 +418,35 @@ impl RecordingSession {
+@@ -346,6 +434,35 @@ impl RecordingSession {
          output_dir: &str,
          record_video: bool,
          owner: Option<&str>,
@@ -512,7 +550,7 @@ index d3db85f..60f140d 100644
      ) -> anyhow::Result<()> {
          let mut inner = self.inner.lock().unwrap();
          // Write-boundary resurrection guard — checked INSIDE the lock so the
-@@ -365,15 +466,21 @@ impl RecordingSession {
+@@ -365,15 +482,21 @@ impl RecordingSession {
                  );
              }
          }
@@ -542,7 +580,7 @@ index d3db85f..60f140d 100644
          let dir = expand_tilde(output_dir);
          std::fs::create_dir_all(&dir)?;
  
-@@ -386,12 +493,18 @@ impl RecordingSession {
+@@ -386,12 +509,18 @@ impl RecordingSession {
          let mut video_error: Option<String> = None;
          if record_video {
              let path = dir.join("recording.mp4");
@@ -562,7 +600,7 @@ index d3db85f..60f140d 100644
                      video_error = Some(e.to_string());
                      tracing::warn!(target: "recording",
                          "Video capture failed to start; per-turn recording will \
-@@ -406,14 +519,16 @@ impl RecordingSession {
+@@ -406,14 +535,16 @@ impl RecordingSession {
          // off (record_video=false), the sampler is still useful for
          // post-hoc analysis, so we run it anyway — the cost is one
          // background thread + a small jsonl file.
@@ -586,7 +624,7 @@ index d3db85f..60f140d 100644
              }
          }
  
-@@ -434,6 +549,9 @@ impl RecordingSession {
+@@ -434,6 +565,9 @@ impl RecordingSession {
          // the daemon-global recorder is a singleton, so the latest start() owns
          // it. The previous owner's disconnect then no-ops in stop_owner().
          inner.owner = owner.map(str::to_owned);
@@ -596,7 +634,7 @@ index d3db85f..60f140d 100644
          inner.generation = inner.generation.wrapping_add(1);
          inner.enabled = true;
          inner.output_dir = Some(dir);
-@@ -465,7 +583,48 @@ impl RecordingSession {
+@@ -465,7 +599,48 @@ impl RecordingSession {
      /// The guard lives inside the lock so it is race-free against a concurrent
      /// `start()`. Supersedes the #1775 generation-token `stop()`.
      pub fn stop_owner(&self, requester: Option<&str>) -> anyhow::Result<()> {
@@ -645,7 +683,7 @@ index d3db85f..60f140d 100644
          if !inner.enabled {
              return Ok(());
          }
-@@ -478,7 +637,7 @@ impl RecordingSession {
+@@ -478,7 +653,7 @@ impl RecordingSession {
                  return Ok(());
              }
          }
@@ -654,7 +692,7 @@ index d3db85f..60f140d 100644
          let dir = inner.output_dir.clone();
          let (video_meta, stop_error) = match inner.video.take().map(|rec| rec.stop()) {
              Some(Ok(meta)) => match validate_video_metadata(meta) {
-@@ -497,8 +656,8 @@ impl RecordingSession {
+@@ -497,8 +672,8 @@ impl RecordingSession {
          inner.session_monotonic_start = None;
          if let Some(error) = &stop_error {
              inner.last_error = Some(error.clone());
@@ -665,7 +703,7 @@ index d3db85f..60f140d 100644
          }
          inner.last_video = video_meta.clone();
          inner.last_cursor_samples = cursor_samples;
-@@ -509,7 +668,7 @@ impl RecordingSession {
+@@ -509,7 +684,7 @@ impl RecordingSession {
          // landed.
          if let Some(dir) = dir {
              let video_block = if let Some(ref m) = video_meta {
@@ -674,7 +712,7 @@ index d3db85f..60f140d 100644
              } else {
                  video_session_payload(false, final_video_error.as_deref(), None)
              };
-@@ -546,6 +705,7 @@ impl RecordingSession {
+@@ -546,6 +721,7 @@ impl RecordingSession {
      pub fn current_state(&self) -> RecordingState {
          let inner = self.inner.lock().unwrap();
          RecordingState {
@@ -682,7 +720,7 @@ index d3db85f..60f140d 100644
              enabled: inner.enabled,
              output_dir: inner
                  .output_dir
-@@ -553,19 +713,28 @@ impl RecordingSession {
+@@ -553,19 +729,28 @@ impl RecordingSession {
                  .map(|p| p.to_string_lossy().into_owned()),
              next_turn: inner.next_turn,
              last_error: inner.last_error.clone(),
@@ -714,7 +752,7 @@ index d3db85f..60f140d 100644
      }
  
      /// Reserve a turn while deliberately suppressing visual and accessibility
-@@ -578,21 +747,36 @@ impl RecordingSession {
+@@ -578,21 +763,36 @@ impl RecordingSession {
          args: &Value,
          start_ms: u64,
      ) -> Option<PendingTurn> {
@@ -753,7 +791,7 @@ index d3db85f..60f140d 100644
              let out = inner.output_dir.clone()?;
              let idx = inner.next_turn;
              inner.next_turn += 1;
-@@ -600,6 +784,7 @@ impl RecordingSession {
+@@ -600,6 +800,7 @@ impl RecordingSession {
                  out.join(format!("turn-{idx:05}")),
                  inner.session_start_ms,
                  inner.generation,
@@ -761,7 +799,7 @@ index d3db85f..60f140d 100644
              )
          };
  
-@@ -643,6 +828,12 @@ impl RecordingSession {
+@@ -643,6 +844,12 @@ impl RecordingSession {
          if !inner.enabled || inner.generation != generation {
              return None;
          }
@@ -774,7 +812,7 @@ index d3db85f..60f140d 100644
          if let Err(error) = write_phase_artifacts(&turn_dir, "before", &before) {
              inner.last_error = Some(error.to_string());
          }
-@@ -660,14 +851,17 @@ impl RecordingSession {
+@@ -660,14 +867,17 @@ impl RecordingSession {
              click_point,
              capture_visual_state,
              before,
@@ -795,7 +833,7 @@ index d3db85f..60f140d 100644
                      })
                  })
              } else {
-@@ -1021,6 +1215,18 @@ fn write_turn(
+@@ -1021,6 +1231,18 @@ fn write_turn(
          "t_ms_from_session_start": now.saturating_sub(session_start_ms),
          "t_start_ms_from_session_start": start_ms.saturating_sub(session_start_ms),
      });
@@ -814,7 +852,7 @@ index d3db85f..60f140d 100644
      if let Some((cx, cy)) = click_point {
          payload["click_point"] = serde_json::json!({"x": cx, "y": cy});
      }
-@@ -1266,6 +1472,7 @@ mod tests {
+@@ -1266,6 +1488,7 @@ mod tests {
                  window_id: 902,
                  pid: 901,
                  capture: Mutex::new(DispatchClickCapture::default()),
@@ -822,7 +860,7 @@ index d3db85f..60f140d 100644
              })),
          }
      }
-@@ -2111,6 +2318,7 @@ mod tests {
+@@ -2111,6 +2334,7 @@ mod tests {
              path: path.clone(),
              duration_ms: 1,
              finalized: false,
@@ -830,7 +868,7 @@ index d3db85f..60f140d 100644
          })
          .expect_err("unfinalized output must fail");
          assert!(error.to_string().contains("did not finalize"));
-@@ -2120,6 +2328,7 @@ mod tests {
+@@ -2120,6 +2344,7 @@ mod tests {
              path: path.clone(),
              duration_ms: 1,
              finalized: true,
@@ -838,7 +876,7 @@ index d3db85f..60f140d 100644
          })
          .expect_err("empty finalized output must fail");
          assert!(error.to_string().contains("is empty"));
-@@ -2129,8 +2338,167 @@ mod tests {
+@@ -2129,8 +2354,175 @@ mod tests {
              path,
              duration_ms: 1,
              finalized: true,
@@ -976,6 +1014,14 @@ index d3db85f..60f140d 100644
 +                    assert_eq!(recording_dispatch_target(), Some((7, 42)));
 +                    record_pointer_dispatch(7, 42, || Some((0.1, 0.2)), false);
 +                    record_pointer_dispatch(7, 42, || Some((0.8, 0.9)), false);
++                    let recorder = PointerRecorder::capture(7, 42).unwrap();
++                    assert!(PointerRecorder::capture(8, 42).is_none());
++                    std::thread::spawn(move || {
++                        assert_eq!(recording_dispatch_target(), None);
++                        recorder.record(0.6, 0.7, true);
++                    })
++                    .join()
++                    .unwrap();
 +                })
 +                .await
 +                .unwrap();
@@ -988,7 +1034,7 @@ index d3db85f..60f140d 100644
 +            let action: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
 +            assert_eq!(
 +                action["pointer_dispatches"].as_array().unwrap().len(),
-+                2,
++                3,
 +                "{tool}"
 +            );
 +            assert_eq!(action["pointer_dispatches"][1]["x"], 0.8);
@@ -1108,7 +1154,7 @@ index 43779ee..b603984 100644
          "next_turn": state.next_turn,
          "last_error": state.last_error,
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-index d93bf6d..4717a16 100644
+index d93bf6d..5b56d72 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 @@ -1517,13 +1517,13 @@ impl ToolRegistry {
@@ -1132,7 +1178,7 @@ index d93bf6d..4717a16 100644
              })
              .flatten();
  
-@@ -2714,12 +2714,13 @@ fn publish_action_result(result: &mut ToolResult) -> Result<(), String> {
+@@ -2714,12 +2714,14 @@ fn publish_action_result(result: &mut ToolResult) -> Result<(), String> {
          .action_record
          .as_ref()
          .ok_or_else(|| "successful action omitted its internal execution record".to_owned())?;
@@ -1144,10 +1190,11 @@ index d93bf6d..4717a16 100644
          .validate_invariants()
          .map_err(|error| format!("invalid public projection: {error}"))?;
 +    public.settling = result.settling.clone();
++    public.focus_change = result.focus_change.clone();
      let structured =
          serde_json::to_value(public).map_err(|error| format!("projection failed: {error}"))?;
      // The breaking contract narrows machine-readable structured content. Keep
-@@ -4511,6 +4512,29 @@ resources:
+@@ -4511,6 +4513,37 @@ resources:
          assert_eq!(hits.load(Ordering::SeqCst), 1);
      }
  
@@ -1166,11 +1213,19 @@ index d93bf6d..4717a16 100644
 +            events: 3,
 +            subscriptions: 8,
 +        });
++        result.focus_change = Some(cua_driver_contract::ActionFocusChange {
++            previous_pid: 7,
++            current_pid: Some(7),
++            restoration_attempted: true,
++            input_activity_observed: false,
++        });
 +        publish_action_result(&mut result).unwrap();
 +        let structured = result.structured_content.unwrap();
 +        assert_eq!(structured["effect"], "unverifiable");
 +        assert!(structured.get("evidence").is_none());
 +        assert_eq!(structured["settling"]["events"], 3);
++        assert_eq!(structured["focus_change"]["previous_pid"], 7);
++        assert_eq!(structured["focus_change"]["restoration_attempted"], true);
 +        cua_driver_contract::validate_success_output("click", structured).unwrap();
 +    }
 +
@@ -1267,6 +1322,20 @@ index bc860cd..edceabe 100644
          ));
      }
  }
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+index 5d6ac1f..227f638 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+@@ -726,6 +726,9 @@ fn main() {
+                 platform_macos::cursor::overlay::run_on_main_thread();
+                 let _ = serve_handle.join();
+             } else {
++                // NSWorkspace still needs the main run loop when UI is disabled.
++                // A background observer queue cannot service its notification source.
++                platform_macos::focus_steal::run_notification_loop();
+                 let _ = serve_handle.join();
+             }
+         }
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs b/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
 index 2695747..1bb1383 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
@@ -2133,7 +2202,7 @@ index bf6cd24..e85c314 100644
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
-index 29a4d2d..2d4a98a 100644
+index 29a4d2d..2d0c76d 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
 @@ -1119,6 +1119,16 @@ pub fn with_x11_foreground<T>(
@@ -2173,7 +2242,7 @@ index 29a4d2d..2d4a98a 100644
          };
          conn.send_event(false, target.window, EventMask::POINTER_MOTION, &motion)?;
          conn.flush()?;
-+        record_window_pointer(xid, ix, iy, false);
++        record_window_pointer(xid, ix, iy, true);
          if step_delay_ms > 0 {
              sleep(Duration::from_millis(step_delay_ms));
          }
@@ -2251,7 +2320,7 @@ index 29a4d2d..2d4a98a 100644
              0,
          )?;
          conn.flush()?;
-+        record_screen_pointer(x.round() as i32, y.round() as i32, false);
++        record_screen_pointer(x.round() as i32, y.round() as i32, true);
          if delay > 0 {
              sleep(Duration::from_millis(delay));
          }
@@ -2328,7 +2397,7 @@ index 879aa53..9697b5e 100644
 +#[cfg(target_os = "linux")]
 +pub mod video_window;
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
-index d835bf1..3401151 100644
+index d835bf1..b7ec1ef 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
 @@ -460,8 +460,7 @@ impl Tool for ListWindowsTool {
@@ -2345,7 +2414,7 @@ index d835bf1..3401151 100644
  ///
  fn window_record_json(w: &crate::x11::WindowInfo) -> Value {
      json!({
-+        "focused": if crate::wayland::is_wayland() { None } else { crate::x11::focused_window(w.xid) },
++        "focused": if crate::wayland::is_wayland() { w.pid.and_then(|pid| crate::wayland::focused_target(pid, w.xid)) } else { crate::x11::focused_window(w.xid) },
          "window_id": w.xid,
          "pid": w.pid,
          "app_name": w.app_name,
@@ -2433,15 +2502,16 @@ index d835bf1..3401151 100644
                              )
                          })
                          .collect();
-@@ -1065,6 +1069,7 @@ impl Tool for GetWindowStateTool {
+@@ -1065,6 +1069,8 @@ impl Tool for GetWindowStateTool {
                      is_error: None,
                      structured_content: Some(structured),
                      action_record: None,
 +                    settling: None,
++                    focus_change: None,
                  }
              }
              Ok(Err(e)) => ToolResult::error(format!("Capture error: {e}")),
-@@ -1110,10 +1115,15 @@ mod get_window_state_actions_tests {
+@@ -1110,10 +1116,15 @@ mod get_window_state_actions_tests {
  
      fn node(actions: Vec<String>) -> AtspiNode {
          AtspiNode {
@@ -2457,7 +2527,7 @@ index d835bf1..3401151 100644
              checked: None,
              enabled: Some(true),
              selected: None,
-@@ -3363,7 +3373,7 @@ impl Tool for ClickTool {
+@@ -3363,7 +3374,7 @@ impl Tool for ClickTool {
              // sees the cursor "click somewhere else."
              reveal_pointer_action_for(&self.state, &cursor_id, f64::from(sx), f64::from(sy), true)
                  .await;
@@ -2466,7 +2536,7 @@ index d835bf1..3401151 100644
                  if crate::wayland::wayland_input_enabled() {
                      if !modifiers.is_empty() {
                          anyhow::bail!(
-@@ -3402,6 +3412,9 @@ impl Tool for ClickTool {
+@@ -3402,6 +3413,9 @@ impl Tool for ClickTool {
              Ok(v) => v,
              Err(e) => return e,
          };
@@ -2476,7 +2546,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          let count = args.u64_or("count", 1) as usize;
          let isolated_background = isolated_hyprland_background(delivery);
-@@ -3450,6 +3463,23 @@ impl Tool for ClickTool {
+@@ -3450,6 +3464,23 @@ impl Tool for ClickTool {
              cua_driver_core::element_token::ResolvedElement::None => window_id_arg,
          };
  
@@ -2500,7 +2570,7 @@ index d835bf1..3401151 100644
          if let Some(idx) = elem_idx_resolved {
              let xid_hint = window_id_resolved;
              // Resolve the element's screen center + its window FIRST, so the
-@@ -3457,8 +3487,8 @@ impl Tool for ClickTool {
+@@ -3457,8 +3488,8 @@ impl Tool for ClickTool {
              // matching the coordinate path below and the macOS/Windows backends.
              // Previously perform_action ran inside this spawn_blocking, so the
              // app updated before the cursor visibly arrived.
@@ -2511,7 +2581,7 @@ index d835bf1..3401151 100644
                      let (cx, cy) = element_screen_center(pid, idx, xid_hint)?;
                      let xid = xid_hint
                          .or_else(|| {
-@@ -3469,10 +3499,11 @@ impl Tool for ClickTool {
+@@ -3469,10 +3500,11 @@ impl Tool for ClickTool {
                          })
                          .unwrap_or(0);
                      Ok((xid, cx, cy))
@@ -2527,7 +2597,7 @@ index d835bf1..3401151 100644
              if let Some((xid, sx, sy)) = placement {
                  if xid != 0 {
                      crate::overlay::send_command_for(
-@@ -3494,9 +3525,10 @@ impl Tool for ClickTool {
+@@ -3494,9 +3526,10 @@ impl Tool for ClickTool {
                  );
              }
              if element_click_prefers_ax(foreground_hyprland, button, count, !modifiers.is_empty()) {
@@ -2541,7 +2611,7 @@ index d835bf1..3401151 100644
                  if let Ok(Ok((_action, suspected_noop))) = ax_result {
                      let mut structured = json!({
                          "path": "ax",
-@@ -3524,7 +3556,7 @@ impl Tool for ClickTool {
+@@ -3524,7 +3557,7 @@ impl Tool for ClickTool {
                          "an exact window_id or window-bound element token is required",
                      );
                  };
@@ -2550,7 +2620,7 @@ index d835bf1..3401151 100644
                      resolve_element_local_coords(pid, idx, Some(xid))
                  })
                  .await;
-@@ -3592,44 +3624,45 @@ impl Tool for ClickTool {
+@@ -3592,44 +3625,45 @@ impl Tool for ClickTool {
  
              // The AX route was unavailable. Fall back to a target-addressed
              // X11 event for toolkits that accept it.
@@ -2630,7 +2700,7 @@ index d835bf1..3401151 100644
              return match result {
                  // An element click is never driver-verifiable (no read-back) —
                  // verified:false; the caller confirms via screenshot. `effect` is
-@@ -3701,7 +3734,7 @@ impl Tool for ClickTool {
+@@ -3701,7 +3735,7 @@ impl Tool for ClickTool {
          let glide_target = if let Some((sx, sy)) = wayland_output_point {
              Some((sx as f64, sy as f64))
          } else {
@@ -2639,7 +2709,7 @@ index d835bf1..3401151 100644
                  .await
                  .ok()
                  .and_then(|r| r.ok())
-@@ -3739,7 +3772,7 @@ impl Tool for ClickTool {
+@@ -3739,7 +3773,7 @@ impl Tool for ClickTool {
                  );
              }
              if button == 1 && count == 1 {
@@ -2648,7 +2718,7 @@ index d835bf1..3401151 100644
                      crate::atspi::perform_action_at_screen_point(pid, xid, output_x, output_y)
                  })
                  .await;
-@@ -3767,107 +3800,108 @@ impl Tool for ClickTool {
+@@ -3767,107 +3801,108 @@ impl Tool for ClickTool {
          // delivery_mode: background (default) = no-focus-steal injection;
          // foreground = activate the target window (EWMH) first, then inject,
          // then restore prior active. Mirrors macOS/Windows.
@@ -2845,7 +2915,7 @@ index d835bf1..3401151 100644
          let mode_label = if delivery.is_foreground() {
              "foreground"
          } else {
-@@ -3954,8 +3988,10 @@ async fn focus_nested_inject_target(
+@@ -3954,8 +3989,10 @@ async fn focus_nested_inject_target(
      pixel: Option<(f64, f64)>,
  ) -> Result<(), ToolResult> {
      if let Some(index) = element_index {
@@ -2858,7 +2928,7 @@ index d835bf1..3401151 100644
          {
              Ok(Ok(true)) => Ok(()),
              Ok(Ok(false)) => Err(ToolResult::error(format!(
-@@ -3966,7 +4002,7 @@ async fn focus_nested_inject_target(
+@@ -3966,7 +4003,7 @@ async fn focus_nested_inject_target(
          };
      }
      if let Some((x, y)) = pixel {
@@ -2867,7 +2937,7 @@ index d835bf1..3401151 100644
              crate::wayland::inject_click(pid, window_id, x, y, 1, 1)
          })
          .await
-@@ -3981,6 +4017,49 @@ async fn focus_nested_inject_target(
+@@ -3981,6 +4018,51 @@ async fn focus_nested_inject_target(
  
  // ── type_text ─────────────────────────────────────────────────────────────────
  
@@ -2902,13 +2972,15 @@ index d835bf1..3401151 100644
 +            _ => {}
 +        }
 +    }
-+    let verified = !crate::wayland::is_wayland()
-+        && window.is_some_and(|xid| {
-+            crate::x11::list_windows(Some(pid))
-+                .iter()
-+                .any(|w| w.xid == xid && w.is_on_screen)
-+                && crate::x11::focused_window(xid) == Some(true)
-+        });
++    let verified = window.is_some_and(|xid| {
++        if crate::wayland::is_wayland() {
++            return crate::wayland::focused_target(pid, xid) == Some(true);
++        }
++        crate::x11::list_windows(Some(pid))
++            .iter()
++            .any(|w| w.xid == xid && w.is_on_screen)
++            && crate::x11::focused_window(xid) == Some(true)
++    });
 +    (!verified).then(|| {
 +        ToolResult::error("foreground_unavailable: exact target is not focused; no input sent")
 +    })
@@ -2917,7 +2989,7 @@ index d835bf1..3401151 100644
  pub struct TypeTextTool {
      state: Arc<ToolState>,
  }
-@@ -4093,6 +4172,9 @@ impl Tool for TypeTextTool {
+@@ -4093,6 +4175,9 @@ impl Tool for TypeTextTool {
                  }
              }
          };
@@ -2927,7 +2999,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if isolated_hyprland_background(delivery)
              && resolved_elem_idx.is_none()
-@@ -4824,6 +4906,9 @@ impl Tool for PressKeyTool {
+@@ -4824,6 +4909,9 @@ impl Tool for PressKeyTool {
          // Reuses click's translation + delivery_mode; after it, deliver via the plain
          // background path (the focus-click already handled fronting when fg). Pass x,y
          // (no element_index) for Chromium/Electron surfaces the AX path can't focus.
@@ -2937,7 +3009,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if isolated_hyprland_background(delivery) {
              if xid_opt.is_none() {
-@@ -5222,6 +5307,9 @@ impl Tool for HotkeyTool {
+@@ -5222,6 +5310,9 @@ impl Tool for HotkeyTool {
          let key_display = format!("{}+{}", mods.join("+"), key);
          let key_for_wayland = key.clone();
          let mods_for_wayland = mods.clone();
@@ -2947,7 +3019,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
  
          if isolated_hyprland_background(delivery) {
-@@ -5524,6 +5612,15 @@ impl Tool for SetValueTool {
+@@ -5524,6 +5615,15 @@ impl Tool for SetValueTool {
                  "set_value requires element_index or element_token to address the target element.",
              ),
          };
@@ -2963,7 +3035,7 @@ index d835bf1..3401151 100644
          let value_for_task = value.clone();
          let xid = args
              .opt_u64("window_id")
-@@ -5531,9 +5628,10 @@ impl Tool for SetValueTool {
+@@ -5531,9 +5631,10 @@ impl Tool for SetValueTool {
              .unwrap_or(0);
          position_named_session_keyboard_cursor(&self.state, &args, pid, xid, Some(idx), None, true)
              .await;
@@ -2977,7 +3049,7 @@ index d835bf1..3401151 100644
          match result {
              Ok(Ok(())) => ToolResult::text(format!("Set value of element [{idx}] to '{value}'.")),
              Ok(Err(e)) => ToolResult::error(e.to_string()),
-@@ -5691,7 +5789,7 @@ impl Tool for ScrollTool {
+@@ -5691,7 +5792,7 @@ impl Tool for ScrollTool {
                  )
                  .await;
              }
@@ -2986,7 +3058,7 @@ index d835bf1..3401151 100644
                  if wayland {
                      crate::wayland::scroll_desktop(x, y, &direction, amount as u32)
                  } else {
-@@ -5750,10 +5848,11 @@ impl Tool for ScrollTool {
+@@ -5750,10 +5851,11 @@ impl Tool for ScrollTool {
          let xid = match xid_opt {
              Some(x) => x,
              None => {
@@ -3002,7 +3074,7 @@ index d835bf1..3401151 100644
                  match windows.first() {
                      Some(w) => w.xid,
                      None => {
-@@ -5792,7 +5891,7 @@ impl Tool for ScrollTool {
+@@ -5792,7 +5894,7 @@ impl Tool for ScrollTool {
          }
  
          if named_session_cursor_key(&args).is_some() {
@@ -3011,7 +3083,7 @@ index d835bf1..3401151 100644
                  explicit_keyboard_cursor_target(pid, xid, resolved_element_index, pixel_target)
                      .or_else(|| keyboard_window_center(xid))
              })
-@@ -5808,6 +5907,9 @@ impl Tool for ScrollTool {
+@@ -5808,6 +5910,9 @@ impl Tool for ScrollTool {
              }
          }
  
@@ -3021,7 +3093,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          let isolated_background = isolated_hyprland_background(delivery);
          if !isolated_background {
-@@ -5826,7 +5928,7 @@ impl Tool for ScrollTool {
+@@ -5826,7 +5931,7 @@ impl Tool for ScrollTool {
              // coordinate-based compositor fallback.
              if !(crate::wayland::wayland_input_enabled() && is_webkitgtk_embedder(pid)) {
                  let direction_for_ax = direction.clone();
@@ -3030,7 +3102,7 @@ index d835bf1..3401151 100644
                      crate::atspi::scroll_element(pid, idx, &direction_for_ax, amount, by)
                  })
                  .await;
-@@ -5855,7 +5957,7 @@ impl Tool for ScrollTool {
+@@ -5855,7 +5960,7 @@ impl Tool for ScrollTool {
                  );
              }
              let point = if let Some(index) = resolved_element_index {
@@ -3039,7 +3111,7 @@ index d835bf1..3401151 100644
                      resolve_element_local_coords(pid, index, Some(xid))
                  })
                  .await
-@@ -5925,7 +6027,7 @@ impl Tool for ScrollTool {
+@@ -5925,7 +6030,7 @@ impl Tool for ScrollTool {
                  );
              };
              let direction_for_inject = direction.clone();
@@ -3048,7 +3120,7 @@ index d835bf1..3401151 100644
                  crate::wayland::inject_scroll(pid, xid, x, y, &direction_for_inject, amount as u32)
              })
              .await;
-@@ -5957,7 +6059,7 @@ impl Tool for ScrollTool {
+@@ -5957,7 +6062,7 @@ impl Tool for ScrollTool {
                      },
                  ) => {
                      let idx = *element_index;
@@ -3057,7 +3129,7 @@ index d835bf1..3401151 100644
                          resolve_element_local_coords(pid, idx, Some(xid))
                      })
                      .await
-@@ -5980,7 +6082,7 @@ impl Tool for ScrollTool {
+@@ -5980,7 +6085,7 @@ impl Tool for ScrollTool {
              let output_point = local_point.map(|(x, y)| {
                  crate::wayland::window_local_to_output(xid, x.round() as i32, y.round() as i32)
              });
@@ -3066,7 +3138,7 @@ index d835bf1..3401151 100644
                  crate::wayland::scroll_at(xid, output_point, &direction_for_wayland, amount as u32)
              })
              .await;
-@@ -6008,7 +6110,7 @@ impl Tool for ScrollTool {
+@@ -6008,7 +6113,7 @@ impl Tool for ScrollTool {
          let element_point = match &resolved {
              cua_driver_core::element_token::ResolvedElement::Element { element_index, .. } => {
                  let idx = *element_index;
@@ -3075,7 +3147,7 @@ index d835bf1..3401151 100644
                      resolve_element_local_coords(pid, idx, Some(xid))
                  })
                  .await
-@@ -6046,7 +6148,7 @@ impl Tool for ScrollTool {
+@@ -6046,7 +6151,7 @@ impl Tool for ScrollTool {
          let cursor_id_for_task = cursor_id.clone();
          let direction_for_wayland = direction.clone();
          let amount_u32 = amount as u32;
@@ -3084,7 +3156,7 @@ index d835bf1..3401151 100644
              if crate::wayland::wayland_input_enabled() {
                  return crate::wayland::scroll(xid, &direction_for_wayland, amount_u32);
              }
-@@ -6174,6 +6276,9 @@ impl Tool for DoubleClickTool {
+@@ -6174,6 +6279,9 @@ impl Tool for DoubleClickTool {
              Ok(v) => v,
              Err(e) => return e,
          };
@@ -3094,7 +3166,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
              return refusal;
-@@ -6224,16 +6329,19 @@ impl Tool for DoubleClickTool {
+@@ -6224,16 +6332,19 @@ impl Tool for DoubleClickTool {
          };
          if let Some(idx) = elem_idx_resolved {
              let xid_hint = window_id_resolved;
@@ -3121,7 +3193,7 @@ index d835bf1..3401151 100644
                      {
                          crate::overlay::send_command_for(
                              cursor_id.clone(),
-@@ -6246,7 +6354,7 @@ impl Tool for DoubleClickTool {
+@@ -6246,7 +6357,7 @@ impl Tool for DoubleClickTool {
                      let wayland_point = crate::wayland::wayland_input_enabled()
                          .then(|| crate::wayland::window_local_to_output(xid, lxi, lyi));
                      let cursor_id_for_task = cursor_id.clone();
@@ -3130,7 +3202,7 @@ index d835bf1..3401151 100644
                          if crate::wayland::is_inject_mode() {
                              return crate::wayland::inject_click(pid, xid, lx, ly, 2, 1);
                          }
-@@ -6320,7 +6428,7 @@ impl Tool for DoubleClickTool {
+@@ -6320,7 +6431,7 @@ impl Tool for DoubleClickTool {
          let glide_target = if let Some((sx, sy)) = wayland_output_point {
              Some((sx as f64, sy as f64))
          } else {
@@ -3139,7 +3211,7 @@ index d835bf1..3401151 100644
                  .await
                  .ok()
                  .and_then(|r| r.ok())
-@@ -6330,7 +6438,7 @@ impl Tool for DoubleClickTool {
+@@ -6330,7 +6441,7 @@ impl Tool for DoubleClickTool {
          }
          let (xi, yi) = (x as i32, y as i32);
          let cursor_id_for_task = cursor_id.clone();
@@ -3148,7 +3220,7 @@ index d835bf1..3401151 100644
              if crate::wayland::is_inject_mode() {
                  return crate::wayland::inject_click(pid, xid, x, y, 2, 1);
              }
-@@ -6413,6 +6521,9 @@ impl Tool for RightClickTool {
+@@ -6413,6 +6524,9 @@ impl Tool for RightClickTool {
              Ok(v) => v,
              Err(e) => return e,
          };
@@ -3158,7 +3230,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
              return refusal;
-@@ -6463,16 +6574,19 @@ impl Tool for RightClickTool {
+@@ -6463,16 +6577,19 @@ impl Tool for RightClickTool {
          };
          if let Some(idx) = elem_idx_resolved {
              let xid_hint = window_id_resolved;
@@ -3185,7 +3257,7 @@ index d835bf1..3401151 100644
                      {
                          crate::overlay::send_command_for(
                              cursor_id.clone(),
-@@ -6485,7 +6599,7 @@ impl Tool for RightClickTool {
+@@ -6485,7 +6602,7 @@ impl Tool for RightClickTool {
                      let wayland_point = crate::wayland::wayland_input_enabled()
                          .then(|| crate::wayland::window_local_to_output(xid, lxi, lyi));
                      let cursor_id_for_task = cursor_id.clone();
@@ -3194,7 +3266,7 @@ index d835bf1..3401151 100644
                          if crate::wayland::is_inject_mode() {
                              return crate::wayland::inject_click(pid, xid, lx, ly, 1, 3);
                          }
-@@ -6559,7 +6673,7 @@ impl Tool for RightClickTool {
+@@ -6559,7 +6676,7 @@ impl Tool for RightClickTool {
          let glide_target = if let Some((sx, sy)) = wayland_output_point {
              Some((sx as f64, sy as f64))
          } else {
@@ -3203,7 +3275,7 @@ index d835bf1..3401151 100644
                  .await
                  .ok()
                  .and_then(|r| r.ok())
-@@ -6569,7 +6683,7 @@ impl Tool for RightClickTool {
+@@ -6569,7 +6686,7 @@ impl Tool for RightClickTool {
          }
          let (xi, yi) = (x as i32, y as i32);
          let cursor_id_for_task = cursor_id.clone();
@@ -3212,7 +3284,7 @@ index d835bf1..3401151 100644
              if crate::wayland::is_inject_mode() {
                  return crate::wayland::inject_click(pid, xid, x, y, 1, 3);
              }
-@@ -6676,7 +6790,7 @@ impl Tool for DragTool {
+@@ -6676,7 +6793,7 @@ impl Tool for DragTool {
              let steps = input.steps.unwrap_or(20).clamp(1, 200) as usize;
              let wayland = crate::wayland::wayland_input_enabled();
              let path = if wayland { "wayland_desktop" } else { "xtest" };
@@ -3221,7 +3293,7 @@ index d835bf1..3401151 100644
                  if wayland {
                      crate::wayland::drag_desktop(
                          from_x.round() as i32,
-@@ -6728,6 +6842,9 @@ impl Tool for DragTool {
+@@ -6728,6 +6845,9 @@ impl Tool for DragTool {
              Some(v) => v,
              None => return ToolResult::error("window_id is required on Linux."),
          };
@@ -3231,7 +3303,7 @@ index d835bf1..3401151 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          let isolated_background = isolated_hyprland_background(delivery);
          if !isolated_background {
-@@ -6939,10 +7056,12 @@ impl Tool for DragTool {
+@@ -6939,10 +7059,12 @@ impl Tool for DragTool {
          let screen_from = if let Some((from, _)) = wayland_points {
              Some((from.0 as f64, from.1 as f64))
          } else {
@@ -3248,7 +3320,7 @@ index d835bf1..3401151 100644
          };
          if let Some((sx_from, sy_from)) = screen_from {
              overlay_glide_to_for(&cursor_id, sx_from, sy_from).await;
-@@ -6964,7 +7083,7 @@ impl Tool for DragTool {
+@@ -6964,7 +7086,7 @@ impl Tool for DragTool {
          if crate::wayland::wayland_input_enabled() {
              let steps_u32 = steps as u32;
              let drag_result = if crate::wayland::is_inject_mode() {
@@ -3257,7 +3329,7 @@ index d835bf1..3401151 100644
                      crate::wayland::inject_drag(
                          pid,
                          xid,
-@@ -6979,7 +7098,7 @@ impl Tool for DragTool {
+@@ -6979,7 +7101,7 @@ impl Tool for DragTool {
                      (from_x.round() as i32, from_y.round() as i32),
                      (to_x.round() as i32, to_y.round() as i32),
                  ));
@@ -3266,7 +3338,7 @@ index d835bf1..3401151 100644
                      crate::wayland::drag(xid, fxi, fyi, txi, tyi, steps_u32, duration_ms, button)
                  })
              };
-@@ -7015,7 +7134,7 @@ impl Tool for DragTool {
+@@ -7015,7 +7137,7 @@ impl Tool for DragTool {
          }
  
          if delivery.is_foreground() {
@@ -3275,7 +3347,7 @@ index d835bf1..3401151 100644
                  Ok::<_, anyhow::Error>((
                      window_local_to_screen(xid, from_x, from_y)?,
                      window_local_to_screen(xid, to_x, to_y)?,
-@@ -7027,7 +7146,7 @@ impl Tool for DragTool {
+@@ -7027,7 +7149,7 @@ impl Tool for DragTool {
                  Ok(Err(e)) => return ToolResult::error(e.to_string()),
                  Err(e) => return ToolResult::error(format!("Task error: {e}")),
              };
@@ -3284,7 +3356,7 @@ index d835bf1..3401151 100644
                  crate::input::with_x11_foreground(xid, 80, || {
                      crate::input::send_drag_xtest_desktop(
                          screen_from_x.round() as i32,
-@@ -7073,7 +7192,7 @@ impl Tool for DragTool {
+@@ -7073,7 +7195,7 @@ impl Tool for DragTool {
              cursor_id.clone(),
              cursor_overlay::OverlayCommand::SetPressed(true),
          );
@@ -3293,7 +3365,7 @@ index d835bf1..3401151 100644
              crate::input::send_button_down(
                  xid,
                  from_x.round() as i32,
-@@ -7098,7 +7217,7 @@ impl Tool for DragTool {
+@@ -7098,7 +7220,7 @@ impl Tool for DragTool {
                  let t = i as f64 / steps.max(1) as f64;
                  let ix = from_x + (to_x - from_x) * t;
                  let iy = from_y + (to_y - from_y) * t;
@@ -3302,7 +3374,7 @@ index d835bf1..3401151 100644
                      crate::input::send_motion(
                          xid,
                          ix.round() as i32,
-@@ -7110,8 +7229,10 @@ impl Tool for DragTool {
+@@ -7110,8 +7232,10 @@ impl Tool for DragTool {
                  match motion_result {
                      Ok(Ok(())) => {
                          if let Ok(Ok((sx, sy))) =
@@ -3315,7 +3387,7 @@ index d835bf1..3401151 100644
                          {
                              self.state
                                  .cursor_registry
-@@ -7138,7 +7259,7 @@ impl Tool for DragTool {
+@@ -7138,7 +7262,7 @@ impl Tool for DragTool {
              }
          }
  
@@ -3324,7 +3396,7 @@ index d835bf1..3401151 100644
              crate::input::send_button_up(xid, to_x.round() as i32, to_y.round() as i32, button)
          })
          .await;
-@@ -7155,8 +7276,10 @@ impl Tool for DragTool {
+@@ -7155,8 +7279,10 @@ impl Tool for DragTool {
          );
  
          if result.is_ok() {
@@ -3337,7 +3409,7 @@ index d835bf1..3401151 100644
              {
                  crate::overlay::send_command_for(
                      cursor_id.clone(),
-@@ -7261,7 +7384,8 @@ impl Tool for MouseButtonDownTool {
+@@ -7261,7 +7387,8 @@ impl Tool for MouseButtonDownTool {
              cursor_overlay::OverlayCommand::PinAbove(xid),
          );
          if let Ok(Ok((sx, sy))) =
@@ -3347,7 +3419,7 @@ index d835bf1..3401151 100644
          {
              overlay_glide_to_for(&cursor_id, sx, sy).await;
              crate::overlay::send_command_for(
-@@ -7277,13 +7401,15 @@ impl Tool for MouseButtonDownTool {
+@@ -7277,13 +7404,15 @@ impl Tool for MouseButtonDownTool {
          // the existing input::send_button_down behaviour.
          let result = if crate::wayland::is_wayland() {
              let cid = cursor_id.clone();
@@ -3366,7 +3438,7 @@ index d835bf1..3401151 100644
          };
          match result {
              Ok(Ok(())) => {
-@@ -7299,8 +7425,10 @@ impl Tool for MouseButtonDownTool {
+@@ -7299,8 +7428,10 @@ impl Tool for MouseButtonDownTool {
                      .lock()
                      .unwrap()
                      .insert(cursor_id.clone(), hold.clone());
@@ -3379,7 +3451,7 @@ index d835bf1..3401151 100644
                  {
                      self.state
                          .cursor_registry
-@@ -7412,8 +7540,10 @@ impl Tool for MouseDragTool {
+@@ -7412,8 +7543,10 @@ impl Tool for MouseDragTool {
              cursor_id.clone(),
              cursor_overlay::OverlayCommand::PinAbove(xid),
          );
@@ -3392,7 +3464,7 @@ index d835bf1..3401151 100644
          {
              overlay_glide_to_for(&cursor_id, sx, sy).await;
              self.state
-@@ -7445,7 +7575,7 @@ impl Tool for MouseDragTool {
+@@ -7445,7 +7578,7 @@ impl Tool for MouseDragTool {
              // X11 keeps the existing input::send_motion path.
              let cid_inner = cursor_id.clone();
              let move_result = if is_wl {
@@ -3401,7 +3473,7 @@ index d835bf1..3401151 100644
                      crate::wayland::persistent_vptr::move_to(
                          &cid_inner,
                          ix.round() as i32,
-@@ -7454,7 +7584,7 @@ impl Tool for MouseDragTool {
+@@ -7454,7 +7587,7 @@ impl Tool for MouseDragTool {
                  })
                  .await
              } else {
@@ -3410,7 +3482,7 @@ index d835bf1..3401151 100644
                      crate::input::send_motion(
                          xid,
                          ix.round() as i32,
-@@ -7467,8 +7597,10 @@ impl Tool for MouseDragTool {
+@@ -7467,8 +7600,10 @@ impl Tool for MouseDragTool {
              match move_result {
                  Ok(Ok(())) => {
                      if let Ok(Ok((sx, sy))) =
@@ -3423,7 +3495,7 @@ index d835bf1..3401151 100644
                      {
                          let heading = if (ix - prev_x).abs() > f64::EPSILON
                              || (iy - prev_y).abs() > f64::EPSILON
-@@ -7508,9 +7640,10 @@ impl Tool for MouseDragTool {
+@@ -7508,9 +7643,10 @@ impl Tool for MouseDragTool {
                      .lock()
                      .unwrap()
                      .insert(cursor_id.clone(), hold.clone());
@@ -3437,7 +3509,7 @@ index d835bf1..3401151 100644
                  {
                      self.state
                          .cursor_registry
-@@ -7613,7 +7746,8 @@ impl Tool for MouseButtonUpTool {
+@@ -7613,7 +7749,8 @@ impl Tool for MouseButtonUpTool {
              cursor_overlay::OverlayCommand::PinAbove(xid),
          );
          if let Ok(Ok((sx, sy))) =
@@ -3447,7 +3519,7 @@ index d835bf1..3401151 100644
          {
              overlay_glide_to_for(&cursor_id, sx, sy).await;
          }
-@@ -7626,18 +7760,22 @@ impl Tool for MouseButtonUpTool {
+@@ -7626,18 +7763,22 @@ impl Tool for MouseButtonUpTool {
          // (single logical drag rather than a click pair).
          let result = if crate::wayland::is_wayland() {
              let cid = cursor_id.clone();
@@ -3475,19 +3547,21 @@ index d835bf1..3401151 100644
                  {
                      self.state
                          .cursor_registry
-@@ -8231,6 +8369,7 @@ impl Tool for GetDesktopStateTool {
+@@ -8231,6 +8372,8 @@ impl Tool for GetDesktopStateTool {
                      is_error: None,
                      structured_content: Some(structured),
                      action_record: None,
 +                    settling: None,
++                    focus_change: None,
                  }
              }
              Ok(Err(e)) => ToolResult::error(format!("Capture error: {e}")),
-@@ -9053,6 +9192,7 @@ impl Tool for ZoomTool {
+@@ -9053,6 +9196,8 @@ impl Tool for ZoomTool {
                          "mime_type": "image/jpeg"
                      })),
                      action_record: None,
 +                    settling: None,
++                    focus_change: None,
                  }
              }
              Ok(Err(e)) => ToolResult::error(format!("Zoom failed: {e}")),
@@ -3871,11 +3945,435 @@ index 0000000..f8d5003
 +        interruption: failure,
 +    })
 +}
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs
+index a2691a0..25d4701 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs
+@@ -108,11 +108,13 @@ enum Cmd {
+         y: f64,
+         button: Button,
+         reply: Sender<anyhow::Result<()>>,
++        recording: Option<super::recording::PointerCapture>,
+     },
+     MoveAbsolute {
+         x: f64,
+         y: f64,
+         reply: Sender<anyhow::Result<()>>,
++        recording: Option<super::recording::PointerCapture>,
+     },
+     Scroll {
+         dx: f64,
+@@ -140,6 +142,7 @@ enum Cmd {
+         duration_ms: u64,
+         button: Button,
+         reply: Sender<anyhow::Result<()>>,
++        recording: Option<super::recording::PointerCapture>,
+     },
+     Shutdown,
+ }
+@@ -269,6 +272,7 @@ pub fn click(x: f64, y: f64, button: Button) -> anyhow::Result<()> {
+             x,
+             y,
+             button,
++            recording: super::recording::PointerCapture::current(),
+             reply: tx_r,
+         })
+         .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
+@@ -281,7 +285,12 @@ pub fn move_absolute(x: f64, y: f64) -> anyhow::Result<()> {
+     ensure_started()?;
+     let (tx_r, rx_r) = bounded(1);
+     tx()?
+-        .send(Cmd::MoveAbsolute { x, y, reply: tx_r })
++        .send(Cmd::MoveAbsolute {
++            x,
++            y,
++            recording: super::recording::PointerCapture::current(),
++            reply: tx_r,
++        })
+         .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
+     wait_for_reply(rx_r)
+ }
+@@ -391,6 +400,7 @@ pub fn drag(
+             steps,
+             duration_ms,
+             button,
++            recording: super::recording::PointerCapture::current(),
+             reply: tx_r,
+         })
+         .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
+@@ -982,7 +992,13 @@ impl EisState {
+                     anyhow::anyhow!("no resumed EIS {interface} device negotiated within 20s")
+                 })?;
+             }
+-            Cmd::Click { x, y, button, .. } => {
++            Cmd::Click {
++                x,
++                y,
++                button,
++                recording,
++                ..
++            } => {
+                 let (device, rel_x, rel_y) = self.pointer_device_for(*x, *y)?;
+                 let serial = self.last_serial;
+                 let ptr_abs =
+@@ -992,8 +1008,16 @@ impl EisState {
+                 ptr_abs.motion_absolute(rel_x, rel_y);
+                 btn.button(button.to_evdev(), reis::ei::button::ButtonState::Press);
+                 device.frame(serial, event_time_us());
++                self.flush_input()?;
++                if let Some(recording) = recording {
++                    recording.record(*x, *y, true);
++                }
+                 btn.button(button.to_evdev(), reis::ei::button::ButtonState::Released);
+                 device.frame(serial, event_time_us());
++                self.flush_input()?;
++                if let Some(recording) = recording {
++                    recording.record(*x, *y, false);
++                }
+             }
+             Cmd::Drag {
+                 from_x,
+@@ -1003,6 +1027,7 @@ impl EisState {
+                 steps,
+                 duration_ms,
+                 button,
++                recording,
+                 ..
+             } => {
+                 let (device, from_rx, from_ry) = self.pointer_device_for(*from_x, *from_y)?;
+@@ -1028,8 +1053,9 @@ impl EisState {
+                 device.frame(serial, event_time_us());
+                 btn.button(button.to_evdev(), reis::ei::button::ButtonState::Press);
+                 device.frame(serial, event_time_us());
+-                if let Some(context) = self.context.as_ref() {
+-                    let _ = context.flush();
++                self.flush_input()?;
++                if let Some(recording) = recording {
++                    recording.record(*from_x, *from_y, true);
+                 }
+                 // Bound the interpolation: run_command executes synchronously in
+                 // the worker loop, so a huge step count would block EIS event
+@@ -1042,8 +1068,13 @@ impl EisState {
+                     let iy = from_ry + (to_ry - from_ry) * t;
+                     ptr_abs.motion_absolute(ix, iy);
+                     device.frame(serial, event_time_us());
+-                    if let Some(context) = self.context.as_ref() {
+-                        let _ = context.flush();
++                    self.flush_input()?;
++                    if let Some(recording) = recording {
++                        recording.record(
++                            *from_x + (*to_x - *from_x) * f64::from(t),
++                            *from_y + (*to_y - *from_y) * f64::from(t),
++                            true,
++                        );
+                     }
+                     if !delay.is_zero() {
+                         std::thread::sleep(delay);
+@@ -1051,8 +1082,14 @@ impl EisState {
+                 }
+                 btn.button(button.to_evdev(), reis::ei::button::ButtonState::Released);
+                 device.frame(serial, event_time_us());
++                self.flush_input()?;
++                if let Some(recording) = recording {
++                    recording.record(*to_x, *to_y, false);
++                }
+             }
+-            Cmd::MoveAbsolute { x, y, .. } => {
++            Cmd::MoveAbsolute {
++                x, y, recording, ..
++            } => {
+                 let (device, rel_x, rel_y) = self.pointer_device_for(*x, *y)?;
+                 let serial = self.last_serial;
+                 let ptr_abs =
+@@ -1060,6 +1097,10 @@ impl EisState {
+ 
+                 ptr_abs.motion_absolute(rel_x, rel_y);
+                 device.frame(serial, event_time_us());
++                self.flush_input()?;
++                if let Some(recording) = recording {
++                    recording.record(*x, *y, false);
++                }
+             }
+             Cmd::Scroll { dx, dy, .. } => {
+                 let device = self.device_with_interface("ei_scroll").ok_or_else(|| {
+@@ -1167,10 +1208,15 @@ impl EisState {
+             }
+             Cmd::Shutdown => {}
+         }
+-        if let Some(ctx) = self.context.as_ref() {
+-            let _ = ctx.flush();
+-        }
+-        Ok(())
++        self.flush_input()
++    }
++
++    fn flush_input(&self) -> anyhow::Result<()> {
++        self.context
++            .as_ref()
++            .ok_or_else(|| anyhow::anyhow!("EIS context is unavailable"))?
++            .flush()
++            .map_err(|error| anyhow::anyhow!("EIS input flush failed: {error}"))
+     }
+ 
+     /// Pick a pointer device whose announced Region contains `(x, y)`,
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
-index ca0b769..85a5af3 100644
+index ca0b769..2aee290 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
-@@ -1090,6 +1090,14 @@ fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec
+@@ -21,6 +21,7 @@ pub mod persistent_vptr;
+ pub(crate) mod portal;
+ pub mod portal_screenshot;
+ mod primary_seat;
++mod recording;
+ pub mod shell_helper;
+ pub mod sway_ipc;
+ mod virtual_keyboard;
+@@ -50,6 +51,10 @@ use wayland_client::{
+     },
+     Connection, Dispatch, Proxy, QueueHandle, WEnum,
+ };
++use wayland_protocols::xdg::xdg_output::zv1::client::{
++    zxdg_output_manager_v1::ZxdgOutputManagerV1,
++    zxdg_output_v1::{self, ZxdgOutputV1},
++};
+ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+     zwlr_foreign_toplevel_handle_v1::{self as ftl_handle, ZwlrForeignToplevelHandleV1},
+     zwlr_foreign_toplevel_manager_v1::{
+@@ -395,6 +400,11 @@ struct State {
+     output: Option<WlOutput>,
+     output_w: u32,
+     output_h: u32,
++    output_transform: Option<wl_output::Transform>,
++    xdg_output_manager: Option<ZxdgOutputManagerV1>,
++    logical_size: Option<(u32, u32)>,
++    logical_position: Option<(i32, i32)>,
++    output_count: u32,
+     // Native screencopy capture state.
+     scrcopy_manager: Option<ZwlrScreencopyManagerV1>,
+     shm: Option<WlShm>,
+@@ -432,7 +442,11 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
+                     qh,
+                     (),
+                 ));
++            } else if interface == ZxdgOutputManagerV1::interface().name {
++                state.xdg_output_manager =
++                    Some(registry.bind::<ZxdgOutputManagerV1, _, _>(name, version.min(3), qh, ()));
+             } else if interface == WlOutput::interface().name {
++                state.output_count += 1;
+                 let out = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, ());
+                 if state.output.is_none() {
+                     state.output = Some(out);
+@@ -469,16 +483,72 @@ impl Dispatch<WlSeat, ()> for State {
+ impl Dispatch<WlOutput, ()> for State {
+     fn event(
+         state: &mut Self,
+-        _: &WlOutput,
++        output: &WlOutput,
+         event: wl_output::Event,
+         _: &(),
+         _: &Connection,
+         _: &QueueHandle<Self>,
+     ) {
+-        // Remember the output resolution so `click` can aim at its centre.
+-        if let wl_output::Event::Mode { width, height, .. } = event {
+-            state.output_w = width.max(0) as u32;
+-            state.output_h = height.max(0) as u32;
++        if state
++            .output
++            .as_ref()
++            .is_none_or(|selected| selected.id() != output.id())
++        {
++            return;
++        }
++        match event {
++            wl_output::Event::Geometry { transform, .. } => {
++                state.output_transform = match transform {
++                    WEnum::Value(value) => Some(value),
++                    _ => None,
++                }
++            }
++            wl_output::Event::Mode {
++                width,
++                height,
++                flags,
++                ..
++            } if matches!(flags, WEnum::Value(flags) if flags.contains(wl_output::Mode::Current)) =>
++            {
++                state.output_w = width.max(0) as u32;
++                state.output_h = height.max(0) as u32;
++            }
++
++            _ => {}
++        }
++    }
++}
++
++impl Dispatch<ZxdgOutputManagerV1, ()> for State {
++    fn event(
++        _: &mut Self,
++        _: &ZxdgOutputManagerV1,
++        _: <ZxdgOutputManagerV1 as Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++    }
++}
++
++impl Dispatch<ZxdgOutputV1, ()> for State {
++    fn event(
++        state: &mut Self,
++        _: &ZxdgOutputV1,
++        event: zxdg_output_v1::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        match event {
++            zxdg_output_v1::Event::LogicalSize { width, height } => {
++                state.logical_size =
++                    (width > 0 && height > 0).then_some((width as u32, height as u32));
++            }
++            zxdg_output_v1::Event::LogicalPosition { x, y } => {
++                state.logical_position = Some((x, y))
++            }
++            _ => {}
+         }
+     }
+ }
+@@ -864,7 +934,14 @@ fn capture_via_screencopy() -> anyhow::Result<Vec<u8>> {
+                 rgba.extend_from_slice(&[r, g, b, a]);
+             }
+         }
+-        cua_driver_core::image_utils::encode_rgba_to_png(&rgba, w, h)
++        let pixels = image::RgbaImage::from_raw(w, h, rgba)
++            .ok_or_else(|| anyhow::anyhow!("invalid screencopy buffer dimensions"))?;
++        let pixels = orient_output_pixels(pixels, state.output_transform)?;
++        cua_driver_core::image_utils::encode_rgba_to_png(
++            pixels.as_raw(),
++            pixels.width(),
++            pixels.height(),
++        )
+     })();
+ 
+     // Always tear down regardless of result.
+@@ -881,6 +958,33 @@ fn capture_via_screencopy() -> anyhow::Result<Vec<u8>> {
+     result
+ }
+ 
++/// Screencopy buffers use the output's physical orientation. Convert them to
++/// the logical coordinate frame before any window crop. Rotation and mirroring
++/// are lossless pixel permutations; resizing is performed only by the cropper.
++fn orient_output_pixels(
++    pixels: image::RgbaImage,
++    transform: Option<wl_output::Transform>,
++) -> anyhow::Result<image::RgbaImage> {
++    use image::imageops::{flip_horizontal_in_place, rotate180, rotate270, rotate90};
++    use wl_output::Transform;
++    let transform =
++        transform.ok_or_else(|| anyhow::anyhow!("capture output transform is unknown"))?;
++    let mut pixels = match transform {
++        Transform::Normal | Transform::Flipped => pixels,
++        Transform::_90 | Transform::Flipped90 => rotate90(&pixels),
++        Transform::_180 | Transform::Flipped180 => rotate180(&pixels),
++        Transform::_270 | Transform::Flipped270 => rotate270(&pixels),
++        _ => anyhow::bail!("capture output transform is unsupported"),
++    };
++    if matches!(
++        transform,
++        Transform::Flipped | Transform::Flipped90 | Transform::Flipped180 | Transform::Flipped270
++    ) {
++        flip_horizontal_in_place(&mut pixels);
++    }
++    Ok(pixels)
++}
++
+ /// Allocate an anonymous shared-memory file of `size` bytes and mmap it RW.
+ /// Returns the raw fd and the mmap pointer; the caller is responsible for
+ /// passing both to [`cleanup_mmap`] when done.
+@@ -1080,6 +1184,81 @@ pub fn screenshot_dispatch_with_pid(xid: u64, pid: u32) -> anyhow::Result<Vec<u8
+     screenshot_dispatch_for_pid(xid, Some(pid))
+ }
+ 
++fn capture_sway_window(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec<u8>> {
++    let window = sway_ipc::window_for_id(xid)
++        .ok_or_else(|| surface_identity_unproven(xid, "Sway target no longer exists"))?;
++    if pid.is_some_and(|pid| pid != window.pid) || !window.visible {
++        return Err(surface_identity_unproven(
++            xid,
++            "Sway target is hidden or has a different owner",
++        ));
++    }
++    let output = sway_ipc::single_output_rect().ok_or_else(|| {
++        surface_identity_unproven(xid, "capture requires one identified Sway output")
++    })?;
++    let pixels = screenshot_bytes()?;
++    let after = sway_ipc::window_for_id(xid)
++        .ok_or_else(|| surface_identity_unproven(xid, "Sway target disappeared during capture"))?;
++    if (window.pid, window.x, window.y, window.width, window.height)
++        != (after.pid, after.x, after.y, after.width, after.height)
++        || !after.visible
++        || sway_ipc::single_output_rect() != Some(output)
++    {
++        return Err(surface_identity_unproven(
++            xid,
++            "Sway geometry changed during capture",
++        ));
++    }
++    crop_scaled_output(
++        &pixels,
++        output,
++        (window.x, window.y, window.width, window.height),
++    )
++}
++
++fn crop_scaled_output(
++    bytes: &[u8],
++    output: (i32, i32, u32, u32),
++    window: (i32, i32, u32, u32),
++) -> anyhow::Result<Vec<u8>> {
++    use image::GenericImageView;
++    let image = image::load_from_memory(bytes)?;
++    if output.2 == 0 || output.3 == 0 || window.2 == 0 || window.3 == 0 {
++        anyhow::bail!("capture geometry is empty");
++    }
++    let sx = f64::from(image.width()) / f64::from(output.2);
++    let sy = f64::from(image.height()) / f64::from(output.3);
++    if (sx - sy).abs() > 0.01 {
++        anyhow::bail!("capture output scale is inconsistent");
++    }
++    let x = i64::from(window.0) - i64::from(output.0);
++    let y = i64::from(window.1) - i64::from(output.1);
++    if x < 0
++        || y < 0
++        || x + i64::from(window.2) > i64::from(output.2)
++        || y + i64::from(window.3) > i64::from(output.3)
++    {
++        anyhow::bail!("target extends beyond the identified capture output");
++    }
++    let left = (x as f64 * sx).round() as u32;
++    let top = (y as f64 * sy).round() as u32;
++    let right = ((x + i64::from(window.2)) as f64 * sx).round() as u32;
++    let bottom = ((y + i64::from(window.3)) as f64 * sy).round() as u32;
++    if right <= left || bottom <= top || right > image.width() || bottom > image.height() {
++        anyhow::bail!("scaled capture rectangle is outside the output");
++    }
++    let crop = image.view(left, top, right - left, bottom - top).to_image();
++    let crop = image::imageops::resize(
++        &crop,
++        window.2,
++        window.3,
++        image::imageops::FilterType::Lanczos3,
++    );
++    let mut encoded = std::io::Cursor::new(Vec::new());
++    crop.write_to(&mut encoded, image::ImageFormat::Png)?;
++    Ok(encoded.into_inner())
++}
++
+ fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec<u8>> {
+     if is_wayland() && hyprland::is_session() {
+         return hyprland::capture(xid, pid).map_err(|error| {
+@@ -1090,6 +1269,17 @@ fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec
              )
          });
      }
@@ -3887,14 +4385,297 @@ index ca0b769..85a5af3 100644
 +            )
 +        });
 +    }
++    if is_wayland() && std::env::var_os("SWAYSOCK").is_some() {
++        return capture_sway_window(xid, pid);
++    }
      screenshot_window_bytes_with_dispatch(
          is_wayland(),
          xid,
+@@ -1258,6 +1448,90 @@ pub struct VptrSession {
+     pub output_h: u32,
+ }
+ 
++fn virtual_pointer_dimensions(state: &State) -> anyhow::Result<(u32, u32)> {
++    // wl_output's integer scale cannot represent fractional scaling, and its
++    // mode dimensions precede rotation. Use the compositor's logical geometry
++    // on this connection, without a subprocess or an inferred coordinate frame.
++    if state.output_count == 1 && state.logical_position == Some((0, 0)) {
++        if let Some((width, height)) = state.logical_size {
++            if width > 0 && height > 0 {
++                return Ok((width, height));
++            }
++        }
++    }
++    anyhow::bail!("foreground_unavailable: virtual-pointer logical output layout is not attested; no input sent")
++}
++
++#[cfg(test)]
++mod virtual_pointer_geometry_tests {
++    use super::*;
++    #[test]
++    fn capture_orientation_preserves_every_pixel() {
++        use wl_output::Transform;
++        let source =
++            image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([(y * 3 + x) as u8, 0, 0, 255]));
++        for (transform, dimensions, expected) in [
++            (Transform::Normal, (3, 2), vec![0, 1, 2, 3, 4, 5]),
++            (Transform::_90, (2, 3), vec![3, 0, 4, 1, 5, 2]),
++            (Transform::_180, (3, 2), vec![5, 4, 3, 2, 1, 0]),
++            (Transform::_270, (2, 3), vec![2, 5, 1, 4, 0, 3]),
++            (Transform::Flipped, (3, 2), vec![2, 1, 0, 5, 4, 3]),
++            (Transform::Flipped90, (2, 3), vec![0, 3, 1, 4, 2, 5]),
++            (Transform::Flipped180, (3, 2), vec![3, 4, 5, 0, 1, 2]),
++            (Transform::Flipped270, (2, 3), vec![5, 2, 4, 1, 3, 0]),
++        ] {
++            let result = orient_output_pixels(source.clone(), Some(transform)).unwrap();
++            assert_eq!(result.dimensions(), dimensions);
++            assert_eq!(
++                result.pixels().map(|pixel| pixel.0[0]).collect::<Vec<_>>(),
++                expected
++            );
++        }
++        assert!(orient_output_pixels(source, None).is_err());
++    }
++
++    #[test]
++    fn scaled_capture_preserves_the_far_corner() {
++        let mut image = image::RgbaImage::from_pixel(128, 90, image::Rgba([0, 0, 255, 255]));
++        for y in 60..90 {
++            for x in 96..128 {
++                image.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
++            }
++        }
++        let mut png = std::io::Cursor::new(Vec::new());
++        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
++        let cropped = crop_scaled_output(png.get_ref(), (0, 0, 64, 45), (0, 0, 64, 45)).unwrap();
++        let decoded = image::load_from_memory(&cropped).unwrap().to_rgba8();
++        assert_eq!(decoded.dimensions(), (64, 45));
++        assert_eq!(decoded.get_pixel(60, 40).0, [255, 0, 0, 255]);
++        assert!(crop_scaled_output(png.get_ref(), (0, 0, 64, 45), (-1, 0, 64, 45)).is_err());
++    }
++    #[test]
++    fn absolute_extents_use_logical_pixels_and_refuse_unknown_layouts() {
++        let mut state = State {
++            output_count: 1,
++            output_w: 1280,
++            output_h: 900,
++            logical_position: Some((0, 0)),
++            logical_size: Some((853, 600)),
++            ..State::default()
++        };
++        assert_eq!(virtual_pointer_dimensions(&state).unwrap(), (853, 600));
++        state.logical_size = Some((600, 853));
++        assert_eq!(virtual_pointer_dimensions(&state).unwrap(), (600, 853));
++        state.output_count = 2;
++        assert!(virtual_pointer_dimensions(&state).is_err());
++        state.output_count = 1;
++        state.logical_position = Some((-853, 0));
++        assert!(virtual_pointer_dimensions(&state).is_err());
++        state.logical_position = Some((0, 0));
++        state.logical_size = None;
++        assert!(virtual_pointer_dimensions(&state).is_err());
++        state.logical_size = Some((0, 600));
++        assert!(virtual_pointer_dimensions(&state).is_err());
++    }
++}
++
+ /// Bind manager + seat + virtual-pointer + first output, optionally activate a
+ /// foreign-toplevel by `window_id` so the synthesised events land on it, and
+ /// return the live session that scroll / drag / click reuse. Wayland forbids a
+@@ -1272,6 +1546,13 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
+ 
+     let mut state = State::default();
+     queue.roundtrip(&mut state)?;
++    // Request logical geometry after registry discovery. The connection owns
++    // protocol dispatch; no subprocess or integer-scale approximation is needed.
++    let _logical_output = state
++        .xdg_output_manager
++        .as_ref()
++        .zip(state.output.as_ref())
++        .map(|(manager, output)| manager.get_xdg_output(output, &qh, ()));
+     for _ in 0..4 {
+         queue.roundtrip(&mut state)?;
+     }
+@@ -1323,8 +1604,8 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
+         queue.roundtrip(&mut state)?;
+     }
+ 
++    let (output_w, output_h) = virtual_pointer_dimensions(&state)?;
+     let vptr = mgr.create_virtual_pointer(Some(&seat), &qh, ());
+-    let (output_w, output_h) = (state.output_w.max(1), state.output_h.max(1));
+     Ok(VptrSession {
+         conn,
+         queue,
+@@ -1423,6 +1704,19 @@ pub fn activate_window_for_input_target(
+     )
+ }
+ 
++/// Attest an exact visible PID/window pair without changing compositor focus.
++/// Only adapters with an implemented input contract participate. Other Wayland
++/// compositors remain unknown; AT-SPI focus is not compositor keyboard focus.
++pub fn focused_target(pid: u32, window_id: u64) -> Option<bool> {
++    if std::env::var_os("SWAYSOCK").is_some() {
++        let windows = sway_ipc::list_windows()?;
++        return Some(windows.iter().any(|window| {
++            window.pid == pid && window.id == window_id && window.visible && window.focused
++        }));
++    }
++    shell_helper::focused_target(pid, window_id)
++}
++
+ /// Run a focus-bound keyboard transaction only after a compositor adapter has
+ /// confirmed the exact PID/window pair, and restore the previously focused
+ /// toplevel afterward. Global virtual-keyboard/libei input is refused when the
+@@ -1851,7 +2145,18 @@ pub fn drag(
+     button: u8,
+ ) -> anyhow::Result<()> {
+     with_libei_fallback(
+-        || drag_vptr(Some(window_id), from_x, from_y, to_x, to_y, steps, button),
++        || {
++            drag_vptr(
++                Some(window_id),
++                from_x,
++                from_y,
++                to_x,
++                to_y,
++                steps,
++                duration_ms,
++                button,
++            )
++        },
+         || {
+             libei_wait_pointer_ready()?;
+             activate_window_for_input(window_id)?;
+@@ -1871,7 +2176,7 @@ pub fn drag_desktop(
+     button: u8,
+ ) -> anyhow::Result<()> {
+     with_libei_fallback(
+-        || drag_vptr(None, from_x, from_y, to_x, to_y, steps, button),
++        || drag_vptr(None, from_x, from_y, to_x, to_y, steps, duration_ms, button),
+         || {
+             libei_wait_pointer_ready()?;
+             libei_drag(from_x, from_y, to_x, to_y, steps, duration_ms, button)
+@@ -1881,6 +2186,7 @@ pub fn drag_desktop(
+ 
+ /// wlroots virtual-pointer implementation of [`drag`].
+ #[allow(clippy::too_many_arguments)]
++#[allow(clippy::too_many_arguments)]
+ fn drag_vptr(
+     window_id: Option<u64>,
+     from_x: i32,
+@@ -1888,9 +2194,11 @@ fn drag_vptr(
+     to_x: i32,
+     to_y: i32,
+     steps: u32,
++    duration_ms: u64,
+     button: u8,
+ ) -> anyhow::Result<()> {
+     let mut sess = open_vptr_session(window_id)?;
++    let recording = recording::PointerCapture::current();
+     std::thread::sleep(std::time::Duration::from_millis(40));
+     let (w, h) = (sess.output_w, sess.output_h);
+     let btn = evdev_pointer_button(button);
+@@ -1907,17 +2215,28 @@ fn drag_vptr(
+     std::thread::sleep(std::time::Duration::from_millis(15));
+     sess.vptr.button(event_time_ms(), btn, ButtonState::Pressed);
+     sess.vptr.frame();
++    if let Some(recording) = &recording {
++        recording.record(f64::from(fx), f64::from(fy), true);
++    }
+     sess.queue.roundtrip(&mut sess.state)?;
+     let n = steps.max(1);
++    let interval = std::time::Duration::from_secs_f64(duration_ms as f64 / 1000.0 / n as f64);
++    let mut last_motion = std::time::Instant::now();
+     for s in 1..=n {
++        // Honor the requested duration. If the compositor stalls, retain every
++        // point and its spacing instead of catching up in a coalesced burst.
++        std::thread::sleep(interval.saturating_sub(last_motion.elapsed()));
+         let t = s as f64 / n as f64;
+         let ix = (from_x as f64 + (to_x - from_x) as f64 * t).round() as i32;
+         let iy = (from_y as f64 + (to_y - from_y) as f64 * t).round() as i32;
+         let (cx, cy) = clamp_xy(ix, iy);
++        last_motion = std::time::Instant::now();
+         sess.vptr.motion_absolute(event_time_ms(), cx, cy, w, h);
+         sess.vptr.frame();
++        if let Some(recording) = &recording {
++            recording.record(f64::from(cx), f64::from(cy), true);
++        }
+         sess.queue.roundtrip(&mut sess.state)?;
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+     }
+     let (tx, ty) = clamp_xy(to_x, to_y);
+     sess.vptr.motion_absolute(event_time_ms(), tx, ty, w, h);
+@@ -1926,6 +2245,9 @@ fn drag_vptr(
+     sess.vptr
+         .button(event_time_ms(), btn, ButtonState::Released);
+     sess.vptr.frame();
++    if let Some(recording) = &recording {
++        recording.record(f64::from(tx), f64::from(ty), false);
++    }
+     // Sync the synthetic-cursor registry with the drag endpoint so a
+     // subsequent `get_cursor_position` reports where we left the pointer.
+     record_synth_cursor(tx as i32, ty as i32);
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/recording.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/recording.rs
+new file mode 100644
+index 0000000..f94fdaf
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/recording.rs
+@@ -0,0 +1,42 @@
++//! Recording metadata follows the actual input command onto native workers.
++use cua_driver_core::recording::{recording_dispatch_target, PointerRecorder};
++
++pub(super) struct PointerCapture {
++    recorder: PointerRecorder,
++    bounds: (f64, f64, f64, f64),
++}
++impl PointerCapture {
++    pub(super) fn current() -> Option<Self> {
++        let (id, pid) = recording_dispatch_target()?;
++        let recorder = PointerRecorder::capture(id, pid)?;
++        let pid = u32::try_from(pid).ok()?;
++        let bounds = if let Some(window) = super::sway_ipc::window_for_id(id) {
++            if window.pid != pid {
++                return None;
++            }
++            (window.x, window.y, window.width, window.height)
++        } else {
++            let window = super::shell_helper::trusted_window_for_id(pid, id)?;
++            (window.x, window.y, window.width, window.height)
++        };
++        if bounds.2 == 0 || bounds.3 == 0 {
++            return None;
++        }
++        Some(Self {
++            recorder,
++            bounds: (
++                bounds.0.into(),
++                bounds.1.into(),
++                bounds.2.into(),
++                bounds.3.into(),
++            ),
++        })
++    }
++    pub(super) fn record(&self, x: f64, y: f64, pressed: bool) {
++        self.recorder.record(
++            (x - self.bounds.0) / self.bounds.2,
++            (y - self.bounds.1) / self.bounds.3,
++            pressed,
++        );
++    }
++}
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
-index 1a791db..13f90e0 100644
+index 1a791db..f65c285 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
-@@ -236,6 +236,51 @@ pub fn trusted_screenshot_display() -> Option<Vec<u8>> {
+@@ -41,6 +41,7 @@ const SEMANTIC_CURSOR_API_VERSION: u32 = 8;
+ struct ShellWindow {
+     info: WindowInfo,
+     focused: bool,
++    input_focused: Option<bool>,
+ }
+ 
+ pub fn available() -> bool {
+@@ -236,6 +237,51 @@ pub fn trusted_screenshot_display() -> Option<Vec<u8>> {
      decode_capture(&raw)
  }
  
@@ -3946,7 +4727,52 @@ index 1a791db..13f90e0 100644
  fn decode_capture(raw: &str) -> Option<Vec<u8>> {
      use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
  
-@@ -643,9 +688,9 @@ mod tests {
+@@ -346,6 +392,17 @@ pub fn trusted_window_for_id(pid: u32, window_id: u64) -> Option<WindowInfo> {
+         .map(|window| window.info)
+ }
+ 
++/// Read focus without activating anything. Unknown ownership or helper failure
++/// remains unknown, never an affirmative foreground attestation.
++pub fn focused_target(pid: u32, window_id: u64) -> Option<bool> {
++    let windows = trusted_shell_windows(Some(pid))?;
++    Some(windows.iter().any(|window| {
++        window.info.xid == window_id
++            && window.info.is_on_screen
++            && window.input_focused == Some(true)
++    }))
++}
++
+ /// Enumerate exact browser-window ids for one process through the verified
+ /// GNOME Shell helper. `None` means no trusted helper is available; an empty
+ /// vector means the trusted helper found no owned windows.
+@@ -530,6 +587,9 @@ fn parse_shell_windows(raw: &str, filter_pid: Option<u32>) -> Option<Vec<ShellWi
+                         width,
+                         height,
+                     },
++                    input_focused: window
++                        .get("input_focused")
++                        .and_then(serde_json::Value::as_bool),
+                     focused: window
+                         .get("focused")
+                         .and_then(serde_json::Value::as_bool)
+@@ -590,6 +650,16 @@ mod tests {
+     const EXTENSION_METADATA: &str =
+         include_str!("../../../../../wayland-helper/winrects@cua/metadata.json");
+ 
++    #[test]
++    fn compositor_focus_does_not_imply_unobstructed_input() {
++        let raw = r#"('[{"id":1,"pid":42,"x":0,"y":0,"w":640,"h":480,"focused":true},{"id":2,"pid":42,"x":0,"y":0,"w":640,"h":480,"focused":true,"input_focused":false},{"id":3,"pid":42,"x":0,"y":0,"w":640,"h":480,"focused":true,"input_focused":true}]',)"#;
++        let windows = parse_shell_windows(raw, None).unwrap();
++        assert!(windows.iter().all(|window| window.focused));
++        assert_eq!(windows[0].input_focused, None);
++        assert_eq!(windows[1].input_focused, Some(false));
++        assert_eq!(windows[2].input_focused, Some(true));
++    }
++
+     #[test]
+     fn parses_and_filters_shell_windows() {
+         let raw = r#"('[{"id":46,"pid":6079,"title":"Sentinel's window","x":66,"y":32,"w":958,"h":736,"focused":true,"minimized":false,"visible":true,"stacking":2},{"id":47,"pid":6080,"title":"Hidden","x":0,"y":0,"w":100,"h":100,"minimized":true,"visible":false,"stacking":1}]',)"#;
+@@ -643,9 +713,9 @@ mod tests {
      }
  
      #[test]
@@ -3954,19 +4780,63 @@ index 1a791db..13f90e0 100644
 +    fn bundled_helper_v9_retains_host_owned_modifier_badge_chips() {
          assert!(EXTENSION_SOURCE.contains("GetVersion()"));
 -        assert!(EXTENSION_SOURCE.contains("return 8;"));
-+        assert!(EXTENSION_SOURCE.contains("return 9;"));
++        assert!(EXTENSION_SOURCE.contains("return 10;"));
          assert!(EXTENSION_SOURCE.contains("SetCursorState"));
          assert!(EXTENSION_SOURCE.contains("SetCursorColor"));
          assert!(EXTENSION_SOURCE.contains("SetSessionLabel"));
-@@ -670,7 +715,7 @@ mod tests {
+@@ -670,7 +740,7 @@ mod tests {
          assert!(!EXTENSION_SOURCE.contains("function drawModifiers"));
          let metadata: serde_json::Value =
              serde_json::from_str(EXTENSION_METADATA).expect("valid bundled helper metadata");
 -        assert_eq!(metadata["version"], 8);
-+        assert_eq!(metadata["version"], 9);
++        assert_eq!(metadata["version"], 10);
  
          for action in [
              "idle", "observe", "click", "drag", "scroll", "text", "key", "navigate", "app",
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
+index bc090b9..c9eff6d 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
+@@ -131,6 +131,39 @@ pub fn list_windows() -> Option<Vec<Window>> {
+     parse_tree(&output.stdout)
+ }
+ 
++/// Logical geometry for the one active output. Multiple outputs need explicit
++/// capture/output identity correlation, so that shape remains unavailable.
++pub fn single_output_rect() -> Option<(i32, i32, u32, u32)> {
++    if std::env::var_os("SWAYSOCK").is_none() {
++        return None;
++    }
++    #[derive(Deserialize)]
++    struct Output {
++        active: bool,
++        rect: Rect,
++    }
++    let output = Command::new("swaymsg")
++        .args(["-r", "-t", "get_outputs"])
++        .stdin(Stdio::null())
++        .stderr(Stdio::null())
++        .output()
++        .ok()?;
++    if !output.status.success() {
++        return None;
++    }
++    let outputs: Vec<Output> = serde_json::from_slice(&output.stdout).ok()?;
++    let active: Vec<_> = outputs.into_iter().filter(|output| output.active).collect();
++    let [output] = active.as_slice() else {
++        return None;
++    };
++    Some((
++        output.rect.x,
++        output.rect.y,
++        u32::try_from(output.rect.width).ok()?,
++        u32::try_from(output.rect.height).ok()?,
++    ))
++}
++
+ pub fn window_for_id(id: u64) -> Option<Window> {
+     list_windows()?.into_iter().find(|window| window.id == id)
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs
 index 11f3b83..06d3cc0 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs
@@ -4874,6 +5744,29 @@ index ee1f5d3..c487bdd 100644
              value_description: control_state.value_description.clone(),
              min_value: control_state.min_value,
              max_value: control_state.max_value,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+index 5d74ddd..68e43fc 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+@@ -446,7 +446,9 @@ pub fn run_on_main_thread() {
+     let rx = match CMD_RX_CELL.lock().unwrap().take() {
+         Some(r) => r,
+         None => {
+-            // init() was never called — no overlay, just spin.
++            // Private workers may have no overlay channel. Workspace state
++            // still needs the main run loop, without initializing NSApplication.
++            crate::focus_steal::run_notification_loop();
+             loop {
+                 std::thread::park();
+             }
+@@ -462,6 +464,7 @@ pub fn run_on_main_thread() {
+     };
+ 
+     if !cfg.enabled {
++        crate::focus_steal::run_notification_loop();
+         loop {
+             std::thread::park();
+         }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/focus_guard.rs b/libs/cua-driver/rust/crates/platform-macos/src/focus_guard.rs
 index b94288a..d85cec6 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/focus_guard.rs
@@ -4892,39 +5785,275 @@ index b94288a..d85cec6 100644
      }
  
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs b/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
-index 7596841..a0bf78e 100644
+index 7596841..09c3ef0 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
-@@ -517,10 +517,29 @@ fn handle_activation(dispatcher: &Arc<Dispatcher>, note: &objc2_foundation::NSNo
+@@ -45,15 +45,9 @@
+ //! `OnceLock::get_or_init`, so it's safe to call from any thread without
+ //! racing on observer install.
+ //!
+-//! ## Why a fresh background `NSOperationQueue` (not `mainQueue`)
+-//!
+-//! NSWorkspace's block-based observer fires on the queue you give it. If
+-//! the queue is `nil` (Swift default) or `mainQueue`, the block runs on
+-//! the main thread — which means it requires a live main run loop.
+-//! `cua-driver call` (one-shot subcommand) and `--no-overlay` mode don't
+-//! have one, so the activation observer would never fire. A fresh
+-//! background `NSOperationQueue` sidesteps that — the block runs on the
+-//! queue's own thread regardless of run-loop state.
++//! Callbacks run synchronously on the notification posting thread. The daemon must
++//! also service the MAIN run loop: NSWorkspace produces its notifications
++//! there and caches application state until that loop runs.
  
+ use std::collections::HashMap;
+ use std::sync::{Arc, Mutex, OnceLock};
+@@ -63,7 +57,6 @@ use objc2_app_kit::{
+     NSApplicationActivationOptions, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
+     NSWorkspaceDidActivateApplicationNotification,
+ };
+-use objc2_foundation::NSOperationQueue;
+ use uuid::Uuid;
+ 
+ /// Per-entry deadline. After this much wall-clock time the dispatcher's
+@@ -103,6 +96,32 @@ struct Entry {
+     /// Provenance for tracing — e.g. `"LaunchAppTool.pre"`.
+     #[allow(dead_code)]
+     origin: &'static str,
++    input_at_start: [u32; 8],
++    activation_observed: bool,
++    restoration_attempted: bool,
++    input_activity_observed: bool,
++}
++
++// HID state counters contain no key values and require no event tap. Other
++// input producers can share HID state; these are not proof of physical typing.
++// Any intervening input withdraws permission to restore focus. This deliberately
++// errs toward leaving the person's choice alone, including an ambiguous switch.
++#[link(name = "CoreGraphics", kind = "framework")]
++extern "C" {
++    fn CGEventSourceCounterForEventType(state: i32, event_type: u32) -> u32;
++}
++fn hardware_input_counts() -> [u32; 8] {
++    // HID state (1): left/right/other down, key down/up, modifiers, scroll, drag.
++    [1, 3, 25, 10, 11, 12, 22, 6].map(|event| unsafe { CGEventSourceCounterForEventType(1, event) })
++}
++
++/// Service workspace notifications without creating NSApplication or UI.
++/// The serve thread owns process shutdown; this loop has no polling timer.
++pub fn run_notification_loop() {
++    unsafe {
++        let _ = NSWorkspace::sharedWorkspace();
++        objc2_foundation::NSRunLoop::currentRunLoop().run();
++    }
+ }
+ 
+ /// Singleton focus-steal preventer.
+@@ -215,6 +234,24 @@ pub struct SuppressionLease {
+ }
+ 
+ impl SuppressionLease {
++    /// Only report changes that were observed during this lease. Absence is not
++    /// a guarantee against a transition shorter than notification delivery.
++    pub fn focus_change(&self) -> Option<cua_driver_contract::ActionFocusChange> {
++        let entries = self.dispatcher.entries.lock().unwrap();
++        let entry = entries.get(&self.handle.0)?;
++        let current = crate::apps::frontmost_pid();
++        if !entry.activation_observed && current == Some(entry.restore_to) {
++            return None;
++        }
++        Some(cua_driver_contract::ActionFocusChange {
++            previous_pid: entry.restore_to,
++            current_pid: current,
++            restoration_attempted: entry.restoration_attempted,
++            input_activity_observed: entry.input_activity_observed
++                || entry.input_at_start != hardware_input_counts(),
++        })
++    }
++
+     /// Explicit release. Useful if the caller wants to drop the lease
+     /// before its scope ends without taking the `Drop` path.
+     pub fn release(mut self) {
+@@ -298,6 +335,10 @@ impl Dispatcher {
+             restore_to,
+             deadline: Instant::now() + ENTRY_DEADLINE,
+             origin,
++            input_at_start: hardware_input_counts(),
++            activation_observed: false,
++            restoration_attempted: false,
++            input_activity_observed: false,
+         };
+         {
+             let mut guard = self.entries.lock().unwrap();
+@@ -336,6 +377,9 @@ impl Dispatcher {
+         guard
+             .values()
+             .filter(|e| {
++                if e.input_activity_observed {
++                    return false;
++                }
+                 if e.allowed_pid == Some(activated_pid) {
+                     return false;
+                 }
+@@ -441,7 +485,7 @@ impl Dispatcher {
+ 
+ /// Register the NSWorkspace.didActivateApplicationNotification observer.
+ ///
+-/// The returned token and the queue are intentionally `mem::forget`-leaked
++/// The returned token is intentionally retained for the process lifetime
+ /// — the singleton is process-lifetime, so we never tear the observer
+ /// down. Forgetting avoids having to thread `!Send` `Retained<...>`
+ /// handles through `FocusStealPreventer` (which lives in `Arc<...>` /
+@@ -454,18 +498,8 @@ fn install_observer(dispatcher: &Arc<Dispatcher>) {
+     let ws = unsafe { NSWorkspace::sharedWorkspace() };
+     let center = unsafe { ws.notificationCenter() };
+ 
+-    // Fresh background NSOperationQueue. Critical: with `nil` queue,
+-    // AppKit delivers synchronously on the posting thread (typically main);
+-    // with `mainQueue`, the block requires a running main run loop. A
+-    // fresh queue runs the block on a private background thread no matter
+-    // what run loop the binary has up.
+-    let queue = unsafe { NSOperationQueue::new() };
+-    // setMaxConcurrentOperationCount: 1 means activations are processed
+-    // serially — they're cheap so contention isn't a worry, but serial
+-    // processing keeps the restore order deterministic if two come in
+-    // back to back.
+-    unsafe { queue.setMaxConcurrentOperationCount(1) };
+-
++    // Deliver synchronously on NSWorkspace's posting thread. The serviced
++    // main run loop is required; another queue can outlive a short action lease.
+     let dispatcher_clone = Arc::clone(dispatcher);
+     let block = RcBlock::new(move |note_ptr: NonNull<NSNotification>| {
+         // SAFETY: AppKit gives us a borrowed NSNotification for the
+@@ -478,23 +512,21 @@ fn install_observer(dispatcher: &Arc<Dispatcher>) {
+         center.addObserverForName_object_queue_usingBlock(
+             Some(NSWorkspaceDidActivateApplicationNotification),
+             None,
+-            Some(&queue),
++            None,
+             &block,
+         )
+     };
+ 
+-    // Intentionally leak both — the observer needs to outlive any
++    // Intentionally retain the token — the observer needs to outlive any
+     // particular `Arc<FocusStealPreventer>` and the singleton has
+     // process lifetime.
+     std::mem::forget(token);
+-    std::mem::forget(queue);
+ }
+ 
+ /// Match a single activation notification against the dispatcher and,
+ /// for each matching entry, re-activate the entry's `restore_to` pid.
+ ///
+-/// Runs on the observer queue's background thread — safe to call
+-/// blocking system APIs.
++/// Runs synchronously with the notification. Restoration performs no AX read.
+ fn handle_activation(dispatcher: &Arc<Dispatcher>, note: &objc2_foundation::NSNotification) {
+     use objc2::msg_send;
+     use objc2::runtime::AnyObject;
+@@ -515,12 +547,64 @@ fn handle_activation(dispatcher: &Arc<Dispatcher>, note: &objc2_foundation::NSNo
+         pid as i32
+     };
+ 
++    let input = hardware_input_counts();
++    {
++        let mut entries = dispatcher.entries.lock().unwrap();
++        for entry in entries.values_mut() {
++            entry.activation_observed |= activated_pid != entry.restore_to;
++            entry.input_activity_observed |= input != entry.input_at_start;
++        }
++    }
      let restore_pids = dispatcher.snapshot_matches(activated_pid);
++    tracing::debug!(activated_pid, current = ?crate::apps::frontmost_pid(), candidates = ?restore_pids, "focus activation observed");
      for pid in restore_pids {
 +        // Notifications are queued. Never restore over a more recent user/app
 +        // activation, or let two leases successively override each other.
-+        if !activation_is_current(activated_pid, crate::apps::frontmost_pid()) {
++        if !activation_is_current(crate::input::skylight::front_process_matches_pid(
++            activated_pid,
++        )) {
 +            break;
++        }
++        // Recheck hardware activity just before restoration, not only when
++        // the notification was queued. Never restore over fresh human input.
++        let input = hardware_input_counts();
++        {
++            let mut entries = dispatcher.entries.lock().unwrap();
++            let mut permitted = false;
++            for entry in entries.values_mut().filter(|e| {
++                e.restore_to == pid
++                    && e.allowed_pid != Some(activated_pid)
++                    && e.target_pid
++                        .map_or(activated_pid != e.restore_to, |p| p == activated_pid)
++            }) {
++                entry.input_activity_observed |= input != entry.input_at_start;
++                if !entry.input_activity_observed && entry.deadline > Instant::now() {
++                    entry.restoration_attempted = true;
++                    permitted = true;
++                }
++            }
++            if !permitted {
++                break;
++            }
 +        }
          restore_focus(pid);
      }
  }
  
-+fn activation_is_current(notified: i32, current: Option<i32>) -> bool {
-+    current == Some(notified)
++fn activation_is_current(window_server_matches: Option<bool>) -> bool {
++    window_server_matches == Some(true)
 +}
 +
 +#[cfg(test)]
 +mod activation_order_tests {
 +    #[test]
 +    fn queued_notifications_cannot_restore_over_a_newer_activation() {
-+        assert!(super::activation_is_current(42, Some(42)));
-+        assert!(!super::activation_is_current(42, Some(7)));
-+        assert!(!super::activation_is_current(42, None));
++        assert!(super::activation_is_current(Some(true)));
++        assert!(!super::activation_is_current(Some(false)));
++        assert!(!super::activation_is_current(None));
 +    }
 +}
 +
  /// Re-activate `pid` if it's still running. Safe to call from any
  /// thread — Apple documents `activateWithOptions:` as thread-safe.
  fn restore_focus(pid: i32) {
+@@ -557,6 +641,26 @@ mod tests {
+         assert_eq!(d.len(), 0);
+     }
+ 
++    #[test]
++    fn intervening_input_disables_targeted_and_wildcard_restoration() {
++        let d = Arc::new(Dispatcher::new());
++        let targeted = d.add(Some(42), 7, "test.target");
++        let wildcard = d.add(None, 7, "test.wildcard");
++        assert_eq!(d.snapshot_matches(42).len(), 2);
++        for id in [targeted.0, wildcard.0] {
++            d.entries
++                .lock()
++                .unwrap()
++                .get_mut(&id)
++                .unwrap()
++                .input_activity_observed = true;
++        }
++        assert!(d.snapshot_matches(42).is_empty());
++        assert!(d.snapshot_matches(99).is_empty());
++        // Neither a new notification nor another lookup re-arms this lease.
++        assert!(d.snapshot_matches(42).is_empty());
++    }
++
+     /// Wildcard entries (`target_pid = None`) match every activation
+     /// except the entry's own restore_to pid.
+     #[test]
+@@ -639,6 +743,10 @@ mod tests {
+                     restore_to: 7,
+                     deadline: Instant::now() - Duration::from_secs(1),
+                     origin: "test.leak",
++                    input_at_start: hardware_input_counts(),
++                    activation_observed: false,
++                    restoration_attempted: false,
++                    input_activity_observed: false,
+                 },
+             );
+         }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
 index 2b9baf8..c1e83f1 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
@@ -4958,7 +6087,7 @@ index 2b9baf8..c1e83f1 100644
  pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
      // Handle "+" / "plus" → Shift+= (US keyboard layout).
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
-index 8ace326..0eff4a9 100644
+index 8ace326..022b7f1 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 @@ -19,8 +19,9 @@ use foreign_types::ForeignType;
@@ -5315,7 +6444,7 @@ index 8ace326..0eff4a9 100644
      );
  }
  
-@@ -1152,15 +1097,62 @@ fn post_mouse_event_with_mode(
+@@ -1152,15 +1097,67 @@ fn post_mouse_event_with_mode(
      crate::input::skylight::set_integer_field(event_ptr, 40, pid as i64);
  
      match mode {
@@ -5354,7 +6483,12 @@ index 8ace326..0eff4a9 100644
 +        },
 +        matches!(
 +            event_type,
-+            CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown
++            CGEventType::LeftMouseDown
++                | CGEventType::RightMouseDown
++                | CGEventType::OtherMouseDown
++                | CGEventType::LeftMouseDragged
++                | CGEventType::RightMouseDragged
++                | CGEventType::OtherMouseDragged
 +        ),
 +    );
 +}
@@ -5381,7 +6515,7 @@ index 8ace326..0eff4a9 100644
  /// Post a stamped `mouseMoved` to `pid` at `point` before a down/up pair.
  ///
  /// AppKit hit-tests a button/`NSView` against the cursor-tracking state the
-@@ -1253,7 +1245,7 @@ pub fn scroll_wheel_at_xy(
+@@ -1253,7 +1250,7 @@ pub fn scroll_wheel_at_xy(
                  .unwrap_or_default()
                  .subsec_nanos() as i64,
          ),
@@ -5390,7 +6524,7 @@ index 8ace326..0eff4a9 100644
      );
      std::thread::sleep(std::time::Duration::from_millis(12));
  
-@@ -1292,11 +1284,15 @@ pub fn scroll_wheel_at_xy(
+@@ -1292,11 +1289,15 @@ pub fn scroll_wheel_at_xy(
          // f40 = target pid (Chromium synthetic-event filter).
          crate::input::skylight::set_integer_field(event_ptr, 40, pid as i64);
  
@@ -5409,7 +6543,7 @@ index 8ace326..0eff4a9 100644
      }
      Ok(())
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
-index a657ced..4d59b1a 100644
+index a657ced..65282ac 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
 @@ -228,16 +228,6 @@ pub fn is_available() -> bool {
@@ -5498,7 +6632,30 @@ index a657ced..4d59b1a 100644
  // ── NSMenu shortcut activation ────────────────────────────────────────────────
  
  /// Gets the PSN for the process that owns `window_id`.
-@@ -625,6 +553,69 @@ fn make_key_window_record(window_id: u32, event_kind: u8) -> [u8; 0xF8] {
+@@ -593,6 +521,22 @@ pub fn front_process_matches(target_pid: libc::pid_t, target_wid: u32) -> Option
+     Some(front_psn == target_psn)
+ }
+ 
++/// Check a process activation directly, without NSWorkspace's cached state.
++/// Notifications can precede the cache update. A missing SPI result remains
++/// unknown; callers must not restore focus using a guessed PID.
++pub fn front_process_matches_pid(pid: libc::pid_t) -> Option<bool> {
++    let get_front = get_front_process_fn()?;
++    let get_target = get_process_for_pid_fn()?;
++    let mut current = [0u8; 8];
++    let mut target = [0u8; 8];
++    if unsafe { get_front(current.as_mut_ptr() as *mut c_void) } != 0
++        || unsafe { get_target(pid, target.as_mut_ptr() as *mut c_void) } != 0
++    {
++        return None;
++    }
++    Some(current == target)
++}
++
+ /// Make `target_pid` and `target_wid` WindowServer-frontmost and leave them
+ /// there. Unlike [`with_foreground_assist`], this deliberately does not save or
+ /// restore the previous process. It is the persistent counterpart required by
+@@ -625,6 +569,69 @@ fn make_key_window_record(window_id: u32, event_kind: u8) -> [u8; 0xF8] {
      record
  }
  
@@ -5934,19 +7091,20 @@ index f5eb9d0..ed3a201 100644
                          let m: Vec<&str> = mods_owned.iter().map(String::as_str).collect();
                          if fg {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs
-index 652a372..0b9bbda 100644
+index 652a372..4a935c7 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs
-@@ -128,6 +128,7 @@ impl Tool for GetDesktopStateTool {
+@@ -128,6 +128,8 @@ impl Tool for GetDesktopStateTool {
              is_error: None,
              structured_content: Some(structured),
              action_record: None,
 +            settling: None,
++            focus_change: None,
          }
      }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
-index 9078607..444ded9 100644
+index 9078607..71a729a 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 @@ -295,14 +295,22 @@ impl Tool for GetWindowStateTool {
@@ -5996,15 +7154,16 @@ index 9078607..444ded9 100644
              "returned_element_count": filtered_element_count,
              "elements_complete": elements_complete,
              "tree_markdown": tree_md,
-@@ -697,6 +706,7 @@ impl Tool for GetWindowStateTool {
+@@ -697,6 +706,8 @@ impl Tool for GetWindowStateTool {
              is_error: None,
              structured_content: Some(structured),
              action_record: None,
 +            settling: None,
++            focus_change: None,
          }
      }
  }
-@@ -817,7 +827,7 @@ pub(crate) fn build_elements_array_with_token(
+@@ -817,7 +828,7 @@ pub(crate) fn build_elements_array_with_token(
      nodes
          .iter()
          .filter_map(|node| {
@@ -6013,7 +7172,7 @@ index 9078607..444ded9 100644
              // `label` is a best-effort human-readable string: title first,
              // then description, then value, then identifier. Mirrors what
              // a human reading the markdown row would call this element.
-@@ -831,7 +841,6 @@ pub(crate) fn build_elements_array_with_token(
+@@ -831,7 +842,6 @@ pub(crate) fn build_elements_array_with_token(
                  .frame
                  .map(|[x, y, w, h]| serde_json::json!({ "x": x, "y": y, "w": w, "h": h }));
              let mut entry = serde_json::json!({
@@ -6021,7 +7180,7 @@ index 9078607..444ded9 100644
                  "role": node.role,
                  "depth": node.depth,
              });
-@@ -840,7 +849,10 @@ pub(crate) fn build_elements_array_with_token(
+@@ -840,7 +850,10 @@ pub(crate) fn build_elements_array_with_token(
              // (invalidated when the next snapshot supersedes this
              // one in the per-pid LRU). See cua-driver-core's
              // `element_token` module.
@@ -6033,7 +7192,7 @@ index 9078607..444ded9 100644
                  entry["element_token"] =
                      serde_json::json!(cua_driver_core::element_token::token_for(sid, idx));
              }
-@@ -858,15 +870,12 @@ pub(crate) fn build_elements_array_with_token(
+@@ -858,15 +871,12 @@ pub(crate) fn build_elements_array_with_token(
              // `value_state` widens the string-only AXValue read to all CF
              // types (CFNumber sliders → "8", CFBoolean checkboxes/radios →
              // "1"/"0") — controls whose state was previously invisible here.
@@ -6054,7 +7213,7 @@ index 9078607..444ded9 100644
              }
              if let Some(desc) = node.value_description.clone() {
                  entry["value_description"] = serde_json::Value::String(desc);
-@@ -1163,12 +1172,12 @@ mod tests {
+@@ -1163,12 +1173,12 @@ mod tests {
          let elements = build_elements_array_with_token(&nodes, None);
          assert_eq!(
              elements.len(),
@@ -6070,7 +7229,7 @@ index 9078607..444ded9 100644
              .collect();
          assert_eq!(
              indices,
-@@ -1304,7 +1313,7 @@ mod tests {
+@@ -1304,7 +1314,7 @@ mod tests {
              None,
              vec![],
          )];
@@ -6079,7 +7238,7 @@ index 9078607..444ded9 100644
          let entry = &build_elements_array_with_token(&nodes, None)[0];
          assert_eq!(entry["label"], "Compose message", "label stays the title");
          assert_eq!(
-@@ -1408,22 +1417,27 @@ mod tests {
+@@ -1408,22 +1418,27 @@ mod tests {
      }
  
      #[test]
@@ -6151,6 +7310,36 @@ index 1b33b44..260a645 100644
                          }
                          _ => crate::input::keyboard::hotkey(pid, &key, &m),
                      }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+index 7a9df62..807bbd8 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+@@ -68,7 +68,24 @@ impl Tool for ListWindowsTool {
+             windows.retain(|w| w.pid == pid);
+         }
+ 
+-        let windows_json: Vec<Value> = windows.iter().map(window_record_json).collect();
++        // Read one exact focus target for a scoped query. Z-order alone can
++        // select a transient tooltip above the actual key window.
++        let focused = pid_filter.and_then(|pid| {
++            let id = crate::ax::bindings::focused_window_id_of_pid(pid)?;
++            Some((
++                id,
++                crate::input::skylight::front_process_matches(pid, id) == Some(true),
++            ))
++        });
++        let windows_json: Vec<Value> = windows
++            .iter()
++            .map(|window| {
++                let mut record = window_record_json(window);
++                record["focused"] =
++                    serde_json::json!(focused.map(|(id, front)| front && id == window.window_id));
++                record
++            })
++            .collect();
+ 
+         ToolResult::text(format!("Found {} window(s).", windows_json.len())).with_structured(
+             serde_json::json!({
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 index 5b2ce9e..2d1546e 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
@@ -6290,10 +7479,10 @@ index 64b98e1..1e1f210 100644
                          std::thread::sleep(std::time::Duration::from_millis(50));
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/settling.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/settling.rs
 new file mode 100644
-index 0000000..2f6f68b
+index 0000000..14c7931
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/settling.rs
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,83 @@
 +//! Shared native action settling without changing action-success semantics.
 +use crate::ax::activity::{unavailable, Monitor, MONITORED_ACTION};
 +use async_trait::async_trait;
@@ -6354,7 +7543,7 @@ index 0000000..2f6f68b
 +        let prior = crate::apps::frontmost_pid();
 +        let background = args.get("delivery_mode").and_then(Value::as_str) != Some("foreground");
 +        // Keep a targeted lease through observed settling, never a desktop wildcard.
-+        let _lease = if monitor.is_some() && background {
++        let lease = if background {
 +            prior
 +                .filter(|p| *p != pid)
 +                .map(|p| crate::focus_steal::begin_suppression(Some(pid), p, "action.settling"))
@@ -6373,18 +7562,20 @@ index 0000000..2f6f68b
 +            None => unavailable(),
 +        };
 +        result.settling = Some(settling);
++        result.focus_change = lease.as_ref().and_then(|lease| lease.focus_change());
 +        result
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/zoom.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/zoom.rs
-index f389448..aaae546 100644
+index f389448..9387a9f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/zoom.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/zoom.rs
-@@ -117,6 +117,7 @@ impl Tool for ZoomTool {
+@@ -117,6 +117,8 @@ impl Tool for ZoomTool {
                          "mime_type": "image/jpeg"
                      })),
                      action_record: None,
 +                    settling: None,
++                    focus_change: None,
                  }
              }
              Ok(Err(e)) => ToolResult::error(format!("Zoom failed: {e}")),
@@ -6792,30 +7983,33 @@ index ce3841e..3802563 100644
      }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 9d0d4cf..8af9469 100644
+index 9d0d4cf..84b3d0b 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-@@ -1637,6 +1637,7 @@ impl Tool for GetWindowStateTool {
+@@ -1637,6 +1637,8 @@ impl Tool for GetWindowStateTool {
                      is_error: None,
                      structured_content: Some(structured),
                      action_record: None,
 +                    settling: None,
++                    focus_change: None,
                  }
              }
              Err(e) => ToolResult::error(format!("Error: {e}")),
-@@ -7897,6 +7898,7 @@ impl Tool for GetDesktopStateTool {
+@@ -7897,6 +7899,8 @@ impl Tool for GetDesktopStateTool {
              is_error: None,
              structured_content: Some(structured),
              action_record: None,
 +            settling: None,
++            focus_change: None,
          }
      }
  }
-@@ -8849,6 +8851,7 @@ impl Tool for ZoomTool {
+@@ -8849,6 +8853,8 @@ impl Tool for ZoomTool {
                          "mime_type": "image/jpeg"
                      })),
                      action_record: None,
 +                    settling: None,
++                    focus_change: None,
                  }
              }
              Ok(Err(e)) => ToolResult::error(format!("Zoom failed: {e}")),
@@ -6861,7 +8055,7 @@ index 8e9c373..e7d6735 100644
 +passed. The Mako Linux release includes this helper and its installer alongside
 +the driver; installation into the user's running Shell remains explicit.
 diff --git a/libs/cua-driver/wayland-helper/winrects@cua/extension.js b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
-index 743acc2..811fc5d 100644
+index 743acc2..9addbbb 100644
 --- a/libs/cua-driver/wayland-helper/winrects@cua/extension.js
 +++ b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
 @@ -8,10 +8,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -6882,11 +8076,19 @@ index 743acc2..811fc5d 100644
    }
    GetVersion() {
 -    return 8;
-+    return 9;
++    return 10;
    }
    GetRects() {
      const actors = global.get_window_actors();
-@@ -891,6 +893,52 @@ export default class WinRectsExtension extends Extension {
+@@ -884,6 +886,7 @@ export default class WinRectsExtension extends Extension {
+         buffer_x: buffer.x,
+         buffer_y: buffer.y,
+         focused: focusedWindow === w,
++        input_focused: focusedWindow === w && this._windowInputAvailable(),
+         minimized,
+         visible: Boolean(actor?.visible) && !minimized,
+         stacking,
+@@ -891,6 +894,52 @@ export default class WinRectsExtension extends Extension {
      }
      return JSON.stringify(out);
    }
@@ -6939,8 +8141,37 @@ index 743acc2..811fc5d 100644
    async CaptureAsync(_params, invocation) {
      try {
        const shooter = new Shell.Screenshot();
+@@ -910,6 +959,10 @@ export default class WinRectsExtension extends Extension {
+       invocation.return_dbus_error('org.cua.WinRects.CaptureFailed', String(error));
+     }
+   }
++  _windowInputAvailable() {
++    return !Main.overview.visible && !Main.overview.animationInProgress &&
++      Main.modalCount === 0 && !Main.sessionMode.isLocked;
++  }
+   ActivateAsync([id], invocation) {
+     const target = global
+       .get_window_actors()
+@@ -919,9 +972,15 @@ export default class WinRectsExtension extends Extension {
+       invocation.return_value(new GLib.Variant('(b)', [false]));
+       return;
+     }
++    // A MetaWindow can own keyboard focus while Overview still intercepts
++    // pointer events. Explicit activation must leave that shell surface first.
++    Main.overview.hide();
+     target.activate(global.get_current_time());
+-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+-      invocation.return_value(new GLib.Variant('(b)', [global.display.focus_window === target]));
++    const deadline = GLib.get_monotonic_time() + 750000;
++    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 20, () => {
++      const ready = global.display.focus_window === target && this._windowInputAvailable();
++      if (!ready && GLib.get_monotonic_time() < deadline) return GLib.SOURCE_CONTINUE;
++      invocation.return_value(new GLib.Variant('(b)', [ready]));
+       return GLib.SOURCE_REMOVE;
+     });
+   }
 diff --git a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
-index 3faf86b..e4f4ac0 100644
+index 3faf86b..a2843ca 100644
 --- a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
 +++ b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
 @@ -3,5 +3,5 @@
@@ -6948,5 +8179,5 @@ index 3faf86b..e4f4ac0 100644
    "description": "Expose window geometry, capture, cursor, and verified activation for cua-driver on Wayland.",
    "shell-version": ["45", "46", "47", "48", "49", "50"],
 -  "version": 8
-+  "version": 9
++  "version": 10
  }

@@ -3,10 +3,27 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.12`. Mac lossless values and keyboard changes are retained. Linux adds
+`0.28.2+mako.17`. Mac lossless values and keyboard changes are retained. Linux adds
 exact values and coverage, retained accessibility objects for semantic input,
 modal refusal and focus checks before foreground input. Non-actionable rows can
 omit `element_index`; the host handles them as readable containers.
+
++mako.17 repairs no-overlay notification delivery and checks WindowServer
+identity when an activation notification precedes the NSWorkspace cache update.
+Three system-activation trials restore the original app and retain interruption
+receipts; continuation requires observation. This is reactive recovery, with
+23–99 ms between the fixture's activation notifications. Physical typing and
+general proactive prevention remain unproven. Wayland drag duration is now
+honored; four packaged scale/rotation/load workflows pass with forty hidden jobs.
+See the [current evidence](../../docs/audits/2026-09-23/local-control-focus15/README.md).
+
++mako.14 fixes fractional-scale pointer coordinates and rotated/mirrored native
+screenshots on Wayland. It uses compositor logical geometry and lossless pixel
+transforms. Eleven packaged Sway workflows pass, including combined 150% scale
+and 90° rotation. This does not extend acceptance to untested compositor families
+or prove general Mac focus-steal prevention. Direct Mac comparisons and rejected
+approaches are recorded in the
+[continuation report](../../docs/audits/2026-09-23/local-control-focus14/README.md).
 
 This release adds owned exact-window recording: ScreenCaptureKit on macOS and
 XComposite on X11. Physical cursors are excluded. Actual native click, move, drag and scroll
@@ -24,10 +41,13 @@ interception and physical IME/concurrent typing remain unproven.
 `node scripts/package-control-driver-linux.mjs <checkout> --arch=arm64` builds Linux using the
 image in [scripts/linux-control](../../scripts/linux-control/README.md). The package
 records source, patch, image and binary hashes and retains Cua's MIT license.
-Linux ARM64/X11, Sway and GNOME 46 have scoped acceptance. GNOME helper v9 adds
-exact-window texture capture and covered video; minimization ends capture and
+Linux ARM64/X11, Sway and GNOME 46 have scoped acceptance. GNOME helper v10 retains
+exact-window texture capture and covered video, and checks Overview/modal/lock
+state before attesting keyboard focus. Minimization ends capture and
 retains playable partial video. The helper and installer ship with the Linux
-package. Sway hidden capture/video, other compositors and x64 remain unverified.
+package. Sway hidden capture/video and other compositors remain unverified. Linux x64
+passes complete jobs and X11 recording under OrbStack translation; native
+Intel/AMD hardware performance is not established.
 
 `node scripts/package-control-driver.mjs <checkout>` signs the Mac build and checks
 its binary/version. `node scripts/install-control-driver.mjs` installs the manifest's
@@ -36,17 +56,20 @@ an immutable version under `~/Library/Application Support/mako/control-drivers/`
 and atomically selects it through `~/.local/bin/cua-driver`. The installer verifies
 provenance/signature before selection, keeps the previous executable for running
 daemons and rollback, and refuses unknown launcher targets or another install lock.
-It does not restart active daemons. Version `0.28.2+mako.12` is now selected on this
+It does not restart active daemons. Version `0.28.2+mako.17` is now selected on this
 Mac for new launches; the running Mako host/extension deployment remains separate.
 
 Installer upgrade/repeat/lock/verification-failure tests and signed installation
-passed. The current source passed 375 Mac tests (two existing ignores) and 448
-Linux tests (five existing ignores). Final packaged Mac gesture/cursor, GNOME
-covered capture/video and Sway hidden-workspace jobs passed. The shared X11
+passed. The preceding +mako.12 release passed 375 Mac tests (two existing ignores) and
+448 Linux tests (five existing ignores). +mako.13 has 632 core and 455 Linux unit
+passes, signed Mac foreground drag/recording acceptance, GNOME libei gesture and
+recording acceptance, and Sway 1×/2× screenshot/input acceptance. Final X11 held-button
+recording, covered video and interruption retention pass on Linux x64, alongside
+30 complete save jobs and 400/400 tagged concurrent keystrokes. The shared X11
 encoder regression also passed; an intermittent unmanaged-window setup failure
 remains documented separately.
 See the [current wayfinder](../../docs/local-control-map.md) and
-[recording evidence](../../docs/audits/2026-09-22/local-control-next/release12/README.md)
+[current acceptance evidence](../../docs/audits/2026-09-22/local-control-acceptance13/README.md)
 for live results and remaining gates. These are locally signed builds, not a
 notarized public release.
 
