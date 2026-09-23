@@ -16,7 +16,10 @@
     "./browser": "./dist/browser/index.js"
   },
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsgo -b",
@@ -26,5 +29,8 @@
   "dependencies": {
     "devtools-protocol": "0.0.1692173",
     "zod": "4.4.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

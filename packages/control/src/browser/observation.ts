@@ -28,6 +28,8 @@ export type PageObservation = z.infer<typeof PageObservationSchema>
 
 export const PageNodeSelectorSchema = z
   .object({
+    role: z.string().min(1).max(100).optional(),
+    name: z.string().max(500).optional(),
     text: z.string().max(500).optional(),
     roles: z.array(z.string().min(1).max(100)).max(64).optional(),
     states: z
@@ -66,6 +68,8 @@ function hasStates(
 }
 
 function matches(node: PageObservationNode, selector: ParsedPageNodeSelector) {
+  if (selector.role !== undefined && node.role !== selector.role) return false
+  if (selector.name !== undefined && (node.name ?? "") !== selector.name) return false
   if (selector.refsOnly && node.ref === undefined) return false
   if (
     selector.roles &&

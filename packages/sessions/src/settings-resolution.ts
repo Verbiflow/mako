@@ -77,10 +77,13 @@ export function resolveSessionSettings(
     ...(model?.options.map((option) => option.id) ?? []),
     ...applicable.flatMap((layer) => Object.keys(layer.settings.options ?? {})),
   ])
+  // A new conversation on the provider's default model starts on that
+  // model's reported defaults; an existing one may have been changed
+  // outside Mako, so there the provider's model says nothing about options.
   const selectionChanged =
     modelState.kind === "known" &&
     modelState.source !== "session" &&
-    modelState.source !== "provider"
+    (modelState.source !== "provider" || input.context === "new")
   for (const id of ids) {
     const option = model?.options.find((entry) => entry.id === id)
     const selected = applicable.find(

@@ -1,3 +1,4 @@
+import { ControlFault, controlInput } from "./fault.js"
 import {
   RecordingHandle,
   RecordingOptionsSchema,
@@ -15,17 +16,22 @@ import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import {
   ControlOperationSchema,
+  pointerOperationSchema,
   ControlTargetSchema,
   PageTargetSchema,
   WindowControlTargetSchema,
+  type NativeScreenshotOptions,
   type ControlTarget,
   type PageTarget,
 } from "./contract.js"
 import {
   PageObservationNodeSchema,
+  PageNodeSelectorSchema,
   pageNodeLines,
   selectPageNodes,
   type PageNodeSelector,
+  type PageObservationNode,
+  type PageNodeSelection,
 } from "../browser/observation.js"
 import type {
   CdpCommand,
@@ -56,6 +62,10 @@ const selectorSchema = ControlSelectorSchema.extend({
   // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Zod schema composition API.
   within: ControlReadScopeSchema.shape.within.optional(),
 })
+const selectorHint =
+  'Use {role:"button",name:"Save"}; to scope it, add within:[{role:"form",name:"Profile"}]. Copy exact role/name from observe().'
+const selectionHint =
+  'Use {role:"button",name:"Save",max:20}; optional keys: text, roles, states, refsOnly, includeAncestors. Strings only, no regular expressions.'
 export type ElementSelector = z.infer<typeof selectorSchema>
 const expectationSchema = selectorSchema
   .extend({
@@ -75,6 +85,23 @@ const expectationSchema = selectorSchema
   )
 export type ElementExpectation = z.input<typeof expectationSchema>
 
+export interface ControlExpectationResult {
+  status: "matched"
+  target: ControlTarget
+  observation: string
+  expectation: z.output<typeof expectationSchema>
+  evidence: PageObservationNode | null
+  coverage: ControlObservationData["coverage"]
+}
+
+export interface ControlSelection extends PageNodeSelection {
+  target: ControlTarget
+  observation: string
+  lines: string[]
+  coverage: ControlObservationData["coverage"]
+  toJSON(): Omit<ControlSelection, "nodes" | "toJSON">
+}
+
 /** Structured evidence stays local; returning an observation emits its compact view once. */
 export class ControlObservation {
   readonly data: ControlObservationData
@@ -87,7 +114,7 @@ export class ControlObservation {
   get observation() {
     return this.data.observation
   }
-  get nodes() {
+  get nodes(): PageObservationNode[] {
     return this.data.nodes
   }
   get lines() {
@@ -96,20 +123,33 @@ export class ControlObservation {
   get coverage() {
     return this.data.coverage
   }
-  get(selector: ElementSelector) {
-    const { role, name, within } = selectorSchema.parse(selector)
+  get(selector: ElementSelector): PageObservationNode {
+    const { role, name, within } = controlInput(
+      selectorSchema.safeParse(selector),
+      "selector",
+      selectorHint
+    )
     const matches = scopeControlNodes(this.nodes, {
       within,
       match: { role, name },
     })
     if (matches.length !== 1)
-      throw new Error(
-        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. Candidates: ${JSON.stringify(matches.slice(0, 5).map((node) => ({ ref: node.ref, role: node.role, name: node.name?.slice(0, 120), depth: node.depth })))}. Observe a narrower scope or disambiguate; nothing was dispatched.`
+      throw new ControlFault(
+        matches.length ? "target-ambiguous" : "target-not-found",
+        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. Candidates: ${JSON.stringify(matches.slice(0, 5).map((node) => ({ ref: node.ref, role: node.role, name: node.name?.slice(0, 120), depth: node.depth })))}. Observe a narrower scope or use locator({role,name,within:[{role,name}]}); nothing was dispatched.`,
+        "not-dispatched"
       )
     return matches[0]!
   }
-  select(selector: PageNodeSelector) {
-    const selection = selectPageNodes({ nodes: this.nodes }, selector)
+  select(selector: PageNodeSelector): ControlSelection {
+    const selection = selectPageNodes(
+      { nodes: this.nodes },
+      controlInput(
+        PageNodeSelectorSchema.safeParse(selector),
+        "selection",
+        selectionHint
+      )
+    )
     const { nodes, ...counts } = selection
     const compact = {
       ...counts,
@@ -207,14 +247,27 @@ export class ControlObservation {
 }
 
 /** Quiet notifications are timing information, not action verification. */
-export const NativeSettlingSchema = z.object({
-  status: z.enum(["events_quiet", "deadline", "unavailable"]),
-  scope: z.literal("process_notifications"),
-  elapsed_ms: z.number().int().nonnegative(),
-  events: z.number().int().nonnegative(),
-  subscriptions: z.number().int().nonnegative(),
-}).strict()
+export const NativeSettlingSchema = z
+  .object({
+    status: z.enum(["events_quiet", "deadline", "unavailable"]),
+    scope: z.literal("process_notifications"),
+    elapsed_ms: z.number().int().nonnegative(),
+    events: z.number().int().nonnegative(),
+    subscriptions: z.number().int().nonnegative(),
+  })
+  .strict()
 export type NativeSettling = z.infer<typeof NativeSettlingSchema>
+
+/** A bounded native observation, not a guarantee of continuous focus isolation. */
+export const NativeFocusChangeSchema = z
+  .object({
+    previous_pid: z.number().int().positive(),
+    current_pid: z.number().int().positive().nullable(),
+    restoration_attempted: z.boolean(),
+    input_activity_observed: z.boolean(),
+  })
+  .strict()
+export type NativeFocusChange = z.infer<typeof NativeFocusChangeSchema>
 
 export const ExecutionReceiptSchema = z.object({
   status: z.literal("dispatched"),
@@ -223,6 +276,7 @@ export const ExecutionReceiptSchema = z.object({
   delivery: z.enum(["background", "foreground", "none"]),
   verification: z.literal("not-requested"),
   settling: NativeSettlingSchema.optional(),
+  focus_change: NativeFocusChangeSchema.optional(),
   guard: z.record(z.string(), z.json()),
   result: z.json().optional(),
 })
@@ -239,6 +293,7 @@ const pointSchema = z
     view: z.string().min(1),
   })
   .strict()
+const clickOptionsSchema = pointerOperationSchema.omit({ kind: true, at: true })
 export type Point = z.infer<typeof pointSchema>
 
 export class ControlHandle {
@@ -247,10 +302,19 @@ export class ControlHandle {
     protected readonly call: ControlCall,
     target: ControlTarget
   ) {
-    this.target = Object.freeze(ControlTargetSchema.parse(target))
+    this.target = Object.freeze(
+      controlInput(
+        ControlTargetSchema.safeParse(target),
+        "target",
+        "Use an exact target returned by discovery/open/claim; do not guess a lease or window ID."
+      )
+    )
   }
   locator(selector: ElementSelector) {
-    return new ControlLocator(this, selectorSchema.parse(selector))
+    return new ControlLocator(
+      this,
+      controlInput(selectorSchema.safeParse(selector), "selector", selectorHint)
+    )
   }
   async observe(options: ObserveOptions = {}) {
     return new ControlObservation(
@@ -263,7 +327,11 @@ export class ControlHandle {
         await this.call("recording", {
           operation: "start",
           target: this.target,
-          options: RecordingOptionsSchema.parse(options),
+          options: controlInput(
+            RecordingOptionsSchema.safeParse(options),
+            "recording options",
+            "Use {directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}. Read handle.capabilities() for this target’s frame-rate limit."
+          ),
         })
       ),
       this.target
@@ -279,7 +347,11 @@ export class ControlHandle {
     return ExecutionReceiptSchema.parse(
       await this.call("dispatch", {
         target: this.target,
-        operation: ControlOperationSchema.parse(operation),
+        operation: controlInput(
+          ControlOperationSchema.safeParse(operation),
+          "operation",
+          "Use setValue(ref,text), click(ref), pressKey(key,{modifiers?}) or scroll({deltaX?,deltaY?,at?}); copy refs from this target’s latest observation."
+        ),
       })
     )
   }
@@ -290,17 +362,24 @@ export class ControlHandle {
     at: string | Point,
     options: { button?: "left" | "right" | "middle"; count?: number } = {}
   ) {
-    const reference = z.string().safeParse(at)
-    if (
-      reference.success &&
-      (options.button ?? "left") === "left" &&
-      (options.count ?? 1) === 1
+    const click = controlInput(
+      clickOptionsSchema.safeParse(options),
+      "click options",
+      'Use {button:"right",count:1}; button is left/right/middle, count is 1–3.'
     )
+    const reference = z.string().safeParse(at)
+    if (reference.success && click.button === "left" && click.count === 1)
       return this.activate(reference.data)
     return this.perform({
       kind: "pointer",
-      at: reference.success ? { ref: reference.data } : pointSchema.parse(at),
-      ...options,
+      at: reference.success
+        ? { ref: reference.data }
+        : controlInput(
+            pointSchema.safeParse(at),
+            "click point",
+            "Use an observed ref string or {x:100,y:80,view:shot.view} from this target’s latest screenshot."
+          ),
+      ...click,
     })
   }
   activate(ref: string) {
@@ -325,15 +404,23 @@ export class ControlHandle {
   async expect(
     expectation: ElementExpectation,
     options: { timeoutMs?: number; everyMs?: number } = {}
-  ) {
-    const wanted = expectationSchema.parse(expectation)
-    const timing = z
-      .object({
-        timeoutMs: z.number().int().min(0).max(55_000).default(5000),
-        everyMs: z.number().int().min(20).max(2000).default(100),
-      })
-      .strict()
-      .parse(options)
+  ): Promise<ControlExpectationResult> {
+    const wanted = controlInput(
+      expectationSchema.safeParse(expectation),
+      "expectation",
+      'Use {role:"textbox",name:"Name",value:"Ada"}; optional within, states, absent.'
+    )
+    const timing = controlInput(
+      z
+        .object({
+          timeoutMs: z.number().int().min(0).max(55_000).default(5000),
+          everyMs: z.number().int().min(20).max(2000).default(100),
+        })
+        .strict()
+        .safeParse(options),
+      "assertion timing",
+      "Use {timeoutMs:5000,everyMs:100}; timeoutMs is 0–55000 and everyMs is 20–2000."
+    )
     const deadline = Date.now() + timing.timeoutMs
     for (;;) {
       const view = await this.observe({
@@ -394,7 +481,11 @@ export class ControlLocator {
     private readonly selector: ElementSelector
   ) {}
   locator(selector: ElementSelector) {
-    const next = selectorSchema.parse(selector)
+    const next = controlInput(
+      selectorSchema.safeParse(selector),
+      "selector",
+      selectorHint
+    )
     return new ControlLocator(this.handle, {
       ...next,
       within: [
@@ -420,16 +511,20 @@ export class ControlLocator {
       max: 6,
     })
     if (!view.coverage.complete || !view.coverage.textComplete)
-      throw new Error(
-        "Locator coverage is incomplete. Narrow its scope; nothing was dispatched."
+      throw new ControlFault(
+        "incomplete-observation",
+        "Locator coverage is incomplete. Narrow its scope with within:[{role,name}]; nothing was dispatched.",
+        "not-dispatched"
       )
     const node = view.get({
       role: this.selector.role,
       name: this.selector.name,
     })
     if (!node.ref)
-      throw new Error(
-        "The matched element has no actionable reference; nothing was dispatched."
+      throw new ControlFault(
+        "target-not-actionable",
+        "The matched element has no actionable reference; observe an interactive control instead. Nothing was dispatched.",
+        "not-dispatched"
       )
     return node.ref
   }
@@ -447,10 +542,25 @@ export class ControlLocator {
   async selectOption(option: { value: string } | { label: string }) {
     return this.handle.selectOption(await this.resolve(), option)
   }
+  async screenshot(
+    options: {
+      format?: "png" | "jpeg"
+      quality?: number
+      maxSide?: number
+    } = {}
+  ) {
+    if (!(this.handle instanceof TabHandle))
+      throw new ControlFault(
+        "unsupported",
+        "Element screenshots currently require a browser tab. Use window.screenshot() for the native window; nothing was captured.",
+        "not-dispatched"
+      )
+    return this.handle.screenshot({ ...options, ref: await this.resolve() })
+  }
   expect(
     expectation: Omit<ElementExpectation, "role" | "name" | "within">,
     options: { timeoutMs?: number; everyMs?: number } = {}
-  ) {
+  ): Promise<ControlExpectationResult> {
     return this.handle.expect({ ...expectation, ...this.selector }, options)
   }
   toJSON() {
@@ -459,8 +569,11 @@ export class ControlLocator {
 }
 
 export class WindowHandle extends ControlHandle {
-  screenshot(options: JsonObject = {}) {
-    return this.call("capture", { target: this.target, options })
+  screenshot(options: NativeScreenshotOptions = {}) {
+    return this.call("capture", {
+      target: this.target,
+      options: { ...options },
+    })
   }
   private nativeTarget() {
     const target = WindowControlTargetSchema.parse(this.target)
@@ -553,7 +666,11 @@ export class TabHandle extends ControlHandle {
   ): Promise<CdpCommandResult<Method>> {
     const result = await this.raw("cdp", {
       method,
-      params: z.record(z.string(), z.json()).parse(args[0] ?? {}),
+      params: controlInput(
+        z.record(z.string(), z.json()).safeParse(args[0] ?? {}),
+        "CDP parameters",
+        "Use a JSON object matching help({domain,method}); functions and undefined are not protocol values."
+      ),
     })
     // SAFETY: The pinned method maps to this result; the host validates the command and JSON wire data.
     return result as CdpCommandResult<Method>
@@ -566,7 +683,11 @@ export class AppHandle {
     private readonly call: ControlCall,
     pid: number
   ) {
-    this.pid = z.number().int().positive().parse(pid)
+    this.pid = controlInput(
+      z.number().int().positive().safeParse(pid),
+      "application PID",
+      "Use a numeric pid from control.apps(); then await control.app({pid}).windows()."
+    )
   }
   windows() {
     return this.call("targets", { kind: "windows", pid: this.pid })
@@ -574,11 +695,15 @@ export class AppHandle {
   window(windowId: number) {
     return new WindowHandle(
       this.call,
-      WindowControlTargetSchema.parse({
-        kind: "window",
-        pid: this.pid,
-        window_id: windowId,
-      })
+      controlInput(
+        WindowControlTargetSchema.safeParse({
+          kind: "window",
+          pid: this.pid,
+          window_id: windowId,
+        }),
+        "window ID",
+        "Use a numeric window_id from await control.windows(pid)."
+      )
     )
   }
   toJSON() {
@@ -594,6 +719,19 @@ export type OpenTabOptions = {
   disposition?: "tab" | "window"
   lifetime?: "task" | "persistent"
   context?: "profile" | "isolated"
+}
+/** Creation succeeded but navigation did not. The exact tab remains owned by this task. */
+export class TabNavigationError extends Error {
+  constructor(
+    readonly target: PageTarget,
+    readonly navigation: JsonValue,
+    message: string
+  ) {
+    super(
+      `Tab created, but navigation failed: ${message}. Inspect this exact tab with control.tab(error.target); do not repeat openTab. Target: ${JSON.stringify(target)}`
+    )
+    this.name = "TabNavigationError"
+  }
 }
 export function controlClient(call: ControlCall) {
   const bindPage = (value: JsonValue) => {
@@ -612,12 +750,38 @@ export function controlClient(call: ControlCall) {
     window: (target: { pid: number; window_id: number }) =>
       new WindowHandle(
         call,
-        WindowControlTargetSchema.parse({ kind: "window", ...target })
+        controlInput(
+          WindowControlTargetSchema.safeParse({ kind: "window", ...target }),
+          "window target",
+          "Use control.window({pid,window_id}) with numeric IDs from control.windows(pid)."
+        )
       ),
     tab: (target: PageTarget) =>
-      new TabHandle(call, PageTargetSchema.parse(target)),
-    openTab: async (options: OpenTabOptions) =>
-      bindPage(await call("page", { name: "open", args: { ...options } })),
+      new TabHandle(
+        call,
+        controlInput(
+          PageTargetSchema.safeParse(target),
+          "page target",
+          "Use control.tab(target) with the complete target returned by openTab/claimTab; do not guess the generation or lease."
+        )
+      ),
+    openTab: async (options: OpenTabOptions) => {
+      const result = await call("page", { name: "open", args: { ...options } })
+      const handle = bindPage(result)
+      const { navigation } = z
+        .object({ navigation: z.json().optional() })
+        .parse(result)
+      const failure = z
+        .object({ fault: z.object({ message: z.string() }) })
+        .safeParse(navigation)
+      if (failure.success)
+        throw new TabNavigationError(
+          PageTargetSchema.parse(handle.target),
+          navigation!,
+          failure.data.fault.message
+        )
+      return handle
+    },
     claimTab: async (options: {
       browser: string
       tab: string
@@ -630,6 +794,13 @@ export function controlClient(call: ControlCall) {
     apps: () => call("targets", { kind: "apps" }),
     windows: (pid: number) => call("targets", { kind: "windows", pid }),
     browsers: () => call("targets", { kind: "browsers" }),
+    connectBrowser: async (browser: string) =>
+      z
+        .object({
+          status: z.literal("connected"),
+          generation: z.string().min(1),
+        })
+        .parse(await call("connect", { browser })),
     tabs: (browser: string) => call("targets", { kind: "pages", browser }),
     native: (name: string, args: JsonObject = {}) =>
       call("native", { name, args }),

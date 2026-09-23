@@ -43,26 +43,33 @@ export interface CursorSdkModelSelection {
 }
 
 /**
- * The SDK's parameter ids and Mako's option ids differ for the two roles the
- * composer treats specially. Cursor's ACP transport already normalizes its
- * `reasoning` option to `effort` and its boolean `fast` option to `fast`;
- * the SDK keeps the same wire ids, so a thread that saved `effort: high`
- * under ACP resolves to the same choice when it continues through the SDK.
+ * The SDK's parameter ids and Mako's option ids differ for the roles the
+ * composer treats specially. The SDK names reasoning per model family —
+ * `reasoning` for GPT, `effort` for Claude, `reasoning_effort` for Grok 4.7
+ * and Gemini — and all of them are Mako's `effort`, the id Cursor's ACP
+ * transport already uses, so a thread that saved `effort: high` under ACP
+ * resolves to the same choice when it continues through the SDK.
  */
-const OPTION_IDS = new Map<string, { id: string; role?: "reasoning" | "speed" }>([
+const OPTION_IDS = new Map<string, { id: string; role?: NonNullable<ModelOption["role"]> }>([
   ["reasoning", { id: "effort", role: "reasoning" }],
+  ["effort", { id: "effort", role: "reasoning" }],
+  ["reasoning_effort", { id: "effort", role: "reasoning" }],
+  ["thought_level", { id: "effort", role: "reasoning" }],
   ["fast", { id: "fast", role: "speed" }],
+  ["context", { id: "context", role: "context" }],
 ])
 
-function optionFor(parameter: CursorSdkModelParameter): ModelOption | undefined {
-  const mapped = OPTION_IDS.get(parameter.id) ?? { id: parameter.id }
+function optionFor(parameter: CursorSdkModelParameter, taken: ReadonlySet<string>): ModelOption | undefined {
+  const known = OPTION_IDS.get(parameter.id)
+  // Two parameters naming the same role keep the second under its own id.
+  const mapped = known && !taken.has(known.id) ? known : { id: parameter.id }
   const values: ModelChoice[] = []
   for (const entry of parameter.values) {
     if (!entry.value) continue
-    values.push({ value: entry.value, label: entry.displayName ?? entry.value })
+    values.push({ value: entry.value, label: displayText(entry.displayName) ?? entry.value })
   }
   if (values.length === 0) return undefined
-  const label = parameter.displayName ?? labelFor(parameter.id)
+  const label = displayText(parameter.displayName) ?? labelFor(parameter.id)
   const wireValues = new Set(values.map((value) => value.value))
   if (wireValues.size === 2 && wireValues.has("true") && wireValues.has("false")) {
     return {
@@ -84,6 +91,12 @@ function optionFor(parameter: CursorSdkModelParameter): ModelOption | undefined 
     role: mapped.role,
     values,
   }
+}
+
+/** Cursor pads some display names with zero-width spaces ("Fast\u200b\u200b"). */
+function displayText(value: string | undefined): string | undefined {
+  const text = value?.replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim()
+  return text || undefined
 }
 
 function labelFor(parameterId: string): string {
@@ -115,7 +128,7 @@ function variantFor(
   const suffix = variant.params.map((param) => `${param.id}=${param.value}`).join(",")
   const result: ModelVariant = {
     id: `${item.id}[${suffix}]`,
-    label: variant.displayName,
+    label: displayText(variant.displayName) ?? item.id,
     values,
   }
   if (variant.description) result.description = variant.description
@@ -127,13 +140,13 @@ export function normalizeCursorSdkModels(
   list: readonly CursorSdkModelListItem[],
   configuredModel?: string
 ): HarnessModelCatalog {
-  const byId = new Map<string, SessionModel>()
+  let byId = new Map<string, SessionModel>()
   let defaultModel: string | undefined
   for (const item of list) {
     if (!item.id || byId.has(item.id)) continue
     const options: ModelOption[] = []
     for (const parameter of item.parameters ?? []) {
-      const option = optionFor(parameter)
+      const option = optionFor(parameter, new Set(options.map((entry) => entry.id)))
       if (option) options.push(option)
     }
     const variants: ModelVariant[] = []
@@ -158,6 +171,16 @@ export function normalizeCursorSdkModels(
     if (item.description) model.description = item.description
     if (item.aliases?.length) model.aliases = [...item.aliases]
     if (variants.length > 0) model.variants = variants
+    // Cursor lists its account default (`default`, "Auto") beside the model
+    // it names (`auto-smart`, "Auto"). Two rows with one name are one model;
+    // the bare row survives as an alias so a thread that saved it resolves.
+    const twin = [...byId.values()].find((entry) => entry.label === model.label)
+    if (twin && (options.length === 0 || twin.options.length === 0)) {
+      const [kept, folded] = options.length === 0 ? [twin, model] : [model, twin]
+      kept.aliases = [...new Set([...(kept.aliases ?? []), folded.id, ...(folded.aliases ?? [])])]
+      byId = new Map([...byId].map(([id, entry]) => (id === folded.id ? [kept.id, kept] : [id, entry])))
+      continue
+    }
     byId.set(item.id, model)
   }
   const models = [...byId.values()]

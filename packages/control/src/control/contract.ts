@@ -32,6 +32,18 @@ export const ControlTargetSchema = z.discriminatedUnion("kind", [
 ])
 export type ControlTarget = z.infer<typeof ControlTargetSchema>
 
+export const NativeScreenshotOptionsSchema = z
+  .object({
+    format: z.enum(["png", "jpeg"]).optional(),
+    quality: z.number().int().min(1).max(100).optional(),
+    maxSide: z.number().int().min(256).max(4096).optional(),
+    screenshot_out_file: z.string().min(1).optional(),
+  })
+  .strict()
+export type NativeScreenshotOptions = z.infer<
+  typeof NativeScreenshotOptionsSchema
+>
+
 const setTextOperationSchema = z
   .object({
     kind: z.literal("set-text"),
@@ -64,7 +76,7 @@ const pointSchema = z.union([
     })
     .strict(),
 ])
-const pointerOperationSchema = z
+export const pointerOperationSchema = z
   .object({
     kind: z.literal("pointer"),
     at: pointSchema,

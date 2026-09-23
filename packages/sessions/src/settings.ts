@@ -24,7 +24,7 @@ const optionFields = {
   wireId: z.string().optional(),
   label: z.string(),
   /** Provider-assigned semantics; consumers must not infer them from labels. */
-  role: z.enum(["reasoning", "speed"]).optional(),
+  role: z.enum(["reasoning", "speed", "context"]).optional(),
   /** A provider may expose a setting that cannot be changed in this transport. */
   disabledReason: z.string().optional(),
   change: z.literal("launch").optional(),
@@ -134,6 +134,12 @@ export function settingsWithVariant(
   const variant = model?.variants?.find((entry) => entry.id === settings.model)
   const options = { ...variant?.values, ...settings.options }
   for (const option of model?.options ?? []) {
+    // A choice saved under the provider's own name for an option (Cursor's
+    // `reasoning_effort`) is the same choice as Mako's id for it.
+    if (option.wireId && option.wireId !== option.id && options[option.wireId] !== undefined) {
+      options[option.id] ??= options[option.wireId]
+      delete options[option.wireId]
+    }
     const value = options[option.id]
     if (
       option.kind !== "select" ||

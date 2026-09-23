@@ -204,9 +204,11 @@ try {
   )
   await appendFile(grokEvents, "{}\n")
   const grokTitled = await new Promise((resolve, reject) => {
+    // macOS delivers FSEvents seconds late when fseventsd is busy (4.4s was
+    // measured at load 25); the deadline tests delivery, not scheduler luck.
     const timer = setTimeout(
       () => reject(new Error("Grok summary title did not reach the one catalog row")),
-      2_000
+      12_000
     )
     const check = () => {
       const [row] = grokCatalog.list()

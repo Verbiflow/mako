@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { ControlFault } from "./fault.js"
 import type { PageObservationNode } from "../browser/observation.js"
 
 export const ControlSelectorSchema = z
@@ -24,8 +25,10 @@ export function scopeControlNodes(
         : []
     )
     if (matches.length !== 1)
-      throw new Error(
-        `Scope requires one ${container.role} ${JSON.stringify(container.name)}; found ${matches.length}. Observe and disambiguate the container.`
+      throw new ControlFault(
+        matches.length ? "target-ambiguous" : "target-not-found",
+        `Scope requires one ${container.role} ${JSON.stringify(container.name)}; found ${matches.length}. Observe and disambiguate the container with an outer within scope. Nothing was dispatched.`,
+        "not-dispatched"
       )
     const index = matches[0]!
     const depth = selected[index]!.depth

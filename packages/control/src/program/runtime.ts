@@ -125,7 +125,7 @@ export class ControlProgramRuntime {
     this.options = options
   }
 
-  run(source: string, signal: AbortSignal): Promise<ControlProgramOutput[]> {
+  run(source: string, signal: AbortSignal, options: { yield?: boolean } = {}): Promise<ControlProgramOutput[]> {
     const retained = this.cells.keys().next().value
     if (retained !== undefined)
       return Promise.reject(
@@ -145,6 +145,7 @@ export class ControlProgramRuntime {
       () => undefined,
       () => undefined
     )
+    if (options.yield === false) return result
     return new Promise((resolve, reject) => {
       let yielded = false
       const timer = setTimeout(() => {
@@ -203,11 +204,15 @@ export class ControlProgramRuntime {
       void cell.promise.then(
         (output) => {
           signal.removeEventListener("abort", abort)
+          // An abandoned wait never consumes the eventual action receipt.
+          if (signal.aborted) return
           this.cells.delete(cellId)
           resolve(output)
         },
         (error) => {
           signal.removeEventListener("abort", abort)
+          // An abandoned wait never consumes the eventual action receipt.
+          if (signal.aborted) return
           this.cells.delete(cellId)
           reject(error)
         }

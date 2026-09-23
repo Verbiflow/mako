@@ -342,10 +342,170 @@ await assert.rejects(recordingWindow.record(), /does not belong/)
 await assert.rejects(recordingWindow.record({ maxDurationMs: 0 }))
 
 // Recording identity remains strict in browser-importable code.
-const pageRecordingTarget = { kind: "page", browser: "chrome", tab: "1", generation: "g1", lease: "lease-1" }
+const pageRecordingTarget = {
+  kind: "page",
+  browser: "chrome",
+  tab: "1",
+  generation: "g1",
+  lease: "lease-1",
+}
 const pageRecording = { ...receipt, target: pageRecordingTarget }
-assert.equal(recordingReceipt(pageRecording, { lease: "lease-1", generation: "g1", tab: "1", browser: "chrome", kind: "page" }), pageRecording)
+assert.equal(
+  recordingReceipt(pageRecording, {
+    lease: "lease-1",
+    generation: "g1",
+    tab: "1",
+    browser: "chrome",
+    kind: "page",
+  }),
+  pageRecording
+)
 for (const field of ["browser", "tab", "generation", "lease"])
-  assert.throws(() => recordingReceipt({ ...pageRecording, target: { ...pageRecordingTarget, [field]: "different" } }, pageRecordingTarget), /does not belong/)
-assert.throws(() => recordingReceipt(pageRecording, recordingTarget), /does not belong/)
-assert.throws(() => recordingReceipt({ ...receipt, target: { ...recordingTarget, pid: 43 } }, recordingTarget), /does not belong/)
+  assert.throws(
+    () =>
+      recordingReceipt(
+        {
+          ...pageRecording,
+          target: { ...pageRecordingTarget, [field]: "different" },
+        },
+        pageRecordingTarget
+      ),
+    /does not belong/
+  )
+assert.throws(
+  () => recordingReceipt(pageRecording, recordingTarget),
+  /does not belong/
+)
+assert.throws(
+  () =>
+    recordingReceipt(
+      { ...receipt, target: { ...recordingTarget, pid: 43 } },
+      recordingTarget
+    ),
+  /does not belong/
+)
+
+// Restoring the foreground must not erase evidence that the task interrupted it.
+const focusChange = {
+  previous_pid: 7,
+  current_pid: 7,
+  restoration_attempted: true,
+  input_activity_observed: false,
+}
+const interruptedClient = controlClient(async () => ({
+  status: "dispatched",
+  actionId: "interrupted",
+  route: "accessibility",
+  delivery: "background",
+  verification: "not-requested",
+  guard: { status: "settled" },
+  focus_change: focusChange,
+}))
+const interrupted = await interruptedClient
+  .window({ pid: 42, window_id: 7 })
+  .click("s00000001:1")
+assert.deepEqual(
+  interrupted.focus_change,
+  focusChange,
+  "Restored focus interruption survives the public client"
+)
+assert.equal(interrupted.verification, "not-requested")
+
+// Connection is an explicit public operation; discovery and open do not hide it.
+const connectionCalls = []
+const connectionClient = controlClient(async (action, request) => {
+  connectionCalls.push({ action, request })
+  return { status: "connected", generation: "fixture-generation" }
+})
+assert.deepEqual(await connectionClient.connectBrowser("mako-dev-fixture"), {
+  status: "connected",
+  generation: "fixture-generation",
+})
+assert.deepEqual(connectionCalls, [
+  {
+    action: "connect",
+    request: { browser: "mako-dev-fixture" },
+  },
+])
+
+// A failed navigation must not be hidden inside a successful tab handle.
+const pageTarget = {
+  kind: "page",
+  browser: "scratch",
+  tab: "tab",
+  generation: "generation",
+  lease: "lease",
+}
+const openFailure = controlClient(async () => ({
+  ...pageTarget,
+  navigation: { fault: { message: "Navigation interrupted" } },
+}))
+await assert.rejects(
+  openFailure.openTab({ url: "https://example.test" }),
+  (error) => {
+    assert.equal(error.name, "TabNavigationError")
+    assert.deepEqual(error.target, pageTarget)
+    assert.match(error.message, /do not repeat openTab/)
+    return true
+  }
+)
+const scoped = new ControlObservation(
+  observation([field("Name", "A"), field("Other", "B")])
+)
+assert.equal(
+  scoped.select({ role: "TextField", name: "Name", includeAncestors: false })
+    .nodes.length,
+  1
+)
+const screenshotCalls = []
+const pageClient = controlClient(async (action, args) => {
+  screenshotCalls.push({ action, args })
+  if (action === "observe")
+    return { ...observation([field("Save", "", "p1")]), target: pageTarget }
+  if (action === "capture") return { data: "image" }
+  throw new Error(action)
+})
+await pageClient
+  .tab(pageTarget)
+  .locator({ role: "TextField", name: "Save" })
+  .screenshot({ maxSide: 2048 })
+assert.equal(screenshotCalls[1].args.options.ref, "p1")
+assert.equal(screenshotCalls[1].args.options.maxSide, 2048)
+assert.equal(screenshotCalls.length, 2)
+
+// Ref clicks used to ignore a misspelled options key and perform a left click.
+{
+  const before = mutations
+  assert.throws(() => window.click("s00000001:1", { buton: "right" }), {
+    code: "invalid-request",
+    outcome: "not-dispatched",
+  })
+  assert.equal(mutations, before)
+  const view = new ControlObservation(
+    observation([field("Name", "one"), field("Name", "two", "s00000001:2")])
+  )
+  assert.throws(() => view.get({ role: "TextField", name: "Name" }), {
+    code: "target-ambiguous",
+    outcome: "not-dispatched",
+  })
+  assert.throws(() => view.get({ role: "TextField", name: "Missing" }), {
+    code: "target-not-found",
+    outcome: "not-dispatched",
+  })
+  assert.throws(() => view.select({ name: /Name/ }), {
+    code: "invalid-request",
+    outcome: "not-dispatched",
+  })
+  assert.throws(
+    () =>
+      window.locator({
+        role: "TextField",
+        name: "Name",
+        within: [{ role: "Group", text: "Profile" }],
+      }),
+    { code: "invalid-request", outcome: "not-dispatched" }
+  )
+  console.log(
+    "Control client: typo clicks, ambiguity, missing targets and selector corrections carry pre-dispatch faults"
+  )
+}

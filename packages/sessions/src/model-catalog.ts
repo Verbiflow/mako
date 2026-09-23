@@ -709,7 +709,7 @@ function canonicalDevinDefault(
 
 function acpOptionRole(
   option: AcpConfigOptionInput
-): "reasoning" | "speed" | undefined {
+): HarnessModelOption["role"] {
   // Thinking is an independent enable switch, even under thought_level.
   if (option.id === "thinking") return undefined
   for (const id of [option.id, option.category]) {
@@ -727,6 +727,8 @@ function acpOptionRole(
       id === "serviceTier"
     )
       return "speed"
+    if (id === "context" || id === "context_window" || id === "contextWindow")
+      return "context"
   }
   return undefined
 }

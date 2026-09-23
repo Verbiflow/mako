@@ -9,6 +9,7 @@ export const RecordingOptionsSchema = z
     cursor: z.boolean().default(true),
     maxDurationMs: z.number().int().min(1000).max(600_000).default(120_000),
     maxSide: z.number().int().min(320).max(2560).default(1600),
+    fps: z.number().int().min(1).max(60).optional(),
   })
   .strict()
 export type RecordingOptions = z.input<typeof RecordingOptionsSchema>
@@ -27,8 +28,10 @@ export const RecordingReceiptSchema = z.object({
   durationMs: z.number().nonnegative(),
   frames: z.number().int().nonnegative(),
   droppedFrames: z.number().int().nonnegative(),
+  sampledFrames: z.number().int().nonnegative().optional(),
   video: z.string().optional(),
   timeline: z.string().optional(),
+  dimensions: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).optional(),
   error: z.string().optional(),
 })
 export type RecordingReceipt = z.infer<typeof RecordingReceiptSchema>

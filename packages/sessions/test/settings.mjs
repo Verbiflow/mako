@@ -101,3 +101,40 @@ const { normalizeClaudeModels, cursorModelSettings } = await import("../dist/mod
 const claudeCatalog = normalizeClaudeModels([{value:"fable",resolvedModel:"claude-fable-5-1",displayName:"Fable",supportsEffort:true,supportedEffortLevels:["high"]}])
 assert.equal(resolveModelLaunch(claudeCatalog.models,{model:"claude-fable-5-1[1m]",options:{effort:"high"}}).model,"claude-fable-5-1[1m]")
 assert.deepEqual(cursorModelSettings("opus[thinking=true,reasoning=high,fast=false]"),{model:"opus",options:{thinking:"true",effort:"high",fast:"false"}})
+
+const { normalizeCursorSdkModels } = await import("../dist/index.js")
+const sdk = normalizeCursorSdkModels([
+  { id: "claude-opus-5-5", displayName: "Claude Opus 5.5", parameters: [
+    { id: "context", displayName: "Context", values: [{ value: "300k", displayName: "300K" }, { value: "1m", displayName: "1M" }] },
+    { id: "effort", displayName: "Effort", values: [{ value: "low", displayName: "Low" }, { value: "high", displayName: "High" }] },
+    { id: "fast", displayName: "Fast", values: [{ value: "false" }, { value: "true", displayName: "Fast\u200b\u200b" }] },
+  ], variants: [{ params: [{ id: "context", value: "1m" }, { id: "effort", value: "high" }, { id: "fast", value: "false" }], displayName: "Claude Opus 5.5", isDefault: true }] },
+  { id: "grok-4.7", displayName: "Grok 4.7", parameters: [
+    { id: "reasoning_effort", displayName: "Effort", values: [{ value: "low" }, { value: "high" }] },
+  ] },
+])
+const [opus, grok] = sdk.models
+// Every family's reasoning parameter is the composer's effort, whatever the SDK calls it.
+assert.deepEqual(opus.options.map(o => [o.id, o.wireId, o.role]), [["context", "context", "context"], ["effort", "effort", "reasoning"], ["fast", "fast", "speed"]])
+assert.deepEqual(grok.options.map(o => [o.id, o.wireId, o.role]), [["effort", "reasoning_effort", "reasoning"]])
+assert.equal(opus.options[2].values[1].label, "Fast")
+// A choice saved under the SDK's own id still resolves, and does not raise an unsupported-option issue.
+const saved = resolveSessionSettings({ models: sdk.models, context: "new", preference: { source: "saved", settings: { model: "grok-4.7", options: { reasoning_effort: "low" } } } })
+assert.deepEqual(saved.settings, { model: "grok-4.7", options: { effort: "low" } })
+assert.deepEqual(saved.issues, [])
+// A new conversation on the provider's default model reads that model's defaults; an existing one does not guess.
+const fresh = resolveSessionSettings({ models: sdk.models, context: "new", defaults: { model: "claude-opus-5-5" } })
+assert.deepEqual(fresh.options.effort, { kind: "known", value: "high", source: "model-default" })
+const continued = resolveSessionSettings({ models: sdk.models, context: "existing", defaults: { model: "claude-opus-5-5" } })
+assert.deepEqual(continued.options.effort, { kind: "unknown" })
+console.log("Cursor SDK roles: reasoning under every family's name, context windows, and saved wire ids")
+
+const autos = normalizeCursorSdkModels([
+  { id: "auto-smart", displayName: "Auto", parameters: [{ id: "optimize_for", values: [{ value: "balanced" }, { value: "cost" }] }] },
+  { id: "default", displayName: "Auto" },
+  { id: "composer-2.5", displayName: "Composer 2.5" },
+])
+// Cursor's account default and the model it names are one row, and the bare id still resolves.
+assert.deepEqual(autos.models.map(m => [m.id, m.aliases]), [["auto-smart", ["default"]], ["composer-2.5", undefined]])
+assert.equal(resolveSessionSettings({ models: autos.models, context: "new", preference: { source: "saved", settings: { model: "default" } } }).issues.length, 0)
+console.log("Cursor SDK catalog: one Auto row")

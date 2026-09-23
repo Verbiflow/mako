@@ -1,0 +1,48 @@
+{
+  "name": "@mako/control-runtime",
+  "version": "0.1.0",
+  "license": "Elastic-2.0",
+  "type": "module",
+  "description": "Shared Node session engine and composable CLI for browser and computer control.",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./host": "./dist/host.js",
+    "./browser": "./dist/browser.js",
+    "./desktop": "./dist/desktop.js",
+    "./contracts": "./dist/contracts.js",
+    "./session": "./dist/session.js",
+    "./extension": "./dist/browser-extension-protocol.js",
+    "./mcp": "./dist/computer-tools-main.js",
+    "./cli": "./dist/control-cli.js",
+    "./cloud": "./dist/cloud-control-main.js"
+  },
+  "bin": {
+    "mako-control": "dist/control-cli.js",
+    "mako-control-mcp": "dist/cloud-control-main.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsgo -b",
+    "typecheck": "tsgo -b --force",
+    "test": "npm run -s build && node test/lifecycle.mjs && node test/media.mjs"
+  },
+  "dependencies": {
+    "@mako/control": "0.1.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "devtools-protocol": "0.0.1692173",
+    "image-size": "2.0.2",
+    "sharp": "0.35.3",
+    "ws": "8.21.3",
+    "zod": "4.4.3"
+  }
+}
