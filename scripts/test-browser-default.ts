@@ -2,9 +2,9 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BrowserService } from "../electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import { macApplicationBundle } from "../electron/browser-application.js"
-import type { LocalBrowser } from "../electron/browser-discovery.js"
+import type { LocalBrowser } from "../packages/control-runtime/src/browser-discovery.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-default-browser-"))
 const path = "/Applications/Unknown Chromium Brand.app"

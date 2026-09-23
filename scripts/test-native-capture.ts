@@ -4,7 +4,7 @@ import type { JsonObject } from "../electron/codex-app-json.js"
 import {
   nativeCapture,
   nativeCapturePoint,
-} from "../electron/native-capture.js"
+} from "../packages/control-runtime/src/native-capture.js"
 
 const bytes = await sharp({
   create: { width: 1001, height: 701, channels: 3, background: "#395060" },
@@ -53,7 +53,7 @@ console.log(
 // math alone cannot detect a lost/double-applied transform at that boundary.
 if (process.platform === "darwin") {
   const { createControlSession } =
-    await import("../electron/control-session.js")
+    await import("../packages/control-runtime/src/control-session.js")
   const { z } = await import("zod")
   const calls: { name: string; args: JsonObject }[] = []
   const session = createControlSession(

@@ -54,7 +54,7 @@ try {
   const driver = resolveExecutable("cua-driver")
   evidence.driver = { path: driver, version: (await exec(driver, ["--version"])).stdout.trim() }
   const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve("dist-electron/computer-tools-main.js"), "--driver", driver, "--socket", socket], env: { ...process.env }, stderr: "inherit" }))
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve("packages/control-runtime/dist/computer-tools-main.js"), "--driver", driver, "--socket", socket], env: { ...process.env }, stderr: "inherit" }))
   await cell(`state.window=control.window({pid:${pid},window_id:${initial.window}});return await state.window.observe();`)
   for (let index = 0; index < 3; index++) {
     const receipt = await cell("state.view=await state.window.observe();state.ref=state.view.nodes.find(n=>n.role==='Button' && n.name==='Attempt system activation').ref;return await state.window.click(state.ref);")

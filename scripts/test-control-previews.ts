@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
 import { mock } from "node:test"
-import { BrowserService } from "../electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import { ControlPreviews } from "../electron/control-previews.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
-} from "../electron/contracts/browser-control.js"
+} from "../packages/control-runtime/src/contracts/browser-control.js"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const fixture = await browserFixture()

@@ -479,7 +479,7 @@ async function openSurface(
   )
   if (!socket)
     throw new Error("the native driver is not installed or did not start")
-  const entry = join(process.cwd(), "dist-electron", "computer-tools-main.js")
+  const entry = join(process.cwd(), "packages", "control-runtime", "dist", "computer-tools-main.js")
   await access(entry).catch(() => {
     throw new Error(
       "The production computer server is not built. Run npm run build:electron before the benchmark."

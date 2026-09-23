@@ -2,9 +2,9 @@ import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { BrowserService } from "../dist-electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { sampleFrontmost, frontmostPid } from "./lib/control-fixture.mjs"
-import { BrowserCommandSchema } from "../dist-electron/contracts/browser-control.js"
+import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 
 // Uses an already connected browser, opens only task-owned local fixture tabs,
 // and checks persisted saves at the server, independently of page observations.

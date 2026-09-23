@@ -108,11 +108,11 @@ async function runElectron() {
   }
   const { nativeSessionPath } = await import("../dist-electron/native-source.js")
   const catalog = defaultCatalog()
-  const { BrowserService } = await import("../dist-electron/browser-service.js")
+  const { BrowserService } = await import("../packages/control-runtime/dist/browser-service.js")
   const { startControlService } =
     await import("../dist-electron/control-service.js")
   const { extensionBrowsers } =
-    await import("../dist-electron/browser-extension-registration.js")
+    await import("../packages/control-runtime/dist/browser-extension-registration.js")
   const browser = new BrowserService(
     process.env.MAKO_E2E_BROWSER_REGISTRATION_ROOT
       ? await extensionBrowsers(process.env.MAKO_E2E_BROWSER_REGISTRATION_ROOT)

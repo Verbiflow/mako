@@ -5,7 +5,7 @@ import { join } from "node:path"
 import {
   singleBrowserProfile,
   browserProfileName,
-} from "../electron/browser-profile-name.js"
+} from "../packages/control-runtime/src/browser-profile-name.js"
 const root = await mkdtemp(join(tmpdir(), "mako-profile-names-"))
 try {
   await mkdir(join(root, "Default"))

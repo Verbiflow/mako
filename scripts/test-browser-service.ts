@@ -1,13 +1,13 @@
 import assert from "node:assert/strict"
 import { z } from "zod"
-import { BrowserService } from "../electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
   BrowserFault,
-} from "../electron/contracts/browser-control.js"
+} from "../packages/control-runtime/src/contracts/browser-control.js"
 import { startControlService } from "../electron/control-service.js"
-import { browserControlClient } from "../electron/browser-control-client.js"
+import { browserControlClient } from "../packages/control-runtime/src/browser-control-client.js"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const discovered = [

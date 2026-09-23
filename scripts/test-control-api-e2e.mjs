@@ -11,7 +11,7 @@ import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
 } from "../dist-electron/cua-embedded.js"
-import { BrowserService } from "../dist-electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { startControlService } from "../dist-electron/control-service.js"
 import { cocoaFixtureSource } from "./lib/cocoa-fixture.mjs"
 import {
@@ -116,7 +116,7 @@ try {
     new StdioClientTransport({
       command: process.execPath,
       args: [
-        resolve("dist-electron/computer-tools-main.js"),
+        resolve("packages/control-runtime/dist/computer-tools-main.js"),
         "--driver",
         resolveExecutable("cua-driver"),
         "--socket",

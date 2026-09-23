@@ -9,8 +9,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DeskBrowser } from "../dist-electron/desk-browser.js"
 import { deskPageForWindow } from "../dist-electron/desk-browser-window.js"
-import { BrowserService } from "../dist-electron/browser-service.js"
-import { BrowserCommandSchema } from "../dist-electron/contracts/browser-control.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
+import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-desk-browser-"))
 app.setPath("userData", join(root, "profile"))

@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { createBrowserToolsServer } from "../dist-electron/browser-tools-main.js"
-import { BrowserService } from "../dist-electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 
 const observationSchema = z.object({
   nodes: z.array(

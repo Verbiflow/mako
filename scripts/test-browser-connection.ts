@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { z } from "zod"
 import { WebSocketServer } from "ws"
-import { BrowserConnection } from "../electron/browser-connection.js"
-import { BrowserFault } from "../electron/contracts/browser-control.js"
+import { BrowserConnection } from "../packages/control-runtime/src/browser-connection.js"
+import { BrowserFault } from "../packages/control-runtime/src/contracts/browser-control.js"
 const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
 await new Promise<void>((resolve) => server.once("listening", resolve))
 let calls = 0

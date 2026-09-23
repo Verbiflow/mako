@@ -8,9 +8,9 @@ import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { DeskBrowser } from "../dist-electron/desk-browser.js"
 import { deskPageForWindow } from "../dist-electron/desk-browser-window.js"
-import { BrowserService } from "../dist-electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { ControlPreviews } from "../dist-electron/control-previews.js"
-import { BrowserCommandSchema } from "../dist-electron/contracts/browser-control.js"
+import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 const clips = process.env.CAPTURE_CLIPS !== "0"
 const fps = Number(process.env.CAPTURE_FPS ?? 60)
 assert.ok(Number.isInteger(fps) && fps >= 1 && fps <= 60)

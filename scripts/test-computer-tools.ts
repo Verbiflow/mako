@@ -18,9 +18,9 @@ import { z } from "zod"
 import {
   BACKGROUND_INPUT_LADDER,
   createComputerToolsServer,
-} from "../electron/computer-tools-main.js"
-import { connectMcpComputerDriver, type ComputerDriverClient } from "../electron/computer-driver-client.js"
-import { canonicalDriverPath } from "../electron/computer-paths.js"
+} from "../packages/control-runtime/src/computer-tools-main.js"
+import { connectMcpComputerDriver, type ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
+import { canonicalDriverPath } from "../packages/control-runtime/src/computer-paths.js"
 
 const source = `
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';

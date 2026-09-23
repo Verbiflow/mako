@@ -16,9 +16,9 @@ import { WebSocket } from "ws"
 import {
   ExtensionMessageSchema,
   NativeMessageDecoder,
-} from "../dist-electron/browser-extension-protocol.js"
+} from "../packages/control-runtime/dist/browser-extension-protocol.js"
 import { startBrowserNativeHost } from "../dist-electron/browser-native-host.js"
-import { extensionBrowsers } from "../dist-electron/browser-extension-registration.js"
+import { extensionBrowsers } from "../packages/control-runtime/dist/browser-extension-registration.js"
 import {
   chromiumProfileRoots,
   prepareBrowserExtension,

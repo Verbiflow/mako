@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { BrowserService } from "../electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import { DeskBrowser, type DeskPage } from "../electron/desk-browser.js"
 import { deskUrlPolicy } from "../electron/desk-browser-policy.js"
 import {
@@ -15,7 +15,7 @@ import {
 import {
   publishDeskBrowserRegistration,
   registeredDeskBrowsers,
-} from "../electron/desk-browser-registration.js"
+} from "../packages/control-runtime/src/desk-browser-registration.js"
 import {
   publishDevRendererRegistration,
   readDevRendererRegistration,
@@ -26,7 +26,7 @@ import { deskFile } from "../electron/desk-scheme.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
-} from "../electron/contracts/browser-control.js"
+} from "../packages/control-runtime/src/contracts/browser-control.js"
 import type { JsonObject } from "../electron/codex-app-json.js"
 
 const screenshotPixels = (await sharp({ create: { width: 1600, height: 1000, channels: 3, background: "white" } }).png().toBuffer()).toString("base64")

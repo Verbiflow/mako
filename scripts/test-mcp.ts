@@ -16,7 +16,7 @@ import {
 } from "../electron/mcp.js"
 import { integrationCatalog } from "../electron/integrations.js"
 import { BROWSER_TOOL_INPUTS } from "../electron/browser-tools-main.js"
-import { COMPUTER_TOOL_INPUTS } from "../electron/computer-tools-main.js"
+import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/computer-tools-main.js"
 import {
   cuaEmbeddedSocket,
   ensureCuaEmbedded,

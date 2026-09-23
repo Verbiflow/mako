@@ -11,9 +11,9 @@ const root = await realpath(process.cwd())
 await mkdir(output, { mode: 0o755 })
 const lock = JSON.parse(await readFile("runtime/control/package-lock.json", "utf8"))
 for (const [path, dependency] of Object.entries(lock.packages)) {
-  assert.ok(path === "" || path === "packages/control" || path.startsWith("node_modules/"))
+  assert.ok(path === "" || ["packages/control", "packages/control-runtime"].includes(path) || path.startsWith("node_modules/"))
   assert.ok(!path.split("/").includes(".."), "Dependency path leaves the package")
-  if (dependency.resolved && dependency.resolved !== "packages/control") {
+  if (dependency.resolved && !["packages/control", "packages/control-runtime"].includes(dependency.resolved)) {
     const url = new URL(dependency.resolved)
     assert.equal(url.origin, "https://registry.npmjs.org", "Only public npm dependencies enter the release")
     assert.equal(url.username + url.password + url.search + url.hash, "", "Dependency URL contains credentials or parameters")
@@ -37,21 +37,24 @@ async function copy(source, destination, allowedRoot = root) {
 // Trace dependencies, then copy original modules unchanged. The worker entry is
 // explicit because fork() isn't part of an import graph. No source maps, profiles,
 // build caches, .git, environment files or provider code enter this package.
-const graph = await build({ entryPoints: ["dist-electron/cloud-control-main.js", "dist-electron/cloud-control-worker.js", "dist-electron/control-cli.js"], outdir: "/unused", platform: "node", format: "esm", bundle: true, packages: "external", metafile: true, write: false, logLevel: "silent" })
+const graph = await build({ entryPoints: ["packages/control-runtime/dist/cloud-control-main.js", "packages/control-runtime/dist/cloud-control-worker.js", "packages/control-runtime/dist/control-cli.js"], outdir: "/unused", platform: "node", format: "esm", bundle: true, packages: "external", metafile: true, write: false, logLevel: "silent" })
 for (const [file, entry] of Object.entries(graph.metafile.inputs)) {
-  assert.match(file, /^dist-electron\/[\w./-]+\.js$/)
+  assert.match(file, /^packages\/control-runtime\/dist\/[\w./-]+\.js$/)
   assert.ok(!entry.imports.some(item => item.path === "electron"), "Cloud release must not import Electron")
-  await copy(file, file)
+
 }
 async function packageFiles(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name)
     if (entry.isDirectory()) await packageFiles(path)
-    else if (entry.name.endsWith(".js")) await copy(path, path)
+    else if (entry.name.endsWith(".js") || entry.name.endsWith(".d.ts")) await copy(path, path)
   }
 }
-await packageFiles("packages/control/dist")
-await copy("packages/control/package.json", "packages/control/package.json")
+for (const name of ["control", "control-runtime"]) {
+  await packageFiles(`packages/${name}/dist`)
+  for (const file of ["package.json", "README.md", "LICENSE"])
+    await copy(`packages/${name}/${file}`, `packages/${name}/${file}`)
+}
 await copy("runtime/control/package.json", "package.json")
 await copy("runtime/control/package-lock.json", "package-lock.json")
 await copy("docs/local-control-runtime.md", "README.md")

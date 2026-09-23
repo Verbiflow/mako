@@ -16,12 +16,12 @@ assert.equal(process.execPath, join(app, "Contents/MacOS/Mako"))
 // An installed recording must not find Homebrew or shell-installed encoders.
 process.env.PATH = "/usr/bin:/bin";
 const archive = join(app, "Contents/Resources/app.asar")
-const { mediaExecutable } = await import(pathToFileURL(join(archive, "dist-electron/control-media.js")).href)
+const { mediaExecutable } = await import(pathToFileURL(join(archive, "node_modules/@mako/control-runtime/dist/control-media.js")).href)
 for (const name of ["ffmpeg", "ffprobe"]) assert.equal(mediaExecutable(name), join(app, "Contents/Resources/control-media/darwin-arm64", name))
 const require = createRequire(join(archive, "package.json"))
 const sharp = require("sharp")
 const { ControlRecording } = await import(
-  pathToFileURL(join(archive, "dist-electron/control-recording.js")).href
+  pathToFileURL(join(archive, "node_modules/@mako/control-runtime/dist/control-recording.js")).href
 )
 await mkdir(output, { recursive: true })
 let stops = 0

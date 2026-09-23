@@ -7,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { createBrowserToolsServer } from "../electron/browser-tools-main.js"
-import { BrowserService } from "../electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const artifactsRoot = join(tmpdir(), `mako-browser-artifacts-${process.pid}`)

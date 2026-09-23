@@ -16,15 +16,15 @@ import { createBrowserToolsServer } from "../electron/browser-tools-main.js"
 import {
   BrowserService,
   type BrowserFocusPolicy,
-} from "../electron/browser-service.js"
-import { createComputerToolsServer } from "../electron/computer-tools-main.js"
+} from "../packages/control-runtime/src/browser-service.js"
+import { createComputerToolsServer } from "../packages/control-runtime/src/computer-tools-main.js"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../electron/cua-embedded.js"
 import { resolveExecutable } from "../electron/executable.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
   type BrowserCommand,
-} from "../electron/contracts/browser-control.js"
+} from "../packages/control-runtime/src/contracts/browser-control.js"
 import type { JsonValue } from "../electron/codex-app-json.js"
 import { browserFixture } from "./browser-control-fixture.js"
 

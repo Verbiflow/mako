@@ -45,7 +45,7 @@ async function start(name, options = {}) {
   const output = join(evidence, name)
   const path = join(evidence, `${name}.json`)
   await writeFile(path, JSON.stringify({ output, browser: { executable: "/usr/bin/chromium", sandbox: false }, startupMs: 15000, shutdownMs: 10000, ...options }))
-  const child = spawn(process.execPath, [join(root, "dist-electron/cloud-control-main.js"), "--config", path], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, MAKO_CREDENTIAL_CANARY: "must-not-reach-worker" } })
+  const child = spawn(process.execPath, [require.resolve("@mako/control-runtime/cloud"), "--config", path], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, MAKO_CREDENTIAL_CANARY: "must-not-reach-worker" } })
   active.add(child)
   const exited = new Promise(resolve => child.once("exit", (code, signal) => { active.delete(child); resolve({ code, signal }) }))
   let log = ""
@@ -161,7 +161,7 @@ try {
     const output=join(evidence,name)
     const config=join(evidence,`${name}.json`)
     await writeFile(config,JSON.stringify({output,browser:{executable,sandbox:false},startupMs:2000,shutdownMs:2000}))
-    const child=spawn(process.execPath,[join(root,"dist-electron/cloud-control-main.js"),"--config",config],{stdio:["pipe","ignore","ignore"]})
+    const child=spawn(process.execPath,[require.resolve("@mako/control-runtime/cloud"),"--config",config],{stdio:["pipe","ignore","ignore"]})
     const exit=new Promise(resolve=>child.once("exit",(code,signal)=>resolve({code,signal})))
     if(signal){await until(async()=>Boolean(await readFile(startupMarker,"utf8")), 2000);child.kill(signal)}
     const exited=await Promise.race([exit,delay(8000).then(()=>{child.kill("SIGKILL");throw new Error(`${name} did not stop`)})])
@@ -172,7 +172,7 @@ try {
     results.push({name,exit:exited,launcher:receipt})
   }
   // Existing output is a refusal, never permission to remove another job's files.
-  await assert.rejects(run(process.execPath, [join(root, "dist-electron/cloud-control-main.js"), "--config", join(evidence, "browser-a.json")]), /EEXIST/)
+  await assert.rejects(run(process.execPath, [require.resolve("@mako/control-runtime/cloud"), "--config", join(evidence, "browser-a.json")]), /EEXIST/)
   console.log(JSON.stringify({ passed: true, evidence, scenarios: results.length, video, duration: media.format.duration }))
 } finally {
   for (const child of active) child.kill("SIGTERM")

@@ -54,7 +54,7 @@ try {
   const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.human-input")
   assert.ok(socket)
   await client.connect(new StdioClientTransport({ command: process.execPath,
-    args: [resolve("dist-electron/computer-tools-main.js"), "--driver", driver, "--socket", socket], env: { ...process.env }, stderr: "inherit" }))
+    args: [resolve("packages/control-runtime/dist/computer-tools-main.js"), "--driver", driver, "--socket", socket], env: { ...process.env }, stderr: "inherit" }))
   await cell(`state.window=control.window({pid:${target.pid},window_id:${target.window}});return await state.window.observe();`)
   evidence.status = "waiting-for-human"
   console.log(JSON.stringify({ status: evidence.status, root }))

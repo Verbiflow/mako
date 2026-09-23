@@ -36,6 +36,8 @@ await lane("prune", process.execPath, ["scripts/prune-host-output.mjs"])
 
 await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/relay", "packages/control"])
 
+await lane("control-runtime", process.execPath, [tsgo, "-b", "packages/control-runtime"])
+
 const lanes = await Promise.allSettled([
   lane("tsgo", process.execPath, [tsgo, "-b"]).then(() =>
     lane("native-observers", process.execPath, ["scripts/build-native-observers.mjs"])

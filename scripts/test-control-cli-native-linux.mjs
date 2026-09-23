@@ -1,5 +1,6 @@
 // Run in the reviewed Linux acceptance image; mount fixture.py at /tmp/fixture.py.
 import assert from "node:assert/strict"
+import { createRequire } from "node:module"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
@@ -7,7 +8,8 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 const run = promisify(execFile)
 const root = process.env.MAKO_RUNTIME_ROOT ?? "/opt/mako-control"
-const cli = join(root, "dist-electron/control-cli.js")
+const require = createRequire(join(root, "package.json"))
+const cli = require.resolve("@mako/control-runtime/cli")
 const directory = await mkdtemp("/tmp/mako-cli-native-")
 const output = join(directory, "job")
 const config = join(directory, "job.json")

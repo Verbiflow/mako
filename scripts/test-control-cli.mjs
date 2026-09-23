@@ -7,11 +7,11 @@ import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { createComputerToolsServer } from "../dist-electron/computer-tools-main.js"
-import { BrowserService } from "../dist-electron/browser-service.js"
+import { createComputerToolsServer } from "../packages/control-runtime/dist/computer-tools-main.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { browserFixture } from "./browser-control-fixture.ts"
 
-const cli = resolve("dist-electron/control-cli.js")
+const cli = resolve("packages/control-runtime/dist/control-cli.js")
 const directory = await mkdtemp(join(tmpdir(), "mako-cli-proof-"))
 const fixture = await browserFixture()
 const browsers = new BrowserService([fixture.definition])
@@ -87,6 +87,22 @@ try {
     0,
     "Text commands never capture images"
   )
+  const invalidRead = await command(
+    ["observe", "--target-file", targetFile, "--input", "-"],
+    {
+      stdin: JSON.stringify({ max: "ten" }),
+      code: 2,
+    }
+  )
+  assert.equal(invalidRead.code, "invalid-request")
+  assert.equal(invalidRead.outcome, "not-dispatched")
+  const invalidScript = await command(["exec", "--source-file", "-"], {
+    stdin: `return await control.tab(${JSON.stringify(target)}).observe({max:'ten'})`,
+    code: 2,
+  })
+  assert.equal(invalidScript.code, "invalid-request")
+  assert.equal(invalidScript.outcome, "not-dispatched")
+  assert.match(invalidScript.message, /observe/)
   const imageFile = join(directory, "capture with spaces.png")
   const image = await command([
     "shot",

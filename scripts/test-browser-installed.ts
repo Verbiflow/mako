@@ -12,9 +12,9 @@ import { join } from "node:path"
 import {
   discoverInstalledChromium,
   mergeInstalledBrowsers,
-} from "../electron/browser-installed.js"
-import { BrowserService } from "../electron/browser-service.js"
-import { BrowserCommandSchema } from "../electron/contracts/browser-control.js"
+} from "../packages/control-runtime/src/browser-installed.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
+import { BrowserCommandSchema } from "../packages/control-runtime/src/contracts/browser-control.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-browser-installed-"))
 async function app(

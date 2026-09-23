@@ -43,7 +43,7 @@ try {
     compositor: (await exec(process.env.MAKO_COMPOSITOR, ["--version"])).stdout.trim(),
     driver: (await exec("/driver/cua-driver", ["--version"])).stdout.trim(),
     driverSha256: await digest("/driver/cua-driver"),
-    hostSha256: await digest("/repo/dist-electron/computer-tools-main.js"),
+    hostSha256: await digest("/repo/packages/control-runtime/dist/computer-tools-main.js"),
     probeSha256: await digest(new URL(import.meta.url)),
   }
   const initial = await until(async () => {
@@ -53,7 +53,7 @@ try {
   })
   const { target } = initial
   evidence.initial = initial
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["/repo/dist-electron/computer-tools-main.js", "--driver", "/driver/cua-driver", "--socket", "/tmp/mako-driver.sock"], env: { ...process.env }, stderr: "inherit" }))
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["/repo/packages/control-runtime/dist/computer-tools-main.js", "--driver", "/driver/cua-driver", "--socket", "/tmp/mako-driver.sock"], env: { ...process.env }, stderr: "inherit" }))
   evidence.windows = await cell(`return await control.windows(${target.pid});`)
   const windows = evidence.windows.windows ?? evidence.windows
   assert.equal(windows.length, 1, "The pid-scoped target identifies exactly one fixture window")

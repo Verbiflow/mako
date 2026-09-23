@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { NativeRecordings } from "../electron/native-recording.js"
-import type { ComputerDriverClient } from "../electron/computer-driver-client.js"
+import { NativeRecordings } from "../packages/control-runtime/src/native-recording.js"
+import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 const target = { kind: "window" as const, pid: 42, window_id: 7 }
 const tools: Tool[] = [

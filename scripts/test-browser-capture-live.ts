@@ -8,11 +8,11 @@ import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { BrowserService } from "../electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
-} from "../electron/contracts/browser-control.js"
+} from "../packages/control-runtime/src/contracts/browser-control.js"
 import { RecordingReceiptSchema } from "@mako/control/control"
 
 const executable =

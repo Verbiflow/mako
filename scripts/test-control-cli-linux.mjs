@@ -1,5 +1,6 @@
 // Run in the reviewed Linux runtime image with this file mounted at /checks.
 import assert from "node:assert/strict"
+import { createRequire } from "node:module"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
@@ -7,7 +8,8 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 const run = promisify(execFile)
 const root = process.env.MAKO_RUNTIME_ROOT ?? "/opt/mako-control"
-const cli = join(root, "dist-electron/control-cli.js")
+const require = createRequire(join(root, "package.json"))
+const cli = require.resolve("@mako/control-runtime/cli")
 const directory = await mkdtemp("/tmp/mako-cli-linux-")
 let sessionFile
 let stopped = false
@@ -143,6 +145,29 @@ try {
   )
   assert.ok(Number(probe.format.duration) > 0)
   assert.ok(probe.streams[0].width > shot.width)
+  // Execute public help against duplicate controls in a real Chromium page.
+  const setup = `document.body.insertAdjacentHTML('beforeend', '<form aria-label="Profile"><label>Name<input aria-label="Name"></label><button type="button">Save</button></form>'); window.profileSaves=0; document.querySelector('form button').onclick=()=>window.profileSaves++`
+  await program(
+    `await state.tab.cdp('Runtime.evaluate',{expression:${JSON.stringify(setup)}})`
+  )
+  await assert.rejects(
+    program("await state.tab.locator({role:'button',name:'Save'}).click()"),
+    (error) =>
+      error.code === 3 && JSON.parse(error.stderr).code === "target-ambiguous"
+  )
+  const examples = (await command(["help"])).examples
+  await program(examples.scopedEdit)
+  const independent = await program(
+    "return (await state.tab.cdp('Runtime.evaluate',{expression:\"JSON.stringify({profile:document.querySelector('form input').value,original:document.querySelector('input').value,profileSaves:window.profileSaves,saves:window.saves})\",returnByValue:true})).result.value"
+  )
+  assert.deepEqual(JSON.parse(independent), {
+    profile: "Ada",
+    original: "東京 🧪",
+    profileSaves: 1,
+    saves: 1,
+  })
+  const closeup = await program(examples.screenshot)
+  assert.ok((await stat(closeup.path)).size > 0)
   await command(["session", "stop"])
   stopped = true
   const launcher = await until(
@@ -170,6 +195,11 @@ try {
         width: probe.streams[0].width,
         height: probe.streams[0].height,
         duration: probe.format.duration,
+      },
+      publicExamples: {
+        scopedEdit: true,
+        scopedScreenshot: true,
+        ambiguousClickRefused: true,
       },
       cleanup: launcher,
     })

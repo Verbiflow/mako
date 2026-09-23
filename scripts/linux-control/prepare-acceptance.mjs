@@ -17,9 +17,9 @@ const provenance = JSON.parse(await readFile(join(driver, "provenance.json"), "u
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex")
 const lock = JSON.parse(await readFile("scripts/linux-control/runtime/package-lock.json", "utf8"))
 for (const [path, entry] of Object.entries(lock.packages)) {
-  assert.ok(path === "" || path === "packages/control" || path.startsWith("node_modules/"), `Unexpected lockfile path: ${path}`)
+  assert.ok(path === "" || ["packages/control", "packages/control-runtime"].includes(path) || path.startsWith("node_modules/"), `Unexpected lockfile path: ${path}`)
   assert.ok(!path.split("/").includes(".."), "Lockfile must not refer outside the payload")
-  if (entry.resolved && entry.resolved !== "packages/control") {
+  if (entry.resolved && !["packages/control", "packages/control-runtime"].includes(entry.resolved)) {
     const url = new URL(entry.resolved)
     assert.equal(url.origin, "https://registry.npmjs.org", "Acceptance dependencies must use the public npm registry")
     assert.equal(url.username + url.password + url.search + url.hash, "", "Dependency URLs must not contain credentials or query parameters")
@@ -38,10 +38,10 @@ async function copy(source, destination) {
   await writeFile(target, bytes, { mode: metadata.mode & 0o777 })
   files.push({ path: destination, bytes: bytes.length, sha256: sha256(bytes) })
 }
-const graph = await build({ entryPoints: ["dist-electron/computer-tools-main.js", "dist-electron/browser-service.js"], outdir: "/unused", bundle: true, platform: "node", format: "esm", packages: "external", write: false, metafile: true, logLevel: "silent" })
+const graph = await build({ entryPoints: ["packages/control-runtime/dist/computer-tools-main.js", "packages/control-runtime/dist/browser-service.js"], outdir: "/unused", bundle: true, platform: "node", format: "esm", packages: "external", write: false, metafile: true, logLevel: "silent" })
 for (const file of Object.keys(graph.metafile.inputs)) {
-  assert.match(file, /^dist-electron\/[\w./-]+\.js$/)
-  await copy(resolve(file), file)
+  assert.match(file, /^packages\/control-runtime\/dist\/[\w./-]+\.js$/)
+
 }
 async function copyJavaScript(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -52,6 +52,8 @@ async function copyJavaScript(directory) {
 }
 await copyJavaScript(resolve("packages/control/dist"))
 await copy("packages/control/package.json", "packages/control/package.json")
+await copyJavaScript(resolve("packages/control-runtime/dist"))
+await copy("packages/control-runtime/package.json", "packages/control-runtime/package.json")
 await copy("scripts/linux-control/runtime/package.json", "package.json")
 await copy("scripts/linux-control/runtime/package-lock.json", "package-lock.json")
 for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh"]) {

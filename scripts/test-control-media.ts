@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { mediaExecutable } from "../electron/control-media.js"
+import { mediaExecutable } from "../packages/control-runtime/src/control-media.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-media-resolver-"))
 const prior = Object.getOwnPropertyDescriptor(process, "resourcesPath")

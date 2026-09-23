@@ -6,7 +6,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
-import { ControlRecording } from "../electron/control-recording.js"
+import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
 
 const directory = await mkdtemp(join(tmpdir(), "mako-recording-test-"))
 const target = {

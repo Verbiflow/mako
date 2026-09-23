@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { BrowserToolsRuntime } from "../electron/browser-tools-runtime.js"
+import { BrowserToolsRuntime } from "../packages/control-runtime/src/browser-tools-runtime.js"
 import {
   INLINE_IMAGE_COUNT,
   outlineOf,

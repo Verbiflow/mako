@@ -4,7 +4,7 @@ import {
   BrowserCapture,
   type CaptureConnection,
   type BrowserFrame,
-} from "../electron/browser-capture.js"
+} from "../packages/control-runtime/src/browser-capture.js"
 
 const jpeg = (
   await sharp({

@@ -7,10 +7,10 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { BrowserService } from "../dist-electron/browser-service.js"
-import { extensionBrowsers } from "../dist-electron/browser-extension-registration.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
+import { extensionBrowsers } from "../packages/control-runtime/dist/browser-extension-registration.js"
 import { startControlService } from "../dist-electron/control-service.js"
-import { mediaExecutable } from "../dist-electron/control-media.js"
+import { mediaExecutable } from "../packages/control-runtime/dist/control-media.js"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
 const browser = process.argv[2]
@@ -55,7 +55,7 @@ async function cell(source) {
 }
 try {
   await service.connect(browser)
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve("dist-electron/computer-tools-main.js")], env: { ...process.env, MAKO_CONTROL_URL: credentials.url, MAKO_CONTROL_TOKEN: credentials.token, MAKO_TASK_ID: "installed-browser-acceptance" }, stderr: "pipe" }))
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve("packages/control-runtime/dist/computer-tools-main.js")], env: { ...process.env, MAKO_CONTROL_URL: credentials.url, MAKO_CONTROL_TOKEN: credentials.token, MAKO_TASK_ID: "installed-browser-acceptance" }, stderr: "pipe" }))
   evidence.frontmostBefore = await frontmostPid()
   samples = sampleFrontmost()
   await cell(`state.tab=await control.openTab({browser:${JSON.stringify(browser)},url:${JSON.stringify(`http://127.0.0.1:${page.address().port}`)},background:true});return true`)

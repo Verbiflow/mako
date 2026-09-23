@@ -34,7 +34,7 @@ async function cell(source) {
 try {
   const target = await until(readState)
   await until(() => stat("/tmp/mako-driver.sock").then(value => value.isSocket()))
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["/repo/dist-electron/computer-tools-main.js", "--driver", process.env.MAKO_RECORDING_DRIVER, "--socket", "/tmp/mako-driver.sock"], env: { ...process.env }, stderr: "inherit" }))
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["/repo/packages/control-runtime/dist/computer-tools-main.js", "--driver", process.env.MAKO_RECORDING_DRIVER, "--socket", "/tmp/mako-driver.sock"], env: { ...process.env }, stderr: "inherit" }))
   const windows = await cell(`return await control.windows(${target.pid});`)
   evidence.windows = windows
   const window = windows.windows?.find(item => item.title.startsWith("Mako Wayland target")) ?? windows.find?.(item => item.title.startsWith("Mako Wayland target"))

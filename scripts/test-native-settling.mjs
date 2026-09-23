@@ -104,7 +104,7 @@ try {
     new StdioClientTransport({
       command: process.execPath,
       args: [
-        resolve("dist-electron/computer-tools-main.js"),
+        resolve("packages/control-runtime/dist/computer-tools-main.js"),
         "--driver",
         resolveExecutable("cua-driver"),
         "--socket",

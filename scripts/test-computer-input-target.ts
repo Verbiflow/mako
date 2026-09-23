@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
-import { verifyForegroundInput } from "../electron/computer-input-target.js"
+import { verifyForegroundInput } from "../packages/control-runtime/src/computer-input-target.js"
 import type { JsonObject } from "../electron/codex-app-json.js"
 
 const server = new Server(

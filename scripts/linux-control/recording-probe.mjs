@@ -17,7 +17,7 @@ await client.connect(
   new StdioClientTransport({
     command: process.execPath,
     args: [
-      "/repo/dist-electron/computer-tools-main.js",
+      "/repo/packages/control-runtime/dist/computer-tools-main.js",
       "--driver",
       process.env.MAKO_RECORDING_DRIVER ?? "/target/debug/cua-driver",
       "--socket",

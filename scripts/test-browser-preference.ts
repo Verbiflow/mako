@@ -6,14 +6,15 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BrowserService } from "../electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import {
   BrowserCommandSchema,
+  BrowserFault,
   BrowserTargetSchema,
-} from "../electron/contracts/browser-control.js"
+} from "../packages/control-runtime/src/contracts/browser-control.js"
 import { browserFixture } from "./browser-control-fixture.js"
-import { BrowserPreferences } from "../electron/browser-preference.js"
-import { tabInterruption } from "../electron/browser-compatibility.js"
+import { BrowserPreferences } from "../packages/control-runtime/src/browser-preference.js"
+import { tabInterruption } from "../packages/control-runtime/src/browser-compatibility.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-browser-preference-"))
 const first = await browserFixture(),
@@ -52,7 +53,9 @@ try {
     0,
     "Preference does not request browser approval"
   )
-  await assert.rejects(run({ action: "open" }), /Connect this browser/)
+  await assert.rejects(run({ action: "open" }), (error: Error) =>
+    error instanceof BrowserFault && error.detail.code === "disconnected" && error.detail.outcome === "not-dispatched"
+  )
   await service.connect("aside")
   const original = BrowserTargetSchema.parse(await run({ action: "open" }))
   assert.equal(original.browser, "aside")
@@ -142,7 +145,7 @@ try {
   const credentials = host.mint("preferred-api", "preferred-binding")
   const client = new Client({name:"preferred-browser-test",version:"1"})
   try {
-    await client.connect(new StdioClientTransport({command:process.execPath,args:[join(process.cwd(),"dist-electron/computer-tools-main.js")],env:{PATH:process.env.PATH ?? "",MAKO_CONTROL_URL:credentials.url,MAKO_CONTROL_TOKEN:credentials.token},stderr:"pipe"}))
+    await client.connect(new StdioClientTransport({command:process.execPath,args:[join(process.cwd(),"packages/control-runtime/dist/computer-tools-main.js")],env:{PATH:process.env.PATH ?? "",MAKO_CONTROL_URL:credentials.url,MAKO_CONTROL_TOKEN:credentials.token},stderr:"pipe"}))
     const result = await client.callTool({name:"mako_control_exec",arguments:{source:"state.page = await control.openTab({}); return state.page.target;"}})
     assert.equal(result.isError, undefined, JSON.stringify(result))
     const content = z.array(z.object({type:z.string(),text:z.string().optional()}).passthrough()).parse(result.content)

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
-import { BrowserCapture } from "../electron/browser-capture.js"
-import { BrowserRecordings } from "../electron/browser-recording.js"
-import type { BrowserConnection } from "../electron/browser-connection.js"
+import { BrowserCapture } from "../packages/control-runtime/src/browser-capture.js"
+import { BrowserRecordings } from "../packages/control-runtime/src/browser-recording.js"
+import type { BrowserConnection } from "../packages/control-runtime/src/browser-connection.js"
 const directory = await mkdtemp(join(tmpdir(), "browser-recording-lifecycle-"))
 const target = {
   browser: "fixture",

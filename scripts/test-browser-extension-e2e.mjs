@@ -16,11 +16,11 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { once } from "node:events"
-import { BrowserService } from "../dist-electron/browser-service.js"
+import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
-} from "../dist-electron/contracts/browser-control.js"
+} from "../packages/control-runtime/dist/contracts/browser-control.js"
 
 const executable = process.env.MAKO_TEST_BROWSER_EXECUTABLE
 if (!executable)
