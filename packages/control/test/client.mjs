@@ -1,3 +1,4 @@
+import { recordingReceipt } from "../dist/control/recording.js"
 import assert from "node:assert/strict"
 import { controlClient, ControlObservation } from "../dist/control/index.js"
 const target = { kind: "window", pid: 42, window_id: 7 }
@@ -14,6 +15,7 @@ const observation = (
 ) => ({
   target,
   observation: "s00000001",
+  lineage: "window-instance-1",
   nodes,
   lines: nodes.map(
     (n) =>
@@ -270,3 +272,80 @@ assert.deepEqual(
   "Explicit locator reads return its subtree"
 )
 assert.equal(calls.at(-1).args.match, undefined)
+
+// Different forms, documents, incomplete reads and reordered rows are not deltas.
+const compare = (changes) =>
+  new ControlObservation({ ...first.data, ...changes }).diff(first)
+assert.equal(
+  compare({ scope: { match: { role: "TextField", name: "Other" } } }).reason,
+  "scope-changed"
+)
+assert.equal(
+  compare({ lineage: "window-instance-2" }).reason,
+  "lineage-changed"
+)
+assert.equal(compare({ lineage: undefined }).reason, "lineage-unavailable")
+assert.equal(
+  compare({ coverage: { complete: false, omitted: 1, textComplete: true } })
+    .reason,
+  "incomplete-observation"
+)
+assert.equal(compare({ scope: { within: [] } }).kind, "delta")
+const ordered = new ControlObservation(
+  observation([field("A", "1"), field("B", "2", "s1:2")])
+)
+assert.equal(
+  new ControlObservation({
+    ...ordered.data,
+    nodes: [...ordered.nodes].reverse(),
+  }).diff(ordered).reason,
+  "order-changed"
+)
+const longBefore = new ControlObservation(
+  observation([field("Name", "x".repeat(100) + "before")])
+)
+const longAfter = new ControlObservation(
+  observation([field("Name", "x".repeat(100) + "after", "s2:1")])
+)
+assert.match(longAfter.diff(longBefore).added[0], /after/)
+assert.doesNotMatch(longAfter.diff(longBefore).removed[0], /s00000001:1/)
+const many = new ControlObservation(
+  observation(
+    Array.from({ length: 121 }, (_, i) => field(`Row ${i}`, "new", `s2:${i}`))
+  )
+)
+assert.equal(many.diff(first).reason, "change-budget-exceeded")
+
+const recordingTarget = { kind: "window", pid: 42, window_id: 7 }
+let receipt = {
+  id: "record-one",
+  target: recordingTarget,
+  status: "recording",
+  directory: "/tmp/record-one",
+  startedAt: 1,
+  durationMs: 0,
+  frames: 0,
+  droppedFrames: 0,
+}
+let recordingCalls = 0
+const recordingWindow = controlClient(async () => {
+  recordingCalls++
+  return receipt
+}).window({ pid: 42, window_id: 7 })
+const recording = await recordingWindow.record()
+assert.equal((await recording.status()).id, "record-one")
+receipt = { ...receipt, id: "record-two" }
+await assert.rejects(recording.stop(), /does not belong/)
+assert.equal(recordingCalls, 3, "mismatched receipts never trigger a retry")
+receipt = { ...receipt, target: { ...recordingTarget, window_id: 8 } }
+await assert.rejects(recordingWindow.record(), /does not belong/)
+await assert.rejects(recordingWindow.record({ maxDurationMs: 0 }))
+
+// Recording identity remains strict in browser-importable code.
+const pageRecordingTarget = { kind: "page", browser: "chrome", tab: "1", generation: "g1", lease: "lease-1" }
+const pageRecording = { ...receipt, target: pageRecordingTarget }
+assert.equal(recordingReceipt(pageRecording, { lease: "lease-1", generation: "g1", tab: "1", browser: "chrome", kind: "page" }), pageRecording)
+for (const field of ["browser", "tab", "generation", "lease"])
+  assert.throws(() => recordingReceipt({ ...pageRecording, target: { ...pageRecordingTarget, [field]: "different" } }, pageRecordingTarget), /does not belong/)
+assert.throws(() => recordingReceipt(pageRecording, recordingTarget), /does not belong/)
+assert.throws(() => recordingReceipt({ ...receipt, target: { ...recordingTarget, pid: 43 } }, recordingTarget), /does not belong/)
