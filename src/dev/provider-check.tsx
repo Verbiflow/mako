@@ -54,27 +54,17 @@ const versions: HarnessUpdates = {
   },
   opencode: {
     provider: "opencode",
-    label: "OpenCode 1",
-    description: "Available for V1 sessions",
-    installed: "1.18.29",
-    latest: "1.18.31",
+    label: "OpenCode",
+    primary: true,
+    installed: "2.0.1",
+    latest: "2.0.2",
     binary: "/Users/developer/.opencode/bin/opencode",
     channel: "self",
     update: {
       label: "Update",
       command: "/Users/developer/.opencode/bin/opencode",
-      args: ["upgrade", "1.18.31"],
+      args: ["upgrade", "2.0.2"],
     },
-  },
-  "opencode:opencode2": {
-    provider: "opencode",
-    label: "OpenCode 2 · beta",
-    description: "Used for new sessions",
-    primary: true,
-    installed: "0.0.0-beta-19425",
-    latest: "0.0.0-beta-19425",
-    binary: "/Users/developer/.opencode/bin/opencode2",
-    channel: "self",
   },
 }
 providerStore.set({

@@ -260,7 +260,7 @@ export function Fixture() {
       >
         <div className="flex h-screen flex-col bg-surface">
           <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-hairline px-4 py-2 text-label text-faint">
-            <span>Isolated live workflow fixture · no agent is started</span>
+            <span>{new URLSearchParams(location.search).has("native") ? "Development UI · real native provider session" : "Isolated live workflow fixture · no agent is started"}</span>
             <HotIndicator />
             <button
               className="pressable rounded border border-hairline px-2 py-1"

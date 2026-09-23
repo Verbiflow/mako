@@ -853,134 +853,12 @@ export function installMockBridge() {
                   resetsAt: Date.now() + 2 * 86_400_000,
                 },
               },
-    harnessProfiles: async () => [
-      {
-        id: "claude",
-        label: "Claude Code",
-        available: true,
-        transport: "acp" as const,
-        defaultModel: "opus[1m]",
-        settings: { model: "opus[1m]" },
-        capabilities: ["stream", "fork"],
-        models: [
-          {
-            id: "opus[1m]",
-            label: "Opus 5",
-            contextWindow: 1_000_000,
-            options: [
-              {
-                kind: "select" as const,
-                id: "effort",
-                label: "Reasoning",
-                current: "high",
-                values: ["low", "medium", "high", "xhigh", "max"].map(
-                  (value) => ({ value, label: value })
-                ),
-              },
-              {
-                kind: "boolean" as const,
-                id: "fast",
-                label: "Fast mode",
-                current: false,
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: "codex",
-        label: "Codex",
-        available: true,
-        transport: "app-server" as const,
-        defaultModel: "gpt-5.6-sol",
-        settings: { model: "gpt-5.6-sol" },
-        capabilities: ["stream", "fork-at-turn"],
-        models: [
-          {
-            id: "gpt-5.6-sol",
-            label: "GPT-5.6 Sol",
-            options: [
-              {
-                kind: "select" as const,
-                id: "effort",
-                label: "Reasoning",
-                current: "medium",
-                values: ["low", "medium", "high", "xhigh", "max", "ultra"].map(
-                  (value) => ({ value, label: value })
-                ),
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: "cursor",
-        label: "Cursor",
-        available: true,
-        transport: "acp" as const,
-        defaultModel: "claude-fable-5",
-        settings: { model: "claude-fable-5" },
-        capabilities: ["stream"],
-        models: [
-          { id: "claude-fable-5", label: "Claude Fable 5", options: [] },
-        ],
-      },
-      {
-        id: "grok",
-        label: "Grok",
-        available: false,
-        transport: "acp" as const,
-        capabilities: [],
-        models: [],
-      },
-      {
-        id: "devin",
-        label: "Devin",
-        available: true,
-        transport: "acp" as const,
-        defaultModel: "adaptive",
-        settings: { model: "adaptive" },
-        capabilities: ["stream"],
-        models: [{ id: "adaptive", label: "Adaptive", options: [] }],
-      },
-      {
-        id: "opencode",
-        label: "OpenCode",
-        available: true,
-        transport: "acp" as const,
-        defaultModel: "opencode/x-preview-f-free",
-        settings: { model: "opencode/x-preview-f-free" },
-        capabilities: ["stream", "resume", "models"],
-        models: [
-          {
-            id: "opencode/x-preview-f-free",
-            label: "Ox Alpha Free (Unlimited)",
-            options: [],
-          },
-          {
-            id: "openai/gpt-5.4",
-            label: "GPT-5.4",
-            options: [
-              {
-                kind: "select" as const,
-                id: "effort",
-                label: "Reasoning",
-                current: "medium",
-                values: ["low", "medium", "high"].map((value) => ({
-                  value,
-                  label: value,
-                })),
-              },
-            ],
-          },
-        ],
-      },
-    ],
+    harnessProfiles: async () => MOCK_PROFILES,
     harnessAvailability: async () => ({
       codex: true,
       claude: true,
       cursor: true,
-      grok: false,
+      grok: true,
       devin: true,
       opencode: true,
     }),
@@ -1582,47 +1460,15 @@ export function installMockBridge() {
       run: { path: `fresh:${harness}:1`, harness, status: "running" as const },
       cwd: "/Users/you/mako",
     }),
-    harnessTuning: async (harness: string) => {
-      const model =
-        harness === "claude"
-          ? "opus[1m]"
-          : harness === "devin"
-            ? "adaptive"
-            : "gpt-5.6-sol"
-      return {
+    harnessTuning: async (harness: string) =>
+      MOCK_PROFILES.find((profile) => profile.id === harness) ?? {
         id: harness,
         label: harness,
-        available: true,
-        transport:
-          harness === "codex" ? ("app-server" as const) : ("acp" as const),
-        defaultModel: model,
-        settings: { model },
-        capabilities: ["stream"],
-        models: [
-          {
-            id: model,
-            label:
-              harness === "claude"
-                ? "Opus 5"
-                : harness === "devin"
-                  ? "Adaptive"
-                  : "GPT-5.6 Sol",
-            options: [
-              {
-                kind: "select" as const,
-                id: "effort",
-                label: "Reasoning",
-                current: "high",
-                values: ["low", "medium", "high", "xhigh"].map((value) => ({
-                  value,
-                  label: value,
-                })),
-              },
-            ],
-          },
-        ],
-      }
-    },
+        available: false,
+        transport: "acp" as const,
+        capabilities: [],
+        models: [],
+      },
     abortThreadRun: async () => {},
     usage: async () => ({
       total: {
@@ -1786,3 +1632,124 @@ export function installMockBridge() {
     },
   }
 }
+
+const mockEffort = (current: string, values: string[]) => ({
+  kind: "select" as const,
+  id: "effort",
+  label: "Reasoning",
+  role: "reasoning" as const,
+  current,
+  values: values.map((value) => ({ value, label: value })),
+})
+const mockFast = {
+  kind: "boolean" as const,
+  id: "fast",
+  label: "Fast mode",
+  role: "speed" as const,
+  current: false,
+}
+const mockContext = (current: string, values: string[]) => ({
+  kind: "select" as const,
+  id: "context",
+  label: "Context",
+  role: "context" as const,
+  current,
+  values: values.map((value) => ({ value, label: value.toUpperCase() })),
+})
+const mockModel = (
+  id: string,
+  label: string,
+  options: (ReturnType<typeof mockEffort> | ReturnType<typeof mockContext> | typeof mockFast)[] = [],
+  contextWindow?: number
+) => ({ id, label, options, contextWindow })
+
+/** Catalogs shaped like the real harnesses report, so fixture pickers read true. */
+const MOCK_PROFILES = [
+  {
+    id: "claude",
+    label: "Claude Code",
+    available: true,
+    transport: "acp" as const,
+    defaultModel: "opus[1m]",
+    settings: { model: "opus[1m]" },
+    capabilities: ["stream", "fork"],
+    models: [
+      mockModel("opus[1m]", "Opus 5", [mockEffort("high", ["low", "medium", "high", "xhigh", "max"]), mockFast], 1_000_000),
+      mockModel("claude-fable-5-1", "Fable 5.1", [mockEffort("high", ["low", "medium", "high", "xhigh", "max"])], 1_000_000),
+      mockModel("claude-sonnet-5", "Sonnet 5", [mockEffort("medium", ["low", "medium", "high"])], 400_000),
+      mockModel("claude-haiku-4-5", "Haiku 4.5", [], 200_000),
+    ],
+  },
+  {
+    id: "codex",
+    label: "Codex",
+    available: true,
+    transport: "app-server" as const,
+    defaultModel: "gpt-5.6-sol",
+    settings: { model: "gpt-5.6-sol" },
+    capabilities: ["stream", "fork-at-turn"],
+    models: [
+      mockModel("gpt-6-astra", "GPT-6 Astra", [mockEffort("high", ["low", "medium", "high", "xhigh"]), mockFast]),
+      mockModel("gpt-5.6-sol", "GPT-5.6 Sol", [mockEffort("medium", ["low", "medium", "high", "xhigh", "max", "ultra"]), mockFast]),
+      mockModel("gpt-5.6-terra", "GPT-5.6 Terra", [mockEffort("medium", ["low", "medium", "high"])]),
+      mockModel("gpt-5.6-luna", "GPT-5.6 Luna", [mockEffort("low", ["low", "medium"])]),
+      mockModel("gpt-5.5", "GPT-5.5", [mockEffort("medium", ["low", "medium", "high"])]),
+    ],
+  },
+  {
+    id: "cursor",
+    label: "Cursor",
+    available: true,
+    transport: "acp" as const,
+    defaultModel: "claude-fable-5",
+    settings: { model: "claude-fable-5" },
+    capabilities: ["stream"],
+    models: [
+      mockModel("claude-fable-5", "Claude Fable 5", [mockContext("1m", ["300k", "1m"]), mockEffort("high", ["low", "medium", "high", "xhigh", "max"])]),
+      mockModel("auto-smart", "Auto"),
+      mockModel("composer-2.5", "Composer 2.5", [mockFast]),
+      mockModel("claude-opus-5-5", "Claude Opus 5.5", [mockContext("1m", ["300k", "1m"]), mockEffort("medium", ["low", "medium", "high", "xhigh", "max"]), mockFast]),
+      mockModel("gpt-5.6-sol", "GPT-5.6 Sol", [mockContext("1m", ["272k", "1m"]), mockEffort("medium", ["low", "medium", "high"]), mockFast]),
+      mockModel("grok-4.7", "Grok 4.7"),
+    ],
+  },
+  {
+    id: "grok",
+    label: "Grok",
+    available: true,
+    transport: "acp" as const,
+    defaultModel: "grok-4.7",
+    settings: { model: "grok-4.7" },
+    capabilities: ["stream"],
+    models: [
+      mockModel("grok-4.7", "Grok 4.7", [mockEffort("high", ["low", "high"])]),
+      mockModel("grok-4.7-build-fast", "Grok 4.7 Build Fast"),
+      mockModel("grok-4.6", "Grok 4.6"),
+      mockModel("grok-4.5", "Grok 4.5"),
+    ],
+  },
+  {
+    id: "devin",
+    label: "Devin",
+    available: true,
+    transport: "acp" as const,
+    defaultModel: "adaptive",
+    settings: { model: "adaptive" },
+    capabilities: ["stream"],
+    models: [mockModel("adaptive", "Adaptive"), mockModel("gpt-6-astra", "GPT-6 Astra", [mockEffort("high", ["low", "medium", "high"])])],
+  },
+  {
+    id: "opencode",
+    label: "OpenCode",
+    available: true,
+    transport: "acp" as const,
+    defaultModel: "opencode/x-preview-f-free",
+    settings: { model: "opencode/x-preview-f-free" },
+    capabilities: ["stream", "resume", "models"],
+    models: [
+      mockModel("opencode/x-preview-f-free", "Ox Alpha Free (Unlimited)"),
+      mockModel("openai/gpt-5.4", "GPT-5.4", [mockEffort("medium", ["low", "medium", "high"])]),
+      mockModel("anthropic/claude-opus-5-5", "Claude Opus 5.5"),
+    ],
+  },
+]
