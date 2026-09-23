@@ -26,6 +26,7 @@ import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS } from "../../provider-startup.js"
+import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
@@ -72,7 +73,7 @@ interface Live {
 }
 export interface ClaudeSdkDependencies {
   available(): boolean
-  configure(cwd: string, options: ProviderStartOptions): Promise<Options>
+  configure(cwd: string, options: ProviderStartOptions, trace: ProviderLaunchTrace): Promise<Options>
   query(input: {
     prompt: AsyncIterable<SDKUserMessage>
     options: Options
@@ -247,6 +248,7 @@ export function createClaudeSdkDriver(
   }
   return {
     provider: "claude",
+    approvalEvidence: { kind: "request-lifecycle", reason: "The SDK exposes callback submission and request abort. Neither confirms the consumed answer; automatic permission denials do not acknowledge an interactive reply." },
     observesNativeAgents: true,
     canResume: true,
     forkPoint: "checkpoint",
@@ -254,7 +256,7 @@ export function createClaudeSdkDriver(
     modes: CLAUDE_MODES,
     defaultMode: "default",
     available: () => dependencies.available(),
-    async start(cwd, options) {
+    start: (cwd, options) => traceProviderLaunch("claude", options.conversationId, async trace => {
       if (!options.emit) throw new Error("A live event receiver is required")
       const conversationId = options.conversationId
       if (
@@ -267,7 +269,7 @@ export function createClaudeSdkDriver(
       starting.set(options.conversationId, generation)
       let config: Options
       try {
-        config = await dependencies.configure(cwd, options)
+        config = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
         if (starting.get(options.conversationId) !== generation)
           throw new Error("Claude was closed while configuring")
       } finally {
@@ -302,7 +304,7 @@ export function createClaudeSdkDriver(
             Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
           },
           spawnClaudeCodeProcess: (options) => {
-            const child = spawnClaudeProcess(options, conversationId)
+            const child = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
             if (!startupFinished) {
               startupWatch = new ProviderStartupWatch(child, { harness: "Claude" })
               observeSpawn(startupWatch)
@@ -360,7 +362,7 @@ export function createClaudeSdkDriver(
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         const initialization = query.initializationResult()
-        await Promise.race([
+        await trace.step("sdk-initialization", () => Promise.race([
           initialization,
           spawned.then((watch) => watch.step("SDK initialization", initialization)),
           new Promise<never>((_, reject) => {
@@ -369,7 +371,7 @@ export function createClaudeSdkDriver(
               STARTUP_TOTAL_MS
             )
           }),
-        ])
+        ]))
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
         engine.patch(live, {
@@ -394,7 +396,7 @@ export function createClaudeSdkDriver(
         clearTimeout(timer)
         startupWatch?.dispose()
       }
-    },
+    }),
     async prompt(id, text, attachments, settings, dispatch) {
       const { live, content } = await preparePromptAsync(dispatch, async () => {
         const live = requireLive(id)

@@ -4,15 +4,17 @@ import { resolveExecutable } from "../../executable.js"
 import { acpMcpServers } from "../../mcp-runtime.js"
 import type { ProviderStartOptions } from "../live-driver.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
+import type { ProviderLaunchTrace } from "../../provider-launch.js"
 
 export async function claudeSdkOptions(
   cwd: string,
-  input: ProviderStartOptions
+  input: ProviderStartOptions,
+  trace: ProviderLaunchTrace
 ): Promise<Options> {
-  const env = await accountEnv("claude", process.env)
-  const executable = env.CLAUDE_CODE_EXECUTABLE
+  const env = await trace.step("account", () => accountEnv("claude", process.env))
+  const executable = trace.sync("runtime-discovery", () => env.CLAUDE_CODE_EXECUTABLE
     ? resolveExecutable(env.CLAUDE_CODE_EXECUTABLE, env)
-    : undefined
+    : undefined)
   if (env.CLAUDE_CODE_EXECUTABLE && !executable)
     throw new Error("The configured Claude Code executable is unavailable")
   const tuning = ClaudeTuningSchema.parse(input.tuning?.options ?? {})
@@ -21,7 +23,7 @@ export async function claudeSdkOptions(
     env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = tuning.agentTeams ? "1" : "0"
   if (!input.mcpSnapshot)
     throw new Error("The host did not provide MCP discovery")
-  const snapshot = await input.mcpSnapshot()
+  const snapshot = await trace.step("mcp-preparation", input.mcpSnapshot)
   const mcpServers: NonNullable<Options["mcpServers"]> = {}
   for (const server of acpMcpServers(
     snapshot,
