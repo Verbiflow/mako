@@ -34,6 +34,18 @@ export function removeFromLoadout(index: number) {
   save(entries.filter((_, at) => at !== index))
 }
 
+/**
+ * A drop lands `entry` in slot `at`: an entry already in the loadout moves
+ * there, a new one is inserted and the last falls off a full loadout.
+ */
+export function placeInLoadout(entry: LoadoutEntry, at: number) {
+  const rest = prefsStore
+    .get()
+    .modelLoadout.filter((held) => held.harness !== entry.harness || held.model !== entry.model)
+  const slot = Math.max(0, Math.min(at, rest.length))
+  save([...rest.slice(0, slot), entry, ...rest.slice(slot)])
+}
+
 /** Tab/arrow reordering moves the entry one slot at a time. */
 export function moveLoadoutEntry(index: number, delta: -1 | 1) {
   const entries = [...prefsStore.get().modelLoadout]

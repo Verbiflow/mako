@@ -390,6 +390,53 @@ export function cycleComposerRole(role: "reasoning" | "speed"): string | null {
   )
 }
 
+/**
+ * What a new conversation in `harness` starts on, as Settings shows it: the
+ * provider's defaults under the saved preference, with no workspace's
+ * pending composer choice mixed in.
+ */
+export function harnessDefaults(
+  harness: string,
+  profile: HarnessProfile | undefined,
+  preference: SettingsPreference | undefined
+) {
+  return resolveComposerSettingsInput({
+    target: { kind: "new", harness, cwd: "" },
+    profile,
+    preference,
+  })
+}
+
+/**
+ * Save a harness's defaults for new conversations. A composer choice made
+ * for a new conversation in some workspace would outrank them there, so
+ * those pending choices are dropped for this harness.
+ */
+export function saveHarnessDefaults(
+  harness: string,
+  settings: SessionSettings
+): void {
+  setPref("providerSettings", {
+    ...prefsStore.get().providerSettings,
+    [harness]: { source: "saved", settings },
+  })
+  const overrides = Object.fromEntries(
+    Object.entries(prefsStore.get().settingsOverrides).filter(
+      ([key]) => !isNewTargetKey(key, harness)
+    )
+  )
+  setPref("settingsOverrides", overrides)
+}
+
+function isNewTargetKey(key: string, harness: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(key)
+    return Array.isArray(parsed) && parsed[0] === harness && parsed[1] === "new"
+  } catch {
+    return false
+  }
+}
+
 export function resetComposerSettings(target: ComposerTarget): void {
   const overrides = { ...prefsStore.get().settingsOverrides }
   delete overrides[settingsTargetKey(target)]

@@ -1,6 +1,7 @@
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
 import type { LiveActionInput } from "@/lib/types"
+import { actionRetainsInput } from "../../electron/contracts/operation-recovery"
 import { applyLiveSnapshot } from "./live-recovery"
 
 /** A saved receipt owns the draft even when the HTTP response is lost. */
@@ -10,12 +11,12 @@ export async function performLiveAction(
 ): Promise<boolean> {
   try {
     const result = await getMako().liveAction(id, input)
-    if (result.state.kind === "not-accepted" || result.state.kind === "failed") {
+    if (result.state.kind === "not-accepted") {
       toast.error(result.state.reason)
       return false
     }
-    if (result.state.kind === "uncertain") toast.error(result.state.reason)
-    return true
+    if (result.state.kind === "uncertain" || result.state.kind === "failed") toast.error(result.state.reason)
+    return actionRetainsInput(result)
   } catch (error) {
     const snapshot = await getMako()
       .liveSnapshot(id)
@@ -25,7 +26,10 @@ export async function performLiveAction(
       const receipt = snapshot.control?.actions?.find(
         (action) => action.input.id === input.id
       )
-      if (receipt && receipt.state.kind !== "not-accepted") return true
+      if (receipt) {
+        if (receipt.state.kind === "not-accepted") toast.error(receipt.state.reason)
+        return actionRetainsInput(receipt)
+      }
     }
     toast.error(error instanceof Error ? error.message : String(error))
     return false

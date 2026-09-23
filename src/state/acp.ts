@@ -15,7 +15,7 @@ import {
   threadSettingsTarget,
   settingsForSend,
 } from "@/state/composer-settings"
-import { leaveViewerForLive } from "@/state/thread-viewing"
+import { submitTransfer } from "@/state/live-transfers"
 import { performLiveAction } from "@/state/live-actions"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
 import { getMako, hasBridge } from "@/lib/bridge"
@@ -95,8 +95,8 @@ export const acp = {
 
   /**
    * Send a queued message into the running turn instead of after it. The
-   * queue entry leaves only once the provider has accepted the steer, so a
-   * refused steer costs nothing and the message stays in line.
+   * queue entry leaves once a durable action owns the input, including an
+   * uncertain outcome. A refused steer leaves the message in line.
    */
   async steerQueued(requestId: string): Promise<boolean> {
     const live = activeLiveAcp(acpStore.get())
@@ -520,22 +520,8 @@ export const acp = {
           tuning ?? (await settingsForSend(currentSettingsTarget(harness))),
       }
       if (modeId) input.modeId = modeId
-      const snapshot = await getMako().liveTransfer(current.key, input)
-      applyLiveSnapshot(snapshot, null)
-      leaveViewerForLive(harness)
-      return true
+      return submitTransfer(current.key, input)
     } catch (error) {
-      const snapshot = await getMako()
-        .liveSnapshot(current.key)
-        .catch(() => null)
-      if (
-        snapshot?.control?.transfers.some(
-          (transfer) => transfer.input.id === id
-        )
-      ) {
-        applyLiveSnapshot(snapshot)
-        return true
-      }
       toast.error(error instanceof Error ? error.message : String(error))
       return false
     }

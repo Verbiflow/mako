@@ -34,6 +34,12 @@ export interface ViewedThread extends Omit<Thread, "entries"> {
   loadingEarlier?: boolean
   streamRevision?: number
   streamReplaceFrom?: number
+  /**
+   * Painted from the record's tail while its full page is read: entry
+   * indexes are local to the preview, so nothing addresses the host by
+   * them until the full page replaces it.
+   */
+  preview?: boolean
 }
 
 /**

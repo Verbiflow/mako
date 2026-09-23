@@ -39,8 +39,8 @@ export function leaveViewerForLive(harness: string) {
  * fresh read replaces it the moment it lands. Bounded; oldest falls out.
  */
 const threadCache = new Map<string, ViewedThread>()
-const THREAD_CACHE_MAX = 4
-const THREAD_CACHE_BYTES = 24 * 1024 * 1024
+const THREAD_CACHE_MAX = 16
+const THREAD_CACHE_BYTES = 48 * 1024 * 1024
 
 /** The most host pages one request for earlier history reads before it shows what it has. */
 const EARLIER_PAGES_PER_LOAD = 4
@@ -159,7 +159,8 @@ export function loadThreadBlock(path: string, at: BlockAddress): Promise<void> {
   const key = `${path}\u0000${at.entry}\u0000${at.block}`
   const inFlight = blockLoads.get(key)
   if (inFlight) return inFlight
-  if (!hasBridge()) return Promise.resolve()
+  if (!hasBridge() || threadsStore.get().viewing?.preview)
+    return Promise.resolve()
   const load = getMako()
     .threadBlock(path, at)
     .then((block) => {
@@ -194,31 +195,41 @@ export function loadThreadBlock(path: string, at: BlockAddress): Promise<void> {
   return load
 }
 
+const liveModules = Promise.all([
+  import("@/state/acp"),
+  import("@/state/live-recovery"),
+]).then(([acpModule, recovery]) => ({ ...acpModule, applyLiveSnapshot: recovery.applyLiveSnapshot }))
+
+async function adoptOwner(ref: ThreadRef, generation: number) {
+  try {
+    const [owner, { acp, acpStore, applyLiveSnapshot }] = await Promise.all([
+      getMako().resolveOwner(ref.path),
+      liveModules,
+    ])
+    if (!owner || generation !== viewingGeneration) return
+    applyLiveSnapshot(owner.snapshot, owner.bindingId ?? null)
+    if (acpStore.get().activeKey !== owner.snapshot.session.id)
+      acp.activate(owner.snapshot.session.id, false)
+    openThreadTab(ref.path)
+    if (threadsStore.get().viewing || threadsStore.get().opening)
+      leaveViewerForLive(owner.provider)
+  } catch (error) {
+    if (generation === viewingGeneration)
+      toast.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
 export const threadViewingActions = {
   /** Open a foreign session read-only, translated to the canonical shape. */
   async view(ref: ThreadRef, mode: "conversation" | "native" = "conversation") {
     if (!hasBridge()) return
     const generation = ++viewingGeneration
-    const { acp, acpStore, activeAcp } = await import("@/state/acp")
-    const { applyLiveSnapshot } = await import("@/state/live-recovery")
+    const { acp, acpStore, activeAcp } = await liveModules
     if (generation !== viewingGeneration) return
-    if (mode === "conversation") {
-      try {
-        const resolved = await getMako().resolveContinuation(ref.path)
-        const snapshot = resolved.transport === "attached" ? resolved.snapshot : null
-        if (generation !== viewingGeneration) return
-        if (snapshot) {
-          applyLiveSnapshot(snapshot, resolved.transport === "attached" ? resolved.bindingId ?? null : null)
-          acp.activate(snapshot.session.id, false)
-          openThreadTab(ref.path)
-          leaveViewerForLive(resolved.transport === "attached" ? resolved.provider : snapshot.session.harness)
-          return
-        }
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error))
-      }
-    }
-    if (generation !== viewingGeneration) return
+    // The saved transcript paints now; a Mako conversation that owns this
+    // thread takes over when the host names it. Sending resolves again, so
+    // this lookup never decides where a reply goes.
+    if (mode === "conversation") void adoptOwner(ref, generation)
     const activated = mode === "conversation" && acp.activateThread(ref)
     if (!activated) acp.deactivate()
     const liveHarness = activated
@@ -306,6 +317,27 @@ export const threadViewingActions = {
 
       run: null,
     })
+    // A large record's newest exchanges paint from its tail while the full
+    // page is read; whichever lands second never overwrites the full page.
+    let previewShown = false
+    void getMako()
+      .previewThread(ref.path)
+      .then((preview) => {
+        const state = threadsStore.get()
+        if (
+          !preview ||
+          generation !== viewingGeneration ||
+          state.viewing ||
+          state.opening?.kind !== "loading"
+        )
+          return
+        previewShown = true
+        threadsStore.set({
+          viewing: { ...viewedPage(preview), preview: true },
+          composerHarness: liveHarness,
+        })
+      })
+      .catch(() => {})
     try {
       const [page, run] = await Promise.all([
         getMako().pageThread(ref.path),
@@ -315,7 +347,9 @@ export const threadViewingActions = {
       ])
       if (generation !== viewingGeneration) return
       if (!page) throw new Error("This session could not be read")
-      const thread = viewedPage(page)
+      const thread: ViewedThread = previewShown
+        ? { ...viewedPage(page), streamRevision: 1, streamReplaceFrom: 0 }
+        : viewedPage(page)
       rememberThread(thread)
       // The composer adopts this conversation: its agent picker shows the
       // harness that owns the session, and switching it moves the
@@ -361,6 +395,7 @@ export const threadViewingActions = {
       !viewing ||
       !viewing.hasEarlier ||
       viewing.loadingEarlier ||
+      viewing.preview ||
       !hasBridge()
     )
       return
