@@ -1,3 +1,4 @@
+import { applyControlEnvironment } from "./control-launch.js"
 import type { ApprovalSubmission } from "./contracts/approval-response.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
@@ -224,7 +225,7 @@ async function startAcp(
   // not mutate a replacement owner or undo deliberate hibernation.
   const send = options.emit ?? ((event: LiveDriverEvent) => emit(event))
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
-  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir, app.getAppPath()))
+  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
 
   // The nested-session guard: Claude Code refuses to start inside another
   // Claude Code. Mako is not one, but it may have been *launched from* one,
@@ -233,6 +234,7 @@ async function startAcp(
   delete env.CLAUDECODE
   delete env.CLAUDE_CODE_ENTRYPOINT
   spec.configureEnvironment(env)
+  applyControlEnvironment(env, options.conversationTools?.control)
   const executable = resolveExecutable(spec.command, env)
   if (!executable) throw new Error(`${harness} is not installed`)
 
@@ -242,7 +244,7 @@ async function startAcp(
     url: options.conversationTools.url,
     headers: [{ name: "Authorization", value: `Bearer ${options.conversationTools.token}` }],
   } : null
-  const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"], options.conversationTools?.control, id)
+  const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
   if (conversationMcp) preparedServers.push(conversationMcp)
   const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
   const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
@@ -423,9 +425,7 @@ async function startAcp(
       ? acpMcpServers(
           mcpSnapshot,
           harness,
-          transports,
-          options.conversationTools?.control,
-          id
+          transports
         )
       : []
     if (conversationMcp && mcpCapabilities?.http) live.mcpServers.push(conversationMcp)

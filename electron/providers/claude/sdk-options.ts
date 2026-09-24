@@ -1,3 +1,4 @@
+import { applyControlEnvironment } from "../../control-launch.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { accountEnv } from "../../accounts.js"
 import { resolveExecutable } from "../../executable.js"
@@ -12,6 +13,7 @@ export async function claudeSdkOptions(
   trace: ProviderLaunchTrace
 ): Promise<Options> {
   const env = await trace.step("account", () => accountEnv("claude", process.env))
+  applyControlEnvironment(env, input.conversationTools?.control)
   const executable = trace.sync("runtime-discovery", () => env.CLAUDE_CODE_EXECUTABLE
     ? resolveExecutable(env.CLAUDE_CODE_EXECUTABLE, env)
     : undefined)
@@ -28,9 +30,7 @@ export async function claudeSdkOptions(
   for (const server of acpMcpServers(
     snapshot,
     "claude",
-    ["stdio", "http"],
-    input.conversationTools?.control,
-    input.conversationId
+    ["stdio", "http"]
   )) {
     if ("command" in server) {
       mcpServers[server.name] = {

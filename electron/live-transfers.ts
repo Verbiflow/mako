@@ -315,7 +315,7 @@ export class LiveTransfers {
             ? source.control?.approvalResponses?.flatMap(receipt => receipt.origin.bindingId === prior.id && receipt.origin.native && !receipt.nativeDecision ? [receipt.origin.native] : [])
             : undefined,
           fork: nativeFork,
-          conversationTools: this.host.dependencies.tools?.(
+          conversationTools: await this.host.dependencies.tools?.(
             bindingId,
             source.session.id
           ),

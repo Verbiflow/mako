@@ -11,7 +11,7 @@ import {
 
 export const openCodeAcpSource: ProviderAcpSource = {
   provider: "opencode",
-  approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Native v2 tool permission asked/replied events with exact scoped identities. Structured questions remain submission-only; retained observation is bounded and may have gaps." },
+  approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Native v2 tool permission asked/replied events with exact scoped identities. Structured forms still need native bridge forwarding and answer integration; retained observation is bounded and may have gaps." },
   async observeAgents(input) {
     const observer = new OpenCodeAgents(input)
     await observer.ready

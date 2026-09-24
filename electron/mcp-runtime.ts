@@ -1,5 +1,5 @@
 import type { McpServer } from "@agentclientprotocol/sdk"
-import { isMakoNodeServer, projectRuntimeDefinitions } from "./mcp-registry.js"
+import { projectRuntimeDefinitions } from "./mcp-registry.js"
 import type {
   McpProvider,
   McpRegistrySnapshot,
@@ -8,7 +8,6 @@ import type {
 } from "./shared.js"
 import type { JsonObject } from "./codex-app-json.js"
 import { backendConnectionCredentials } from "./backend-connection.js"
-import type { ControlCredentials } from "./control-service.js"
 
 function backendHeaders(definition: McpServerDefinition): Array<{
   name: string
@@ -24,38 +23,10 @@ function backendHeaders(definition: McpServerDefinition): Array<{
   ]
 }
 
-function localEnvironment(
-  definition: McpServerDefinition,
-  control?: ControlCredentials,
-  taskId?: string
-): Array<{
-  name: string
-  value: string
-}> {
-  const environment = isMakoNodeServer(definition.name)
-    ? [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
-    : []
-  const controlServer = definition.name === "mako-control"
-  if (controlServer && control)
-    environment.push(
-      { name: "MAKO_CONTROL_URL", value: control.url },
-      { name: "MAKO_CONTROL_TOKEN", value: control.token }
-    )
-  if (controlServer && process.env.MAKO_CONTROL_MEDIA_ROOT)
-    environment.push({ name: "MAKO_CONTROL_MEDIA_ROOT", value: process.env.MAKO_CONTROL_MEDIA_ROOT })
-  // The task id names the driver session and the artifact directory that
-  // oversized program results are written to.
-  if (controlServer && taskId)
-    environment.push({ name: "MAKO_TASK_ID", value: taskId })
-  return environment
-}
-
 export function acpMcpServers(
   snapshot: McpRegistrySnapshot,
   provider: Exclude<McpProvider, "mako">,
-  transports: readonly McpTransport[],
-  control?: ControlCredentials,
-  taskId?: string
+  transports: readonly McpTransport[]
 ): McpServer[] {
   return projectRuntimeDefinitions(snapshot, provider, transports).flatMap(
     (definition): McpServer[] => {
@@ -65,7 +36,7 @@ export function acpMcpServers(
             name: definition.name,
             command: definition.command,
             args: definition.args ?? [],
-            env: localEnvironment(definition, control, taskId),
+            env: [],
           },
         ]
       }
@@ -90,20 +61,12 @@ export function acpMcpServers(
 }
 
 function codexDefinition(
-  definition: McpServerDefinition,
-  control?: ControlCredentials,
-  taskId?: string
+  definition: McpServerDefinition
 ): JsonObject | null {
   if (definition.transport === "stdio" && definition.command) {
     const result: JsonObject = {
       command: definition.command,
       args: definition.args ?? [],
-    }
-    const environment = localEnvironment(definition, control, taskId)
-    if (environment.length > 0) {
-      result.env = Object.fromEntries(
-        environment.map(({ name, value }) => [name, value])
-      )
     }
     return result
   }
@@ -123,16 +86,14 @@ function codexDefinition(
 
 export function codexMcpConfig(
   snapshot: McpRegistrySnapshot,
-  conversationToolsUrl?: string,
-  control?: ControlCredentials,
-  taskId?: string
+  conversationToolsUrl?: string
 ): JsonObject {
   const servers: JsonObject = {}
   for (const definition of projectRuntimeDefinitions(snapshot, "codex", [
     "stdio",
     "http",
   ])) {
-    const projected = codexDefinition(definition, control, taskId)
+    const projected = codexDefinition(definition)
     if (projected) servers[definition.name] = projected
   }
   if (conversationToolsUrl)

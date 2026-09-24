@@ -1,16 +1,12 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
-import { join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import { accountEnv, selectedAccount } from "./accounts.js"
 import { providerHost } from "./providers/index.js"
 import type { ProviderMcpSource } from "./providers/mcp-source.js"
 import { backendConnectionCredentials } from "./backend-connection.js"
-import { cuaEmbeddedSocket } from "./cua-embedded.js"
-import { cuaDriverStatus } from "./cua-driver-version.js"
-import { headlessNodeExecutable } from "./headless-node.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
 import { projectedMcpServers } from "./contracts/mcp-reach.js"
@@ -454,67 +450,18 @@ async function readCliDefinitions(
   }
 }
 
-const MAKO_NODE_SERVERS = new Set(["mako-control"])
-export function isMakoNodeServer(name: string): boolean {
-  return MAKO_NODE_SERVERS.has(name)
-}
-
 function managedRuntimeEnvironment(): NodeJS.ProcessEnv {
-  const env = { ...process.env }
-  const cuaSocket = cuaEmbeddedSocket()
   const backend = backendConnectionCredentials()
-  if (cuaSocket) env.MAKO_CUA_SOCKET = cuaSocket
-  if (backend) {
-    env.MAKO_BACKEND_URL = backend.url
-    env.MAKO_BACKEND_TOKEN = backend.token
-  }
-  return env
+  return backend ? { MAKO_BACKEND_URL: backend.url, MAKO_BACKEND_TOKEN: backend.token } : {}
 }
 
-export async function managedMcpDefinitions(
-  appPath: string,
-  execPath = process.execPath,
-  env?: NodeJS.ProcessEnv
-): Promise<McpDiscoveredDefinition[]> {
+export async function managedMcpDefinitions(env?: NodeJS.ProcessEnv): Promise<McpDiscoveredDefinition[]> {
   const runtimeEnv = env ?? managedRuntimeEnvironment()
-  const nodeExecutable = headlessNodeExecutable(execPath)
-  const commandEnv = { ...runtimeEnv }
-  delete commandEnv.MAKO_BACKEND_TOKEN
-  delete commandEnv.MAKO_CUA_SOCKET
-  const cuaPath = await findExecutable("cua-driver", commandEnv)
-  const cuaSocket = runtimeEnv.MAKO_CUA_SOCKET
-  const cua = cuaPath !== null && Boolean(cuaSocket)
   const backendUrl = runtimeEnv.MAKO_BACKEND_URL
   const backend = Boolean(backendUrl && runtimeEnv.MAKO_BACKEND_TOKEN)
-  const driver = await cuaDriverStatus(cuaPath)
   const definitions: Array<
     McpInternalDefinition & { availability: boolean; detail: string }
   > = [
-    {
-      name: "mako-control",
-      transport: "stdio",
-      command: process.platform === "win32" ? execPath : "/usr/bin/env",
-      args: [
-        ...(process.platform === "win32"
-          ? []
-          : ["ELECTRON_RUN_AS_NODE=1", nodeExecutable]),
-        join(appPath, "node_modules", "@mako", "control-runtime", "dist", "computer-tools-main.js"),
-        ...(cuaSocket && cuaPath
-          ? ["--socket", cuaSocket, "--driver", cuaPath]
-          : []),
-      ],
-      envNames: process.platform === "win32" ? ["ELECTRON_RUN_AS_NODE"] : [],
-      headerNames: [],
-      portable: true,
-      availability: true,
-      detail: cua
-        ? driver.outdated
-          ? `Browser and system routes are ready; native control needs an update. ${driver.detail}`
-          : "Page, native and system control share one host-routed code API"
-        : cuaPath && !cuaSocket
-          ? "Page and system routes are ready; Mako has not started native control"
-          : "Page and system routes are ready; install CUA Driver for native windows",
-    },
     {
       name: "mako-backend",
       transport: "http",
@@ -581,12 +528,11 @@ async function discoverProviderDefinitions(cwd: string) {
 }
 
 export async function discoverMcpRegistry(
-  cwd: string,
-  appPath: string
+  cwd: string
 ): Promise<McpRegistrySnapshot> {
   const [{ routes, available, discovered }, managed] = await Promise.all([
     discoverProviderDefinitions(cwd),
-    managedMcpDefinitions(appPath),
+    managedMcpDefinitions(),
   ])
   const servers = mergeMcpDefinitions([...discovered, ...managed])
   await Promise.all(

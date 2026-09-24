@@ -665,7 +665,7 @@ export class LiveConversations {
     this.bindingOwners.set(id, id)
     const generation = resident.generation
     const openingOperation = Promise.resolve()
-      .then(() =>
+      .then(async () =>
         driver.start(cwd, {
         ...options,
         modeId,
@@ -674,7 +674,7 @@ export class LiveConversations {
         mcpSnapshot: this.dependencies.mcpSnapshot
           ? () => this.dependencies.mcpSnapshot!(cwd)
           : undefined,
-          conversationTools: this.dependencies.tools?.(id, id),
+          conversationTools: await this.dependencies.tools?.(id, id),
         })
       )
       .then(async (session) => {
@@ -1130,7 +1130,7 @@ export class LiveConversations {
           ? () =>
               this.dependencies.mcpSnapshot!(resident.snapshot.session.cwd)
           : undefined,
-        conversationTools: this.dependencies.tools?.(
+        conversationTools: await this.dependencies.tools?.(
           binding.id,
           resident.snapshot.session.id
         ),
@@ -2852,7 +2852,7 @@ export class LiveConversations {
           this.control(resident).activeBindingId,
           current.context.reduce(
             (text, manifest) => contextPrompt(manifest, text),
-            request.text
+            [this.dependencies.controlInstructions?.(this.control(resident).activeBindingId), request.text].filter(Boolean).join("\n\n")
           ),
           request.attachments,
           request.tuning,

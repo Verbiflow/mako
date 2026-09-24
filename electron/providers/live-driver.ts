@@ -15,7 +15,7 @@ import type {
 } from "../shared.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { ProviderCapability } from "./registry.js"
-import type { ControlCredentials } from "../control-service.js"
+import type { ControlLaunch } from "@mako/control-runtime/session"
 import { UNAVAILABLE_RECOVERY, type RecoveryCapabilities } from "../contracts/recovery.js"
 
 /** Admission resolves separately from the correlated live-action-result event.
@@ -36,7 +36,7 @@ export function recoveryCapabilities(driver: ProviderLiveDriver | undefined): Re
 export interface ConversationTools {
   url: string
   token: string
-  control?: ControlCredentials
+  control?: ControlLaunch
 }
 
 /** Host-only launch credentials. Never included in the renderer wire contract or journals. */

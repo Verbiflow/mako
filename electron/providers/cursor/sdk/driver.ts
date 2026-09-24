@@ -1,3 +1,4 @@
+import { applyControlEnvironment } from "../../../control-launch.js"
 import { preparePrompt } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -138,7 +139,7 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
     // provider registry, which installs this driver, so a static import
     // would make this module a cycle for every test that loads it alone.
     const { acpMcpServers } = await import("../../../mcp-runtime.js")
-    for (const server of acpMcpServers(snapshot, "cursor", ["stdio", "http", "sse"], options.conversationTools?.control, options.conversationId)) {
+    for (const server of acpMcpServers(snapshot, "cursor", ["stdio", "http", "sse"])) {
       if ("command" in server) {
         servers[server.name] = {
           type: "stdio",
@@ -388,6 +389,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       if (sessions.get(options.conversationId)?.closed === false)
         throw new Error("This Cursor binding is already connected")
       const env = await trace.step("account", () => dependencies.auth.childEnv())
+  applyControlEnvironment(env, options.conversationTools?.control)
       const agentId = options.resume ?? options.conversationId
       const stateRoot = dependencies.stateRoot()
       const spawn: CursorSdkSpawnOptions = {

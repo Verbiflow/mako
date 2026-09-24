@@ -44,6 +44,8 @@ import { compileCacheStatus } from "./compile-cache.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { prepareBrowserExtension } from "./browser-extension-setup.js"
+import { ControlSessions } from "./control-sessions.js"
+import { controlLaunchInstructions } from "./control-launch.js"
 import { startControlService } from "./control-service.js"
 import type { DelegateInput, ForkInput, MessageAnchor, TransferInput } from "./shared.js"
 import { TransferInputSchema } from "./contracts/conversation-control.js"
@@ -544,6 +546,13 @@ function terminal() {
   if (!terminalClients) throw new Error("Terminal service is not ready")
   return terminalClients.forOwner(hostClient())
 }
+
+const controlSessions = new ControlSessions(async () => {
+  const driver = resolveExecutable("cua-driver")
+  if (!driver) return undefined
+  const socket = await ensureMakoLocalControl()
+  return socket ? { driver, socket } : undefined
+})
 
 function ensureMakoLocalControl() {
   return ensureCuaEmbedded(
@@ -1282,16 +1291,13 @@ function bindIpc() {
   })
 
   handle("mako:mcp-discover", () =>
-    withHost(async (host) => {
-      await ensureMakoLocalControl().catch(() => null)
-      return discoverMcpRegistry(host.workspace, app.getAppPath())
-    })
+    withHost((host) => discoverMcpRegistry(host.workspace))
   )
   handle("mako:integrations", () =>
     withHost(async (host) => {
       await ensureMakoLocalControl().catch(() => null)
       const [snapshot, github, backend, driver] = await Promise.all([
-        discoverMcpRegistry(host.workspace, app.getAppPath()),
+        discoverMcpRegistry(host.workspace),
         githubStatus(host.workspace),
         backendConnectionStatus(),
         cuaDriverStatus(resolveExecutable("cua-driver")),
@@ -1312,7 +1318,7 @@ function bindIpc() {
     (_e, serverId: string, target: McpSyncTarget) =>
       withHost(async (host) =>
         previewMcpSync(
-          await discoverMcpRegistry(host.workspace, app.getAppPath()),
+          await discoverMcpRegistry(host.workspace),
           serverId,
           target
         )
@@ -1320,12 +1326,9 @@ function bindIpc() {
   )
   handle("mako:mcp-sync-apply", (_e, serverId: string, target: McpSyncTarget) =>
     withHost(async (host) => {
-      const snapshot = await discoverMcpRegistry(
-        host.workspace,
-        app.getAppPath()
-      )
+      const snapshot = await discoverMcpRegistry(host.workspace)
       await applyMcpSync(snapshot, serverId, target)
-      return discoverMcpRegistry(host.workspace, app.getAppPath())
+      return discoverMcpRegistry(host.workspace)
     })
   )
 
@@ -1871,10 +1874,7 @@ app.whenReady().then(async () => {
   powerMonitor.on("unlock-screen", emitTerminalWake)
   liveConversations = new LiveConversations({
     memory: sessionMemory ?? undefined,
-    mcpSnapshot: async (cwd) => {
-      await ensureMakoLocalControl().catch(() => null)
-      return discoverMcpRegistry(cwd, app.getAppPath())
-    },
+    mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
     workspaceSnapshots: new WorkspaceSnapshots(
       join(app.getPath("userData"), "workspace-snapshots")
     ),
@@ -1898,15 +1898,29 @@ app.whenReady().then(async () => {
     },
     appPath: app.getAppPath(),
     root: join(app.getPath("userData"), "conversations"),
-    tools: (bindingId, conversationId) => {
+    tools: async (bindingId, conversationId) => {
       const tools = conversationMcp?.mint(bindingId, conversationId)
-      return tools
-        ? { ...tools, control: controlService?.mint(conversationId, bindingId) }
-        : undefined
+      if (!tools) return undefined
+      const browser = controlService?.mint(conversationId, bindingId)
+      try {
+        return { ...tools, control: await controlSessions.start(bindingId, browser, async (reason) => {
+          await controlService?.revoke(conversationId, bindingId)
+          if (reason === "failed") emit({type:"notice",level:"error",message:"Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control."})
+        }) }
+      } catch (error) {
+        conversationMcp?.revoke(bindingId, conversationId)
+        await controlService?.revoke(conversationId, bindingId)
+        throw error
+      }
+    },
+    controlInstructions: bindingId => {
+      const launch = controlSessions.get(bindingId)
+      return launch ? controlLaunchInstructions(launch) : undefined
     },
     revokeTools: async (bindingId, conversationId) => {
       conversationMcp?.revoke(bindingId, conversationId)
       await controlService?.revoke(conversationId, bindingId)
+      await controlSessions.stop(bindingId)
     },
     providers: () =>
       providerHost.liveDrivers.list().map((driver) => driver.provider),
@@ -2127,6 +2141,7 @@ app.on("before-quit", (event) =>
       powerMonitor.removeListener("resume", emitTerminalWake)
       powerMonitor.removeListener("unlock-screen", emitTerminalWake)
       terminalClients?.dispose()
+      void controlSessions.close()
       stopCuaEmbedded()
       void appshots.close()
       controlService?.close()

@@ -173,15 +173,8 @@ function serviceConnection(
 }
 
 function localBrowserConnection(
-  server: McpServerRecord | undefined,
   browsers: BrowserControlStatus[]
 ): IntegrationConnection {
-  if (!server || server.availability === "unavailable") {
-    return {
-      kind: "unavailable",
-      detail: server?.detail ?? "Local browser control is not installed",
-    }
-  }
   if (browsers.some((browser) => browser.connection.status === "connected"))
     return { kind: "ready", detail: "Local browser connected" }
   return {
@@ -190,12 +183,11 @@ function localBrowserConnection(
       (browser) => browser.connection.status === "awaiting-approval"
     )
       ? "Waiting for browser connection approval"
-      : "Connect a browser in MCP settings",
+      : "Connect a browser in Settings",
   }
 }
 
 function localConnection(
-  server: McpServerRecord | undefined,
   permissions: MakoComputerPermissions,
   driver?: CuaDriverStatus
 ): IntegrationConnection {
@@ -204,12 +196,6 @@ function localConnection(
       kind: "unavailable",
       detail: driver?.detail ?? "CUA Driver is not installed",
     }
-  if (!server || server.availability === "unavailable") {
-    return {
-      kind: "unavailable",
-      detail: server?.detail ?? "Local control is not installed",
-    }
-  }
   if (!permissions.accessibility || permissions.screenRecording !== "granted") {
     return {
       kind: "needs-permission",
@@ -259,16 +245,13 @@ export function integrationCatalog(
   driver?: CuaDriverStatus,
   relay?: RelayPresence
 ): IntegrationCatalogSnapshot {
-  const unifiedControl = snapshot.servers.find(
-    (server) => server.name === "mako-control"
-  )
   const services: IntegrationRecord[] = DEFINITIONS.map((definition) => ({
     ...definition,
     connection:
       definition.auth === "mako-backend"
         ? backendConnection(backendStatus, relay)
         : definition.auth === "local-browser"
-          ? localBrowserConnection(unifiedControl, browsers)
+          ? localBrowserConnection(browsers)
           : serviceConnection(definition, snapshot.servers, githubConnected),
   }))
   const local: IntegrationRecord[] = [
@@ -293,7 +276,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Local Chrome", "Inspect", "Interact", "Capture"],
       events: [],
-      connection: localBrowserConnection(unifiedControl, browsers),
+      connection: localBrowserConnection(browsers),
     },
     {
       id: "computer-use",
@@ -304,7 +287,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Read UI", "Click", "Type", "Capture"],
       events: [],
-      connection: localConnection(unifiedControl, permissions, driver),
+      connection: localConnection(permissions, driver),
     },
     {
       id: "apple-mail",
@@ -315,7 +298,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Read UI", "Draft", "App automation"],
       events: [],
-      connection: localConnection(unifiedControl, permissions, driver),
+      connection: localConnection(permissions, driver),
     },
     {
       id: "apple-messages",
@@ -326,7 +309,7 @@ export function integrationCatalog(
       auth: "local-permission",
       capabilities: ["Read UI", "Draft", "App automation"],
       events: [],
-      connection: localConnection(unifiedControl, permissions, driver),
+      connection: localConnection(permissions, driver),
     },
   ]
   return {

@@ -68,7 +68,8 @@ export interface Dependencies {
   tools?(
     bindingId: string,
     conversationId: string
-  ): ConversationTools | undefined
+  ): ConversationTools | undefined | Promise<ConversationTools | undefined>
+  controlInstructions?(bindingId: string): string | undefined
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   providers?(): string[]
   root: string

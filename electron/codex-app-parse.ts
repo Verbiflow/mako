@@ -1,3 +1,4 @@
+import { CodexReportedAccessSchema } from "./providers/codex/access.js"
 import {
   CodexAgentItemSchema,
   CodexAgentActivitySchema,
@@ -288,6 +289,9 @@ export function parseThreadResponse(
   if (serviceTier.value !== undefined) response.serviceTier = serviceTier.value
   if (reasoningEffort.value !== undefined)
     response.reasoningEffort = reasoningEffort.value
+  // Missing or future policy variants remain unclassified, never "Ask".
+  const access = CodexReportedAccessSchema.safeParse(root)
+  if (access.success) Object.assign(response, access.data)
   return { valid: true, value: response }
 }
 

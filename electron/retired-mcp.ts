@@ -13,6 +13,7 @@ import type { JsonValue } from "./codex-app-json.js"
 const retiredScripts = new Map<string, string>([
   ["mako-browser-use", "browser-tools-main.js"],
   ["mako-local-control", "computer-tools-main.js"],
+  ["mako-control", "computer-tools-main.js"],
   ["mako-local-tools", "local-tools-main.js"],
 ])
 const RetiredLaunchSchema = z
@@ -53,7 +54,8 @@ export function retiredMakoMcp(
   const scriptIndex = parsed.data.launch.findIndex(
     (argument) =>
       basename(argument) === script &&
-      basename(dirname(argument)) === "dist-electron"
+      (basename(dirname(argument)) === "dist-electron" ||
+        (basename(dirname(argument)) === "dist" && argument.replaceAll("\\", "/").includes("/@mako/control-runtime/")))
   )
   if (scriptIndex < 1) return false
   const runtime = basename(parsed.data.launch[scriptIndex - 1] ?? "")

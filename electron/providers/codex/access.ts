@@ -1,3 +1,4 @@
+import { z } from "zod"
 import {
   accessModeId,
   accessTierInfo,
@@ -27,22 +28,59 @@ export const CODEX_ACCESS_TIERS: readonly AccessTier[] = ["ask", "edits", "auto"
 export const CODEX_DEFAULT_MODE = accessModeId("ask")
 
 /**
- * The tier a thread's reported approval/sandbox pair amounts to. `turn/start`
- * overrides are sticky, so the pair the thread response reports is what the
- * session opened with. Anything read-only asks; workspace-write with the
- * auto reviewer is auto review; workspace-write otherwise accepts edits;
- * danger-full-access waits for nothing.
+ * Validate native policy before projecting it into Mako's access picker.
+ * Unknown wire variants stay unclassified; they are not the default preset.
  */
+export const CodexReportedAccessSchema = z.object({
+  approvalPolicy: z.union([
+    z.enum(["untrusted", "on-request", "never"]),
+    z.object({
+      granular: z.object({
+        sandbox_approval: z.boolean(),
+        rules: z.boolean(),
+        skill_approval: z.boolean(),
+        request_permissions: z.boolean(),
+        mcp_elicitations: z.boolean(),
+      }),
+    }),
+  ]).optional(),
+  approvalsReviewer: z.enum(["user", "auto_review", "guardian_subagent"]).optional(),
+  sandbox: z.discriminatedUnion("type", [
+    z.object({ type: z.literal("dangerFullAccess") }),
+    z.object({ type: z.literal("readOnly"), networkAccess: z.boolean() }),
+    z.object({
+      type: z.literal("externalSandbox"),
+      networkAccess: z.enum(["restricted", "enabled"]),
+    }),
+    z.object({
+      type: z.literal("workspaceWrite"),
+      writableRoots: z.array(z.string()),
+      networkAccess: z.boolean(),
+      excludeTmpdirEnvVar: z.boolean(),
+      excludeSlashTmp: z.boolean(),
+    }),
+  ]).optional(),
+}) satisfies z.ZodType<{
+  approvalPolicy?: AskForApproval
+  approvalsReviewer?: ApprovalsReviewer
+  sandbox?: SandboxPolicy
+}>
+
+/** Recognize native presets without treating absent/custom policy as Ask. */
 export function codexObservedTier(reported: {
   approvalPolicy?: AskForApproval | null
   approvalsReviewer?: ApprovalsReviewer | null
   sandbox?: SandboxPolicy | null
-}): AccessTier {
+}): AccessTier | null {
   const sandbox = reported.sandbox?.type
   if (sandbox === "dangerFullAccess") return "full"
-  if (sandbox === "workspaceWrite")
-    return reported.approvalsReviewer === "auto_review" ? "auto" : "edits"
-  return "ask"
+  if (reported.approvalPolicy !== "on-request" && reported.approvalPolicy !== "untrusted") return null
+  if (sandbox === "workspaceWrite") {
+    if (reported.approvalsReviewer === "auto_review") return "auto"
+    if (reported.approvalsReviewer === undefined || reported.approvalsReviewer === "user") return "edits"
+  }
+  if (sandbox === "readOnly" && (reported.approvalsReviewer === undefined || reported.approvalsReviewer === "user")) return "ask"
+  return null
 }
 
 export function codexAccessModes(): LiveSessionMode[] {

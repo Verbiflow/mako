@@ -15,7 +15,6 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import type { JsonObject } from "./codex-app-json.js"
 import {
-  isMakoNodeServer,
   mcpDiscoveryRoute,
   type McpDiscoveryRoute,
 } from "./mcp-registry.js"
@@ -59,20 +58,12 @@ function directPath(
     : (route.workspaceFiles[0] ?? null)
 }
 
-function managedEnvironment(
-  definition: McpServerDefinition
-): Record<string, string> {
-  return isMakoNodeServer(definition.name)
-    ? { ELECTRON_RUN_AS_NODE: "1" }
-    : {}
-}
-
 function serializableDefinition(
   definition: McpServerDefinition,
   provider: "claude" | "cursor" | "opencode" = "cursor"
 ): JsonObject {
   if (definition.transport === "stdio") {
-    const env = managedEnvironment(definition)
+    const env = {}
     if (provider === "opencode") {
       const result: JsonObject = {
         type: "local",
@@ -340,7 +331,7 @@ export async function applyMcpSync(
       route.write.args(
         definition,
         target.scope,
-        managedEnvironment(definition)
+        {}
       ),
       {
         cwd: snapshot.cwd,

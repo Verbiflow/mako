@@ -1,3 +1,4 @@
+import { applyControlEnvironment } from "./control-launch.js"
 import type { ApprovalSubmission } from "./contracts/approval-response.js"
 import { preparePrompt, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
@@ -12,11 +13,10 @@ import type {
   ProviderSteerResult,
 } from "./providers/live-driver.js"
 import { resolveCodexExecutable } from "./providers/codex/executable.js"
-import type { ConversationTools, ProviderStartOptions } from "./providers/live-driver.js"
+import type { ProviderStartOptions } from "./providers/live-driver.js"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
-import { app } from "electron"
 import { accountEnv } from "./accounts.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable } from "./executable.js"
@@ -75,7 +75,6 @@ type Live = {
   state: LiveSessionState
   tuning?: Tuning
   conversationToolsUrl?: string
-  control?: ConversationTools["control"]
   mcpSnapshot: McpRegistrySnapshot
   nextRequestId: number
   pending: Map<string, PendingRpc>
@@ -124,10 +123,11 @@ async function startCodex(
 ): Promise<LiveSessionState> {
   const id = options.conversationId
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
-  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir, app.getAppPath()))
+  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
   const env = await trace.step("account", () => accountEnv("codex", process.env))
   if (options.conversationTools)
     env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
+  applyControlEnvironment(env, options.conversationTools?.control)
   const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
   if (!executable) throw new Error("Codex is not installed")
   const child = trace.sync("spawn", () => spawn(executable, ["app-server"], {
@@ -163,7 +163,6 @@ async function startCodex(
     tuning: options.tuning,
     emit: (event) => emit(event),
     conversationToolsUrl: options.conversationTools?.url,
-    control: options.conversationTools?.control,
     mcpSnapshot,
     nextRequestId: 0,
     pending: new Map(),
@@ -231,6 +230,7 @@ async function startCodex(
       settings.options!.serviceTier = codexServiceTier(
         response.serviceTier ?? "default"
       )
+    const observedAccess = codexObservedTier(response)
     updateState(live, {
       nativeId: response.thread.id,
       nativePath: response.thread.path ?? undefined,
@@ -242,7 +242,7 @@ async function startCodex(
       // A choice is already in force; otherwise the approval/sandbox pair the
       // thread reports is the level the session opened with.
       currentMode:
-        options.modeId ?? accessModeId(codexObservedTier(response)),
+        options.modeId ?? (observedAccess ? accessModeId(observedAccess) : null),
     })
     return live.state
   } catch (error) {
@@ -435,9 +435,7 @@ async function openThread(
     live.tuning,
     codexMcpConfig(
       live.mcpSnapshot,
-      live.conversationToolsUrl,
-      live.control,
-      live.id
+      live.conversationToolsUrl
     )
   )
   if (fork)
