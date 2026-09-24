@@ -5,7 +5,7 @@ WORKDIR /opt/mako-control
 # creates executable links. A manifest-only install silently omits those links.
 COPY . .
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
-    && test -x node_modules/.bin/mako-control && test -x node_modules/.bin/mako-control-mcp
+    && test -x node_modules/.bin/mako-control
 
 FROM node:24-bookworm-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates fonts-noto-cjk fonts-noto-color-emoji \
