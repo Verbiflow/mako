@@ -1052,15 +1052,21 @@ export class CursorProvider implements SessionProvider {
           continue
         }
         for (let i = 0; i < buffer.length; i++) {
+          // A single-byte varint cannot be an epoch timestamp. Most bytes in
+          // these protobuf blobs are ASCII; do not run the decoder for them.
+          const first = buffer[i]
+          if (first === undefined || first < 0x80) continue
           let value = 0
           let shift = 0
+          let factor = 1
           let j = i
           while (j < buffer.length && shift <= 49) {
             const byte = buffer[j]
             if (byte === undefined) break
-            value += (byte & 0x7f) * 2 ** shift
+            value += (byte & 0x7f) * factor
             if ((byte & 0x80) === 0) break
             shift += 7
+            factor *= 128
             j++
           }
           if (value > floor && value < ceiling && value > best) best = value

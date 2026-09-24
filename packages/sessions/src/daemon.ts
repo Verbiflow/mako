@@ -32,6 +32,7 @@ import {
 } from "node:net"
 import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
+import { createHash } from "node:crypto"
 import { monitorEventLoopDelay } from "node:perf_hooks"
 import { z } from "zod"
 import { dirname, join } from "node:path"
@@ -103,7 +104,9 @@ export async function claimDaemon(
 ): Promise<DaemonClaim> {
   const lockPath =
     process.platform === "win32"
-      ? join(homedir(), ".mako", "syncd.lock")
+      ? join(homedir(), ".mako", socketPath === daemonSocketPath()
+          ? "syncd.lock"
+          : `catalog-${createHash("sha256").update(socketPath).digest("hex")}.lock`)
       : `${socketPath}.lock`
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 })
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -231,6 +234,8 @@ export function portLink(port: DaemonPort, frameLimit: number): DaemonLink {
 /** Serve one catalog over the socket. Resolves once listening. */
 export interface ServeCatalogOptions {
   catalogIdentity?: string
+  /** On-demand readers retire after their last client leaves; login daemons omit this. */
+  idleMs?: number
   /** Lists require complete initial discovery; known-path reads do not. */
   discovery?: Promise<ThreadRef[]>
   /**
@@ -260,6 +265,7 @@ function catalogService(
   const clients = new Set<DaemonLink>()
   const follows = new Map<DaemonLink, Map<string, () => void>>()
   const retireListeners = new Set<() => void>()
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
 
   const broadcast = (frame: DaemonEvent) => {
     const line = serializeDaemonFrame(frame)
@@ -284,6 +290,13 @@ function catalogService(
       for (const client of clients) client.close()
     }, 100)
   }
+  const watchIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = undefined
+    if (options.idleMs !== undefined && clients.size === 0 && !retiring)
+      idleTimer = setTimeout(retire, options.idleMs)
+  }
+  watchIdle()
   let highMemorySamples = 0
   const memoryTimer = setInterval(() => {
     if (options.memoryGuard === false) return
@@ -299,6 +312,7 @@ function catalogService(
       return false
     }
     clients.add(link)
+    watchIdle()
     follows.set(link, new Map())
 
     const reply = (frame: DaemonResponseFrame) => {
@@ -310,6 +324,7 @@ function catalogService(
         switch (frame.op) {
           case "ping": {
             const memory = process.memoryUsage()
+            const cpu = process.cpuUsage()
             reply({
               id: frame.id,
               ok: true,
@@ -323,6 +338,10 @@ function catalogService(
                 runtime: process.execPath,
                 rss: memory.rss,
                 heapUsed: memory.heapUsed,
+                ...catalog.metrics,
+                clients: clients.size,
+                cpuUserMicros: cpu.user,
+                cpuSystemMicros: cpu.system,
                 eventLoopP99Ms:
                   Number(eventLoopDelay.percentile(99)) / 1_000_000,
               },
@@ -423,6 +442,7 @@ function catalogService(
       clients.delete(link)
       for (const stop of follows.get(link)?.values() ?? []) stop()
       follows.delete(link)
+      watchIdle()
     })
     return true
   }
@@ -431,6 +451,7 @@ function catalogService(
     attach,
     retire,
     dispose() {
+      if (idleTimer) clearTimeout(idleTimer)
       clearInterval(memoryTimer)
       eventLoopDelay.disable()
       stopEvents()

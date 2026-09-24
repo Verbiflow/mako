@@ -16,6 +16,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Server } from "node:net"
 import { defaultCatalog, defaultCatalogIdentity } from "./index.js"
+import { onDemandCatalogPaths } from "./catalog-identity.js"
 import {
   claimDaemon,
   daemonSocketPath,
@@ -37,7 +38,11 @@ async function main(): Promise<void> {
   const dir = join(homedir(), ".mako")
   await mkdir(dir, { recursive: true, mode: 0o700 })
   await chmod(dir, 0o700)
-  const socketPath = daemonSocketPath()
+  const onDemand = process.argv.includes("--on-demand")
+  const archivePath = join(dir, "archive")
+  const identity = await defaultCatalogIdentity(archivePath)
+  const paths = onDemand ? onDemandCatalogPaths(identity) : null
+  const socketPath = paths?.socket ?? daemonSocketPath()
   let claim: DaemonClaim
   try {
     claim = await claimDaemon(socketPath)
@@ -47,10 +52,10 @@ async function main(): Promise<void> {
   }
 
   const catalog = defaultCatalog({
-    cachePath: join(dir, "syncd-catalog.json"),
+    cachePath: paths?.cache ?? join(dir, "syncd-catalog.json"),
     // The daemon owns the durable copy: every session it ever sees is also
     // written here, and survives its native store being pruned or deleted.
-    archivePath: join(dir, "archive"),
+    archivePath,
   })
 
   const started = performance.now()
@@ -65,8 +70,9 @@ async function main(): Promise<void> {
     // Observe failures while socket ownership and identity are being resolved.
     void discovery.catch(() => {})
     server = await serveCatalog(catalog, socketPath, claim, {
-      catalogIdentity: await defaultCatalogIdentity(join(dir, "archive")),
+      catalogIdentity: identity,
       discovery,
+      idleMs: onDemand ? 10_000 : undefined,
     })
     void discovery.catch((error) => {
       console.error("mako-syncd: discovery failed", error)

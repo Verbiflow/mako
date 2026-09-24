@@ -108,7 +108,11 @@ export interface SessionProvider {
    */
   peek(file: NativeFile): Promise<ThreadRef | null>
 
-  /** The full read: the whole conversation, translated. */
+  /**
+   * The full read: the whole conversation, translated. Known-path reads and
+   * followers may run before discovery completes; initialize their native
+   * resources from the path, never from a prior discover() side effect.
+   */
   read(path: string): Promise<Thread | null>
 
   /**

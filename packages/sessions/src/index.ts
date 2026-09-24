@@ -27,6 +27,7 @@ export {
 } from "./format.js"
 export { normalizeToolOutput } from "./tool-output.js"
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
+export { onDemandCatalogPaths } from "./catalog-identity.js"
 export { SessionArchive } from "./archive.js"
 export {
   connectDaemon,

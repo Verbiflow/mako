@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { SessionCatalog } from "../dist/catalog.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { GrokProvider } from "../dist/providers/grok.js"
+import { CursorProvider } from "../dist/providers/cursor.js"
+import { DatabaseSync } from "node:sqlite"
 
 // A thread is as fresh as its last message. Provider files change for other
 // reasons — a CLI flushing bookkeeping as it exits, a TUI rewriting a sidecar
@@ -187,6 +189,36 @@ try {
   const refinedRef = await grok.refine(rewritten, rewritten.bytes)
   assert.equal(refinedRef.updatedAt, rewritten.updatedAt, "refine keeps the transcript's time")
   await grokCatalog.stop()
+
+  // Legacy Cursor stores have no sidecar: binary and JSON activity evidence
+  // must survive cheap metadata decoding, without promoting an mtime touch.
+  const cursorDir = join(home, ".cursor", "acp-sessions", "legacy-clock")
+  await mkdir(cursorDir, { recursive: true })
+  const cursorPath = join(cursorDir, "store.db")
+  const database = new DatabaseSync(cursorPath)
+  const varint = number => {
+    const bytes = []
+    do {
+      const byte = number % 128
+      number = Math.floor(number / 128)
+      bytes.push(byte | (number ? 128 : 0))
+    } while (number)
+    return Buffer.from(bytes)
+  }
+  try {
+    database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)")
+    database.prepare("INSERT INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: "legacy-clock", name: "Legacy clock", model: "test" }))
+    const insert = database.prepare("INSERT INTO blobs VALUES (?, ?)")
+    insert.run("binary", Buffer.concat([Buffer.alloc(120_000, 65), varint(now - 60_000), Buffer.from([0, 128])]))
+    insert.run("future", Buffer.concat([Buffer.from([8]), varint(now + 86_400_000)]))
+    const cursor = new CursorProvider(home, {})
+    const file = await cursor.stat(cursorPath)
+    assert.equal((await cursor.peek(file)).updatedAt, iso(-60_000))
+    insert.run("json", Buffer.from(JSON.stringify({ timestamp: now - 30_000 })))
+    assert.equal((await cursor.peek(await cursor.stat(cursorPath))).updatedAt, iso(-30_000))
+  } finally {
+    database.close()
+  }
 
   console.log("activity stamps: ok")
 } finally {

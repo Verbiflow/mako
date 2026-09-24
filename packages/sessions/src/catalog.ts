@@ -278,6 +278,7 @@ export class SessionCatalog {
   private refreshes = new Map<string, RefreshState>()
   private rescans = new Map<string, RefreshState>()
   private scans = new Set<Promise<ThreadRef[]>>()
+  private fullScans = 0
   private reconciling: Promise<void> | null = null
   private opened: {
     path: string
@@ -367,6 +368,7 @@ export class SessionCatalog {
   }
 
   private async scanOnce(options: { emitChanges?: boolean }): Promise<ThreadRef[]> {
+    this.fullScans += 1
     await this.prepare()
     this.orderedRefs = null
     const seen = new Set<string>()
@@ -412,6 +414,10 @@ export class SessionCatalog {
 
   get count(): number {
     return this.orderedRefs?.length ?? this.list().length
+  }
+
+  get metrics() {
+    return { fullScans: this.fullScans, watchers: this.watchers.size, observations: this.observations.size }
   }
 
   /** The known sessions, newest first, optionally narrowed to a workspace. */

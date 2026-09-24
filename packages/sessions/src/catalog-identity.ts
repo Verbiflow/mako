@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { readdir, readFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
+import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
 
@@ -47,6 +48,18 @@ export interface CatalogSharingScope {
   code: string
   archivePath: string
   providers: Array<{ harness: string; roots: string[] }>
+}
+
+/** A private, scope-specific endpoint and cache for hosts with login sync off. */
+export function onDemandCatalogPaths(identity: string) {
+  if (!/^[a-f0-9]{64}$/.test(identity)) throw new Error("Invalid catalog identity")
+  const root = join(homedir(), ".mako", "catalogs", identity.slice(0, 24))
+  return {
+    socket: process.platform === "win32"
+      ? `\\\\.\\pipe\\mako-catalog-${identity}`
+      : join(root, "reader.sock"),
+    cache: join(root, "metadata.json"),
+  }
 }
 
 /** Equal code still must not mix account roots, archives or native runtimes. */

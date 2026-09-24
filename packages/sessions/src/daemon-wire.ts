@@ -77,6 +77,12 @@ export interface DaemonStats {
   rss?: number
   heapUsed?: number
   eventLoopP99Ms?: number
+  clients?: number
+  fullScans?: number
+  watchers?: number
+  observations?: number
+  cpuUserMicros?: number
+  cpuSystemMicros?: number
 }
 
 type JsonScalar = boolean | number | string | null
@@ -360,6 +366,10 @@ function parseDaemonStats(value: JsonValue | undefined): DaemonStats | null {
   if (rss !== undefined) result.rss = rss
   if (heapUsed !== undefined) result.heapUsed = heapUsed
   if (eventLoopP99Ms !== undefined) result.eventLoopP99Ms = eventLoopP99Ms
+  for (const key of ["clients", "fullScans", "watchers", "observations", "cpuUserMicros", "cpuSystemMicros"] as const) {
+    const metric = readNumber(value, key)
+    if (metric !== undefined && metric >= 0) result[key] = metric
+  }
   return result
 }
 
