@@ -3,7 +3,7 @@ import { z } from "zod"
 import type { BlockAddress, EntryBlock, ThreadEntry, ThreadPage } from "@mako/sessions"
 import type { LiveBlock } from "./contracts/live-content.js"
 import type { LiveSnapshot } from "./contracts/live-conversations.js"
-import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage } from "./contracts/live-history.js"
+import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
 
@@ -15,7 +15,7 @@ const MAX_RECORDS = 8
 const MAX_ACTIVE_READS = 32
 const IDLE_MS = 10 * 60_000
 interface View { id: string; snapshot: LiveSnapshot; used: number }
-type HistoryValue = LiveSnapshot | LiveHistoryPage | LiveBlock | EntryBlock | null
+type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | LiveBlock | EntryBlock
 interface RecordValue {
   id: string
   value: HistoryValue
@@ -43,11 +43,14 @@ const resultArray = z.array(z.unknown())
 export class LiveHistoryReader {
   private readonly views = new Map<string, View>()
   private readonly records = new Map<string, RecordValue>()
+  private readonly versions = new WeakMap<LiveBlock | EntryBlock, string>()
+  private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
+  private readonly nativeBlock?: (path: string, at: BlockAddress) => Promise<EntryBlock | null>
 
   constructor(
-    private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>,
-    private readonly nativeBlock?: (path: string, at: BlockAddress) => Promise<EntryBlock | null>,
-  ) {}
+    nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>,
+    nativeBlock?: (path: string, at: BlockAddress) => Promise<EntryBlock | null>,
+  ) { this.nativePage = nativePage; this.nativeBlock = nativeBlock }
 
   /** Shared response boundary for operations that return a snapshot. */
   present<Result>(value: Result): Result {
@@ -115,7 +118,12 @@ export class LiveHistoryReader {
       const captured = await snapshot()
       if (!captured) value = null
       else {
-        value = this.capture(captured, input.epoch !== undefined && input.epoch === captured.epoch ? input.from : undefined)
+        const held = input.ifCurrent && this.views.get(input.ifCurrent.token)
+        if (held?.id === id && input.epoch !== undefined && held.snapshot.epoch === input.epoch && captured.epoch === input.epoch &&
+            captured.revision === input.ifCurrent?.revision) {
+          held.used = Date.now()
+          value = { kind: "unchanged", token: input.ifCurrent.token, revision: captured.revision, epoch: captured.epoch }
+        } else value = this.capture(captured, input.epoch !== undefined && input.epoch === captured.epoch ? input.from : undefined)
       }
     } else {
       const view = this.views.get(input.token)
@@ -134,10 +142,12 @@ export class LiveHistoryReader {
       }
       else if (input.at.kind === "live") {
         value = view.snapshot.blocks[input.at.index]
+        if (value?.type === "tool") value = { ...value, historyVersion: this.version(value) }
       } else {
         const base = view.snapshot.base
         const entry = base?.entries[input.at.entry - (base?.start ?? 0)]
         value = entry?.kind === "assistant" ? entry.blocks[input.at.block] : undefined
+        const version = value?.type === "tool" ? this.version(value) : undefined
         if (base && value?.type === "tool" && isPartialTool(value)) {
           const before = await this.nativePage?.(base.ref.path)
           if (!before || nativeHistoryRevision(before) !== nativeHistoryRevision(base))
@@ -149,6 +159,7 @@ export class LiveHistoryReader {
             throw new Error("The complete tool output could not be read from the captured native history.")
           value = full
         }
+        if (value?.type === "tool") value = { ...value, historyVersion: version }
       }
       if (value === undefined) throw new Error("That retained history item is unavailable.")
     }
@@ -212,7 +223,9 @@ export class LiveHistoryReader {
     let blockStart = before.blocks
     let baseStart = before.base
     while (blockStart > covered && blocks.length < PAGE_ITEMS) {
-      const block = previewLive(source.blocks[blockStart - 1]!, blockStart - 1)
+      const original = source.blocks[blockStart - 1]!
+      const preview = previewLive(original, blockStart - 1)
+      const block = preview.type === "tool" && preview.historyRest ? { ...preview, historyVersion: this.version(original) } : preview
       const size = JSON.stringify(block).length
       if (blocks.length && chars + size > PAGE_CHARS) break
       blocks.push(block)
@@ -221,7 +234,11 @@ export class LiveHistoryReader {
     }
     if (blockStart === covered) {
       while (baseStart > baseOrigin && entries.length + blocks.length < PAGE_ITEMS) {
-        const entry = previewEntry(source.base!.entries[baseStart - baseOrigin - 1]!)
+        const original = source.base!.entries[baseStart - baseOrigin - 1]!
+        const entry = original.kind === "assistant" ? { ...original, blocks: original.blocks.map(block => {
+          const preview = previewTool(block)
+          return preview.type === "tool" && isPartialTool(preview) ? { ...preview, historyVersion: this.version(block) } : preview
+        }) } : original
         const size = JSON.stringify(entry).length
         if (entries.length + blocks.length > 0 && chars + size > PAGE_CHARS) break
         entries.push(entry)
@@ -243,6 +260,14 @@ export class LiveHistoryReader {
       history: { token, blockStart, blockEnd: before.blocks, turnStart,
         before: blockStart > covered || baseStart > baseOrigin || source.base?.hasEarlier ? { blocks: blockStart, base: baseStart } : null },
     }
+  }
+
+  private version(block: LiveBlock | EntryBlock): string {
+    const held = this.versions.get(block)
+    if (held) return held
+    const version = randomUUID()
+    this.versions.set(block, version)
+    return version
   }
 }
 
@@ -268,8 +293,4 @@ function isPartialTool(value: EntryBlock | undefined | null): boolean {
 function largeTool(block: { input?: string; output?: string; details?: unknown; attachments?: unknown }): boolean {
   return (block.input?.length ?? 0) > TOOL_PREVIEW || (block.output?.length ?? 0) > TOOL_PREVIEW ||
     JSON.stringify([block.details, block.attachments]).length > TOOL_PREVIEW
-}
-
-function previewEntry(entry: ThreadEntry): ThreadEntry {
-  return entry.kind === "assistant" ? { ...entry, blocks: entry.blocks.map(previewTool) } : entry
 }
