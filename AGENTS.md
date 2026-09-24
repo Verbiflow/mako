@@ -296,7 +296,7 @@ unwrapped from its MCP envelope), `steps` (`view`, `act`, `until`,
 `@mako/control-runtime` (`packages/control-runtime`) owns the Node session engine,
 CLI, browser connections, driver lifecycle, capture and recording. Its root
 `createControlRuntime({artifacts,browsers?,native?})` requires explicit standalone
-configuration. `/host`, `/browser`, `/session` and `/mcp` serve the desktop and
+configuration. `/host`, `/browser` and `/session` serve the desktop and
 transport adapters; `/contracts` and `/extension` are safe schema-only imports.
 Mako imports these package exports. Keep OS permission hosts and app UI wiring in
 `electron/`; do not move engine ownership back there. `runtime/control` is the
@@ -308,15 +308,16 @@ not a managed or runtime-recognized server.
 `packages/control/test` covers the pure layer; `docs/audits/2026-09-14/`
 holds the measurements the design rests on.
 
-Every provider receives the same managed `mako-control` MCP server, with
-`mako_control_status`, `mako_control_help` and `mako_control_exec`. Local Control
+Every provider receives a task-owned `mako-control` CLI and private session file.
+`ControlSessions` starts the worker; provider environments receive PATH/session
+configuration through `applyControlEnvironment`. The public Local Control MCP
+adapter is removed; retain the native driver’s private protocol. Local Control
 v2 programs use `control.app({pid})`, `control.window({pid,window_id})`,
 `control.tab(target)`, `control.openTab` and `control.claimTab`. The bound client
 in `packages/control/src/control/client.ts` owns API composition; the host owns
 routing, target validation, driver sessions and foreground checks. Public
 `control.act/observe/advanced/wait` and the separate `page` helper are retired.
-The older computer/browser program servers remain private regression harnesses,
-not managed provider APIs.
+The internal driver test executor and browser regression harness are not public provider APIs.
 
 Keep handles in `state` across cells. The worker's AsyncLocalStorage associates
 calls with their executing cell; a timer from a finished cell cannot borrow a
@@ -460,20 +461,12 @@ posts every tool call to PostHog by default. `test-computer-tools.ts`
 checks the two cursor calls and their order; the e2e's `fill-and-verify`
 times a `set_value` and a `click` on two elements under 2 s each.
 
-`scripts/benchmark-control-agents.ts` starts the compiled production MCP server
-over stdio and runs hosted models against its shipped `mako_computer_exec` (the
-tool's own description and the server's instructions, no harness prelude).
-Built-in fixture tasks cover read, fill, replace, and an `aria-hidden` canvas
-whose random text requires a real image; image blocks reach multimodal chat
-endpoints. With `--tasks <file>`, tasks against a real application such as
-`docs/audits/2026-09-14/conductor-agent-tasks.json`; it samples the
-frontmost pid throughout, runs an optional independent state-oracle program
-after the model, and reports pass, oracle evidence, wall/model/tool time,
-turns, prompt tokens, text/image bytes, and whether the target or driver took
-the front. Fixtures live in `scripts/lib/control-fixture.mjs`, shared with the
-e2e.
+`scripts/benchmark-control-agents.ts` gives hosted models a shell and the task's
+CLI, measuring turns, tokens, wall time, exact fixture outcomes and foreground
+changes. Its internal driver executor only administers fixtures. Fresh provider
+acceptance covers the actual launch environment and command discovery.
 
-`computer-tools-main.ts` wraps the native driver (`cua-driver`, an external
+`control-session.ts` wraps the native driver (`cua-driver`, an external
 install under `/Applications/CuaDriver.app`) and repairs what the driver gets
 wrong for agents. The driver refuses an output path whose deepest existing
 parent is a symlink (`/tmp` on macOS), so `computer-paths.ts` realpaths that
@@ -529,7 +522,7 @@ their standard `Local State` browser/profile records, so branded forks use the
 same extension transport. `open` defaults to a background, task-lifetime target;
 `disposition: "window"` creates a separate window and
 `lifetime: "persistent"` is the explicit opt-out. A released temporary target
-keeps its owner, takeover transfers that owner, and MCP-client cleanup closes
+keeps its owner, takeover transfers that owner, and task-session cleanup closes
 owned tabs and windows without disconnecting the shared browser.
 `context: "isolated"` uses `Target.createBrowserContext` only on direct CDP,
 is always task-lifetime, and is disposed as one unit; extension transports
@@ -1089,9 +1082,9 @@ mid-turn delivery, idle replies, queueing, native identity, and retained context
 `--restart` stops the host mid-conversation and reopens the same native session
 through the provider's own resume (Cursor's SDK `Agent.resume`, Grok's
 `session/load`, Codex's thread resume) with no portable history, on the first named provider that can.
-`--control` starts the embedded driver and a background Electron fixture, asks
+`--control` starts the embedded driver and a background AppKit fixture, asks
 the installed provider to read a random workspace value and enter/verify it
-through `mako-control`, requires a real `mako_control_exec` block, checks
+through the task-owned `mako-control` CLI, refuses removed public MCP tools, checks
 the fixture state and continuous frontmost sample independently, and removes
 the native session even when the turn fails. Grok needs an advertised tier that
 pre-approves lazy MCP calls (currently `MAKO_E2E_MODE=access:full`); Codex needs

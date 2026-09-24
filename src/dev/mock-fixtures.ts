@@ -355,33 +355,7 @@ export const MCP: McpRegistrySnapshot = {
       ],
       portable: true,
     },
-    {
-      id: "mock-control",
-      name: "mako-control",
-      transport: "stdio",
-      command: "/Applications/Mako.app/Contents/MacOS/Mako",
-      args: [
-        "computer-tools-main.js",
-        "--driver",
-        "cua-driver",
-        "--socket",
-        "/tmp/mako-cua.sock",
-      ],
-      envNames: [],
-      headerNames: [],
-      origins: [
-        {
-          provider: "mako",
-          account: "local",
-          scope: "managed",
-          provenance: "Mako managed",
-        },
-      ],
-      portable: true,
-      managed: true,
-      availability: "available",
-      detail: "Page, native and system control share one host-routed code API",
-    },
+
   ],
 }
 
