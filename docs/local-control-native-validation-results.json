@@ -372,5 +372,23 @@
     "engine": "source-only; frozen package runtime during GUI and Linux runs; desktop rollout not performed",
     "physicalInput": "coordination-unanswered",
     "proactiveFocus": "general-deliberate-activation-prevention-not-established"
+  },
+  "inputTargetContinuation": {
+    "candidate": "0d02dc53d0a315ff",
+    "installed": false,
+    "driver": "0.28.2+mako.21",
+    "before": "modified-key-reaches-focused-decoy",
+    "sourceRounds": 3,
+    "packagedRounds": 3,
+    "sandboxedSaveRounds": 4,
+    "publicMiddleClick": {
+      "frames": 671,
+      "width": 600,
+      "height": 352,
+      "pointerEvents": 19,
+      "foregroundSamples": 148
+    },
+    "japaneseTest": "deferred-by-user; other work remains active",
+    "evidence": "local-control-input-target-evidence.md"
   }
 }

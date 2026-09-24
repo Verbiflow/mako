@@ -74,7 +74,7 @@ must not be confused with the installed app size above.
 The current installed desktop is separate from this candidate. Readiness found
 running Mako processes, so no app was replaced and no installer was left queued.
 The candidate includes the preceding bounded-read and private-socket changes.
-Its dialog acceptance result is recorded alongside the other packaged receipts.
+Its sandboxed Save As workflow passed three cancellations and one confirmed write, with the remote Apple panel service identified and unchanged foreground.
 
 ## Remaining gates
 
@@ -82,9 +82,9 @@ These fixes do not establish proactive prevention of deliberate application
 activation, arbitrary raw keyboard/pointer routing across remote panel processes,
 IME composition, additional Linux compositor gestures, or full reference parity.
 The earlier English typing trial remains evidence; the user confirmed that it was
-already performed, so it was not repeated. IME remains a distinct participant
-choice; Japanese is not mandatory. No synthetic key sequence is counted as a
-physical or composition test.
+already performed, so it was not repeated. The user explicitly deferred the Japanese test as overkill. Other physical-input
+questions and all other work remain active; no IME pass is inferred. No synthetic
+key sequence is counted as a physical or composition test.
 
 Run `node scripts/test-native-keyboard-target.mjs` for source-engine acceptance.
 For a candidate, use its executable with `ELECTRON_RUN_AS_NODE=1` and pass

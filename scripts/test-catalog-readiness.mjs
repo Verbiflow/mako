@@ -254,6 +254,22 @@ try {
   assert.equal(threads.threadsReady(), true)
   threads.stopThreads()
 
+  // A lost reader's delayed list cannot erase its replacement in the same lifetime.
+  state.list = deferred()
+  install()
+  await listening()
+  assert.equal((await threads.pageThread("codex")).ref.harness, "codex")
+  const lostList = state.list
+  state.list = null
+  state.clients.at(-1).close()
+  await listening()
+  assert.equal(threads.threadsReady(), true)
+  lostList.resolve([{ harness: "codex", path: "lost-reader" }])
+  await tick()
+  assert.ok(!threads.listThreads().some(ref => ref.path === "lost-reader"))
+  assert.equal(threads.threadsReady(), true)
+  threads.stopThreads()
+
   // Failed initialization is an error, including for subsequent reads; not absent history.
   state.lineage = deferred()
   install()

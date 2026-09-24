@@ -11,6 +11,7 @@ parity has not been established.
 - **Every complaint from the agent:** [issue ledger](local-control-agent-issues.md),
   including findings that were corrected, not reproduced, or remain open.
 - **Architecture:** [ownership boundaries, diagnostics and change tests](local-control-architecture.md).
+- **CLI discovery and adherence:** [LC-29](#lc-29--cli-discovery-and-agent-adherence) is active: inspect actual startup delivery and unprompted CLI use, not just successful commands.
 - **CLI refactor:** [shared engine and shell contract](local-control-cli.md).
   CLI-only source acceptance passes; installed-host rollout remains open.
 - **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
@@ -37,7 +38,7 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.21 selected for new launches; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | +mako.21 installed for new Mac driver launches; existing daemons retain their executable. Signed candidate `33153e3c6176bd87` includes the menu/role and dialog-error fixes; packaged CLI, startup/reopen, Aside save/confirmation, native exact text/capture and dialog-refusal checks pass. Prior candidate evidence includes 40 Aside jobs. | Installed app remains `345bfd91c64009c6`; the previous idle update timed out. The subsequent idle rollout aborted at 11:37 UTC when a dev host appeared and another conversation started; nothing was replaced. No rollout is currently queued. The newer signed candidate is prepared but not queued; two running conversations were still reported at the final readiness check. See `local-control-cli-deployment.json` for the earlier aborted attempt. Post-install CLI-only repetition and extension rollout remain open. Candidate/source-host tests are not installed-host proof. |
+| Installed components | +mako.21 installed for new Mac driver launches; existing daemons retain their executable. Latest signed candidate `0d02dc53d0a315ff` includes the dialog/depth/socket changes, addressed modified keys and public middle-click. Its packaged CLI, both startup/reopen routes, bundled media, two-field keyboard and sandboxed Save As checks pass. Earlier candidate evidence includes Aside jobs; those do not certify this exact candidate. | Installed app remains `345bfd91c64009c6`; the previous idle update timed out. The subsequent idle rollout aborted at 11:37 UTC when a dev host appeared and another conversation started; nothing was replaced. No rollout is currently queued. Candidate `0d02dc53d0a315ff` is prepared but not queued; its readiness check still found running Mako processes. See `local-control-cli-deployment.json` for the earlier aborted attempt. Post-install CLI-only repetition and extension rollout remain open. Candidate/source-host tests are not installed-host proof. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -435,6 +436,24 @@ page-triggered extension downloads still need attribution/completion support.
 
 **Status: partial; safe refusals remain part of the contract.**
 
+Current continuation: fixed modified native keys dropping their addressed field.
+The previous frozen engine selected a decoy field; source and signed candidate
+`0d02dc53d0a315ff` each pass three exact-field rounds with unchanged decoy/focus.
+The public API now supports a single native middle-click when the driver advertises
+it. A resized-screenshot gesture run passes real AppKit events and cursor recording
+(671 frames, 19 pointer events, 148 unchanged foreground samples). Old drivers and
+stale refs refuse before dispatch. The candidate also passes sandboxed Save As,
+three cancellations and one independently confirmed write. No native-driver update
+or installed-desktop replacement occurred. [Evidence](local-control-input-target-evidence.md).
+
+**User scope decision:** defer the Japanese physical test as overkill. Do not ask
+the user to repeat the completed English trial merely to unblock other work.
+This does not establish IME correctness or waive other physical-input questions.
+Proactive focus prevention, cross-process raw input, broader gesture/compositor
+coverage and installed rollout remain active. CLI discovery/adherence is now an
+additional priority in LC-29.
+
+
 September 24 physical-input continuation: ordinary English typing and IME are now
 separate modes of `scripts/test-native-human-input.mjs`. The English trial retained
 the exact two-line text during eight background edit/save jobs, with 78 keydowns
@@ -490,7 +509,7 @@ packed-consumer checks and full lint pass.
 [Evidence, failures and exact limits](local-control-dialog-depth-evidence.md).
 
 Next: proactive Mac focus protection, raw cross-process key/pointer delivery and other dialog families; clipboard
-consumption/collision handling; physical Japanese IME and simultaneous human typing.
+consumption/collision handling; remaining physical-input confirmation. Japanese testing is deferred by user choice; do not treat it as a prerequisite for the other work.
 Broaden Electron/Qt/rich-editor coverage. The explicit Terminal GUI job now passes:
 background launch, native command typing, high-level Return, independent output
 read, screenshot and owned-window cleanup. All 82 foreground samples stayed on
@@ -626,6 +645,45 @@ from capture/output fps; check that instrumentation does not distort a candidate
 Use equal-resolution comparisons alongside ordinary defaults. Compare the same workload
 and builds before/after changes. A reference parity claim requires matched reference
 runs; symbols, marketing fps and synthetic transport timings are not substitutes.
+
+## LC-29 — CLI discovery and agent adherence
+
+**Status: investigation active; user reports agents finding the CLI harder than MCP.**
+[Initial source audit, measurements and acceptance design](local-control-cli-discovery.md).
+This supplements LC-20 and LC-27; the public MCP adapter stays removed.
+
+Separate whether the agent discovers the available tool from whether it follows
+its targeting, observation, verification and recovery rules. Current startup
+injection is a short paragraph linking to `--help`; launch tests check command
+presence and environment wiring. Prior fresh trials received the CLI explicitly,
+so their success does not establish discovery during an ordinary user task.
+
+Next:
+
+1. Trace actual prompt/environment delivery through Codex, Claude, Cursor and ACP,
+   including resume, compaction, fresh bindings, worker loss and child-agent shells.
+   Identify source/candidate/installed builds rather than assuming the current
+   source instructions reached a reported session.
+2. Read relevant Mako session records for observed wrong routes, guessed commands,
+   repeated help, fabricated refs, false completion and unsafe retries. Separate
+   test/development commands from actual agent use; retain no raw credentials or
+   private browser content in tracked evidence.
+3. Compare a compact task-oriented bootstrap and focused help against the current
+   version. Explain when to use the CLI, exact discovery, session ownership,
+   persistent handles, files/stdin, explicit images and unknown-outcome recovery.
+   Check operational examples against the actual parser/engine. Avoid restoring
+   a large catalog to every prompt or adding another control implementation.
+4. Run browser/native held-out jobs with the normal production startup prompt,
+   without telling the agent which tool to select. Measure first correct action,
+   tool adoption, help calls/bytes, invalid calls, interventions, total context,
+   independently verified completion and any unintended input/replay. Include
+   repeated/resumed tasks, not only a fresh agent handed an executable path.
+
+Done for a declared provider/build matrix when complete tasks improve discovery
+and rule adherence without sacrificing exact outcomes, latency or context cost.
+Keep matched baseline/candidate failures; passing subprocess tests or better prose
+alone does not close this item. No general MCP-versus-CLI regression or superiority
+claim has yet been established.
 
 ## Scope decision from the Replicas review
 
