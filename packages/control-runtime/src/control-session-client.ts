@@ -68,7 +68,7 @@ async function readDescriptor(file: string): Promise<SessionDescriptor> {
     if (descriptor.build !== (await controlSessionBuild()))
       throw new ControlFault(
         "incompatible-session",
-        "CLI and running engine builds differ. Use the matching CLI or explicitly stop and restart the idle session.",
+        "CLI and running engine builds differ. Use the matching task CLI. If that build is no longer available, end the task through its owner and start a new task; no command was dispatched.",
         "not-dispatched"
       )
     return descriptor

@@ -830,6 +830,7 @@ export class BrowserService {
         const dialog = dialogOpening.safeParse(event.params)
         if (!dialog.success) return
         binding.dialog = { ...dialog.data, openedAt: Date.now() }
+        void binding.focus.setDialogOpen(true)
         if (binding.dialogPolicy === "ask") return
         const accept = binding.dialogPolicy === "accept"
         void binding.connection
@@ -855,6 +856,12 @@ export class BrowserService {
       }
       case "Page.javascriptDialogClosed":
         binding.dialog = null
+        void binding.focus.setDialogOpen(false).catch(() => {
+          binding.uncertain = true
+          binding.connection.emitLocal("mako.focusRestoreFailed", {
+            message: "Focus restoration failed after the dialog closed; the attachment was ended. Observe browser status before continuing.",
+          }, binding.sessionId)
+        })
         return
       case "Network.requestWillBeSent": {
         const request = requestEvent.safeParse(event.params)
@@ -1541,12 +1548,9 @@ export class BrowserService {
   ): Promise<JsonValue> {
     const send = async (method: string, params: JsonObject = {}) => {
       try {
-        return await binding.connection.send(
-          method,
-          params,
-          signal,
-          binding.sessionId
-        )
+        return method.startsWith("Input.")
+          ? await this.input(binding, method, params, signal)
+          : await binding.connection.send(method, params, signal, binding.sessionId)
       } catch (error) {
         if (error instanceof BrowserFault)
           throw new BrowserFault({
@@ -2069,19 +2073,20 @@ export class BrowserService {
           : await this.activeEditable(binding, signal)
         if (command.clear && field.length > 0) {
           await this.keyPress(
-            send,
+            binding,
             { key: "a", code: "KeyA", keyCode: 65 },
             0,
+            signal,
             ["selectAll"]
           )
         }
         // Selection replacement is one edit. Clearing first emits an intermediate
         // empty input event that controlled forms may reject or use to move focus.
         if (command.clear && field.length > 0 && command.text === "")
-          await this.keyPress(send, keySpec("Backspace"), 0)
+          await this.keyPress(binding, keySpec("Backspace"), 0, signal)
         else if (command.text !== "")
           await send("Input.insertText", { text: command.text })
-        if (command.submit) await this.keyPress(send, keySpec("Enter"), 0)
+        if (command.submit) await this.keyPress(binding, keySpec("Enter"), 0, signal)
         return {
           field: field.tag,
           cleared: command.clear && field.length > 0 ? field.length : 0,
@@ -2093,9 +2098,10 @@ export class BrowserService {
         if (command.ref)
           await this.focusEditable(binding, command.ref, signal, false)
         await this.keyPress(
-          send,
+          binding,
           keySpec(command.key),
-          modifierMask(command.modifiers)
+          modifierMask(command.modifiers),
+          signal
         )
         return { key: command.key, modifiers: command.modifiers ?? [] }
       }
@@ -2170,7 +2176,10 @@ export class BrowserService {
           if (command.promptText !== undefined)
             answer.promptText = command.promptText
           await send("Page.handleJavaScriptDialog", answer)
-          binding.dialog = null
+          // Answering may synchronously open another dialog. Do not erase its
+          // state or restore focus while that new modal blocks the renderer.
+          if (binding.dialog === answered) binding.dialog = null
+          await binding.focus.setDialogOpen(binding.dialog !== null)
         }
         const describe = (dialog: DialogState): JsonObject => ({
           type: dialog.type,
@@ -2498,6 +2507,50 @@ export class BrowserService {
     }
   }
 
+  /** A modal can suspend a renderer's input acknowledgement until answered.
+   * Stop waiting on the event, but never treat that event as input success. */
+  private async input(
+    binding: Binding,
+    method: string,
+    params: JsonObject,
+    signal: AbortSignal
+  ): Promise<JsonObject> {
+    const interrupted = new AbortController()
+    let dialog: DialogState | null = null
+    const opened = () => {
+      if (binding.dialogPolicy !== "ask" || !binding.dialog) return
+      dialog = binding.dialog
+      interrupted.abort()
+    }
+    const unsubscribe = binding.connection.onEvent((event) => {
+      if (event.sessionId === binding.sessionId &&
+          event.method === "Page.javascriptDialogOpening") opened()
+    })
+    try {
+      // Dispatch before checking an already open dialog: this permits the one
+      // button/key release that cleans up an interrupted press. The normal
+      // command boundary refuses new input while a dialog is open.
+      const pending = binding.connection.send(
+        method, params, AbortSignal.any([signal, interrupted.signal]), binding.sessionId
+      )
+      opened()
+      try {
+        return await pending
+      } catch (error) {
+        if (dialog && !signal.aborted && error instanceof BrowserFault &&
+            error.detail.code === "cancelled" && error.detail.outcome === "unknown")
+          throw new BrowserFault({
+            code: "dialog-open",
+            message: "A dialog interrupted input acknowledgement. The input may already have taken effect; do not repeat it. Read dialog({}), answer with dialog({respond:'accept'|'dismiss'}), then observe this exact tab before more input.",
+            outcome: "unknown",
+          })
+        throw error
+      }
+    } finally {
+      unsubscribe()
+    }
+  }
+
   private async clickAt(
     binding: Binding,
     at: { ref: string } | { x: number; y: number },
@@ -2507,7 +2560,7 @@ export class BrowserService {
     signal: AbortSignal
   ): Promise<JsonValue> {
     const send = (method: string, params: JsonObject = {}) =>
-      binding.connection.send(method, params, signal, binding.sessionId)
+      this.input(binding, method, params, signal)
     const point = await this.resolvePoint(binding, at, signal)
     const pressed = {
       ...point,
@@ -2524,11 +2577,11 @@ export class BrowserService {
       pointerType: "mouse",
     })
     const release = (timeoutMs: number) =>
-      binding.connection.send(
+      this.input(
+        binding,
         "Input.dispatchMouseEvent",
         { type: "mouseReleased", ...pressed, buttons: 0 },
-        AbortSignal.timeout(timeoutMs),
-        binding.sessionId
+        AbortSignal.timeout(timeoutMs)
       )
     try {
       await send("Input.dispatchMouseEvent", {
@@ -2541,9 +2594,9 @@ export class BrowserService {
         await release(2000).catch(() => {})
       throw error
     }
-    // The release gets its own budget so a cancelled command still lets go
-    // of the button; a second attempt covers one slow synchronous handler.
-    const released = await release(5000).catch(() => release(2000))
+    // Release once with its own budget, even when the caller cancelled after
+    // press. A missing acknowledgement is never permission to replay release.
+    const released = await release(5000)
     if (signal.aborted)
       throw new BrowserFault({
         code: "cancelled",
@@ -2596,9 +2649,10 @@ export class BrowserService {
   }
 
   private async keyPress(
-    send: (method: string, params?: JsonObject) => Promise<JsonObject>,
+    binding: Binding,
     spec: KeySpec,
     modifiers: number,
+    signal: AbortSignal,
     commands?: string[]
   ): Promise<void> {
     const down: JsonObject = {
@@ -2614,15 +2668,28 @@ export class BrowserService {
       down.unmodifiedText = spec.text
     }
     if (commands) down.commands = commands
-    await send("Input.dispatchKeyEvent", down)
-    await send("Input.dispatchKeyEvent", {
+    const release = () => this.input(binding, "Input.dispatchKeyEvent", {
       type: "keyUp",
       key: spec.key,
       code: spec.code,
       windowsVirtualKeyCode: spec.keyCode,
       nativeVirtualKeyCode: spec.keyCode,
       modifiers,
-    })
+    }, AbortSignal.timeout(5000))
+    try {
+      await this.input(binding, "Input.dispatchKeyEvent", down, signal)
+    } catch (error) {
+      if (error instanceof BrowserFault && error.detail.outcome === "unknown")
+        await release().catch(() => {})
+      throw error
+    }
+    await release()
+    if (signal.aborted)
+      throw new BrowserFault({
+        code: "cancelled",
+        message: "Key input was dispatched and released before cancellation. Observe before deciding whether to press again.",
+        outcome: "unknown",
+      })
   }
 
   private node(binding: Binding, ref: string): number {

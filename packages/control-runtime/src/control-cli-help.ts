@@ -140,7 +140,7 @@ export const controlCommands = new Map<string, CommandHelp>(
       output:
         "JSON recording receipt with id and target. Save it to stop/status later; command exit does not stop recording.",
       notes:
-        "--input accepts {options:{cursor,maxDurationMs,...}}. Rates depend on the backend; unsupported requests refuse. Requested/output fps does not establish distinct source fps.",
+        "--input accepts {options:{cursor,maxDurationMs,...}}. Rates depend on the backend; unsupported requests refuse. Requested/output fps does not establish distinct source fps. The receipt’s frames field counts source frames or retained samples, not encoded constant-rate frames; the encoder may duplicate frames.",
       examples: [
         "mako-control record start --target-file target.json --directory ./recordings > recording.json",
       ],
@@ -173,10 +173,11 @@ export const controlCommands = new Map<string, CommandHelp>(
       output:
         "JSON array of result/log/artifact blocks. Explicit images and large values are saved to files. Waits for completion; no tickets to collect.",
       notes:
-        "control, state, console.log, emitImage and artifacts are available. Await actions; return only needed results. state survives separate invocations. Timeout/cancellation resets the script worker; normal script errors retain state. Read api --topic examples for scoped locators and verification. Scripts are trusted local code, not a sandbox.",
+        "control, state, console.log, emitImage and artifacts are available. Await actions; return only needed results. state survives separate invocations. Timeout/cancellation resets the script worker; normal script errors retain state. Read api once for the complete reference, or api --topic examples for recipes. To use an existing CLI target, pass the complete open/claim JSON to control.tab(TARGET_JSON) and store it in state.tab; native targets use control.window({pid,window_id}). Scripts are trusted local code, not a sandbox.",
       examples: [
         "printf '%s' 'return await control.browsers()' | mako-control exec --source-file -",
         "mako-control exec --source-file workflow.js > results.json",
+        `jq -r '"state.tab=control.tab(" + tojson + "); return await state.tab.observe();"' target.json | mako-control exec --source-file -`,
       ],
     },
     api: {
@@ -187,7 +188,7 @@ export const controlCommands = new Map<string, CommandHelp>(
       output:
         "JSON signatures, return contracts and examples. Without a topic, returns the complete control reference.",
       notes:
-        "Topics: discovery, connection, actions, observations, assertions, recording, page, native, output, examples. Native --tool help may connect the driver; ordinary command --help never needs a session.",
+        "Topics: discovery, connection, handles, actions, observations, assertions, recording, page, native, output, examples. Native --tool help may connect the driver; ordinary command --help never needs a session.",
       examples: [
         "mako-control api --topic examples",
         "mako-control api --domain Page --method navigate",
@@ -250,5 +251,5 @@ export function controlCommandHelp(
       JSON.stringify({ commands: Object.fromEntries(commands), contract }) +
       "\n"
     )
-  return `mako-control — browser and computer use for one persistent task\n\n${commands.map(([name, entry]) => `  ${name.padEnd(15)} ${entry.summary}`).join("\n")}\n\nRun mako-control COMMAND --help for flags, output and examples. Add --json for structured help.\nBrowser workflow: browsers → connect --browser ID → open --browser ID --url URL > target.json → observe --target-file target.json.\nNative workflow: apps → windows --pid PID → exec with control.window({pid,window_id}).\nUse api --topic examples for complete scripts and explicit verification.\n\n${contract}\n`
+  return `mako-control — browser and computer use for one persistent task\n\n${commands.map(([name, entry]) => `  ${name.padEnd(15)} ${entry.summary}`).join("\n")}\n\nRun mako-control COMMAND --help for flags, output and examples. Add --json for structured help.\nBrowser workflow: browsers → connect --browser ID → open --browser ID --url URL > target.json → observe --target-file target.json.\nNative workflow: apps → windows --pid PID → exec with control.window({pid,window_id}).\nFor a multi-step job, read mako-control api once: it includes handles, selectors, dialogs, verification and recording. Use api --topic examples when only recipes are needed.\n\n${contract}\n`
 }

@@ -103,21 +103,34 @@ import { DevinLocalProvider } from "./providers/devin-local.js"
 import { DevinCliProvider } from "./providers/devin-cli.js"
 import { ClaudeProvider } from "./providers/claude.js"
 import { OpenCodeProvider } from "./providers/opencode.js"
+import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
+
+// Freeze the implementation identity for this loaded module lifetime. A dev
+// rebuild on disk must not make an old host claim it loaded the new readers.
+const loadedCatalogCode = catalogCodeIdentity().catch(() => null)
+
+function defaultProviders() {
+  return [
+    new CodexProvider(), new ClaudeProvider(), new CursorProvider(),
+    new GrokProvider(), new OpenCodeProvider(), new DevinLocalProvider(),
+    new DevinCliProvider(),
+  ]
+}
+
+/** Compatibility for sharing discovery across installed and development hosts. */
+export async function defaultCatalogIdentity(archivePath: string): Promise<string> {
+  const code = await loadedCatalogCode
+  if (!code) throw new Error("Cannot establish catalog reader compatibility")
+  const providers = defaultProviders().map(provider => ({ harness: provider.harness, roots: provider.roots() }))
+  return catalogSharingIdentity({ code, archivePath, providers })
+}
 
 /** The catalog with every built-in provider, ready to scan. */
 export function defaultCatalog(
   options: { cachePath?: string; archivePath?: string } = {}
 ): SessionCatalog {
   const catalog = new SessionCatalog(
-    [
-      new CodexProvider(),
-      new ClaudeProvider(),
-      new CursorProvider(),
-      new GrokProvider(),
-      new OpenCodeProvider(),
-      new DevinLocalProvider(),
-      new DevinCliProvider(),
-    ],
+    defaultProviders(),
     options
   )
   return catalog

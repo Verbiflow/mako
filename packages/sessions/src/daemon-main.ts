@@ -15,7 +15,7 @@ import { chmod, mkdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Server } from "node:net"
-import { defaultCatalog } from "./index.js"
+import { defaultCatalog, defaultCatalogIdentity } from "./index.js"
 import {
   claimDaemon,
   daemonSocketPath,
@@ -58,7 +58,9 @@ async function main(): Promise<void> {
   try {
     const refs = await catalog.scan()
     catalog.startWatching()
-    server = await serveCatalog(catalog, socketPath, claim)
+    server = await serveCatalog(catalog, socketPath, claim, {
+      catalogIdentity: await defaultCatalogIdentity(join(dir, "archive")),
+    })
     console.log(
       `mako-syncd: ${refs.length} sessions in ${Math.round(performance.now() - started)}ms, watching · ${socketPath}`
     )

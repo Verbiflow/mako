@@ -137,7 +137,12 @@ export async function runControlCli(
     },
   })
   if (values.help || positionals.length === 0 || positionals[0] === "help") {
-    process.stdout.write(controlCommandHelp(positionals[0] === "help" ? positionals.slice(1) : positionals, values.json))
+    process.stdout.write(
+      controlCommandHelp(
+        positionals[0] === "help" ? positionals.slice(1) : positionals,
+        values.json
+      )
+    )
     return
   }
   if (positionals.length > 2)
@@ -249,10 +254,18 @@ export async function runControlCli(
         }
       } catch (error) {
         child.kill("SIGTERM")
-        throw error
+        if (controlFaultData(error)) throw error
+        throw new ControlFault(
+          controller.signal.aborted ? "cancelled" : "startup-failed",
+          controller.signal.aborted
+            ? "Session startup cancelled; shutdown was requested. Inspect this job's launcher.json cleanup report before starting another job."
+            : "Session startup did not complete; shutdown was requested. Inspect this job's output and launcher.json cleanup report before starting another job.",
+          "unknown"
+        )
       }
     }
-    const sessionFile = values["session-file"] ?? process.env.MAKO_CONTROL_SESSION_FILE
+    const sessionFile =
+      values["session-file"] ?? process.env.MAKO_CONTROL_SESSION_FILE
     if (!sessionFile)
       throw new ControlFault(
         "invalid-request",
@@ -482,65 +495,76 @@ export async function runControlCli(
         reply.fault.message,
         reply.fault.outcome
       )
-    let value = reply.value
-    if (command === "open" || command === "claim") {
-      const opened = object.parse(value)
-      const target = ControlTargetSchema.parse({
-        kind: "page",
-        browser: opened.browser,
-        tab: opened.tab,
-        generation: opened.generation,
-        lease: opened.lease,
-      })
-      const failed = z
-        .object({ fault: z.object({ outcome: z.string() }) })
-        .safeParse(opened.navigation)
-      value = failed.success
-        ? { target, navigation: z.json().parse(opened.navigation) }
-        : target
-      if (failed.success)
-        process.exitCode = failed.data.fault.outcome === "unknown" ? 4 : 5
-    }
-    if (command === "shot")
-      value = await writeImage(
-        z.string().parse(values.output),
-        value,
-        values.overwrite ?? false
-      )
-    if (command === "exec") {
-      // The service saves explicit images as artifacts; ordinary values stay lossless.
-      value = z
-        .array(z.record(z.string(), z.json()))
-        .parse(value)
-        .map((block) => {
-          if (block.type === "image")
-            throw new ControlFault(
-              "invalid-image-reply",
-              "Engine returned inline image data instead of a saved artifact. Do not replay the program.",
-              "unknown"
-            )
-          const text = z.string().safeParse(block.text)
-          if (block.type === "text" && text.success) {
-            try {
-              return {
-                type: "result",
-                value: z.json().parse(JSON.parse(text.data)),
-              }
-            } catch {
-              return block
-            }
-          }
-          return block
+    // The engine has already completed this command. Failure to consume or
+    // publish its result must never be presented as a pre-dispatch input error.
+    try {
+      let value = reply.value
+      if (command === "open" || command === "claim") {
+        const opened = object.parse(value)
+        const target = ControlTargetSchema.parse({
+          kind: "page",
+          browser: opened.browser,
+          tab: opened.tab,
+          generation: opened.generation,
+          lease: opened.lease,
         })
-    }
-    await output(value)
-    if (
-      command === "record" &&
-      ["failed", "interrupted"].includes(
-        RecordingReceiptSchema.parse(value).status
+        const failed = z
+          .object({ fault: z.object({ outcome: z.string() }) })
+          .safeParse(opened.navigation)
+        value = failed.success
+          ? { target, navigation: z.json().parse(opened.navigation) }
+          : target
+        if (failed.success)
+          process.exitCode = failed.data.fault.outcome === "unknown" ? 4 : 5
+      }
+      if (command === "shot")
+        value = await writeImage(
+          z.string().parse(values.output),
+          value,
+          values.overwrite ?? false
+        )
+      if (command === "exec") {
+        // The service saves explicit images as artifacts; ordinary values stay lossless.
+        value = z
+          .array(z.record(z.string(), z.json()))
+          .parse(value)
+          .map((block) => {
+            if (block.type === "image")
+              throw new ControlFault(
+                "invalid-image-reply",
+                "Engine returned inline image data instead of a saved artifact. Do not replay the program.",
+                "unknown"
+              )
+            const text = z.string().safeParse(block.text)
+            if (block.type === "text" && text.success) {
+              try {
+                return {
+                  type: "result",
+                  value: z.json().parse(JSON.parse(text.data)),
+                }
+              } catch {
+                return block
+              }
+            }
+            return block
+          })
+      }
+      const failedRecording =
+        command === "record" &&
+        ["failed", "interrupted"].includes(
+          RecordingReceiptSchema.parse(value).status
+        )
+      await output(value)
+      if (failedRecording) process.exitCode = 5
+    } catch (error) {
+      if (controlFaultData(error)) throw error
+      const io = z.object({ code: z.string().max(80) }).safeParse(error)
+      throw new ControlFault(
+        "result-unavailable",
+        `The command completed, but its result could not be validated or saved${io.success ? ` (${io.data.code})` : ""}. Do not replay it; inspect the same session and target.`,
+        "unknown"
       )
-    )
-      process.exitCode = 5
+    }
   } finally {
     process.removeListener("SIGINT", cancel)
     process.removeListener("SIGTERM", cancel)

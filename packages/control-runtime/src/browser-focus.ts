@@ -6,6 +6,7 @@ export class BrowserFocus {
   private users = 0
   private enabled = false
   private closed = false
+  private dialogOpen = false
 
   constructor(
     private readonly connection: Pick<BrowserConnection, "send">,
@@ -45,6 +46,17 @@ export class BrowserFocus {
     }
   }
 
+  /** Modal handlers block focus-reset acknowledgements. Keep the target-local
+   * hold until the dialog closes; session teardown still resets or detaches. */
+  setDialogOpen(open: boolean): Promise<void> {
+    this.dialogOpen = open
+    if (open) return Promise.resolve()
+    return this.enqueue(async () => {
+      if (!this.closed && !this.dialogOpen && this.users === 0)
+        await this.disable()
+    })
+  }
+
   async acquire(
     signal = AbortSignal.timeout(5000)
   ): Promise<() => Promise<void>> {
@@ -76,7 +88,7 @@ export class BrowserFocus {
       released = true
       return this.enqueue(async () => {
         if (this.closed) return
-        if (--this.users === 0) await this.disable()
+        if (--this.users === 0 && !this.dialogOpen) await this.disable()
       })
     }
   }

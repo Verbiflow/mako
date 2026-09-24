@@ -75,7 +75,7 @@ export function daemonSocketPath(): string {
  * without it forever. Clients that see an older daemon retire it and let a
  * fresh one take the socket.
  */
-export const PROTOCOL_VERSION = 30
+export const PROTOCOL_VERSION = 31
 export const MAX_DAEMON_RSS = 512 * 1024 * 1024
 export function daemonMemoryUnsafe(rss: number): boolean {
   return rss > MAX_DAEMON_RSS
@@ -230,6 +230,7 @@ export function portLink(port: DaemonPort, frameLimit: number): DaemonLink {
 
 /** Serve one catalog over the socket. Resolves once listening. */
 export interface ServeCatalogOptions {
+  catalogIdentity?: string
   /**
    * Retire when the process RSS stays above `MAX_DAEMON_RSS`. On by default
    * for the detached daemon; a catalog served from a worker thread inside a
@@ -316,6 +317,7 @@ function catalogService(
                 sessions: catalog.count,
                 version: PROTOCOL_VERSION,
                 script: process.argv[1] ?? "",
+                catalogIdentity: options.catalogIdentity,
                 runtime: process.execPath,
                 rss: memory.rss,
                 heapUsed: memory.heapUsed,

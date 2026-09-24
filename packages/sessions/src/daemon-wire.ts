@@ -70,6 +70,8 @@ export interface DaemonStats {
   version: number
   /** The entry script this daemon runs; a client from another build retires it. */
   script?: string
+  /** Reader code, native roots, archive and runtime identity. */
+  catalogIdentity?: string
   /** The Node runtime executing that script. */
   runtime?: string
   rss?: number
@@ -349,6 +351,8 @@ function parseDaemonStats(value: JsonValue | undefined): DaemonStats | null {
   const script = readString(value, "script")
   const runtime = readString(value, "runtime")
   if (script !== undefined) result.script = script
+  const catalogIdentity = readString(value, "catalogIdentity")
+  if (catalogIdentity !== undefined) result.catalogIdentity = catalogIdentity
   if (runtime !== undefined) result.runtime = runtime
   const rss = readNumber(value, "rss")
   const heapUsed = readNumber(value, "heapUsed")

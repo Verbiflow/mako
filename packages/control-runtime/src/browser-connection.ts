@@ -210,24 +210,6 @@ export class BrowserConnection {
         signal.removeEventListener("abort", abort)
         if (error) reject(error)
         else {
-          const point =
-            method === "Input.dispatchMouseEvent"
-              ? mousePointSchema.safeParse(params)
-              : undefined
-          if (point?.success)
-            for (const listener of this.inputListeners) {
-              try {
-                listener({
-                  sessionId,
-                  dispatchedAt,
-                  x: point.data.x,
-                  y: point.data.y,
-                  pressed: params.type === "mousePressed",
-                })
-              } catch {
-                /* Media feedback cannot change the outcome of delivered input. */
-              }
-            }
           resolve(result)
         }
       }
@@ -267,6 +249,27 @@ export class BrowserConnection {
             )
         }
       )
+      // Cursor events describe dispatched input, not UI completion. A modal
+      // may delay the CDP reply until the agent answers it.
+      const point =
+        method === "Input.dispatchMouseEvent"
+          ? mousePointSchema.safeParse(params)
+          : undefined
+      if (point?.success)
+        for (const listener of this.inputListeners) {
+          try {
+            listener({
+              sessionId,
+              dispatchedAt,
+              x: point.data.x,
+              y: point.data.y,
+              pressed: params.type === "mousePressed",
+            })
+          } catch {
+            /* Media feedback cannot change the outcome of delivered input. */
+          }
+        }
+
     })
   }
 
