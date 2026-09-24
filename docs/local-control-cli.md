@@ -1,7 +1,7 @@
 # Composable Local Control commands
 
-The shared engine and shell commands are implemented locally. Installation and
-latest regular-profile Aside acceptance remain separate gates in
+The installed shared engine and CLI passed a fresh-agent Aside form workflow.
+New capture/recording fixes still need installed rollout; see
 [Wayfinder LC-20](local-control-map.md#lc-20--shared-engine-and-composable-cli).
 The [architecture contract](local-control-architecture.md) owns the boundaries;
 the [issue ledger](local-control-agent-issues.md) tracks the original agent failures.
@@ -27,7 +27,16 @@ Untrusted cloud jobs still need the VM/container boundary.
 
 In a built checkout, run `node /absolute/mako/packages/control-runtime/dist/control-cli.js`.
 The standalone package provides `mako-control`; `mako-control-mcp` is the separate
-MCP stdio launcher. The installed Mako app has not yet received this update.
+MCP stdio launcher. The installed Mac app also contains the CLI:
+
+```sh
+ELECTRON_RUN_AS_NODE=1 /Applications/Mako.app/Contents/MacOS/Mako \
+  /Applications/Mako.app/Contents/Resources/app.asar/node_modules/@mako/control-runtime/dist/control-cli.js \
+  status --session-file "$session_file"
+```
+
+A global `mako-control` shell alias is not installed automatically. Use a CLI
+from the same build as the session: mismatched engines refuse explicitly.
 
 On Mac, use the `sessionFile` returned by the updated `mako_control_status` for
 that task. The permission-owning host stays in charge. On Linux, a trusted job
@@ -40,7 +49,7 @@ mako-control connect --browser "$browser_id" --session-file "$session_file"
 mako-control open --browser "$browser_id" --url https://example.com \
   --session-file "$session_file" > target.json
 mako-control observe --target-file target.json --session-file "$session_file"
-mako-control shot --target-file target.json --role button --name Save \
+mako-control shot --target-file target.json --role button --name Save --format png \
   --output 'Save button.png' --session-file "$session_file" > capture.json
 mako-control exec --source-file workflow.js --session-file "$session_file"
 mako-control session stop --session-file "$session_file"
@@ -62,7 +71,7 @@ may consume it. For example, `cat target.json | mako-control observe --target-fi
 | --- | --- |
 | `observe` | Exact target plus optional read scope in `--input`; returns structured observation. Does not capture images. |
 | `act` | Exact target plus a closed operation in `--input`, such as `{ "kind":"set-text", "ref":"…", "text":"Hello" }`; returns dispatch evidence. |
-| `shot` | Requires `--output`. Optional `--role`/`--name` or `{selector:{role,name,within},options:{…}}` through `--input`. Writes actual image bytes and returns path, SHA-256, byte count, dimensions and coordinate metadata. Existing files require `--overwrite`. |
+| `shot` | Requires `--output`. `--format png\|jpeg` selects the encoding; the filename alone does not. Optional `--role`/`--name` or `{selector:{role,name,within},options:{…}}` through `--input`. Writes actual image bytes and returns path, SHA-256, byte count, dimensions and coordinate metadata. Existing files require `--overwrite`. |
 | `record start` | Exact target, optional `--directory`, `--name`, `--fps`, `--max-side` or structured recording options; returns a receipt containing the target and recording ID. |
 | `record stop --input receipt.json --wait` | Waits for finalization; returns the final receipt. `finished` and `video` establish a completed artifact. Failed/interrupted artifacts exit nonzero. `record status` reads the same receipt ID. |
 | `exec --source-file workflow.js` | Trusted JavaScript using the existing control API. Waits for completion without MCP cells. Returns an array of result/log/artifact blocks; explicit images are saved to files. Script state survives commands. The existing script deadline still applies. |

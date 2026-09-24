@@ -285,6 +285,20 @@ state.recording = await state.tab.record({
 return state.recording;
 ```
 
+Browser previews and recordings share a temporary CDP focus-emulation hold.
+The first consumer enables it so an inactive tab can paint; the last consumer
+disables it. Input actions share that hold, so finishing a click cannot freeze
+an ongoing recording. No browser tab/window activation is requested. Text reads
+remain unchanged. Embedders can choose `focusPolicy: "off"` when page focus or
+visibility events must remain untouched; hidden capture may then refuse for lack
+of frames. `"lease"` retains its explicit whole-lease behavior.
+
+Aside acceptance restores both `document.hasFocus()` and visibility after viewing
+or a screenshot, including transport loss/reconnect. After a CDP click, Chromium
+can keep `hasFocus()` true while the tab is hidden, even after detachment. Mako
+does not force a DOM blur or activate another user tab to conceal that difference.
+The physical foreground samples and page focus are separate evidence.
+
 Use the same method on `state.window`. Actions continue through the ordinary
 handle. Recording does not add screenshots or video frames to observations or
 model context. It draws a separate cursor from known mouse dispatch positions;
@@ -312,8 +326,10 @@ reason. A failed receipt can leave partial source files in `directory` without
 claiming they form a usable video. Task end and target loss stop capture.
 
 The default duration limit is two minutes, configurable from one second to ten
-minutes. `maxSide` defaults to 1600 pixels and accepts 320–2560. Frames and disk
-usage are bounded; dropped browser frames are counted. Recording currently
+minutes. `maxSide` defaults to 1600 pixels and accepts 320–2560. Source-frame disk usage is bounded; dropped browser frames are counted. Final
+rendering streams RGBA frames to FFmpeg with backpressure rather than staging
+another full set of PNGs. Static output lasts the recording duration rounded up
+to one output frame; encoded 60 fps does not imply 60 distinct source frames. Recording currently
 uses bundled `ffmpeg` and `ffprobe` in the new macOS arm64 package;
 development and Linux hosts require their runtime encoder dependencies. Native capture requires the updated
 shared driver; macOS uses ScreenCaptureKit and requires macOS 15 or later for
@@ -358,7 +374,7 @@ visible DOM text. Selectors use strings, not regular expressions.
 
 ```js
 emitImage(await state.tab.locator({role:'button',name:'Save'}).screenshot({maxSide:2048}))
-state.recording = await state.tab.record({name:'Save workflow',fps:60,maxSide:2560})
+state.recording = await state.tab.record({name:'Save workflow',fps:60,maxSide:1920})
 return await state.recording.stop()
 ```
 
@@ -368,7 +384,7 @@ finished/interrupted/failed, then use its file paths and encoded `dimensions`.
 `sampledFrames` counts intentional fps sampling separately from `droppedFrames`.
 Timeline v2 records actual pixel dimensions separately from viewport geometry.
 `maxSide` is a cap, not a source-resolution or devicePixelRatio override. Browser
-sampling/output supports 1–60 fps and defaults to 60; native capture defaults to 30 and currently refuses higher rates. Preview delivery also targets 60 fps. Actual source cadence and renderer presentation can be lower; output fps alone does not prove distinct captured frames.
+sampling/output supports 1–60 fps and defaults to 60; native recording negotiates the installed driver/backend ceiling (up to 60), with older drivers fixed at 30. GNOME PNG capture remains limited to 5 until continuous capture is implemented. The shared browser video source fits within 1920×1080; this changes neither the page viewport nor explicit screenshot detail. Preview delivery also targets 60 fps. Actual source cadence and renderer presentation can be lower; output fps alone does not prove distinct captured frames.
 
 Opening an unsupported external URL in a desk browser refuses before creating a
 window. When creation succeeds but navigation fails, `TabNavigationError.target`

@@ -1,6 +1,6 @@
 # Local Control agent issue ledger
 
-Updated 2026-09-23. Tracks the supplied Cursor session feedback and the related
+Updated 2026-09-24. Tracks the supplied Cursor session feedback and the related
 capture/API failures found while reproducing it. The [wayfinder](local-control-map.md)
 owns delivery order; this file owns each complaint's disposition and closure check.
 The [investigation](audits/2026-09-23/local-control-capture21/README.md) records the
@@ -56,6 +56,11 @@ Workstream owners: [LC-22 API](local-control-map.md#lc-22--agent-facing-contract
 | R15 — Native screenshot options silently ignored. Found during CLI acceptance. | **Fixed locally.** `maxSide:320` previously returned 640×420; shared native capture now returns 320×210, honors JPEG options and maps resized pixel input to the driver frame. Default bytes bypass reencoding. | Real GTK files/JPEG and shared-engine coordinate/stale-view checks pass. Preserve installed Mac/Linux tests; background X11 pointer input remains explicitly unsupported. [Evidence](audits/2026-09-23/local-control-cli-media.md). |
 
 
+| R16 — Native fps was fixed and Linux capture stalled on pipe writes. | **Fixed in the +19 candidate; broader acceptance open.** Source fps now reaches ScreenCaptureKit/X11, and GNOME declares its real 5 fps ceiling. The Linux writer slept 5 ms every time its pipe filled; the 60 fps request retained only 33 source frames in 2.37 seconds. Writability polling raises the covered 640×420 source to 56.70 fps; encoded output fps is reported separately. | Measure retained source frames separately from CFR output, plus exact pixels, interruption cleanup and sustained 1080p CPU/memory. [Backend plan](local-control-capture-backends.md). |
+| R17 — First-operation Mac recording crashes in ScreenCaptureKit. | **Reproduced.** The +18 candidate aborted in `SCContentFilter` / `SLSGetDisplaysWithRect`; a prior observation avoided that crash. +19 explicitly initializes the CoreGraphics display connection and checks window geometry before constructing the filter. First-operation capture passed at 1920×1080 with 577 distinct frames in 10.03 s and unchanged foreground samples. | Recording must work as the first operation with no extra agent observation, activation or capture-scope change. Retain first-use and repeated-start checks. |
+| R18 — Sustained browser recording fills the source-JPEG storage cap. | **Reproduced; open.** The explicit 1080p, two-viewer, 60-second run reached 52.02 distinct fps. Recording retained 2,379 JPEGs (536,971,545 bytes), then stopped at 41.33 seconds. Streaming the later RGBA encoding step did not eliminate source-image accumulation. | Encode during capture with bounded buffering, source timestamps, accurate cursor composition and playable interrupted output. Keep the failed run; do not raise the cap to claim a pass. [Measurements](local-control-preview-evidence.md#september-24-sustained-1080p-failure). |
+
+
 Owner: [LC-21 capture](local-control-map.md#lc-21--responsive-capture-recordings-and-cursor).
 Packaging and final installed proof also depend on LC-26 and LC-23.
 
@@ -65,7 +70,7 @@ Packaging and final installed proof also depend on LC-26 and LC-23.
 | --- | --- | --- |
 | B01 — Full-tree lint flags `message: object` in the cloud worker. | **Fixed locally.** Final full lint passed with zero errors and five existing React/TanStack warnings. | Preserve full-tree checks; distinguish an unrelated concurrent failure from one introduced here. See the capture audit's `verification/` logs. |
 | B02 — Raw-call uncertainty and broad invalidation from the earlier API review. | **Target recovery implemented and fault-tested locally.** Browser/raw native failures preserve unknown outcomes; exact-target reads recover, unrelated refs survive, driver reconnect and failed captures cannot clear uncertainty. Late monitoring failure, cancelled waits/programs, overlapping observations and waiting dialogs have regressions. | Browser-wide cookies, raw CDP restrictions, attach/detach ownership, in-flight profile locks and lost-reply recovery now pass local regressions in the [shared-engine audit](audits/2026-09-23/local-control-session-cli.md). Remaining: real process loss during input and installed replacement. [Recovery audit](audits/2026-09-23/local-control-recovery.md); [LC-08/14](local-control-map.md#lc-08--lc-14--uncertainty-ownership-and-independent-targets). |
-| B03 — “Passed locally” repeatedly confused with “available in the installed app.” | **Idle-only install queued, not installed.** Signed candidate `1e3322212fc98974` passed packaged startup. Aside 0.3.2 passed 20 complete jobs; hidden-tab recording then refused for no frames. Earlier evidence remains separate. | Record exact host, extension and driver versions and rerun the relevant original workflow after safe installation. [LC-23](local-control-map.md#lc-23--preview-isolation-and-installed-browser-rollout). |
+| B03 — “Passed locally” repeatedly confused with “available in the installed app.” | **Current build needs acceptance.** The queued installer aborted on host replacement. Running build `3e3f6a31a7970952` contains preview compression; the earlier candidate’s checks do not certify it. Aside 0.3.2 passed 20 complete jobs; hidden-tab recording then refused for no frames. Earlier evidence remains separate. | Record exact host, extension and driver versions and rerun the relevant original workflow after safe installation. [LC-23](local-control-map.md#lc-23--preview-isolation-and-installed-browser-rollout). |
 
 ## How to close an issue
 
@@ -75,3 +80,26 @@ explanations and failed candidates. Link the original complaint to its check;
 “better help”, “60 fps output” or a passing unit test alone does not close an
 end-to-end usability or fidelity complaint. Reopen an entry if a real agent still
 needs a workaround that its closure check says should be unnecessary.
+
+
+## September 24 acceptance findings
+
+- **R09:** source-host Aside live capture now shares temporary focus emulation
+  with input. Capture/screenshot/transport-loss restoration passes. CDP clicks
+  can retain page `hasFocus()` while hidden; physical foreground and DOM focus
+  are reported separately. No tab activation or forced blur fallback.
+- **R10:** fixed the reproduced 512 MiB PNG staging failure with bounded encoder
+  streaming. A 37.73-second two-viewer recording completes with the minimal
+  bundled encoder. Static duration and encoder failure/reaping have regressions.
+- **R08/R12:** 1080p two-viewer delivery reaches 58.03 distinct fps for 30 seconds,
+  but expanded IPC remains 17.67 MB/s. The 60-second 1440p run reaches only
+  34.00 fps. High-resolution efficiency remains open; preserve the slower run.
+- **A05/A08/A10:** fresh agents pass installed CLI/MCP scoped editing, exact
+  values, stdin/files and one-element capture. CLI `shot --format png|jpeg` now
+  makes encoding explicit; filename extensions alone never selected it.
+- **Native keyboard:** source high-level Return now completes the verified
+  Terminal job. Explicitly off-screen siblings no longer over-restrict the
+  admission hint. Recording's live AX dialog still trips the driver's ambiguity
+  guard; title/size guesses do not remove it.
+
+[Evidence and remaining acceptance](local-control-preview-evidence.md#september-24-capture-ownership-and-long-recording).

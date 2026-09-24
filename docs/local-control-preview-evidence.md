@@ -203,8 +203,8 @@ downscaling, cropping and viewer pixel loss do not. Source CSS and captured pixe
 are reported separately. This passed **diagnostic policy**, not normal production
 capture, and did not test concurrent recording or physical human typing.
 
-The decision whether preview/recording may temporarily change page focus/visibility
-has been presented to the user; action-only production behavior is unchanged.
+At that checkpoint capture policy was undecided. The September 24 work below
+implements shared temporary emulation for explicit live capture.
 
 The macOS ARM64 candidate **1e3322212fc98974** passed direct and Launch Services
 packaged startup, host/preload/composer, client quit/reopen, draft persistence,
@@ -213,13 +213,17 @@ size is **662,787,567 bytes** (whole app, not just Control). The packager now ta
 workspace package filters from the release manifest, fixing an omitted frozen
 `control-runtime` mapping and retaining the intended JS/license-only filter.
 
-Candidate: `release/preview-transport-20260923/mac-arm64/Mako.app`. The default host
-still served older build `1f2c6af3acd5149e` with two running agents at readiness
-check. An idle-only installer is queued; it never stops those agents, refuses a
-changed/cancelled lifecycle operation, retains the previous app and verifies the
-new host’s build ID after launch. Its bounded wait expires after 30 minutes.
-Read `release/preview-transport-20260923/install-state.json` for the actual result;
-**queued is not installed**. No installed-host acceptance is claimed yet.
+Candidate: `release/preview-transport-20260923/mac-arm64/Mako.app`. At the initial
+readiness check, the default host still served `1f2c6af3acd5149e` with two running
+agents. The queued idle-only installer later **aborted without installation** when
+the shared host changed; its receipt records that refusal. It is no longer queued.
+
+A subsequent live probe reports installed host **3e3f6a31a7970952**, built
+2026-09-24T04:55:11.687Z. The installed ASAR contains Brotli encoding, client
+negotiation/decompression and preview-only host routing. Its compiled modules differ
+from the earlier candidate. This verifies code presence and the running build ID,
+not the full installed capture/CLI workflow. Do not replace it with the older
+candidate; run the remaining acceptance against this newer exact artifact.
 
 ## Remaining cost and acceptance
 
@@ -241,3 +245,166 @@ Verification: `test:control-preview`, the production audits above, complete host
 build and application TypeScript checking passed. Full `npm run lint` passed with
 zero errors and five existing React/TanStack warnings; anti-slop reported zero
 warnings/errors.
+
+## September 24 capture ownership and long recording
+
+These checks use the installed Aside Work extension 0.3.2 and the updated source
+host, through the normal default policy. They do not replace acceptance of the
+new installed default Mako host. Earlier no-frame results above describe the old
+policy. Live capture now owns temporary focus emulation alongside input actions;
+ordinary text observation does not acquire it.
+
+`audit-browser-focus.mjs <exact-browser-id>` checks an independently read page
+before/during/after viewing, screenshots and private transport termination plus
+reconnect. Those three cases restore `{visibility:"hidden",focus:false}`. A CDP
+click is a counterexample: after capture stops the page is hidden but `hasFocus()`
+stays true, even after debugger release/reselection. The remaining state is not
+an unclosed emulation owner: the browser acknowledges `enabled:false`, ownership
+is empty and capture is stopped. The fixture does not force DOM blur or switch
+the user's active tab to manufacture a matching state. Chromium's
+[focus controller](https://raw.githubusercontent.com/chromium/chromium/main/third_party/blink/renderer/core/page/focus_controller.cc)
+tracks emulation separately from underlying focus; this source supports that
+distinction, not a claim that every Chrome version behaves identically.
+
+The longer viewer audit includes one-second working-set/RSS/heap sampling,
+separate Node and Electron CPU, actual source pixels and final ownership state.
+All results below are from this shared workstation and the offscreen measurement
+fixture, not a physical-display or isolated benchmark.
+
+| Run | First source pixels | Animation | Distinct fps | Gap p95 | Wire / expanded MB/s | Electron / Node CPU cores | Outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Before streaming encoder | 1920×1080 | 30 s | 56.89 | 20.37 ms | 11.58 / 17.23 | 0.94 / 0.48 | Recording failed at 512 MiB rendered PNG staging limit. |
+| Sustained shared load | 1920×1080 | 60 s | 43.43 | 50.37 ms | 9.07 / 13.49 | 1.25 / 0.49 | Throughput failed; simultaneous media regression work may contribute. |
+| Sustained larger capture | 2560×1440 | 60 s | 34.00 | 85.80 ms | 7.48 / 14.76 | 0.91 / 0.37 | Throughput failed. Cleanup test also exposed the click focus-state distinction above. |
+| Streaming encoder, two viewers + recording | 1920×1080 | 30 s | **58.03** | **20.08 ms** | **11.87 / 17.67** | **0.93 / 0.48** | Complete job passed. |
+
+The final row passed all 36 input/visible-marker checks. Click/type/scroll p95 was
+119.10/110.99/103.83 ms. Both viewers retained all 8,294,400 decoded RGBA bytes,
+with zero differences or invalid pixel samples. Every one of 288 foreground
+samples remained on Aside. Closing either viewer preserved the other; closing
+both preserved recording; final stop released capture/emulation. No physical
+keyboard participant was involved.
+
+The recording receipt covers 37,724.53 ms, 2,142 source frames and zero dropped
+frames (1,418 intentional sampling events counted separately). FFprobe verifies
+1920×1080, 60/1 output rate, 2,264 encoded frames and 37.733333 s. Repeated static
+frames in the constant-rate file are not counted as new source frames. Source
+input, screenshots and finalization are included beyond the 30-second animation.
+
+During that animation, Electron working set rose from 866,729,984 to
+1,204,011,008 bytes (peak 1,339,539,456). Node RSS went from 221,233,152 to
+213,975,040 bytes; heap from 32,002,944 to 39,064,464. Electron includes the
+instrumented offscreen viewer processes. These CPU numbers exclude installed
+Aside and FFmpeg, and memory includes measurement work; neither is a whole-system
+budget. The 60-second larger-capture run peaked at 1,431,011,328 Electron bytes.
+This is enough evidence to keep sustained high-resolution efficiency open.
+
+The next controlled experiment should remove base64/JSON media copies from the
+Electron delivery path while preserving exact compressed image bytes, one shared
+capture, bounded latest-frame delivery and independent recording. Compare it
+against these source sizes and one/two-viewer workloads before selecting it.
+No codec change or lossy resize was accepted to improve these numbers.
+
+## Streaming encoder and fresh-agent checks
+
+The old finalizer rendered every source/action timestamp into another PNG on disk
+before starting FFmpeg. A normal 30-second dense recording exhausted its 512 MiB
+render budget. The replacement streams RGBA at the requested output cadence,
+waits for stdin backpressure and reuses the unchanged rendered state. Rendering,
+encoding and child cleanup share a bounded deadline. A rendering failure kills
+and reaps the encoder before the final receipt settles.
+
+The regression represents 531.58 MiB of old PNG staging using 81 full-HD source
+frames. It finishes with zero rendered files. A single static source recorded
+for 1,377 ms encodes to 1,400 ms at 10 fps instead of duplicating its tail duration.
+Geometry, native transparent cursor composition, source budgets and unchanged
+encoding quality retain their existing checks. Media recipe 2 adds only explicit
+pipe/rawvideo support to the static, network-disabled build. Packaged browser and
+native-overlay tests pass with shell/Homebrew encoders unavailable.
+
+Fresh agents separately tested installed build `3e3f6a31a7970952`: CLI/MCP state
+continuity, stdin/source files, spaced artifact paths, exact Unicode, refusal of
+ambiguous Save, one scoped Shipping save with untouched Billing, and element
+capture passed. That old installed build still failed continuous background
+recording, which the newer source/candidate checks address. `shot --format` now
+allows an explicit PNG/JPEG choice instead of implying encoding from a filename.
+
+The native Terminal job launched a scratch window, typed a marker command through
+the driver, used high-level Return, independently read the output and captured it.
+All 82 samples stayed on Aside. Only the owned scratch was closed. The capability
+fix excludes explicitly off-screen document rows; unknown/on-screen competitors
+and fresh driver preflight still block. Recording can add an AX dialog that
+blocks typing; this was not bypassed with a title/size exception.
+
+Reproducible checks: `test:control-recording`, `test-browser-service.ts`,
+`test-native-keyboard-capabilities.ts`, `test-control-cli.mjs`,
+`test-native-terminal-acceptance.mjs`, `audit-browser-focus.mjs`, and
+`audit-control-preview.mjs --shared-host --extension=<id> --two-viewers --recording
+--seconds=30`. Machine-local detailed evidence is under
+`docs/audits/2026-09-23/local-control-installed-next/` and
+`docs/audits/2026-09-23/fresh-terminal-acceptance/`; ignored media may be absent in
+fresh clones. The measurements and limitations above remain in tracked docs.
+
+
+## Signed candidate and queued rollout
+
+Candidate `b1d91522d82480b1` contains the final shared-focus, streaming encoder,
+native capability and explicit CLI image-format changes. It is locally signed,
+662,856,997 bytes, with 1,081 verified input files and 671 resolved imports. Both
+packaged startup routes pass. Packaged media tests remove shell/Homebrew encoders
+from PATH and pass browser encoding plus native transparent cursor composition.
+
+`test-installed-browser.mjs <browser-id> <candidate.app>`, run under that app's
+Electron-as-Node executable, loads the candidate's ASAR engine and host. It passed
+**40** independently counted Unicode saves through scoped forms and dialogs,
+leaving Billing untouched. Recording finalized after 13,217.85 ms with 90 source
+frames, 60 dispatched pointer samples and zero dropped frames. This mostly static
+form job is not a high-frame-rate benchmark. The decoded video was visually
+inspected for exact target content and the dispatched cursor.
+
+The test then interrupts this client's transport during another recording. Its
+old handle refuses, the interrupted receipt retains playable video, reconnect
+still rejects that stale handle, and a newly created owned tab can close normally.
+All **259** foreground samples remain on Aside. The detailed candidate receipt is
+under `docs/audits/2026-09-23/local-control-installed-next/packaged-aside/`.
+
+The default installed app remains `3e3f6a31a7970952`. The queued idle installer at
+`release/control-capture-20260924/install-after-idle.mjs` subsequently aborted:
+`install-state.json` reports `not-installed` because the shared host changed.
+It did not replace the app. A future rollout must validate the exact current
+candidate and host, then repeat packaged media and regular Aside acceptance.
+Neither the old queued state nor candidate tests establish installation.
+
+## September 24 sustained 1080p failure
+
+The source capture budget is now explicitly 1920×1080; it does not resize the
+page or change independent screenshot detail. A 60-second Aside extension run
+with two viewers and recording **failed**. This is additional evidence, not a
+replacement for earlier successful short runs or failed long runs.
+
+- Live viewer: 3,121 distinct frames in 60.00084 seconds, **52.02 fps**. Frame-gap
+  p50 16.84 ms, p95 34.10 ms, maximum 166.93 ms; zero invalid marker samples.
+- Transport: 645,518,891 compressed bytes and 960,656,372 expanded bytes, about
+  **10.76 MB/s compressed / 16.01 MB/s expanded**.
+- Resource measurement: Electron fixture processes averaged 1.05 CPU cores and
+  the separate Node host 0.81 cores. Electron working set rose from 958 MB to
+  1,182 MB; Node RSS from 232 MB to 249 MB. These exclude installed browser and
+  FFmpeg CPU and are not whole-system cost.
+- Recording interrupted at **41.33 seconds**, after retaining 2,379 source JPEGs
+  totaling **536,971,545 bytes**. The stop reason was the 512 MiB source-frame
+  storage limit. The test failed before its final acceptance report, so no complete
+  input, foreground or cleanup acceptance is claimed for this run.
+
+The earlier streaming encoder fix removed decoded-PNG staging during finalization.
+`ControlRecording.storeFrame` still saves each source JPEG until recording ends.
+Continuous encoding during capture, with bounded pending frames and playable
+partial output on interruption, remains necessary. Raising the cap would preserve
+that accumulation. Keep source timing, cursor alignment, frame geometry and
+independent screenshots intact while replacing it.
+
+Reproduction: `node scripts/audit-control-preview.mjs --shared-host
+--extension=<connected-browser-id> --two-viewers --recording --seconds=60`.
+Machine-local evidence is under `docs/audits/2026-09-24/preview-1080-sustained/`
+(`animation.json`, `timeline.json`, `run.log`). Raw fixture media remains in the
+private temporary run directory named by that log. These ignored artifacts may
+be absent in another checkout; the script and this outcome remain tracked.

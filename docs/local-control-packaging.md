@@ -132,3 +132,25 @@ omits package declarations. Docker installs complete prepared packages before
 creating CLI links. See [measured sizes and acceptance](local-control-package-evidence.md).
 Full native/mixed image totals, the newly packaged desktop and publication remain
 separate gates; the small npm archives do not represent installed Chromium size.
+
+
+## Recording media recipe 2
+
+The streaming renderer requires FFmpeg's `pipe` protocol and `rawvideo`
+demuxer/decoder. The macOS ARM64 recipe enables those explicitly while preserving
+static linking, disabled networking/autodetection and the same pinned sources.
+The packager now compares source manifests and recipe versions, in addition to
+binary hashes, so a valid old binary cannot ship with an incompatible renderer.
+Rebuild with `npm run prepare:control-media`; generated binaries stay ignored.
+The existing packaged recording test runs with Homebrew removed from PATH and
+checks both browser encoding and native transparent cursor composition.
+
+## September 24 source-rate candidate
+
+`0.28.2+mako.19` adds requested native capture rates, a CoreGraphics first-use
+preflight and writable-pipe waits on Linux. Mac ARM64 and Linux ARM64 packages
+match the reviewed patch; they are acceptance candidates, not an installed
+upgrade or x64 proof. The selected installed driver remains +17. The new API
+reads backend rate capabilities rather than assuming 60 fps on every platform.
+No new runtime capture dependency was added. The [backend reuse plan](local-control-capture-backends.md)
+tracks the larger PipeWire/DMA-BUF work and its target-specific dependency budget.

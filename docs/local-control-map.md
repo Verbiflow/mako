@@ -1,6 +1,6 @@
 # Local Control wayfinder
 
-Updated 2026-09-23. This is the current plan for browser and computer control across
+Updated 2026-09-24. This is the current plan for browser and computer control across
 all harnesses, desktop Mac and isolated Linux cloud jobs. The goal is accurate,
 responsive complete workflows with a composable API and CLI. Full ChatGPT/Codex
 parity has not been established.
@@ -12,7 +12,8 @@ parity has not been established.
   including findings that were corrected, not reproduced, or remain open.
 - **Architecture:** [ownership boundaries, diagnostics and change tests](local-control-architecture.md).
 - **CLI refactor:** [shared engine and shell contract](local-control-cli.md).
-  Shell verbs and the shared session engine are implemented and locally tested; installation is pending.
+  The installed CLI/MCP form workflow passes; the newer capture/recording build is in release acceptance.
+- **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
 - **Interactive streaming:** [reference findings, transport experiments and local/remote scope](local-control-streaming.md).
 - **Using the existing API:** [API reference](local-control-api.md).
 - **Reusable packages:** [Node package ownership and consumer checks](package-boundaries.md); [LC-28](#lc-28--reusable-packages-and-public-entrypoints).
@@ -32,10 +33,10 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Area | What is established | What is not established |
 | --- | --- | --- |
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
-| Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained efficiency and current Aside capture acceptance. Inactive headless tabs may produce no frames. |
-| Native capture/input | Patched driver +mako.17; tested exact-value routes, bounded settling, recording and scoped gesture coverage. Mac focus recovery is reactive, with observed 23–99 ms interruptions. | General proactive focus prevention, physical IME/concurrent typing, universal gestures or native 60 fps. Mac/X11 capture requests 30 fps; GNOME window capture polls at ~5 fps. |
+| Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
+| Native capture/input | Patched driver +mako.17; tested exact-value routes, bounded settling, recording and scoped gesture coverage. Mac focus recovery is reactive, with observed 23–99 ms interruptions. | General proactive focus prevention, physical IME/concurrent typing, universal gestures or native 60 fps. The +19 candidate requests up to 60 fps on Mac/X11; installed +17 remains fixed at 30. GNOME window capture still polls at ~5 fps. |
 | Standalone Linux | Node launcher without Electron; final ARM64 and native Intel x64 packages pass eleven lifecycle scenarios, including crash/cancellation/process-group cleanup. Temporary EC2 resources removed. | Public distribution, AMD, x64 Wayland, all compositor families, or latest CLI acceptance on native x64 hardware. |
-| Installed components | +mako.17 selected for new Mac driver launches. Earlier regular-profile Aside extension 0.3.2 passed 80 saved jobs. | Latest shared host/capture fixes have not replaced the running Mako app. Earlier Aside acceptance does not validate these newer changes. |
+| Installed components | +mako.17 selected for new Mac driver launches. Fresh agents passed CLI/MCP scoped Aside editing on host `3e3f6a31a7970952`; the earlier queued installer aborted on host replacement. | Signed candidate `b1d91522d82480b1` passes 40 Aside jobs and interrupted recording; idle rollout aborted on a changed host; post-install repetition has not run. Candidate/source-host tests are not default installed-host proof. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -51,6 +52,9 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
   Preserve task ownership across separate shell invocations. Local Mac, remote
   browsers and future Linux cloud jobs use that engine with verified backend
   capabilities. Live streaming is an engine output, not a third automation system.
+- Live preview/recording performance target: 1920×1080 at 60 distinct fps.
+  1440p/4K is optional, not a release gate. Preserve full-detail explicit screenshots
+  and exact coordinate geometry. Do not resize user pages to satisfy a video target.
 - Accuracy comes before throughput. Dispatch and UI quiet are not task success;
   verify exact target state. Never replay an action with an uncertain outcome.
 - Observation and images are explicit. Scoped reads must preserve completeness,
@@ -87,7 +91,7 @@ Statuses below distinguish implementation from deployment and broader acceptance
 
 ## LC-20 — Shared engine and composable CLI
 
-**Status: shared engine and CLI implemented; local acceptance passed; installation pending.**
+**Status: installed CLI/MCP form acceptance passed; new capture and native capability fixes await rollout.**
 [Commands and lifecycle contract](local-control-cli.md).
 
 `createControlSession` now owns program state, native policy, target evidence,
@@ -110,16 +114,24 @@ the MCP/CLI fixture; finalization is owned by the session. [Evidence and limits]
 Real Linux browser recording finalized at 780×494 while its button screenshot was 65×37;
 the clipped capture did not resize the video. See the [CLI evidence](audits/2026-09-23/local-control-session-cli.md).
 
-Next: install the exact host/CLI build after active work ends, run fresh-agent
-usability, repeat the new package on native x64 (the workflow now includes both CLI
-jobs), and extend sustained-load/encoder-failure coverage beyond these short jobs. Preserve short
+Fresh agents used installed build `3e3f6a31a7970952` through separate CLI/MCP
+processes: exact Unicode state, stdin/source files, spaced output paths, strict
+ambiguous-Save refusal, scoped save/read and element capture passed. The installed
+CLI is present inside the app; there is no automatic global shell alias. The
+source CLI now adds `shot --format png|jpeg` so file workflows can choose bytes
+explicitly. A later source-runtime native Terminal job passed through high-level
+Return with independently verified output and 82 unchanged foreground samples.
+
+Next: roll out the exact new capture/recording build after active work ends,
+repeat the new package on native x64 (the workflow includes both CLI jobs), and
+extend sustained-load/encoder-failure coverage beyond these jobs. Preserve short
 verified scripts alongside separate commands. Viewer/network latency and full
 backend-stage diagnostics remain distinct measurement work, not claims derived
 from CLI startup timings.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: viewer decode failure fixed; lossless shared-host compression measured; installed Aside capture and native rates remain open.**
+**Status: scoped short-run source and packaged Aside acceptance passed; sustained 1080p runs still fail. Idle rollout and native rates remain open.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 
@@ -135,19 +147,61 @@ A separate-host comparison reduced socket response bodies from 17.62 to 11.98 MB
 with identical decoded pixels and ~59 distinct fps. A later CPU-instrumented pair
 was slower (49.75 vs 56.35 fps); tail latency and total resource cost remain open.
 This is negotiated Brotli transport compression; Electron IPC still expands the
-full preview JSON. Installed Aside 0.3.2 supplies no frames for the default hidden
-tab policy; emulated lease focus restores frames but changes page focus semantics.
-That diagnostic passed 36 inputs, exact 2560×1440 pixels and 73 unchanged foreground
-samples at 52.24 fps. Production policy remains unchanged pending the user’s choice.
+full preview JSON. Default input and capture now share a per-tab emulation hold.
+The first live consumer enables painting; the last disables emulation. Text reads
+stay unchanged, and no tab/window activation is requested. Focus-off embedders keep
+no-frame refusal. Unit checks cover overlapping consumers/actions, screenshot
+pause, startup/reset failure and interrupted acquisition.
 
-Next: resolve that capture policy and verify the actual installed shared host,
-remote delivery and instrumentation overhead. The original fixture used ~2.1 Electron CPU cores,
-including source animation and offscreen measurement. These are different workloads
-from the earlier ~555 KB/frame, ~1.5-core capture-only fixture. Measure memory and
-sustained resource cost before selecting a transport, with unchanged text fidelity. Finish actual
-pixel/DPR policy, resize/no-frame reporting, cursor legibility and all gesture routes.
-Thread requested fps through native capabilities/capture, replacing GNOME's polling
-source where needed. A getUserMedia constraint does not upgrade native recording.
+The installed Aside extension with the source host passed a 30-second two-viewer
+run at **58.03 distinct fps**, with 36 exact input checks, unchanged 1920×1080 decoded
+pixels, 288 unchanged foreground samples and a finalized 37.73-second recording.
+Streaming rendering removed the reproduced 512 MiB PNG staging failure. The
+rebuilt minimal encoder passed browser/native cursor tests and failure cleanup.
+Viewing/screenshot/transport-loss tests restore page focus and hidden visibility;
+a click can leave Chromium's `hasFocus()` true after detachment while the tab stays
+hidden. This limitation is recorded, not replaced by forced blur or tab activation.
+[Measurements and limits](local-control-preview-evidence.md#september-24-capture-ownership-and-long-recording).
+
+Next: validate the new signed candidate and roll out only at host idle. The sustained
+1080p run still sends **11.87 MB/s** compressed / **17.67 MB/s** expanded preview data.
+Electron working set rose from 867 MB to 1.20 GB; Node RSS stayed around 214–221 MB.
+Those include the offscreen fixture and exclude installed browser/encoder CPU.
+The 60-second runs at mixed capture sizes were slower and remain in the evidence.
+The latest 60-second run with the explicit 1920×1080 source budget reached
+**52.02 distinct fps** and stopped recording after **41.33 seconds** when retained
+source JPEGs reached 512 MiB. The earlier fix removed decoded-PNG staging during
+finalization; it did not remove source-JPEG accumulation during capture. Encode
+continuously with bounded buffering and playable interrupted output before claiming
+sustained recording acceptance. Do not solve this by raising the storage cap.
+[Failure and measurements](local-control-preview-evidence.md#september-24-sustained-1080p-failure).
+The next transport experiment is binary media delivery outside preview JSON,
+with bounded queues, unchanged image bytes, shared task ownership and measured
+one/two-viewer cost; keep the selected 1080p video budget and report actual pixels; do not degrade
+explicit screenshots or silently reduce below the requested video size.
+Finish actual pixel/DPR policy, resize/no-frame reporting, cursor legibility and
+all gesture routes. Requested fps is now threaded through native capabilities/capture
+in the +19 candidate: Mac/X11 advertise 60 and GNOME advertises 5, with source-rate
+acknowledgment and refusal before unsupported starts. Replace GNOME PNG
+polling with a continuous PipeWire source; compare XComposite texture import and
+ext-image-copy-capture/DMA-BUF for Linux. These are explicit LC-21 work items, not
+optional polish. [Source-reviewed projects and implementation gates](local-control-capture-backends.md)
+cover OBS, wl-screenrec, Selkies, Sunshine and rejected alternatives. A getUserMedia
+constraint does not upgrade native recording.
+
+The source-rate candidate also fixes first-operation Mac recording: a fresh
+ScreenCaptureKit filter could abort until an earlier observation had initialized
+CoreGraphics. Capture now establishes the display connection and checks geometry
+itself. A 10-second first-operation run retained 577 distinct 1920×1080 frames
+(57.53 fps) with unchanged foreground samples. Linux's 5 ms sleep on every full
+encoder-pipe write limited the test to 13.94 source fps. Waiting for writability
+raised the same covered-window workflow to 56.70 source fps, preserving exact
+values, blue target pixels and playable interrupted video. These are preliminary
+candidate results; the Linux fixture is 640×420, not sustained 1080p acceptance.
+The longer Mac run retained 3,400 distinct frames over 60.05 seconds (**56.62 fps**),
+below the 57 fps acceptance floor. Foreground samples changed from Aside to Mako;
+the sampler cannot establish who caused that change. The run did not pass.
+[Candidate provenance, failures and reproduction](local-control-native-capture-evidence.md).
 
 Done per backend when moving content supplies approximately 60 distinct source
 frames/s at the declared size under the accepted workload, controls stay responsive,
@@ -172,7 +226,9 @@ or viewing. Remote-browser work does not wait for a managed cloud-agent environm
 
 Native screenshots now validate supported options, honor resizing/format requests
 and retain exact returned-image coordinate mapping. Native recording capabilities
-publish the current 30 fps limit; known startup refusals are `not-dispatched`.
+derive their source-rate ceiling from the driver (new Mac/X11 candidates allow
+60; the GNOME PNG source declares 5; older drivers stay fixed at 30). Unsupported
+rates refuse before starting capture. Known startup refusals are `not-dispatched`.
 Stale image/reference CLI faults use the recovery exit code. These close scoped
 contract bugs, not general discovery/usability acceptance.
 
@@ -248,14 +304,31 @@ state. This also closes the older LC-14 contention/invalidation work.
 
 ## LC-23 — Preview isolation and installed browser rollout
 
-**Status: signed candidate verified and idle-only install queued; installed acceptance incomplete.**
+**Status: signed candidate passes packaged Aside acceptance; idle installation aborted on host replacement.**
 
-Candidate `1e3322212fc98974` passed both packaged startup routes. The installed host
-was still `1f2c6af3acd5149e` with two active runs; installation waits for idle.
-The receipt is `release/preview-transport-20260923/install-state.json`. Aside
+Candidate `1e3322212fc98974` passed both packaged startup routes. Its idle-only
+installer subsequently aborted because the shared host changed, without replacing
+the app. The receipt is `release/preview-transport-20260923/install-state.json`.
+A fresh probe now reports installed host `3e3f6a31a7970952` (built
+2026-09-24T04:55:11.687Z); its packaged host/client modules contain negotiated
+preview compression. The modules differ from the earlier candidate, so prior
+measurements do not certify this exact build. Do not reinstall the older candidate. Aside
 extension 0.3.2 passed 20 exact form jobs and 188 unchanged foreground samples,
 then recording refused because the hidden tab supplied no frames. This does not
 pass the recording/reconnect phases. [Evidence](local-control-preview-evidence.md#installed-aside-and-release-acceptance).
+
+Candidate **`b1d91522d82480b1`** now passes both packaged startup routes, bundled
+browser/native cursor encoding and **40** regular Aside form jobs with dialogs,
+recording, interruption retention, reconnect and stale-handle refusal. All 259
+foreground samples remain on Aside. This test loads the candidate's actual ASAR
+modules and bundled encoders; it does not certify the old installed host.
+The attempted installer verified host identity and never force-stopped work. Its
+post-install packaged-media/Aside checks did not run. Read
+`release/control-capture-20260924/install-state.json`; the attempt ended `not-installed` at 06:29 UTC after the shared host changed.
+No app was replaced. Installed build remains `3e3f6a31a7970952`; restart/rollout
+must be revalidated against the current host, not silently resumed.
+Only `installed-and-accepted` closes that deployment gate. A host replacement,
+cancelled quit or deadline aborts without replacing the app.
 
 Next: define the supported fixture/preview boundary and enforce it at the host
 bridge before offering side-effect-free previews. Merely describing a live desk
@@ -277,7 +350,14 @@ page-triggered extension downloads still need attribution/completion support.
 
 Next: proactive Mac focus protection, menus and cross-process dialogs; clipboard
 consumption/collision handling; physical Japanese IME and simultaneous human typing.
-Broaden Electron/Qt/rich-editor coverage. Finish native observation lineage,
+Broaden Electron/Qt/rich-editor coverage. The explicit Terminal GUI job now passes:
+background launch, native command typing, high-level Return, independent output
+read, screenshot and owned-window cleanup. All 82 foreground samples stayed on
+Aside. A capability-only fix ignores explicitly off-screen document rows while
+unknown/on-screen competitors and the driver's final guard still refuse. Recording
+can introduce an AX dialog that blocks keyboard delivery; no title/size exception
+was added. Keep direct shell execution as a separate exact-output route.
+Finish native observation lineage,
 invalidation, bounded scoped reads and busy/progress readiness without interpreting
 quiet as completion. Carry forward LC-09/10/13/15/16 where evidence remains narrow.
 
@@ -296,7 +376,10 @@ not a reason to stop testing Mako's own implementation.
 Next: extend native Intel X11 evidence to AMD/x64 Wayland and missing compositor
 routes. ARM64 Sway has scale/rotation/load and hidden-job evidence; GNOME 46 has
 scoped capture/input evidence; Weston/labwc have semantic hidden-job evidence,
-not equivalent capture/gesture support. KDE and other versions remain unverified.
+not equivalent capture/gesture support. KWin 5.27.11 ARM64 now passes twenty exact
+background form jobs, independent Save counts, unchanged duplicate-name cover
+and focus history, plus unsupported raw-input/capture refusals. KDE capture,
+gestures, Plasma 6 and other versions remain unverified.
 
 Done per supported target with fresh isolated desktops, exact identity/value oracles,
 scaled/rotated geometry, modal/popup behavior, covered/hidden capture where promised,
@@ -315,6 +398,11 @@ frozen build files and 664 imports verified. Packaging now derives workspace
 FileSets from the canonical release manifest, fixing the omitted `control-runtime`
 mapping and preserving JS/license-only Control payloads. Both packaged startup
 routes passed. Other target and actual default-host rollout claims remain separate.
+
+The new signed ARM64 candidate is **662,856,997 bytes**, with 1,081 verified build
+files and 671 resolved imports. Media recipe 2 passes packaged browser/native
+cursor encoding without Homebrew; the packager rejects a stale recipe/source
+manifest even when its old binary hashes still match.
 
 Next: measure full installed bytes and cold start per browser/native/mixed cloud
 image and desktop target, not just source payload or driver size. Audit a reduced
