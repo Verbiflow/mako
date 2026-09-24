@@ -145,7 +145,7 @@ export class ExtensionRouter {
       await this.activity?.cursor.clear(attached.target.id)
     if (command.method === "Page.startScreencast")
       await this.activity?.cursor.setRecording(attached.target.id, true)
-    const result = await this.api.debugger.sendCommand(
+    const pending = this.api.debugger.sendCommand(
       { targetId: attached.target.id },
       command.method,
       command.params
@@ -153,14 +153,16 @@ export class ExtensionRouter {
       if(command.method === "Page.startScreencast") await this.activity?.cursor.setRecording(attached.target.id,false)
       throw error
     })
-    if (command.method === "Page.stopScreencast")
-      await this.activity?.cursor.setRecording(attached.target.id, false)
     this.activity?.cursor.action(
       attached.target.id,
       attached.target.tabId,
       command.method,
       command.params
     )
+    const result = await pending
+    if (command.method === "Page.stopScreencast")
+      await this.activity?.cursor.setRecording(attached.target.id, false)
+
     return ExtensionFieldsSchema.parse(result ?? {})
   }
 

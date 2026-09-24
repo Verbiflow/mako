@@ -66,7 +66,7 @@ export function installCursor() {
   }
 }
 
-/** Visual acknowledgments never delay input. Hidden tabs send zero cursor CDP calls. */
+/** Dispatch feedback never delays input. Hidden tabs send zero cursor CDP calls. */
 export class ExtensionCursor {
   private readonly recording = new Set<string>()
   async setRecording(targetId: string, active: boolean) {
@@ -133,8 +133,7 @@ export class ExtensionCursor {
     const action: CursorAction = point.success
       ? {
           ...point.data,
-          pressed:
-            params.type === "mousePressed" || params.type === "mouseReleased",
+          pressed: params.type === "mousePressed",
         }
       : {}
     // Coalesce feedback under load, never queue one paint per keystroke.
