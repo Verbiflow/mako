@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..f43e5b3 100644
+index a91f724..d17dbf7 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..f43e5b3 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..7beddd2 100644
+index 351b086..4857209 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..7beddd2 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.17"
++version = "0.28.2+mako.19"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -343,7 +343,7 @@ index ec46f81..64e0292 100644
  
  impl ToolResult {
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
-index d3db85f..57a15e3 100644
+index d3db85f..0caa654 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
 @@ -141,12 +141,14 @@ struct TurnCapture {
@@ -461,7 +461,7 @@ index d3db85f..57a15e3 100644
  fn point_in_image(png: &[u8], x: f64, y: f64) -> bool {
      image::load_from_memory_with_format(png, image::ImageFormat::Png).is_ok_and(|image| {
          let (width, height) = (image.width(), image.height());
-@@ -233,18 +319,13 @@ pub struct RecordingSession {
+@@ -233,18 +319,14 @@ pub struct RecordingSession {
  struct RecordingInner {
      enabled: bool,
      generation: u64,
@@ -483,10 +483,11 @@ index d3db85f..57a15e3 100644
 +    recording_id: Option<String>,
 +    target: Option<video::WindowVideoTarget>,
 +    capture_actions: bool,
++    fps: u32,
      output_dir: Option<PathBuf>,
      next_turn: u32,
      session_start_ms: u64,
-@@ -273,6 +354,7 @@ struct RecordingInner {
+@@ -273,12 +355,14 @@ struct RecordingInner {
  /// Snapshot of the current recording state (cheap to clone).
  #[derive(Debug, Clone)]
  pub struct RecordingState {
@@ -494,7 +495,14 @@ index d3db85f..57a15e3 100644
      pub enabled: bool,
      pub output_dir: Option<String>,
      pub next_turn: u32,
-@@ -289,6 +371,8 @@ pub struct RecordingState {
+     pub last_error: Option<String>,
+     /// Whether a video subprocess is currently running.
+     pub video_active: bool,
++    pub fps: u32,
+     /// Path to the most recently finalized video file, if any. Populated
+     /// after a stop; cleared on next start.
+     pub last_video_path: Option<String>,
+@@ -289,6 +373,8 @@ pub struct RecordingState {
      /// drives ownership via `session_end` (it already knows its own id) rather
      /// than reading this back.
      pub owner: Option<String>,
@@ -503,7 +511,7 @@ index d3db85f..57a15e3 100644
  }
  
  impl RecordingSession {
-@@ -299,6 +383,10 @@ impl RecordingSession {
+@@ -299,6 +385,11 @@ impl RecordingSession {
                  enabled: false,
                  generation: 0,
                  owner: None,
@@ -511,14 +519,14 @@ index d3db85f..57a15e3 100644
 +                recording_id: None,
 +                target: None,
 +                capture_actions: true,
++                fps: 30,
                  output_dir: None,
                  next_turn: 1,
                  session_start_ms: 0,
-@@ -346,6 +434,35 @@ impl RecordingSession {
-         output_dir: &str,
+@@ -347,6 +438,38 @@ impl RecordingSession {
          record_video: bool,
          owner: Option<&str>,
-+    ) -> anyhow::Result<()> {
+     ) -> anyhow::Result<()> {
 +        self.start_target(output_dir, record_video, owner, None, true)
 +    }
 +
@@ -537,6 +545,7 @@ index d3db85f..57a15e3 100644
 +            target,
 +            capture_actions,
 +            None,
++            video::max_window_fps().min(30),
 +        )
 +    }
 +    pub fn start_identified(
@@ -547,10 +556,13 @@ index d3db85f..57a15e3 100644
 +        target: Option<video::WindowVideoTarget>,
 +        capture_actions: bool,
 +        recording_id: Option<&str>,
-     ) -> anyhow::Result<()> {
++        fps: u32,
++    ) -> anyhow::Result<()> {
++        if target.is_some() { video::validate_window_fps(fps)?; }
          let mut inner = self.inner.lock().unwrap();
          // Write-boundary resurrection guard — checked INSIDE the lock so the
-@@ -365,15 +482,21 @@ impl RecordingSession {
+         // is_session_ended test is atomic with the enabled/owner write below.
+@@ -365,15 +488,22 @@ impl RecordingSession {
                  );
              }
          }
@@ -568,6 +580,7 @@ index d3db85f..57a15e3 100644
 +                && inner.target == target
 +                && inner.output_dir.as_deref() == Some(expand_tilde(output_dir).as_path())
 +                && inner.capture_actions == capture_actions
++                && inner.fps == fps
 +                && inner.video.is_some() == record_video
 +            {
 +                return Ok(());
@@ -580,14 +593,14 @@ index d3db85f..57a15e3 100644
          let dir = expand_tilde(output_dir);
          std::fs::create_dir_all(&dir)?;
  
-@@ -386,12 +509,18 @@ impl RecordingSession {
+@@ -386,12 +516,18 @@ impl RecordingSession {
          let mut video_error: Option<String> = None;
          if record_video {
              let path = dir.join("recording.mp4");
 -            match video::start_video(&path) {
 +            match target.map_or_else(
 +                || video::start_video(&path),
-+                |target| video::start_window_video(&path, target),
++                |target| video::start_window_video(&path, target, fps),
 +            ) {
                  Ok(rec) => {
                      inner.video = Some(rec);
@@ -600,7 +613,7 @@ index d3db85f..57a15e3 100644
                      video_error = Some(e.to_string());
                      tracing::warn!(target: "recording",
                          "Video capture failed to start; per-turn recording will \
-@@ -406,14 +535,16 @@ impl RecordingSession {
+@@ -406,14 +542,16 @@ impl RecordingSession {
          // off (record_video=false), the sampler is still useful for
          // post-hoc analysis, so we run it anyway — the cost is one
          // background thread + a small jsonl file.
@@ -624,17 +637,18 @@ index d3db85f..57a15e3 100644
              }
          }
  
-@@ -434,6 +565,9 @@ impl RecordingSession {
+@@ -434,6 +572,10 @@ impl RecordingSession {
          // the daemon-global recorder is a singleton, so the latest start() owns
          // it. The previous owner's disconnect then no-ops in stop_owner().
          inner.owner = owner.map(str::to_owned);
 +        inner.target = target;
 +        inner.recording_id = recording_id.map(str::to_owned);
 +        inner.capture_actions = capture_actions;
++        inner.fps = fps;
          inner.generation = inner.generation.wrapping_add(1);
          inner.enabled = true;
          inner.output_dir = Some(dir);
-@@ -465,7 +599,48 @@ impl RecordingSession {
+@@ -465,7 +607,48 @@ impl RecordingSession {
      /// The guard lives inside the lock so it is race-free against a concurrent
      /// `start()`. Supersedes the #1775 generation-token `stop()`.
      pub fn stop_owner(&self, requester: Option<&str>) -> anyhow::Result<()> {
@@ -683,7 +697,7 @@ index d3db85f..57a15e3 100644
          if !inner.enabled {
              return Ok(());
          }
-@@ -478,7 +653,7 @@ impl RecordingSession {
+@@ -478,7 +661,7 @@ impl RecordingSession {
                  return Ok(());
              }
          }
@@ -692,7 +706,7 @@ index d3db85f..57a15e3 100644
          let dir = inner.output_dir.clone();
          let (video_meta, stop_error) = match inner.video.take().map(|rec| rec.stop()) {
              Some(Ok(meta)) => match validate_video_metadata(meta) {
-@@ -497,8 +672,8 @@ impl RecordingSession {
+@@ -497,8 +680,8 @@ impl RecordingSession {
          inner.session_monotonic_start = None;
          if let Some(error) = &stop_error {
              inner.last_error = Some(error.clone());
@@ -703,7 +717,7 @@ index d3db85f..57a15e3 100644
          }
          inner.last_video = video_meta.clone();
          inner.last_cursor_samples = cursor_samples;
-@@ -509,7 +684,7 @@ impl RecordingSession {
+@@ -509,7 +692,7 @@ impl RecordingSession {
          // landed.
          if let Some(dir) = dir {
              let video_block = if let Some(ref m) = video_meta {
@@ -712,7 +726,7 @@ index d3db85f..57a15e3 100644
              } else {
                  video_session_payload(false, final_video_error.as_deref(), None)
              };
-@@ -546,6 +721,7 @@ impl RecordingSession {
+@@ -546,6 +729,7 @@ impl RecordingSession {
      pub fn current_state(&self) -> RecordingState {
          let inner = self.inner.lock().unwrap();
          RecordingState {
@@ -720,7 +734,7 @@ index d3db85f..57a15e3 100644
              enabled: inner.enabled,
              output_dir: inner
                  .output_dir
-@@ -553,19 +729,28 @@ impl RecordingSession {
+@@ -553,19 +737,29 @@ impl RecordingSession {
                  .map(|p| p.to_string_lossy().into_owned()),
              next_turn: inner.next_turn,
              last_error: inner.last_error.clone(),
@@ -741,6 +755,7 @@ index d3db85f..57a15e3 100644
 +            },
 +            recording_id: inner.recording_id.clone(),
 +            target: inner.target,
++            fps: inner.fps,
          }
      }
  
@@ -752,7 +767,7 @@ index d3db85f..57a15e3 100644
      }
  
      /// Reserve a turn while deliberately suppressing visual and accessibility
-@@ -578,21 +763,36 @@ impl RecordingSession {
+@@ -578,21 +772,36 @@ impl RecordingSession {
          args: &Value,
          start_ms: u64,
      ) -> Option<PendingTurn> {
@@ -791,7 +806,7 @@ index d3db85f..57a15e3 100644
              let out = inner.output_dir.clone()?;
              let idx = inner.next_turn;
              inner.next_turn += 1;
-@@ -600,6 +800,7 @@ impl RecordingSession {
+@@ -600,6 +809,7 @@ impl RecordingSession {
                  out.join(format!("turn-{idx:05}")),
                  inner.session_start_ms,
                  inner.generation,
@@ -799,7 +814,7 @@ index d3db85f..57a15e3 100644
              )
          };
  
-@@ -643,6 +844,12 @@ impl RecordingSession {
+@@ -643,6 +853,12 @@ impl RecordingSession {
          if !inner.enabled || inner.generation != generation {
              return None;
          }
@@ -812,7 +827,7 @@ index d3db85f..57a15e3 100644
          if let Err(error) = write_phase_artifacts(&turn_dir, "before", &before) {
              inner.last_error = Some(error.to_string());
          }
-@@ -660,14 +867,17 @@ impl RecordingSession {
+@@ -660,14 +876,17 @@ impl RecordingSession {
              click_point,
              capture_visual_state,
              before,
@@ -833,7 +848,7 @@ index d3db85f..57a15e3 100644
                      })
                  })
              } else {
-@@ -1021,6 +1231,18 @@ fn write_turn(
+@@ -1021,6 +1240,18 @@ fn write_turn(
          "t_ms_from_session_start": now.saturating_sub(session_start_ms),
          "t_start_ms_from_session_start": start_ms.saturating_sub(session_start_ms),
      });
@@ -852,7 +867,7 @@ index d3db85f..57a15e3 100644
      if let Some((cx, cy)) = click_point {
          payload["click_point"] = serde_json::json!({"x": cx, "y": cy});
      }
-@@ -1266,6 +1488,7 @@ mod tests {
+@@ -1266,6 +1497,7 @@ mod tests {
                  window_id: 902,
                  pid: 901,
                  capture: Mutex::new(DispatchClickCapture::default()),
@@ -860,7 +875,7 @@ index d3db85f..57a15e3 100644
              })),
          }
      }
-@@ -2111,6 +2334,7 @@ mod tests {
+@@ -2111,6 +2343,7 @@ mod tests {
              path: path.clone(),
              duration_ms: 1,
              finalized: false,
@@ -868,7 +883,7 @@ index d3db85f..57a15e3 100644
          })
          .expect_err("unfinalized output must fail");
          assert!(error.to_string().contains("did not finalize"));
-@@ -2120,6 +2344,7 @@ mod tests {
+@@ -2120,6 +2353,7 @@ mod tests {
              path: path.clone(),
              duration_ms: 1,
              finalized: true,
@@ -876,7 +891,7 @@ index d3db85f..57a15e3 100644
          })
          .expect_err("empty finalized output must fail");
          assert!(error.to_string().contains("is empty"));
-@@ -2129,8 +2354,175 @@ mod tests {
+@@ -2129,8 +2363,177 @@ mod tests {
              path,
              duration_ms: 1,
              finalized: true,
@@ -958,6 +973,7 @@ index d3db85f..57a15e3 100644
 +                target,
 +                false,
 +                Some("recording-one"),
++                30,
 +            )
 +            .unwrap();
 +        let generation = session.current_state().generation;
@@ -969,6 +985,7 @@ index d3db85f..57a15e3 100644
 +                target,
 +                false,
 +                Some("recording-one"),
++                30,
 +            )
 +            .unwrap();
 +        assert_eq!(session.current_state().generation, generation);
@@ -1053,15 +1070,16 @@ index d3db85f..57a15e3 100644
 +    }
  }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
-index 43779ee..b603984 100644
+index 43779ee..7e27dec 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
-@@ -99,7 +99,11 @@ impl Tool for StartRecordingTool {
+@@ -99,7 +99,12 @@ impl Tool for StartRecordingTool {
                              screenshots + JSON are recorded). On macOS this uses native \
                              ScreenCaptureKit (no extra TCC prompt, macOS 15.0+); on \
                              Windows + Linux it requires ffmpeg on PATH."
 -                    }
 +                    },
++                    "fps": {"type":"integer", "minimum":1, "maximum":crate::video::max_window_fps(), "description":"Requested exact-window source frame rate. Requires window_target; distinct frames depend on source updates."},
 +                    "window_target": { "type":"object", "properties": { "pid":{"type":"integer","minimum":1}, "window_id":{"type":"integer","minimum":1}}, "required":["pid","window_id"], "additionalProperties":false },
 +                    "recording_id":{"type":"string","minLength":1,"maxLength":128},
 +                    "capture_actions": {"type":"boolean", "description":"Capture before/after trees and images. False keeps the action journal without extra observations."}
@@ -1069,7 +1087,7 @@ index 43779ee..b603984 100644
                  },
                  "additionalProperties": false
              }),
-@@ -122,10 +126,26 @@ impl Tool for StartRecordingTool {
+@@ -122,10 +127,34 @@ impl Tool for StartRecordingTool {
          // (session_end) only stops the recording its own session started.
          let owner = args.opt_str("_session_id");
  
@@ -1087,6 +1105,13 @@ index 43779ee..b603984 100644
 +                }
 +            }
 +        };
++        let fps = match args.get("fps") {
++            None => crate::video::max_window_fps().min(30),
++            Some(value) => match value.as_u64().and_then(|n| u32::try_from(n).ok()) {
++                Some(fps) if target.is_some() => fps,
++                _ => return ToolResult::error("fps requires an integer and an exact window_target"),
++            },
++        };
 +        match self.session.start_identified(
              output_dir.as_deref().unwrap(),
              record_video,
@@ -1094,10 +1119,11 @@ index 43779ee..b603984 100644
 +            target,
 +            args.bool_or("capture_actions", true),
 +            args.get("recording_id").and_then(Value::as_str),
++            fps,
          ) {
              Ok(()) => {
                  let state = self.session.current_state();
-@@ -192,7 +212,7 @@ impl Tool for StopRecordingTool {
+@@ -192,7 +221,7 @@ impl Tool for StopRecordingTool {
                  .into(),
              input_schema: json!({
                  "type": "object",
@@ -1106,7 +1132,7 @@ index 43779ee..b603984 100644
                  "additionalProperties": false
              }),
              read_only: false,
-@@ -202,11 +222,17 @@ impl Tool for StopRecordingTool {
+@@ -202,11 +231,17 @@ impl Tool for StopRecordingTool {
          })
      }
  
@@ -1129,7 +1155,7 @@ index 43779ee..b603984 100644
              Ok(()) => {
                  let state = self.session.current_state();
                  let video_note = state
-@@ -256,8 +282,12 @@ impl Tool for GetRecordingStateTool {
+@@ -256,8 +291,12 @@ impl Tool for GetRecordingStateTool {
          })
      }
  
@@ -1143,7 +1169,7 @@ index 43779ee..b603984 100644
          // Match Swift text format 1:1:
          //   "✅ recording: enabled output_dir=<path> next_turn=<N>"
          //   "✅ recording: disabled"
-@@ -497,6 +527,9 @@ fn recording_state_json(state: &RecordingState) -> Value {
+@@ -497,10 +536,14 @@ fn recording_state_json(state: &RecordingState) -> Value {
          // "recording" mirrors the Swift field name for parity.
          "recording": state.enabled,
          "enabled": state.enabled,
@@ -1153,6 +1179,11 @@ index 43779ee..b603984 100644
          "output_dir": state.output_dir,
          "next_turn": state.next_turn,
          "last_error": state.last_error,
+         "video_active": state.video_active,
++        "fps": state.fps,
+         "last_video_path": state.last_video_path,
+         // Session that owns the live recording (the daemon-injected
+         // `_session_id`), or null when started anonymously. Informational; the
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 index d93bf6d..5b56d72 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
@@ -1233,10 +1264,10 @@ index d93bf6d..5b56d72 100644
      fn action_projection_keeps_browser_refusal_diagnostics_and_closes_structured_content() {
          let legacy = serde_json::json!({
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs
-index f7eddc5..dabdffc 100644
+index f7eddc5..576a425 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs
-@@ -31,18 +31,37 @@ pub struct VideoMetadata {
+@@ -31,18 +31,40 @@ pub struct VideoMetadata {
      pub duration_ms: u64,
      /// Whether the backend finalized the mp4 cleanly (playable file).
      pub finalized: bool,
@@ -1264,17 +1295,20 @@ index f7eddc5..dabdffc 100644
  /// once at startup via `set_video_backend_factory`.
  pub trait VideoBackendFactory: Send + Sync {
      fn start(&self, output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>>;
++    /// Maximum requested rate; actual distinct frames depend on the source.
++    fn max_window_fps(&self) -> u32 { 30 }
 +    fn start_window(
 +        &self,
 +        _output_path: &Path,
 +        _target: WindowVideoTarget,
++        _fps: u32,
 +    ) -> anyhow::Result<Box<dyn VideoBackend>> {
 +        anyhow::bail!("Exact-window video capture is unavailable on this backend; display capture was not started")
 +    }
  }
  
  static VIDEO_BACKEND_FACTORY: OnceLock<Box<dyn VideoBackendFactory>> = OnceLock::new();
-@@ -63,3 +82,13 @@ pub fn start_video(output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>>
+@@ -63,3 +85,27 @@ pub fn start_video(output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>>
          .ok_or_else(|| anyhow::anyhow!("no video backend registered for this platform"))?;
      factory.start(output_path)
  }
@@ -1282,11 +1316,25 @@ index f7eddc5..dabdffc 100644
 +pub fn start_window_video(
 +    output_path: &Path,
 +    target: WindowVideoTarget,
++    fps: u32,
 +) -> anyhow::Result<Box<dyn VideoBackend>> {
++    validate_window_fps(fps)?;
 +    VIDEO_BACKEND_FACTORY
 +        .get()
 +        .ok_or_else(|| anyhow::anyhow!("no video backend registered"))?
-+        .start_window(output_path, target)
++        .start_window(output_path, target, fps)
++}
++
++/// This is a capability ceiling, not a measured frame-rate promise.
++pub fn max_window_fps() -> u32 {
++    VIDEO_BACKEND_FACTORY.get().map_or(30, |factory| factory.max_window_fps())
++}
++pub fn validate_window_fps(fps: u32) -> anyhow::Result<()> {
++    let maximum = max_window_fps();
++    if fps == 0 || fps > maximum {
++        anyhow::bail!("Exact-window capture supports 1..={maximum} fps; requested {fps}. No capture was started");
++    }
++    Ok(())
 +}
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/video_ffmpeg.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/video_ffmpeg.rs
 index 36d108c..2cce6e8 100644
@@ -1300,6 +1348,53 @@ index 36d108c..2cce6e8 100644
          })
      }
  }
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/tests/window_video_rate.rs b/libs/cua-driver/rust/crates/cua-driver-core/tests/window_video_rate.rs
+new file mode 100644
+index 0000000..d561241
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cua-driver-core/tests/window_video_rate.rs
+@@ -0,0 +1,41 @@
++use cua_driver_core::{
++    recording::RecordingSession,
++    video::{self, VideoBackend, VideoBackendFactory, WindowVideoTarget},
++};
++use std::{path::Path, sync::{Arc, Mutex}};
++struct Factory(Arc<Mutex<Vec<u32>>>);
++impl VideoBackendFactory for Factory {
++    fn start(&self, _: &Path) -> anyhow::Result<Box<dyn VideoBackend>> { panic!("must not widen scope") }
++    fn max_window_fps(&self) -> u32 { 60 }
++    fn start_window(&self, _: &Path, _: WindowVideoTarget, fps: u32) -> anyhow::Result<Box<dyn VideoBackend>> {
++        self.0.lock().unwrap().push(fps);
++        anyhow::bail!("fixture: source unavailable")
++    }
++}
++#[test]
++fn source_rate_validation_and_recording_identity() {
++    let calls = Arc::new(Mutex::new(Vec::new()));
++    video::set_video_backend_factory(Box::new(Factory(calls.clone())));
++    let target = WindowVideoTarget { pid: 42, window_id: 7 };
++    for fps in [0, 61, u32::MAX] {
++        assert!(video::start_window_video(Path::new("unused"), target, fps).is_err());
++    }
++    assert!(calls.lock().unwrap().is_empty(), "invalid rates refuse before backend dispatch");
++    for fps in [1, 30, 60] {
++        assert!(video::start_window_video(Path::new("unused"), target, fps).is_err());
++    }
++    assert_eq!(*calls.lock().unwrap(), [1, 30, 60]);
++    let dir = tempfile::tempdir().unwrap();
++    let output = dir.path().join("recording");
++    let session = RecordingSession::new();
++    let start = |fps| session.start_identified(output.to_str().unwrap(), false, Some("rate-owner"), Some(target), false, Some("rate-id"), fps);
++    assert!(start(61).is_err());
++    assert!(!output.exists(), "invalid rate creates no files");
++    start(60).unwrap();
++    let generation = session.current_state().generation;
++    assert_eq!(session.current_state().fps, 60);
++    start(60).unwrap();
++    assert_eq!(session.current_state().generation, generation);
++    assert!(start(30).is_err(), "same recording id cannot silently change capture rate");
++    session.stop_identified(Some("rate-owner"), "rate-id").unwrap();
++}
 diff --git a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs b/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
 index bc860cd..edceabe 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
@@ -3566,7 +3661,7 @@ index d835bf1..b7ec1ef 100644
              }
              Ok(Err(e)) => ToolResult::error(format!("Zoom failed: {e}")),
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/video_wayland.rs b/libs/cua-driver/rust/crates/platform-linux/src/video_wayland.rs
-index 0a525d8..1ff36a7 100644
+index 0a525d8..f5133cf 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/video_wayland.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/video_wayland.rs
 @@ -11,7 +11,7 @@ use std::process::{Child, Command, Stdio};
@@ -3578,16 +3673,18 @@ index 0a525d8..1ff36a7 100644
  
  pub struct WfRecorderVideoBackendFactory;
  
-@@ -24,6 +24,46 @@ impl VideoBackendFactory for WfRecorderVideoBackendFactory {
+@@ -24,6 +24,45 @@ impl VideoBackendFactory for WfRecorderVideoBackendFactory {
          WfRecorderVideoBackend::start(output_path)
              .map(|backend| Box::new(backend) as Box<dyn VideoBackend>)
      }
++    fn max_window_fps(&self) -> u32 { 5 }
 +    fn start_window(
 +        &self,
 +        path: &Path,
 +        target: WindowVideoTarget,
++        fps: u32,
 +    ) -> anyhow::Result<Box<dyn VideoBackend>> {
-+        crate::video_window::start_window_capture(path, move || {
++        crate::video_window::start_window_capture(path, fps, move || {
 +            let session = crate::wayland::shell_helper::WindowCaptureSession::new(
 +                u64::from(target.window_id), Some(u32::try_from(target.pid)?))
 +                .ok_or_else(|| anyhow::anyhow!("Exact-window Wayland recording requires the attested GNOME helper v9; no display capture was started"))?;
@@ -3611,9 +3708,6 @@ index 0a525d8..1ff36a7 100644
 +    fn dimensions(&self) -> (u32, u32) {
 +        self.dimensions
 +    }
-+    fn interval_ms(&self) -> u64 {
-+        200
-+    }
 +    fn frame(&self) -> anyhow::Result<Vec<u8>> {
 +        let frame = self.session.frame().ok_or_else(|| anyhow::anyhow!("Exact GNOME window capture ended: target lost, minimized, moved workspace, or helper unavailable"))?;
 +        let image = image::load_from_memory(&frame)?;
@@ -3625,7 +3719,7 @@ index 0a525d8..1ff36a7 100644
  }
  
  struct GnomeShellVideoBackend {
-@@ -162,6 +202,7 @@ impl VideoBackend for GnomeShellVideoBackend {
+@@ -162,6 +201,7 @@ impl VideoBackend for GnomeShellVideoBackend {
              path: self.output_path,
              duration_ms: elapsed.as_millis() as u64,
              finalized: true,
@@ -3633,7 +3727,7 @@ index 0a525d8..1ff36a7 100644
          })
      }
  }
-@@ -282,6 +323,7 @@ impl VideoBackend for WfRecorderVideoBackend {
+@@ -282,6 +322,7 @@ impl VideoBackend for WfRecorderVideoBackend {
              path: self.output_path,
              duration_ms: elapsed.as_millis() as u64,
              finalized: true,
@@ -3643,10 +3737,10 @@ index 0a525d8..1ff36a7 100644
  }
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/video_window.rs b/libs/cua-driver/rust/crates/platform-linux/src/video_window.rs
 new file mode 100644
-index 0000000..f8d5003
+index 0000000..b48c9de
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/video_window.rs
-@@ -0,0 +1,298 @@
+@@ -0,0 +1,314 @@
 +//! Exact-window pixel sources share one bounded, task-owned FFmpeg encoder.
 +use crate::capture::CompositeCapture;
 +use cua_driver_core::video::{VideoBackend, VideoBackendFactory, VideoMetadata, WindowVideoTarget};
@@ -3672,12 +3766,14 @@ index 0000000..f8d5003
 +    fn start(&self, path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
 +        cua_driver_core::video_ffmpeg::FfmpegVideoBackendFactory.start(path)
 +    }
++    fn max_window_fps(&self) -> u32 { 60 }
 +    fn start_window(
 +        &self,
 +        path: &Path,
 +        target: WindowVideoTarget,
++        fps: u32,
 +    ) -> anyhow::Result<Box<dyn VideoBackend>> {
-+        start_window_capture(path, move || {
++        start_window_capture(path, fps, move || {
 +            Ok(Box::new(CompositeCapture::new(
 +                target.window_id,
 +                u32::try_from(target.pid)?,
@@ -3689,9 +3785,6 @@ index 0000000..f8d5003
 +pub(super) trait WindowCapture {
 +    fn dimensions(&self) -> (u32, u32);
 +    fn frame(&self) -> anyhow::Result<Vec<u8>>;
-+    fn interval_ms(&self) -> u64 {
-+        33
-+    }
 +}
 +impl WindowCapture for CompositeCapture {
 +    fn dimensions(&self) -> (u32, u32) {
@@ -3704,6 +3797,7 @@ index 0000000..f8d5003
 +
 +pub(super) fn start_window_capture(
 +    path: &Path,
++    fps: u32,
 +    capture: impl FnOnce() -> anyhow::Result<Box<dyn WindowCapture>> + Send + 'static,
 +) -> anyhow::Result<Box<dyn VideoBackend>> {
 +    if path.exists() {
@@ -3726,7 +3820,7 @@ index 0000000..f8d5003
 +    std::thread::spawn(move || {
 +        let _admission = admission;
 +        let result =
-+            capture().and_then(|capture| record(path, capture, worker_stop, ready_tx.clone()));
++            capture().and_then(|capture| record(path, capture, fps, worker_stop, ready_tx.clone()));
 +        if let Err(error) = &result {
 +            let _ = ready_tx.try_send(Err(error.to_string()));
 +        }
@@ -3782,6 +3876,7 @@ index 0000000..f8d5003
 +fn record(
 +    path: PathBuf,
 +    capture: Box<dyn WindowCapture>,
++    fps: u32,
 +    stop: Arc<AtomicBool>,
 +    ready: mpsc::SyncSender<Result<(), String>>,
 +) -> anyhow::Result<VideoMetadata> {
@@ -3804,11 +3899,13 @@ index 0000000..f8d5003
 +                "-video_size",
 +                &format!("{width}x{height}"),
 +                "-framerate",
-+                "30",
++                &fps.to_string(),
 +                "-use_wallclock_as_timestamps",
 +                "1",
 +                "-i",
 +                "pipe:0",
++                "-fps_mode",
++                "vfr",
 +                "-an",
 +                "-vf",
 +                "pad=ceil(iw/2)*2:ceil(ih/2)*2",
@@ -3883,7 +3980,18 @@ index 0000000..f8d5003
 +                }
 +                Ok(n) => bytes = &bytes[n..],
 +                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-+                    std::thread::sleep(Duration::from_millis(5))
++                    // A fixed sleep here costs one delay for every pipe-sized
++                    // slice of a frame. Wait for writability instead; the
++                    // deadline still bounds an encoder that stops reading.
++                    let mut poll = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
++                    let result = unsafe { libc::poll(&mut poll, 1, 20) };
++                    if result < 0 {
++                        let error = std::io::Error::last_os_error();
++                        if error.kind() != std::io::ErrorKind::Interrupted {
++                            failure = Some(error.to_string());
++                            break 'capture;
++                        }
++                    }
 +                }
 +                Err(e) => {
 +                    failure = Some(e.to_string());
@@ -3895,9 +4003,11 @@ index 0000000..f8d5003
 +            let _ = ready.send(Ok(()));
 +            announced = true;
 +        }
-+        let elapsed = started.elapsed().as_millis() as u64;
-+        let interval = capture.interval_ms().max(1);
-+        let next = Duration::from_millis((elapsed / interval + 1) * interval);
++        let elapsed = started.elapsed().as_nanos();
++        // Absolute rational cadence: 60 fps is 16.666... ms, not 16 or 17.
++        // Skip missed slots under backpressure; never queue catch-up frames.
++        let next_tick = elapsed * u128::from(fps) / 1_000_000_000 + 1;
++        let next = Duration::from_nanos((next_tick * 1_000_000_000 / u128::from(fps)) as u64);
 +        std::thread::sleep(next.saturating_sub(started.elapsed()));
 +        if stop.load(Ordering::Acquire) {
 +            break;
@@ -7580,10 +7690,10 @@ index f389448..9387a9f 100644
              }
              Ok(Err(e)) => ToolResult::error(format!("Zoom failed: {e}")),
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/video_sckit.rs b/libs/cua-driver/rust/crates/platform-macos/src/video_sckit.rs
-index ce3841e..3802563 100644
+index ce3841e..d8694a1 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/video_sckit.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/video_sckit.rs
-@@ -1,163 +1,261 @@
+@@ -1,163 +1,277 @@
 -//! Native ScreenCaptureKit video backend (macOS).
 -//!
 -//! Replaces the ffmpeg subprocess pipeline with an in-process SCStream +
@@ -7644,14 +7754,16 @@ index ce3841e..3802563 100644
 -    fn start(&self, output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
 -        SckitVideoBackend::start(output_path).map(|b| Box::new(b) as Box<dyn VideoBackend>)
 +    fn start(&self, path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
-+        SckitVideoBackend::start(path, None).map(|b| Box::new(b) as Box<dyn VideoBackend>)
++        SckitVideoBackend::start(path, None, 30).map(|b| Box::new(b) as Box<dyn VideoBackend>)
 +    }
++    fn max_window_fps(&self) -> u32 { 60 }
 +    fn start_window(
 +        &self,
 +        path: &Path,
 +        target: WindowVideoTarget,
++        fps: u32,
 +    ) -> anyhow::Result<Box<dyn VideoBackend>> {
-+        SckitVideoBackend::start(path, Some(target)).map(|b| Box::new(b) as Box<dyn VideoBackend>)
++        SckitVideoBackend::start(path, Some(target), fps).map(|b| Box::new(b) as Box<dyn VideoBackend>)
      }
  }
 -
@@ -7683,18 +7795,9 @@ index ce3841e..3802563 100644
 -                    parent.display()
 -                )
 -            })?;
-+    fn start(path: &Path, target: Option<WindowVideoTarget>) -> anyhow::Result<Self> {
++    fn start(path: &Path, target: Option<WindowVideoTarget>, fps: u32) -> anyhow::Result<Self> {
 +        if path.exists() {
 +            anyhow::bail!("Recording output already exists; choose a new directory");
-+        }
-+        if let Some(parent) = path.parent() {
-+            std::fs::create_dir_all(parent)?;
-+        }
-+        if ACTIVE
-+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-+            .is_err()
-+        {
-+            anyhow::bail!("A native capture is still starting, running or stopping");
          }
 -        // SCRecordingOutput appends-or-fails on an existing file; match the
 -        // Swift impl by clearing any stale recording.mp4 from a prior run.
@@ -7706,6 +7809,15 @@ index ce3841e..3802563 100644
 -                    "failed to remove stale recording file {}: {e}",
 -                    output_path.display()
 -                );
++        if let Some(parent) = path.parent() {
++            std::fs::create_dir_all(parent)?;
++        }
++        if ACTIVE
++            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
++            .is_err()
++        {
++            anyhow::bail!("A native capture is still starting, running or stopping");
++        }
 +        let admission = Admission;
 +        let (stop, stopped) = mpsc::channel();
 +        let (ready_tx, ready) = mpsc::sync_channel(1);
@@ -7717,7 +7829,7 @@ index ce3841e..3802563 100644
 +        let path = path.to_path_buf();
 +        std::thread::spawn(move || {
 +            let _admission = admission;
-+            let result = capture(path, target, stopped, ready_tx.clone(), worker_cancelled);
++            let result = capture(path, target, fps, stopped, ready_tx.clone(), worker_cancelled);
 +            if let Err(error) = &result {
 +                let _ = ready_tx.try_send(Err(error.to_string()));
 +            }
@@ -7746,10 +7858,19 @@ index ce3841e..3802563 100644
 +fn capture(
 +    path: PathBuf,
 +    target: Option<WindowVideoTarget>,
++    fps: u32,
 +    stop: mpsc::Receiver<()>,
 +    ready: mpsc::SyncSender<Result<(), String>>,
 +    cancelled: Arc<AtomicBool>,
 +) -> anyhow::Result<VideoMetadata> {
++    // A first-use SCContentFilter can abort inside SkyLight before any window
++    // observation has initialized CoreGraphics. Establish and verify the
++    // display connection explicitly; this neither creates UI nor activates apps.
++    let displays = core_graphics::display::CGDisplay::active_displays()
++        .map_err(|error| anyhow::anyhow!("Recording display discovery failed: {error}"))?;
++    if displays.is_empty() {
++        anyhow::bail!("No active display is available for recording");
++    }
 +    let content = SCShareableContent::get()
 +        .map_err(|e| anyhow::anyhow!("Recording window discovery failed: {e}"))?;
 +    let (filter, width, height, initial_size) = if let Some(target) = target {
@@ -7762,6 +7883,11 @@ index ce3841e..3802563 100644
 +            anyhow::bail!("Recording window belongs to another process");
 +        }
 +        let frame = window.frame();
++        if !frame.origin.x.is_finite() || !frame.origin.y.is_finite()
++            || !frame.size.width.is_finite() || !frame.size.height.is_finite()
++            || frame.size.width <= 0.0 || frame.size.height <= 0.0 {
++            anyhow::bail!("Recording window geometry is unavailable");
++        }
 +        let filter = SCContentFilter::create().with_window(&window).build();
 +        let rect = filter.content_rect();
 +        let scale = f64::from(filter.point_pixel_scale());
@@ -7850,7 +7976,7 @@ index ce3841e..3802563 100644
 +    let config = SCStreamConfiguration::new()
 +        .with_width(width.max(2))
 +        .with_height(height.max(2))
-+        .with_minimum_frame_interval(&screencapturekit::cm::CMTime::new(1, 30))
++        .with_minimum_frame_interval(&screencapturekit::cm::CMTime::new(1, fps as i32))
 +        .with_preserves_aspect_ratio(true)
 +        .with_shows_cursor(target.is_none());
 +    let output_config = SCRecordingOutputConfiguration::new()
@@ -7863,10 +7989,10 @@ index ce3841e..3802563 100644
 +    let callbacks = RecordingCallbacks::new()
 +        .on_start(move || {
 +            let _ = started.send(Event::Started);
-         })
++        })
 +        .on_fail(move |error| {
 +            let _ = failed.send(Event::Failed(error));
-+        })
+         })
 +        .on_finish(move || {
 +            let _ = events_tx.send(Event::Finished);
 +        });

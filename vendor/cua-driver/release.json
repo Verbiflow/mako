@@ -1,7 +1,7 @@
 {
   "base": "fc188250b4ca8549b8e61f937fdb1fb560770e86",
   "upstreamTag": "cua-driver-rs-v0.28.2",
-  "version": "0.28.2+mako.17",
+  "version": "0.28.2+mako.19",
   "patch": "release.patch",
   "platforms": [
     "darwin-arm64",
