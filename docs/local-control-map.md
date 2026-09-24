@@ -15,6 +15,7 @@ parity has not been established.
   The installed CLI/MCP form workflow passes; the newer capture/recording build is in release acceptance.
 - **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
 - **Interactive streaming:** [reference findings, transport experiments and local/remote scope](local-control-streaming.md).
+- **Streaming choice and VNC:** [Selkies/pixelflux prototype, Moonlight comparison and compatibility boundary](local-control-streaming.md#september-24-selection-browser-streaming-moonlight-and-vnc).
 - **Using the existing API:** [API reference](local-control-api.md).
 - **Reusable packages:** [Node package ownership and consumer checks](package-boundaries.md); [LC-28](#lc-28--reusable-packages-and-public-entrypoints).
 - **Build, cloud and contributors:** [runtime](local-control-runtime.md),
@@ -48,10 +49,14 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Decisions to preserve
 
-- One provider-neutral engine under MCP and CLI; composability is required.
+- One provider-neutral engine behind the CLI; composability is required.
   Preserve task ownership across separate shell invocations. Local Mac, remote
   browsers and future Linux cloud jobs use that engine with verified backend
   capabilities. Live streaming is an engine output, not a third automation system.
+- Complete CLI-first agent delivery: a CLI must not require an MCP call to obtain
+  its session. The desktop still has that coupling. Retire default Local Control
+  MCP injection after independent bootstrap and caller acceptance; the public adapter and launcher must be deleted. This does
+  not remove other Mako MCP integrations or the native driver's private protocol.
 - Live preview/recording performance target: 1920×1080 at 60 distinct fps.
   1440p/4K is optional, not a release gate. Preserve full-detail explicit screenshots
   and exact coordinate geometry. Do not resize user pages to satisfy a video target.
@@ -72,6 +77,16 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
+**Active priority (September 24): finish CLI-only browser and computer use.**
+The user explicitly chose removal of the public Local Control MCP adapter, not an
+optional compatibility mode. Streaming investigation/implementation is paused
+until this migration passes its correctness, usability, lifecycle and packaging
+checks. Preserve the existing browser/native functionality, lossless values,
+exact target checks, background policy and recording cleanup. Agent-friendly
+per-command help, composable files/stdin and minimal startup/context cost are
+required acceptance criteria, not follow-up polish.
+
+
 1. **Close correctness and misleading-result gaps** in LC-08 and LC-22, starting
    with raw-action uncertainty, capture geometry and precise recovery messages.
    Keep the full [agent issue ledger](local-control-agent-issues.md) accounted for.
@@ -91,16 +106,30 @@ Statuses below distinguish implementation from deployment and broader acceptance
 
 ## LC-20 — Shared engine and composable CLI
 
-**Status: installed CLI/MCP form acceptance passed; new capture and native capability fixes await rollout.**
+**Status: CLI-only source migration implemented; acceptance and installation in progress.**
 [Commands and lifecycle contract](local-control-cli.md).
 
-`createControlSession` now owns program state, native policy, target evidence,
-recovery and recordings. MCP is an adapter. Disposable CLI processes share that
-engine over an owner-only Unix socket with exact session/protocol/code identity.
-Discovery, connect/open/claim, observe/act, scoped screenshots, recording
-start/stop/status, script execution and bounded diagnostics are implemented.
-Text calls do not take screenshots; explicit media produces files; scripts retain
-state without exposing MCP cells to shell callers.
+`createControlSession` owns program state, native policy, target evidence,
+recovery and recordings. Desktop task supervisors start one worker and supply an
+exact CLI shim/session descriptor through every provider launch path. Browser
+credentials stay in worker IPC. The public MCP adapter, managed injection, export
+and launcher are deleted. Private Cua protocol and unrelated MCPs remain.
+
+CLI command/group help works offline, with signatures, outputs, examples and
+structured `--json` help. `api` loads focused runtime reference. Disposable CLI
+processes share state through an owner-only Unix socket with exact session/code
+identity. Text reads take no screenshots; media is written to files. No source,
+continuation ticket or uncertain action is automatically replayed.
+
+September 24 source proofs: actual CLI workflow passed in 3.98 s; ordinary fixture
+commands were mostly 87–138 ms including process startup (not real-app latency).
+Lossless Unicode, stale-coordinate refusal, broken pipes, cancellation and
+recording finalization passed. Desktop supervisor tests cover explicit stop,
+worker SIGKILL and parent SIGKILL, including removal of task shim/socket files.
+Native keyboard capability and direct-engine regression tests passed. MCP
+registry tests confirm no managed Local Control server and preserve other MCPs.
+Fresh-provider and packaged acceptance are underway; no installed rollout claim.
+
 
 Evidence: separate-process MCP/CLI fixture checks, full legacy MCP/driver
 regressions, real Linux Chromium form/capture/recording job and all eleven existing
@@ -188,6 +217,17 @@ ext-image-copy-capture/DMA-BUF for Linux. These are explicit LC-21 work items, n
 optional polish. [Source-reviewed projects and implementation gates](local-control-capture-backends.md)
 cover OBS, wl-screenrec, Selkies, Sunshine and rejected alternatives. A getUserMedia
 constraint does not upgrade native recording.
+
+The next isolated Linux streaming prototype is **Selkies/pixelflux**, comparing
+WebRTC with binary WebSocket delivery; **Sunshine/Moonlight** supplies the native
+viewer comparison. pixelflux's encoded recording sink is a specific reuse candidate
+for R18, but its published Python extension and monitor-scoped portal capture are
+not a drop-in Node dependency or exact-window backend. KasmVNC is a second cloud
+candidate, not standard VNC compatibility. Ordinary VNC would use a separate
+adapter (for example TigerVNC/noVNC) to the same job desktop, with input ownership
+enforced and no second automation API. The need for standard-client interoperability
+awaits clarification; no VNC service is enabled by this plan.
+[Source review, prototype selection and gates](local-control-streaming.md#september-24-selection-browser-streaming-moonlight-and-vnc).
 
 The source-rate candidate also fixes first-operation Mac recording: a fresh
 ScreenCaptureKit filter could abort until an earlier observation had initialized
@@ -423,7 +463,7 @@ Generic build declarations do not certify Intel Mac, Windows or Linux desktop re
 of scope; the user approved Node packages plus composable CLIs.
 
 `@mako/control` remains lightweight. `@mako/control-runtime` now owns the shared
-session/browser/native/capture implementation and CLI/MCP entrypoints. Desktop,
+session/browser/native/capture implementation and CLI entrypoint. Desktop,
 extension, build and deployment callers use the new package; old source and
 compiled entrypoints are removed. Standalone configuration is explicit, worker
 paths resolve within packages, and engine identity survives relocation. Strict
@@ -449,7 +489,7 @@ This is the continuation of LC-12, not another API implementation milestone.
 
 Next: repeated held-out tasks with duplicate controls, virtualized content, rich
 editors, popups, multiple windows, downloads, long recordings and interruptions.
-Run via MCP and CLI in multiple harnesses; retain fresh-agent mistakes as cases.
+Run via the CLI in multiple harnesses; retain fresh-agent mistakes as cases.
 
 Done for a declared matrix when independent outcomes establish completion and false
 confirmation rates, focus/input interference, recovery, human interventions, model

@@ -125,7 +125,7 @@ passed; the capture21 evidence identifies subsequent tested builds separately.
 ## Reusable Node package extraction
 
 LC-28 now ships source packages `@mako/control` and `@mako/control-runtime`; the
-Linux deployment recipe installs those same packages. The CLI, MCP adapter and
+Linux deployment recipe installs those same packages. The CLI, task supervisor and
 application share their engine. Archives include declarations and licenses, omit
 maps/caches/binaries, and pass a strict external-consumer check. Desktop packaging
 omits package declarations. Docker installs complete prepared packages before

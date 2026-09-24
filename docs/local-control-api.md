@@ -1,21 +1,21 @@
 # Local Control API
 
-The public MCP surface is `mako_control_status`, `mako_control_help`, and
-`mako_control_exec`. All providers receive this surface. Basic status, help,
-and browser execution work without starting the native driver.
+The public agent interface is the task-owned `mako-control` CLI for browser and
+computer use. `mako-control --help` works offline; command-specific help includes
+arguments, results, exit codes and examples. `api --topic examples` supplies
+complete scripts; native schema help connects the driver only when requested.
 
-Start a program with `mako_control_exec({source: "return await control.browsers()"})`.
-If it yields `{cell: 17, status: "running", ...}`, collect that same program with
-`mako_control_exec({cell: 17})`. Supply exactly one of `source` or `cell`.
-`cell` is the returned numeric continuation ID, never a script name. Do not
-resubmit source to collect a running program. Invalid arguments are reported as
-`invalid-request` / `not-dispatched`; that call did not start or resume a program.
+```sh
+printf '%s' 'return await control.browsers()' | mako-control exec --source-file -
+```
 
-`source` accepts an async JavaScript body. Await calls and return only the evidence
-needed for the next decision. Save handles in `state` to use them in later cells;
-ordinary errors preserve it, while cancellation and timeout reset the worker.
-Top-level JavaScript declarations do not persist. A callback from a finished
-cell cannot acquire a later cell's authority.
+`exec` takes an async JavaScript body and waits for its result. It never returns a
+continuation ticket. Await calls and return only needed evidence. Keep handles in
+`state` across commands; ordinary errors preserve it, while cancellation and
+timeout reset the worker. Top-level declarations do not persist. Callbacks from
+completed programs cannot acquire a later program's authority. Invalid arguments
+report `invalid-request` / `not-dispatched` for that operation; earlier steps may
+have completed. Correct only the failed step.
 
 ## Preferred browser
 
@@ -193,10 +193,10 @@ with a bounded field correction and example. Locators report `target-ambiguous`,
 These outcomes describe the failed operation, not earlier steps in a program:
 correct that step without replaying prior writes. Backend failures after dispatch
 remain unknown even if their cause is a response-schema error. Common examples
-are available in `mako_control_help({topic:'examples'})`; replace example labels
+are available in `mako-control api --topic examples`; replace example labels
 with exact names from your observation.
 
-Control failures preserve a `code` and an `outcome` across worker and MCP
+Control failures preserve a `code` and an `outcome` across worker and CLI
 boundaries: `not-dispatched`, `rejected`, or `unknown`. An unknown outcome may
 have changed the UI. Observe the affected target before deciding what to do;
 do not retry merely because a transport failed. High-level input is blocked
@@ -255,7 +255,7 @@ refuse ambiguity or incomplete coverage before dispatch. They never retry input.
 `expect()`; successful dispatch alone does not establish that a form saved.
 
 `handle.capabilities()` describes the bound window or browser transport. Request
-one section with `mako_control_help({topic: 'target'})` (see help's topic enum).
+one section with `mako-control api --topic actions` (see help's topic enum).
 
 Name work with `control.openTab({url, name: 'Quarterly report'})`. Extension task
 children appear in `tab.children()`; select an exact returned descriptor with
@@ -392,8 +392,7 @@ retains the exact owned target for `control.tab(error.target)`. Do not repeat
 `openTab` to recover it. A hidden desk remains a live client of the real app;
 it is not a sandbox for stubbing side-effecting modules.
 
-The [composable CLI design](local-control-cli.md) shares this engine. The current
-Linux executable launches MCP stdio; the proposed shell verbs are not yet shipped.
+The [composable CLI design](local-control-cli.md) shares this engine. Both desktop and Linux task supervisors expose the same command interface.
 
 ## Recovery after interrupted actions
 
@@ -411,14 +410,15 @@ the mutation, then observe again. Dialog replies and event reads can run while
 navigation is waiting. Answering a currently open dialog does not verify or retry
 the preceding action.
 
-Cancelling a wait for a yielded cell leaves its receipt available. Collect the
-same cell before submitting another program. Cancelling the program itself stops
-its worker; any dispatched action still needs observation before further input.
+Cancelling exec stops its script worker; any dispatched action still needs
+observation before further input. A cancelled recording finalization waiter does
+not discard the recording; inspect its exact receipt through record status.
 
 ## Shared shell session and browser-wide ownership
 
-[Composable CLI commands](local-control-cli.md) share `createControlSession` with
-MCP. The updated MCP status returns `sessionFile` for its private Unix socket.
+[Composable CLI commands](local-control-cli.md) use `createControlSession` through
+a private Unix socket. The desktop supervisor supplies the exact CLI/session to
+the provider at task launch; Linux session start returns its descriptor.
 Shell commands preserve the same target generations, refs, recordings and script
 state. `diagnostics` returns bounded command/request metadata without arguments
 or page contents. A normal shell command exiting does not close the engine.

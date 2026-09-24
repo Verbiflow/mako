@@ -10,7 +10,7 @@ The session extraction is implemented locally; release acceptance is tracked in 
 
 ```mermaid
 flowchart TD
-  Harness[Harness through MCP or CLI] --> Session[Shared task session]
+  Harness[Harness through CLI] --> Session[Shared task session]
   Session --> Browser[Browser backend]
   Session --> Native[Native backend]
   Browser --> Capture[Owned capture and recording]
@@ -29,10 +29,10 @@ behind backend capabilities and the supervisor that actually owns the resources.
 | Boundary | Owns | Must not leak into callers |
 | --- | --- | --- |
 | Public contract (`@mako/control`) | Typed targets, actions, observations, capabilities and outcomes; deliberate output and strict selection semantics. | OS handles, CDP sessions, codec negotiation, MCP cells in shell workflows, or backend-specific failure guessing. |
-| Task session | Program lifetime/state, authoritative grants/leases, observation/ref validity, action ordering, uncertainty and cancellation. | Separate MCP/CLI ownership maps or target selection based on whichever process happens to answer. |
+| Task session | Program lifetime/state, authoritative grants/leases, observation/ref validity, action ordering, uncertainty and cancellation. | Separate command/viewer ownership maps or target selection based on whichever process happens to answer. |
 | Browser/native backend | Exact target attachment, backend input/capture mechanisms, supported capabilities and truthful results. | A false promise that every backend supports the same gestures, capture scope, background delivery or frame rate. |
 | Capture and recording owner | Shared source lifetime, actual geometry/timestamps, bounded subscribers, interruption and artifact finalization. | Consumer-managed stream start/stop races, recording geometry inferred from viewport metadata, or preview quality silently defining saved evidence. |
-| MCP/CLI/viewer adapters | Request validation/formatting, transport lifecycle and consumer subscriptions. | Another planner, automatic action replay, a second ref cache or private input shortcuts. |
+| CLI/viewer adapters | Request validation/formatting, transport lifecycle and consumer subscriptions. | Another planner, automatic action replay, a second ref cache or private input shortcuts. |
 | Process supervisor | Launch, readiness, resource limits, process groups, shutdown and artifact retention for resources it owns. | Assuming Electron, a user desktop or a cloud provider is always present; destroying a shared user browser as if it were an owned test process. |
 
 These are ownership boundaries, not a requirement to create six new packages or
@@ -43,8 +43,8 @@ a wrapper that only forwards methods does not earn another layer.
 ## Start with the actual seams
 
 - [`createControlSession`](../packages/control-runtime/src/control-session.ts) owns program/session
-  state and host policy. [`createComputerToolsServer`](../packages/control-runtime/src/computer-tools-main.ts)
-  owns MCP registration/formatting; the CLI socket adapter calls the same session.
+  state and host policy. The task supervisor owns its desktop worker; the CLI
+  socket adapter calls that exact session.
   Browser capture, native dispatch and recovery have no second CLI implementation.
 - [`startControlService`](../electron/control-service.ts) is an existing authorized
   HTTP bridge for browser/preview work. It is not already the extracted cross-
@@ -114,9 +114,9 @@ Diagnostics must have an instrumentation-overhead check of their own.
 
 | Change exercise | Acceptance criterion |
 | --- | --- |
-| Add CLI alongside MCP | Same session engine and backend jobs; adapter-specific code covers parsing, output, exit codes and connection lifetime. No duplicated action policy or targets. |
+| Replace public MCP with CLI | Same session engine and backend jobs; adapter-specific code covers parsing, output, exit codes and connection lifetime. No duplicated action policy or targets. |
 | Swap JPEG delivery for a measured media candidate | Input/observation contracts and artifact fidelity are unchanged; only media adapter/capability and viewer integration change. Existing streams retain scoped cleanup. |
-| Add a Linux capture/compositor route | Backend implementation, capability registration and conformance fixtures change. Harness/MCP/CLI command handlers need no per-compositor branches. |
+| Add a Linux capture/compositor route | Backend implementation, capability registration and conformance fixtures change. Harness/CLI command handlers need no per-compositor branches. |
 | Inject a detach after input dispatch | Every adapter reports unknown outcome, prevents unsafe continuation and requires fresh evidence. A fresh unrelated target still works. |
 | Add a second viewer during recording | Existing target/source ownership is reused; CPU/encode counts are measurable; closing one consumer cannot terminate the others. |
 | Reproduce a reported bug | A small synthetic fixture plus bounded correlated diagnostics identifies the failing stage without a model run, arbitrary sleeps or the user's live data. |
@@ -133,8 +133,8 @@ independent saved state and no-replay checks while optimizing.
    contract. Establish the diagnostic fields needed to compare implementations.
 2. Extract the task-session owner from MCP registration without changing callers'
    behavior. Test it with injected backend/transport faults and shutdown races.
-3. Migrate MCP and add the composable CLI. Verify one ownership implementation,
-   truthful capabilities and consistent outcomes across both adapters.
+3. Move session startup into task supervisors; migrate callers to the composable
+   CLI and delete public MCP. Verify truthful capabilities and consistent outcomes.
 4. Add the measured media transport/capture changes behind that owner. Keep local,
    remote-browser and isolated-Linux composition explicit at startup.
 5. Remove superseded paths, duplicated caches, timers, compatibility branches and

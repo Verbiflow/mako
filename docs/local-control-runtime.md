@@ -17,8 +17,8 @@ Electron runtime. Do not package the whole Mako app merely to run these files.
 | Component | Owner and dependencies | Evidence / remaining work |
 | --- | --- | --- |
 | Public API and program worker | `packages/control`; Node and Zod | Shared across providers; no Electron import. |
-| Shared session and MCP adapter | `packages/control-runtime/src/control-session.ts` owns native policy/state; `packages/control-runtime/src/computer-tools-main.ts` owns MCP; Node and MCP SDK | Executed on native Intel EC2 without Electron. |
-| Browser transport, targets and recording | `packages/control-runtime/src/browser-service.ts`; Node, ws, image decoding and FFmpeg when recording | Can be composed directly with the MCP adapter using `browserCall`; this turn’s dev capture used that composition under Node. |
+| Shared session and CLI | `packages/control-runtime/src/control-session.ts` owns native policy/state; task workers expose a private CLI socket. | Node runtime; previous native Intel evidence predates CLI-only migration. |
+| Browser transport, targets and recording | `packages/control-runtime/src/browser-service.ts`; Node, ws, image decoding and FFmpeg when recording | Composed directly with the session using `browserCall`; no Electron dependency. |
 | Native driver | Patched Cua executable | Separate process. macOS uses the desktop host’s responsibility/permission chain; Linux uses the job’s display and accessibility bus. |
 | Hidden Mako desk | Electron `BrowserWindow` adapter | Only needed to inspect Mako itself. Dev screenshot and recording pass after renderer readiness. |
 | Cloud launcher and release | `cloud-control-main.ts` supervises a job worker and its process group; target-specific package graph | Eleven lifecycle scenarios passed on ARM64 and native Intel x64. Locally prepared, not published. |
@@ -32,12 +32,12 @@ current browser tab or unsent draft.
 ## Cloud composition
 
 A trusted job runner should start one control runtime inside each disposable VM
-or container boundary. Agents use the same three MCP tools and bound handles.
+or container boundary. Agents use the same CLI and bound JavaScript handles.
 They do not manage displays, driver processes or credentials themselves.
 
 ```mermaid
 flowchart LR
-  A[Agent / MCP client] --> C[Node Local Control service]
+  A[Agent / CLI] --> C[Node Local Control service]
   C --> B[Browser service]
   C --> N[Native driver]
   B --> P[Job-owned Chromium]
@@ -124,8 +124,8 @@ A trusted configuration names a fresh absolute output path and explicit backends
 }
 ```
 
-Launch `./node_modules/.bin/mako-control-mcp --config /absolute/job.json`
-inside the disposable job boundary and connect MCP over stdio. Omit unused
+Launch `mako-control session start --config /absolute/job.json`
+inside the disposable job boundary. Use the returned sessionFile for CLI commands. Omit unused
 backends. Browser sandboxing defaults on; `sandbox:false` is an explicit trusted
 runner choice, used only inside the isolated acceptance container. Do not forward
 cloud credentials, the host display or a person's browser profile into the job.
@@ -133,7 +133,7 @@ cloud credentials, the host display or a person's browser profile into the job.
 The launcher creates an owner-only runtime directory. It clears inherited provider
 credentials, starts only requested backends, waits for readiness and preserves
 artifacts outside the runtime directory. `ready.json`, `worker.json` and
-`launcher.json` report readiness, interruption and cleanup. EOF/SIGTERM/interrupt
+`launcher.json` report readiness, interruption and cleanup. Explicit session stop/SIGTERM/interrupt
 start bounded finalization; hard failure kills the job's process group. A worker
 observes parent IPC loss too, so a killed launcher does not strand its children.
 A VM/container lifetime is still the boundary for untrusted agent code and a final
@@ -147,8 +147,8 @@ arrives; it never activates or moves an existing tab to make recording work.
 Regular-profile extension behavior needs separate installed acceptance.
 
 The shell interface is implemented through the [shared session and CLI](local-control-cli.md).
-`mako-control` provides the shell verbs; `mako-control-mcp` provides MCP stdio.
-Both reuse this session engine and capture implementation.
+`mako-control` provides the shell verbs and is the sole public agent entrypoint.
+Desktop and isolated Linux workers reuse this session engine and capture implementation.
 
 ## Reference comparison
 

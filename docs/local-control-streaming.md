@@ -27,6 +27,91 @@ as a description of their current transport. Its rejected WebCodecs experiment
 was a result for that tested pipeline, not a general rejection of WebRTC.
 Neither article proves Mako needs Go, a particular codec, or a new agent runtime.
 
+## September 24 selection: browser streaming, Moonlight and VNC
+
+Recommendation: prototype **Selkies/pixelflux for the isolated Linux desktop**,
+compare its WebRTC and binary WebSocket modes, and use **Sunshine/Moonlight as the
+native-client performance reference**. For the local Mac, retain ScreenCaptureKit
+and evaluate VideoToolbox encoding; for exact Linux windows, retain the portal
+window-grant boundary described in the [capture backend review](local-control-capture-backends.md).
+These are backend choices under the same session engine. No candidate has been
+adopted or benchmarked inside Mako by this review.
+
+Fast desktop streaming has mature implementations. Mako's source-image storage,
+JSON/base64 delivery and PNG capture loops are implementation debt, not unavoidable
+properties of computer use. A transport replacement alone still cannot provide
+frames from a stalled source, identify the correct window, or make unknown input
+safe to repeat.
+
+| Candidate | Evidence and fit | Decision |
+| --- | --- | --- |
+| [Moonlight Qt](https://github.com/moonlight-stream/moonlight-qt/tree/032529d782242e3833e0b3b147dbbf96e878e3ca) + [Sunshine](https://github.com/LizardByte/Sunshine/tree/c48e50e418b27cba2b387c3a1ae9605da8a96341) | Moonlight is the native GameStream client; Sunshine is the capture/encoding host. Hardware decoding, multiple video codecs and 4:4:4 are documented. The reviewed Qt pacer bounds its render/pacing queues and drops excess decoded frames. | Strong native-viewer benchmark and implementation reference. Qt/GameStream is not an embeddable web viewer, WebRTC implementation or VNC endpoint. Measure before claiming it is the fastest. |
+| [Selkies](https://github.com/selkies-project/selkies/tree/3a46db7d58e4bddf2dd1f031ee9577720545e8ab) | Browser viewer and Linux session streaming; native capture/encoding through pixelflux. The reviewed WebRTC pipeline keeps monotonic media timestamps across capture restarts and starts only requested media. Current default is WebSocket/WebCodecs, with WebRTC opt-in. | First complete browser-viewer prototype. Compare both transports on the same source, codec, quality and network. Do not call WebSockets inherently slow or WebRTC automatically faster. |
+| [pixelflux](https://github.com/linuxserver/pixelflux/tree/40a9d46ba9b8c137b9812825041c68977ddf615f) | Rust/PyO3 capture/encode component with damage-aware paths, software/hardware encoding and encoded recording output. Its `recording_sink.rs` uses shared encoded buffers and bounded nonblocking per-recorder queues. | First component-reuse investigation. Its published crate is a Python `cdylib`, not a ready Node/Rust library dependency. Compare a supervised helper with a maintained native library boundary; include runtime/package cost. Its portal code requests **monitors**, not exact windows. Do not substitute that route on the user's desktop. |
+| [KasmVNC](https://github.com/kasmtech/KasmVNC/tree/e9d297b4defd50d6a46d4ef1d04d443125350b72) | Web desktop stack; current source includes software/hardware video encoding alongside rectangle encoders. Upstream explicitly says it is not standard RFB-compatible. | Second integrated cloud candidate if Selkies fails the measured quality, cost or lifecycle gates. Do not claim ordinary VNC clients work because VNC is in its name. |
+| [TigerVNC](https://github.com/TigerVNC/tigervnc/tree/dd416cbfa2023ffcdd3bd23d90ce8254b3faf627) + [noVNC](https://github.com/novnc/noVNC/tree/acca57b997f206683d27796829ee1f72da37002a) | Standard VNC server/client family and browser RFB client. noVNC needs a WebSocket endpoint or a WebSocket-to-TCP proxy. | Compatibility route if ordinary VNC access is required. Benchmark separately; neither universal 60 fps nor poor performance follows from the VNC label alone. |
+
+The strongest reusable recording idea is already in pixelflux: consume encoded
+frames as they arrive, rather than save thousands of JPEGs and encode them later.
+Reuse an encode only when dimensions, quality, timestamps and cursor composition
+match. After encoded-frame loss, recover at a decodable boundary/keyframe; dropping
+arbitrary dependent video packets is not equivalent to dropping independent JPEGs.
+A slow recorder must receive an explicit interruption and playable partial artifact,
+not quietly corrupt video or block interactive input.
+
+The Replicas article identifies a custom Go capture process plus native pixel
+conversion/encoding, WebRTC, shared encoding, unchanged-region reuse, bounded
+queues and independent recovery. It does **not** identify Moonlight, Selkies or a
+specific publicly reusable implementation. Its 55.7 displayed fps, 29.3 ms p95 gap
+and 127.4 ms median click-to-visible are publisher measurements with network and
+different competitor resolutions; they cannot rank Mako without a matched test.
+
+### Transport and cloud compatibility contract
+
+- Preferred experiment: full-frame H.264 over WebRTC for remote browser viewing,
+  with hardware encoding/decoding where verified and an explicit software path.
+  Compare full-frame H.264 over binary WebSocket/WebCodecs on the same fixture.
+  The first codec is a compatibility baseline, not a permanent codec restriction.
+- Local viewers should avoid network signaling/relay work where a direct local
+  media path works. Remote tests cover direct UDP, relay, TCP-only networks,
+  latency/jitter/loss and reconnect. A deployment may need STUN/TURN; account for
+  relay bandwidth and do not advertise an unreachable media endpoint.
+- VNC is an optional compatibility adapter to the **same isolated job desktop**,
+  not the required internal media format. Whether ordinary VNC clients are a
+  release requirement is awaiting user clarification. Until resolved, design for
+  the adapter but do not bundle or start it by default.
+- Viewing grants do not grant input. If interactive VNC/human control is enabled,
+  its input path must join the same target ownership/takeover policy. A server
+  injecting events beside the engine would bypass that policy. Read-only viewing
+  can be evaluated now; full human takeover remains deferred.
+- Agent browser commands, native semantic input and exact screenshots still use
+  Mako's engine near the target. Agent calls and frame bytes do not route through
+  one another. A cloud stream must not become a second automation API.
+
+### Prototype decision gate
+
+First run the existing moving/text/input fixture on an isolated Linux desktop
+with Selkies/pixelflux, using pinned builds and no replacement of the user's local
+browser or desktop. Compare WebRTC and binary WebSocket on CPU-only x64 and ARM64,
+then available GPU hardware. Include a Sunshine/Moonlight native-viewer comparison
+where the hardware supports it; record that its viewer differs.
+
+Use the selected 1920×1080/60 target and 57 distinct fps sustained floor. Measure
+at least 60 seconds plus a longer recording soak, source-to-viewer frame age,
+frame-gap and input-to-visible p50/p95, missed/duplicate input, small colored text,
+cursor accuracy, bandwidth, idle/active CPU, memory, startup and installed bytes.
+Run one/two viewers with recording, bounded slow consumers, encoder failure and
+reconnect. Test 4:2:0 text quality against 4:4:4/lossless references; do not reduce
+explicit screenshot fidelity to improve video numbers. Publish actual performance
+and all failures. Adopt the smallest integration that passes, not every project.
+
+Source review copies and revision metadata are in ignored
+`docs/audits/2026-09-24/streaming-selection/`. Repository licenses differ:
+Moonlight/Sunshine GPL-3.0, KasmVNC/TigerVNC GPL-2.0, Selkies/pixelflux MPL-2.0,
+noVNC primarily MPL-2.0 with exceptions. Codec/build dependencies need their own
+inventory: for example pixelflux defaults to its GPL encoder feature. No project
+or codec dependency was added to the shipped package during this review.
+
 ## What the Mako inspection shows
 
 - [BrowserCapture](../packages/control-runtime/src/browser-capture.ts) already shares one CDP stream

@@ -6,14 +6,38 @@ New capture/recording fixes still need installed rollout; see
 The [architecture contract](local-control-architecture.md) owns the boundaries;
 the [issue ledger](local-control-agent-issues.md) tracks the original agent failures.
 
+## CLI-only migration
+
+The September 24 source now starts task-owned desktop workers independently of
+MCP. Codex, ACP providers, Claude SDK and Cursor SDK receive an exact CLI shim on
+PATH, a private session descriptor and short command-first instructions. Browser
+credentials travel to the worker over IPC; they are absent from the shim and
+provider control environment. Public Local Control MCP registration, adapter,
+package export and launcher are removed. The Cua executable's private MCP
+transport and unrelated Mako MCP integrations remain.
+
+Command help is offline: `mako-control --help`, `shot --help`, `record --help` and
+`help shot` describe arguments, outputs, examples and failure semantics. Add
+`--json` for structured help. `api --topic examples` and `api --domain Page
+--method navigate` load focused JavaScript/backend reference from the session.
+All browser and native actions still use the shared engine's targeting,
+observations, route checks, assertions and recording implementation.
+
+Source acceptance covers separate CLI processes, lossless state, cancellation
+without replay, recording waiter cancellation, code/session mismatch, explicit
+shutdown, killed workers and killed parents. The managed MCP regression confirms
+Local Control is absent while other integrations remain. These results do not
+establish installed-host rollout or fresh-agent acceptance on every provider.
+Streaming work remains paused until those migration release gates are closed.
+
 ## One session across commands
 
 [`createControlSession`](../packages/control-runtime/src/control-session.ts) owns the runtime, target
 references, recovery state, native policy, recordings and cleanup.
-[`createComputerToolsServer`](../packages/control-runtime/src/computer-tools-main.ts) is its MCP adapter.
+[`startDesktopControlSession`](../packages/control-runtime/src/desktop-session.ts) owns the desktop worker and task CLI.
 The [CLI](../packages/control-runtime/src/control-cli.ts) uses that same session through a private Unix
 socket. It does not start another browser, input engine or reference cache for
-each command. MCP and CLI share script `state`, exact target leases and recordings.
+each command. Separate CLI processes share script `state`, exact target leases and recordings.
 
 An ordinary command closes only its request connection. Explicit stop, task
 teardown, deadline or supervisor death closes the engine. The socket directory is
@@ -26,8 +50,7 @@ Untrusted cloud jobs still need the VM/container boundary.
 ## Use it
 
 In a built checkout, run `node /absolute/mako/packages/control-runtime/dist/control-cli.js`.
-The standalone package provides `mako-control`; `mako-control-mcp` is the separate
-MCP stdio launcher. The installed Mac app also contains the CLI:
+The standalone package provides `mako-control`. The installed Mac app also contains the CLI:
 
 ```sh
 ELECTRON_RUN_AS_NODE=1 /Applications/Mako.app/Contents/MacOS/Mako \
@@ -38,8 +61,9 @@ ELECTRON_RUN_AS_NODE=1 /Applications/Mako.app/Contents/MacOS/Mako \
 A global `mako-control` shell alias is not installed automatically. Use a CLI
 from the same build as the session: mismatched engines refuse explicitly.
 
-On Mac, use the `sessionFile` returned by the updated `mako_control_status` for
-that task. The permission-owning host stays in charge. On Linux, a trusted job
+On Mac, the task supervisor supplies `mako-control` and `MAKO_CONTROL_SESSION_FILE`
+automatically. Its absolute command path is also in the task instructions for
+shells that replace PATH. The permission-owning host stays in charge. On Linux, a trusted job
 configuration can start the existing non-Electron supervisor:
 
 ```sh
@@ -76,7 +100,8 @@ may consume it. For example, `cat target.json | mako-control observe --target-fi
 | `record stop --input receipt.json --wait` | Waits for finalization; returns the final receipt. `finished` and `video` establish a completed artifact. Failed/interrupted artifacts exit nonzero. `record status` reads the same receipt ID. |
 | `exec --source-file workflow.js` | Trusted JavaScript using the existing control API. Waits for completion without MCP cells. Returns an array of result/log/artifact blocks; explicit images are saved to files. Script state survives commands. The existing script deadline still applies. |
 | `diagnostics` | Last 100 shared-engine commands and last 100 socket requests, with IDs, timing, target identity and outcome. Does not record arguments, source, page contents or image bytes. |
-| `help` / `--help` | Shared API reference / shell signatures and examples. `help --input help.json` requests focused API help. |
+| `COMMAND --help` / `help COMMAND` | Offline signatures, result contracts, examples and exit codes. `--json` returns structured command help. |
+| `api --topic TOPIC` | Focused JavaScript API help; `--tool ACTION` reads a native schema; `--domain DOMAIN --method METHOD` reads CDP help. |
 
 One JSON result goes to stdout; failures go to stderr as JSON. No automatic
 reconnection or replay occurs. Screenshot files use exclusive temporary files,
@@ -108,15 +133,14 @@ remain in their existing owners.
 
 ## Verification and remaining release gates
 
-`npm run test:control-cli` checks actual separate shell processes sharing an MCP
+`npm run test:control-cli` checks actual separate shell processes sharing a task
 session: stdin, paths containing spaces, retained Unicode state, image artifacts,
 no implicit screenshots, closed output pipes, cancellation without replay,
 reconciliation, build/session mismatch and shutdown. It also cancels a recording
 waiter while capture shutdown is held, verifies one shutdown across repeated stop
 calls, finalizes the same recording and runs another tab plus four concurrent
 shell programs while finalization is pending. BrowserService regressions
-cover profile cookie ownership and raw browser administration. Existing MCP and
-native-driver fixtures run against the extracted engine.
+cover profile cookie ownership and raw browser administration. Native-driver regression fixtures call the engine directly; public workflow probes launch the CLI.
 
 `scripts/test-control-cli-linux.mjs` runs against real Chromium in the reviewed
 Linux runtime image. It verifies form state and one Save, scoped capture, a
