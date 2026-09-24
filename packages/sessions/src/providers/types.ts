@@ -68,6 +68,12 @@ export interface SessionProvider {
    */
   watchTarget?(path: string): string | null
 
+  /** Physical files whose changes affect this followed session, including
+   * absent WAL/sidecars. Defaults to the session path for file stores. The
+   * catalog shares bounded stat subscriptions across viewers; no discovery
+   * or transcript reads are needed when these files are unchanged. */
+  observationPaths?(path: string): string[]
+
   /**
    * True when `updatedAt` comes from what the provider reads — the newest
    * message's own timestamp — never from the file's mtime. Claude Code appends

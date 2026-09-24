@@ -20,7 +20,7 @@ import { attachmentFromUrl, type AttachmentContent } from "../content.js"
  */
 
 import { createHash } from "node:crypto"
-import { readFile, readdir, stat } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { homedir } from "node:os"
 import { join, sep } from "node:path"
@@ -147,6 +147,11 @@ export class DevinCliProvider implements SessionProvider {
     return [this.dir]
   }
 
+  observationPaths(): string[] {
+    const database = this.dbPath()
+    return [database, `${database}-wal`]
+  }
+
   /**
    * Sessions live in the database and their locks; the logs, plugin state
    * and summaries beside them change without a session moving.
@@ -186,7 +191,6 @@ export class DevinCliProvider implements SessionProvider {
   async discover(): Promise<NativeFile[]> {
     const info = await stat(this.dbPath()).catch(() => null)
     if (!info) return []
-    const locked = await lockedSessionIds(this.lockPath())
     const db = await this.connection()
     if (!db) return []
     try {
@@ -197,10 +201,10 @@ export class DevinCliProvider implements SessionProvider {
            FROM sessions s WHERE s.hidden = 0`
         )
         .all()
+      const rows = stored.map(parseDiscoveryRow).filter((row): row is DiscoveryRow => row !== null)
+      const locked = await lockedSessionIds(this.lockPath(), rows.map(row => row.id))
       const files: NativeFile[] = []
-      for (const fields of stored) {
-        const row = parseDiscoveryRow(fields)
-        if (!row) continue
+      for (const row of rows) {
         const at = isoOf(row.activity)
         const isLocked = locked.has(row.id)
         // Synthetic sessions share one database; this fractional revision lets
@@ -273,7 +277,7 @@ export class DevinCliProvider implements SessionProvider {
     if (!id) return null
     const info = await stat(this.dbPath()).catch(() => null)
     if (!info) return null
-    const locked = (await lockedSessionIds(this.lockPath())).has(id)
+    const locked = (await lockedSessionIds(this.lockPath(), [id])).has(id)
     const ref = await this.peek({
       path,
       bytes: 0,
@@ -410,24 +414,21 @@ function entryDigest(entry: ThreadEntry): string {
   return createHash("sha256").update(JSON.stringify(entry)).digest("base64url")
 }
 
-async function lockedSessionIds(path: string): Promise<Set<string>> {
-  const files = await readdir(path).catch((): string[] => [])
-  const locked = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".lock"))
-      .map(async (file) => {
-        const raw = await readFile(join(path, file), "utf8").catch(() => "")
-        const pid = Number(raw.trim())
-        if (!Number.isInteger(pid) || pid <= 0) return null
-        try {
-          process.kill(pid, 0)
-          return file.slice(0, -5)
-        } catch {
-          return null
-        }
-      })
-  )
-  return new Set(locked.filter((id): id is string => id !== null))
+/** Native lock files accumulate after sessions disappear. Only read locks for
+ * the sessions this operation actually returns; recheck their PIDs every time. */
+async function lockedSessionIds(path: string, ids: string[]): Promise<Set<string>> {
+  const locked = new Set<string>()
+  for (let offset = 0; offset < ids.length; offset += 8) {
+    await Promise.all(ids.slice(offset, offset + 8).map(async id => {
+      // Session IDs are database data, never permission to read outside locks.
+      if (id.includes("/") || id.includes("\\")) return
+      const raw = await readFile(join(path, `${id}.lock`), "utf8").catch(() => "")
+      const pid = Number(raw.trim())
+      if (!Number.isInteger(pid) || pid <= 0) return
+      try { process.kill(pid, 0); locked.add(id) } catch { /* No live lock owner. */ }
+    }))
+  }
+  return locked
 }
 
 function translator(): MessageTranslator {

@@ -49,7 +49,7 @@ Discovery and exact targets:
 
 Read, act and record:
   mako-control observe --target-file target.json --session-file session.json
-  mako-control shot --target-file target.json --role button --name Save --output 'Save button.png' --session-file session.json
+  mako-control shot --target-file target.json --role button --name Save --format png --output 'Save button.png' --session-file session.json
   mako-control act --target-file target.json --input operation.json --session-file session.json
   mako-control record start --target-file target.json --directory ./recordings --session-file session.json > recording.json
   mako-control record stop --input recording.json --wait --session-file session.json
@@ -59,7 +59,8 @@ Read, act and record:
 
 --input, --target-file and --source-file accept - for stdin (one per command).
 Every command writes one JSON result to stdout. Errors are JSON on stderr.
-shot requires --output; --overwrite explicitly replaces an existing file.
+shot requires --output; --format png|jpeg selects bytes, independent of the filename.
+--overwrite explicitly replaces an existing file.
 record stop --wait returns after finalization; inspect status and video.
 exec waits for completion; state survives separate invocations. No MCP cells.
 act accepts a closed operation, e.g. {"kind":"set-text","ref":"...","text":"Hello"}.
@@ -157,6 +158,7 @@ export async function runControlCli(
       "source-file": { type: "string" },
       input: { type: "string" },
       output: { type: "string" },
+      format: { type: "string" },
       overwrite: { type: "boolean" },
       role: { type: "string" },
       name: { type: "string" },
@@ -199,6 +201,7 @@ export async function runControlCli(
         "target-file",
         "input",
         "output",
+        "format",
         "overwrite",
         "role",
         "name",
@@ -482,6 +485,7 @@ export async function runControlCli(
           )
         {
           const options = object.parse(payload.options ?? {})
+          if (values.format) options.format = values.format
           if (values["max-side"]) options.maxSide = Number(values["max-side"])
           const request = {
             ...payload,

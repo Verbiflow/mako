@@ -557,6 +557,10 @@ export class CodexProvider implements SessionProvider {
     return [this.root]
   }
 
+  observationPaths(path: string): string[] {
+    return [path, this.metadataPath, `${this.metadataPath}-wal`]
+  }
+
   async discover(): Promise<NativeFile[]> {
     const paths = await walkFiles(this.root, (name) => name.endsWith(".jsonl"))
     const byIdentity = new Map<string, NativeFile[]>()

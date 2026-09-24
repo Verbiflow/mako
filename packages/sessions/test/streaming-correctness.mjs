@@ -755,7 +755,7 @@ async function cacheInvalidationIsScopedToTheProvider() {
       return base.read(path)
     },
   }
-  const sharedPaths = Array.from({ length: 5 }, (_, i) => join(sharedRoot, `store.db#${i}`))
+  const sharedPaths = Array.from({ length: 16 }, (_, i) => join(sharedRoot, `store.db#${i}`))
   let sharedReads = 0
   const shared = {
     harness: "shared",
@@ -784,13 +784,13 @@ async function cacheInvalidationIsScopedToTheProvider() {
   assert.equal(fileReads, 1, "another provider's write leaves this thread cached")
   await catalog.open(sharedPaths[0])
   assert.equal(sharedReads, 2, "the shared provider's own threads are re-read")
-  // The cache is bounded: the oldest of five falls out.
+  // Sixteen distinct newer threads evict the older file from the sixteen-entry cache.
   for (const path of sharedPaths) await catalog.open(path)
-  assert.equal(sharedReads, 6)
+  assert.equal(sharedReads, 17)
   await catalog.open(filePath)
-  assert.equal(fileReads, 2, "a thread not opened for four others is re-read")
-  await catalog.open(sharedPaths[4])
-  assert.equal(sharedReads, 6, "the most recent stays warm")
+  assert.equal(fileReads, 2, "a thread not opened for sixteen others is re-read")
+  await catalog.open(sharedPaths[15])
+  assert.equal(sharedReads, 17, "the most recent stays warm")
   await catalog.stop()
 }
 

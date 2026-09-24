@@ -17,7 +17,7 @@
  *     costs one positional read of only the appended bytes per flush.
  */
 
-import { existsSync, realpathSync, watch, type FSWatcher } from "node:fs"
+import { existsSync, realpathSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { dirname, join, sep } from "node:path"
 import {
@@ -57,6 +57,7 @@ interface FollowState {
   follower: SessionFollower | null
   fromByte: number
   baselineCount: number | null
+  unobserve?: () => void
 }
 
 interface RefreshState {
@@ -97,8 +98,8 @@ const WATCH_DEBOUNCE_MS = 24
 const WATCH_MAX_SETTLE_WINDOWS = 4
 const CACHE_SAVE_DEBOUNCE_MS = 2000
 
-/** Rescan cadence where recursive watching is unavailable. Stat-only. */
-const POLL_FALLBACK_MS = 30_000
+/** Discovery cadence even when directory notifications silently disappear. */
+const DISCOVERY_RECONCILE_MS = 30_000
 /**
  * How often files that changed recently are stat-ed while watching. A
  * watcher can miss a burst of appends to a session another app is writing,
@@ -262,12 +263,21 @@ export class SessionCatalog {
   private cachePath?: string
   private cacheLoaded = false
   private saveTimer: NodeJS.Timeout | null = null
-  private watchers: FSWatcher[] = []
+  private watchers = new Map<string, FSWatcher>()
+  private discovering: Promise<void> | null = null
+  private watching = false
+  private stopped = false
+  private observations = new Map<string, {
+    targets: Set<string>
+    changed: (current: Stats, previous: Stats) => void
+  }>()
   private pending = new Map<string, { since: number; timer: NodeJS.Timeout }>()
   private listeners = new Set<(event: CatalogEvent) => void>()
   private follows = new Map<string, FollowState>()
   private refreshes = new Map<string, RefreshState>()
   private rescans = new Map<string, RefreshState>()
+  private scans = new Set<Promise<ThreadRef[]>>()
+  private reconciling: Promise<void> | null = null
   private opened: {
     path: string
     throughByte: number
@@ -334,17 +344,27 @@ export class SessionCatalog {
   /**
    * Reconcile the catalog with disk. Returns every known session, newest
    * first. By default emits nothing — scan is for building state; watch is
-   * for changes — but the polling fallback (platforms without recursive
-   * watch) passes `emitChanges` so its rescans behave like watch events.
+   * for changes — but periodic discovery passes `emitChanges` so its
+   * rescans behave like watch events.
    */
-  async scan(options: { emitChanges?: boolean } = {}): Promise<ThreadRef[]> {
+  scan(options: { emitChanges?: boolean } = {}): Promise<ThreadRef[]> {
+    if (this.stopped) return Promise.resolve(this.list())
+    const task = this.scanOnce(options)
+    this.scans.add(task)
+    void task.then(() => this.scans.delete(task), () => this.scans.delete(task))
+    return task
+  }
+
+  private async scanOnce(options: { emitChanges?: boolean }): Promise<ThreadRef[]> {
     await this.loadCache()
     await this.archive?.load()
     this.orderedRefs = null
     const seen = new Set<string>()
+    const unavailable = new Set<SessionProvider>()
     await Promise.all(
       this.providers.map(async (provider) => {
-        const files = await provider.discover().catch((): NativeFile[] => [])
+        const files = await provider.discover().catch(() => null)
+        if (!files) { unavailable.add(provider); return }
         await forEachConcurrent(files, 4, async (file) => {
           seen.add(file.path)
           const cached = this.cachedEntry(file.path, provider)
@@ -368,9 +388,13 @@ export class SessionCatalog {
       })
     )
     for (const path of this.byPath.keys()) {
-      if (seen.has(path)) continue
+      const owner = this.ownerOf(path)
+      if (seen.has(path) || (owner && unavailable.has(owner))) continue
       const existing = await stat(path).catch(() => null)
-      if (!existing) this.forget(path)
+      if (!existing) {
+        this.forget(path)
+        if (options.emitChanges) this.emit({ type: "removed", path })
+      }
     }
     this.scheduleSave()
     return this.list()
@@ -555,30 +579,12 @@ export class SessionCatalog {
    * *anything* — this app, the harness's own CLI, another wrapper entirely.
    */
   startWatching(): void {
-    if (this.watchers.length > 0) return
-    let unwatchable = false
-    for (const provider of this.providers) {
-      for (const root of provider.roots()) {
-        if (!existsSync(root)) continue // Not installed: nothing to watch.
-        try {
-          const watcher = watch(
-            root,
-            { recursive: true },
-            (_event, filename) => {
-              if (!filename) return
-              this.noticed(`${root}/${filename.toString()}`)
-            }
-          )
-          watcher.on("error", () => this.ensurePolling())
-          this.watchers.push(watcher)
-        } catch {
-          // Recursive watching is unavailable on some platforms and network
-          // volumes. Those roots fall back to the polling rescan below.
-          unwatchable = true
-        }
-      }
-    }
-    if (unwatchable) this.ensurePolling()
+    if (this.watching) return
+    this.watching = true
+    this.stopped = false
+    this.refreshWatchRoots()
+    this.ensurePolling()
+    for (const [path, follow] of this.follows) this.observeFollow(path, follow)
     if (!this.activeTimer) {
       this.activeTimer = setInterval(() => {
         void this.reconcileActive()
@@ -587,12 +593,59 @@ export class SessionCatalog {
     }
   }
 
+  /** Directory events are hints. Periodic discovery also finds previously
+   * unknown sessions when the OS silently drops events. One sweep at a time. */
+  reconcileDiscovery(): Promise<void> {
+    if (this.stopped) return Promise.resolve()
+    if (this.discovering) return this.discovering
+    this.discovering = (async () => {
+      if (this.watching) this.refreshWatchRoots()
+      await this.scan({ emitChanges: true })
+    })().finally(() => { this.discovering = null })
+    return this.discovering
+  }
+
+  private refreshWatchRoots(): void {
+    const roots = new Set(this.providers.flatMap(provider => provider.roots()))
+    for (const [root, watcher] of this.watchers) {
+      if (roots.has(root) && existsSync(root)) continue
+      watcher.close()
+      this.watchers.delete(root)
+    }
+    for (const root of roots) {
+      if (this.watchers.has(root) || !existsSync(root)) continue
+      try {
+        const watcher = watch(root, { recursive: true }, (_event, filename) => {
+          if (this.watchers.get(root) !== watcher || !filename) return
+          this.noticed(`${root}/${filename.toString()}`)
+        })
+        watcher.on("error", () => {
+          if (this.watchers.get(root) !== watcher) return
+          this.watchers.delete(root)
+          watcher.close()
+        })
+        this.watchers.set(root, watcher)
+      } catch {
+        // Discovery still runs; retry registration on the next sweep.
+      }
+    }
+  }
+
   /**
    * Stat every followed or recently updated file and refresh the ones the
    * watcher did not report. Bounded to the active set; a full scan stays the
-   * job of the polling fallback.
+   * job of periodic discovery.
    */
-  async reconcileActive(now = Date.now()): Promise<void> {
+  reconcileActive(now = Date.now()): Promise<void> {
+    if (this.stopped) return Promise.resolve()
+    if (this.reconciling) return this.reconciling
+    this.reconciling = this.reconcileActiveOnce(now).finally(() => {
+      this.reconciling = null
+    })
+    return this.reconciling
+  }
+
+  private async reconcileActiveOnce(now: number): Promise<void> {
     const since = new Date(now - ACTIVE_WINDOW_MS).toISOString()
     const candidates: string[] = []
     for (const [path, entry] of this.byPath) {
@@ -604,6 +657,7 @@ export class SessionCatalog {
       if (!provider || rescansFor(provider, path)) return
       const cached = this.byPath.get(path)
       const file = await nativeFileOf(provider, path)
+      if (this.stopped) return
       if (!cached || !file) return
       if (
         cached.bytes === file.bytes &&
@@ -650,9 +704,49 @@ export class SessionCatalog {
     if (opened) this.opened = null
     state.listeners.add(onEntries)
     this.follows.set(path, state)
+    if (this.watching) this.observeFollow(path, state)
     return () => {
       state.listeners.delete(onEntries)
-      if (state.listeners.size === 0) this.follows.delete(path)
+      if (state.listeners.size === 0 && this.follows.get(path) === state) {
+        state.unobserve?.()
+        this.follows.delete(path)
+      }
+    }
+  }
+
+  /** Directory notifications can silently stop arriving. Reconcile only
+   * followed physical sources, once per distinct file, without parsing
+   * unchanged stores or registering more recursive directory watchers. */
+  private observeFollow(path: string, follow: FollowState): void {
+    if (follow.unobserve) return
+    const provider = this.ownerOf(path)
+    if (!provider) return
+    const files = new Set(provider.observationPaths?.(path) ?? [path])
+    for (const file of files) {
+      let observation = this.observations.get(file)
+      if (!observation) {
+        const targets = new Set<string>()
+        const changed = (current: Stats, previous: Stats) => {
+          if (this.stopped || (current.nlink === 0 && previous.nlink === 0)) return
+          for (const target of targets) this.noticed(file, target)
+        }
+        observation = { targets, changed }
+        this.observations.set(file, observation)
+        watchFile(file, { persistent: false, interval: 500 }, changed)
+      }
+      observation.targets.add(path)
+    }
+    follow.unobserve = () => {
+      for (const file of files) {
+        const observation = this.observations.get(file)
+        if (!observation) continue
+        observation.targets.delete(path)
+        if (observation.targets.size === 0) {
+          unwatchFile(file, observation.changed)
+          this.observations.delete(file)
+        }
+      }
+      follow.unobserve = undefined
     }
   }
 
@@ -665,6 +759,8 @@ export class SessionCatalog {
     if (!provider?.remove) return false
     if (!(await provider.remove(path))) return false
     this.threadCache.delete(path)
+    this.follows.get(path)?.unobserve?.()
+    this.follows.get(path)?.listeners.clear()
     this.follows.delete(path)
     if (this.forget(path)) {
       this.scheduleSave()
@@ -674,8 +770,15 @@ export class SessionCatalog {
   }
 
   async stop(): Promise<void> {
-    for (const watcher of this.watchers) watcher.close()
-    this.watchers = []
+    this.stopped = true
+    this.watching = false
+    for (const follow of this.follows.values()) {
+      follow.unobserve?.()
+      follow.listeners.clear()
+    }
+    this.follows.clear()
+    for (const watcher of this.watchers.values()) watcher.close()
+    this.watchers.clear()
     if (this.pollTimer) {
       clearInterval(this.pollTimer)
       this.pollTimer = null
@@ -686,6 +789,13 @@ export class SessionCatalog {
     }
     for (const held of this.pending.values()) clearTimeout(held.timer)
     this.pending.clear()
+    await Promise.all([
+      ...this.scans,
+      this.discovering,
+      this.reconciling,
+      ...[...this.refreshes.values()].map(state => state.promise),
+      ...[...this.rescans.values()].map(state => state.promise),
+    ])
     this.threadCache.clear()
     if (this.saveTimer) {
       clearTimeout(this.saveTimer)
@@ -705,10 +815,10 @@ export class SessionCatalog {
   /* ------------------------------------------------------------ internals */
 
   private ensurePolling(): void {
-    if (this.pollTimer) return
+    if (this.stopped || this.pollTimer) return
     this.pollTimer = setInterval(() => {
-      void this.scan({ emitChanges: true })
-    }, POLL_FALLBACK_MS)
+      void this.reconcileDiscovery()
+    }, DISCOVERY_RECONCILE_MS)
     this.pollTimer.unref?.()
   }
 
@@ -725,10 +835,11 @@ export class SessionCatalog {
     return null
   }
 
-  private noticed(path: string): void {
-    const provider = this.ownerOf(path)
+  private noticed(path: string, followedTarget?: string): void {
+    if (this.stopped) return
+    const provider = this.ownerOf(followedTarget ?? path)
     if (!provider) return
-    const mapped = provider.watchTarget?.(path)
+    const mapped = followedTarget ?? provider.watchTarget?.(path)
     if (mapped === null) return
     const target = mapped ?? path
     const rescan = rescansFor(provider, target)
@@ -791,7 +902,7 @@ export class SessionCatalog {
               )
             )
           }
-        } while (state.requested)
+        } while (state.requested && !this.stopped)
       } finally {
         if (this.rescans.get(key) === state) this.rescans.delete(key)
       }
@@ -802,7 +913,8 @@ export class SessionCatalog {
 
   /** Re-discover one provider's synthetic files; diff against the cache. */
   private async rescanProviderOnce(provider: SessionProvider): Promise<void> {
-    const files = await provider.discover().catch((): NativeFile[] => [])
+    const files = await provider.discover().catch(() => null)
+    if (!files) return // An unavailable store is not an empty store.
     const seen = new Set<string>()
     for (const file of files) {
       seen.add(file.path)
@@ -895,7 +1007,7 @@ export class SessionCatalog {
           const refreshMetadata = Boolean(state.forceMetadata)
           state.forceMetadata = false
           await this.refreshOnce(provider, path, refreshMetadata)
-        } while (state.requested)
+        } while (state.requested && !this.stopped)
       } finally {
         if (this.refreshes.get(path) === state) this.refreshes.delete(path)
       }
@@ -1089,6 +1201,7 @@ export class SessionCatalog {
   }
 
   private capture(ref: ThreadRef): void {
+    if (this.stopped) return
     if (!ref.archived && !ref.locked)
       this.archive?.note(ref, () => this.open(ref.path, false))
   }
@@ -1099,6 +1212,7 @@ export class SessionCatalog {
   }
 
   private emit(event: CatalogEvent): void {
+    if (this.stopped) return
     // Archive once the writer releases its lock. Re-translating a giant live
     // conversation on every checkpoint competes with the agent writing it.
     if (this.archive && (event.type === "added" || event.type === "updated")) {
@@ -1128,7 +1242,7 @@ export class SessionCatalog {
   }
 
   private scheduleSave(): void {
-    if (!this.cachePath || this.saveTimer) return
+    if (this.stopped || !this.cachePath || this.saveTimer) return
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
       void this.saveCache()

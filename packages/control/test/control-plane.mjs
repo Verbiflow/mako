@@ -36,6 +36,22 @@ assert.equal(
   "foreground-required",
   "native Command chords are never dispatched as background keys"
 )
+const ambiguousKeys = planControlOperation(
+  window,
+  { kind: "press-key", key: "return", modifiers: [] },
+  windowCapabilities({
+    platform: "darwin",
+    target: window,
+    documentWindows: 2,
+    onScreen: true,
+  })
+)
+assert.equal(ambiguousKeys.status, "foreground-required")
+assert.match(
+  ambiguousKeys.reason,
+  /pid-keyboard: 2 document windows share this process/,
+  "foreground fallback must retain the background route's refusal reason"
+)
 assert.deepEqual(
   planControlOperation(
     window,

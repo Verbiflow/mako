@@ -447,6 +447,18 @@ export class CursorProvider implements SessionProvider {
     return file ?? null
   }
 
+  observationPaths(path: string): string[] {
+    const database = this.isDesktopPath(path)
+      ? join(this.desktop.root, "state.vscdb") : path
+    const files = [database, `${database}-wal`]
+    if (!this.isDesktopPath(path)) files.push(join(dirname(path), "meta.json"))
+    if (this.isSdkStore(path)) {
+      const index = cursorSdkIndexPath(this.sdkStateRoot)
+      files.push(index, `${index}-wal`)
+    }
+    return files
+  }
+
   /** `index.db`, its WAL or its shm under the SDK state root. */
   private isSdkIndexPath(path: string): boolean {
     return (

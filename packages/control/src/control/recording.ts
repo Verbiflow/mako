@@ -8,7 +8,7 @@ export const RecordingOptionsSchema = z
     name: z.string().min(1).max(80).default("Recording"),
     cursor: z.boolean().default(true),
     maxDurationMs: z.number().int().min(1000).max(600_000).default(120_000),
-    maxSide: z.number().int().min(320).max(2560).default(1600),
+    maxSide: z.number().int().min(320).max(2560).default(1920),
     fps: z.number().int().min(1).max(60).optional(),
   })
   .strict()

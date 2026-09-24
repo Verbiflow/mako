@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, writeFile, unlink } from "node:fs/promises"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -91,6 +91,8 @@ try {
   const locks = join(dir, "session_locks")
   await mkdir(locks)
   await writeFile(join(locks, "session-1.lock"), String(process.pid))
+  // Native lock files outlive sessions; unrelated locks must not affect results.
+  for (let batch = 0; batch < 20; batch++) await Promise.all(Array.from({ length: 50 }, (_, i) => writeFile(join(locks, `retired-${batch}-${i}.lock`), String(process.pid))))
   const provider = new DevinCliProvider(home)
   const [file] = await provider.discover()
   assert.ok(file)
@@ -119,6 +121,11 @@ try {
   await writeFile(join(locks, "session-1.lock"), "99999999")
   const [unlocked] = await provider.discover()
   assert.equal(unlocked.locked, false)
+  await unlink(join(locks, "session-1.lock"))
+  assert.equal((await provider.read(file.path)).ref.locked, false, "single-session read sees lock removal")
+  await writeFile(join(locks, "session-1.lock"), String(process.pid))
+  assert.equal((await provider.discover())[0].locked, true, "new lock is not hidden by cached discovery")
+  await writeFile(join(locks, "session-1.lock"), "99999999")
 
   const follower = provider.createFollower(file.path, file.bytes)
   const writable = new DatabaseSync(join(dir, "sessions.db"))
@@ -245,6 +252,27 @@ try {
   } finally {
     await restarted.stop()
   }
+  const watched = new SessionCatalog([provider])
+  const writer = new DatabaseSync(join(dir, "sessions.db"))
+  try {
+    await watched.scan()
+    const viewed = await watched.open(file.path)
+    const updates = []
+    watched.follow(file.path, viewed.ref.bytes, entries => updates.push(...entries))
+    watched.startWatching()
+    for (const watcher of watched.watchers.values()) watcher.close()
+    writer.exec("PRAGMA journal_mode=WAL")
+    writer.prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+      999, "session-1", 999, 6, JSON.stringify({ role: "user", content: "observed through WAL" }), 999
+    )
+    writer.prepare("UPDATE sessions SET last_activity_at = ?, main_chain_id = ? WHERE id = ?").run(999, 999, "session-1")
+    const deadline = Date.now() + 2000
+    while (!updates.some(entry => entry.kind === "user" && entry.text === "observed through WAL")) {
+      assert.ok(Date.now() < deadline, "Devin WAL update delivered without directory events")
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    console.log("Devin native WAL observation delivered without directory events")
+  } finally { await watched.stop(); writer.close() }
   provider.close()
   console.log("Devin CLI tests clean: streamed rows, tools, thinking, locks, and incremental follow verified.")
 } finally {

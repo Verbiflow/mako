@@ -2,13 +2,14 @@ import { z } from "zod"
 import { mediaExecutable } from "./control-media.js"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { Readable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import {
   mkdir,
   mkdtemp,
   writeFile,
   readFile,
   stat,
-  rm,
   rename,
   readdir,
   realpath,
@@ -439,196 +440,185 @@ export class ControlRecording {
       ) * 2
     )
     this.dimensions = { width, height }
-    // Include action moments even when a static page emits no new screencast frame.
-    const times = [
-      ...new Set([
-        first.at,
-        ...this.frames.map((f) => f.at),
-        ...this.pointers.map((p) => p.at),
-        ...this.pointers
-          .filter((p) => p.pressed)
-          .map((p) => Math.min(p.at + 400, this.endedAt ?? p.at)),
-      ]),
-    ]
-      .filter((at) => at >= first.at)
-      .sort((a, b) => a - b)
-    const manifest: string[] = ["ffconcat version 1.0"]
-    let renderedBytes = 0
-    const renderedFiles: string[] = []
-    try {
-      let frameIndex = 0,
-        pointerIndex = -1,
-        pressIndex = -1
-      for (let index = 0; index < times.length; index++) {
-        const at = times[index]!
-        while (
-          frameIndex + 1 < this.frames.length &&
-          this.frames[frameIndex + 1]!.at <= at
-        )
-          frameIndex++
-        while (
-          pointerIndex + 1 < this.pointers.length &&
-          this.pointers[pointerIndex + 1]!.at <= at
-        ) {
-          pointerIndex++
-          if (this.pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
-        }
-        const frame = this.frames[frameIndex]!
-        const pointer = this.pointers[pointerIndex]
-        const image = sharp(
-          await readFile(join(this.directory, frame.file))
-        ).resize(width, height, {
-          fit: "contain",
-          background: this.sourceVideo
-            ? { r: 0, g: 0, b: 0, alpha: 0 }
-            : "#171614",
-        })
-        const overlays: OverlayOptions[] = []
-        if (pointer) {
-          const viewportWidth = frame.viewportWidth ?? frame.width
-          const viewportHeight = frame.viewportHeight ?? frame.height
-          const scale = Math.min(width / viewportWidth, height / viewportHeight)
-          const x = Math.round(
-            pointer.x * (frame.pageScaleFactor ?? 1) * scale +
-              (width - viewportWidth * scale) / 2
-          )
-          const y = Math.round(
-            (pointer.y * (frame.pageScaleFactor ?? 1) +
-              (frame.offsetTop ?? 0)) *
-              scale +
-              (height - viewportHeight * scale) / 2
-          )
-          if (x >= 0 && y >= 0 && x < width && y < height) {
-            const addOverlay = async (
-              input: Buffer,
-              left: number,
-              top: number
-            ) => {
-              const offsetX = Math.max(0, -left)
-              const offsetY = Math.max(0, -top)
-              const visibleWidth = Math.min(
-                28 - offsetX,
-                width - Math.max(0, left)
-              )
-              const visibleHeight = Math.min(
-                32 - offsetY,
-                height - Math.max(0, top)
-              )
-              if (visibleWidth <= 0 || visibleHeight <= 0) return
-              const clipped = await sharp(input)
-                .extract({
-                  left: offsetX,
-                  top: offsetY,
-                  width: visibleWidth,
-                  height: visibleHeight,
-                })
-                .png()
-                .toBuffer()
-              overlays.push({
-                input: clipped,
-                left: Math.max(0, left),
-                top: Math.max(0, top),
-              })
-            }
-            const press = this.pointers[pressIndex]
-            if (
-              press &&
-              at - press.at < 400 &&
-              press.x === pointer.x &&
-              press.y === pointer.y
-            ) {
-              const ring = Buffer.from(
-                '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32"><circle cx="8" cy="8" r="6" fill="none" stroke="#efaa59" stroke-width="2"/></svg>'
-              )
-              await addOverlay(ring, x - 3, y - 4)
-            }
-            await addOverlay(pointerArtwork, x - 5, y - 4)
-          }
-        }
-        const file = `render-${index}.png`
-        await image
-          .ensureAlpha()
-          .composite(overlays)
-          .png()
-          .toFile(join(this.directory, file))
-        const duration =
-          Math.max(1, (times[index + 1] ?? this.endedAt ?? at + 1) - at) / 1000
-        renderedFiles.push(join(this.directory, file))
-        renderedBytes += (await stat(join(this.directory, file))).size
-        if (renderedBytes > 512 * 1024 * 1024)
-          throw new Error("Recording rendering exceeded its 512 MiB budget")
-        manifest.push(
-          `file '${file}'`,
-          "option framerate 1000",
-          `duration ${duration}`
-        )
-      }
-      manifest.push(
-        `file 'render-${times.length - 1}.png'`,
-        "option framerate 1000"
-      )
-      await writeFile(
-        join(this.directory, "frames.ffconcat"),
-        manifest.join("\n")
-      )
-      const output = join(this.directory, "recording.mp4")
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn(
-          mediaExecutable("ffmpeg"),
-          [
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-n",
-            ...(this.sourceVideo ? ["-i", this.sourceVideo] : []),
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            "frames.ffconcat",
-            ...(this.sourceVideo
-              ? [
-                  "-filter_complex",
-                  `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
-                ]
-              : ["-vf", `fps=${this.options.fps}`]),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "18",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            output,
-          ],
-          { cwd: this.directory, stdio: ["ignore", "ignore", "pipe"] }
-        )
-        let tail = ""
-        child.stderr.on("data", (data: Buffer) => {
-          tail = (tail + data.toString()).slice(-4096)
-        })
-        const timeout = setTimeout(() => {
-          child.kill("SIGKILL")
-        }, 120_000)
-        child.on("error", (error) => {
-          clearTimeout(timeout)
-          reject(error)
-        })
-        child.on("exit", (code) => {
-          clearTimeout(timeout)
-          if (code === 0) resolve()
-          else reject(new Error(`Video encoding failed: ${tail}`))
-        })
+    const output = join(this.directory, "recording.mp4")
+    const child = spawn(
+      mediaExecutable("ffmpeg"),
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-n",
+        ...(this.sourceVideo ? ["-i", this.sourceVideo] : []),
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "rgba",
+        "-video_size",
+        `${width}x${height}`,
+        "-framerate",
+        String(this.options.fps),
+        "-i",
+        "pipe:0",
+        ...(this.sourceVideo
+          ? [
+              "-filter_complex",
+              `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
+            ]
+          : []),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        output,
+      ],
+      { cwd: this.directory, stdio: ["pipe", "ignore", "pipe"] }
+    )
+    let tail = ""
+    child.stderr.on("data", (data: Buffer) => {
+      tail = (tail + data.toString()).slice(-4096)
+    })
+    const encoding = new Promise<void>((resolve, reject) => {
+      child.on("error", reject)
+      child.on("close", (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`Video encoding failed: ${tail}`))
       })
-      if ((await stat(output)).size === 0)
-        throw new Error("Video encoder produced an empty file")
-      this.video = output
+    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => {
+      controller.abort(new Error("Video encoding timed out"))
+      child.kill("SIGKILL")
+    }, 120_000)
+    // pipeline bounds queued buffers and waits for stdin backpressure. No rendered
+    // images accumulate on disk, even for a dense full-resolution recording.
+    const frames = Readable.from(this.renderFrames(width, height), {
+      objectMode: false,
+      highWaterMark: 1,
+    })
+    const streaming = pipeline(frames, child.stdin, {
+      signal: controller.signal,
+    })
+    try {
+      await Promise.all([streaming, encoding])
+    } catch (error) {
+      const failure = controller.signal.aborted ? controller.signal.reason : error
+      controller.abort()
+      child.kill("SIGKILL")
+      await Promise.allSettled([streaming, encoding])
+      throw failure
     } finally {
-      await Promise.all(renderedFiles.map((file) => rm(file, { force: true })))
+      clearTimeout(timeout)
+    }
+    if ((await stat(output)).size === 0)
+      throw new Error("Video encoder produced an empty file")
+    this.video = output
+  }
+
+  private async *renderFrames(width: number, height: number): AsyncGenerator<Buffer> {
+    const count = Math.max(1, Math.ceil((this.endedAt ?? 0) * this.options.fps / 1000))
+    let frameIndex = 0,
+      pointerIndex = -1,
+      pressIndex = -1
+    let previousState = ""
+    let rendered: Buffer | undefined
+    for (let index = 0; index < count; index++) {
+      // Use the recording clock directly. Repeating a static image through concat
+      // can double its last duration; CFR has exactly one duration per output frame.
+      const at = index * 1000 / this.options.fps
+      while (frameIndex + 1 < this.frames.length && this.frames[frameIndex + 1]!.at <= at)
+        frameIndex++
+      while (pointerIndex + 1 < this.pointers.length && this.pointers[pointerIndex + 1]!.at <= at) {
+        pointerIndex++
+        if (this.pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
+      }
+      const press = this.pointers[pressIndex]
+      const pressed = !!press && at - press.at < 400
+      const state = `${frameIndex}:${pointerIndex}:${pressed}`
+      if (rendered && state === previousState) {
+        yield rendered
+        continue
+      }
+      const frame = this.frames[frameIndex]!
+      const pointer = this.pointers[pointerIndex]
+      const image = sharp(
+        await readFile(join(this.directory, frame.file))
+      ).resize(width, height, {
+        fit: "contain",
+        background: this.sourceVideo
+          ? { r: 0, g: 0, b: 0, alpha: 0 }
+          : "#171614",
+      })
+      const overlays: OverlayOptions[] = []
+      if (pointer) {
+        const viewportWidth = frame.viewportWidth ?? frame.width
+        const viewportHeight = frame.viewportHeight ?? frame.height
+        const scale = Math.min(width / viewportWidth, height / viewportHeight)
+        const x = Math.round(
+          pointer.x * (frame.pageScaleFactor ?? 1) * scale +
+            (width - viewportWidth * scale) / 2
+        )
+        const y = Math.round(
+          (pointer.y * (frame.pageScaleFactor ?? 1) +
+            (frame.offsetTop ?? 0)) *
+            scale +
+            (height - viewportHeight * scale) / 2
+        )
+        if (x >= 0 && y >= 0 && x < width && y < height) {
+          const addOverlay = async (
+            input: Buffer,
+            left: number,
+            top: number
+          ) => {
+            const offsetX = Math.max(0, -left)
+            const offsetY = Math.max(0, -top)
+            const visibleWidth = Math.min(
+              28 - offsetX,
+              width - Math.max(0, left)
+            )
+            const visibleHeight = Math.min(
+              32 - offsetY,
+              height - Math.max(0, top)
+            )
+            if (visibleWidth <= 0 || visibleHeight <= 0) return
+            const clipped = await sharp(input)
+              .extract({
+                left: offsetX,
+                top: offsetY,
+                width: visibleWidth,
+                height: visibleHeight,
+              })
+              .png()
+              .toBuffer()
+            overlays.push({
+              input: clipped,
+              left: Math.max(0, left),
+              top: Math.max(0, top),
+            })
+          }
+          const press = this.pointers[pressIndex]
+          if (
+            press &&
+            at - press.at < 400 &&
+            press.x === pointer.x &&
+            press.y === pointer.y
+          ) {
+            const ring = Buffer.from(
+              '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32"><circle cx="8" cy="8" r="6" fill="none" stroke="#efaa59" stroke-width="2"/></svg>'
+            )
+            await addOverlay(ring, x - 3, y - 4)
+          }
+          await addOverlay(pointerArtwork, x - 5, y - 4)
+        }
+      }
+      rendered = await image.ensureAlpha().composite(overlays).raw().toBuffer()
+      previousState = state
+      yield rendered
     }
   }
 }

@@ -91,7 +91,7 @@ import {
   ControlImageSchema,
   type ControlImage,
 } from "./contracts/control-preview.js"
-import { NativeRecordings } from "./native-recording.js"
+import { NativeRecordings, nativeRecordingRate } from "./native-recording.js"
 import { RecordingOptionsSchema } from "@mako/control/control"
 import { randomUUID } from "node:crypto"
 import { readFile, stat, writeFile } from "node:fs/promises"
@@ -1378,8 +1378,13 @@ export function createControlSession(
     const capabilities = windowCapabilities({
       platform: process.platform,
       target,
-      documentWindows: windows.filter((window) => window.kind === "document")
-        .length,
+      // This is an admission hint, not proof of keyboard ownership. A transient
+      // off-screen row need not block the route; the driver's fresh AX/window
+      // preflight still refuses competing destinations before posting input.
+      // Unknown visibility remains a possible competitor.
+      documentWindows: windows.filter(
+        (window) => window.kind === "document" && window.is_on_screen !== false
+      ).length,
       onScreen: exact?.is_on_screen ?? null,
       pageBrowser: pageRoutes.get(target.pid)?.browser ?? undefined,
     })
@@ -1399,7 +1404,7 @@ export function createControlSession(
           ? "preflight-required"
           : "driver-update-required",
         scope: "exact-window",
-        maxFps: 30,
+        maxFps: nativeRecordingRate(recording).maxFps,
         cursor: "dispatched-pointer",
         requires: ["ffmpeg", "ffprobe", "supported native window capture"],
         completion: "record().stop() then recording.status()",
@@ -2484,7 +2489,7 @@ export function createControlSession(
       assertions:
         "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial.",
       recording:
-        "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}) starts explicit video capture of this tab or window. Save the returned handle in state. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video, timeline paths and encoded dimensions when ready. fps caps browser sampling and output (browser default/max 60; native default/max 30). maxSide caps output size; it does not fabricate source detail or alter devicePixelRatio. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
+        "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}) starts explicit video capture of this tab or window. Save the returned handle in state. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video, timeline paths and encoded dimensions when ready. fps caps browser sampling and output (browser default/max 60; native defaults to the driver-advertised maximum, up to 60). maxSide caps output size; it does not fabricate source detail or alter devicePixelRatio. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
       page: "tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot({ref?,region?:{x,y,width,height},fullPage?,format?:png|jpeg,quality?,maxSide?}), upload(ref,files), dialog({auto?,respond?,promptText?}), children(), retain(name), download({directory,ref?|url?,timeoutMs?}), downloadStatus(id,{timeoutMs?}), close(), release(), cdp(method,params?). tab.raw(name,args?) is the explicit page escape hatch; call help({domain,method}) for pinned CDP schemas. tab.locator({role,name}).screenshot({maxSide:2048}) reads and captures one exact element; emitImage(await ...) displays it. Screenshot coordinates report actual image pixels and viewport CSS geometry; do not infer coordinates from a resized chat thumbnail. A Mako desk is a live client of the real app, not a side-effect-free sandbox, and refuses URLs outside its own origin. Profile/task/background defaults. name labels the task group; retain(name) keeps a result after task cleanup. children() returns {children:[{browser,tab,title,url}],note}; pass a child to control.claimTab(child). Extension downloads accept an explicit http(s) URL, await the browser-issued ID, and copy the completed file into a unique subdirectory of directory; browserPath retains the original. In-progress results have an id for downloadStatus, never repeat the start. Ref-triggered download routing and isolated contexts require direct CDP.",
       native:
         "window.screenshot({format?,quality?,maxSide?,screenshot_out_file?}) returns actual image geometry and a view token; coordinates use the returned image pixels with {x,y,view}, including resized captures, window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
@@ -2674,7 +2679,7 @@ export function createControlSession(
             controlInput(
               RecordingOptionsSchema.safeParse(request.options ?? {}),
               "recording options",
-              "Use {directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}; native capture supports up to 30 fps."
+              "Use {directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}; native rates depend on the driver/backend capability."
             ),
             client,
             available,

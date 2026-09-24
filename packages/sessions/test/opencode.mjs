@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 
+import { SessionCatalog } from "../dist/catalog.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
 
 // A caller-supplied home isolates fixtures from the user's native configuration.
@@ -776,6 +777,28 @@ try {
     output: "read failed",
     error: true,
   })
+
+  const catalog = new SessionCatalog([provider])
+  try {
+    await catalog.scan()
+    const viewed = await catalog.open(currentFile.path)
+    const updates = []
+    catalog.follow(currentFile.path, viewed.ref.bytes, entries => updates.push(...entries))
+    catalog.startWatching()
+    for (const watcher of catalog.watchers.values()) watcher.close()
+    current.exec("PRAGMA journal_mode=WAL")
+    current.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      "msg_observed", "ses_current", "user", 6, 11000, 11000,
+      json({ text: "observed through WAL", files: [], agents: [], time: { created: 11000 } })
+    )
+    current.prepare("UPDATE session SET time_updated = ? WHERE id = ?").run(11000, "ses_current")
+    const deadline = Date.now() + 2000
+    while (!updates.some(entry => entry.kind === "user" && entry.text === "observed through WAL")) {
+      assert.ok(Date.now() < deadline, "OpenCode WAL update delivered without directory events")
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    console.log("OpenCode native WAL observation delivered without directory events")
+  } finally { await catalog.stop() }
 
   console.log("OpenCode provider tests clean: V1, V2, projected sessions, roots, metadata, tools, reasoning, usage, interruption, compaction, isolation, and follower diffs verified.")
 } finally {

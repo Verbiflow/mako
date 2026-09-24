@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { imageSize } from "image-size"
+import type { BrowserFocus } from "./browser-focus.js"
 import type { BrowserConnection } from "./browser-connection.js"
 
 export type CaptureConnection = Pick<
@@ -44,7 +45,9 @@ export class BrowserCapture {
   private readonly unclose: () => void
   private readonly connection: CaptureConnection
   private readonly sessionId: string
-  constructor(connection: CaptureConnection, sessionId: string) {
+  private releaseFocus?: () => Promise<void>
+  private ending?: Promise<void>
+  constructor(connection: CaptureConnection, sessionId: string, private readonly focus?: BrowserFocus) {
     this.connection = connection
     this.sessionId = sessionId
     this.unlisten = connection.onEvent((event) => {
@@ -127,6 +130,14 @@ export class BrowserCapture {
   private async start() {
     if (this.closed) throw new Error("Browser capture attachment ended")
     if (this.running || !this.subscribers.size) return
+    if (!this.releaseFocus && this.focus) {
+      const release = await this.focus.acquire()
+      if (this.closed || !this.subscribers.size) {
+        await release()
+        throw new Error("Browser capture attachment ended")
+      }
+      this.releaseFocus = release
+    }
     this.running = true
     try {
       await this.connection.send(
@@ -134,8 +145,10 @@ export class BrowserCapture {
         {
           format: "jpeg",
           quality: 90,
-          maxWidth: 2560,
-          maxHeight: 2560,
+          // Bound video at the selected 1080p budget without changing the page
+          // viewport or the independent full-detail screenshot route.
+          maxWidth: 1920,
+          maxHeight: 1080,
           everyNthFrame: 1,
         },
         AbortSignal.timeout(5000),
@@ -167,7 +180,14 @@ export class BrowserCapture {
       throw new Error(
         "Capture stop failed; the exact tab attachment was released"
       )
+    } finally {
+      if (!this.subscribers.size && !this.suspended) await this.releaseFocusHold()
     }
+  }
+  private async releaseFocusHold() {
+    const release = this.releaseFocus
+    this.releaseFocus = undefined
+    await release?.()
   }
   async subscribe(subscriber: Subscriber): Promise<() => Promise<void>> {
     if (this.closed) throw new Error("Browser capture attachment ended")
@@ -179,6 +199,7 @@ export class BrowserCapture {
       if (cached && this.latest === cached) subscriber.frame(cached)
     } catch (error) {
       this.subscribers.delete(subscriber)
+      await this.ending
       await this.enqueue(async () => {
         if (!this.subscribers.size) await this.stop()
       })
@@ -216,6 +237,7 @@ export class BrowserCapture {
             }, AbortSignal.timeout(5000), this.sessionId)
           }
           this.suspended = false
+          if (!this.subscribers.size) await this.releaseFocusHold()
           await this.start()
         } catch {
           this.suspended = false
@@ -234,24 +256,11 @@ export class BrowserCapture {
   end(reason: string) {
     if (this.closed) return
     this.closed = true
-    if (this.running) {
-      void this.connection
-        .send(
-          "Page.stopScreencast",
-          {},
-          AbortSignal.timeout(2000),
-          this.sessionId
-        )
-        .catch(() =>
-          this.connection
-            .send(
-              "Target.detachFromTarget",
-              { sessionId: this.sessionId },
-              AbortSignal.timeout(2000)
-            )
-            .catch(() => {})
-        )
-    }
+    const stop = this.running
+      ? this.connection.send("Page.stopScreencast", {}, AbortSignal.timeout(2000), this.sessionId)
+          .catch(() => this.connection.send("Target.detachFromTarget", { sessionId: this.sessionId }, AbortSignal.timeout(2000)).catch(() => {}))
+      : Promise.resolve()
+    this.ending = stop.then(() => {}).finally(() => this.releaseFocusHold()).catch(() => {})
     this.running = false
     this.latest = undefined
     this.unlisten()

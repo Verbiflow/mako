@@ -572,6 +572,10 @@ export class GrokProvider implements SessionProvider {
     return this.transcriptPath(sessionDir)
   }
 
+  observationPaths(path: string): string[] {
+    return [path, join(dirname(path), "summary.json")]
+  }
+
   async peek(file: NativeFile): Promise<ThreadRef | null> {
     const name = basename(file.path)
     if (name !== TRANSCRIPT_UPDATES && name !== TRANSCRIPT_LEGACY) return null

@@ -1,4 +1,5 @@
 import { BrowserCapture, type BrowserFrame } from "./browser-capture.js"
+import { BrowserFocus } from "./browser-focus.js"
 import { BrowserRecordings } from "./browser-recording.js"
 import { BrowserPreferences } from "./browser-preference.js"
 import {
@@ -249,7 +250,7 @@ interface Binding {
   target: BrowserTarget
   connection: BrowserConnection
   sessionId: string
-  focusEmulated: boolean
+  focus: BrowserFocus
   lineage: string
   intentionalDetach?: boolean
   uncertain: boolean
@@ -678,7 +679,7 @@ export class BrowserService {
             binding.target,
             "Tab lease ended"
           )
-          this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.endBinding(this.bindings.get(key), "Tab binding ended")
           this.bindings.delete(key)
         }
         for (const [key, target] of this.ownedTargets)
@@ -768,8 +769,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.get(key)?.capture.end("Tab binding ended")
-          this.bindings.delete(key)
+        this.endBinding(this.bindings.get(key), "Tab binding ended")
+        this.bindings.delete(key)
         this.ownedTargets.delete(key)
         continue
       }
@@ -796,8 +797,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.get(key)?.capture.end("Tab binding ended")
-          this.bindings.delete(key)
+        this.endBinding(this.bindings.get(key), "Tab binding ended")
+        this.bindings.delete(key)
         continue
       }
       if (event.sessionId !== binding.sessionId) continue
@@ -980,13 +981,7 @@ export class BrowserService {
         `Target ${tab} is a ${info.targetInfo.type}, not a page. Select a page target from tabs; workers and service workers accept no page input.`
       )
     if (existing) {
-      if (existing.focusEmulated)
-        await connection.send(
-          "Emulation.setFocusEmulationEnabled",
-          { enabled: false },
-          signal,
-          existing.sessionId
-        )
+      await existing.focus.close()
       existing.intentionalDetach = true
       try {
         await connection.send(
@@ -1002,8 +997,8 @@ export class BrowserService {
         existing.target,
         "Tab lease ended"
       )
-      this.bindings.get(key)?.capture.end("Tab binding ended")
-          this.bindings.delete(key)
+      this.endBinding(this.bindings.get(key), "Tab binding ended")
+      this.bindings.delete(key)
     }
     const attachParameters: JsonObject = { targetId: tab, flatten: true }
     if (this.entry(browser).definition.transport === "extension")
@@ -1013,21 +1008,17 @@ export class BrowserService {
     )
     try {
       await connection.send("Page.enable", {}, signal, sessionId)
-      const focusEmulated = this.focusPolicy === "lease"
-      if (focusEmulated)
-        await connection.send(
-          "Emulation.setFocusEmulationEnabled",
-          { enabled: true },
-          signal,
-          sessionId
-        )
+      const focus = new BrowserFocus(connection, sessionId)
+      if (this.focusPolicy === "lease") await focus.acquire(signal)
       this.bindings.set(key, {
-        capture: new BrowserCapture(connection, sessionId),
+        capture: new BrowserCapture(
+          connection, sessionId, this.focusPolicy === "off" ? undefined : focus
+        ),
         owner,
         target,
         connection,
         sessionId,
-        focusEmulated,
+        focus,
         lineage: randomUUID(),
         uncertain: this.uncertainProfiles.has(browser),
         mutationRevision: 0,
@@ -1054,6 +1045,12 @@ export class BrowserService {
       throw error
     }
     return target
+  }
+
+  private endBinding(binding: Binding | undefined, reason: string) {
+    if (!binding) return
+    binding.capture.end(reason)
+    void binding.focus.close().catch(() => {})
   }
 
   /** UI consumers share the tab's compositor stream, independent of agent observations. */
@@ -1165,7 +1162,7 @@ export class BrowserService {
             binding.target,
             "Tab lease ended"
           )
-          this.bindings.get(key)?.capture.end("Tab binding ended")
+          this.endBinding(this.bindings.get(key), "Tab binding ended")
           this.bindings.delete(key)
         }
       for (const [key, target] of this.ownedTargets)
@@ -1450,7 +1447,7 @@ export class BrowserService {
             binding.target,
             "Tab lease ended"
           )
-          binding.capture.end("Tab binding ended")
+          this.endBinding(binding, "Tab binding ended")
           this.bindings.delete(this.key(binding.target))
           throw new BrowserFault({
             code: "target-closed",
@@ -1529,40 +1526,11 @@ export class BrowserService {
       !FOCUS_INPUT_ACTIONS.has(command.action)
     )
       return operation()
-    let enableAttempted = false
+    const release = await binding.focus.acquire(signal)
     try {
-      enableAttempted = true
-      await binding.connection.send(
-        "Emulation.setFocusEmulationEnabled",
-        { enabled: true },
-        signal,
-        binding.sessionId
-      )
-      binding.focusEmulated = true
       return await operation()
     } finally {
-      if (
-        enableAttempted &&
-        this.bindings.get(this.key(binding.target)) === binding
-      ) {
-        await binding.connection
-          .send(
-            "Emulation.setFocusEmulationEnabled",
-            { enabled: false },
-            AbortSignal.timeout(2000),
-            binding.sessionId
-          )
-          .then(
-            () => {
-              binding.focusEmulated = false
-            },
-            () => {
-              // Keep it marked so release or takeover makes another bounded
-              // disable attempt. Failure never grants permission to activate.
-              binding.focusEmulated = true
-            }
-          )
-      }
+      await release()
     }
   }
 
@@ -1616,6 +1584,11 @@ export class BrowserService {
           recording: {
             state: "preflight-required",
             scope: "exact-tab",
+            pageFocus: this.focusPolicy === "off"
+              ? "unchanged; hidden pages may not paint"
+              : this.focusPolicy === "lease"
+                ? "emulated for the tab lease; never activates the tab"
+                : "emulated during capture; disabled after the last consumer; never activates the tab",
             cursor: "dispatched-pointer",
             requires: ["ffmpeg", "ffprobe"],
             completion: "record().stop() then recording.status()",
@@ -2026,15 +1999,14 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.get(key)?.capture.end("Tab binding ended")
-          this.bindings.delete(key)
+        this.endBinding(this.bindings.get(key), "Tab binding ended")
+        this.bindings.delete(key)
         this.ownedTargets.delete(key)
         return result
       }
       case "release": {
         binding.intentionalDetach = true
-        if (binding.focusEmulated)
-          await send("Emulation.setFocusEmulationEnabled", { enabled: false })
+        await binding.focus.close()
         const result = await root("Target.detachFromTarget", {
           sessionId: binding.sessionId,
         })
@@ -2043,8 +2015,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        binding.capture.end("Tab binding ended")
-          this.bindings.delete(this.key(binding.target))
+        this.endBinding(binding, "Tab binding ended")
+        this.bindings.delete(this.key(binding.target))
         return result
       }
       case "cdp": {
@@ -2053,6 +2025,8 @@ export class BrowserService {
             command.method.startsWith("Storage.") ||
             ["Network.setCookie", "Network.setCookies", "Network.deleteCookies", "Network.clearBrowserCookies", "Network.clearBrowserCache"].includes(command.method))
           fault("invalid-request", "This raw command changes browser/profile state outside the tab lease. Use cookies for profile cookie operations and managed open/release/close for target lifecycle. Browser-wide administration belongs to the owning supervisor.")
+        if (command.method === "Emulation.setFocusEmulationEnabled")
+          fault("invalid-request", "Focus emulation belongs to managed input and live capture; raw changes would interrupt other consumers of this tab.")
         if (["Page.startScreencast", "Page.stopScreencast", "Page.screencastFrameAck"].includes(command.method))
           fault("invalid-request", "Use tab.record() for capture; recording and live preview share this tab's stream.")
         if (command.method === "Page.captureScreenshot")
@@ -2873,15 +2847,7 @@ export class BrowserService {
       const key = this.key(binding.target)
       if (this.bindings.get(key) !== binding) continue
       const signal = AbortSignal.timeout(2000)
-      if (binding.focusEmulated)
-        await binding.connection
-          .send(
-            "Emulation.setFocusEmulationEnabled",
-            { enabled: false },
-            signal,
-            binding.sessionId
-          )
-          .catch(() => {})
+      await binding.focus.close().catch(() => {})
       binding.intentionalDetach = true
       await binding.connection
         .send(
@@ -2895,8 +2861,8 @@ export class BrowserService {
         binding.target,
         "Tab lease ended"
       )
-      this.bindings.get(key)?.capture.end("Tab binding ended")
-          this.bindings.delete(key)
+      this.endBinding(this.bindings.get(key), "Tab binding ended")
+      this.bindings.delete(key)
       released++
     }
     const targets = [...this.ownedTargets.entries()].filter(
@@ -2947,8 +2913,8 @@ export class BrowserService {
           binding.target,
           "Tab lease ended"
         )
-        this.bindings.get(key)?.capture.end("Tab binding ended")
-          this.bindings.delete(key)
+        this.endBinding(this.bindings.get(key), "Tab binding ended")
+        this.bindings.delete(key)
       }
     for (const [key, target] of this.ownedTargets)
       if (target.browser === id) this.ownedTargets.delete(key)
@@ -2958,7 +2924,7 @@ export class BrowserService {
   close(): void {
     this.closing = true
     for (const id of this.browsers.keys()) this.disconnect(id)
-    for (const binding of this.bindings.values()) binding.capture.end("Browser service closed")
+    for (const binding of this.bindings.values()) this.endBinding(binding, "Browser service closed")
     this.bindings.clear()
     this.attachmentOwners.clear()
     this.attached.clear()

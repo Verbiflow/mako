@@ -10,6 +10,7 @@ import type {
   ComputerDriverClient,
   ComputerDriverResult,
 } from "./computer-driver-client.js"
+import type { JsonObject } from "./json.js"
 import { ControlRecording } from "./control-recording.js"
 
 const stateSchema = z.object({
@@ -20,6 +21,7 @@ const stateSchema = z.object({
     window_id: z.number().int().positive(),
   }),
   video_active: z.boolean(),
+  fps: z.number().int().min(1).max(60).optional(),
   output_dir: z.string().nullable(),
   last_video_path: z.string().nullable(),
   last_error: z.string().nullable(),
@@ -39,6 +41,18 @@ function data(result: ComputerDriverResult) {
   return stateSchema.parse(toolResultData(parsed))
 }
 
+/** Older drivers have a fixed 30 fps source. New drivers declare their backend ceiling. */
+export function nativeRecordingRate(tool: Tool | undefined) {
+  const property = tool?.inputSchema.properties?.fps
+  if (property === undefined) return { maxFps: 30, configurable: false }
+  const rate = z.object({
+    type: z.literal("integer"),
+    minimum: z.literal(1),
+    maximum: z.number().int().min(1).max(60),
+  }).parse(property)
+  return { maxFps: rate.maximum, configurable: true }
+}
+
 /** One host task owns these handles. Driver ownership is independently enforced. */
 export class NativeRecordings {
   private closed = false
@@ -56,12 +70,6 @@ export class NativeRecordings {
       throw new ControlFault(
         "session-closed",
         "Recording task has ended",
-        "not-dispatched"
-      )
-    if ((options.fps ?? 30) > 30)
-      throw new ControlFault(
-        "unsupported",
-        "The native window recorder supports up to 30 fps; no capture was started.",
         "not-dispatched"
       )
     if (
@@ -86,6 +94,16 @@ export class NativeRecordings {
         "The installed native driver does not support task-owned window recording. Update the shared driver before recording this window.",
         "not-dispatched"
       )
+    const rate = nativeRecordingRate(start)
+    const fps = options.fps ?? rate.maxFps
+    if (fps > rate.maxFps || (!rate.configurable && fps !== 30))
+      throw new ControlFault(
+        "unsupported",
+        rate.configurable
+          ? `This native backend supports up to ${rate.maxFps} fps; no capture was started.`
+          : "This driver captures at a fixed 30 fps. Update it to request another source rate; no capture was started.",
+        "not-dispatched"
+      )
     for (const [id, recording] of this.recordings) {
       if (this.recordings.size < 64) break
       if (
@@ -99,7 +117,7 @@ export class NativeRecordings {
     let began: Promise<void> | undefined
     let recording: ControlRecording | undefined
     try {
-      recording = await ControlRecording.create(target, options, async () => {
+      recording = await ControlRecording.create(target, { ...options, fps }, async () => {
         // Start can complete after cancellation. Wait for completion, then stop by the id supplied before dispatch.
         await began?.catch(() => {})
         if (!began) return
@@ -132,17 +150,19 @@ export class NativeRecordings {
       active.markStarted()
       // Do not cancel a dispatched start and lose its receipt. Cleanup waits for this call.
       began = (async () => {
+        const args: JsonObject = {
+          session,
+          recording_id: active.id,
+          output_dir: active.directory,
+          record_video: true,
+          capture_actions: false,
+          window_target: { pid: target.pid, window_id: target.window_id },
+        }
+        if (rate.configurable) args.fps = fps
         const result = data(
           await client.callTool(
             "start_recording",
-            {
-              session,
-              recording_id: active.id,
-              output_dir: active.directory,
-              record_video: true,
-              capture_actions: false,
-              window_target: { pid: target.pid, window_id: target.window_id },
-            },
+            args,
             { timeout: 20_000 }
           )
         )
@@ -152,6 +172,8 @@ export class NativeRecordings {
           result.target.window_id !== target.window_id
         )
           throw new Error("Native recording identity changed during startup")
+        if (rate.configurable && result.fps !== fps)
+          throw new Error("Native driver did not acknowledge the requested capture rate")
         if (!result.video_active || result.output_dir !== active.directory)
           throw new Error(
             result.last_error ??

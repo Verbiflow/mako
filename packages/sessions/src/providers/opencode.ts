@@ -106,6 +106,11 @@ export class OpenCodeProvider implements SessionProvider {
     return [...new Set(this.databases.map(path => dirname(path)))]
   }
 
+  observationPaths(path: string): string[] {
+    const target = parseSessionPath(path, this.databasePaths())
+    return target ? [target.database, `${target.database}-wal`] : []
+  }
+
   /**
    * The root also holds logs, shell transcripts, snapshots and tool output
    * that a running agent writes continuously; only the databases hold

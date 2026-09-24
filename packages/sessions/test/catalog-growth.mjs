@@ -92,6 +92,20 @@ try {
   const freshHistory = await catalog.page(resumed)
   assert.ok(freshHistory.total > cachedHistory.total, "opening a cached thread validates native bytes before watcher refresh")
   assert.equal(freshHistory.entries.at(-1).text, "External continuation without a watcher event")
+  // Native title changes do not have to append anything to the rollout.
+  const opened = await catalog.open(resumed)
+  const unfollow = catalog.follow(resumed, opened.ref.bytes, () => {})
+  catalog.startWatching()
+  for (const watcher of catalog.watchers.values()) watcher.close()
+  const titleDb = new DatabaseSync(metadataPath)
+  titleDb.prepare("UPDATE threads SET name = ? WHERE id = ?").run("Observed native title", parent)
+  titleDb.close()
+  const titleDeadline = Date.now() + 2000
+  while (catalog.list().find(ref => ref.path === resumed)?.title !== "Observed native title") {
+    assert.ok(Date.now() < titleDeadline, "native title sidecar delivered without directory events")
+    await later()
+  }
+  unfollow()
   await catalog.stop()
 
   // Claude writes its own title later in the same file.
@@ -186,6 +200,7 @@ try {
   assert.equal(grokFirst[0].path, grokUpdates)
   assert.equal(grokFirst[0].title, "Grok Session Inquiry")
   grokCatalog.startWatching()
+  for (const watcher of grokCatalog.watchers.values()) watcher.close()
   await new Promise((resolve) => setTimeout(resolve, 80))
   await writeFile(
     grokSummary,
@@ -204,11 +219,11 @@ try {
   )
   await appendFile(grokEvents, "{}\n")
   const grokTitled = await new Promise((resolve, reject) => {
-    // macOS delivers FSEvents seconds late when fseventsd is busy (4.4s was
-    // measured at load 25); the deadline tests delivery, not scheduler luck.
+    // Directory notifications are disabled above. This unfollowed row must
+    // update on the production 30-second discovery sweep, including sidecars.
     const timer = setTimeout(
       () => reject(new Error("Grok summary title did not reach the one catalog row")),
-      12_000
+      33_000
     )
     const check = () => {
       const [row] = grokCatalog.list()

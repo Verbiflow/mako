@@ -275,7 +275,7 @@ function routeFromCapabilities(
       return {
         status: "foreground-required",
         route: "foreground",
-        reason: capability.reason,
+        reason: [...reasons, capability.reason].join(" "),
       }
     reasons.push(`${route}: ${capability.reason}`)
   }
