@@ -32,20 +32,15 @@ try {
   assert.equal(await archive.read(ref.path), null, "queued writes cannot resurrect forgotten history")
 
   const legacyRoot = join(home, "legacy-model-archive")
-  const legacy = new SessionArchive(legacyRoot)
   const knownRef = { ...ref, settings: { model: "known", options: { fast: false } } }
   const unknownRef = { ...ref, nativeId: "unknown-model", path: join(home, "unknown-model"), settings: { options: { effort: "high" } } }
-  try {
-    legacy.note(knownRef, async () => ({ ref: knownRef, entries }))
-    legacy.note(unknownRef, async () => ({ ref: unknownRef, entries }))
-    await legacy.flush()
-  } finally {
-    await legacy.stop()
-  }
-  const legacyDb = new DatabaseSync(join(legacyRoot, "archive.sqlite"))
   const legacyRef = { ...unknownRef, model: "", settings: { ...unknownRef.settings, model: "" } }
+  await mkdir(legacyRoot)
+  const legacyDb = new DatabaseSync(join(legacyRoot, "archive.sqlite"))
   try {
-    legacyDb.prepare("UPDATE sessions SET ref = ? WHERE path = ?").run(JSON.stringify(legacyRef), unknownRef.path)
+    legacyDb.exec("CREATE TABLE sessions (path TEXT PRIMARY KEY, ref TEXT NOT NULL, entries TEXT NOT NULL, revision TEXT NOT NULL)")
+    for (const saved of [knownRef, legacyRef])
+      legacyDb.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?)").run(saved.path, JSON.stringify(saved), JSON.stringify(entries), "legacy")
   } finally {
     legacyDb.close()
   }

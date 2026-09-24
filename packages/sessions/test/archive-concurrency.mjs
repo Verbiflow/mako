@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import fs from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
+import { fork } from 'node:child_process'
+import { once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { SessionArchive } from '../dist/archive.js'
 
@@ -95,6 +99,186 @@ test('other hosts observe new archive rows without restarting',async(a,b)=>{
   assert.equal(b.orphans(new Set())[0].revision,'one')
   await capture(a,thread('two'))
   assert.equal(b.orphans(new Set())[0].revision,'two')
+})
+
+test('a peer commit during attachment copying invalidates the prepared snapshot',async(a,b,location)=>{
+  await capture(a,thread())
+  const source=join(location,'image.txt')
+  await writeFile(source,'retained bytes')
+  let current=thread('two')
+  current.entries[0].attachments=[{type:'attachment',name:'image.txt',mimeType:'text/plain',source:{kind:'file',path:source}}]
+  const entered=deferred(),release=deferred()
+  const copy=fs.copyFile
+  let held=false,reads=0,running
+  fs.copyFile=async(from,to,...args)=>{
+    if(from===source && !held){held=true;entered.resolve();await release.promise}
+    return copy(from,to,...args)
+  }
+  syncBuiltinESMExports()
+  try {
+    a.note(current.ref,async()=>{reads++;return current})
+    running=a.flush()
+    await entered.promise
+    current=thread('three')
+    await capture(b,current)
+    release.resolve();await running
+    assert.equal(reads,2)
+    assert.equal((await a.read('/fixture/native')).entries[0].text,'three')
+  }finally{release.resolve();await running?.catch(()=>{});fs.copyFile=copy;syncBuiltinESMExports()}
+})
+
+test('old connections retain reads but cannot insert, update or delete after migration',async(a,_b,location)=>{
+  await mkdir(location,{recursive:true})
+  const old = new DatabaseSync(join(location,'archive.sqlite'))
+  old.exec('CREATE TABLE sessions (path TEXT PRIMARY KEY, ref TEXT NOT NULL, entries TEXT NOT NULL, revision TEXT NOT NULL)')
+  const value = thread()
+  old.prepare('INSERT INTO sessions VALUES (?,?,?,?)').run(value.ref.path,JSON.stringify(value.ref),JSON.stringify(value.entries),'legacy')
+  const prepared = old.prepare('UPDATE sessions SET entries=? WHERE path=?')
+  try {
+    await a.load()
+    assert.equal((await a.read(value.ref.path)).entries[0].text,'one')
+    assert.equal(JSON.parse(old.prepare('SELECT entries FROM sessions').get().entries)[0].text,'one')
+    assert.throws(()=>prepared.run('[]',value.ref.path),/mako_archive_writer/)
+    assert.throws(()=>old.prepare('INSERT INTO sessions VALUES (?,?,?,?)').run('/other','{}','[]','old'),/mako_archive_writer/)
+    assert.throws(()=>old.prepare('DELETE FROM sessions').run(),/mako_archive_writer/)
+    await capture(a,thread('two'))
+    assert.equal(JSON.parse(old.prepare('SELECT entries FROM sessions').get().entries)[0].text,'two')
+  } finally {old.close()}
+})
+
+test('noisy discovery returning identical content makes no database write',async(a,_b,location)=>{
+  const value=thread()
+  await capture(a,value)
+  const observer=new DatabaseSync(join(location,'archive.sqlite'))
+  const before=observer.prepare('PRAGMA data_version').get().data_version
+  let reads=0
+  a.note(ref('noisy-discovery'),async()=>{reads++;return value})
+  await a.flush()
+  assert.equal(reads,1)
+  assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before)
+  observer.close()
+})
+
+test('wrong native paths and invalid entries cannot poison committed history',async(a)=>{
+  await capture(a,thread())
+  a.note(ref('two'),async()=>thread('two','two',{path:'/different'}))
+  await assert.rejects(a.flush(),/different native path/)
+  a.note(ref('three'),async()=>({...thread('three'),entries:[{kind:'user',text:123}]}))
+  await assert.rejects(a.flush(),/text/)
+  assert.equal((await a.read('/fixture/native')).entries[0].text,'one')
+  await capture(a,thread('four'))
+  assert.equal((await a.read('/fixture/native')).entries[0].text,'four')
+})
+
+test('repeated conflicts are bounded and a later observation can retry',async(a,b)=>{
+  await capture(a,thread())
+  let reads=0
+  a.note(ref('attempt'),async()=>{
+    reads++
+    await capture(b,thread('peer-'+reads))
+    return thread('attempt')
+  })
+  await assert.rejects(a.flush(),/three capture attempts/)
+  assert.equal(reads,3)
+  assert.equal((await a.read('/fixture/native')).entries[0].text,'peer-3')
+  await capture(a,thread('later'))
+  assert.equal((await a.read('/fixture/native')).entries[0].text,'later')
+})
+
+test('settings key order and repeated deletion make no extra commit',async(a,_b,location)=>{
+  await capture(a,thread('one','one',{settings:{model:'model',options:{effort:'high',fast:false}}}))
+  const observer=new DatabaseSync(join(location,'archive.sqlite'))
+  try {
+    let before=observer.prepare('PRAGMA data_version').get().data_version
+    a.note(ref('one',{settings:{options:{fast:false,effort:'high'},model:'model'}}),async()=>{throw Error('Equivalent settings should skip native reading')})
+    await a.flush()
+    assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before)
+    await a.forget('/fixture/native')
+    before=observer.prepare('PRAGMA data_version').get().data_version
+    await a.forget('/fixture/native')
+    assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before)
+  }finally{observer.close()}
+})
+
+async function worker(location) {
+  const child=fork(new URL('./fixtures/archive-writer.mjs',import.meta.url),[location],{stdio:['ignore','pipe','pipe','ipc']})
+  const messages=[], waiters=[]
+  let stderr=''
+  child.stderr.on('data',chunk=>{stderr+=chunk})
+  child.on('message',message=>{
+    const waiter=waiters.shift()
+    if(waiter)waiter(message);else messages.push(message)
+  })
+  const next=async type=>{
+    const message=messages.shift()??await new Promise((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(new Error('Worker timeout '+type+' '+stderr)),10000)
+      waiters.push(message=>{clearTimeout(timeout);resolve(message)})
+    })
+    assert.equal(message.type,type,JSON.stringify(message)+' '+stderr)
+    return message
+  }
+  try { await next('ready') } catch(error) {
+    if(child.exitCode===null && child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited}
+    throw error
+  }
+  return {child,next,send:message=>child.send(message),stop:async()=>{
+    const exited=once(child,'exit');child.send({type:'stop'});await exited
+  }}
+}
+
+test('independent processes reconcile stale reads and deletion, with no lock left by a crash',async(a,_b,location)=>{
+  await a.load()
+  const source=join(location,'native.json')
+  await writeFile(source,JSON.stringify(thread('one')))
+  const first=await worker(location), second=await worker(location)
+  try {
+    first.send({type:'capture',ref:ref('one'),source,hold:true})
+    await first.next('reading')
+    await writeFile(source,JSON.stringify(thread('two')))
+    second.send({type:'capture',ref:ref('two'),source})
+    await second.next('done')
+    first.send({type:'release'})
+    assert.equal((await first.next('done')).reads,2)
+    assert.equal((await a.read('/fixture/native')).entries[0].text,'two')
+    await writeFile(source,JSON.stringify(thread('three')))
+    first.send({type:'capture',ref:ref('three'),source,hold:true})
+    await first.next('reading')
+    second.send({type:'forget',path:'/fixture/native'})
+    await second.next('done')
+    first.send({type:'release'})
+    await first.next('done')
+    assert.equal(await a.read('/fixture/native'),null)
+    const other=thread('other','other',{path:'/fixture/other'})
+    await writeFile(source,JSON.stringify(other))
+    first.send({type:'capture',ref:other.ref,source,hold:true})
+    await first.next('reading')
+    const exited=once(first.child,'exit');first.child.kill('SIGKILL');await exited
+    second.send({type:'capture',ref:other.ref,source})
+    await second.next('done')
+    assert.equal((await a.read('/fixture/other')).entries[0].text,'other')
+  } finally {
+    if(first.child.exitCode===null && first.child.signalCode===null)await first.stop()
+    await second.stop()
+  }
+})
+
+test('independent processes can initialize the same new archive',async(_a,_b,location)=>{
+  for(let round=0;round<Number(process.env.MAKO_ARCHIVE_TEST_ROUNDS??1);round++) {
+    const cold=join(location,'round-'+round)
+    const results=await Promise.allSettled(Array.from({length:4},()=>worker(cold)))
+    await Promise.all(results.filter(r=>r.status==='fulfilled').map(r=>r.value.stop()))
+    for (const result of results) if(result.status==='rejected')throw result.reason
+  }
+  const reopened=new SessionArchive(location)
+  try{await capture(reopened,thread());assert.equal((await reopened.read('/fixture/native')).entries[0].text,'one')}finally{await reopened.stop()}
+})
+
+test('initialization failure can be retried without restarting the archive owner',async(a,_b,location)=>{
+  await writeFile(location,'not a directory')
+  await assert.rejects(a.load())
+  await rm(location)
+  await capture(a,thread())
+  assert.equal((await a.read('/fixture/native')).entries[0].text,'one')
 })
 
 let failures=0

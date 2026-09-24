@@ -30,6 +30,8 @@ export const EntryBlockSchema = z.discriminatedUnion("type", [
      * shell output opens in one small message; `block` reads the rest.
      */
     outputLength: z.number().nonnegative().optional(),
+    /** Other tool fields were previewed; load the full block before copying/rendering its details. */
+    contentOmitted: z.literal(true).optional(),
     /** Inline images a page left out of `attachments`; `block` reads them. */
     attachmentsOmitted: z.number().int().positive().optional(),
     error: z.boolean().optional(),
