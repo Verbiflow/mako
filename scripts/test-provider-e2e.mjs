@@ -166,7 +166,7 @@ async function runElectron() {
   let owner = new LiveConversations(dependencies)
   bindAcp((event) => owner.observe(event))
   bindCodexApp((event) => owner.observe(event))
-  mcp = await startConversationMcp(owner)
+  mcp = await startConversationMcp(owner, (binding, operation, signal) => sessions.request(binding, operation, signal))
   control = await startControlService(browser, (id, binding) =>
     owner.authorizeAgent(id, binding)
   )
@@ -390,7 +390,7 @@ async function runElectron() {
                 await new Promise((resolve) => setTimeout(resolve, 250))
               }
               owner = new LiveConversations(dependencies)
-              mcp = await startConversationMcp(owner)
+              mcp = await startConversationMcp(owner, (binding, operation, signal) => sessions.request(binding, operation, signal))
               return owner
             },
           })
@@ -412,7 +412,7 @@ async function runElectron() {
           id,
           requestId,
           controlMode
-            ? `Read proof.txt to obtain the exact fixture value. Then use Mako's attached mako-control CLI to operate the background window titled ${JSON.stringify(controlTitle)}. The target pid is ${String(controlStarted?.pid)}. Replace its Proof field with that fixture value, press its Verify proof button, and reply "done". Do not bring the target to the foreground. This is an authorized disposable integration test.`
+            ? `Read proof.txt to obtain the exact fixture value. Then operate the background window titled ${JSON.stringify(controlTitle)}. The target pid is ${String(controlStarted?.pid)}. Replace its Proof field with that fixture value, press its Verify proof button, and reply "done". Do not bring the target to the foreground. This is an authorized disposable integration test.`
             : process.argv.includes("--shell")
               ? "Run the shell command `cat proof.txt` with your terminal or shell tool and reply with only the fixture value it prints. This is an authorized disposable integration test. Do not modify files."
               : "Read proof.txt in this workspace using your file tool. Reply with only the fixture value. This is an authorized disposable integration test. Do not modify files."
@@ -1035,7 +1035,7 @@ async function runElectron() {
         await new Promise((resolve) => setTimeout(resolve, 250))
       }
       owner = new LiveConversations(dependencies)
-      mcp = await startConversationMcp(owner)
+      mcp = await startConversationMcp(owner, (binding, operation, signal) => sessions.request(binding, operation, signal))
       const requestId = randomUUID()
       owner.submit(
         id,

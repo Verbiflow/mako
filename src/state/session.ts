@@ -66,6 +66,7 @@ import {
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
+import { recoverThreadReader } from "@/state/thread-viewing"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mcpStore } from "@/state/mcp"
 
@@ -385,6 +386,9 @@ function applyToActive(event: HostEvent) {
       break
     case "thread-activity":
       applyThreadActivity(event.path, event.activity)
+      break
+    case "thread-reader-reset":
+      void recoverThreadReader(event.path)
       break
     case "thread-entries":
       applyThreadEntries(

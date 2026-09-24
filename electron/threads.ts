@@ -519,6 +519,7 @@ async function adoptClient(
   }
   daemon = client
   daemonKind = kind
+  refreshFollowForReader(client)
   const started = performance.now()
   let hydrated = false
   const stopEvents = client.onEvent((event) => {
@@ -783,6 +784,7 @@ async function runInProcessCatalog(signal: AbortSignal): Promise<void> {
     await source.prepare()
     signal.throwIfAborted()
     catalog = source
+    refreshFollowForReader(source)
     source.onEvent((event) => {
       if (signal.aborted || catalog !== source) return
       if (event.type === "removed") {
@@ -1018,9 +1020,18 @@ async function openThreadDirect(path: string): Promise<Thread | null> {
  * by whatever app is writing it — stream to the renderer as they land.
  */
 let unfollow: (() => void) | null = null
+let followedReader: SessionCatalog | DaemonClient | null = null
+let followedPath: string | null = null
+
+function refreshFollowForReader(source: SessionCatalog | DaemonClient): void {
+  if (followedPath && followedReader && followedReader !== source)
+    emit({ type: "thread-reader-reset", path: followedPath })
+}
 
 export function followThread(path: string, fromByte: number): void {
   unfollow?.()
+  followedPath = path
+  followedReader = daemon ?? catalog
   if (!daemon && !catalog) {
     let cancelled = false
     unfollow = () => {
@@ -1063,6 +1074,8 @@ export function followThread(path: string, fromByte: number): void {
 export function unfollowThread(): void {
   unfollow?.()
   unfollow = null
+  followedPath = null
+  followedReader = null
 }
 
 const HARNESS_NAMES = {

@@ -94,6 +94,8 @@ export type HostEventBody =
       path: string
       activity: ExternalThreadActivity | null
     }
+  /** A replacement reader needs a fresh page checkpoint before following again. */
+  | { type: "thread-reader-reset"; path: string }
   /** New entries appended to the thread the viewer is following. */
   | {
       type: "thread-entries"

@@ -75,6 +75,15 @@ try {
   assert.match(text(first), /fixture/)
   assert.equal(fixture.calls.length, 0, "discovery does not connect")
   summary.firstCallBytes = Buffer.byteLength(JSON.stringify(first))
+  const imported = await js(
+    'let {basename}=await import("node:path"); basename("/tmp/control-proof")'
+  )
+  assert.equal(imported.isError, undefined, text(imported))
+  assert.match(text(imported), /control-proof/)
+  assert.match(
+    text(await js('basename("/tmp/retained-import")')),
+    /retained-import/
+  )
   const status = await js("await control.status()")
   assert.equal(status.isError, undefined, text(status))
   assert.match(text(status), /native/)
@@ -219,7 +228,15 @@ const native = new ControlProgramRuntime({
       )
     return { events: [] }
   },
-  image: value => [z.object({type:z.literal("image"),data:z.string(),mimeType:z.string()}).parse(value)],
+  image: (value) => [
+    z
+      .object({
+        type: z.literal("image"),
+        data: z.string(),
+        mimeType: z.string(),
+      })
+      .parse(value),
+  ],
   fault: (d) => new ControlFault(d.code, d.message, d.outcome),
 })
 const evaluate = (code: string, active = signal) =>
@@ -263,20 +280,25 @@ try {
     evaluate("sequence+=1"),
   ])
   assert.match(JSON.stringify(simultaneous[1]), /2/)
-  const images = await evaluate('for (let i=0;i<4;i++) emitImage({type:"image",data:"A".repeat(9*1024*1024),mimeType:"image/png"})')
-  assert.equal(images.filter(b => b.type === "image").length, 2)
+  const images = await evaluate(
+    'for (let i=0;i<4;i++) emitImage({type:"image",data:"A".repeat(9*1024*1024),mimeType:"image/png"})'
+  )
+  assert.equal(images.filter((b) => b.type === "image").length, 2)
   assert.ok(Buffer.byteLength(JSON.stringify(images)) < 32 * 1024 * 1024)
-  for (const block of images) if (block.type === "text") {
-    const receipt = z.object({path:z.string(),bytes:z.number()}).parse(JSON.parse(block.text))
-    const bytes = await readFile(receipt.path)
-    assert.equal(bytes.length, 9*1024*1024/4*3)
-    assert.ok(bytes.equals(Buffer.alloc(bytes.length)))
-  }
+  for (const block of images)
+    if (block.type === "text") {
+      const receipt = z
+        .object({ path: z.string(), bytes: z.number() })
+        .parse(JSON.parse(block.text))
+      const bytes = await readFile(receipt.path)
+      assert.equal(bytes.length, ((9 * 1024 * 1024) / 4) * 3)
+      assert.ok(bytes.equals(Buffer.alloc(bytes.length)))
+    }
   summary.losslessImageBudget = true
   summary.nativeWorker = true
 } finally {
   await native.close()
-  await rm(nativeArtifacts, {recursive:true,force:true})
+  await rm(nativeArtifacts, { recursive: true, force: true })
 }
 console.log(JSON.stringify(summary))
 console.log(

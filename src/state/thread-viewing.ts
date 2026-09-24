@@ -161,12 +161,13 @@ export function loadThreadBlock(path: string, at: BlockAddress): Promise<void> {
   if (inFlight) return inFlight
   if (!hasBridge() || threadsStore.get().viewing?.preview)
     return Promise.resolve()
+  const generation = viewingGeneration
   const load = getMako()
     .threadBlock(path, at)
     .then((block) => {
       if (!block) return
       const { viewing } = threadsStore.get()
-      if (!viewing || viewing.ref.path !== path) return
+      if (generation !== viewingGeneration || !viewing || viewing.ref.path !== path) return
       const local = at.entry - viewing.pageStart
       const entry = viewing.entries[local]
       if (entry?.kind !== "assistant" || !entry.blocks[at.block]) return
@@ -216,6 +217,54 @@ async function adoptOwner(ref: ThreadRef, generation: number) {
   } catch (error) {
     if (generation === viewingGeneration)
       toast.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** Recover the selected native view from pages, then follow its fresh checkpoint. */
+export async function recoverThreadReader(path: string): Promise<void> {
+  const viewing = threadsStore.get().viewing
+  if (!viewing || viewing.ref.path !== path || !hasBridge()) return
+  const generation = ++viewingGeneration
+  const current = () => generation === viewingGeneration && threadsStore.get().viewing?.ref.path === path
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const latest = await getMako().pageThread(path)
+      if (!current()) return
+      if (!latest) throw new Error("This session could not be read")
+      let first = latest
+      const chunks = [latest.entries]
+      let changed = false
+      while (first.hasEarlier && first.start > viewing.pageStart) {
+        const earlier = await getMako().pageThread(path, first.start)
+        if (!current()) return
+        if (!earlier || earlier.start >= first.start)
+          throw new Error("Earlier conversation history could not be read")
+        // Do not combine pages from different snapshots after a source rewrite.
+        if (earlier.total !== latest.total || earlier.checkpoint !== latest.checkpoint) {
+          changed = true
+          break
+        }
+        chunks.push(earlier.entries)
+        first = earlier
+      }
+      if (changed) continue
+      const entries = chunks.reverse().flat()
+      const arrived = new Set(entries.filter(entry => entry.kind === "user").map(entry => entry.text))
+      const echoes = viewing.entries.filter(entry => isOptimisticEcho(entry) && entry.kind === "user" && !arrived.has(entry.text))
+      const next: ViewedThread = {
+        ...viewedPage(latest), entries: [...entries, ...echoes], pageStart: first.start,
+        hasEarlier: first.hasEarlier, streamRevision: (viewing.streamRevision ?? 0) + 1,
+        streamReplaceFrom: 0,
+      }
+      threadsStore.set({ viewing: next, opening: null })
+      rememberThread(next)
+      await getMako().followThread(path, latest.checkpoint ?? latest.ref.bytes ?? 0)
+      return
+    }
+    throw new Error("The conversation kept changing while its history was refreshed. Try opening it again.")
+  } catch (error) {
+    if (!current()) return
+    threadsStore.set({ opening: { kind: "failed", ref: viewing.ref, error: error instanceof Error ? error.message : String(error) } })
   }
 }
 
@@ -399,6 +448,7 @@ export const threadViewingActions = {
       !hasBridge()
     )
       return
+    const generation = viewingGeneration
     threadsStore.set({ viewing: { ...viewing, loadingEarlier: true } })
     try {
       const earlier: ThreadEntry[] = []
@@ -420,7 +470,7 @@ export const threadViewingActions = {
           break
       }
       const current = threadsStore.get().viewing
-      if (!current || current.ref.path !== viewing.ref.path) return
+      if (generation !== viewingGeneration || !current || current.ref.path !== viewing.ref.path) return
       if (!page) {
         threadsStore.set({ viewing: { ...current, loadingEarlier: false } })
         return
@@ -440,6 +490,7 @@ export const threadViewingActions = {
       rememberThread(next)
     } catch (error) {
       const current = threadsStore.get().viewing
+      if (generation !== viewingGeneration) return
       if (current?.ref.path === viewing.ref.path)
         threadsStore.set({ viewing: { ...current, loadingEarlier: false } })
       toast.error(error instanceof Error ? error.message : String(error))
