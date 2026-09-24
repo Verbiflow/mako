@@ -33,7 +33,7 @@ final class Session: NSObject {
     guard phase == "ready" else { return }
     phase = "running"; startedAt = Date().timeIntervalSince1970
     sender.isEnabled = false
-    label.stringValue = "Type in the box using your Japanese input source. Click Finish when done."
+    label.stringValue = "Type the displayed lines by hand. Click Finish when done."
     text.window?.makeFirstResponder(text)
   }
   @objc func finish(_ sender: NSButton) {
@@ -44,11 +44,15 @@ final class Session: NSObject {
   }
 }
 let output = CommandLine.arguments[1]
+let ime = CommandLine.arguments.count > 2 && CommandLine.arguments[2] == "ime"
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let window = NSWindow(contentRect: NSRect(x: 160, y: 240, width: 680, height: 370), styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "Mako — physical typing check"
-let title = NSTextField(wrappingLabelWithString: "Click Start, then type these two lines by hand. Use your Japanese input source for the first line; choose candidates and commit normally. Please do not paste.\n日本語の入力テストです。\nHuman typing stays here 12345.")
+let instructions = ime
+  ? "Click Start. Use Japanese input for the first line, choosing candidates and committing normally. Switch to English for the second. Do not paste.\n日本語の入力テストです。\nHuman typing stays here 12345."
+  : "Use your normal English keyboard. Click Start, then type these two lines by hand, with Return between them. Do not paste. Click Finish after the final period.\nHuman typing stays here 12345.\nBackground edits must not steal my keys."
+let title = NSTextField(wrappingLabelWithString: instructions)
 title.frame = NSRect(x: 20, y: 250, width: 640, height: 100)
 let text = EvidenceText(frame: NSRect(x: 20, y: 75, width: 640, height: 165))
 text.isRichText = false; text.font = NSFont.systemFont(ofSize: 20)
