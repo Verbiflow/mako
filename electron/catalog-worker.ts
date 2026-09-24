@@ -25,7 +25,7 @@ const catalogWorkerData = z.object({
 export type CatalogWorkerData = z.infer<typeof catalogWorkerData>
 
 export type CatalogWorkerMessage =
-  | { type: "listening"; sessions: number; scanMs: number }
+  | { type: "listening"; sessions: number; prepareMs: number }
   | { type: "failed"; message: string }
 
 async function main(): Promise<void> {
@@ -43,16 +43,20 @@ async function main(): Promise<void> {
   })
   const started = performance.now()
   try {
-    const refs = await catalog.scan()
-    catalog.startWatching()
+    await catalog.prepare()
+    const discovery = catalog.scan().then((refs) => {
+      catalog.startWatching()
+      return refs
+    })
     // The worker's heap is bounded by its resource limits, not by the
     // daemon's user-wide RSS guard.
-    const server = serveCatalogOnPort(catalog, data.data.port, { memoryGuard: false })
+    const server = serveCatalogOnPort(catalog, data.data.port, { memoryGuard: false, discovery })
     server.onClose(() => void catalog.stop())
+    void discovery.catch(() => server.close())
     post({
       type: "listening",
-      sessions: refs.length,
-      scanMs: Math.round(performance.now() - started),
+      sessions: catalog.count,
+      prepareMs: Math.round(performance.now() - started),
     })
   } catch (error) {
     await catalog.stop()

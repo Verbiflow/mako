@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { delimiter, isAbsolute, join } from "node:path"
 import { hostLog } from "./host-log.js"
 import { trackProviderPid, untrackProviderPid } from "./provider-children.js"
+import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
 
 /**
  * The embedded native driver, one per host.
@@ -23,6 +24,7 @@ interface Daemon {
   socket: string
   executable: string
   child: ChildProcess
+  endpoint: Awaited<ReturnType<typeof createPrivateControlSocket>>
 }
 
 let daemon: Daemon | null = null
@@ -131,7 +133,7 @@ function forget(current: Daemon): void {
   if (daemon !== current) return
   daemon = null
   untrackProviderPid(current.pid)
-  void unlink(current.socket).catch(() => undefined)
+  void current.endpoint.close().catch(() => undefined)
 }
 
 async function start(
@@ -144,7 +146,8 @@ async function start(
   await mkdir(stateDir, { recursive: true, mode: 0o700 })
   await chmod(stateDir, 0o700)
   await sweepStaleSockets(stateDir)
-  const socket = join(stateDir, `embedded-${process.pid}.sock`)
+  const endpoint = await createPrivateControlSocket(stateDir, `embedded-${process.pid}.sock`)
+  const socket = endpoint.path
   await unlink(socket).catch(() => undefined)
   const driverEnv = {
     CUA_DRIVER_EMBEDDED: "1",
@@ -162,7 +165,7 @@ async function start(
   // awaiting its glide before semantic AX actions; --no-overlay removes that
   // render path entirely and keeps background control visually quiet.
   const args = ["serve", "--embedded", "--no-overlay", "--socket", socket]
-  const started = await spawnDirect(command, socket, args, {
+  const started = await spawnDirect(command, endpoint, args, {
     ...env,
     ...driverEnv,
   })
@@ -183,10 +186,11 @@ async function start(
 
 async function spawnDirect(
   command: string,
-  socket: string,
+  endpoint: Awaited<ReturnType<typeof createPrivateControlSocket>>,
   args: string[],
   env: NodeJS.ProcessEnv
 ): Promise<Daemon> {
+  const socket = endpoint.path
   stderr = ""
   const child = spawn(command, args, {
     env,
@@ -196,24 +200,27 @@ async function spawnDirect(
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString("utf8")).slice(-8_000)
   })
+  let spawnFailure: string | null = null
+  child.once("error", (error) => { spawnFailure = error.message })
   const current: Daemon = {
     pid: child.pid ?? 0,
     socket,
     executable: command,
     child,
+    endpoint,
   }
   child.once("exit", () => {
     if (daemon === current) forget(current)
   })
   try {
     await waitForSocket(socket, () =>
-      child.exitCode === null
+      spawnFailure ?? (child.exitCode === null
         ? null
-        : stderr.trim() || `Embedded CUA Driver exited with ${child.exitCode}`
+        : stderr.trim() || `Embedded CUA Driver exited with ${child.exitCode}`)
     )
   } catch (error) {
     child.kill("SIGTERM")
-    await unlink(socket).catch(() => undefined)
+    await endpoint.close()
     throw error
   }
   return current
@@ -234,5 +241,5 @@ export function stopCuaEmbedded(): void {
   daemon = null
   untrackProviderPid(running.pid)
   running.child.kill("SIGTERM")
-  void unlink(running.socket).catch(() => undefined)
+  void running.endpoint.close().catch(() => undefined)
 }

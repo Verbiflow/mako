@@ -1,5 +1,8 @@
 import { threadIdentity } from "@mako/sessions"
-import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
+import {
+  nativeSessionPath,
+  type NativeSourceIdentity,
+} from "./native-source.js"
 /**
  * The machine's sessions, whoever wrote them.
  *
@@ -43,17 +46,29 @@ import {
   type ThreadPageOptions,
   type ThreadRef,
 } from "@mako/sessions"
-import type { CatalogWorkerData, CatalogWorkerMessage } from "./catalog-worker.js"
+import type {
+  CatalogWorkerData,
+  CatalogWorkerMessage,
+} from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { WorkspaceGit } from "./host-git.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { annotate as annotateLineage, loadLineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
-import { resolveAnchor, type MessageAnchor } from "./contracts/message-anchor.js"
+import {
+  resolveAnchor,
+  type MessageAnchor,
+} from "./contracts/message-anchor.js"
 import { tmpdir } from "node:os"
 
-const TEMPORARY_ROOTS = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]
+const TEMPORARY_ROOTS = [
+  tmpdir(),
+  "/tmp",
+  "/private/tmp",
+  "/var/folders",
+  "/private/var/folders",
+]
 const workspacePresence = new Map<string, { at: number; missing: boolean }>()
 const WORKSPACE_PRESENCE_TTL_MS = 60_000
 
@@ -133,6 +148,8 @@ const LIST_CAP = 600
 
 let catalog: SessionCatalog | null = null
 let daemon: DaemonClient | null = null
+/** The serving reader whose initial discovery has also completed. */
+let discoveredSource: SessionCatalog | DaemonClient | null = null
 /** Who serves `daemon`: the user's detached daemon or this host's own worker thread. */
 let daemonKind: "process" | "worker" | null = null
 let catalogWorker: Worker | null = null
@@ -151,6 +168,56 @@ function invalidateActivityRef(ref: ThreadRef): void {
 let sendEvent: (event: HostEvent) => void = () => {}
 const threadEventSubscribers = new Set<(event: HostEvent) => void>()
 let recoveringDaemon: Promise<void> | null = null
+let catalogStartup: Promise<void> | null = null
+let catalogLifetime: AbortController | null = null
+
+/** Stop settles waiting reads even if a native scan has not returned yet. */
+function catalogTask(
+  signal: AbortSignal,
+  work: () => Promise<void>
+): Promise<void> {
+  let abort = () => {}
+  const stopped = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    if (signal.aborted) abort()
+  })
+  const task = Promise.race([
+    Promise.resolve().then(() => {
+      signal.throwIfAborted()
+      return work()
+    }),
+    stopped,
+  ]).finally(() => signal.removeEventListener("abort", abort))
+  // Startup is also observed by readers, but may fail before any reader exists.
+  void task.catch(() => {})
+  return task
+}
+
+async function awaitCatalogReady(): Promise<{
+  source: Pick<SessionCatalog, "page" | "open" | "block">
+  signal: AbortSignal
+}> {
+  const signal = catalogLifetime?.signal
+  if (!signal) throw new Error("The session history reader has not started")
+  signal.throwIfAborted()
+  while (!daemon && !catalog) {
+    const pending = recoveringDaemon ?? catalogStartup
+    if (!pending) throw new Error("The session history reader is unavailable")
+    await pending
+    signal.throwIfAborted()
+    if (
+      !daemon &&
+      !catalog &&
+      pending === (recoveringDaemon ?? catalogStartup)
+    ) {
+      throw new Error("The session history reader is unavailable")
+    }
+  }
+  const source = daemon ?? catalog
+  if (!source) throw new Error("The session history reader is unavailable")
+  return { source, signal }
+}
 
 function emit(event: HostEvent): void {
   if (event.type === "thread-ref") invalidateActivityRef(event.ref)
@@ -272,38 +339,43 @@ function stopProcessMonitor(): void {
  * LaunchAgent owns startup; other platforms use one detached fallback.
  */
 export function installThreads(send: (event: HostEvent) => void): void {
+  if (catalogLifetime) stopThreads()
+  catalogLifetime = new AbortController()
+  const signal = catalogLifetime.signal
   sendEvent = send
   stopping = false
   monitorProviderProcesses()
-  void (async () => {
-    try {
-      await loadLineage()
-      // The installed app enables login capture by default; explicit opt-outs stay local.
-      await refreshDaemonLoginJob()
-      if (!(await daemonLoginEnabled())) {
-        await runLocalCatalog()
-        return
-      }
-      if (await connectViaDaemon()) return
-      if (!(await startDaemon())) {
-        await runLocalCatalog()
-        return
-      }
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        if (await connectViaDaemon()) return
-      }
-      await runLocalCatalog()
-    } catch (error) {
-      // A catalog that failed to build must say so — an empty rail with no
-      // explanation reads as "the feature is broken", which it would be.
-      emit({
-        type: "notice",
-        level: "error",
-        message: `The thread catalog failed to start: ${error instanceof Error ? error.message : String(error)}`,
-      })
+  catalogStartup = catalogTask(signal, async () => {
+    await loadLineage()
+    signal.throwIfAborted()
+    // The installed app enables login capture by default; explicit opt-outs stay local.
+    await refreshDaemonLoginJob()
+    signal.throwIfAborted()
+    if (!(await daemonLoginEnabled())) {
+      await runLocalCatalog(signal)
+      return
     }
-  })()
+    if (await connectViaDaemon(signal)) return
+    if (!(await startDaemon(signal))) {
+      await runLocalCatalog(signal)
+      return
+    }
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      if (await connectViaDaemon(signal)) return
+    }
+    await runLocalCatalog(signal)
+  })
+  void catalogStartup.catch((error) => {
+    if (signal.aborted) return
+    // A catalog that failed to build must say so — an empty rail with no
+    // explanation reads as "the feature is broken", which it would be.
+    emit({
+      type: "notice",
+      level: "error",
+      message: `The thread catalog failed to start: ${error instanceof Error ? error.message : String(error)}`,
+    })
+  })
 }
 
 function applyDaemonEvent(event: DaemonEvent, announce: boolean): void {
@@ -361,11 +433,16 @@ function monitorDaemon(client: DaemonClient): void {
   }, 5_000)
 }
 
-async function connectViaDaemon(): Promise<boolean> {
+async function connectViaDaemon(signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted()
   let client: DaemonClient | null = null
   try {
     client = await connectDaemon()
-    const identity = await defaultCatalogIdentity(join(homedir(), ".mako", "archive"))
+    signal.throwIfAborted()
+    const identity = await defaultCatalogIdentity(
+      join(homedir(), ".mako", "archive")
+    )
+    signal.throwIfAborted()
     if (daemonIsForeign(client.stats, daemonScript(), identity)) {
       // A checkout never evicts the daemon the user relies on; it watches
       // locally instead. The installed app replaces any vintage but its own.
@@ -373,6 +450,7 @@ async function connectViaDaemon(): Promise<boolean> {
         client.close()
         return false
       }
+      signal.throwIfAborted()
       const pid = client.stats.pid
       await Promise.race([
         client.retire().catch(() => {}),
@@ -380,6 +458,7 @@ async function connectViaDaemon(): Promise<boolean> {
       ])
       client.close()
       await new Promise((resolve) => setTimeout(resolve, 50))
+      signal.throwIfAborted()
       if (pid !== process.pid && processIsAlive(pid)) {
         try {
           process.kill(pid, "SIGTERM")
@@ -401,7 +480,7 @@ async function connectViaDaemon(): Promise<boolean> {
       client.close()
       return false
     }
-    const adopted = await adoptClient(client, "process")
+    const adopted = await adoptClient(client, "process", signal)
     if (!adopted) return false
     monitorDaemon(client)
     client.onClose(() => {
@@ -410,7 +489,7 @@ async function connectViaDaemon(): Promise<boolean> {
       stopDaemonMonitor()
       daemon = null
       daemonKind = null
-      if (!stopping) void recoverDaemon()
+      if (!stopping) void recoverDaemon(signal)
     })
     return true
   } catch {
@@ -425,48 +504,63 @@ async function connectViaDaemon(): Promise<boolean> {
 
 /**
  * Take a connected catalog server as the source of truth: mirror its list,
- * then patch the mirror from its events. Events that arrive while the list
- * is in flight are replayed silently afterwards so nothing is missed or
- * announced twice.
+ * then patch the mirror from later events. The client publishes that snapshot
+ * in wire order: earlier events are already included, later ones must win.
  */
 async function adoptClient(
   client: DaemonClient,
-  kind: "process" | "worker"
+  kind: "process" | "worker",
+  signal: AbortSignal
 ): Promise<boolean> {
-  const pending: DaemonEvent[] = []
-  let hydrated = false
-  const stopEvents = client.onEvent((event) => {
-    if (!hydrated) {
-      pending.push(event)
-      return
-    }
-    applyDaemonEvent(event, true)
-  })
-  try {
-    const refs = await client.list()
-    mirror.clear()
-    activityIndex = null
-    for (const ref of refs) {
-      noteStoreWrite(ref, undefined)
-      mirror.set(ref.path, ref)
-    }
-    for (const event of pending) applyDaemonEvent(event, false)
-    if (stopping) {
-      stopEvents()
-      client.close()
-      return false
-    }
-    daemon = client
-    daemonKind = kind
-    hydrated = true
-    push()
-    reconcileProviderActivity()
-    return true
-  } catch {
-    stopEvents()
+  if (signal.aborted || stopping) {
     client.close()
     return false
   }
+  daemon = client
+  daemonKind = kind
+  const started = performance.now()
+  let hydrated = false
+  const stopEvents = client.onEvent((event) => {
+    if (signal.aborted || daemon !== client) return
+    // A known-path follow may already be live while the catalog list loads.
+    if (event.event === "entries") {
+      applyDaemonEvent(event, true)
+      return
+    }
+    if (!hydrated) return
+    applyDaemonEvent(event, true)
+  })
+  client.onClose(stopEvents)
+  void catalogTask(signal, async () => {
+    await client.list({}, (refs) => {
+      signal.throwIfAborted()
+      if (daemon !== client) return
+      mirror.clear()
+      activityIndex = null
+      for (const ref of refs) {
+        noteStoreWrite(ref, undefined)
+        mirror.set(ref.path, ref)
+      }
+      hydrated = true
+      discoveredSource = client
+      push()
+      reconcileProviderActivity()
+    })
+    if (signal.aborted || daemon !== client) return
+    hostLog("threads", "catalog discovery adopted", {
+      sessions: mirror.size,
+      discoveryMs: Math.round(performance.now() - started),
+      kind,
+    })
+  }).catch((error) => {
+    stopEvents()
+    if (!signal.aborted && daemon === client)
+      hostWarn("threads", "catalog discovery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    client.close()
+  })
+  return true
 }
 
 /**
@@ -478,7 +572,8 @@ async function adoptClient(
  * frame whole; a Unix socket handed the host a 7 MB thread as some nine
  * hundred 8 KiB reads, and each read woke the Chromium-integrated loop.
  */
-async function runCatalogWorker(): Promise<boolean> {
+async function runCatalogWorker(signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted()
   if (catalog || daemon) return true
   const channel = new MessageChannel()
   const data: CatalogWorkerData = {
@@ -504,19 +599,29 @@ async function runCatalogWorker(): Promise<boolean> {
     }
     const failed = (error: Error) => settle({ type: "failed", message: error.message })
     const exited = (code: number) =>
-      settle({ type: "failed", message: `The catalog worker exited with code ${code}` })
+      settle({
+        type: "failed",
+        message: `The catalog worker exited with code ${code}`,
+      })
     worker.on("message", settle)
     worker.once("error", failed)
     worker.once("exit", exited)
   })
+  if (signal.aborted) {
+    await stopCatalogWorker(worker)
+    channel.port1.close()
+    signal.throwIfAborted()
+  }
   if (listening.type === "failed") {
-    hostWarn("threads", "catalog worker failed to start", { error: listening.message })
+    hostWarn("threads", "catalog worker failed to start", {
+      error: listening.message,
+    })
     await stopCatalogWorker(worker)
     return false
   }
   hostLog("threads", "catalog worker listening", {
     sessions: listening.sessions,
-    scanMs: listening.scanMs,
+    prepareMs: listening.prepareMs,
   })
   let client: DaemonClient
   try {
@@ -528,7 +633,7 @@ async function runCatalogWorker(): Promise<boolean> {
     await stopCatalogWorker(worker)
     return false
   }
-  if (!(await adoptClient(client, "worker"))) {
+  if (!(await adoptClient(client, "worker", signal))) {
     await stopCatalogWorker(worker)
     return false
   }
@@ -542,7 +647,7 @@ async function runCatalogWorker(): Promise<boolean> {
     void stopCatalogWorker(worker)
     if (stopping) return
     hostWarn("threads", "catalog worker lost", { reason })
-    void recoverCatalogWorker()
+    void recoverCatalogWorker(signal)
   }
   worker.once("error", (error) => lost(error.message))
   worker.once("exit", (code) => lost(`exit ${code}`))
@@ -553,35 +658,52 @@ async function runCatalogWorker(): Promise<boolean> {
 let catalogWorkerRestarts = 0
 
 /** One restart, then the in-process catalog: a worker that keeps dying is not a strategy. */
-function recoverCatalogWorker(): Promise<void> {
-  recoveringDaemon ??= (async () => {
+function recoverCatalogWorker(signal: AbortSignal): Promise<void> {
+  return recoverCatalog(signal, async () => {
     if (catalogWorkerRestarts < 1) {
       catalogWorkerRestarts += 1
-      if (await runCatalogWorker()) return
+      if (await runCatalogWorker(signal)) return
     }
-    await runInProcessCatalog()
-  })().finally(() => {
-    recoveringDaemon = null
+    await runInProcessCatalog(signal)
   })
-  return recoveringDaemon
 }
 
-async function stopCatalogWorker(worker: Worker | null = catalogWorker): Promise<void> {
+function recoverCatalog(
+  signal: AbortSignal,
+  work: () => Promise<void>
+): Promise<void> {
+  if (recoveringDaemon) return recoveringDaemon
+  const task = catalogTask(signal, work).finally(() => {
+    if (recoveringDaemon === task) recoveringDaemon = null
+  })
+  recoveringDaemon = task
+  void task.catch((error) => {
+    if (signal.aborted) return
+    hostWarn("threads", "catalog recovery failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
+  return task
+}
+
+async function stopCatalogWorker(
+  worker: Worker | null = catalogWorker
+): Promise<void> {
   if (!worker) return
   if (catalogWorker === worker) catalogWorker = null
   await worker.terminate().catch(() => {})
 }
 
-function recoverDaemon(): Promise<void> {
-  recoveringDaemon ??= (async () => {
-    if (!(await daemonLoginEnabled()) || !(await startDaemon())) {
-      await runLocalCatalog()
+function recoverDaemon(signal: AbortSignal): Promise<void> {
+  return recoverCatalog(signal, async () => {
+    if (!(await daemonLoginEnabled()) || !(await startDaemon(signal))) {
+      await runLocalCatalog(signal)
       return
     }
     for (let attempt = 0; attempt < 10; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)))
       if (stopping) return
-      if (await connectViaDaemon()) {
+      if (await connectViaDaemon(signal)) {
         emit({
           type: "notice",
           level: "success",
@@ -590,17 +712,14 @@ function recoverDaemon(): Promise<void> {
         return
       }
     }
-    await runLocalCatalog()
+    await runLocalCatalog(signal)
     emit({
       type: "notice",
       level: "error",
       message:
         "Session sync could not restart. Mako is watching locally until the next launch.",
     })
-  })().finally(() => {
-    recoveringDaemon = null
   })
-  return recoveringDaemon
 }
 
 function processIsAlive(pid: number): boolean {
@@ -613,7 +732,8 @@ function processIsAlive(pid: number): boolean {
 }
 
 /** Installs the login job and returns whether this build is allowed to. */
-async function startDaemon(): Promise<boolean> {
+async function startDaemon(signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted()
   if (!daemonLoginOwner()) return false
   await setDaemonLogin(true)
   return true
@@ -623,41 +743,67 @@ async function startDaemon(): Promise<boolean> {
  * Watch from this host: on a worker thread, or in-process when the worker
  * cannot start. Either way the renderer sees one catalog.
  */
-async function runLocalCatalog(): Promise<void> {
+async function runLocalCatalog(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
   if (catalog || daemon) return
-  if (await runCatalogWorker()) return
-  await runInProcessCatalog()
+  if (await runCatalogWorker(signal)) return
+  await runInProcessCatalog(signal)
 }
 
-async function runInProcessCatalog(): Promise<void> {
+async function runInProcessCatalog(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
   if (catalog || daemon) return
   hostWarn("threads", "catalog running on the host thread")
-  catalog = defaultCatalog({
+  const source = defaultCatalog({
     cachePath: join(app.getPath("userData"), "threads-catalog.json"),
-    // Same archive the daemon uses — whichever process runs the catalog,
-    // the durable copy lands in one place.
     archivePath: join(homedir(), ".mako", "archive"),
   })
-  await catalog.scan()
-  for (const ref of catalog.list()) noteStoreWrite(ref, undefined)
-  push()
-  reconcileProviderActivity()
-  catalog.startWatching()
-  catalog.onEvent((event) => {
-    if (event.type === "removed") {
-      forgetStore(event.path)
-      emit({ type: "thread-removed", path: event.path })
-    } else {
-      noteStoreWrite(event.ref, undefined)
-      emit({ type: "thread-ref", ref: annotate(event.ref) })
-    }
-    reconcileProviderActivity()
-  })
+  const stop = () => void source.stop()
+  signal.addEventListener("abort", stop, { once: true })
+  try {
+    await source.prepare()
+    signal.throwIfAborted()
+    catalog = source
+    source.onEvent((event) => {
+      if (signal.aborted || catalog !== source) return
+      if (event.type === "removed") {
+        forgetStore(event.path)
+        emit({ type: "thread-removed", path: event.path })
+      } else {
+        noteStoreWrite(event.ref, undefined)
+        emit({ type: "thread-ref", ref: annotate(event.ref) })
+      }
+      reconcileProviderActivity()
+    })
+    void catalogTask(signal, async () => {
+      await source.scan()
+      signal.throwIfAborted()
+      if (catalog !== source) return
+      discoveredSource = source
+      for (const ref of source.list()) noteStoreWrite(ref, undefined)
+      push()
+      reconcileProviderActivity()
+      source.startWatching()
+    }).catch((error) => {
+      if (signal.aborted || catalog !== source) return
+      emit({
+        type: "notice",
+        level: "error",
+        message: `Session discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    })
+  } catch (error) {
+    if (catalog === source) catalog = null
+    await source.stop()
+    throw error
+  } finally {
+    signal.removeEventListener("abort", stop)
+  }
 }
 
-/** Whether a source is serving — the renderer's retry asks this. */
+/** Whether the serving reader has a complete initial catalog for the rail. */
 export function threadsReady(): boolean {
-  return daemon !== null || catalog !== null
+  return discoveredSource !== null && discoveredSource === (daemon ?? catalog)
 }
 
 /** For the settings surface: is the daemon doing the work, and since when. */
@@ -677,6 +823,12 @@ export async function daemonStatus(): Promise<DaemonStats | null> {
 
 export function stopThreads(): void {
   stopping = true
+  catalogLifetime?.abort(new Error("The session history reader stopped"))
+  catalogStartup = null
+  recoveringDaemon = null
+  discoveredSource = null
+  catalogWorkerRestarts = 0
+  unfollowThread()
   stopDaemonMonitor()
   stopProcessMonitor()
   catalog?.stop()
@@ -706,8 +858,13 @@ export function listThreads(
 }
 
 /** Recovery must not depend on the sidebar's ordering or visible result cap. */
-export function nativePathForSession(identity: NativeSourceIdentity): string | undefined {
-  return nativeSessionPath(identity, daemon ? [...mirror.values()] : catalog?.list() ?? [])
+export function nativePathForSession(
+  identity: NativeSourceIdentity
+): string | undefined {
+  return nativeSessionPath(
+    identity,
+    daemon ? [...mirror.values()] : (catalog?.list() ?? [])
+  )
 }
 
 /**
@@ -732,9 +889,9 @@ export async function pageThread(
   limit?: number,
   options?: ThreadPageOptions
 ): Promise<ThreadPage | null> {
-  const page = daemon
-    ? await daemon.page(path, before, limit, options)
-    : await (catalog?.page(path, before, limit, options) ?? null)
+  const { source, signal } = await awaitCatalogReady()
+  signal.throwIfAborted()
+  const page = await source.page(path, before, limit, options)
   return page ? { ...page, ref: annotate(page.ref) } : null
 }
 
@@ -784,15 +941,18 @@ export async function threadBlock(
   path: string,
   at: BlockAddress
 ): Promise<EntryBlock | null> {
-  return daemon
-    ? daemon.block(path, at)
-    : ((await catalog?.block(path, at)) ?? null)
+  const { source, signal } = await awaitCatalogReady()
+  signal.throwIfAborted()
+  return source.block(path, at)
 }
 
 export async function openThread(path: string): Promise<Thread | null> {
-  const thread = daemon
-    ? await openThreadViaDaemon(path)
-    : await (catalog?.open(path) ?? null)
+  const { source, signal } = await awaitCatalogReady()
+  signal.throwIfAborted()
+  const thread =
+    source === daemon
+      ? await openThreadViaDaemon(path)
+      : await source.open(path)
   return thread ? { ...thread, ref: annotate(thread.ref) } : null
 }
 
@@ -842,6 +1002,23 @@ let unfollow: (() => void) | null = null
 
 export function followThread(path: string, fromByte: number): void {
   unfollow?.()
+  if (!daemon && !catalog) {
+    let cancelled = false
+    unfollow = () => {
+      cancelled = true
+    }
+    void awaitCatalogReady()
+      .then(({ signal }) => {
+        if (!cancelled && !signal.aborted) followThread(path, fromByte)
+      })
+      .catch((error) => {
+        if (!cancelled)
+          hostWarn("threads", "history follow unavailable", {
+            error: error instanceof Error ? error.message : String(error),
+          })
+      })
+    return
+  }
   if (daemon) {
     const client = daemon
     void client.follow(path, fromByte).catch(() => {})
@@ -948,7 +1125,8 @@ export async function transcriptArtifactFor(
   upto?: MessageAnchor
 ): Promise<TranscriptArtifact | null> {
   const known = listThreads().find((ref) => ref.path === path)
-  const point = upto === undefined ? "all" : upto.id ?? upto.at ?? String(upto.index)
+  const point =
+    upto === undefined ? "all" : (upto.id ?? upto.at ?? String(upto.index))
   const cacheKey = `${path}:${point}`
   const version = `${known?.bytes ?? "?"}:${known?.updatedAt ?? "?"}:${instruction ?? ""}`
   const cached = transcriptArtifacts.get(cacheKey)
