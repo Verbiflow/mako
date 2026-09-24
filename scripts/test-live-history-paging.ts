@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
+import { z } from "zod"
 import { setImmediate as tick } from "node:timers/promises"
 import { LiveHistoryReader } from "../electron/live-history-reader"
 import { historyJsonChunks } from "../electron/live-history-json"
@@ -8,6 +9,11 @@ import type { LiveHistoryRead, LiveHistoryPage } from "../electron/contracts/liv
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
 
 const samples: unknown[] = [null, false, 0, "", [undefined, undefined, null], { no: undefined, yes: ["a\n\"\\\t", "\ud800", "😀東京"] }]
+function equalDetail<Actual, Expected>(actual: Actual, expected: Expected): void {
+  const { historyVersion, ...content } = z.object({ historyVersion: z.string().uuid() }).passthrough().parse(actual)
+  assert.ok(historyVersion)
+  assert.deepEqual(content, expected)
+}
 samples.push(JSON.parse('{"__proto__":{"retained":true},"constructor":"data"}'))
 for (const value of samples) {
   const result = [...historyJsonChunks(value, 3)].join("")
@@ -45,6 +51,13 @@ for (const [index, provider] of ["claude", "codex", "cursor", "grok", "devin", "
     entries: Array.from({ length: 160 }, (_, n) => ({ kind: "user", id: `base-${n}`, text: `Base ${n}` })) }
   const reader = new LiveHistoryReader()
   const first = await read<LiveSnapshot>(reader, source, { kind: "snapshot" })
+  const conditional = { kind: "snapshot" as const, epoch: source.epoch,
+    ifCurrent: { token: first.history!.token, revision: source.revision } }
+  assert.deepEqual(await read(reader, source, conditional),
+    { kind: "unchanged", token: first.history!.token, revision: source.revision, epoch: source.epoch })
+  const otherEpoch = await read<LiveSnapshot>(reader, { ...source, epoch: "new-owner" }, conditional)
+  assert.equal(otherEpoch.epoch, "new-owner")
+  assert.notEqual(otherEpoch.history!.token, first.history!.token, "A new owner cannot acknowledge the old view")
   assert.ok(first.history?.before)
   assert.ok(first.blocks.length < source.blocks.length)
   assert.ok(Buffer.byteLength(JSON.stringify(source)) > 32 * 1024 * 1024)
@@ -71,7 +84,7 @@ for (const [index, provider] of ["claude", "codex", "cursor", "grok", "devin", "
   const tool = first.blocks.find(block => block.type === "tool")
   assert.ok(tool?.type === "tool" && tool.historyRest)
   const full = await read(reader, source, { kind: "detail", token: first.history!.token, at: { kind: "live", index: tool.historyRest.index } })
-  assert.deepEqual(full, source.blocks[tool.historyRest.index])
+  equalDetail(full, source.blocks[tool.historyRest.index])
   const later = { ...source, revision: 2, blocks: [...source.blocks.slice(0, -1), { type: "text" as const, text: "newer" }] }
   await read(reader, later, { kind: "snapshot" })
   assert.deepEqual(await read(reader, later, { kind: "detail", token: first.history!.token, at: { kind: "live", index: source.blocks.length - 1 } }), source.blocks.at(-1), "Old token remains immutable")
@@ -91,7 +104,7 @@ assert.equal(giantReader.present({ snapshot: null }).snapshot, null)
 assert.ok(giantReader.present({ snapshot: giant }).snapshot.history)
 const giantView = await read<LiveSnapshot>(giantReader, giant, { kind: "snapshot" })
 assert.ok(JSON.stringify(giantView).length < 32_000)
-assert.deepEqual(await read(giantReader, giant, { kind: "detail", token: giantView.history!.token, at: { kind: "live", index: 1 } }), giant.blocks[1])
+equalDetail(await read(giantReader, giant, { kind: "detail", token: giantView.history!.token, at: { kind: "live", index: 1 } }), giant.blocks[1])
 const concurrent = await Promise.all(Array.from({ length: 12 }, () => giantReader.read(giant.session.id,
   { kind: "detail", token: giantView.history!.token, at: { kind: "live", index: 1 } }, async () => giant)))
 for (const part of concurrent) {
@@ -158,6 +171,22 @@ try {
   source.blocks = [...source.blocks.slice(0, -1), { type: "text", id: "text-79", text: "Latest full response APPENDED" }]
   assert.equal(await hydrateLive(id), true)
   assert.equal(acpStore.get().conversations[id]!.history!.blockStart, oldest, "Refresh preserves the range explicitly loaded by the reader")
+  const refreshed = acpStore.get().conversations[id]!
+  assert.equal(refreshed.blocks.find(block => block.type === "tool" && block.id === preview.id), detail,
+    "Unrelated revisions retain the expanded output by immutable content identity")
+  await hydrateLive(id)
+  assert.equal(acpStore.get().conversations[id], refreshed, "Unchanged refresh preserves the complete projection reference")
+  source.revision++
+  source.blocks = source.blocks.map(block => block.type === "tool" && block.id === preview.id
+    ? { ...block, output: "Changed output ".repeat(500) } : block)
+  await hydrateLive(id)
+  const updated = acpStore.get().conversations[id]!
+  const changedTool = updated.blocks.find(block => block.type === "tool" && block.id === preview.id)
+  assert.ok(changedTool?.type === "tool" && changedTool.historyRest)
+  assert.notEqual(changedTool.historyVersion, detail.historyVersion, "Changed output invalidates an expanded result even with the same tool ID")
+  await loadLiveHistoryDetail(id, updated.history!.token, { kind: "live", index: preview.historyRest.index })
+  const reloaded = acpStore.get().conversations[id]!.blocks.find(block => block.type === "tool" && block.id === preview.id)
+  assert.ok(reloaded?.type === "tool" && reloaded.output === "Changed output ".repeat(500))
   // A reconnect supersedes an outstanding older page. New approvals/receipts
   // and a new epoch survive its eventual arrival unchanged.
   const late = Promise.withResolvers<void>()
@@ -190,6 +219,30 @@ try {
   const expected = (await import("../src/lib/exchanges")).responseText(fullProjection.exchanges[0]!)
   assert.equal(await completeLiveAnswer(id, exchange), expected)
   assert.equal(acpStore.get().conversations[id], copyView, "Copy leaves the reading position and state intact")
+  source.blocks = []
+  source.revision = 20
+  source.base = { ref: { harness: "claude", nativeId: "cache", path: "fixture" }, start: 0, hasEarlier: false, total: 1,
+    entries: [{ kind: "assistant", blocks: [{ type: "tool", id: "native-cache", name: "read", output: "native".repeat(1000) }] }] }
+  await hydrateLive(id)
+  const nativeView = acpStore.get().conversations[id]!
+  await loadLiveHistoryDetail(id, nativeView.history!.token, { kind: "base", entry: 0, block: 0 })
+  const nativeEntry = acpStore.get().conversations[id]!.base!.entries[0]!
+  assert.ok(nativeEntry.kind === "assistant")
+  const nativeFull = nativeEntry.blocks[0]!
+  assert.ok(nativeFull.type === "tool")
+  source.revision++
+  await hydrateLive(id)
+  const retainedNative = acpStore.get().conversations[id]!.base!.entries[0]!
+  assert.ok(retainedNative.kind === "assistant")
+  assert.equal(retainedNative.blocks[0], nativeFull, "Unchanged native output survives an unrelated revision")
+  source.revision++
+  source.base = { ...source.base, entries: [{ kind: "assistant", blocks: [{ type: "tool", id: "native-cache", name: "read", output: "new native".repeat(1000) }] }] }
+  await hydrateLive(id)
+  const changedNative = acpStore.get().conversations[id]!.base!.entries[0]!
+  assert.ok(changedNative.kind === "assistant")
+  const changedNativeTool = changedNative.blocks[0]!
+  assert.ok(changedNativeTool.type === "tool")
+  assert.notEqual(changedNativeTool.historyVersion, nativeFull.historyVersion, "Changed native output invalidates its expanded cache")
   await tick()
   console.log("PASS: renderer page/stream merge, stable message identity, lazy detail and reconnect fencing")
 } finally { bridge.mock.restore(); Reflect.deleteProperty(globalThis, "window") }
@@ -214,7 +267,17 @@ let changed = false
 const nativeDetail = new LiveHistoryReader(async () => ({ ...partial.base, checkpoint: changed ? 11 : 10 }), async () => nativeOutput)
 const partialView = await read<LiveSnapshot>(nativeDetail, partial, { kind: "snapshot" })
 const address = { kind: "base" as const, entry: 0, block: 0 }
-assert.deepEqual(await read(nativeDetail, partial, { kind: "detail", token: partialView.history!.token, at: address }), nativeOutput)
+equalDetail(await read(nativeDetail, partial, { kind: "detail", token: partialView.history!.token, at: address }), nativeOutput)
 changed = true
 await assert.rejects(read(nativeDetail, partial, { kind: "detail", token: partialView.history!.token, at: address }), /native history changed/)
 console.log("PASS: native preview completion and changed-source refusal")
+
+const evictedReader = new LiveHistoryReader()
+const expiring = auditSnapshot(0)
+expiring.epoch = "eviction"
+const oldView = evictedReader.capture(expiring)
+for (let n = 0; n < 40; n++) evictedReader.capture({ ...expiring, session: { ...expiring.session, id: auditId(5000 + n) } })
+const recaptured = await read<LiveSnapshot>(evictedReader, expiring, { kind: "snapshot", epoch: expiring.epoch,
+  ifCurrent: { token: oldView.history!.token, revision: expiring.revision } })
+assert.notEqual(recaptured.history!.token, oldView.history!.token, "Eviction returns a fresh usable view, never an unchanged acknowledgement")
+console.log("PASS: conditional refresh owner/epoch and eviction fences")

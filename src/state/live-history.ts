@@ -3,7 +3,7 @@ import { acpStore, replaceAcpConversation } from "@/state/acp-state"
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot, EntryBlock } from "@/lib/types"
-import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage } from "../../electron/contracts/live-history"
+import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistorySnapshot } from "../../electron/contracts/live-history"
 import { LiveBlockSchema, type LiveBlock } from "../../electron/contracts/live-content"
 
 /** Reassemble one explicitly requested value, validating part identity/order.
@@ -31,11 +31,15 @@ export async function readLiveValue<T>(id: string, input: LiveHistoryRead): Prom
   return JSON.parse(pieces.join("")) as T
 }
 
-export async function readLiveSnapshot(id: string): Promise<LiveSnapshot | null> {
+export function readLiveSnapshot(id: string): Promise<LiveSnapshot | null>
+export function readLiveSnapshot(id: string, conditional: true): Promise<LiveHistorySnapshot>
+export async function readLiveSnapshot(id: string, conditional = false): Promise<LiveHistorySnapshot> {
   const bridge = getMako()
   if (Object.hasOwn(bridge, "liveRead")) {
     const held = acpStore.get().conversations[id]
-    try { return await readLiveValue<LiveSnapshot | null>(id, { kind: "snapshot", epoch: held?.epoch,
+    try { return await readLiveValue<LiveHistorySnapshot>(id, { kind: "snapshot", epoch: held?.epoch,
+      ifCurrent: conditional && held?.hydrated && held.history && held.revision !== undefined
+        ? { token: held.history.token, revision: held.revision } : undefined,
       from: held?.history ? { blocks: held.history.blockStart, base: held.base?.start ?? 0 } : undefined }) }
     catch (error) {
       // Existing hosts keep their old read API. A data/transport failure is
@@ -47,6 +51,31 @@ export async function readLiveSnapshot(id: string): Promise<LiveSnapshot | null>
 }
 
 const loading = new Map<string, Promise<void>>()
+
+/** Reuse only host-proven immutable tool content; provider IDs/status alone
+ * cannot prove that a later tool result has the same bytes. */
+export function retainLiveDetails(snapshot: LiveSnapshot): LiveSnapshot {
+  const held = acpStore.get().conversations[snapshot.session.id]
+  if (!snapshot.history || held?.kind !== "live" || !held.history) return snapshot
+  const details = new Map<string, LiveBlock | EntryBlock>()
+  for (const block of held.blocks)
+    if (block.type === "tool" && block.historyVersion && !block.historyRest) details.set(block.historyVersion, block)
+  for (const entry of held.base?.entries ?? [])
+    if (entry.kind === "assistant") for (const block of entry.blocks)
+      if (block.type === "tool" && block.historyVersion && !block.contentOmitted && !block.attachmentsOmitted &&
+          (block.outputLength ?? 0) <= (block.output?.length ?? 0)) details.set(block.historyVersion, block)
+  if (!details.size) return snapshot
+  const blocks = snapshot.blocks.map(block => {
+    const retained = block.type === "tool" && block.historyRest && block.historyVersion ? details.get(block.historyVersion) : undefined
+    return retained?.type === "tool" && "title" in retained ? retained : block
+  })
+  const base = snapshot.base ? { ...snapshot.base, entries: snapshot.base.entries.map(entry => entry.kind === "assistant"
+    ? { ...entry, blocks: entry.blocks.map(block => {
+      const retained = block.type === "tool" && block.historyVersion ? details.get(block.historyVersion) : undefined
+      return retained?.type === "tool" && "name" in retained ? retained : block
+    }) } : entry) } : null
+  return { ...snapshot, blocks, base }
+}
 
 /** Prepend content only. Historical control/receipt state is never authoritative. */
 export function prependLiveHistory<T extends Pick<LiveSnapshot, "blocks" | "base" | "history">>(current: T, page: LiveHistoryPage): T {

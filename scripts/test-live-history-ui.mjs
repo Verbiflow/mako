@@ -33,11 +33,19 @@ try {
     await installWebBridge(); const real = window.mako;
     // Only workspace/provider discovery is a fixture. All history calls use
     // the production web bridge, proxy, peer router and owner reader.
-    window.mako = { ...original, liveRead: real.liveRead, liveSnapshot: real.liveSnapshot, copy: async text => { window.copiedHistory = text } };
+    window.historyReadCounts = { reads: 0, details: 0, bytes: 0 };
+    window.mako = { ...original, liveRead: async (...args) => {
+      const result = await real.liveRead(...args);
+      window.historyReadCounts.reads++;
+      if (args[1].kind === 'detail') window.historyReadCounts.details++;
+      window.historyReadCounts.bytes += new TextEncoder().encode(JSON.stringify(result)).length;
+      return result;
+    }, liveSnapshot: real.liveSnapshot, copy: async text => { window.copiedHistory = text } };
     const { hydrateLive, applyLiveBatch } = await import('/src/state/live-recovery.ts');
     real.onEvent(event => { if(event.type === 'live-batch') applyLiveBatch(event.batch) });
     const { acpStore } = await import('/src/state/acp-state.ts');
     window.historyState = () => acpStore.get().conversations[${JSON.stringify(process.env.MAKO_HISTORY_ID)}];
+    window.refreshHistory = () => hydrateLive(${JSON.stringify(process.env.MAKO_HISTORY_ID)});
     await hydrateLive(${JSON.stringify(process.env.MAKO_HISTORY_ID)});
     acpStore.set({activeKey:${JSON.stringify(process.env.MAKO_HISTORY_ID)}});
   })()`)
@@ -68,6 +76,23 @@ try {
   await until("document.body.textContent.includes('Fixture output 299')")
   await evaluate("Array.from(document.querySelectorAll('article')).find(e=>e.textContent.includes('Finding 299')).scrollIntoView({block:'start',behavior:'instant'})")
   await capture('complete-tool-output.png')
+  const refresh = await evaluate(`(async () => {
+    const before = {...window.historyReadCounts};
+    const view = historyState();
+    const start = performance.now();
+    for(let n=0;n<30;n++) await window.refreshHistory();
+    return { elapsedMs: performance.now()-start, sameView: view === historyState(),
+      details: window.historyReadCounts.details-before.details,
+      bytes: window.historyReadCounts.bytes-before.bytes,
+      reads: window.historyReadCounts.reads-before.reads };
+  })()`)
+  assert.equal(refresh.sameView, true)
+  assert.equal(refresh.details, 0)
+  assert.equal(refresh.reads, 30)
+  assert.ok(refresh.bytes < 16000)
+  await capture('cached-refresh.png')
+  await writeFile(join(evidence, 'refresh-ui.json'), JSON.stringify(refresh, null, 2) + '\n')
+  console.log('Thirty unchanged refreshes through the browser/peer/owner: ' + JSON.stringify(refresh))
   await evaluate(`(()=>{const article=Array.from(document.querySelectorAll('article')).find(e=>e.textContent.includes('Finding 299'));article.querySelector('[aria-label="Copy answer"]').click()})()`)
   await until("window.copiedHistory?.includes('Finding 299')")
   assert.equal(await evaluate("document.querySelectorAll('[data-sonner-toast]').length"), 0)

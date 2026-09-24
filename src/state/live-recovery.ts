@@ -10,7 +10,7 @@ import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
-import { prependLiveHistory, readLiveSnapshot, readLiveValue } from "@/state/live-history"
+import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import type { LiveHistoryPage } from "../../electron/contracts/live-history"
 
 const fetching = new Map<string, Promise<boolean>>()
@@ -50,6 +50,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   )
   const observedChange = existing?.kind === "live" && sameEpoch(existing, snapshot) &&
     pending.get(id)?.some(batch => sameEpoch(batch, snapshot) && batch.revision > (existing.revision ?? 0) && batch.revision <= snapshot.revision)
+  snapshot = retainLiveDetails(snapshot)
   replaceAcpConversation(id, {
     key: id,
     replyBindingId: replyBindingId === undefined ? existing?.replyBindingId : replyBindingId ?? undefined,
@@ -109,10 +110,11 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   const existing = fetching.get(id)
   if (existing) return existing
   let restored = false
-  const fetch = readLiveSnapshot(id)
+  const fetch = readLiveSnapshot(id, true)
     .then((snapshot) => {
       restored = true
-      if (snapshot) applyLiveSnapshot(snapshot)
+      if (snapshot && "kind" in snapshot) restoredLive(id)
+      else if (snapshot) applyLiveSnapshot(snapshot)
       else {
         pending.delete(id)
         restoredLive(id)
