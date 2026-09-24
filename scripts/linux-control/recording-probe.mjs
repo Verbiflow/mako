@@ -6,6 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { setTimeout as delay } from "node:timers/promises"
 const execute = promisify(execFile)
+const fps = Number(process.env.MAKO_RECORDING_FPS ?? 30)
+assert.ok(Number.isInteger(fps) && fps >= 1 && fps <= 60)
 const read = async (path) => JSON.parse(await readFile(path, "utf8"))
 for (let i = 0; i < 100; i++) {
   if (await read("/tmp/record-target.json").catch(() => null)) break
@@ -71,7 +73,7 @@ try {
   }
   assert.ok(window, "Fixture window is registered before recording")
   await cell(
-    `state.window=control.window({pid:${target.pid},window_id:${window.window_id}});state.recording=await state.window.record({directory:'/evidence',name:'Occluded Linux window',maxDurationMs:30000});return state.recording;`
+    `state.window=control.window({pid:${target.pid},window_id:${window.window_id}});state.recording=await state.window.record({directory:'/evidence',name:'Occluded Linux window',fps:${fps},maxDurationMs:30000});return state.recording;`
   )
   cover = spawn(
     "python3",
@@ -197,6 +199,8 @@ try {
       ])
     ).stdout
   )
+  const sourceProbe = JSON.parse((await execute("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", `${result.directory}/source.mp4`])).stdout)
+  const sourceFps = Number(sourceProbe.streams[0].nb_frames) / Number(sourceProbe.format.duration)
   await cell(
     "state.closedRecording=await state.window.record({directory:'/evidence',name:'Closed Linux window',maxDurationMs:10000});return state.closedRecording"
   )
@@ -217,7 +221,7 @@ try {
   await writeFile(
     "/evidence/result.json",
     JSON.stringify(
-      { passed: true, target, coverPid, foreground, probe, result, receipts },
+      { passed: true, requestedFps: fps, sourceFps, sourceProbe, target, coverPid, foreground, probe, result, receipts },
       null,
       2
     )
@@ -228,6 +232,8 @@ try {
       video: result.video,
       pixel: [r, g, b],
       frames: result.frames,
+      requestedFps: fps,
+      sourceFps,
       duration: probe.format.duration,
     })
   )

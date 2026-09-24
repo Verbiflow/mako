@@ -4,6 +4,7 @@ mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 export CUA_DRIVER_REQUIRE_FOCUSED_TARGET=1 CUA_DRIVER_PERMISSION_MODE=unrestricted
 export XDG_CURRENT_DESKTOP="$MAKO_COMPOSITOR"
+[ "$MAKO_COMPOSITOR" != kwin_wayland ] || export XDG_CURRENT_DESKTOP=KDE
 # Headless compositor backends may have no keyboard device. Nest in this job's
 # private X server so focus assertions use a real seat and native Wayland clients.
 export DISPLAY=:91 WLR_BACKENDS=x11
@@ -14,7 +15,8 @@ exec dbus-run-session -- sh -c '
   case "$MAKO_COMPOSITOR" in
     weston) weston --backend=x11-backend.so --use-pixman --width=1280 --height=900 --socket=wayland-test --idle-time=0 >/tmp/compositor.log 2>&1 & ;;
     labwc) labwc -s "true" >/tmp/compositor.log 2>&1 & ;;
-    *) echo "Choose weston or labwc" >&2; exit 2 ;;
+    kwin_wayland) kwin_wayland --x11-display "$DISPLAY" --width 1280 --height 900 --socket wayland-test --no-lockscreen --no-global-shortcuts --no-kactivities >/tmp/compositor.log 2>&1 & ;;
+    *) echo "Choose weston, labwc or kwin_wayland" >&2; exit 2 ;;
   esac
   ready=0
   for n in $(seq 1 100); do

@@ -41,6 +41,6 @@ def tick():
     state['frame']={'x':frame.x,'y':frame.y,'width':frame.width,'height':frame.height}
     state['text']=entry.get_text();state['frames']+=1;state['active']=window.is_active();state['width']=window.get_allocated_width();state['height']=window.get_allocated_height();area.queue_draw()
     Path(output+'.next').write_text(json.dumps(state));os.replace(output+'.next',output);return True
-GLib.timeout_add(33,tick)
+GLib.timeout_add(round(1000/int(os.environ.get("MAKO_RECORDING_FPS","30"))),tick)
 window.connect('destroy',Gtk.main_quit)
 Gtk.main()

@@ -137,3 +137,19 @@ the original startup cause remains unproven and its diagnostics are retained.
 For local container runs while editing files, mount a frozen copy of the fixture
 folder and package.json: this Mac's shared filesystem returned truncated live
 files during two runs; neither run reached driver acceptance.
+
+
+## KWin semantic background acceptance
+
+KWin 5.27.11 on ARM64 passed the same twenty-job semantic suite on September 24.
+Build `Dockerfile.kwin` after `Dockerfile.portable-wayland`, then use the portable
+runner with `MAKO_COMPOSITOR=kwin_wayland`. Run with `--network none`, a read-only
+checkout and the reviewed `/driver` mount. The nested compositor needs no resource
+capability: its test image removes the executable's file capability instead of
+privileging the container. This test dependency is not bundled into Mako.
+
+The test checks exact Unicode values, independent Save counts, an unchanged second
+app with duplicate names, no target/cover focus changes, and refusal of unverified
+raw input/capture. It does not establish KDE recording/gestures, Plasma 6, native
+x64 or physical keyboard behavior. Collect `/tmp/portable-wayland-evidence.json`
+and `/tmp/compositor.log`, then remove the named test container.

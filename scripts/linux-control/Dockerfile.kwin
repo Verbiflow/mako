@@ -1,0 +1,7 @@
+FROM mako-control-linux:portable-wayland
+USER root
+# Nested acceptance needs no resource capability; do not grant it to the container.
+RUN apt-get update && apt-get install -y --no-install-recommends kwin-wayland \
+    && setcap -r /usr/bin/kwin_wayland && rm -rf /var/lib/apt/lists/*
+USER ubuntu
+ENV QT_QUICK_BACKEND=software KWIN_COMPOSE=Q
