@@ -7,11 +7,12 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parentPort } from "node:worker_threads"
 import { z } from "zod"
-import type { JsonValue } from "../json.js"
+import type { JsonObject, JsonValue } from "../json.js"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { controlClient } from "../control/client.js"
 import { artifactFileName } from "./artifacts.js"
 import { computerHelpers, type ComputerHelpers } from "../computer/steps.js"
+import { ControlRepl } from "./repl.js"
 import { checkpointTask, recallTask } from "./task-state.js"
 
 const identifier = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/)
@@ -19,6 +20,8 @@ const incoming = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("run"),
     source: z.string(),
+    mode: z.enum(["script", "repl"]).default("script"),
+    documentation: z.string().optional(),
     runId: z.number(),
     namespace: identifier,
     actions: z.array(identifier).max(128),
@@ -38,8 +41,10 @@ const imageValue = z.object({
   mimeType: z.enum(["image/png", "image/jpeg"]),
 })
 
-const port = parentPort
-if (!port) throw new Error("Control programs run in a worker")
+const port = (() => {
+  if (!parentPort) throw new Error("Control programs run in a worker")
+  return parentPort
+})()
 
 const pending = new Map<
   number,
@@ -94,6 +99,7 @@ interface RunContext {
   runId: number
   active: boolean
   requests: Set<number>
+  mode: "script" | "repl"
 }
 const runs = new AsyncLocalStorage<RunContext>()
 const call = (
@@ -106,7 +112,7 @@ const call = (
     throw new Error(
       "This script has already finished; late control actions are refused"
     )
-  return new Promise<JsonValue>((resolve, reject) => {
+  const dispatch = () => new Promise<JsonValue>((resolve, reject) => {
     const id = ++sequence
     context.requests.add(id)
     pending.set(id, {
@@ -119,15 +125,57 @@ const call = (
         reject(error)
       },
     })
+    const command: JsonObject = { ...args, action }
+    if (action === "help" && context.mode === "repl") command.syntax = "repl"
     port.postMessage({
       kind: "call",
       runId: context.runId,
       id,
       namespace,
-      command: { ...args, action },
+      command,
     })
   })
+  if (context.mode === "repl" && documentation && action !== "help") {
+    return (async () => {
+      const target = z.object({ kind: z.enum(["page", "window"]) }).safeParse(args.target)
+      if (target.success || action === "page" || action === "native") {
+        await documentTopic("actions")
+        await documentTopic("observations")
+        await documentTopic(target.success ? target.data.kind === "page" ? "page" : "native" : action === "page" ? "page" : "native")
+      }
+      if (!context.active) throw new Error("This script has already finished")
+      return dispatch()
+    })()
+  }
+  return dispatch()
 }
+let repl: ControlRepl | undefined
+let documentation: string | undefined
+const documented = new Set<string>()
+let documenting: Promise<void> = Promise.resolve()
+function emit(kind: "output" | "image", value: JsonValue) {
+  const active = runs.getStore()
+  if (active?.active) port.postMessage({ kind, runId: active.runId, value: jsonSafe(value) })
+}
+function documentTopic(topic: string): Promise<void> {
+  const written = documenting.then(async () => {
+    if (documented.has(topic)) return
+    const detail = await call("control", "help", { topic })
+    if (!runs.getStore()?.active) throw new Error("This script has already finished")
+    emit("output", detail)
+    documented.add(topic)
+  })
+  documenting = written.catch(() => {})
+  return written
+}
+async function rewriteDocumentation() {
+  if (!documentation) return
+  const topics = [...documented]
+  documented.clear()
+  emit("output", documentation)
+  for (const topic of topics.length ? topics : ["discovery", "handles"]) await documentTopic(topic)
+}
+
 const client = controlClient((action, args) => call("control", action, args))
 
 port.on("message", (raw) => {
@@ -150,7 +198,7 @@ port.on("message", (raw) => {
   }
 
   const runId = message.runId
-  const context: RunContext = { runId, active: true, requests: new Set() }
+  const context: RunContext = { runId, active: true, requests: new Set(), mode: message.mode }
   const apiFor = (namespace: string, actions: readonly string[]) =>
     Object.fromEntries(
       actions.map((action) => [
@@ -159,17 +207,16 @@ port.on("message", (raw) => {
       ])
     )
   const api = apiFor(message.namespace, message.actions)
-  const controlApi = message.namespace === "control" ? client : api
+  const controlApi = message.namespace === "control" ? Object.freeze({ ...client, rewriteDocumentation }) : api
   const extras = Object.entries(message.extra).filter(
     ([name]) => name !== message.namespace
   )
-  const output = (kind: "output" | "image", value: JsonValue) => {
-    if (context.active)
-      port.postMessage({ kind, runId, value: jsonSafe(value) })
-  }
+  const output = emit
   const artifacts = {
-    save: (name: string, value: JsonValue) =>
-      saveArtifact(message.artifacts, z.string().min(1).parse(name), value),
+    save: (name: string, value: JsonValue) => {
+      if (!runs.getStore()?.active) throw new Error("This script has already finished")
+      return saveArtifact(message.artifacts, z.string().min(1).parse(name), value)
+    },
   }
 
   // Step helpers are the namespace's, built over the same actions the
@@ -180,7 +227,27 @@ port.on("message", (raw) => {
   // Trusted local JavaScript. Worker isolation bounds scheduling, not OS authority.
   void runs.run(context, () =>
     Promise.resolve()
-      .then(() => {
+      .then(async () => {
+        if (message.mode === "repl") {
+          if (message.namespace !== "control") throw new ControlFault("unsupported-operation", "Persistent agent JavaScript requires the unified control SDK.", "not-dispatched")
+          if (!repl) {
+            documentation = message.documentation
+            await rewriteDocumentation()
+          }
+          repl ??= new ControlRepl({
+            control: Object.freeze({ ...client, rewriteDocumentation }),
+            state,
+            console: { log: (...values: JsonValue[]) => output("output", values.length === 1 ? values[0] : values) },
+            emitImage: (value: JsonValue) => output("image", value),
+            artifacts,
+            setTimeout,
+            clearTimeout,
+            Buffer,
+            checkpoint: (value: Record<string, JsonValue>) => checkpointTask(state, z.record(z.string(), z.json()).parse(value)),
+            recall: () => recallTask(state),
+          })
+          return repl.evaluate(message.source)
+        }
         const run = new Function(
           message.namespace,
           ...extras.map(([name]) => name),

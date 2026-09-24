@@ -1,5 +1,7 @@
 export {
   ControlProgramRuntime,
+  ControlProgramError,
+  type ControlProgramExecution,
   ControlProgramRequestSchema,
   ControlProgramInputSchema,
   PROGRAM_TIME_LIMIT_MS,
@@ -11,6 +13,7 @@ export {
 } from "./runtime.js"
 export {
   INLINE_IMAGE_COUNT,
+  INLINE_IMAGE_BYTES,
   INLINE_TEXT_BUDGET,
   INLINE_TOTAL_BUDGET,
   artifactFileName,

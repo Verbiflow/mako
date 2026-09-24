@@ -750,6 +750,8 @@ export function controlClient(call: ControlCall) {
     return new TabHandle(call, { kind: "page", ...target })
   }
   return Object.freeze({
+    status: () => call("status", {}),
+    help: (options: { topic?: "discovery" | "connection" | "handles" | "actions" | "observations" | "assertions" | "recording" | "page" | "native" | "output" | "examples"; tool?: string; domain?: string; method?: string } = {}) => call("help", { ...options }),
     app: (target: { pid: number }) => new AppHandle(call, target.pid),
     window: (target: { pid: number; window_id: number }) =>
       new WindowHandle(

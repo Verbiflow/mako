@@ -9,6 +9,7 @@ import { z } from "zod"
 import type { JsonObject, JsonValue } from "../json.js"
 import {
   INLINE_IMAGE_COUNT,
+  INLINE_IMAGE_BYTES,
   INLINE_TEXT_BUDGET,
   INLINE_TOTAL_BUDGET,
   spillImage,
@@ -71,6 +72,20 @@ export type ControlProgramOutput =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string }
 
+export interface ControlProgramExecution {
+  yield?: boolean
+  mode?: "script" | "repl"
+  timeoutMs?: number
+}
+
+/** Keep already-emitted evidence when a later statement fails. */
+export class ControlProgramError extends Error {
+  constructor(readonly output: ControlProgramOutput[], readonly cause: Error) {
+    super(cause.message)
+    this.name = "ControlProgramError"
+  }
+}
+
 export interface ControlProgramFault {
   code: "cancelled" | "timed-out"
   message: string
@@ -88,6 +103,8 @@ export interface ControlProgramOptions {
   extra?: Readonly<Record<string, readonly string[]>>
   /** Where results past the inline budget are written whole. */
   artifacts: string
+  /** Model instructions emitted only by the REPL, refreshed after worker reset. */
+  replDocumentation?: string
   call(
     command: JsonObject,
     signal: AbortSignal,
@@ -125,7 +142,9 @@ export class ControlProgramRuntime {
     this.options = options
   }
 
-  run(source: string, signal: AbortSignal, options: { yield?: boolean } = {}): Promise<ControlProgramOutput[]> {
+  run(source: string, signal: AbortSignal, options: ControlProgramExecution = {}): Promise<ControlProgramOutput[]> {
+    if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > PROGRAM_TIME_LIMIT_MS))
+      return Promise.reject(new ControlFault("invalid-request", `Program timeout must be an integer from 1 to ${PROGRAM_TIME_LIMIT_MS} milliseconds.`, "not-dispatched"))
     const retained = this.cells.keys().next().value
     if (retained !== undefined)
       return Promise.reject(
@@ -139,7 +158,7 @@ export class ControlProgramRuntime {
     const cellId = ++this.sequence
     const result = this.tail.then(() => {
       active.throwIfAborted()
-      return this.execute(source, active, cellId)
+      return this.execute(source, active, cellId, options)
     })
     this.tail = result.then(
       () => undefined,
@@ -247,7 +266,8 @@ export class ControlProgramRuntime {
   private execute(
     source: string,
     signal: AbortSignal,
-    runId: number
+    runId: number,
+    execution: ControlProgramExecution
   ): Promise<ControlProgramOutput[]> {
     const compiled = new URL("./worker.js", import.meta.url)
     this.worker ??= new Worker(
@@ -265,6 +285,7 @@ export class ControlProgramRuntime {
       > = []
       let inlineText = 0
       let inlineImages = 0
+      let inlineImageBytes = 0
       let finished = false
       /**
        * A program's own rejection (`retainWorker`) leaves the worker and its
@@ -286,7 +307,9 @@ export class ControlProgramRuntime {
             this.worker = undefined
             void worker.terminate()
           }
-          reject(error)
+          if (execution.mode === "repl")
+            void Promise.all(output).then(blocks => reject(new ControlProgramError(blocks, error)), reject)
+          else reject(error)
         } else Promise.all(output).then(resolve, reject)
       }
       const receipt = (pending: Promise<{ artifact: true }>) =>
@@ -314,7 +337,7 @@ export class ControlProgramRuntime {
           output.push(block)
           return
         }
-        if (inlineImages >= INLINE_IMAGE_COUNT) {
+        if (inlineImages >= INLINE_IMAGE_COUNT || inlineImageBytes + block.data.length > INLINE_IMAGE_BYTES) {
           output.push(
             receipt(
               spillImage(
@@ -328,6 +351,7 @@ export class ControlProgramRuntime {
           return
         }
         inlineImages += 1
+        inlineImageBytes += block.data.length
         output.push(block)
       }
       const failed = (error: Error) => finish(error)
@@ -412,11 +436,11 @@ export class ControlProgramRuntime {
           finish(
             this.options.fault({
               code: "timed-out",
-              message: `Script exceeded ${PROGRAM_TIME_LIMIT_MS / 1000} seconds. Observe before retrying; script state was reset.`,
+              message: `Script exceeded ${(execution.timeoutMs ?? PROGRAM_TIME_LIMIT_MS) / 1000} seconds. Observe before retrying; script state was reset.`,
               outcome: "unknown",
             })
           ),
-        PROGRAM_TIME_LIMIT_MS
+        execution.timeoutMs ?? PROGRAM_TIME_LIMIT_MS
       )
       signal.addEventListener("abort", abort, { once: true })
       worker.on("message", message)
@@ -426,12 +450,28 @@ export class ControlProgramRuntime {
         kind: "run",
         runId,
         source,
+        mode: execution.mode ?? "script",
+        documentation: this.options.replDocumentation,
         namespace,
         actions: this.options.actions,
         extra: this.options.extra ?? {},
         artifacts,
       })
     })
+  }
+
+  /** Serialized with both interfaces. Target ownership stays in the session. */
+  reset(signal: AbortSignal): Promise<void> {
+    if (this.cells.size)
+      return Promise.reject(new ControlFault("cell-pending", "Collect the pending CLI program before resetting bindings.", "not-dispatched"))
+    const result = this.tail.then(async () => {
+      signal.throwIfAborted()
+      this.stopping.signal.throwIfAborted()
+      await this.worker?.terminate()
+      this.worker = undefined
+    })
+    this.tail = result.catch(() => {})
+    return result
   }
 
   async close(): Promise<void> {

@@ -30,6 +30,8 @@ export const INLINE_TEXT_BUDGET = 40_000
 export const INLINE_TOTAL_BUDGET = 60_000
 /** Images past this count in one run are written to files and described. */
 export const INLINE_IMAGE_COUNT = 4
+/** Base64 bytes, below the session reply limit even with text and receipts. */
+export const INLINE_IMAGE_BYTES = 24 * 1024 * 1024
 const OUTLINE_KEYS = 40
 const OUTLINE_SAMPLE = 3
 const OUTLINE_HEAD = 240
@@ -186,6 +188,6 @@ export async function spillImage(
     ...written,
     bytes: body.byteLength,
     mimeType,
-    note: `This run already returned ${INLINE_IMAGE_COUNT} images inline, so this one was written to the file above. Emit fewer images per run, or read this file with your own tools.`,
+    note: "The complete image was saved to the file above rather than inlined. Read it with your file/image tools; its pixels were not resized or discarded.",
   }
 }
