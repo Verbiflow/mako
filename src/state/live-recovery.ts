@@ -365,7 +365,6 @@ export function hydrateLiveSummaries(
   const requested = globalThis.sessionStorage?.getItem(
     "mako:reload-conversation"
   )
-  globalThis.sessionStorage?.removeItem("mako:reload-conversation")
   if (requested && requested !== "new" && !summaries.some((summary) => summary.session.id === requested) && !acpStore.get().activeKey) {
     // The selected conversation may belong to another host and therefore be
     // absent from this host's boot list. Its persisted route can restore it.

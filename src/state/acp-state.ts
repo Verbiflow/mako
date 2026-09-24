@@ -84,6 +84,20 @@ export const acpStore = createStore<AcpState>({
   conversations: {},
 })
 
+// Selection belongs to this window, including raw browser/dev reloads that
+// bypass the Reload UI command. Persist only changes, never token updates.
+let rememberedSelection: string | null = null
+acpStore.subscribe(() => {
+  const selected = acpStore.get().activeKey
+  if (selected === rememberedSelection) return
+  rememberedSelection = selected
+  try {
+    globalThis.sessionStorage?.setItem("mako:reload-conversation", selected ?? "new")
+  } catch {
+    // Storage denial must not prevent switching conversations.
+  }
+})
+
 export const useAcp = createHook(acpStore)
 
 export function activeAcp(state: AcpState): AcpConversation | null {
