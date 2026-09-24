@@ -8,6 +8,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
@@ -55,6 +56,30 @@ async function fixture(name: string) {
   return { staging, target, ready: async () => {} }
 }
 try {
+  const helperSuffix = "/Contents/Frameworks/Mako Helper.app/Contents/MacOS/Mako Helper"
+  const blockers = await runningBundleProcesses("/Applications/Mako.app", async (command, args) => {
+    if (command === "ps") return { stdout: args.includes("comm=")
+      ? "61 mako-browser-host\n62 mako-browser-host\n63 mako-browser-host\n64 other-title\n"
+      : "61 Mako Helper\n62 Mako Helper\n63 Mako Helper\n64 Mako Helper\n", stderr: "" }
+    if (args.includes("63")) throw new Error("Process inspection unavailable")
+    return { stdout: `n${args.includes("61") ? "/retained/Mako.app" : "/Applications/Mako.app"}${helperSuffix}\n`, stderr: "" }
+  })
+  assert.deepEqual(blockers, [62, 63, 64], "Only a browser bridge verified outside the installed bundle is excluded; installed and unverified helpers still block")
+
+  const reporterBundle = join(root, "reporter/Mako.app")
+  const framework = join(reporterBundle, "Contents/Frameworks/Electron Framework.framework")
+  await mkdir(join(framework, "Versions/A/Helpers"), { recursive: true })
+  await writeFile(join(framework, "Versions/A/Helpers/chrome_crashpad_handler"), "fixture")
+  await symlink("Versions/A/Helpers", join(framework, "Helpers"))
+  const reporter = join(framework, "Helpers/chrome_crashpad_handler")
+  const canonicalReporter = await realpath(reporter)
+  const canonicalReaped: number[] = []
+  await stopOrphanedBundleCrashReporters(reporterBundle, async command => ({
+    stdout: command === "lsof" ? `n${canonicalReporter}\n`
+      : `71 1 501 ${reporter}\n`, stderr: "",
+  }), pid => canonicalReaped.push(pid), 501)
+  assert.deepEqual(canonicalReaped, [71], "The exact orphan is recognized when lsof resolves the framework symlink")
+
   const stopped: number[] = []
   await stopBundleBrowserHosts("/Applications/Mako.app", async (command, args) => ({
     stdout: command === "lsof"

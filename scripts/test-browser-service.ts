@@ -1617,6 +1617,12 @@ try {
   for (const method of ["Browser.close", "Browser.setDownloadBehavior", "Storage.setCookies", "Network.clearBrowserCookies", "Network.setCookies", "Target.sendMessageToTarget"])
     await assert.rejects(profileRun("a", { action: "cdp", target: a, method, params: {} }), /outside the tab lease|target lifecycle/)
   assert.ok(!profileFixture.calls.some(call => call.method === "Browser.close"))
+  await assert.rejects(
+    profileRun("a", { action: "cdp", target: a, method: "Emulation.setFocusEmulationEnabled", params: { enabled: false } }),
+    /belongs to managed input and live capture/
+  )
+  assert.equal(profileFixture.calls.filter(call => call.method === "Emulation.setFocusEmulationEnabled").length, 0,
+    "Raw commands cannot disable focus owned by another capture/input consumer")
   await profileService.releaseOwner("b")
   const peer = BrowserTargetSchema.parse(await profileRun("a", { action: "open", browser: "fixture" }))
   const abort = new AbortController()

@@ -100,6 +100,9 @@ try {
   execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   const mediaRoot = join(project, "vendor/control-media/darwin-arm64")
   const mediaProvenance = JSON.parse(await readFile(join(mediaRoot, "provenance.json"), "utf8"))
+  const mediaRecipe = JSON.parse(await readFile(join(project, "vendor/control-media/sources.json"), "utf8"))
+  assert.equal(mediaProvenance.recipe, mediaRecipe.recipe, "Recording encoder recipe changed; rebuild with npm run prepare:control-media")
+  assert.deepEqual(mediaProvenance.sources, mediaRecipe.sources, "Recording encoder sources changed; rebuild with npm run prepare:control-media")
   for (const name of ["ffmpeg", "ffprobe"]) {
     assert.equal(await digest(join(mediaRoot, name)), mediaProvenance.binaries[name], `Unreviewed recording binary: ${name}`)
   }

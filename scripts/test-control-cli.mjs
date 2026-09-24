@@ -106,6 +106,8 @@ try {
   const imageFile = join(directory, "capture with spaces.png")
   const image = await command([
     "shot",
+    "--format",
+    "png",
     "--target-file",
     targetFile,
     "--output",
@@ -115,6 +117,24 @@ try {
   assert.ok(image.width > 0 && image.height > 0)
   assert.equal("data" in image, false)
   assert.equal(image.bytes, (await stat(imageFile)).size)
+  assert.equal(
+    fixture.calls.findLast((call) => call.method === "Page.captureScreenshot")
+      .params.format,
+    "png"
+  )
+  const invalidFormat = await command(
+    [
+      "shot",
+      "--target-file",
+      targetFile,
+      "--format",
+      "gif",
+      "--output",
+      join(directory, "invalid.gif"),
+    ],
+    { code: 2 }
+  )
+  assert.equal(invalidFormat.outcome, "not-dispatched")
   const captures = () =>
     fixture.calls.filter((call) => call.method === "Page.captureScreenshot")
       .length

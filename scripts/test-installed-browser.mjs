@@ -3,20 +3,25 @@ import { createServer } from "node:http"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
-import { extensionBrowsers } from "../packages/control-runtime/dist/browser-extension-registration.js"
-import { startControlService } from "../dist-electron/control-service.js"
-import { mediaExecutable } from "../packages/control-runtime/dist/control-media.js"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
 const browser = process.argv[2]
 assert.ok(browser, "Pass the exact installed extension browser ID")
+const app = process.argv[3] ? resolve(process.argv[3]) : undefined
+if (app) assert.equal(process.execPath, join(app, "Contents/MacOS/Mako"), "Run packaged acceptance with that candidate's Electron-as-Node")
+const packageRoot = app ? join(app, "Contents/Resources/app.asar") : resolve(".")
+const runtimeRoot = app ? join(packageRoot, "node_modules/@mako/control-runtime/dist") : join(packageRoot, "packages/control-runtime/dist")
+const { BrowserService } = await import(pathToFileURL(join(runtimeRoot, "browser-service.js")).href)
+const { extensionBrowsers } = await import(pathToFileURL(join(runtimeRoot, "browser-extension-registration.js")).href)
+const { mediaExecutable } = await import(pathToFileURL(join(runtimeRoot, "control-media.js")).href)
+const { startControlService } = await import(pathToFileURL(join(packageRoot, "dist-electron/control-service.js")).href)
 const root = await mkdtemp(join(tmpdir(), "mako-installed-browser-"))
-const evidence = { browser, root, jobs: [], status: "running" }
+const evidence = { browser, root, packageRoot, jobs: [], status: "running" }
 const saves = []
 const page = createServer(async (request, response) => {
   if (request.url === "/save") {
@@ -55,7 +60,7 @@ async function cell(source) {
 }
 try {
   await service.connect(browser)
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve("packages/control-runtime/dist/computer-tools-main.js")], env: { ...process.env, MAKO_CONTROL_URL: credentials.url, MAKO_CONTROL_TOKEN: credentials.token, MAKO_TASK_ID: "installed-browser-acceptance" }, stderr: "pipe" }))
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(runtimeRoot, "computer-tools-main.js")], env: { ...process.env, MAKO_CONTROL_URL: credentials.url, MAKO_CONTROL_TOKEN: credentials.token, MAKO_TASK_ID: "installed-browser-acceptance" }, stderr: "pipe" }))
   evidence.frontmostBefore = await frontmostPid()
   samples = sampleFrontmost()
   await cell(`state.tab=await control.openTab({browser:${JSON.stringify(browser)},url:${JSON.stringify(`http://127.0.0.1:${page.address().port}`)},background:true});return true`)

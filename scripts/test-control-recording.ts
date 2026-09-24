@@ -69,7 +69,7 @@ const timeline = JSON.parse(await readFile(result.timeline!, "utf8"))
 assert.ok(
   Math.abs(
     Number(probe.format.duration) -
-      (result.durationMs - timeline.frames[0].at) / 1000
+      result.durationMs / 1000
   ) < 0.05,
   "video duration preserves capture intervals within frame rounding"
 )

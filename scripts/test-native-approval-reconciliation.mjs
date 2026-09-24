@@ -56,6 +56,7 @@ async function run() {
     await import("../dist-electron/live-conversations.js")
   const { defaultCatalog } = await import("@mako/sessions")
   const { nativeSessionPath } = await import("../dist-electron/native-source.js")
+  const { nativeCheckpoint, resumeVerdict } = await import("../dist-electron/native-continuation.js")
   const catalog = defaultCatalog()
   const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
   const { bindCodexApp, stopCodexApps } =
@@ -113,7 +114,9 @@ async function run() {
             events.push({ ...event, withheld: dropDecisions })
             if (dropDecisions) return
           }
+          if (event.type === "live-approval-decision") events.push({ type: "before-native-decision", permissions: owner.snapshot(id)?.permissions.map(p => ({ id: p.id, origin: p.origin })) })
           options.emit?.(event)
+          if (event.type === "live-approval-decision") events.push({ type: "after-native-decision", resolutions: owner.snapshot(id)?.control?.approvalObservations, permissions: owner.snapshot(id)?.permissions.map(p => p.id) })
         },
       }),
   }
@@ -122,9 +125,9 @@ async function run() {
     appPath: root,
     driver: (name) => (name === provider ? observedDriver : undefined),
     history: async () => null,
-    checkpoint: driver.checkpoint ? path => driver.checkpoint(path) : undefined,
+    checkpoint: path => driver.checkpoint ? driver.checkpoint(path) : nativeCheckpoint(path),
     nativePath: session => nativeSessionPath(session, catalog.list()),
-    resumeVerdict: driver.resumeVerdict ? binding => driver.resumeVerdict(binding) : undefined,
+    resumeVerdict: binding => driver.resumeVerdict ? driver.resumeVerdict(binding) : resumeVerdict(binding, providerHost.processProbes.get(binding.provider)),
     emit() {},
     mcpSnapshot: async (path) => ({
       cwd: path,
@@ -134,6 +137,23 @@ async function run() {
     }),
   }
   let owner = new LiveConversations(dependencies)
+  const externalDecision = Boolean(process.env.MAKO_NATIVE_APPROVAL_EXTERNAL)
+  const externalIdentities = new Map()
+  const sendApproval = async (requestId, response) => {
+    if (!externalDecision) return owner.permission(id, requestId, response)
+    const pending = owner.snapshot(id)?.permissions.find(item => item.id === requestId)
+    if (!pending?.origin?.native) throw Error('External decision probe requires exact native request identity')
+    externalIdentities.set(requestId, pending.origin.native)
+    // A separate controller answers the real native callback. Mako's owner has
+    // no local answer intent; only the native observer can settle its question.
+    await driver.permission(pending.origin.bindingId, pending.origin.nativeRequestId, response, {
+      assertCurrent() {
+        if (!owner.snapshot(id)?.permissions.some(item => item.id === requestId)) throw Error('External probe request is no longer current')
+      },
+      report() {},
+    })
+  }
+
   let page
   let renderedRevision
   const evidence = join(root, "visuals")
@@ -159,7 +179,7 @@ async function run() {
   if (process.env.MAKO_NATIVE_APPROVAL_URL) {
     const preload = join(root,'native-approval.cjs')
     await writeFile(preload, `const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('nativeApproval',{send:(requestId,response)=>ipcRenderer.invoke('native-approval',requestId,response),snapshot:()=>ipcRenderer.invoke('native-approval-snapshot')});`)
-    ipcMain.handle('native-approval',(_event,requestId,response)=>owner.permission(id,requestId,response))
+    ipcMain.handle('native-approval',(_event,requestId,response)=>sendApproval(requestId,response))
     ipcMain.handle('native-approval-snapshot',()=>owner.snapshot(id))
     const window = new BrowserWindow({show:true,width:1120,height:840,webPreferences:{preload,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}})
     page = window.webContents
@@ -255,15 +275,21 @@ async function run() {
               const label=JSON.stringify(choice.name)
               const point=await page.executeJavaScript(`(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${label} && b.getClientRects().length);if(!button)throw Error('Native approval button missing');const r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
               for(const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
-            } else await owner.permission(id, permission.id, {
+            } else await sendApproval(permission.id, {
               kind: "choice", optionId: choice?.optionId ?? null,
             }).catch(error => { if (!process.env.MAKO_NATIVE_APPROVAL_DROP_SUBMISSION) throw error })
           }
         }
       )
       if (driver.approvalEvidence.kind === "native-decisions" && record.approvals && !dropDecisions) {
-        done = await wait(s => [...seen].every(id => s?.control?.approvalResponses?.some(receipt => receipt.id === id && receipt.nativeDecision?.answerDigest === receipt.digest)), undefined, 5000)
-        record.nativeDecisionsConfirmed = true
+        done = await wait(s => [...seen].every(id => externalDecision
+          ? s?.control?.approvalObservations?.some(item => JSON.stringify(item.decision?.identity) === JSON.stringify(externalIdentities.get(id)))
+          : s?.control?.approvalResponses?.some(receipt => receipt.id === id && receipt.nativeDecision?.answerDigest === receipt.digest)), undefined, 5000)
+        record.nativeDecisionsConfirmed = !externalDecision
+        if (externalDecision) {
+          record.externalResolutions = done.control.approvalObservations
+          if (done.permissions.length || done.control.approvalResponses?.length) throw Error('External native decision left a question or fabricated a local answer')
+        }
       }
       const content = await readFile(path, "utf8").catch(() => null)
       record.fileMatches = content === nonce
@@ -287,12 +313,27 @@ async function run() {
       }
       console.log(JSON.stringify({ provider, ...record }))
     }
-    if (dropDecisions) {
+    if (process.env.MAKO_NATIVE_APPROVAL_CANCEL) {
+      const cancelNonce = randomUUID(), cancelPath = join(cwd, 'cancelled.txt'), request = randomUUID()
+      owner.submit(id, request, `In this disposable fixture, request approval to execute exactly: printf '%s' '${cancelNonce}' >> '${cancelPath}'. Do not run any other command or write any other file.`)
+      await wait(s => s?.permissions.some(p => p.title.includes(cancelNonce) || p.title.includes(cancelPath)))
+      await capture('cancel-pending')
+      const sentBeforeCancel = answerDispatches
+      await owner.cancel(id)
+      const cancelled = await wait(s => !s?.permissions.length && s?.requests.some(r => r.id === request && ['canceled', 'interrupted'].includes(r.status)))
+      if (await readFile(cancelPath, 'utf8').catch(() => null) !== null) throw Error('Cancelled pending operation executed')
+      if (answerDispatches !== sentBeforeCancel) throw Error('Cancellation dispatched an approval answer')
+      result.cancellation = { requestStatus: cancelled.requests.find(r => r.id === request).status, questionRemoved: true, fileAbsent: true, answerDispatched: false }
+      await render(cancelled)
+      await capture('cancel-completed')
+    }
+    if (dropDecisions || process.env.MAKO_NATIVE_APPROVAL_REOPEN) {
+      const requireNativeDecisions = dropDecisions
       await catalog.scan()
       owner.discoverNativePaths()
       const before = owner.snapshot(id)
       const sentAnswers = answerDispatches
-      if (!before.control.approvalResponses.every(r => r.origin.native && !r.nativeDecision)) throw Error('Lost-event test did not retain unresolved native identities')
+      if (requireNativeDecisions && !before.control.approvalResponses.every(r => r.origin.native && !r.nativeDecision)) throw Error('Lost-event test did not retain unresolved native identities')
       if (!owner.hibernateIfIdle(id)) throw Error('Disposable session could not hibernate')
       await wait(s => s?.session.connection === 'hibernated', undefined, 20_000)
       owner.stop()
@@ -300,16 +341,26 @@ async function run() {
       owner = new LiveConversations(dependencies)
       const followup = randomUUID()
       owner.submit(id, followup, 'Do not run any tools. Reply with only: reconnected')
-      const resumed = await wait(s => s?.requests.some(r => r.id === followup && r.status === 'completed') && s.control?.approvalResponses?.every(r => r.nativeDecision?.answerDigest === r.digest))
+      const resumed = await wait(s => s?.requests.some(r => r.id === followup && r.status === 'completed') && (!requireNativeDecisions || s.control?.approvalResponses?.every(r => r.nativeDecision?.answerDigest === r.digest)))
       if (resumed.session.nativeId !== result.nativeId) throw Error('Reconnect changed native session')
-      const allowed = await readFile(join(cwd,'allow.txt'),'utf8')
-      if (allowed !== result.cases.find(item => item.decision === 'allow').nonce) throw Error('Approval operation executed more than once')
-      if (await readFile(join(cwd,'deny.txt'),'utf8').catch(()=>null) !== null) throw Error('Denied operation executed after reconnect')
+      const followupStart = resumed.blocks.findIndex(block => block.type === 'user' && block.requestId === followup)
+      if (followupStart < 0 || !resumed.blocks.slice(followupStart + 1).filter(block => block.type === 'text').map(block => block.text).join('').includes('reconnected')) throw Error('Reconnect did not produce the requested visible answer')
+      for (const item of result.cases) {
+        const content = await readFile(join(cwd, `${item.decision}.txt`), 'utf8').catch(() => null)
+        if (content !== (item.fileMatches ? item.nonce : null)) throw Error(`Reconnect changed ${item.decision} execution count`)
+      }
       if (answerDispatches !== sentAnswers) throw Error('Reconnect replayed an approval answer')
-      result.reconnect = { sameSession: true, receipts: resumed.control.approvalResponses, answersReplayed: false, answerDispatches, allowedOperationCount: 1, deniedOperationCount: 0 }
+      if (JSON.stringify(resumed.control?.approvalObservations) !== JSON.stringify(before.control?.approvalObservations)) throw Error('Reconnect lost external native resolutions')
+      const priorReceipts = before.control?.approvalResponses ?? []
+      for (const prior of priorReceipts) {
+        const retained = resumed.control?.approvalResponses?.find(receipt => receipt.id === prior.id)
+        if (!retained || retained.digest !== prior.digest) throw Error('Reconnect lost an approval receipt')
+        if (!requireNativeDecisions && !prior.nativeDecision && retained.nativeDecision) throw Error('Reconnect fabricated native decision evidence')
+      }
+      result.reconnect = { sameSession: true, receipts: resumed.control?.approvalResponses, answersReplayed: false, answerDispatches, executionCountsUnchanged: true, exactNativeDecisions: requireNativeDecisions }
       await render(resumed)
       await capture('reconnected-native-evidence')
-      if (page) {
+      if (page && requireNativeDecisions) {
         const point = await page.executeJavaScript("(()=>{const r=document.querySelector('button[aria-label=\"Conversation actions\"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
         for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
         if (!await page.executeJavaScript("document.body.textContent.includes('Agent recorded your answer')")) throw Error('Recovered native decision did not reach approval history UI')
@@ -331,6 +382,8 @@ async function run() {
             error: r.error,
           })),
           receipts: final.control?.approvalResponses,
+          resolutions: final.control?.approvalObservations,
+          permissions: final.permissions,
         }
       : undefined
     result.nativeId ??= final?.session.nativeId

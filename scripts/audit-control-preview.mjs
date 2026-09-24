@@ -23,6 +23,13 @@ if (process.versions.electron) {
 } else {
   const { build, preview } = await import("vite")
   const baseline = process.argv.includes("--baseline")
+  const seconds = Number(
+    process.argv.find((value) => value.startsWith("--seconds="))?.slice(10) ?? 4
+  )
+  assert.ok(
+    Number.isInteger(seconds) && seconds >= 1 && seconds <= 120,
+    "--seconds must be an integer from 1 to 120"
+  )
   const root = await mkdtemp(join(tmpdir(), "mako-preview-latency-"))
   const config = {
     plugins: baseline
@@ -74,6 +81,7 @@ if (process.versions.electron) {
         .find((value) => value.startsWith("--extension="))
         ?.slice("--extension=".length) ?? "",
     MAKO_PREVIEW_NODE: process.execPath,
+    MAKO_PREVIEW_SECONDS: String(seconds),
     MAKO_PREVIEW_WINDOW: process.argv.includes("--background-window")
       ? "1"
       : "0",
@@ -118,7 +126,8 @@ async function audit() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   if (process.platform === "darwin") app.setActivationPolicy("prohibited")
-  const watchdog = setTimeout(() => app.exit(2), 90_000)
+  const durationMs = Number(process.env.MAKO_PREVIEW_SECONDS ?? 4) * 1000
+  const watchdog = setTimeout(() => app.exit(2), durationMs + 90_000)
   const viewer = new BrowserWindow({
     show: false,
     width: 640,
@@ -417,13 +426,12 @@ async function audit() {
         },
       }
     }
-    if (extension)
-      console.error(
-        "Fixture document:",
-        await source.webContents.executeJavaScript(
-          "({ready:document.readyState,visibility:document.visibilityState,width:innerWidth,height:innerHeight,canvas:!!document.querySelector('canvas')})"
+    const initialPage = extension
+      ? await source.webContents.executeJavaScript(
+          "({ready:document.readyState,visibility:document.visibilityState,focus:document.hasFocus(),width:innerWidth,height:innerHeight,canvas:!!document.querySelector('canvas')})"
         )
-      )
+      : undefined
+    if (initialPage) console.error("Fixture document:", initialPage)
     if (extension)
       await writeFile(
         join(root, "extension-source.png"),
@@ -477,7 +485,30 @@ async function audit() {
         .map((value) => [value.pid, value.cpu.cumulativeCPUUsage ?? 0])
     )
     const started = performance.now()
-    await delay(4000)
+    const memory = []
+    const sampleMemory = async () => {
+      const host = shared
+        ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
+        : undefined
+      memory.push({
+        atMs: performance.now() - started,
+        electronWorkingSetBytes: app
+          .getAppMetrics()
+          .reduce(
+            (sum, metric) => sum + metric.memory.workingSetSize * 1024,
+            0
+          ),
+        hostRssBytes: host?.memory?.rss,
+        hostHeapBytes: host?.memory?.heapUsed,
+      })
+    }
+    await sampleMemory()
+    while (performance.now() - started < durationMs) {
+      await delay(
+        Math.min(1000, Math.max(0, durationMs - (performance.now() - started)))
+      )
+      await sampleMemory()
+    }
     const elapsed = performance.now() - started
     const animated = samples.splice(0)
     const cpuSeconds = app
@@ -516,6 +547,7 @@ async function audit() {
       .map((frame, index) => frame.at - animated[index].at)
     const animation = {
       elapsedMs: elapsed,
+      memory,
       distinctFrames: animated.length,
       fps: (animated.length * 1000) / elapsed,
       gapsMs: stats(gaps),
@@ -541,7 +573,6 @@ async function audit() {
       )
       return
     }
-    assert.ok(animation.fps > 45, `Composited unique fps: ${animation.fps}`)
     assert.equal(
       invalid,
       0,
@@ -675,6 +706,48 @@ async function audit() {
     }
     if (!extension)
       await until(() => captureStops === 1, "last consumer stops capture")
+    let restoredPage
+    if (
+      extension &&
+      process.env.MAKO_PREVIEW_LEASE_FOCUS !== "1" &&
+      process.env.MAKO_PREVIEW_WINDOW !== "1"
+    ) {
+      try {
+        await until(async () => {
+          restoredPage = await source.webContents.executeJavaScript(
+            "({visibility:document.visibilityState,focus:document.hasFocus()})"
+          )
+          return restoredPage.visibility === initialPage.visibility
+        }, "last consumer restores hidden page visibility")
+      } finally {
+        const ownership = await invokeRuntime(
+          socket,
+          client,
+          "mako:audit-capture",
+          []
+        )
+        assert.ok(
+          ownership.bindings.every(
+            (binding) =>
+              !binding.focusEnabled &&
+              binding.focusUsers === 0 &&
+              !binding.captureRunning &&
+              binding.captureConsumers === 0
+          ),
+          "All capture and emulation owners must be released"
+        )
+        assert.equal(
+          ownership.focusEvents.at(-1)?.enabled,
+          false,
+          "Browser acknowledged emulation reset"
+        )
+        console.error("Capture restoration:", { restoredPage, ownership })
+        await writeFile(
+          join(root, "restoration.json"),
+          JSON.stringify({ initialPage, restoredPage, ownership }, null, 2)
+        )
+      }
+    }
     if (extension) await run({ action: "close", target })
     const report = {
       boundary: `production ${extension ? "installed extension" : "desk"} capture → ControlPreviews → ${shared ? "separate Node host / private Unix socket → " : ""}Electron IPC/preload → production React overlay → offscreen compositor pixels`,
@@ -682,6 +755,8 @@ async function audit() {
         "input dispatch and compositor delivery use the same main-process performance.now; excludes physical display scanout",
       dimensions: { sourceCss: [1920, 1080], preview: rectangle },
       captureFormat: process.env.MAKO_PREVIEW_CAPTURE,
+      initialPage,
+      restoredPage,
       disposition: process.env.MAKO_PREVIEW_WINDOW === "1" ? "window" : "tab",
       electron: process.versions.electron,
       animated: animation,
@@ -714,6 +789,8 @@ async function audit() {
     }
     await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2))
     console.log(JSON.stringify(report, null, 2))
+    // Preserve input/restoration evidence even when sustained throughput misses its budget.
+    assert.ok(animation.fps >= (durationMs >= 30_000 ? 57 : 45), `Composited unique fps: ${animation.fps}`)
   } finally {
     await focusSamples?.stop()
     previews?.close()

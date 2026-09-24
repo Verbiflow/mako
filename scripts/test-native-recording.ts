@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { NativeRecordings } from "../packages/control-runtime/src/native-recording.js"
+import { NativeRecordings, nativeRecordingRate } from "../packages/control-runtime/src/native-recording.js"
 import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 const target = { kind: "window" as const, pid: 42, window_id: 7 }
@@ -144,3 +144,42 @@ await assert.rejects(
 console.log(
   "Native recording: exact target/session, old-driver refusal, owner handles, duplicate start and lost-receipt cleanup passed"
 )
+
+// Requested source rate reaches only drivers that declare it. Unsupported rates
+// refuse before creating media or dispatching start, including old fixed-rate drivers.
+assert.deepEqual(nativeRecordingRate(tools[0]), {maxFps:30, configurable:false})
+for (const maxFps of [5, 60]) {
+  const catalog: Tool[] = [{ ...tools[0], inputSchema: {
+    type: "object", properties: { ...tools[0].inputSchema.properties,
+      fps: {type:"integer", minimum:1, maximum:maxFps},
+    },
+  }}, tools[1]]
+  assert.deepEqual(nativeRecordingRate(catalog[0]), {maxFps, configurable:true})
+  const manager = new NativeRecordings()
+  let starts = 0
+  let id = ""
+  let output = ""
+  let requested = 0
+  const driver: ComputerDriverClient = {
+    listTools: async () => catalog, onClose() {}, async close() {},
+    async callTool(name, args) {
+      if (name === "start_recording") {
+        starts++
+        id = String(args.recording_id)
+        output = String(args.output_dir)
+        requested = Number(args.fps)
+      }
+      return { content: [], structuredContent: {
+        generation:1, recording_id:id, target, video_active:name === "start_recording",
+        output_dir:output, last_video_path:null, last_error:null, fps:requested,
+      }}
+    },
+  }
+  await assert.rejects(manager.start(target, {directory, fps:maxFps+1}, driver, catalog, "rates", new AbortController().signal), {code:"unsupported", outcome:"not-dispatched"})
+  assert.equal(starts, 0)
+  const receipt = await manager.start(target, {directory}, driver, catalog, "rates", new AbortController().signal)
+  assert.equal(requested, maxFps)
+  await manager.get(target, receipt.id).stop()
+  await manager.close()
+}
+console.log("Native recording source rate: 5/60 fps backend ceilings, negotiated defaults and refusal before dispatch passed")

@@ -125,6 +125,36 @@ try {
       ask(unansweredNative)
       assert.equal(owner.snapshot(id)?.permissions.length, 0, "the corrected answer cannot be sent through another callback")
       assert.equal(calls, 4, "only original answers and the proven-not-submitted correction dispatch")
+      const external = { ...native, requestId: "externally-resolved" }
+      const externalQuestion = ask(external)
+      const receiptsBefore = owner.snapshot(id)?.control?.approvalResponses?.length
+      decision(external, "reject")
+      assert.equal(owner.snapshot(id)?.permissions.length, 0, "native resolution clears an unanswered exact question")
+      assert.equal(owner.snapshot(id)?.control?.approvalResponses?.length, receiptsBefore, "external answers never fabricate local answer receipts")
+      await assert.rejects(owner.permission(id, externalQuestion!, { kind: "choice", optionId: "once" }), /no longer pending/)
+      ask(external)
+      assert.equal(owner.snapshot(id)?.permissions.length, 0, "externally resolved questions cannot reappear")
+      const newExternal = { ...external, scope: randomUUID() }
+      const newerQuestion = ask(newExternal)
+      decision(external, "reject")
+      assert.equal(owner.snapshot(id)?.permissions[0]?.id, newerQuestion, "an old external decision cannot clear a new occurrence")
+      emit({ type: "live-session", session: { ...owner.snapshot(id)!.session, status: "running" } })
+      emit({ type: "live-session", session: { ...owner.snapshot(id)!.session, status: "ready" } })
+      assert.equal(owner.snapshot(id)?.permissions.length, 0, "completed turn removes transient question rows")
+      decision(newExternal, "reject")
+      assert.ok(owner.snapshot(id)?.control?.approvalObservations?.find(item => item.identity.scope === newExternal.scope)?.decision, "late native evidence survives UI cleanup")
+      const resolvedJournal = new LiveJournal(journalRoot, id)
+      try { assert.equal(resolvedJournal.read()?.control?.approvalObservations?.filter(item => item.identity.scope === external.scope && item.identity.requestId === external.requestId && item.decision).length, 1) }
+      finally { resolvedJournal.close() }
+      assert.equal(calls, 4, "external resolution sends no answer")
+      owner.stop(); owner = new LiveConversations(dependencies)
+      const reopenId = randomUUID()
+      owner.transfer(id, { id: reopenId, provider, text: "Reopen", attachments: [] })
+      for (let i = 0; i < 200 && owner.snapshot(id)?.control?.transfers.at(-1)?.state.kind !== "accepted"; i++) await delay(5)
+      assert.equal(owner.snapshot(id)?.control?.transfers.at(-1)?.state.kind, "accepted")
+      ask(external)
+      assert.equal(owner.snapshot(id)?.permissions.length, 0, "journal reopen retains external resolution without a local receipt")
+
       console.log(`PASS ${provider}: exact evidence, fresh callbacks, replacement connection, journal reopen, no replay, unanswered deduplication and correction`)
     } finally { settle.resolve(); owner.stop() }
   }
