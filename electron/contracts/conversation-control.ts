@@ -1,4 +1,4 @@
-import { ApprovalResponseSchema } from "./approval-response.js"
+import { ApprovalResponseSchema, NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval } from "./approval-response.js"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
 import { z } from "zod"
 import { LiveActionSchema } from "./live-actions.js"
@@ -119,6 +119,9 @@ export const DelegateInputSchema = z.object({
 export type DelegateInput = z.infer<typeof DelegateInputSchema>
 export const ConversationControlSchema = z.object({
   approvalResponses: z.array(ApprovalResponseSchema).optional(),
+  // Native questions and later resolutions, independent of local answer intents.
+  approvalObservations: z.array(z.object({ bindingId: z.string(), identity: NativeApprovalIdentitySchema, decision: NativeApprovalDecisionSchema.optional() })
+    .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
   merges: z
     .array(
