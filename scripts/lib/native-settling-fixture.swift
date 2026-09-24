@@ -47,15 +47,27 @@ final class Handler: NSObject, NSMenuDelegate {
   init(_ window:NSWindow,_ text:Text,_ result:NSTextField) { self.window=window;self.text=text;self.result=result }
   @objc func verify(_ sender:Any?) { saves += 1;result.stringValue=text.string }
   @objc func panel(_ sender:Any?) {
-    let panel=NSOpenPanel()
-    panel.directoryURL=URL(fileURLWithPath:CommandLine.arguments.dropFirst().first ?? NSTemporaryDirectory()+"mako-reference-native.json").deletingLastPathComponent()
-    panel.title="Mako test panel";panel.prompt="Choose fixture"
+    let saving=CommandLine.arguments.contains("--save-panel")
+    let panel:NSSavePanel = saving ? NSSavePanel() : NSOpenPanel()
+    let directory=URL(fileURLWithPath:CommandLine.arguments.dropFirst().first ?? NSTemporaryDirectory()+"mako-reference-native.json").deletingLastPathComponent()
+    panel.directoryURL=directory
+    panel.title="Mako test panel";panel.prompt=saving ? "Save fixture file" : "Choose fixture"
     panel.allowedContentTypes = [.plainText]
-    panel.allowsMultipleSelection = false
-    panel.canChooseDirectories = false
+    if let open=panel as? NSOpenPanel {
+      open.allowsMultipleSelection = false
+      open.canChooseDirectories = false
+    } else {
+      panel.nameFieldStringValue="untouched.txt"
+      panel.canCreateDirectories=false
+    }
     panelEvents.append(["kind":"open","at":Date().timeIntervalSince1970])
     panel.beginSheetModal(for:window){response in
-      self.panelEvents.append(["kind":"close","response":response.rawValue,"selected":panel.url?.lastPathComponent ?? "","at":Date().timeIntervalSince1970])
+      var writeError=""
+      if saving && response == .OK, let url=panel.url {
+        if url.deletingLastPathComponent().resolvingSymlinksInPath().path != directory.resolvingSymlinksInPath().path {writeError="outside fixture directory"}
+        else {do {try Data("saved fixture\n".utf8).write(to:url,options:.withoutOverwriting)} catch {writeError=String(describing:error)}}
+      }
+      self.panelEvents.append(["kind":"close","response":response.rawValue,"selected":response == .OK ? (panel.url?.lastPathComponent ?? "") : "","writeError":writeError,"at":Date().timeIntervalSince1970])
     }
   }
 }
@@ -81,7 +93,16 @@ let gesture=Gesture(frame:NSRect(x:320,y:125,width:250,height:150));gesture.setA
 let burst=NSButton(title:"Change asynchronously",target:handler,action:#selector(Handler.burst(_:)));burst.frame=NSRect(x:310,y:290,width:260,height:25)
 let busy=NSButton(title:"Keep changing",target:handler,action:#selector(Handler.burst(_:)));busy.tag=1;busy.frame=NSRect(x:20,y:290,width:270,height:25)
 for view in [text,result,verify,panel,choices,gesture,burst,busy] as [NSView] {window.contentView?.addSubview(view)}
-window.makeFirstResponder(text)
+let keyboardRouting=CommandLine.arguments.contains("--keyboard-routing")
+let decoy=Text(frame:NSRect(x:320,y:125,width:250,height:150))
+if keyboardRouting {
+  gesture.removeFromSuperview()
+  text.string="abcdef";text.setSelectedRange(NSRange(location:6,length:0))
+  decoy.isRichText=false;decoy.string="leave this untouched";decoy.setAccessibilityLabel("Decoy text")
+  decoy.setSelectedRange(NSRange(location:decoy.string.utf16.count,length:0))
+  window.contentView?.addSubview(decoy)
+}
+window.makeFirstResponder(keyboardRouting ? decoy : text)
 window.orderFrontRegardless()
 let output=CommandLine.arguments.count>1 ? CommandLine.arguments[1] : NSTemporaryDirectory()+"mako-reference-native.json"
 var foregroundEvents: [[String: Any]] = []
@@ -89,7 +110,7 @@ let activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
   forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
 ) { notification in
   guard let active = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-  foregroundEvents.append(["pid": active.processIdentifier, "at": Date().timeIntervalSince1970])
+  foregroundEvents.append(["pid": active.processIdentifier, "app": active.localizedName ?? "", "bundle": active.bundleIdentifier ?? "", "at": Date().timeIntervalSince1970])
 }
 let evidenceTimer = Timer(timeInterval:0.025,repeats:true){_ in
   let record:[String:Any]=["pid":ProcessInfo.processInfo.processIdentifier,"window":window.windowNumber,"text":text.string,"saved":result.stringValue,"saves":handler.saves,"bursts":handler.bursts,"burstTimes":handler.burstTimes,"points":gesture.points,"marked":text.hasMarkedText(),"compositions":text.compositions,"inserts":text.inserts,"choice":choices.titleOfSelectedItem ?? "","frontmostPid":NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,"pressedButtons":NSEvent.pressedMouseButtons,"appActive":app.isActive,"windowKey":window.isKeyWindow]
@@ -98,6 +119,11 @@ let evidenceTimer = Timer(timeInterval:0.025,repeats:true){_ in
   evidence["menuEvents"] = handler.menuEvents
   evidence["panelEvents"] = handler.panelEvents
   evidence["sheetAttached"] = window.attachedSheet != nil
+  if keyboardRouting {
+    evidence["selection"]=["location":text.selectedRange().location,"length":text.selectedRange().length]
+    evidence["decoy"]=["text":decoy.string,"location":decoy.selectedRange().location,"length":decoy.selectedRange().length]
+    evidence["focusedField"]=window.firstResponder === decoy ? "decoy" : window.firstResponder === text ? "target" : "other"
+  }
   if let data=try? JSONSerialization.data(withJSONObject:evidence){try? data.write(to:URL(fileURLWithPath:output),options:.atomic)}
 }
 RunLoop.main.add(evidenceTimer, forMode: .common)
