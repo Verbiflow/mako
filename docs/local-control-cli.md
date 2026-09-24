@@ -12,7 +12,7 @@ the [issue ledger](local-control-agent-issues.md) tracks the original agent fail
 Mako agents now primarily use the persistent JavaScript MCP adapter. The CLI is
 an optional composable interface for external callers; both borrow the same task
 engine. The previous CLI-only delivery decision below is superseded by
-[LC-29](local-control-map.md#lc-29--cli-discovery-and-agent-adherence). Its tests
+[LC-29](local-control-map.md#lc-29--agent-discovery-and-mcp-integration). Its tests
 remain evidence for the underlying engine, not acceptance of the new MCP adapter.
 
 ## Earlier CLI-only migration

@@ -1089,7 +1089,8 @@ through the provider's own resume (Cursor's SDK `Agent.resume`, Grok's
 `session/load`, Codex's thread resume) with no portable history, on the first named provider that can.
 `--control` starts the embedded driver and a background AppKit fixture, asks
 the installed provider to read a random workspace value and enter/verify it
-through the task-owned `mako-control` CLI, refuses removed public MCP tools, checks
+without naming a control tool in the task prompt. The normal startup advertises
+the task-owned `mako-control` MCP adapter. The test checks
 the fixture state and continuous frontmost sample independently, and removes
 the native session even when the turn fails. Grok needs an advertised tier that
 pre-approves lazy MCP calls (currently `MAKO_E2E_MODE=access:full`); Codex needs

@@ -3,12 +3,12 @@
 The user reports that agents became worse at finding and using Local Control
 after the public MCP migration. This investigation distinguishes capability
 discovery, API learning and correct execution. The report is not yet a measured
-MCP-versus-CLI regression. [Wayfinder LC-29](local-control-map.md#lc-29--cli-discovery-and-agent-adherence)
+MCP-versus-CLI regression. [Wayfinder LC-29](local-control-map.md#lc-29--agent-discovery-and-mcp-integration)
 owns the work and acceptance gates.
 
-## What Mako currently gives an agent
+## Baseline before the revised MCP decision
 
-Current source and signed candidate `0d02dc53d0a315ff` have no Local Control skill
+At the start of this investigation, source and signed candidate `0d02dc53d0a315ff` have no Local Control skill
 and no public Local Control MCP adapter. `electron/control-launch.ts` prepends the
 task CLI to PATH, sets its session file and supplies a short `<mako-local-control>`
 prompt paragraph. It says to read `--help`, use composable commands or `exec`,
@@ -135,8 +135,9 @@ superseded. This does not revive the old status/help/exec MCP contract.
   does not capture a screenshot. Target-specific support comes from capabilities,
   not guesses about the app.
 
-Implementation has started; provider wiring, package acceptance and fresh-agent
-adoption remain gates. Keep the old source/candidate/installed measurements above
+The adapter, shared-worker execution and provider wiring are implemented locally.
+See [implementation evidence](local-control-agent-repl.md) for the completed tests
+and remaining fresh-agent and release gates. Keep the old source/candidate/installed measurements above
 as historical evidence; they do not describe the new adapter as deployed.
 
 Validate through normal startup, where the user asks for a result and does not

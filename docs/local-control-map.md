@@ -11,7 +11,7 @@ parity has not been established.
 - **Every complaint from the agent:** [issue ledger](local-control-agent-issues.md),
   including findings that were corrected, not reproduced, or remain open.
 - **Architecture:** [ownership boundaries, diagnostics and change tests](local-control-architecture.md).
-- **CLI discovery and adherence:** [LC-29](#lc-29--cli-discovery-and-agent-adherence) is active: implement and validate the unified MCP integration, including ordinary agent discovery.
+- **Agent discovery and MCP integration:** [LC-29](#lc-29--agent-discovery-and-mcp-integration) is active: implement and validate the unified MCP integration, including ordinary agent discovery.
 - **CLI refactor:** [shared engine and shell contract](local-control-cli.md).
   Prior CLI-only acceptance is historical; MCP-first integration supersedes that delivery choice.
 - **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
@@ -38,7 +38,7 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.21 selected for new launches; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | +mako.21 installed for new Mac driver launches; existing daemons retain their executable. Latest signed candidate `0d02dc53d0a315ff` includes the dialog/depth/socket changes, addressed modified keys and public middle-click. Its packaged CLI, both startup/reopen routes, bundled media, two-field keyboard and sandboxed Save As checks pass. Earlier candidate evidence includes Aside jobs; those do not certify this exact candidate. | Installed app remains `345bfd91c64009c6`; the previous idle update timed out. The subsequent idle rollout aborted at 11:37 UTC when a dev host appeared and another conversation started; nothing was replaced. No rollout is currently queued. Candidate `0d02dc53d0a315ff` is prepared but not queued; its readiness check still found running Mako processes. See `local-control-cli-deployment.json` for the earlier aborted attempt. Post-install CLI-only repetition and extension rollout remain open. Candidate/source-host tests are not installed-host proof. |
+| Installed components | +mako.21 installed for new Mac driver launches; existing daemons retain their executable. Latest signed candidate `0d02dc53d0a315ff` includes the dialog/depth/socket changes, addressed modified keys and public middle-click. Its packaged CLI, both startup/reopen routes, bundled media, two-field keyboard and sandboxed Save As checks pass. Earlier candidate evidence includes Aside jobs; those do not certify this exact candidate. | Installed app remains `345bfd91c64009c6`; the previous idle update timed out. The subsequent idle rollout aborted at 11:37 UTC when a dev host appeared and another conversation started; nothing was replaced. No rollout is currently queued. Candidate `0d02dc53d0a315ff` is prepared but not queued; its readiness check still found running Mako processes. See `local-control-cli-deployment.json` for the earlier aborted attempt. This candidate predates the persistent-JS MCP adapter. Rebuild and installed MCP/extension acceptance remain open. Candidate/source-host tests are not installed-host proof. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -51,15 +51,15 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Decisions to preserve
 
-- One provider-neutral engine behind the CLI; composability is required.
+- One provider-neutral TypeScript engine behind MCP, SDK and CLI; composability is required.
   Preserve task ownership across separate shell invocations. Local Mac, remote
   browsers and future Linux cloud jobs use that engine with verified backend
   capabilities. Live streaming is an engine output, not a third automation system.
-- Complete CLI-first agent delivery: a CLI must not require an MCP call to obtain
-  its session. Independent desktop bootstrap and public MCP adapter/launcher
-  deletion are implemented and candidate-tested. Preserve that boundary during
-  installed rollout. Other Mako MCP integrations and the native driver's private
-  protocol remain separate.
+- MCP is the primary Mako agent integration: persistent JavaScript calls the typed
+  session directly. The optional CLI borrows that engine independently of MCP.
+  Never create a second task owner, target cache or input/recording implementation
+  per interface. The old status/help/exec tools stay retired; other Mako MCP
+  integrations and the native driver's private protocol remain separate.
 - Live preview/recording performance target: 1920×1080 at 60 distinct fps.
   1440p/4K is optional, not a release gate. Preserve full-detail explicit screenshots
   and exact coordinate geometry. Do not resize user pages to satisfy a video target.
@@ -84,25 +84,25 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 After reviewing the current unified cua_repl evidence, the user explicitly replaced
 the CLI-only Mako integration decision. Mako agents should discover browser and
 computer use through one persistent JavaScript MCP adapter, calling the shared
-SDK/session directly, never spawning CLI commands. The CLI remains a first-class
-interface for external users and file pipelines. Streaming work stays behind this
+SDK/session directly, never spawning CLI commands. The basic CLI remains available
+for external users and file pipelines. Streaming work stays behind this
 integration’s correctness, discovery, lifecycle and packaging acceptance. Preserve the existing browser/native functionality, lossless values,
-exact target checks, background policy and recording cleanup. Agent-friendly
-per-command help, composable files/stdin and minimal startup/context cost are
-required acceptance criteria, not follow-up polish.
+exact target checks, background policy and recording cleanup. Agent discovery, focused runtime documentation and minimal startup/context cost
+are primary acceptance criteria. Keep the CLI’s existing file/stdin composition.
 
 
 1. **Close correctness and misleading-result gaps** in LC-08 and LC-22, starting
    with raw-action uncertainty, capture geometry and precise recovery messages.
    Keep the full [agent issue ledger](local-control-agent-issues.md) accounted for.
-2. **Finish LC-20 release acceptance for the shared engine and CLI.** Carry those
-   correctness rules into browser and native CLI workflows; test real pipes and separate commands.
+2. **Finish LC-29 MCP discovery and LC-20 shared-engine release acceptance.**
+   Run browser and native jobs through normal provider startup; preserve the basic
+   CLI as a thin consumer of that same engine.
 3. **Finish LC-21's interactive capture path and LC-24's native gaps.** Measure
    complete input → visible result and distinct source frames, then optimize.
-   Native/transport investigation can proceed independently of the CLI adapter.
+   Native/transport investigation can proceed independently of the agent adapter.
 4. **Complete LC-25/LC-26 target acceptance and packaging**, then LC-23's installed
    host/extension rollout. Run acceptance on the exact artifacts being deployed.
-5. **Close LC-27 with repeated complete jobs through the CLI and multiple
+5. **Close LC-27 with repeated complete jobs through MCP and multiple
    harnesses.** Record the remaining unsupported cells explicitly.
 
 The order is a working sequence, not a claim that every platform investigation
@@ -641,7 +641,7 @@ This is the continuation of LC-12, not another API implementation milestone.
 
 Next: repeated held-out tasks with duplicate controls, virtualized content, rich
 editors, popups, multiple windows, downloads, long recordings and interruptions.
-Run via the CLI in multiple harnesses; retain fresh-agent mistakes as cases.
+Run via MCP in multiple harnesses; retain fresh-agent mistakes as cases.
 
 Done for a declared matrix when independent outcomes establish completion and false
 confirmation rates, focus/input interference, recovery, human interventions, model
@@ -651,20 +651,27 @@ Use equal-resolution comparisons alongside ordinary defaults. Compare the same w
 and builds before/after changes. A reference parity claim requires matched reference
 runs; symbols, marketing fps and synthetic transport timings are not substitutes.
 
-## LC-29 — CLI discovery and agent adherence
+## LC-29 — Agent discovery and MCP integration
 
-**Status: investigation active; user reports agents finding the CLI harder than MCP.**
-[Initial source audit, measurements and acceptance design](local-control-cli-discovery.md).
+**Status: persistent-JS MCP implemented and locally tested; fresh-agent and installed acceptance remain open.**
+[Discovery audit and accepted design](local-control-cli-discovery.md).
+[Implementation, retired-MCP comparison and test evidence](local-control-agent-repl.md).
 This supplements LC-20 and LC-27. MCP is the primary Mako agent interface; the CLI
 is a thin optional consumer for external users. All control logic stays in the
 shared TypeScript SDK/engine. The user superseded the CLI-only decision: add
 a new persistent-JS MCP adapter over the shared session, not the retired
 status/help/exec tool collection. [Accepted design](local-control-cli-discovery.md#accepted-design-sdk-cli-and-persistent-js-mcp).
 
+Local implementation now exposes `js` and `js_reset`, with persistent bindings,
+first-use/focused docs, explicit images and shared ownership. Tests pass for real
+MCP-over-HTTP cancellation, revoked grants, package consumers, stale refs across
+interfaces and reset without target cleanup. No new dependency or CLI subprocess
+was added. The signed candidate predates this work; it is not installed.
+
 Separate whether the agent discovers the available tool from whether it follows
 its targeting, observation, verification and recovery rules. Current startup
-injection is a short paragraph linking to `--help`; launch tests check command
-presence and environment wiring. Prior fresh trials received the CLI explicitly,
+injection now advertises the unified MCP `js` tool, with the CLI as an optional
+file-pipeline interface. The earlier CLI-only injection linked to `--help`. Prior fresh trials received the CLI explicitly,
 so their success does not establish discovery during an ordinary user task.
 
 Next:
@@ -677,7 +684,7 @@ Next:
    repeated help, fabricated refs, false completion and unsafe retries. Separate
    test/development commands from actual agent use; retain no raw credentials or
    private browser content in tracked evidence.
-3. Implement the accepted SDK/CLI/MCP boundary. Use a persistent JavaScript worker
+3. **Implemented locally; validate in fresh agents and the release candidate:** the accepted SDK/CLI/MCP boundary. Use a persistent JavaScript worker
    with top-level await and ordinary bindings, a concise model-visible entry tool,
    first-use documentation, focused browser/native help and explicit documentation
    refresh after lost context. Calls go directly through the typed session client;
