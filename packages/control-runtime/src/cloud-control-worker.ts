@@ -10,10 +10,8 @@ import {
 } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createControlSession } from "./control-session.js"
 import { serveControlSession } from "./control-session-server.js"
-import { createComputerToolsServer } from "./computer-tools-main.js"
 import { BrowserService } from "./browser-service.js"
 import {
   CloudWorkerMessageSchema,
@@ -33,7 +31,6 @@ let runtime: string | undefined = process.env.TMPDIR
 let stopping: Promise<void> | undefined
 let requestedStop: string | undefined
 let server: { close(): Promise<void> } | undefined
-let sessionMode = false
 let browsers: BrowserService | undefined
 let initializing: Promise<void> | undefined
 const abort = new AbortController()
@@ -104,8 +101,7 @@ async function textFrom(child: ChildProcess, fd: number): Promise<string> {
   )
 }
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
-async function initialize(current: CloudControlConfig, directory: string, sessionTransport = false) {
-  sessionMode = sessionTransport
+async function initialize(current: CloudControlConfig, directory: string) {
   config = current
   runtime = directory
   process.env.MAKO_CONTROL_ARTIFACTS = current.output
@@ -283,18 +279,12 @@ async function initialize(current: CloudControlConfig, directory: string, sessio
     browserCall,
     onProgramCancelled: () => { void shutdown("request-cancelled") },
   }
-  if (sessionTransport) {
-    const engine = createControlSession(backend, owner, undefined, options)
-    const transport = await serveControlSession(engine, { onStop: () => { void shutdown("session-stop") } })
-    server = transport
-    const sessionFile = join(current.output, ".session.json")
-    await writeFile(sessionFile, JSON.stringify(transport.descriptor) + "\n", { mode: 0o600, flag: "wx" })
-    await rename(sessionFile, join(current.output, "session.json"))
-  } else {
-    const mcp = createComputerToolsServer(backend, owner, undefined, { ...options, cli: true })
-    server = mcp
-    await mcp.connect(new StdioServerTransport())
-  }
+  const engine = createControlSession(backend, owner, undefined, options)
+  const transport = await serveControlSession(engine, { onStop: () => { void shutdown("session-stop") } })
+  server = transport
+  const sessionFile = join(current.output, ".session.json")
+  await writeFile(sessionFile, JSON.stringify(transport.descriptor) + "\n", { mode: 0o600, flag: "wx" })
+  await rename(sessionFile, join(current.output, "session.json"))
   record("ready")
   await writeFile(
     join(current.output, "ready.json"),
@@ -384,7 +374,7 @@ process.on("message", (raw) => {
   const message = CloudWorkerMessageSchema.parse(raw)
   if (message.kind === "stop") void shutdown(message.reason)
   else if (!initializing && !requestedStop) {
-    initializing = initialize(message.config, message.runtime, message.session)
+    initializing = initialize(message.config, message.runtime)
     void initializing.catch((error) => {
       record(error instanceof Error ? error.name : "startup-error")
       void shutdown("startup-failed")
@@ -399,7 +389,4 @@ process.once("SIGTERM", () => {
 })
 process.once("SIGINT", () => {
   void shutdown("SIGINT")
-})
-process.stdin.once("end", () => {
-  if (!sessionMode) void shutdown("stdin-eof")
 })

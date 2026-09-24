@@ -102,18 +102,18 @@ export { BACKGROUND_INPUT_LADDER }
 
 const DEFAULT_MAX_ELEMENTS = 300
 
-const instructions = `Mako computer control is one program tool over a host-owned native driver. mako_computer_exec runs trusted async JavaScript in a local worker; its description carries the whole API, so write the first program from it. Await every call and return only what you need to decide the next step.
+const instructions = `Mako computer control is one program tool over a host-owned native driver. the internal driver test executor runs trusted async JavaScript in a local worker; its description carries the whole API, so write the first program from it. Await every call and return only what you need to decide the next step.
 
-How to work: windows(pid) to pick the document window; view(target) to read it as one line per element; act('click', {element_token}, {postcondition: lines => lines.some(...)}) for a step whose intended result must be proved, since the compact delta and a provider-neutral receipt come back together; omit postcondition when a changed/unchanged observation is enough to decide. fill(element_token, text) writes a field without a keyboard and proves it by read-back; submit(element_token) performs Enter without a keyboard; route(intent, target) selects the strongest proven route for exact, text, control, page, pointer, keyboard, menu or visual work, while routes(target) returns the complete capability set. Chain steps in one program when each follows from the last without your judgement, with expect() guarding assumptions and until() waiting for the screen; return when the next action needs model judgement. When the intent has a command, script({language, source}) runs AppleScript or JXA and shell({command}) runs a command line, both without touching focus; a Finder listing is one line there and eleven windows of accessibility on the GUI route. A window is about 800 tokens as view() lines and about 12,000 as get_window_state JSON: read with view, and use get_window_state when you need frames, actions or the screenshot. \`state\` persists between programs of this MCP client (the helpers keep state.target and state.last there); \`console.log(value)\` adds a text block; \`emitImage(result)\` adds the image a result carries (get_window_state with its screenshot, zoom) with its snapshot receipt; \`artifacts.save(name, value)\` writes a value or image to a file and returns its path. Your session identity is supplied automatically and cannot collide with another task; never pass session.
+How to work: windows(pid) to pick the document window; view(target) to read it as one line per element; act('click', {element_token}, {postcondition: lines => lines.some(...)}) for a step whose intended result must be proved, since the compact delta and a provider-neutral receipt come back together; omit postcondition when a changed/unchanged observation is enough to decide. fill(element_token, text) writes a field without a keyboard and proves it by read-back; submit(element_token) performs Enter without a keyboard; route(intent, target) selects the strongest proven route for exact, text, control, page, pointer, keyboard, menu or visual work, while routes(target) returns the complete capability set. Chain steps in one program when each follows from the last without your judgement, with expect() guarding assumptions and until() waiting for the screen; return when the next action needs model judgement. When the intent has a command, script({language, source}) runs AppleScript or JXA and shell({command}) runs a command line, both without touching focus; a Finder listing is one line there and eleven windows of accessibility on the GUI route. A window is about 800 tokens as view() lines and about 12,000 as get_window_state JSON: read with view, and use get_window_state when you need frames, actions or the screenshot. \`state\` persists between programs of this session (the helpers keep state.target and state.last there); \`console.log(value)\` adds a text block; \`emitImage(result)\` adds the image a result carries (get_window_state with its screenshot, zoom) with its snapshot receipt; \`artifacts.save(name, value)\` writes a value or image to a file and returns its path. Your session identity is supplied automatically and cannot collide with another task; never pass session.
 
 Long tasks: \`checkpoint({objective?, location?, remember?, completed?, pending?})\` keeps the bounded working set a later cell needs and \`recall()\` reads it. Store constraints, discoveries and evidence receipts there; put raw trees, screenshots and long prose in artifacts instead. Grounding: an element_token alone addresses an action, because Mako remembers which pid and window produced each snapshot; every read (view, act, until, get_window_state) takes a new snapshot and invalidates the earlier tokens for that window. Never carry a token by role or label: duplicate or reordered controls can make that target unsafe. fill() returns view, the exact newest lines from its read-back, so take the next token from written.view before another action. Screenshot coordinates are window-local pixels of that window's latest capture (element frames are screen points: subtract window_bounds and multiply by screenshot_scale); for a small target zoom a region and pass from_zoom:true with coordinates read off the zoom image. Reobserve after acting: transport success is not proof the UI changed, and a timeout or cancellation does not prove an action did not run. A stale token or a missing window means rediscover, never another window.
 
-Background input, in order (details in mako_computer_help().routes): 1 accessibility — fill, set_value and element_token clicks (action press/pick/confirm/open), for anything an observed element exposes; this is how a backgrounded Electron or Chromium field is written, since set_value replaces text where a keyboard would select-all and retype. 2 page route — launch_app({bundle_id, page_route: true}) starts an Electron or Chromium app in the background with a private DevTools port and registers it as browser 'app:<bundle_id>'; the browser object is available in every computer program (browser.tabs({browser}), browser.select, browser.click, browser.type, browser.press, browser.observe, browser.screenshot), with keyboard, pointer, DOM reads and screenshots that never touch focus. 3 command — script and shell. 4 window pointer with x,y. 5 pid keyboard (type_text, press_key, hotkey): native Cocoa fields only and never a Cmd chord — Mako refuses a background Cmd chord before it is posted because the installed keyboard path has not passed background Command delivery acceptance (force: true posts it anyway); a Chromium or Electron renderer that is not frontmost drops every posted key; the driver cannot read keys back, so send them through act() and let the delta say whether they landed, and treat mako_routes.status 'unconfirmed' as a reason to read, not to retry. 6 invoke_menu for a menu item or its shortcut: the driver fronts the application for the call and restores the previous frontmost app itself, so it requires foreground: true and reports fronted.ms. 7 delivery_mode:'foreground' with foreground: true: Mako verifies that the exact application and window are already frontmost and refuses otherwise; bring_to_front requires foreground: true too. Mako never fronts on its own, and a result never asks you to: the user is working in another application. Electron and Chromium windows ignore background scrolling on macOS; use their page route. Do not repeat text based on delivered_chars alone: the driver can report zero when the field received everything.
+Background input, in order (details in the driver reference routes): 1 accessibility — fill, set_value and element_token clicks (action press/pick/confirm/open), for anything an observed element exposes; this is how a backgrounded Electron or Chromium field is written, since set_value replaces text where a keyboard would select-all and retype. 2 page route — launch_app({bundle_id, page_route: true}) starts an Electron or Chromium app in the background with a private DevTools port and registers it as browser 'app:<bundle_id>'; the browser object is available in every computer program (browser.tabs({browser}), browser.select, browser.click, browser.type, browser.press, browser.observe, browser.screenshot), with keyboard, pointer, DOM reads and screenshots that never touch focus. 3 command — script and shell. 4 window pointer with x,y. 5 pid keyboard (type_text, press_key, hotkey): native Cocoa fields only and never a Cmd chord — Mako refuses a background Cmd chord before it is posted because the installed keyboard path has not passed background Command delivery acceptance (force: true posts it anyway); a Chromium or Electron renderer that is not frontmost drops every posted key; the driver cannot read keys back, so send them through act() and let the delta say whether they landed, and treat mako_routes.status 'unconfirmed' as a reason to read, not to retry. 6 invoke_menu for a menu item or its shortcut: the driver fronts the application for the call and restores the previous frontmost app itself, so it requires foreground: true and reports fronted.ms. 7 delivery_mode:'foreground' with foreground: true: Mako verifies that the exact application and window are already frontmost and refuses otherwise; bring_to_front requires foreground: true too. Mako never fronts on its own, and a result never asks you to: the user is working in another application. Electron and Chromium windows ignore background scrolling on macOS; use their page route. Do not repeat text based on delivered_chars alone: the driver can report zero when the field received everything.
 
-Results: every action resolves to the driver's structured data, and a refused action throws with the driver's message (Mako's own refusals — a fronting call without foreground: true, a background Cmd chord — throw before the driver is asked); images ride on result.content. A call that fronted carries fronted: {pid, ms}, and mako_computer_status counts them for the task. list_windows rows carry kind: document, helper or unknown, and helper strips are not windows. get_window_state omits the application's menu bar and the duplicate tree_markdown (include_menu_bar:true and include_markdown:true restore them) and defaults max_elements to ${DEFAULT_MAX_ELEMENTS}. A returned or logged value at or past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB, and every image after the ${INLINE_IMAGE_COUNT}th in one program, is written whole to a file and the result carries a receipt with the path, size, hash and an outline of the value's shape; nothing is cut. Programs stop after ${PROGRAM_TIME_LIMIT_MS / 1000} seconds; on timeout, cancellation or an error the worker and \`state\` reset while the driver session, snapshots and Mako's checks remain. Scripts are trusted local code, not an OS sandbox; every action still passes Mako's session, snapshot, path, foreground and preview checks.
+Results: every action resolves to the driver's structured data, and a refused action throws with the driver's message (Mako's own refusals — a fronting call without foreground: true, a background Cmd chord — throw before the driver is asked); images ride on result.content. A call that fronted carries fronted: {pid, ms}, and Session status counts them for the task. list_windows rows carry kind: document, helper or unknown, and helper strips are not windows. get_window_state omits the application's menu bar and the duplicate tree_markdown (include_menu_bar:true and include_markdown:true restore them) and defaults max_elements to ${DEFAULT_MAX_ELEMENTS}. A returned or logged value at or past ${Math.round(INLINE_TEXT_BUDGET / 1000)} KB, and every image after the ${INLINE_IMAGE_COUNT}th in one program, is written whole to a file and the result carries a receipt with the path, size, hash and an outline of the value's shape; nothing is cut. Programs stop after ${PROGRAM_TIME_LIMIT_MS / 1000} seconds; on timeout, cancellation or an error the worker and \`state\` reset while the driver session, snapshots and Mako's checks remain. Scripts are trusted local code, not an OS sandbox; every action still passes Mako's session, snapshot, path, foreground and preview checks.
 
 Output and input file paths (screenshot_out_file, output_dir, destination_root, files) may be absolute, ~-rooted or relative to the working directory; Mako resolves symlinked parents such as /tmp before the driver inspects them. macOS permissions, Chrome debugging consent and provider tool approval are distinct.`
-const controlInstructions = `Mako control is one provider-neutral code API. Use bound window/tab handles through mako_control_exec; call mako_control_help for methods. Store handles in state across cells. control.apps/windows/browsers/tabs discover only missing targets; control.window({pid,window_id}) binds a known window, control.openTab({url}) creates a task page in the Settings preferred browser; an explicit browser overrides it. Missing or disconnected preferences never fall back. Call control.connectBrowser(id) explicitly for a disconnected target; discovery and input never reconnect automatically. For Mako development choose the browser row whose desk origin/sourceRoot matches the requested checkout; never substitute the installed app.
+const controlInstructions = `Mako control is one provider-neutral code API. Use mako-control commands for discovery, observation, input and files; use exec --source-file for verified multi-step JavaScript and api for focused method help. Store handles in state across commands. control.apps/windows/browsers/tabs discover only missing targets; control.window({pid,window_id}) binds a known window, control.openTab({url}) creates a task page in the Settings preferred browser; an explicit browser overrides it. Missing or disconnected preferences never fall back. Call control.connectBrowser(id) explicitly for a disconnected target; discovery and input never reconnect automatically. For Mako development choose the browser row whose desk origin/sourceRoot matches the requested checkout; never substitute the installed app.
 Observe explicitly: const view=await state.tab.observe(); const field=view.get({role:'textbox',name:'Email'}); await state.tab.setValue(field.ref,'alice@example.com'); return await state.tab.expect({role:'textbox',name:'Email',value:'alice@example.com'}). Observe again before using another ref. Refusal throws before dispatch; timeout/cancellation can mean unknown outcome. Never replay uncertain or non-idempotent input. A dispatched receipt is not verification.
 Observations keep structured nodes local and return compact lines once. Return view.select(...) or view.diff(previous) for smaller output; emitImage(await handle.screenshot()) only when needed. Oversized output spills whole to artifacts. Await all actions; late callbacks are refused. Ordinary errors retain state, timeout/cancellation reset it. checkpoint/recall store bounded JSON facts. Background input never fronts implicitly; browser and native permissions stay separate. Scripts are trusted local JavaScript, not an OS sandbox. The old control.act/observe/advanced and page APIs have been replaced. Read help to migrate; do not retry an old action.`
 const toolInputSchema = z.object({
@@ -163,7 +163,7 @@ export const controlHelpInputSchema = z
       .enum([
         "discovery",
         "connection",
-        "target",
+        "actions",
         "observations",
         "assertions",
         "recording",
@@ -649,8 +649,6 @@ export function createControlSession(
   options: ControlSessionOptions = {}
 ) {
   const unified = options.surface !== "driver"
-  const toolPrefix = unified ? "mako_control" : "mako_computer"
-  const execTool = `${toolPrefix}_exec`
   const namespace = unified ? "control" : "computer"
   const observations = new ComputerObservationClient(options.previewEnvironment)
   const nativeRecordings = new NativeRecordings()
@@ -936,10 +934,10 @@ export function createControlSession(
       ? {
           available: Boolean(backend || browserCall),
           version: 2,
-          native: { configured: Boolean(backend), catalog: "help({tool})" },
+          native: { configured: Boolean(backend), catalog: "mako-control api --tool ACTION" },
           browser: { configured: Boolean(browserCall) },
-          program: `${toolPrefix}_exec`,
-          help: `${toolPrefix}_help`,
+          program: "mako-control exec",
+          help: "mako-control api",
           input:
             "background by default; foreground requires explicit preflight",
           artifacts,
@@ -947,7 +945,7 @@ export function createControlSession(
       : {
           available: Boolean(backend),
           driverTools: (await tools()).length,
-          program: `${toolPrefix}_exec`,
+          program: "mako-control exec",
           helpers: [
             "view",
             "act",
@@ -966,7 +964,7 @@ export function createControlSession(
             : "unavailable outside a Mako task",
           agentCursor:
             "quiet for every Mako session: glide_duration_ms 1, no dwell, hidden (the driver's awaited cursor glide cost 1.5 s of every action on a new element and moved on the user's screen); computer.set_agent_cursor_enabled({enabled: true}) shows it",
-          help: `${toolPrefix}_help`,
+          help: "mako-control api",
           inputRoutes: {
             default: "background",
             order: BACKGROUND_INPUT_LADDER.map((rung) => rung.route),
@@ -1022,7 +1020,7 @@ export function createControlSession(
       routes: BACKGROUND_INPUT_LADDER,
       reference: renderReference(available.map(asDriverTool)),
       program:
-        "Every action is computer.<action>({...}) inside mako_computer_exec, beside the helpers view, act, until, expect, token, windows, fill, submit, routes and route and the browser object; call help({tool}) for one action's full schema.",
+        "Every action is computer.<action>({...}) inside the internal driver test executor, beside the helpers view, act, until, expect, token, windows, fill, submit, routes and route and the browser object; call help({tool}) for one action's full schema.",
     }
   }
   const rememberSnapshot = (
@@ -1929,7 +1927,7 @@ export function createControlSession(
     const request = controlInput(
       ControlDispatchRequestSchema.safeParse(raw),
       "action request",
-      'Use an exact target and operation:{kind,...}; see help({topic:"target"}) for action signatures.'
+      'Use an exact target and operation:{kind,...}; see mako-control api --topic actions for action signatures.'
     )
     const key = request.target ? controlTargetKey(request.target) : undefined
     if (request.target && controlNeedsObservation(request.target))
@@ -2463,9 +2461,12 @@ export function createControlSession(
     }
     const reference = {
       version: 2,
-      execution: `Start ${execTool} with {"source":"return await control.browsers()"}. A running receipt returns a numeric cell; collect it through the same tool with {"cell":1}. Copy the receipt's actual ID. Supply exactly one field; cell never contains source code.`,
+      execution: "Run mako-control exec --source-file workflow.js (or - for stdin). It waits for completion and preserves state between commands. Return only needed values; explicit images become files. Use mako-control api --topic examples for focused recipes.",
       examples: {
         discovery: "return await control.browsers()",
+        connectAndOpen: "// Use an exact ID from control.browsers(); connect is explicit.\nconst id='BROWSER_ID_FROM_DISCOVERY'; await control.connectBrowser(id); state.tab=await control.openTab({browser:id,url:'https://example.com'}); return await state.tab.observe();",
+        observedRef: "const view=await state.tab.observe(); const node=view.get({role:'textbox',name:'Name'}); await state.tab.setValue(node.ref,'Ada'); return await state.tab.expect({role:'textbox',name:'Name',value:'Ada'});",
+        nativeWindow: "// Use the exact pid/window_id from apps() and windows(pid).\nstate.window=control.window({pid:1234,window_id:56}); return await state.window.observe();",
         scopedEdit:
           "const form=state.tab.locator({role:'form',name:'Profile'}); await form.locator({role:'textbox',name:'Name'}).setValue('Ada'); await form.locator({role:'button',name:'Save'}).click(); return await state.tab.expect({within:[{role:'form',name:'Profile'}],role:'textbox',name:'Name',value:'Ada'});",
         screenshot:
@@ -2481,11 +2482,11 @@ export function createControlSession(
       connection:
         "await control.connectBrowser(id) explicitly connects an exact discovered browser and returns its connection state. A disconnected desk is ready to connect without an extension or remote-debugging setup. Choose the dev desk by origin/sourceRoot; open a hidden task tab there to inspect or capture Mako. This is a separate view, not a screenshot of the user’s visible window. Chromium profiles still require their installed extension. Example: const {browsers} = await control.browsers(); await control.connectBrowser(browsers.find(b => b.id === chosenId).id); state.tab = await control.openTab({browser:chosenId}); return await state.tab.observe(); No implicit reconnect or action replay.",
       handles:
-        "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across cells. App windows are selected explicitly; no implicit first window.",
-      target:
+        "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across exec commands. App windows are selected explicitly; no implicit first window.",
+      actions:
         "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?,focus_change?}; focus_change reports an observed native focus interruption (even if restored); reobserve before another action, never replay it. Missing focus_change is not proof of continuous focus isolation. native settling reports notification quiet/deadline/unavailable, never action success. Refs expire after mutation or observation.",
       observations:
-        "Observation has nodes, lines, coverage, get({role,name,within?}) for exactly one observed node, select({role?,name?,text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. role/name use the same exact names as get/locator; text searches role, accessibility name and value, not arbitrary visible DOM text. Strings only, not regular expressions. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. No app-specific instructions are assumed.",
+        "Observation has nodes, lines, coverage, get({role,name,within?}) returns one node object; pass node.ref (a string) to setValue/click/activate, not the node object. select({role?,name?,text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. role/name use the same exact names as get/locator; text searches role, accessibility name and value, not arbitrary visible DOM text. Strings only, not regular expressions. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. No app-specific instructions are assumed.",
       assertions:
         "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial.",
       recording:
@@ -2812,7 +2813,7 @@ export function createControlSession(
                 controlInput(
                   controlHelpInputSchema.safeParse(input),
                   "help options",
-                  'Use {topic:"target"}, {tool:"click"} or {domain:"Page",method:"navigate"}; method requires domain.'
+                  'Use {topic:"actions"}, {tool:"click"} or {domain:"Page",method:"navigate"}; method requires domain.'
                 )
               )
             : await help(COMPUTER_TOOL_INPUTS.help.parse(input))
@@ -2822,7 +2823,7 @@ export function createControlSession(
       try {
         return renderReference((await tools()).map(asDriverTool))
       } catch (error) {
-        return `Driver actions: unavailable (${error instanceof Error ? error.message : String(error)}). mako_computer_status reports when the driver is attached.`
+        return `Driver actions: unavailable (${error instanceof Error ? error.message : String(error)}). Session status reports when the driver is attached.`
       }
     },
     async execute(

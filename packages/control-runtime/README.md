@@ -47,27 +47,26 @@ and videos go to files. Use `--help` for exact verb options and exit codes.
 ```sh
 mako-control --session-file "$SESSION_FILE" browsers
 printf '%s' 'return await control.tabs("job")' | mako-control --session-file "$SESSION_FILE" exec --source-file -
-mako-control --session-file "$SESSION_FILE" help
+mako-control --session-file "$SESSION_FILE" api --topic examples
 ```
 
 `mako-control session start --config /absolute/job.json` owns an isolated Linux
-job. `mako-control-mcp --config /absolute/job.json` exposes that same job engine over
-MCP stdio. Configuration and OS prerequisites are described in the deployment
+job. Desktop hosts use `startDesktopControlSession` to attach the CLI at task
+launch. Configuration and OS prerequisites are described in the deployment
 recipe `docs/local-control-runtime.md` in the source repository. The supervisor
 cleans up its process group after crashes, cancellation and lost parent IPC.
 
 ## Integration contracts
 
 - Root: `createControlRuntime`, explicit standalone ownership and configuration.
-- `/session`: private shell server/client and protocol validation.
+- `/session`: session engine, desktop worker supervisor, private shell server/client and protocol validation.
 - `/browser`: `BrowserService` for hosts sharing connections across task owners.
 - `/host`: session and native-driver adapters for an existing permission-owning host.
-- `/mcp`: `createComputerToolsServer` and the app-attached stdio entrypoint.
 - `/contracts` and `/extension`: schemas shared with desktop and browser adapters.
 - `/desktop`: explicit discovery and registration for Mako's desktop integration.
 
-`/cli` and `/cloud` resolve executable entrypoints. Internal files have no wildcard
-exports. MCP, CLI and desktop all use the same targeting, capture and cleanup code.
+`/cli` resolves the sole public executable entrypoint. Internal files have no wildcard
+exports. CLI and desktop use the same targeting, capture and cleanup code.
 Changes to engine code invalidate old CLI session descriptors; reconnect using the
 current owner instead of silently mixing versions.
 

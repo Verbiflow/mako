@@ -19,11 +19,11 @@ import {
 
 async function main() {
   const { values } = parseArgs({
-    options: { config: { type: "string" }, help: { type: "boolean" }, session: { type: "boolean" } },
+    options: { config: { type: "string" }, help: { type: "boolean" } },
   })
   if (values.help) {
     process.stdout.write(
-      "mako-control-mcp --config /absolute/job.json\nLinux job-scoped Local Control over MCP stdio. See docs/local-control-runtime.md.\n"
+      "mako-control session start --config /absolute/job.json\nLinux job-scoped Local Control session supervisor. See docs/local-control-runtime.md.\n"
     )
     return
   }
@@ -79,24 +79,13 @@ async function main() {
     if (stopping) return
     stopping = true
     reason = why
-    process.stdin.unpipe(child.stdin!)
     if (child.connected) child.send({ kind: "stop", reason }, () => {})
     deadline = setTimeout(killGroup, config.shutdownMs + 2000)
   }
   process.once("SIGTERM", () => stop("SIGTERM"))
   process.once("SIGINT", () => stop("SIGINT"))
-  if (!values.session) {
-    process.stdin.once("end", () => stop("stdin-eof"))
-    process.stdin.once("error", () => stop("stdin-error"))
-  }
   process.stdout.once("error", () => stop("stdout-closed"))
-  child.stdin!.on("error", () => stop("worker-input-closed"))
-  // The MCP stream is forwarded with Node stream backpressure; diagnostics never
-  // enter stdout. A worker crash is never repaired by replaying this input.
-  if (!values.session) {
-    process.stdin.pipe(child.stdin!, { end: false })
-    child.stdout!.pipe(process.stdout, { end: false })
-  } else child.stdout!.resume()
+  child.stdout!.resume()
   child.stderr!.on("data", () => {}) // Worker writes bounded diagnostics to its private result directory.
   child.on("message", (raw) => {
     const message = CloudParentMessageSchema.safeParse(raw)
@@ -116,7 +105,7 @@ async function main() {
     if (CloudParentMessageSchema.safeParse(raw).data?.kind === "ready")
       clearTimeout(startup)
   })
-  child.send({ kind: "start", config, runtime, session: values.session ?? false }, () => {})
+  child.send({ kind: "start", config, runtime }, () => {})
   const result = await new Promise<{
     code: number | null
     signal: string | null
@@ -127,7 +116,6 @@ async function main() {
   clearTimeout(timeout)
   clearTimeout(startup)
   clearTimeout(deadline)
-  process.stdin.unpipe(child.stdin!)
   process.stdin.pause()
   // The worker is the leader of this job's process group. Also reap grandchildren
   // after an abrupt worker crash, including encoder and browser subprocesses.

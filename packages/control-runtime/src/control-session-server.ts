@@ -1,5 +1,5 @@
 import { createServer } from "node:http"
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -23,17 +23,17 @@ import {
 } from "./control-session-protocol.js"
 
 const engineBuild = controlSessionBuild()
-// Preserve a load-time identity without making a missing optional CLI payload
-// crash MCP-only callers. Starting the CLI transport still reports this failure.
+// Preserve load-time identity; transport startup reports a missing payload.
 void engineBuild.catch(() => {})
 
 /** The socket borrows one engine. Closing a request never closes its session. */
 export async function serveControlSession(
   session: ControlSession,
-  options: { onStop?: () => void } = {}
+  options: { onStop?: () => void; directory?: string } = {}
 ) {
   const build = await engineBuild
-  const directory = await mkdtemp(join(tmpdir(), "mako-control-"))
+  const directory = options.directory ?? await mkdtemp(join(tmpdir(), "mako-control-"))
+  if (options.directory) await mkdir(directory, { mode: 0o700 })
   await chmod(directory, 0o700)
   const socket = join(directory, "session.sock")
   const file = join(directory, "session.json")

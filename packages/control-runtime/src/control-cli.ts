@@ -19,6 +19,7 @@ import {
   RecordingOptionsSchema,
   RecordingReceiptSchema,
 } from "@mako/control/control"
+import { controlCommandHelp, controlCommands } from "./control-cli-help.js"
 import { isMainModule } from "./main-module.js"
 import {
   readControlSession,
@@ -32,44 +33,6 @@ import {
 import { CloudControlConfigSchema } from "./cloud-control-config.js"
 import { BrowserCommandSchema } from "./contracts/browser-control.js"
 
-const help = `mako-control — composable commands over one persistent Local Control session
-
-Connect to the sessionFile returned by Mako's mako_control_status, or on Linux:
-  mako-control session start --config job.json
-  mako-control session stop --session-file /private/session.json
-
-Discovery and exact targets:
-  mako-control browsers --session-file session.json
-  mako-control connect --browser ID --session-file session.json
-  mako-control tabs --browser ID --session-file session.json
-  mako-control open --browser ID --url https://example.com --session-file session.json > target.json
-  mako-control claim --browser ID --tab ID --session-file session.json > target.json
-  mako-control apps --session-file session.json
-  mako-control windows --pid 42 --session-file session.json
-
-Read, act and record:
-  mako-control observe --target-file target.json --session-file session.json
-  mako-control shot --target-file target.json --role button --name Save --format png --output 'Save button.png' --session-file session.json
-  mako-control act --target-file target.json --input operation.json --session-file session.json
-  mako-control record start --target-file target.json --directory ./recordings --session-file session.json > recording.json
-  mako-control record stop --input recording.json --wait --session-file session.json
-  mako-control exec --source-file workflow.js --session-file session.json
-  mako-control diagnostics --session-file session.json
-  mako-control help --session-file session.json
-
---input, --target-file and --source-file accept - for stdin (one per command).
-Every command writes one JSON result to stdout. Errors are JSON on stderr.
-shot requires --output; --format png|jpeg selects bytes, independent of the filename.
---overwrite explicitly replaces an existing file.
-record stop --wait returns after finalization; inspect status and video.
-exec waits for completion; state survives separate invocations. No MCP cells.
-act accepts a closed operation, e.g. {"kind":"set-text","ref":"...","text":"Hello"}.
-Exit zero reports dispatch/results, not proof the UI reached the intended state.
-Use handle.expect(...) in exec to verify. Unknown outcomes must never be replayed.
-Exit codes: 2 invalid request, 3 unavailable/stale session or target, 4 unknown
-outcome, 5 rejected/failed artifact, 130 cancelled. A command exit leaves its
-session alive; session stop ends it and finalizes owned recordings.
-`
 const object = z.record(z.string(), z.json())
 async function input(path: string) {
   const stream = path === "-" ? process.stdin : createReadStream(resolve(path))
@@ -148,6 +111,11 @@ export async function runControlCli(
     allowPositionals: true,
     options: {
       help: { type: "boolean" },
+      json: { type: "boolean" },
+      topic: { type: "string" },
+      tool: { type: "string" },
+      domain: { type: "string" },
+      method: { type: "string" },
       "session-file": { type: "string" },
       config: { type: "string" },
       browser: { type: "string" },
@@ -168,8 +136,8 @@ export async function runControlCli(
       wait: { type: "boolean" },
     },
   })
-  if (values.help || positionals.length === 0) {
-    process.stdout.write(help)
+  if (values.help || positionals.length === 0 || positionals[0] === "help") {
+    process.stdout.write(controlCommandHelp(positionals[0] === "help" ? positionals.slice(1) : positionals, values.json))
     return
   }
   if (positionals.length > 2)
@@ -181,46 +149,7 @@ export async function runControlCli(
   const commandKey = ["session", "record"].includes(positionals[0])
     ? positionals.join(" ")
     : positionals[0]
-  const flags = new Map<string, string[]>(
-    Object.entries({
-      "session start": ["config"],
-      "session stop": [],
-      status: [],
-      help: ["input"],
-      diagnostics: [],
-      browsers: [],
-      apps: [],
-      windows: ["pid"],
-      tabs: ["browser"],
-      connect: ["browser"],
-      open: ["browser", "url", "input"],
-      claim: ["browser", "tab"],
-      observe: ["target-file", "input"],
-      act: ["target-file", "input"],
-      shot: [
-        "target-file",
-        "input",
-        "output",
-        "format",
-        "overwrite",
-        "role",
-        "name",
-        "max-side",
-      ],
-      "record start": [
-        "target-file",
-        "input",
-        "directory",
-        "fps",
-        "max-side",
-        "name",
-      ],
-      "record stop": ["target-file", "input", "wait"],
-      "record status": ["target-file", "input"],
-      exec: ["source-file"],
-    })
-  )
-  const allowed = flags.get(commandKey)
+  const allowed = controlCommands.get(commandKey)?.flags
   if (
     !allowed ||
     (!["session", "record"].includes(positionals[0]) &&
@@ -232,10 +161,10 @@ export async function runControlCli(
       "not-dispatched"
     )
   for (const key of Object.keys(values))
-    if (key !== "session-file" && !allowed.includes(key))
+    if (key !== "session-file" && key !== "json" && !allowed.includes(key))
       throw new ControlFault(
         "invalid-request",
-        `--${key} is not an option for ${commandKey}. See --help.`,
+        `--${key} is not an option for ${commandKey}. Run mako-control ${commandKey} --help.`,
         "not-dispatched"
       )
   if (
@@ -260,7 +189,7 @@ export async function runControlCli(
       if (process.platform !== "linux")
         throw new ControlFault(
           "unsupported",
-          "Local Mac sessions are owned by Mako's host. Use sessionFile from mako_control_status. session start creates an isolated Linux job.",
+          "Local Mac sessions are attached by Mako at task launch. session start creates an isolated Linux job.",
           "not-dispatched"
         )
       if (!values.config)
@@ -290,7 +219,6 @@ export async function runControlCli(
           fileURLToPath(new URL("./cloud-control-main.js", import.meta.url)),
           "--config",
           configPath,
-          "--session",
         ],
         { detached: true, stdio: "ignore" }
       )
@@ -324,13 +252,14 @@ export async function runControlCli(
         throw error
       }
     }
-    if (!values["session-file"])
+    const sessionFile = values["session-file"] ?? process.env.MAKO_CONTROL_SESSION_FILE
+    if (!sessionFile)
       throw new ControlFault(
         "invalid-request",
-        "Supply --session-file from the existing session; no new session was started.",
+        "No task session is attached. Launch through Mako, use --session-file for an existing session, or session start for an isolated Linux job.",
         "not-dispatched"
       )
-    const descriptor = await readControlSession(resolve(values["session-file"]))
+    const descriptor = await readControlSession(resolve(sessionFile))
     const payload = values.input
       ? object.parse(JSON.parse(await input(values.input)))
       : {}
@@ -360,7 +289,9 @@ export async function runControlCli(
       case "status":
         operation = { method: "status" }
         break
-      case "help":
+      case "api":
+        for (const key of ["topic", "tool", "domain", "method"] as const)
+          if (values[key] !== undefined) payload[key] = values[key]
         operation = { method: "help", args: payload }
         break
       case "diagnostics":

@@ -36,7 +36,6 @@ export const CloudWorkerMessageSchema = z.discriminatedUnion("kind", [
     kind: z.literal("start"),
     config: CloudControlConfigSchema,
     runtime: z.string(),
-    session: z.boolean().optional(),
   }),
   z.object({ kind: z.literal("stop"), reason: z.string() }),
 ])

@@ -17,13 +17,10 @@
     "./contracts": "./dist/contracts.js",
     "./session": "./dist/session.js",
     "./extension": "./dist/browser-extension-protocol.js",
-    "./mcp": "./dist/computer-tools-main.js",
-    "./cli": "./dist/control-cli.js",
-    "./cloud": "./dist/cloud-control-main.js"
+    "./cli": "./dist/control-cli.js"
   },
   "bin": {
-    "mako-control": "dist/control-cli.js",
-    "mako-control-mcp": "dist/cloud-control-main.js"
+    "mako-control": "dist/control-cli.js"
   },
   "files": [
     "dist/**/*.js",
