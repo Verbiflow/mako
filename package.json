@@ -74,7 +74,7 @@
     "relay:typecheck": "npm run typecheck --workspace @mako/relay",
     "control:build": "npm run build --workspace @mako/control",
     "control:test": "npm test --workspace @mako/control",
-    "test:control-cli": "npm run build:electron && node scripts/test-control-session-build.mjs && node --import tsx scripts/test-control-input-errors.mjs && node scripts/test-control-cli.mjs && node scripts/test-control-cli-output-faults.mjs && tsx scripts/test-browser-modal.ts && node scripts/test-control-desktop-session.mjs && tsx scripts/test-control-owner.ts",
+    "test:control-cli": "npm run build:electron && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node --import tsx scripts/test-control-input-errors.mjs && node scripts/test-control-cli.mjs && node scripts/test-control-cli-output-faults.mjs && tsx scripts/test-browser-modal.ts && node scripts/test-control-desktop-session.mjs && tsx scripts/test-control-owner.ts",
     "test:control-preview": "tsx scripts/test-runtime-response.ts && tsx scripts/test-control-previews.ts && tsx --tsconfig tsconfig.app.json scripts/test-control-preview-state.ts && tsx --tsconfig tsconfig.app.json scripts/test-control-preview-painter.ts",
     "audit:control-preview": "npm run build:electron && node scripts/audit-control-preview.mjs",
     "test:control-recording": "tsx scripts/test-browser-focus.ts && tsx scripts/test-browser-capture.ts && tsx scripts/test-native-capture.ts && tsx scripts/test-control-recording.ts && tsx scripts/test-control-recording-stream.ts && tsx scripts/test-browser-recording.ts && tsx scripts/test-native-recording.ts",
@@ -96,7 +96,7 @@
     "test:live": "npm run test:live-prompt-delivery && tsx scripts/test-live-conversations.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
     "verify:sessions": "npm run typecheck && npm test --workspace @mako/sessions && npm run test:live && npm run test:codex-protocol && npm run test:providers && npm run test:host && npm run test:stage && npm run test:performance && npm run lint && npm run build",
     "test:transfer-scheduling": "node --import tsx scripts/test-transfer-scheduling.ts",
-    "test:conversation-control": "npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-child-workspace.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts",
+    "test:conversation-control": "node scripts/test-catalog-readiness.mjs && npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-child-workspace.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts",
     "test:provider-e2e": "npm run build:electron && node scripts/test-provider-e2e.mjs",
     "test:provider-startup": "tsx scripts/test-provider-launch-trace.ts && tsx scripts/test-provider-startup.ts && tsx scripts/test-cursor-startup.ts",
     "clean:fixture-sessions": "tsx scripts/clean-fixture-sessions.ts",
@@ -135,7 +135,7 @@
     "test:control-driver-install": "node scripts/test-control-driver-install.mjs",
     "prepare:control-media": "node scripts/build-control-media.mjs",
     "build:control-runtime": "node scripts/prune-host-output.mjs && tsgo -b packages/control && tsgo -b packages/control-runtime",
-    "test:control-packages": "npm run build:control-runtime && node packages/control-runtime/test/lifecycle.mjs && node packages/control-runtime/test/media.mjs && node scripts/test-control-session-build.mjs && node scripts/test-control-package-consumer.mjs && node scripts/test-control-runtime-package.mjs && node scripts/linux-control/test-acceptance-payload.mjs"
+    "test:control-packages": "npm run build:control-runtime && node packages/control-runtime/test/lifecycle.mjs && node packages/control-runtime/test/media.mjs && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node scripts/test-control-package-consumer.mjs && node scripts/test-control-runtime-package.mjs && node scripts/linux-control/test-acceptance-payload.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
