@@ -38,7 +38,7 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.21 selected for new launches; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | +mako.21 installed for new Mac driver launches. Latest signed candidate `3c1d563e25a9bd78` includes persistent-JS MCP, the ACP negotiation fix and idle-worker crash containment. Packaged HTTP MCP → private worker → regular Aside/native acceptance, explicit images, dialog recovery, reset/worker-fault retention, CLI/state/cleanup and both startup routes pass. | Installed app remains `345bfd91c64009c6`. The first installation attempt aborted when the shared host changed. A fresh idle-only retry was queued at 2026-09-24 22:37 UTC; only this conversation was active at that check. [Live deployment receipt](local-control-mcp-deployment.json). Installer refuses host/build changes, retains the previous app, verifies the new host and reruns installed MCP checks. Candidate acceptance is not installed-host proof. |
+| Installed components | +mako.21 installed for new Mac driver launches. Latest signed candidate `3c1d563e25a9bd78` includes persistent-JS MCP, the ACP negotiation fix and idle-worker crash containment. Packaged HTTP MCP → private worker → regular Aside/native acceptance, explicit images, dialog recovery, reset/worker-fault retention, CLI/state/cleanup and both startup routes pass. | Build `3c1d563e25a9bd78` is installed. This resumed conversation successfully used its MCP for Aside background page observation/cleanup and native Ghostty observation. The automatic rollout stopped after replacement with a JSON parsing error, before installed packaged acceptance ran. [Live deployment receipt](local-control-mcp-deployment.json). Candidate acceptance and this access check do not complete installed workflow acceptance. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -389,6 +389,8 @@ state. This also closes the older LC-14 contention/invalidation work.
 
 ## LC-23 — Preview isolation and installed browser rollout
 
+**Latest installed check (2026-09-24):** `/Applications/Mako.app` now contains build `3c1d563e25a9bd78`. This resumed conversation received and successfully called the actual `mako-control` MCP tools: first-use SDK docs, readiness, extension connection to Aside Work, disposable background tab creation/observation/close (absence verified), and native Ghostty window observation. The native read intentionally used depth 2 and reported incomplete coverage. The automatic rollout stopped after installation with a JSON parsing error, before its packaged acceptance commands ran; those checks remain pending. This live access check supersedes the older queued-install status below, but does not establish full workflow parity.
+
 **Status: current MCP candidate `3c1d563e25a9bd78` passes packaged Aside/native
 acceptance; installation is waiting for idle.** [Live receipt](local-control-mcp-deployment.json).
 The first MCP attempt aborted at 15:10 UTC when the shared host changed; no app
@@ -662,7 +664,7 @@ runs; symbols, marketing fps and synthetic transport timings are not substitutes
 
 ## LC-29 — Agent discovery and MCP integration
 
-**Status: fresh Codex/Claude/Cursor browser jobs and Codex/Claude/Cursor/Grok ACP native jobs completed; final signed candidate passes. Installation waits for idle. Broader comparative usability remains open.**
+**Status: provider trials and signed candidate checks pass; build `3c1d563e25a9bd78` is installed and live MCP access works. Automated installed acceptance stopped on a JSON parsing error. Direct historical session evidence is recorded; broader comparative usability remains open.**
 [Discovery audit and accepted design](local-control-cli-discovery.md).
 [Implementation, retired-MCP comparison and test evidence](local-control-agent-repl.md).
 This supplements LC-20 and LC-27. MCP is the primary Mako agent interface; the CLI
@@ -675,7 +677,7 @@ Local implementation now exposes `js` and `js_reset`, with persistent bindings,
 first-use/focused docs, explicit images and shared ownership. Tests pass for real
 MCP-over-HTTP cancellation, revoked grants, package consumers, stale refs across
 interfaces and reset without target cleanup. No new dependency or CLI subprocess
-was added. Candidate `3c1d563e25a9bd78` includes the re-review fixes and passes packaged HTTP MCP acceptance; it is waiting for idle installation.
+was added. Candidate `3c1d563e25a9bd78` includes the re-review fixes and passes packaged HTTP MCP acceptance; it is installed, with live browser/native MCP access verified and automated installed acceptance still pending.
 
 Separate whether the agent discovers the available tool from whether it follows
 its targeting, observation, verification and recovery rules. Current startup
@@ -694,9 +696,18 @@ passes the new candidate while retaining its tab. Failed runs and test-runner
 limitations are preserved in the [review](local-control-agent-repl.md#september-24-re-review-and-fresh-agent-acceptance).
 The Japanese physical IME test remains deferred at the user's request.
 
+Direct review of default/dev Mako session databases found concrete old-MCP
+connection guessing, `code`/`source` mismatch, inconsistent query keys and target
+recall confusion. [Session evidence](local-control-cli-discovery.md#session-evidence-checked-directly-on-september-24)
+records the session/block IDs, current mitigations and limits. Add disconnected
+browser recovery, obsolete API history and reset/compaction recovery to ordinary
+agent trials. Inspect result envelopes rather than trusting `completed` labels;
+measure inventory/help output cost. Do not attribute these old-MCP failures to CLI
+migration or count source-search keyword matches as control use.
+
 Next:
 
-1. Complete the queued idle installation and its automatic installed MCP checks.
+1. Resolve the post-install JSON parsing failure and run the installed MCP checks.
    Then verify an ordinary task launched by the new default desktop host; invoking
    installed ASAR modules alone does not prove that host's provider bootstrap.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider

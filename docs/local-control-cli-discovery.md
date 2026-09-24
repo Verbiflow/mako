@@ -31,9 +31,55 @@ CLI migration. No installer was run during this investigation.
 
 A read-only Mako session-database check also found that a keyword match on
 `mako-control` can merely be a Docker image name in shell output. Such matches
-are not CLI adoption or failure evidence. The user was asked for a specific
-example; none was supplied before this initial report. Do not count this
+are not CLI adoption or failure evidence. The initial request for a specific example is superseded by the direct session
+review below; the user asked us to find the evidence ourselves. Do not count this
 conversation's development commands as ordinary agent discovery.
+
+## Session evidence checked directly on September 24
+
+The user asked us to find examples ourselves. Read-only searches covered 147
+conversation databases under Mako's default and dev profiles, excluding this
+investigation's active conversation. The search examined tool names and inputs
+in saved blocks and imported base entries; keywords in output alone were not
+counted. It produced 1,030 candidate records in 21 databases **before manual
+classification**. These are search candidates, not usage counts: source edits,
+searches, inherited history and duplicate conversations are present. No failure
+rate or CLI/MCP comparison can be derived from that count.
+
+The following concrete records were checked with their complete stored tool
+inputs/outputs. None of the cited block IDs had pending `block_appends` rows.
+Database block IDs are local evidence locators; these private databases are not
+repository artifacts. The exact host build is not recorded in these rows, so
+attribute them only to the observed tool contract, not a guessed release.
+
+| Session / provider | Observed behavior | Implication for the current MCP |
+| --- | --- | --- |
+| `1fcfc788-e429-4707-9de8-d5258d3aa854`, Claude, double-tab-bar task; blocks 56, 61, 63, 67 | Opening the dev browser failed with “Connect this browser first.” The agent guessed `browser.connect`, got `browser is not defined`, fetched help, then used the documented advanced connect route. Screenshot input subsequently rejected `target.kind`. | Old MCP discovery succeeded, but connection instructions and target contracts caused recovery work. First-use docs now name `control.connectBrowser(id)` and typed handles own screenshot targeting. Preserve this exact disconnected-browser job as a fresh-agent acceptance case. |
+| `af856bab-cfc4-430f-a1d5-50cd04eb713f`, Cursor, “app doesn't feel snappy”; block 1076 | Sent `{code: ...}` to `mako_control_exec`, which required `source`; the tool correctly rejected it before dispatch. | This is an old MCP argument mismatch, not evidence of CLI misuse. Current `js` takes `code`, waits for completion and has no cell-collection contract. Test continuation from old context as well as fresh startup. |
+| Same Cursor session; blocks 2410, 2457–2458 | Listing tabs while disconnected failed; later `select({name: /.../})` rejected `name`, followed by another observations help call. Eight explicit help calls are present across the long session, not eight before its first action. | Current docs explain connection and consistent string `role`/`name` queries; regex matching remains unsupported. Measure help cost per task/turn instead of counting a whole evolving session as onboarding. |
+| `4a327b69-78cb-4ac6-bee6-7557fa707fd5`, Cursor, client-error investigation; blocks 77, 79–80 | Saved a target through `checkpoint`, then assumed `(await recall()).remember.target`; the read failed. The next call copied the previous exact target receipt and observed it. | Old explicit state bookkeeping was confusing. Persistent bindings now handle ordinary calls; reset/compaction acceptance must still prove exact-target recovery. This record does not show an uncertain input being replayed. |
+
+These examples used `mako_control_exec`/`mako_control_help`, the retired MCP
+contract. They establish real usability problems predating the newest integration.
+They do **not** establish that a CLI migration caused a regression or that the
+new MCP has solved every problem. Some tool records label an error-containing
+result `completed`; future metrics must inspect result envelopes and independent
+outcomes, not just the provider's status label. Likewise, error text inside a
+successful UI observation is page content, not a tool failure.
+
+The newly installed MCP did work in this resumed conversation: automatic docs,
+explicit Aside extension connection, background scratch-page observation/cleanup,
+and depth-limited native Ghostty observation. This is prompted live access proof,
+not an unprompted discovery benchmark. Its app/tab inventories also returned
+installed-but-stopped apps and non-selectable browser targets; measure the context
+cost before changing defaults or hiding potentially useful diagnostic information.
+
+Next acceptance jobs should cover disconnected-browser recovery, continuation
+with an obsolete API in history, reset/compaction target recovery, and ordinary
+UI work that does not name a tool. Keep endpoint invocation evidence, exact
+outcome checks and output-byte measurements. Existing provider trials remain
+separate from these historical sessions. No additional session identifiers are
+needed from the user to continue the investigation.
 
 ## Measured documentation cost
 
