@@ -16,6 +16,7 @@ export interface AcpQueuedPrompt {
 }
 
 interface AcpConversationBase {
+  hasSessionQuestions?: boolean
   history?: LiveSnapshot["history"]
   replyBindingId?: string
   pendingPrompts?: PendingPrompt[]
@@ -203,7 +204,8 @@ export function acpForThread(
     if (!conversation) continue
     const available =
       conversation.kind === "starting" ||
-      conversation.session.status !== "closed"
+      conversation.session.status !== "closed" ||
+      Boolean(conversation.control?.questions?.length || (!conversation.hydrated && conversation.hasSessionQuestions))
     const ownsIdentity =
       identity &&
       conversation.kind === "live" &&

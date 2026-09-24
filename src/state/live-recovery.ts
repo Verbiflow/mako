@@ -314,6 +314,7 @@ export function hydrateLiveSummaries(
       replaceAcpConversation(summary.session.id, {
         ...previous,
         session: summary.session,
+        hasSessionQuestions: summary.hasSessionQuestions,
         hydrated: false,
         nativePaths: summary.nativePaths,
         permission: null,
@@ -338,6 +339,7 @@ export function hydrateLiveSummaries(
       key: summary.session.id,
       draftKey: summary.session.id,
       session: summary.session,
+      hasSessionQuestions: summary.hasSessionQuestions,
       harness: summary.session.harness,
       cwd: summary.session.cwd,
       title: summary.session.title,

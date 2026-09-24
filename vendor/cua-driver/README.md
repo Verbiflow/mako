@@ -3,7 +3,13 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.17`. Mac lossless values and keyboard changes are retained. Linux adds
+`0.28.2+mako.21`. The current Mac candidate adds bounded attached-sheet
+discovery shared by observation and exact input validation. It still requires the
+sheet's own CGWindowID; no title, geometry or parent-window substitution is allowed.
+Mac +21 is signed and installed for new launches; exact file selection and
+cancellation pass through the CLI. Incomplete panel coverage and cross-process
+dialogs remain gates; see [the evidence](../../docs/local-control-file-sheet-evidence.md). Mac lossless values
+and keyboard changes are retained. Linux adds
 exact values and coverage, retained accessibility objects for semantic input,
 modal refusal and focus checks before foreground input. Non-actionable rows can
 omit `element_index`; the host handles them as readable containers.
@@ -46,8 +52,10 @@ exact-window texture capture and covered video, and checks Overview/modal/lock
 state before attesting keyboard focus. Minimization ends capture and
 retains playable partial video. The helper and installer ship with the Linux
 package. Sway hidden capture/video and other compositors remain unverified. Linux x64
-passes complete jobs and X11 recording under OrbStack translation; native
-Intel/AMD hardware performance is not established.
+passes complete jobs and X11 recording under OrbStack translation.
+Native AMD +19 acceptance covers X11 jobs/gestures/recording, Sway scale and
+rotation and standalone lifecycle; see [platform validation](../../docs/local-control-native-validation.md).
+Linux remains at +19 until +21 target packaging and acceptance complete.
 
 `node scripts/package-control-driver.mjs <checkout>` signs the Mac build and checks
 its binary/version. `node scripts/install-control-driver.mjs` installs the manifest's

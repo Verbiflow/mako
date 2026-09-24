@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..d17dbf7 100644
+index a91f724..47c6d6d 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..d17dbf7 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..4857209 100644
+index 351b086..ca2e935 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..4857209 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.19"
++version = "0.28.2+mako.21"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -5547,11 +5547,70 @@ index 02ba09c..a376484 100644
 +    }
 +    result
 +}
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+index c07f19b..c3f7731 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -2,7 +2,7 @@
+ //!
+ //! Gathers the facts [`cua_driver_core::background_input`] needs about one
+ //! requested `(pid, CGWindowID)` immediately before a background mutation:
+-//! WindowServer ownership, fresh `AXWindows` membership (mapped through
++//! WindowServer ownership, fresh window/sheet membership (mapped through
+ //! `_AXUIElementGetWindow`), minimized/hidden state, competing same-pid AX
+ //! top-level keyboard destinations, and addressed-element ancestry. All reads are
+ //! bounded and fail closed — an unreadable fact never unlocks a route.
+@@ -13,8 +13,8 @@ use cua_driver_core::background_input::{
+ };
+ 
+ use super::bindings::{
+-    ax_get_window_id, copy_ax_windows, copy_bool_attr, copy_element_attr, copy_string_attr,
+-    focused_element_of_pid, AXUIElementCreateApplication, AXUIElementRef,
++    ax_get_window_id, copy_bool_attr, copy_element_attr, copy_string_attr, focused_element_of_pid,
++    AXUIElementCreateApplication, AXUIElementRef,
+ };
+ use crate::windows::{all_windows, resolve_window_owner, WindowOwner};
+ 
+@@ -31,6 +31,11 @@ const MAX_ANCESTRY_DEPTH: usize = 40;
+ ///
+ /// `element` must be a valid `AXUIElementRef` for the duration of the call.
+ pub unsafe fn element_window_id(element: AXUIElementRef) -> Option<u32> {
++    // A sheet's AXWindow may name its parent; its own native ID takes precedence.
++    let role = copy_string_attr(element, "AXRole")?;
++    if role == "AXSheet" {
++        return ax_get_window_id(element);
++    }
+     if let Some(window) = copy_element_attr(element, "AXWindow") {
+         let window_id = ax_get_window_id(window);
+         CFRelease(window as CFTypeRef);
+@@ -89,7 +94,7 @@ pub unsafe fn focused_element_in_window(pid: i32, window_id: u32) -> Option<AXUI
+     }
+ }
+ 
+-/// One fresh `AXWindows` row: the mapped CGWindowID plus its minimized state.
++/// One freshly resolved window or sheet: the mapped CGWindowID plus its minimized state.
+ /// `minimized: None` means the attribute could not be read — unknown, not
+ /// "not minimized".
+ struct AxWindowRecord {
+@@ -97,11 +102,11 @@ struct AxWindowRecord {
+     minimized: Option<bool>,
+ }
+ 
+-/// Map the application's fresh `AXWindows` through `_AXUIElementGetWindow`.
++/// Map fresh windows and attached sheets through `_AXUIElementGetWindow`.
+ /// Windows whose id the SPI cannot resolve are omitted: an unmappable window
+ /// can never satisfy an exact-target requirement.
+ unsafe fn ax_window_records(app: AXUIElementRef) -> Vec<AxWindowRecord> {
+-    copy_ax_windows(app)
++    super::window_surfaces::copy_window_surfaces(app)
+         .into_iter()
+         .filter_map(|window| {
+             let record = ax_get_window_id(window).map(|window_id| AxWindowRecord {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/mod.rs
-index ee7b6c4..6bd4230 100644
+index ee7b6c4..98c857d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/mod.rs
-@@ -16,10 +16,12 @@
+@@ -16,12 +16,15 @@
  //! - Non-indexed (no actions, not interesting): `- AXRole = "value"`
  //! - 2-space indent per depth level
  
@@ -5563,7 +5622,10 @@ index ee7b6c4..6bd4230 100644
 +pub mod read_budget;
  pub mod tree;
  pub mod window_scope;
++pub mod window_surfaces;
  
+ pub use cache::ElementCache;
+ pub use tree::{
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/read_budget.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/read_budget.rs
 new file mode 100644
 index 0000000..f12aba6
@@ -5731,7 +5793,7 @@ index 0000000..f12aba6
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
-index ee1f5d3..c487bdd 100644
+index ee1f5d3..6fffa38 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
 @@ -96,7 +96,6 @@ pub struct AXNode {
@@ -5742,7 +5804,31 @@ index ee1f5d3..c487bdd 100644
      value_description: Option<String>,
      min_value: Option<f64>,
      max_value: Option<f64>,
-@@ -351,7 +350,8 @@ unsafe fn walk_element(
+@@ -226,7 +225,11 @@ pub fn walk_tree_bounded(
+         // AXChildren omits windows when the app isn't frontmost (AppKit limitation).
+         // AXWindows returns the window list regardless of activation state.
+         let from_children = copy_children(app_elem);
+-        let from_windows = copy_ax_windows(app_elem);
++        let from_windows = if window_id.is_some() {
++            super::window_surfaces::copy_window_surfaces(app_elem)
++        } else {
++            copy_ax_windows(app_elem)
++        };
+ 
+         let mut top_level = from_children;
+         for w in from_windows {
+@@ -259,8 +262,8 @@ pub fn walk_tree_bounded(
+                     let subrole = copy_string_attr(child, "AXSubrole");
+                     let identifier = copy_string_attr(child, "AXIdentifier");
+                     // Match AX window element → CGWindowID via private SPI.
+-                    // Only windows carry one, so skip the round-trip elsewhere.
+-                    let ax_window_id = if role == "AXWindow" {
++                    // Attached sheets carry their own native window ID too.
++                    let ax_window_id = if matches!(role.as_str(), "AXWindow" | "AXSheet") {
+                         ax_get_window_id(child)
+                     } else {
+                         None
+@@ -351,7 +354,8 @@ unsafe fn walk_element(
      max_elements: usize,
      max_depth: usize,
  ) {
@@ -5752,7 +5838,7 @@ index ee1f5d3..c487bdd 100644
          return;
      }
      // Enforce total-node cap — mirrors Swift's maxElements guard.
-@@ -370,31 +370,6 @@ unsafe fn walk_element(
+@@ -370,31 +374,6 @@ unsafe fn walk_element(
  
      let in_web_content = in_web_content || is_web_content_role(&role);
  
@@ -5784,7 +5870,7 @@ index ee1f5d3..c487bdd 100644
      // Keep AXTitle and AXDescription SEPARATE so that the tree format matches
      // the Swift reference: title → "title", description → (description).
      // This is critical for Calculator where AXTitle="" but AXDescription="2"
-@@ -420,8 +395,6 @@ unsafe fn walk_element(
+@@ -420,8 +399,6 @@ unsafe fn walk_element(
      let visible_description = description.as_deref().unwrap_or("").trim().to_owned();
      let visible_value = value.as_deref().unwrap_or("").trim().to_owned();
  
@@ -5793,7 +5879,7 @@ index ee1f5d3..c487bdd 100644
      // Some native controls expose no AX action names but do expose a writable
      // AXValue. Finder's transient inline-rename field is the important case:
      // rendering it without an element_index leaves an agent able to see the
-@@ -442,38 +415,11 @@ unsafe fn walk_element(
+@@ -442,38 +419,11 @@ unsafe fn walk_element(
      };
      let is_actionable = is_addressable(!actions.is_empty(), value_settable, enabled);
  
@@ -5832,7 +5918,7 @@ index ee1f5d3..c487bdd 100644
          value_description: copy_string_attr(element, "AXValueDescription")
              .map(|v| v.trim().to_owned())
              .filter(|v| !v.is_empty()),
-@@ -513,7 +459,9 @@ unsafe fn walk_element(
+@@ -513,7 +463,9 @@ unsafe fn walk_element(
              depth,
              parent_element_index: parent_index,
              frame,
@@ -5843,7 +5929,7 @@ index ee1f5d3..c487bdd 100644
              value_description: control_state.value_description.clone(),
              min_value: control_state.min_value,
              max_value: control_state.max_value,
-@@ -547,7 +495,9 @@ unsafe fn walk_element(
+@@ -547,7 +499,9 @@ unsafe fn walk_element(
              depth,
              parent_element_index: parent_index,
              frame,
@@ -5854,6 +5940,189 @@ index ee1f5d3..c487bdd 100644
              value_description: control_state.value_description.clone(),
              min_value: control_state.min_value,
              max_value: control_state.max_value,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
+index f23b53b..ac40f09 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
+@@ -14,7 +14,7 @@ use crate::windows::WindowOwner;
+ /// What the requested `window_id` turned out to be.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum WindowScope {
+-    /// A top-level AXWindow reported the requested CGWindowID.
++    /// An AXWindow or attached AXSheet reported the requested CGWindowID.
+     Matched,
+     /// WindowServer has no record of the requested CGWindowID — closed,
+     /// stale, or fabricated.
+@@ -26,8 +26,8 @@ pub enum WindowScope {
+         owner_pid: i32,
+         owner_app_name: String,
+     },
+-    /// The CGWindowID exists under the requested pid, but no top-level
+-    /// AXWindow claims it. The screenshot is still the requested window; the
++    /// The CGWindowID exists under the requested pid, but no discovered
++    /// AXWindow or attached AXSheet claims it. The screenshot is still the requested window; the
+     /// AX surface is not, so callers report a degraded (empty-tree) snapshot
+     /// rather than an error.
+     AxUnresolved { ax_window_count: usize },
+@@ -53,8 +53,7 @@ pub struct TopLevelCandidate {
+     /// report `AXStandardWindow` rather than a dialog subrole, but identify
+     /// themselves as `open-panel` / `save-panel`.
+     pub identifier: Option<String>,
+-    /// `_AXUIElementGetWindow` result, when the SPI resolved one. Only read
+-    /// for `AXWindow` roles.
++    /// `_AXUIElementGetWindow` result for a window or attached sheet.
+     pub ax_window_id: Option<u32>,
+ }
+ 
+@@ -133,7 +132,9 @@ where
+     let matched: Vec<usize> = candidates
+         .iter()
+         .enumerate()
+-        .filter(|(_, c)| c.role == "AXWindow" && c.ax_window_id == Some(requested))
++        .filter(|(_, c)| {
++            matches!(c.role.as_str(), "AXWindow" | "AXSheet") && c.ax_window_id == Some(requested)
++        })
+         .map(|(i, _)| i)
+         .collect();
+ 
+@@ -151,7 +152,8 @@ where
+         };
+     }
+ 
+-    // Matched: walk the requested window plus the non-window top-level children.
++    // A matched dialog walks only its exact root. A normal window also keeps
++    // non-window children, excluding sheets with their own mapped identities.
+     //
+     // The menu bar is deliberately among them. MACOS.md documents a
+     // two-snapshot menu flow whose first step reads `AXMenuBarItem` rows
+@@ -165,8 +167,11 @@ where
+         .iter()
+         .enumerate()
+         .filter(|(i, c)| {
+-            (c.role != "AXWindow" || matched.contains(i))
+-                && !(dialog_scope && c.role == "AXMenuBar")
++            if dialog_scope {
++                return matched.contains(i);
++            }
++            matched.contains(i)
++                || (c.role != "AXWindow" && !(c.role == "AXSheet" && c.ax_window_id.is_some()))
+         })
+         .map(|(i, _)| i)
+         .collect();
+@@ -354,6 +359,23 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn attached_sheet_uses_its_own_id_without_siblings_or_menu_bar() {
++        let candidates = [
++            TopLevelCandidate::new("AXWindow", Some(11)),
++            TopLevelCandidate::new("AXSheet", Some(22)),
++            TopLevelCandidate::new("AXSheet", Some(33)),
++            TopLevelCandidate::new("AXMenuBar", None),
++        ];
++        let sheet = decide_window_scope(&candidates, 22, never_called);
++        assert_eq!(sheet.scope, WindowScope::Matched);
++        assert_eq!(sheet.walk, vec![1]);
++        let parent = decide_window_scope(&candidates, 11, never_called);
++        assert_eq!(parent.walk, vec![0, 3]);
++        let stale = decide_window_scope(&candidates, 44, || WindowOwner::Unknown);
++        assert!(stale.walk.is_empty());
++    }
++
+     #[test]
+     fn scope_from_owner_defers_only_for_same_pid() {
+         assert_eq!(scope_from_owner(&WindowOwner::SamePid), None);
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_surfaces.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_surfaces.rs
+new file mode 100644
+index 0000000..5671fa2
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_surfaces.rs
+@@ -0,0 +1,84 @@
++//! Exact AX window and attached-sheet discovery shared by reads and input guards.
++//! Sheets are native windows too, but AppKit omits them from AXWindows.
++use super::bindings::{copy_ax_windows, copy_children, copy_string_attr, AXUIElementRef};
++use core_foundation::base::{CFEqual, CFRelease, CFTypeRef};
++use std::{
++    sync::{atomic::AtomicBool, Arc},
++    time::{Duration, Instant},
++};
++
++const MAX_SURFACES: usize = 64;
++const MAX_CHILDREN: usize = 256;
++
++/// Returns retained window/sheet elements. Never searches arbitrary content or
++/// matches titles/geometry. Incomplete discovery returns no input candidates.
++/// Caller must release every returned element. `app` must remain valid.
++pub unsafe fn copy_window_surfaces(app: AXUIElementRef) -> Vec<AXUIElementRef> {
++    let Some(left) = super::read_budget::remaining() else {
++        return Vec::new();
++    };
++    let (mut surfaces, complete) = super::read_budget::within(
++        Instant::now() + left.min(Duration::from_millis(500)),
++        Arc::new(AtomicBool::new(false)),
++        || {
++            let mut surfaces = Vec::new();
++            let roots = copy_ax_windows(app).into_iter().chain(copy_children(app));
++            for element in roots {
++                let role = copy_string_attr(element, "AXRole");
++                if role.is_none() {
++                    super::read_budget::failed();
++                }
++                if matches!(role.as_deref(), Some("AXWindow" | "AXSheet")) {
++                    retain_unique(&mut surfaces, element);
++                } else {
++                    CFRelease(element as CFTypeRef);
++                }
++            }
++            let mut index = 0;
++            while index < surfaces.len() && super::read_budget::remaining().is_some() {
++                let children = copy_children(surfaces[index]);
++                if children.len() > MAX_CHILDREN {
++                    super::read_budget::failed();
++                }
++                for (position, child) in children.into_iter().enumerate() {
++                    let role = if position < MAX_CHILDREN {
++                        copy_string_attr(child, "AXRole")
++                    } else {
++                        None
++                    };
++                    if role.is_none() {
++                        super::read_budget::failed();
++                    }
++                    if role.as_deref() == Some("AXSheet") {
++                        retain_unique(&mut surfaces, child);
++                    } else {
++                        CFRelease(child as CFTypeRef);
++                    }
++                }
++                index += 1;
++            }
++            surfaces
++        },
++    );
++    if !complete {
++        for element in surfaces.drain(..) {
++            CFRelease(element as CFTypeRef);
++        }
++        super::read_budget::failed();
++    }
++    surfaces
++}
++
++unsafe fn retain_unique(elements: &mut Vec<AXUIElementRef>, element: AXUIElementRef) {
++    if elements
++        .iter()
++        .any(|&known| CFEqual(known as CFTypeRef, element as CFTypeRef) != 0)
++    {
++        CFRelease(element as CFTypeRef);
++    } else if elements.len() >= MAX_SURFACES {
++        CFRelease(element as CFTypeRef);
++        super::read_budget::failed();
++    } else {
++        elements.push(element);
++    }
++}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 index 5d74ddd..68e43fc 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
@@ -7214,7 +7483,7 @@ index 652a372..4a935c7 100644
      }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
-index 9078607..71a729a 100644
+index 9078607..8fe5378 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 @@ -295,14 +295,22 @@ impl Tool for GetWindowStateTool {
@@ -7264,6 +7533,15 @@ index 9078607..71a729a 100644
              "returned_element_count": filtered_element_count,
              "elements_complete": elements_complete,
              "tree_markdown": tree_md,
+@@ -608,7 +617,7 @@ impl Tool for GetWindowStateTool {
+                 structured["degraded"] = serde_json::json!(true);
+                 structured["degraded_reason"] = serde_json::json!(format!(
+                     "ax_window_unresolved: window_id {window_id} exists and is owned by \
+-                     pid {pid}, but none of the {ax_window_count} AXWindow element(s) \
++                     pid {pid}, but none of the discovered windows or attached sheets (from {ax_window_count} AXWindow roots) \
+                      under that pid reports this CGWindowID. The tree is returned EMPTY \
+                      on purpose: the accessibility elements reachable under this pid \
+                      belong to other surfaces (the menu bar, other windows), not to the \
 @@ -697,6 +706,8 @@ impl Tool for GetWindowStateTool {
              is_error: None,
              structured_content: Some(structured),
