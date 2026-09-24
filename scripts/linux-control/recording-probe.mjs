@@ -1,9 +1,8 @@
+import { ControlCliProbe } from "../lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { readFile, writeFile } from "node:fs/promises"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { setTimeout as delay } from "node:timers/promises"
 const execute = promisify(execFile)
 const fps = Number(process.env.MAKO_RECORDING_FPS ?? 30)
@@ -14,39 +13,12 @@ for (let i = 0; i < 100; i++) {
   await delay(50)
 }
 const target = await read("/tmp/record-target.json")
-const client = new Client({ name: "recording-acceptance", version: "1" })
-await client.connect(
-  new StdioClientTransport({
-    command: process.execPath,
-    args: [
-      "/repo/packages/control-runtime/dist/computer-tools-main.js",
-      "--driver",
-      process.env.MAKO_RECORDING_DRIVER ?? "/target/debug/cua-driver",
-      "--socket",
-      "/tmp/mako-driver.sock",
-    ],
-    env: { ...process.env },
-    stderr: "inherit",
-  })
-)
+const client = new ControlCliProbe({ name: "recording-acceptance", version: "1" })
+await client.start({native:{driver:process.env.MAKO_RECORDING_DRIVER ?? "/target/debug/cua-driver",socket:"/tmp/mako-driver.sock"},env:{ ...process.env }})
 const receipts = []
 async function cell(source) {
-  let result = await client.callTool(
-    { name: "mako_control_exec", arguments: { source } },
-    undefined,
-    { timeout: 70_000 }
-  )
-  for (;;) {
-    const first = JSON.parse(
-      result.content.find((b) => b.type === "text")?.text ?? "{}"
-    )
-    if (first.status !== "running") break
-    result = await client.callTool(
-      { name: "mako_control_exec", arguments: { cell: first.cell } },
-      undefined,
-      { timeout: 70_000 }
-    )
-  }
+  let result = await client.request({method:"exec",arguments:{ source }}, { timeout: 70_000 })
+  
   const value = JSON.parse(
     result.content.filter((b) => b.type === "text").at(-1).text
   )

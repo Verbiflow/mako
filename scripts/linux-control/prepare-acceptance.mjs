@@ -38,7 +38,7 @@ async function copy(source, destination) {
   await writeFile(target, bytes, { mode: metadata.mode & 0o777 })
   files.push({ path: destination, bytes: bytes.length, sha256: sha256(bytes) })
 }
-const graph = await build({ entryPoints: ["packages/control-runtime/dist/computer-tools-main.js", "packages/control-runtime/dist/browser-service.js"], outdir: "/unused", bundle: true, platform: "node", format: "esm", packages: "external", write: false, metafile: true, logLevel: "silent" })
+const graph = await build({ entryPoints: ["packages/control-runtime/dist/desktop-session-worker.js", "packages/control-runtime/dist/browser-service.js"], outdir: "/unused", bundle: true, platform: "node", format: "esm", packages: "external", write: false, metafile: true, logLevel: "silent" })
 for (const file of Object.keys(graph.metafile.inputs)) {
   assert.match(file, /^packages\/control-runtime\/dist\/[\w./-]+\.js$/)
 
@@ -56,6 +56,7 @@ await copyJavaScript(resolve("packages/control-runtime/dist"))
 await copy("packages/control-runtime/package.json", "packages/control-runtime/package.json")
 await copy("scripts/linux-control/runtime/package.json", "package.json")
 await copy("scripts/linux-control/runtime/package-lock.json", "package-lock.json")
+await copy("scripts/lib/control-cli-probe.mjs", "scripts/lib/control-cli-probe.mjs")
 for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh"]) {
   await copy(join("scripts/linux-control", name), join("scripts/linux-control", name))
 }

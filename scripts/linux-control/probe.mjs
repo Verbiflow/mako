@@ -1,3 +1,4 @@
+import { ControlCliProbe } from "../lib/control-cli-probe.mjs"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import assert from "node:assert/strict"
@@ -92,41 +93,11 @@ try {
   assert.equal(entry.value, "")
   assert.equal(entry.value_exact, true)
   // Exercise the public Mako host and strict locators, not just raw driver calls.
-  const host = new Client({ name: "mako-linux-public-api", version: "1" })
-  await host.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        "/repo/packages/control-runtime/dist/computer-tools-main.js",
-        "--driver",
-        driver,
-        "--socket",
-        "/tmp/mako-driver.sock",
-      ],
-      env: { ...process.env },
-      stderr: "inherit",
-    })
-  )
+  const host = new ControlCliProbe({ name: "mako-linux-public-api", version: "1" })
+  await host.start({native:{driver:driver,socket:"/tmp/mako-driver.sock"},env:{ ...process.env }})
   const cell = async (source) => {
-    let result = await host.callTool(
-      { name: "mako_control_exec", arguments: { source } },
-      undefined,
-      { timeout: 60000 }
-    )
-    for (;;) {
-      const first = result.content.find((b) => b.type === "text")
-      let receipt
-      try {
-        receipt = JSON.parse(first?.text ?? "{}")
-      } catch {}
-      if (receipt?.status !== "running" || !Number.isInteger(receipt.cell))
-        break
-      result = await host.callTool(
-        { name: "mako_control_exec", arguments: { cell: receipt.cell } },
-        undefined,
-        { timeout: 60000 }
-      )
-    }
+    let result = await host.request({method:"exec",arguments:{ source }}, { timeout: 60000 })
+    
     if (result.isError) throw new Error(JSON.stringify(result))
     const blocks = result.content.filter((b) => b.type === "text")
     return JSON.parse(blocks.at(-1).text)

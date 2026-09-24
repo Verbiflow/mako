@@ -1,3 +1,4 @@
+import { ControlCliProbe } from "../lib/control-cli-probe.mjs"
 import { exerciseGestures } from "./wayland-gestures.mjs"
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
@@ -6,11 +7,9 @@ import { readFile, writeFile, stat } from "node:fs/promises"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const exec = promisify(execFile)
 let cover
-const client = new Client({ name: "wayland-acceptance", version: "1" })
+const client = new ControlCliProbe({ name: "wayland-acceptance", version: "1" })
 const evidence = { passed: false, calls: [] }
 async function readState() { return JSON.parse(await readFile("/tmp/wayland-target.json", "utf8")) }
 async function until(fn) {
@@ -20,12 +19,8 @@ async function until(fn) {
 }
 async function cell(source) {
   const start = performance.now()
-  let response = await client.callTool({ name: "mako_control_exec", arguments: { source } }, undefined, { timeout: 70000 })
-  for (;;) {
-    const receipt = JSON.parse(response.content.find(item => item.type === "text")?.text ?? "{}")
-    if (receipt.status !== "running") break
-    response = await client.callTool({ name: "mako_control_exec", arguments: { cell: receipt.cell } }, undefined, { timeout: 70000 })
-  }
+  let response = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   const result = JSON.parse(response.content.filter(item => item.type === "text").at(-1).text)
   evidence.calls.push({ source, result, milliseconds: performance.now() - start })
   if (response.isError || (result.code && result.outcome)) throw Error(JSON.stringify(result))
@@ -34,7 +29,7 @@ async function cell(source) {
 try {
   const target = await until(readState)
   await until(() => stat("/tmp/mako-driver.sock").then(value => value.isSocket()))
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["/repo/packages/control-runtime/dist/computer-tools-main.js", "--driver", process.env.MAKO_RECORDING_DRIVER, "--socket", "/tmp/mako-driver.sock"], env: { ...process.env }, stderr: "inherit" }))
+  await client.start({native:{driver:process.env.MAKO_RECORDING_DRIVER,socket:"/tmp/mako-driver.sock"},env:{ ...process.env }})
   const windows = await cell(`return await control.windows(${target.pid});`)
   evidence.windows = windows
   const window = windows.windows?.find(item => item.title.startsWith("Mako Wayland target")) ?? windows.find?.(item => item.title.startsWith("Mako Wayland target"))

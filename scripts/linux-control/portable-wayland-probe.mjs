@@ -1,8 +1,7 @@
+import { ControlCliProbe } from "../lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { readFile, writeFile } from "node:fs/promises"
 import { setTimeout as delay } from "node:timers/promises"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash } from "node:crypto"
@@ -10,7 +9,7 @@ import { createHash } from "node:crypto"
 // Compositors without a trusted window/input adapter must still support exact
 // AT-SPI form work, and must refuse raw input/capture rather than guess a target.
 const evidence = { passed: false, compositor: process.env.MAKO_COMPOSITOR, calls: [], jobs: [] }
-const client = new Client({ name: "portable-wayland-acceptance", version: "1" })
+const client = new ControlCliProbe({ name: "portable-wayland-acceptance", version: "1" })
 const read = async path => JSON.parse(await readFile(path, "utf8"))
 async function until(fn) {
   const deadline = Date.now() + 15000
@@ -23,12 +22,8 @@ async function until(fn) {
 }
 async function cell(source) {
   const start = performance.now()
-  let response = await client.callTool({ name: "mako_control_exec", arguments: { source } }, undefined, { timeout: 70000 })
-  for (;;) {
-    const receipt = JSON.parse(response.content.find(item => item.type === "text").text)
-    if (receipt.status !== "running") break
-    response = await client.callTool({ name: "mako_control_exec", arguments: { cell: receipt.cell } }, undefined, { timeout: 70000 })
-  }
+  let response = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   assert.equal(response.content.some(item => item.type === "image"), false, "Form work does not produce screenshots")
   const result = JSON.parse(response.content.filter(item => item.type === "text").at(-1).text)
   evidence.calls.push({ source, result, milliseconds: performance.now() - start })
@@ -43,7 +38,7 @@ try {
     compositor: (await exec(process.env.MAKO_COMPOSITOR, ["--version"])).stdout.trim(),
     driver: (await exec("/driver/cua-driver", ["--version"])).stdout.trim(),
     driverSha256: await digest("/driver/cua-driver"),
-    hostSha256: await digest("/repo/packages/control-runtime/dist/computer-tools-main.js"),
+    hostSha256: await digest("/repo/packages/control-runtime/dist/desktop-session-worker.js"),
     probeSha256: await digest(new URL(import.meta.url)),
   }
   const initial = await until(async () => {
@@ -53,7 +48,7 @@ try {
   })
   const { target } = initial
   evidence.initial = initial
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["/repo/packages/control-runtime/dist/computer-tools-main.js", "--driver", "/driver/cua-driver", "--socket", "/tmp/mako-driver.sock"], env: { ...process.env }, stderr: "inherit" }))
+  await client.start({native:{driver:"/driver/cua-driver",socket:"/tmp/mako-driver.sock"},env:{ ...process.env }})
   evidence.windows = await cell(`return await control.windows(${target.pid});`)
   const windows = evidence.windows.windows ?? evidence.windows
   assert.equal(windows.length, 1, "The pid-scoped target identifies exactly one fixture window")
