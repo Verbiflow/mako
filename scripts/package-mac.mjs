@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { z } from "zod"
 import { execFileSync } from "node:child_process"
 import { constants, createReadStream } from "node:fs"
 import { createHash } from "node:crypto"
@@ -168,11 +169,27 @@ try {
             "!**/*.map",
           ],
         },
-        ...["sessions", "relay", "control"].map((name) => ({
-          from: join(stage, "packages", name),
-          to: `node_modules/@mako/${name}`,
-          filter: ["package.json", "dist/**", "!**/*.map"],
-        })),
+        // Use the release manifest's package filters on the frozen inputs too.
+        // A second package list omitted control-runtime after its extraction.
+        ...buildConfig.files
+          .flatMap((entry) => {
+            const parsed = z
+              .object({
+                from: z.string(),
+                to: z.string(),
+                filter: z.array(z.string()).optional(),
+              })
+              .passthrough()
+              .safeParse(entry)
+            return parsed.success && parsed.data.from.startsWith("packages/")
+              ? [parsed.data]
+              : []
+          })
+          .map((entry) => ({
+            ...entry,
+            from: join(stage, entry.from),
+            filter: [...(entry.filter ?? []), "!**/*.map"],
+          })),
       ],
       extraResources: [...(buildConfig.extraResources ?? []), { from: join(stage, "vendor/kiri"), to: "kiri" }, { from: join(stage, "vendor/control-media"), to: "control-media" }],
       extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }],
@@ -237,11 +254,13 @@ try {
     if (
       file.path === "package.json" ||
       file.path.startsWith("build/") ||
-      file.path.endsWith(".map")
+      file.path.endsWith(".map") ||
+      (/^packages\/control(?:-runtime)?\//.test(file.path) &&
+        (file.path.endsWith(".d.ts") || file.path.endsWith("README.md")))
     )
       continue
     const target = file.path.replace(
-      /^packages\/(sessions|relay|control)\//,
+      /^packages\/(sessions|relay|control|control-runtime)\//,
       "node_modules/@mako/$1/"
     )
     assert.equal(

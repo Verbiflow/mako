@@ -16,6 +16,7 @@ const requests = new Map()
 const streams = new Set()
 let dispatches = 0
 let lostReply = false
+let invalidReads = 0
 const host = createServer(async (request, response) => {
   if (request.url === '/events') {
     response.writeHead(200, { 'content-type': 'application/x-ndjson' })
@@ -28,6 +29,11 @@ const host = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(chunk)
   const { channel, args } = JSON.parse(Buffer.concat(chunks).toString())
   const values = args.map(arg => arg.kind === 'absent' ? undefined : arg.value)
+  if (channel === 'mako:live-snapshot' && values[0] === 'invalid-read') {
+    invalidReads++
+    response.writeHead(200, { 'content-type': 'application/json' }).end('{invalid')
+    return
+  }
   let value
   if (channel === 'mako:live-prompt') {
     const [, id, text] = values
@@ -71,6 +77,9 @@ app.whenReady().then(async()=>{
  try {
   for(let i=0;i<2;i++) { const win=new BrowserWindow({show:false,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});windows.push(win);await win.loadURL(${JSON.stringify(origin)});await wait(()=>win.webContents.executeJavaScript('Boolean(window.ready)')); }
   const [a,b]=windows.map(w=>w.webContents);
+  const readFailure=await a.executeJavaScript('window.mako.liveSnapshot("invalid-read").then(()=>null,e=>({name:e.name,message:e.message}))');
+  assert.match(readFailure.message,/could not read the host response/);
+  assert.ok(!/restarting|not confirmed/.test(readFailure.message));
   await a.executeJavaScript('window.mako.livePrompt("conversation", "browser-first", "First browser message", [])');
   await wait(()=>b.executeJavaScript('events.some(e=>e.message==="First browser message")'));
   await b.executeJavaScript('window.mako.livePrompt("conversation", "browser-second", "Second browser message", [])');
@@ -101,6 +110,7 @@ try {
   clearTimeout(deadline)
   assert.equal(code, 0, output)
   assert.equal(dispatches, 4, 'lost response and abandoned tab did not cause duplicate provider dispatches')
+  assert.equal(invalidReads, 1, 'Malformed read is not misclassified as a disconnect and replayed')
   await invokeRuntime(socket, 'desktop-fixture', 'mako:live-prompt', ['conversation', 'desktop-next', 'Desktop continues', []])
   assert.equal(requests.size, 5)
   console.log('PASS: desktop socket transport continues the same host conversation')

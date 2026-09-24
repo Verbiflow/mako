@@ -9,7 +9,7 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { SessionMemory } from "../electron/session-memory.js"
 import { SharedConversations } from "../electron/shared-conversations.js"
 import { startWebHost } from "../electron/web-host.js"
-import { invokeRuntime, subscribeRuntime, probeRuntime } from "../electron/runtime-connection.js"
+import { invokeRuntime, subscribeRuntime, probeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection.js"
 import { runtimeLocation } from "../electron/runtime-service.js"
 import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
@@ -315,7 +315,8 @@ try {
   ownerHost.close()
   await until(() => events.some((event) => JSON.stringify(event).includes('"connected":false')), "peer disconnect reported")
   const lastRoute = desktopMemory.routeForSession("opencode", "opencode-native")!
-  await assert.rejects(router.route("mako:live-prompt", [lastRoute.conversationId, randomUUID(), "not dispatched"]), /restarting/)
+  await assert.rejects(router.route("mako:live-prompt", [lastRoute.conversationId, randomUUID(), "not dispatched"]), error =>
+    error instanceof RuntimeDisconnectedError && error.conversationId === lastRoute.conversationId)
   await new Promise((resolve) => setTimeout(resolve, 300))
   rmSync(ownerSocket, { force: true })
   ownerHost = await startWebHost(ownerSocket, ownerCall, absentFile, undefined, info(101))
