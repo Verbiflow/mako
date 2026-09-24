@@ -68,7 +68,9 @@ async function until(read, label, timeout = 30_000) {
   throw new Error(`Packaged shared-client startup failed: ${label}`)
 }
 function alive(child) {
-  return child.exitCode === null && child.signalCode === null
+  // LaunchServices' `open -W` can exit before the Electron client. Verify the
+  // application PID once discovered, including Quit and cleanup assertions.
+  return child.clientPid ? processAlive(child.clientPid) : child.exitCode === null && child.signalCode === null
 }
 function processAlive(pid) {
   try {

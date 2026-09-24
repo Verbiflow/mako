@@ -34,6 +34,8 @@ await server.connect(new StdioServerTransport());
 // result that names its snapshot and writes the capture to disk, an
 // unverifiable hotkey, an app list whose active app is never the target, a
 // huge accessibility tree, and an echo of every forwarded argument.
+// The fixture transport accepts degraded/malformed snapshots so the engine
+// boundary, rather than the MCP SDK output validator, handles those cases.
 const driverSource = `
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -41,7 +43,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 const server = new Server({name:'driver',version:'1'},{capabilities:{tools:{}}});
 const target = {session:{type:'string'},pid:{type:'integer',format:'int32'},window_id:{type:'integer',format:'uint32'},element_token:{type:'string'},snapshot_id:{type:'string'},max_elements:{type:'integer',format:'uint32'},screenshot_out_file:{type:'string'},delivery_mode:{type:'string',enum:['background','foreground']}};
 server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
-  {name:'get_window_state',description:'Capture. Returns both.',inputSchema:{type:'object',properties:target,required:['session','pid','window_id']},outputSchema:{type:'object',properties:{snapshot_id:{type:'string'},pid:{type:'integer',format:'int32'},window_id:{type:'integer',format:'uint32'},screenshot_scale:{type:'number',format:'double'}},required:['snapshot_id']}},
+  {name:'get_window_state',description:'Capture. Returns both.',inputSchema:{type:'object',properties:target,required:['session','pid','window_id']},outputSchema:{type:'object',properties:{snapshot_id:{type:['string','number']},pid:{type:'integer',format:'int32'},window_id:{type:'integer',format:'uint32'},screenshot_scale:{type:'number',format:'double'}}}},
   {name:'click',description:'Click',inputSchema:{type:'object',properties:target,required:['session']}},
   {name:'hotkey',description:'Press a key combination.',inputSchema:{type:'object',properties:{...target,keys:{type:'array',items:{type:'string'}}},required:['session','keys']}},
   {name:'list_apps',description:'Apps',inputSchema:{type:'object',properties:{session:{type:'string'}}}},
@@ -55,15 +57,16 @@ server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
   {name:'get_config',description:'Config.',inputSchema:{type:'object',properties:{}}}
 ]}));
 const cursorCalls=[];
-let writes=0; let clicks=0; let fieldValue=''; let captures=0; let images=0; let newest='';
+let writes=0; let clicks=0; let fieldValue=''; let captures=0; let images=0; let newest=''; let refreshes=0;
 // Like the driver: every capture is a new snapshot and only the newest
 // snapshot's tokens are honoured.
 const stale=(token)=>typeof token==='string'&&token!=='refuse'&&!token.startsWith(newest+':');
 server.setRequestHandler(CallToolRequestSchema,async request=>{
   const args=request.params.arguments;
   if(request.params.name==='get_window_state'){
+    if(args.window_id===9001 || args.window_id===9002 || (args.window_id===9003 && ++refreshes>1)){const value=args.window_id!==9002?{degraded:true,degraded_reason:'ax_window_unresolved',elements:[],elements_complete:true}:{snapshot_id:123,elements:[]};return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};}
     captures+=1; if(args.include_screenshot!==false) images+=1; newest='s'+(10+captures).toString(16).padStart(8,'0');
-    const elements=[{element_token:newest+':0',role:'AXButton',label:'Go'},{element_token:newest+':1',role:'AXMenuItem',label:'About'},...(clicks?[{element_token:newest+':2',role:'AXStaticText',label:'Done',value:'Done'}]:[]),{element_token:newest+':3',role:'AXTextField',label:'Name',value:fieldValue,value_exact:fieldValue!=='legacy-normalized'}];
+    const elements=[{element_token:newest+':0',role:'AXButton',label:'Go'},{element_token:newest+':90',role:'AXMenuBar',depth:0},{element_token:newest+':1',role:'AXMenuItem',label:'About',depth:1},...(clicks?[{element_token:newest+':2',role:'AXStaticText',label:'Done',value:'Done'}]:[]),{element_token:newest+':3',role:'AXTextField',label:'Name',value:fieldValue,value_exact:fieldValue!=='legacy-normalized'}];
     const value={snapshot_id:newest,pid:args.pid,window_id:args.window_id,max_elements:args.max_elements,screenshot_scale:2,tree_markdown:'- [0] AXWindow',_note:'prefer elements',elements,returned_element_count:elements.length,screenshot_file_path:args.screenshot_out_file,screenshot_mime_type:'image/png'};
     return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
   }
@@ -72,7 +75,7 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   if(request.params.name==='set_agent_cursor_motion'){ cursorCalls.push({session:args.session,glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms}); const value={motion:{glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms},session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_agent_cursor_enabled'){ cursorCalls.push({session:args.session,enabled:args.enabled}); const value={enabled:args.enabled,session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='get_config'){ const value={cursorCalls,captures,images,writes}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
-  if(request.params.name==='set_value'){ writes+=1; fieldValue=args.value; if(args.value==='unknown-outcome-fixture') return {isError:true,content:[{type:'text',text:'connection lost after possible write'}]}; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='set_value'){ writes+=1; fieldValue=args.value; if(args.value==='ax-unacknowledged-fixture') return {isError:true,content:[{type:'text',text:'AX action failed: AXUIElementPerformAction(AXPress) returned -25204'}]}; if(args.value==='unknown-outcome-fixture') return {isError:true,content:[{type:'text',text:'connection lost after possible write'}]}; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='invoke_menu'){ const value={effect:'invoked',path:args.path,forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='zoom') return {content:[{type:'image',mimeType:'image/png',data:'aW1hZ2U='}],structuredContent:{pid:args.pid,window_id:args.window_id,screenshot_scale:4}};
   if(request.params.name==='hotkey'){ const dropped=args.keys.includes('x'); const value={effect:'unverifiable',keys:args.keys,delivery:{mode:args.delivery_mode??'background'},pid:args.pid,...(dropped?{escalation:{reason:'delivery_failed',target:'foreground'},route:'synthetic_events'}:{})}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
@@ -454,7 +457,7 @@ try {
       ["AXButton", "AXTextField"]
     )
     assert.equal(captured.returned_element_count, 2)
-    assert.equal(captured.menu_bar_elements_omitted, 1)
+    assert.equal(captured.menu_bar_elements_omitted, 2)
     const verbose = await exec(
       client,
       "return await computer.get_window_state({pid: 42, window_id: 7, max_elements: 5, include_markdown: true, include_menu_bar: true})"
@@ -468,7 +471,7 @@ try {
       })
       .parse(JSON.parse(firstText(verbose.content)))
     assert.equal(verboseState.max_elements, 5)
-    assert.equal(verboseState.elements.length, 3)
+    assert.equal(verboseState.elements.length, 4)
     assert.equal(
       verboseState.include_menu_bar,
       undefined,
@@ -1187,6 +1190,46 @@ const proof=await state.window.expect({role:'TextField',name:'Name',value:'unkno
     faults: ["unknown", "observation-required", "observation-required", "observation-required"],
     status: "matched",
   })
+  const unavailable = await unifiedClient.request({
+    method: "exec",
+    arguments: { source: `const failures=[];
+for (const id of [9001,9002,9003]) {
+ const window=control.window({pid:42,window_id:id});
+ if(id===9003) await window.observe();
+ try {await window.observe()} catch(e) {failures.push({code:e.code,outcome:e.outcome,message:e.message})}
+ try {await window.pressKey('Enter')} catch(e) {failures.push({code:e.code,outcome:e.outcome})}
+}
+return failures;` },
+  })
+  assert.ok(!unavailable.isError, JSON.stringify(unavailable))
+  const unavailableFailures = JSON.parse(firstText(unavailable.content))
+  assert.deepEqual(unavailableFailures.map(({code, outcome}: {code: string; outcome: string}) => ({code,outcome})), [
+    {code:"observation-unavailable",outcome:"rejected"},
+    {code:"observation-required",outcome:"not-dispatched"},
+    {code:"invalid-driver-response",outcome:"unknown"},
+    {code:"observation-required",outcome:"not-dispatched"},
+    {code:"observation-unavailable",outcome:"rejected"},
+    {code:"observation-required",outcome:"not-dispatched"},
+  ])
+  assert.match(unavailableFailures[0].message, /parent window/)
+  assert.doesNotMatch(unavailableFailures[2].message, /invalid_type|snapshot_id/)
+  const unacknowledged = await unifiedClient.request({
+    method: "exec",
+    arguments: { source: `const before=await control.native('get_config');let failure;
+const view=await state.window.observe();
+try {await state.window.setValue(view.get({role:'TextField',name:'Name'}).ref,'ax-unacknowledged-fixture')} catch(e) {failure={code:e.code,outcome:e.outcome,message:e.message}};
+let blocked;try {await state.window.pressKey('Enter')} catch(e) {blocked=e.code};
+const proof=await state.window.expect({role:'TextField',name:'Name',value:'ax-unacknowledged-fixture'});
+return {failure,blocked,status:proof.status,writes:(await control.native('get_config')).writes-before.writes};` },
+  })
+  assert.ok(!unacknowledged.isError, JSON.stringify(unacknowledged))
+  const recovered = JSON.parse(firstText(unacknowledged.content))
+  assert.equal(recovered.failure.code,"native-driver-error")
+  assert.equal(recovered.failure.outcome,"unknown")
+  assert.match(recovered.failure.message,/Observe the window and any new dialog/)
+  assert.equal(recovered.blocked,"observation-required")
+  assert.equal(recovered.status,"matched")
+  assert.equal(recovered.writes,1,"An unacknowledged action is not replayed")
   const rawUnknown = await unifiedClient.request({
     method: "exec",
     arguments: {

@@ -303,3 +303,10 @@ const portableSteering = toExchanges(
 )
 assert.equal(portableSteering.length, 1)
 assert.equal(portableSteering[0]?.response.filter((message) => message.role === "user").length, 1)
+
+const controlEnvelope = '<mako-local-control>\nBrowser and computer use: fixture setup\n</mako-local-control>\n\n'
+assert.equal(codexPrompt(controlEnvelope + '<send_user_message_question_reply>\n[{"question":"Which profile?","answer":"Existing"}]\n</send_user_message_question_reply>'), 'Which profile?\n\nExisting')
+const { userTextFrom } = await import('../packages/sessions/src/format.ts')
+assert.equal(userTextFrom(controlEnvelope + 'Keep this request'), 'Keep this request')
+assert.equal(userTextFrom('Explain this example: ' + controlEnvelope), ('Explain this example: ' + controlEnvelope).trim())
+assert.equal(userTextFrom('<mako-local-control>incomplete'), '<mako-local-control>incomplete')

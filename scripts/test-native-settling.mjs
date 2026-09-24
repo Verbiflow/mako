@@ -4,14 +4,15 @@ import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
 } from "../dist-electron/cua-embedded.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { environmentForExecutable, resolveExecutable } from "../dist-electron/executable.js"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
+import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 const root = await mkdtemp(join(tmpdir(), "mako-native-settling-"))
 const run = promisify(execFile)
 const status = join(root, "state.json")
@@ -77,15 +78,16 @@ async function cell(source) {
 try {
   const state = await until(read)
   fixturePid = state.pid
-  evidence.driver = {
-    executable: resolveExecutable("cua-driver"),
-    version: (
-      await run(resolveExecutable("cua-driver"), ["--version"])
-    ).stdout.trim(),
-  }
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
+  const requestedDriver = process.env.MAKO_TEST_DRIVER
+  if (requestedDriver) assert.ok(isAbsolute(requestedDriver))
+  const driver = resolveExecutable(requestedDriver ?? "cua-driver")
+  assert.ok(driver, "The requested driver must exist; no fallback")
+  const driverEnv = environmentForExecutable(driver, process.env)
+  evidence.driver = { executable: driver, version: (await run(driver, ["--version"])).stdout.trim() }
+  await snapshotControlRuntime(root)
+  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit", driverEnv)
   assert.ok(socket)
-  await client.start({native:{driver:resolveExecutable("cua-driver"),socket:socket},env:{ ...process.env }})
+  await client.start({native:{driver,socket},env:driverEnv,runtimeRoot:join(root,"control-runtime-snapshot/node_modules/@mako/control-runtime/dist")})
   samples = sampleFrontmost()
   const observed = await cell(
     `state.target={pid:${state.pid},window_id:${state.window}};state.window=control.window(state.target);return await state.window.observe();`

@@ -634,6 +634,7 @@ try {
         `Prompt acceptance took ${acceptedMs} ms, above ${acceptanceBudget} ms`
       )
     const first = await completed(requestId, { startedAt: sentAt })
+    const completedMs = Date.now() - sentAt
     assert.ok(answer(first, requestId).includes(marker))
     const nativeId = first.session.nativeId
     let approvalEvidence
@@ -645,10 +646,14 @@ try {
       const { checkPackagedAsyncQuestions } = await import('./packaged-async-question-checks.mjs')
       await checkPackagedAsyncQuestions({bridge,command,evaluate,waitFor,conversationId,root,report,restart:async()=>{await stopPackage();await startPackage()}})
     }
+    if (process.env.MAKO_PACKAGE_QUESTION_SOURCE) {
+      const {checkPackagedQuestionHistory}=await import('./packaged-question-history-checks.mjs')
+      await checkPackagedQuestionHistory({bridge,command,evaluate,waitFor,root,report,source:process.env.MAKO_PACKAGE_QUESTION_SOURCE,restart:async()=>{await stopPackage();await startPackage()}})
+    }
     report.phases.push({
       phase: "provider-completion",
       submittedThrough: uiStart ? "composer" : "bridge",
-      elapsedMs: Date.now() - sentAt,
+      elapsedMs: completedMs,
       acceptedMs,
       model: first.session.settings?.model,
       nativeIdPresent: Boolean(nativeId),
@@ -713,7 +718,9 @@ try {
     await bridge("livePrompt", [
       conversationId,
       nextId,
-      "Reply only with the marker from my previous turn. Do not use tools or modify files.",
+      process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1"
+        ? "Reply only with the original PACKAGE_ marker I asked you to remember at the start of this session, before the async questions. Do not use tools or modify files."
+        : "Reply only with the marker from my previous turn. Do not use tools or modify files.",
       [],
     ])
     const resumed = await completed(nextId)

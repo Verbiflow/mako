@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 final class Text: NSTextView {
   var compositions = 0
   var inserts = 0
@@ -26,7 +27,10 @@ final class Gesture: NSView {
   override func mouseUp(with e:NSEvent){record(e,"up")}
   override func scrollWheel(with e:NSEvent){record(e,"scroll")}
 }
-final class Handler: NSObject {
+final class Handler: NSObject, NSMenuDelegate {
+  var menuEvents: [[String: Any]] = []
+  func menuWillOpen(_ menu: NSMenu) { menuEvents.append(["kind": "open", "at": Date().timeIntervalSince1970]) }
+  func menuDidClose(_ menu: NSMenu) { menuEvents.append(["kind": "close", "at": Date().timeIntervalSince1970]) }
   var bursts=0
   var burstTimes:[Double]=[]
   @objc func burst(_ sender:Any?){
@@ -39,11 +43,20 @@ final class Handler: NSObject {
   let text: Text
   let result: NSTextField
   var saves = 0
+  var panelEvents: [[String: Any]] = []
   init(_ window:NSWindow,_ text:Text,_ result:NSTextField) { self.window=window;self.text=text;self.result=result }
   @objc func verify(_ sender:Any?) { saves += 1;result.stringValue=text.string }
   @objc func panel(_ sender:Any?) {
-    let panel=NSOpenPanel();panel.directoryURL=URL(fileURLWithPath:"/tmp/mako-reference-evidence");panel.title="Mako test panel";panel.prompt="Choose fixture"
-    panel.beginSheetModal(for:window){_ in}
+    let panel=NSOpenPanel()
+    panel.directoryURL=URL(fileURLWithPath:CommandLine.arguments.dropFirst().first ?? NSTemporaryDirectory()+"mako-reference-native.json").deletingLastPathComponent()
+    panel.title="Mako test panel";panel.prompt="Choose fixture"
+    panel.allowedContentTypes = [.plainText]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    panelEvents.append(["kind":"open","at":Date().timeIntervalSince1970])
+    panel.beginSheetModal(for:window){response in
+      self.panelEvents.append(["kind":"close","response":response.rawValue,"selected":panel.url?.lastPathComponent ?? "","at":Date().timeIntervalSince1970])
+    }
   }
 }
 let app=NSApplication.shared
@@ -63,6 +76,7 @@ let handler=Handler(window,text,result)
 let verify=NSButton(title:"Save fixture",target:handler,action:#selector(Handler.verify(_:)));verify.frame=NSRect(x:20,y:65,width:140,height:30)
 let panel=NSButton(title:"Open test panel",target:handler,action:#selector(Handler.panel(_:)));panel.frame=NSRect(x:175,y:65,width:160,height:30)
 let choices=NSPopUpButton(frame:NSRect(x:350,y:65,width:200,height:30));choices.addItems(withTitles:["First choice","Second choice","Third choice"]);choices.setAccessibilityLabel("Test menu")
+choices.menu?.delegate = handler
 let gesture=Gesture(frame:NSRect(x:320,y:125,width:250,height:150));gesture.setAccessibilityElement(true);gesture.setAccessibilityRole(.group);gesture.setAccessibilityLabel("Gesture pad")
 let burst=NSButton(title:"Change asynchronously",target:handler,action:#selector(Handler.burst(_:)));burst.frame=NSRect(x:310,y:290,width:260,height:25)
 let busy=NSButton(title:"Keep changing",target:handler,action:#selector(Handler.burst(_:)));busy.tag=1;busy.frame=NSRect(x:20,y:290,width:270,height:25)
@@ -70,8 +84,21 @@ for view in [text,result,verify,panel,choices,gesture,burst,busy] as [NSView] {w
 window.makeFirstResponder(text)
 window.orderFrontRegardless()
 let output=CommandLine.arguments.count>1 ? CommandLine.arguments[1] : NSTemporaryDirectory()+"mako-reference-native.json"
-Timer.scheduledTimer(withTimeInterval:0.025,repeats:true){_ in
-  let record:[String:Any]=["pid":ProcessInfo.processInfo.processIdentifier,"window":window.windowNumber,"text":text.string,"saved":result.stringValue,"saves":handler.saves,"bursts":handler.bursts,"burstTimes":handler.burstTimes,"points":gesture.points,"marked":text.hasMarkedText(),"compositions":text.compositions,"inserts":text.inserts,"choice":choices.titleOfSelectedItem ?? "","frontmostPid":NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,"pressedButtons":NSEvent.pressedMouseButtons,"appActive":app.isActive,"windowKey":window.isKeyWindow]
-  if let data=try? JSONSerialization.data(withJSONObject:record){try? data.write(to:URL(fileURLWithPath:output),options:.atomic)}
+var foregroundEvents: [[String: Any]] = []
+let activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+  forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+) { notification in
+  guard let active = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+  foregroundEvents.append(["pid": active.processIdentifier, "at": Date().timeIntervalSince1970])
 }
+let evidenceTimer = Timer(timeInterval:0.025,repeats:true){_ in
+  let record:[String:Any]=["pid":ProcessInfo.processInfo.processIdentifier,"window":window.windowNumber,"text":text.string,"saved":result.stringValue,"saves":handler.saves,"bursts":handler.bursts,"burstTimes":handler.burstTimes,"points":gesture.points,"marked":text.hasMarkedText(),"compositions":text.compositions,"inserts":text.inserts,"choice":choices.titleOfSelectedItem ?? "","frontmostPid":NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,"pressedButtons":NSEvent.pressedMouseButtons,"appActive":app.isActive,"windowKey":window.isKeyWindow]
+  var evidence = record
+  evidence["foregroundEvents"] = foregroundEvents
+  evidence["menuEvents"] = handler.menuEvents
+  evidence["panelEvents"] = handler.panelEvents
+  evidence["sheetAttached"] = window.attachedSheet != nil
+  if let data=try? JSONSerialization.data(withJSONObject:evidence){try? data.write(to:URL(fileURLWithPath:output),options:.atomic)}
+}
+RunLoop.main.add(evidenceTimer, forMode: .common)
 app.run()

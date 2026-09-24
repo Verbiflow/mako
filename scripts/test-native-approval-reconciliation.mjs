@@ -76,6 +76,8 @@ async function run() {
   let answerDispatches = 0
   let dropDecisions = Boolean(process.env.MAKO_NATIVE_APPROVAL_RECONNECT)
   const observer = (event) => {
+    if (process.env.MAKO_NATIVE_QUESTION_HISTORY && event.type === "live-session") events.push(event)
+    if (process.env.MAKO_NATIVE_QUESTION_HISTORY && (event.type === "live-question" || event.type === "live-question-answered")) return
     if (event.type === "live-permission")
       events.push({
         type: event.type,
@@ -102,6 +104,7 @@ async function run() {
       driver.start(path, {
         ...options,
         emit: (event) => {
+          if (process.env.MAKO_NATIVE_QUESTION_HISTORY && (event.type === "live-question" || event.type === "live-question-answered")) return
           if (event.type === "live-permission")
             events.push({
               type: event.type,
@@ -284,6 +287,17 @@ async function run() {
     })
     await wait((s) => s?.session.status === "ready")
     result.nativeId = owner.snapshot(id).session.nativeId
+    if (process.env.MAKO_NATIVE_QUESTION_HISTORY) {
+      if (!page) throw Error('Native question history proof requires --ui')
+      const {checkNativeQuestionHistory}=await import('./native-question-history-checks.mjs')
+      await checkNativeQuestionHistory({owner:()=>owner,reopen:async()=>{
+        await owner.close(id)
+        owner.stop()
+        owner=new LiveConversations(dependencies)
+        renderedRevision=undefined
+      },id,cwd,driver,mode,page,wait,render,capture,events,result})
+      return
+    }
     if (process.env.MAKO_NATIVE_ASYNC_QUESTIONS) {
       if(!page)throw Error('Async question proof requires --ui')
       const {checkAsyncQuestions}=await import('./native-async-question-checks.mjs')
@@ -493,7 +507,7 @@ async function run() {
     owner.stop()
     stopAcp()
     stopCodexApps()
-    if (result.nativeId) {
+    if (result.nativeId && !result.importSource) {
       const catalog = defaultCatalog()
       for (const ref of await catalog.scan()) {
         if (ref.harness === provider && ref.nativeId === result.nativeId)

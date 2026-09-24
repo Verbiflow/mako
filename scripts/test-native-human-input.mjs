@@ -4,10 +4,11 @@ import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { environmentForExecutable, resolveExecutable } from "../dist-electron/executable.js"
+import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 
 // Interactive acceptance: the runner NEVER writes to the human's text field.
 // A timeout is incomplete evidence, not a pass. Only scratch processes are stopped.
@@ -53,11 +54,16 @@ try {
     fixturePids.push((await until(() => read(name))).pid)
   }
   const target = await read("target")
-  const driver = resolveExecutable("cua-driver")
+  const requestedDriver = process.env.MAKO_TEST_DRIVER
+  if (requestedDriver) assert.ok(isAbsolute(requestedDriver))
+  const driver = resolveExecutable(requestedDriver ?? "cua-driver")
+  assert.ok(driver, "The requested driver must exist; no fallback")
+  const driverEnv = environmentForExecutable(driver, process.env)
   evidence.driver = (await run(driver, ["--version"])).stdout.trim()
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.human-input")
+  await snapshotControlRuntime(root)
+  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.human-input", driverEnv)
   assert.ok(socket)
-  await client.start({native:{driver:driver,socket:socket},env:{ ...process.env }})
+  await client.start({native:{driver,socket},env:driverEnv,runtimeRoot:join(root,"control-runtime-snapshot/node_modules/@mako/control-runtime/dist")})
   await cell(`state.window=control.window({pid:${target.pid},window_id:${target.window}});return await state.window.observe();`)
   evidence.status = "waiting-for-human"
   console.log(JSON.stringify({ status: evidence.status, root }))

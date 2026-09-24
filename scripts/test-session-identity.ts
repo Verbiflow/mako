@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { acpForThread, acpStore } from "../src/state/acp-state.ts"
-import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery.ts"
+import { applyLiveSnapshot, applyLiveBatch, hydrateLiveSummaries } from "../src/state/live-recovery.ts"
 import { canonicalThreadRefs, selectAcpPresence } from "../src/state/acp-presence.ts"
 import { threadStatus } from "../src/state/thread-status.ts"
 import { threadsStore } from "../src/state/thread-store.ts"
@@ -45,6 +45,12 @@ applyLiveBatch({ id, revision: 4, updates: [{ kind: "text", text: "streamed" }] 
 assert.equal(acpForThread(acpStore.get(), { path: "/next/session.jsonl" }), acpStore.get().conversations[id], "An indexed lookup returns the current conversation, not its previous stream snapshot")
 applyLiveBatch({ id, revision: 5, updates: [], session: { ...snapshot.session, status: "closed" } })
 assert.equal(acpForThread(acpStore.get(), alias), null, "Closed indexed bindings are not activatable")
+const questionControl = {...snapshot.control!,questions:[{id:randomUUID(),bindingId:id,native:{sessionId:nativeId,turnId:"turn",itemId:"item",questions:[{id:"q",header:"",question:"Still waiting?",isSecret:false,allowOther:true,options:[]}]}}]}
+applyLiveSnapshot({...snapshot,revision:6,session:{...snapshot.session,status:"closed"},control:questionControl})
+assert.equal(acpForThread(acpStore.get(),alias)?.key,id,"A closed native process cannot hide saved session questions")
+acpStore.set({activeKey:null,conversations:{}})
+hydrateLiveSummaries([{...snapshot,session:{...snapshot.session,status:"closed"},hasSessionQuestions:true}])
+assert.equal(acpForThread(acpStore.get(),alias)?.key,id,"The lightweight restart summary must permit question hydration from the history row")
 const root = await mkdtemp(join(tmpdir(), "mako-identity-"))
 const owner = new LiveConversations({
   root, appPath: root, driver: () => undefined, emit: () => {},

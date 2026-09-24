@@ -4,13 +4,14 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { environmentForExecutable, resolveExecutable } from "../dist-electron/executable.js"
+import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
-// Uses the selected signed driver through the same shared engine as CLI/MCP.
+// Uses the selected signed driver through the public CLI and shared engine.
 // Invoke with ELECTRON_RUN_AS_NODE=1 from the installed Mako permission host.
 const run = promisify(execFile)
 const seconds = Number(process.argv[2] ?? 60)
@@ -51,10 +52,15 @@ try {
   assert.ok(initial)
   pid = initial.pid
   evidence.initial = initial
-  const driver = resolveExecutable("cua-driver")
+  const requestedDriver = process.env.MAKO_TEST_DRIVER
+  if (requestedDriver) assert.ok(isAbsolute(requestedDriver), "MAKO_TEST_DRIVER must identify an exact executable")
+  const driver = resolveExecutable(requestedDriver ?? "cua-driver")
+  assert.ok(driver, "The requested native driver is unavailable; no fallback is allowed")
+  const driverEnv = environmentForExecutable(driver, process.env)
   evidence.driver = {path:driver,version:(await run(driver,["--version"])).stdout.trim()}
-  const socket = await ensureCuaEmbedded(join(root,"driver"),"dev.mako.capture-rate")
-  await client.start({native:{driver:driver,socket:socket},env:{...process.env}})
+  const socket = await ensureCuaEmbedded(join(root,"driver"),"dev.mako.capture-rate",driverEnv)
+  await snapshotControlRuntime(root)
+  await client.start({native:{driver,socket},env:driverEnv,runtimeRoot:join(root,"control-runtime-snapshot/node_modules/@mako/control-runtime/dist")})
   if (process.env.MAKO_RATE_PREOBSERVE === "1") await cell(`return await control.window({pid:${pid},window_id:${initial.window}}).observe()` )
   await cell(`state.window=control.window({pid:${pid},window_id:${initial.window}});state.recording=await state.window.record({directory:${JSON.stringify(root)},fps:${fps},maxSide:1920,cursor:false,maxDurationMs:${(seconds+20)*1000}});return state.recording`)
   await delay(seconds*1000)

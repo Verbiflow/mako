@@ -10,7 +10,7 @@ import { LiveJournal } from "../electron/live-journal.js"
 import type { LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { codexAsyncQuestion, codexQuestionAnswer, codexAnsweredQuestions } from "../electron/providers/codex/questions.js"
-import { pendingQuestion } from "../electron/contracts/live-questions.js"
+import { latestPendingQuestion, pendingQuestion } from "../electron/contracts/live-questions.js"
 import { parseNotification } from "../electron/codex-app-parse.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-session-questions-"))
@@ -26,6 +26,7 @@ try {
     let state: LiveSessionState = {id,harness:provider,cwd:root,nativeId:"native",nativePath:path,status:"ready",connection:"connected",modes:[],currentMode:null,configOptions:[]}
     let prompts=0, steers=0
     let throwSteer=false, refuseSteer=false
+    let beforeRefusal: (() => void) | undefined
     const driver: ProviderLiveDriver = {
       provider, approvalEvidence:{kind:"submission-only",reason:"Fixture"}, canResume:true, available:()=>true,
       sessionQuestions:{encodeAnswer:codexQuestionAnswer}, steering:"step",
@@ -38,7 +39,7 @@ try {
         owner.observe({type:"live-session",session:state})
         dispatch.report({kind:"accepted",source:"native-response",referenceId:state.nativeRunId})
       },
-      steer:async()=>{steers++;if(throwSteer)throw Error("Lost reply");return refuseSteer ? {kind:"not-accepted",reason:"Turn ended"} : {kind:"accepted"}},
+      steer:async()=>{steers++;beforeRefusal?.();if(throwSteer)throw Error("Lost reply");return refuseSteer ? {kind:"not-accepted",reason:"Turn ended"} : {kind:"accepted"}},
       permission:async()=>{throw Error("Session question must never use approval callbacks")},
       close(){},cancel:async()=>{},setMode:async()=>{},
     }
@@ -105,14 +106,28 @@ try {
       assert.equal(prompts,2,"Refused steering continues once as a new turn")
       await owner.permission(id,refused.id,refusedResponse)
       assert.equal(prompts,2);assert.equal(steers,2)
+      const external=ask("turn-external","item-external")
+      const externalResponse={kind:"answers" as const,answers:{[external.native.questions[0]!.id]:["Two"]}}
+      beforeRefusal=()=>owner.observe({type:"live-question-answered",id,answer:{sessionId:"native",itemId:"item-external",questionIds:[external.native.questions[0]!.id]}})
+      await owner.permission(id,external.id,externalResponse)
+      assert.equal(owner.snapshot(id)!.requests.some(request=>request.id===external.id),false,"Answer observed during refused steering must not be queued again")
+      beforeRefusal=undefined
       const pending=ask("turn-4","item-4")
       owner.stop();owner=new LiveConversations(deps)
+      assert.equal(owner.summaries().find(summary=>summary.session.id===id)?.hasSessionQuestions,true,"Restart summaries retain question availability")
       const restored=owner.snapshot(id)!
+      assert.equal(latestPendingQuestion(restored.control!,restored.requests)?.id,pending.id)
+      const questions=Array.from({length:2000},(_,index)=>({...pending,id:randomUUID(),dismissed:index!==1999}))
+      const requests=Array.from({length:10000},()=>({...restored.requests[0]!,id:randomUUID()}))
+      const started=performance.now()
+      assert.equal(latestPendingQuestion({...restored.control!,questions},requests)?.id,questions.at(-1)!.id)
+      console.log(`${provider}: select pending question from 2,000 groups / 10,000 requests in ${(performance.now()-started).toFixed(2)} ms`)
+
       assert.ok(restored.control!.questions!.some(q=>q.id===pending.id))
       assert.ok(restored.control!.questions!.find(q=>q.id===third.id)?.dismissed)
       await owner.permission(id,first.id,response)
       await owner.permission(id,second.id,secondResponse)
-      assert.equal(prompts,2);assert.equal(steers,2)
+      assert.equal(prompts,2);assert.equal(steers,3)
     } finally {owner.stop()}
   }
   console.log("Session questions: all-six + future fixtures preserve lifetime, durable one-write answers, lost-reply fences, stale evidence and dismissal/reopen")

@@ -12,9 +12,12 @@ export async function checkPackagedAsyncQuestions({bridge,command,evaluate,waitF
     for(const type of ['mousePressed','mouseReleased'])await command('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
   }
   const select=async()=>{
-    const selector=`[data-conversation-id="${conversationId}"]`
+    await click("[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Recent'&&e.getClientRects().length)")
+    const current=await snapshot()
+    const source=current.session.nativePath??current.control.bindings.find(b=>b.id===current.control.activeBindingId)?.path
+    const selector=`[data-conversation-id="${conversationId}"]${source ? `, [data-flip-key=${JSON.stringify(source)}]` : ""}`
     await waitFor(()=>evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`),Boolean,'async conversation rail row')
-    await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
+    await click(`document.querySelector(${JSON.stringify(selector)})`)
   }
   const original=(await snapshot()).session.nativeId
   let prior
@@ -40,15 +43,20 @@ export async function checkPackagedAsyncQuestions({bridge,command,evaluate,waitF
     await command('Input.insertText',{text:phrase})
     await capture(label+'-draft')
     await click("[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Send answers'&&!e.disabled&&e.getClientRects().length)")
-    const final=await waitFor(snapshot,s=>s?.session.status==='ready'&&s.blocks.some(b=>b.type==='text'&&b.text.includes(phrase)),'native async answer',120000)
+    const final=await waitFor(snapshot,s=>s?.session.status==='ready'&&[
+      ...s.blocks,
+      ...(s.base?.entries??[]).filter(entry=>entry.kind==='assistant').flatMap(entry=>entry.blocks),
+    ].some(b=>b.type==='text'&&b.text.includes(phrase)),'native async answer',120000)
     assert.equal(final.session.nativeId,original)
+    if(active)assert.equal(final.control.actions.find(action=>action.input.id===question.id)?.state.kind,"accepted","The active case must prove native steering acceptance")
     await bridge('livePermission',[conversationId,question.id,response])
     const after=await snapshot()
     assert.equal(active?after.control.actions.filter(a=>a.input.id===question.id).length:after.requests.filter(r=>r.id===question.id).length,1)
     const source=final.session.nativePath??final.control.bindings.find(b=>b.id===question.bindingId)?.path
     assert.ok(source,'Native source required for independent answer count')
     const records=(await readFile(source,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line))
-    const nativeAnswers=records.filter(record=>record.type==='event_msg'&&record.payload?.type==='user_message'&&record.payload.message?.includes(phrase))
+    // response_item is the persisted input; event_msg also mirrors it in newer runtimes.
+    const nativeAnswers=records.filter(record=>record.type==='response_item'&&record.payload?.type==='message'&&record.payload.role==='user'&&record.payload.content?.some(part=>part.type==='input_text'&&part.text?.includes(phrase)))
     assert.equal(nativeAnswers.length,1,'Native store must contain one answer input, not only a local receipt')
     await capture(label+'-completed')
     report.phases.push({phase:label,questionId:question.id,native:question.native,phrase,sameNativeSession:true,nativeAnswerInputs:nativeAnswers.length,operation:active?'steer':'prompt',pendingRestored:!active,staleAnswerProtected:Boolean(prior)})
