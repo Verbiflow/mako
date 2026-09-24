@@ -1,6 +1,6 @@
 import type { Runtime } from "node:inspector"
 import { Session } from "node:inspector/promises"
-import { createContext, type Context } from "node:vm"
+import { constants, createContext, type Context } from "node:vm"
 import { z } from "zod"
 import { ControlFault, controlFaultData } from "../control/fault.js"
 import type { controlClient } from "../control/client.js"
@@ -49,7 +49,32 @@ export class ControlRepl {
       this.inspector.on("Runtime.executionContextCreated", created)
       try {
         await this.inspector.post("Runtime.enable")
-        this.context = createContext(globals, { name: "mako-control" })
+        this.context = createContext(
+          {
+            ...globals,
+            process,
+            fetch,
+            URL,
+            URLSearchParams,
+            TextEncoder,
+            TextDecoder,
+            AbortController,
+            AbortSignal,
+            structuredClone,
+            performance,
+            setInterval,
+            clearInterval,
+            setImmediate,
+            clearImmediate,
+            queueMicrotask,
+          },
+          {
+            name: "mako-control",
+            // Node's own loader preserves import() for trusted scripts. The worker
+            // is still the cancellation boundary; vm is not a security boundary.
+            importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+          }
+        )
         if (contextId === undefined)
           throw new Error("Control REPL context was not created")
         return contextId

@@ -334,6 +334,16 @@ const recordingWindow = controlClient(async () => {
 }).window({ pid: 42, window_id: 7 })
 const recording = await recordingWindow.record()
 assert.equal((await recording.status()).id, "record-one")
+const recoveredCalls = []
+const recoveredWindow = controlClient(async (action, args) => {
+  recoveredCalls.push({action, ...args})
+  return receipt
+}).window(recordingTarget)
+const recoveredRecording = await recoveredWindow.recording("record-one")
+assert.equal((await recoveredRecording.status()).id, "record-one")
+assert.deepEqual(recoveredCalls.map(c => c.operation), ["status", "status"])
+await assert.rejects(recoveredWindow.recording("wrong-recording"), /does not belong/)
+assert.ok(recoveredCalls.every(c => c.operation !== "start"))
 receipt = { ...receipt, id: "record-two" }
 await assert.rejects(recording.stop(), /does not belong/)
 assert.equal(recordingCalls, 3, "mismatched receipts never trigger a retry")

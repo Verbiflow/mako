@@ -339,6 +339,15 @@ export class ControlHandle {
     )
     return new RecordingHandle(this.call, receipt)
   }
+  async recording(id: string) {
+    const exact = controlInput(z.string().min(1).safeParse(id), "recording ID", "Copy the id from the recording receipt; this reads an existing recording and never starts one.")
+    const receipt = recordingReceipt(
+      RecordingReceiptSchema.parse(await this.call("recording", { operation: "status", target: this.target, id: exact })),
+      this.target,
+      exact
+    )
+    return new RecordingHandle(this.call, receipt)
+  }
   capabilities() {
     return this.call("capabilities", { target: this.target })
   }
