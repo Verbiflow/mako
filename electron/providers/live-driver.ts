@@ -36,6 +36,7 @@ export function recoveryCapabilities(driver: ProviderLiveDriver | undefined): Re
 export interface ConversationTools {
   url: string
   token: string
+  controlUrl?: string
   control?: ControlLaunch
 }
 

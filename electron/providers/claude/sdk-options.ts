@@ -57,6 +57,12 @@ export async function claudeSdkOptions(
       url: input.conversationTools.url,
       headers: { Authorization: `Bearer ${input.conversationTools.token}` },
     }
+  if (input.conversationTools?.controlUrl)
+    mcpServers["mako-control"] = {
+      type: "http",
+      url: input.conversationTools.controlUrl,
+      headers: { Authorization: `Bearer ${input.conversationTools.token}` },
+    }
   return {
     cwd,
     env,
