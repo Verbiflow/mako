@@ -91,6 +91,8 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
     type: z.literal("tool"),
     /** A view preview, resolved from the immutable retained snapshot on expansion. */
     historyRest: z.object({ index: z.number().int().nonnegative(), length: z.number().nonnegative() }).optional(),
+    /** Display-only immutable content identity, including a resolved detail. */
+    historyVersion: z.string().optional(),
     id: z.string(),
     title: z.string(),
     toolKind: z.string().optional(),

@@ -319,6 +319,9 @@ export const hostCallInputs = {
         kind: z.literal("snapshot"),
         from: z.object({ blocks: z.number(), base: z.number() }).optional(),
         epoch: z.string().optional(),
+        ifCurrent: z
+          .object({ token: z.string(), revision: z.number() })
+          .optional(),
       }),
       z.object({
         kind: z.literal("earlier"),

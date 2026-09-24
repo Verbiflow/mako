@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
 import type { LiveBlock } from "./live-content.js"
+import type { LiveSnapshot } from "./live-conversations.js"
 
 export const LiveHistoryCursorSchema = z.object({
   blocks: z.number().int().nonnegative(),
@@ -15,12 +16,14 @@ export const LiveHistoryAddressSchema = z.discriminatedUnion("kind", [
 export type LiveHistoryAddress = z.infer<typeof LiveHistoryAddressSchema>
 
 export const LiveHistoryReadSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("snapshot"), from: LiveHistoryCursorSchema.optional(), epoch: z.string().optional() }),
+  z.object({ kind: z.literal("snapshot"), from: LiveHistoryCursorSchema.optional(), epoch: z.string().optional(),
+    ifCurrent: z.object({ token: z.string().uuid(), revision: z.number().int().nonnegative() }).optional() }),
   z.object({ kind: z.literal("earlier"), token: z.string().uuid(), before: LiveHistoryCursorSchema }),
   z.object({ kind: z.literal("detail"), token: z.string().uuid(), at: LiveHistoryAddressSchema }),
   z.object({ kind: z.literal("part"), record: z.string().uuid(), offset: z.number().int().nonnegative() }),
 ])
 export type LiveHistoryRead = z.infer<typeof LiveHistoryReadSchema>
+export type LiveHistorySnapshot = LiveSnapshot | { kind: "unchanged"; token: string; revision: number; epoch: string } | null
 
 /** One immutable view of retained history. These coordinates are absolute;
  * renderer arrays are windows, never journal indexes. */
