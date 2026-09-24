@@ -95,11 +95,15 @@ export type Block =
        * Set when `text` is only the head of the output: the full length and
        * where in the native thread the rest can be read (`threadBlock`).
        */
-      rest?: { length: number; at: BlockAddress }
+      rest?: ToolContentRest
     }
   | AttachmentContent
 
 export type BlockType = Block["type"]
+
+export type ToolContentRest =
+  | { length: number; at: BlockAddress }
+  | { length: number; live: { token: string; at: import("./live-history.js").LiveHistoryAddress } }
 
 export interface ChatMessage {
   /** Stable identity of a host-owned prompt, including optimistic presentation. */

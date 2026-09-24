@@ -129,6 +129,8 @@ export interface LiveSummary {
 }
 
 export interface LiveSnapshot extends LiveSummary {
+  /** Renderer-only retained-history window; never persisted in the journal. */
+  history?: import("./live-history.js").LiveHistoryWindow
   nativeAgents?: NativeAgentRoster
   control?: ConversationControl
   blocks: LiveBlock[]
@@ -140,6 +142,11 @@ export interface LiveSnapshot extends LiveSummary {
 }
 
 export interface LiveBatch {
+  /** Absolute retained-block coordinates for consumers holding a history window. */
+  changedFrom?: number
+  blockCount?: number
+  /** The event is an invalidation; reread through the bounded history protocol. */
+  historyChanged?: boolean
   nativeAgents?: NativeAgentRoster
   control?: ConversationControl
   base?: ThreadPage | null

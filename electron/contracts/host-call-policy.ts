@@ -44,6 +44,7 @@ const reads = [
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
+  "mako:live-read",
   "mako:live-attach",
   "mako:live-locate",
   "mako:live-state",

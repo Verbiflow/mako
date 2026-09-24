@@ -312,6 +312,38 @@ export const hostCallInputs = {
       })
       .optional(),
   ]),
+  "mako:live-read": z.tuple([
+    z.string(),
+    z.union([
+      z.object({
+        kind: z.literal("snapshot"),
+        from: z.object({ blocks: z.number(), base: z.number() }).optional(),
+        epoch: z.string().optional(),
+      }),
+      z.object({
+        kind: z.literal("earlier"),
+        token: z.string(),
+        before: z.object({ blocks: z.number(), base: z.number() }),
+      }),
+      z.object({
+        kind: z.literal("detail"),
+        token: z.string(),
+        at: z.union([
+          z.object({ kind: z.literal("live"), index: z.number() }),
+          z.object({
+            kind: z.literal("base"),
+            entry: z.number(),
+            block: z.number(),
+          }),
+        ]),
+      }),
+      z.object({
+        kind: z.literal("part"),
+        record: z.string(),
+        offset: z.number(),
+      }),
+    ]),
+  ]),
   "mako:live-rewind": z.tuple([
     z.string(),
     z.object({

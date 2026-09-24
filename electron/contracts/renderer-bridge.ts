@@ -38,6 +38,7 @@ import type {
   HarnessDescriptor,
 } from "../shared.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest } from "../shared.js"
+import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
@@ -314,6 +315,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-snapshot", id),
+    liveRead: (id: string, input: LiveHistoryRead) =>
+      invokeTrustedHost<LiveHistoryChunk>("mako:live-read", id, input),
     liveContinue: (id: string, bindingId: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-continue", id, bindingId, requestId, text, attachments, tuning),
     livePrompt: (
