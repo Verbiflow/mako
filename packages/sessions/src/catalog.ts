@@ -262,6 +262,7 @@ export class SessionCatalog {
   private orderedRefs: ThreadRef[] | null = null
   private cachePath?: string
   private cacheLoaded = false
+  private preparation: Promise<void> | null = null
   private saveTimer: NodeJS.Timeout | null = null
   private watchers = new Map<string, FSWatcher>()
   private discovering: Promise<void> | null = null
@@ -355,9 +356,18 @@ export class SessionCatalog {
     return task
   }
 
+  /** Hydrate saved metadata before serving, without discovering native stores. */
+  prepare(): Promise<void> {
+    this.preparation ??= (async () => {
+      await this.loadCache()
+      await this.archive?.load()
+      if (this.stopped) throw new Error("The session catalog stopped")
+    })()
+    return this.preparation
+  }
+
   private async scanOnce(options: { emitChanges?: boolean }): Promise<ThreadRef[]> {
-    await this.loadCache()
-    await this.archive?.load()
+    await this.prepare()
     this.orderedRefs = null
     const seen = new Set<string>()
     const unavailable = new Set<SessionProvider>()
@@ -579,9 +589,8 @@ export class SessionCatalog {
    * *anything* — this app, the harness's own CLI, another wrapper entirely.
    */
   startWatching(): void {
-    if (this.watching) return
+    if (this.watching || this.stopped) return
     this.watching = true
-    this.stopped = false
     this.refreshWatchRoots()
     this.ensurePolling()
     for (const [path, follow] of this.follows) this.observeFollow(path, follow)
@@ -704,7 +713,8 @@ export class SessionCatalog {
     if (opened) this.opened = null
     state.listeners.add(onEntries)
     this.follows.set(path, state)
-    if (this.watching) this.observeFollow(path, state)
+    // A selected conversation can be followed before broad discovery finishes.
+    if (!this.stopped) this.observeFollow(path, state)
     return () => {
       state.listeners.delete(onEntries)
       if (state.listeners.size === 0 && this.follows.get(path) === state) {
@@ -789,7 +799,8 @@ export class SessionCatalog {
     }
     for (const held of this.pending.values()) clearTimeout(held.timer)
     this.pending.clear()
-    await Promise.all([
+    await Promise.allSettled([
+      this.preparation,
       ...this.scans,
       this.discovering,
       this.reconciling,

@@ -17,6 +17,59 @@ const cases = []
 const test = (name, run) => cases.push({name,run})
 const capture = async (archive, value) => { archive.note(value.ref,async()=>value);await archive.flush() }
 
+test('capture admission reads the revision index without fetching transcript rows', async(a,b,location)=>{
+  const value=thread('indexed','x'.repeat(4*1024*1024))
+  await capture(a,value)
+  const db=new DatabaseSync(join(location,'archive.sqlite'),{readOnly:true})
+  const prepare=DatabaseSync.prototype.prepare
+  const plans=[]
+  try {
+    DatabaseSync.prototype.prepare=function(sql,...args) {
+      if(/SELECT token, deleted, revision FROM archive_captures/.test(sql)) {
+        plans.push(prepare.call(db,'EXPLAIN QUERY PLAN '+sql).all(value.ref.path))
+      }
+      return prepare.call(this,sql,...args)
+    }
+    let reads=0
+    b.note(value.ref,async()=>{reads++;return value})
+    await b.flush()
+    assert.equal(reads,0,'another connection sees the committed revision without retranslating')
+    assert.ok(plans.length>0,'observe the production admission query')
+    for(const plan of plans)assert.ok(plan.some(row=>/COVERING INDEX sessions_capture_revision/.test(row.detail)),JSON.stringify(plan))
+  } finally {
+    DatabaseSync.prototype.prepare=prepare
+    db.close()
+  }
+  assert.equal((await a.read(value.ref.path)).entries[0].text,value.entries[0].text)
+})
+
+test('existing archives gain the index without changing contents, tokens or format',async(a,_b,location)=>{
+  await capture(a,thread('existing','Retained history'))
+  await a.stop()
+  const database=new DatabaseSync(join(location,'archive.sqlite'))
+  let before
+  try {
+    database.exec('DROP INDEX sessions_capture_revision')
+    before={row:database.prepare('SELECT * FROM sessions').get(),capture:database.prepare('SELECT * FROM archive_captures').get(),version:database.prepare('PRAGMA user_version').get()}
+  } finally {database.close()}
+  const reopened=new SessionArchive(location)
+  try {
+    await reopened.load()
+    const reader=new DatabaseSync(join(location,'archive.sqlite'),{readOnly:true})
+    try {
+      assert.deepEqual(reader.prepare('SELECT * FROM sessions').get(),before.row)
+      assert.deepEqual(reader.prepare('SELECT * FROM archive_captures').get(),before.capture)
+      assert.deepEqual(reader.prepare('PRAGMA user_version').get(),before.version)
+      assert.ok(reader.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='sessions_capture_revision'").get())
+    } finally {reader.close()}
+    let reads=0
+    reopened.note(thread('existing').ref,async()=>{reads++;return thread('existing')})
+    await reopened.flush()
+    assert.equal(reads,0)
+    assert.equal((await reopened.read('/fixture/native')).entries[0].text,'Retained history')
+  } finally {await reopened.stop()}
+})
+
 test('settings-only and equal-length content corrections are retained', async (a) => {
   await capture(a,thread('one','old',{settings:{model:'model',options:{effort:'low'}}}))
   await capture(a,thread('one','old',{settings:{model:'model',options:{effort:'high'}}}))

@@ -50,7 +50,7 @@ export const ControlObservationSchema = z.object({
   lineage: z.string().min(1).optional(),
   nodes: z.array(PageObservationNodeSchema),
   lines: z.array(z.string()),
-  scope: ControlReadScopeSchema.optional(),
+  scope: ControlReadScopeSchema.extend({ maxDepth: z.number().int().min(1).max(25).optional() }).optional(),
   coverage: z.object({
     complete: z.boolean(),
     omitted: z.number().nonnegative().nullable(),
@@ -286,6 +286,7 @@ export type ObserveOptions = ControlReadScope & {
   interactive?: boolean
   max?: number
 }
+export type NativeObserveOptions = ObserveOptions & { maxDepth?: number }
 const pointSchema = z
   .object({
     x: z.number().finite(),
@@ -569,6 +570,9 @@ export class ControlLocator {
 }
 
 export class WindowHandle extends ControlHandle {
+  override observe(options: NativeObserveOptions = {}) {
+    return super.observe(options)
+  }
   screenshot(options: NativeScreenshotOptions = {}) {
     return this.call("capture", {
       target: this.target,

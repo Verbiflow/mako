@@ -124,6 +124,9 @@ export class SessionArchive {
           }
           database.exec("PRAGMA user_version=1")
         }
+        // Capture admission needs the revision, never the transcript payload.
+        // The primary path index still fetches a potentially huge sessions row.
+        database.exec("CREATE INDEX IF NOT EXISTS sessions_capture_revision ON sessions(path, revision)")
         database.exec("COMMIT")
       } catch (error) {
         database.exec("ROLLBACK")
@@ -364,7 +367,7 @@ export class SessionArchive {
       ?.prepare(
         `
       SELECT token, deleted, revision FROM archive_captures
-      LEFT JOIN sessions USING (path) WHERE path = ?
+      LEFT JOIN sessions INDEXED BY sessions_capture_revision USING (path) WHERE path = ?
     `
       )
       .get(path)

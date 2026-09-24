@@ -2,16 +2,15 @@
 import { fork } from "node:child_process"
 import {
   mkdir,
-  mkdtemp,
   readFile,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
+import { createControlDirectory } from "./private-socket.js"
 import {
   CloudControlConfigSchema,
   CloudParentMessageSchema,
@@ -39,7 +38,7 @@ async function main() {
   const config = CloudControlConfigSchema.parse(JSON.parse(source))
   // Never reuse another job's output or recursively delete a caller's directory.
   await mkdir(config.output, { mode: 0o700 })
-  const runtime = await mkdtemp(join(tmpdir(), "mako-cloud-"))
+  const runtime = await createControlDirectory("mako-cloud-")
   let stopping = false
   let finished = false
   let ready = false

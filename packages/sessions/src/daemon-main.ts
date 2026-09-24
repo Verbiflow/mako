@@ -56,13 +56,25 @@ async function main(): Promise<void> {
   const started = performance.now()
   let server: Server
   try {
-    const refs = await catalog.scan()
-    catalog.startWatching()
+    await catalog.prepare()
+    const discovery = catalog.scan().then((refs) => {
+      catalog.startWatching()
+      console.log(`mako-syncd: discovered ${refs.length} sessions in ${Math.round(performance.now() - started)}ms`)
+      return refs
+    })
+    // Observe failures while socket ownership and identity are being resolved.
+    void discovery.catch(() => {})
     server = await serveCatalog(catalog, socketPath, claim, {
       catalogIdentity: await defaultCatalogIdentity(join(dir, "archive")),
+      discovery,
+    })
+    void discovery.catch((error) => {
+      console.error("mako-syncd: discovery failed", error)
+      server.close()
+      void catalog.stop()
     })
     console.log(
-      `mako-syncd: ${refs.length} sessions in ${Math.round(performance.now() - started)}ms, watching · ${socketPath}`
+      `mako-syncd: reader available in ${Math.round(performance.now() - started)}ms · ${socketPath}`
     )
   } catch (error) {
     console.log(String(error instanceof Error ? error.message : error))

@@ -142,8 +142,13 @@ export const ControlObserveRequestSchema = z
     query: z.string().max(200).optional(),
     interactive: z.boolean().default(false),
     max: z.number().int().min(1).max(1000).default(250),
+    maxDepth: z.number().int().min(1).max(25).optional(),
   })
   .strict()
+  .superRefine((request, context) => {
+    if (request.maxDepth !== undefined && request.target.kind !== "window")
+      context.addIssue({ code: "custom", path: ["maxDepth"], message: "maxDepth is a native window read limit; browser observations use within/match scopes." })
+  })
 export type ControlObserveRequest = z.infer<typeof ControlObserveRequestSchema>
 
 export const ControlDispatchRequestSchema = z

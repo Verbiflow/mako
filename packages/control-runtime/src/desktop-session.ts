@@ -1,9 +1,9 @@
 import { fork, type ChildProcess } from "node:child_process"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
+import { createControlDirectory } from "./private-socket.js"
 import {
   DesktopSessionConfigSchema,
   type DesktopSessionConfig,
@@ -32,7 +32,7 @@ export async function startDesktopControlSession(
 ) {
   const config = DesktopSessionConfigSchema.parse(input)
   const executable = options.executable ?? process.execPath
-  const directory = await mkdtemp(join(tmpdir(), "mako-cli-"))
+  const directory = await createControlDirectory("mako-cli-")
   const supplied = options.env ?? process.env
   const environment: NodeJS.ProcessEnv = { ELECTRON_RUN_AS_NODE: "1" }
   for (const key of [

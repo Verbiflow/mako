@@ -1,10 +1,10 @@
 import { createServer } from "node:http"
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
+import { createControlDirectory, createPrivateControlSocket } from "./private-socket.js"
 import {
   controlClient,
   controlFaultData,
@@ -32,10 +32,11 @@ export async function serveControlSession(
   options: { onStop?: () => void; directory?: string } = {}
 ) {
   const build = await engineBuild
-  const directory = options.directory ?? await mkdtemp(join(tmpdir(), "mako-control-"))
+  const directory = options.directory ?? await createControlDirectory("mako-control-")
   if (options.directory) await mkdir(directory, { mode: 0o700 })
   await chmod(directory, 0o700)
-  const socket = join(directory, "session.sock")
+  const endpoint = await createPrivateControlSocket(directory, "session.sock")
+  const socket = endpoint.path
   const file = join(directory, "session.json")
   const descriptor: SessionDescriptor = {
     protocol: CONTROL_SESSION_PROTOCOL,
@@ -266,7 +267,11 @@ export async function serveControlSession(
         await session.close()
         await stoppedServer
       } finally {
-        await rm(directory, { recursive: true, force: true })
+        try {
+          await endpoint.close()
+        } finally {
+          await rm(directory, { recursive: true, force: true })
+        }
       }
     })())
   }

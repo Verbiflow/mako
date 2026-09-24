@@ -114,3 +114,12 @@ for (const platform of ["linux", "win32", undefined]) {
   for (const route of ["window-pointer", "pid-keyboard", "menu"])
     assert.equal(capabilities.routes.find((entry) => entry.route === route).status, "unavailable")
 }
+
+// Native traversal limits cannot silently become browser options or invalid depths.
+const { ControlObserveRequestSchema } = await import("../dist/control/index.js")
+const nativeRead = { target: { kind: "window", pid: 42, window_id: 7 } }
+for (const maxDepth of [1, 5, 25]) assert.equal(ControlObserveRequestSchema.parse({ ...nativeRead, maxDepth }).maxDepth, maxDepth)
+for (const maxDepth of [0, 26, 1.5, "5"]) assert.equal(ControlObserveRequestSchema.safeParse({ ...nativeRead, maxDepth }).success, false)
+const pageRead = { target: { kind: "page", browser: "fixture", tab: "1", lease: "fixture", generation: "fixture" } }
+assert.equal(ControlObserveRequestSchema.safeParse(pageRead).success, true)
+assert.equal(ControlObserveRequestSchema.safeParse({ ...pageRead, maxDepth: 5 }).success, false)

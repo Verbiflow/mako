@@ -231,6 +231,8 @@ export function portLink(port: DaemonPort, frameLimit: number): DaemonLink {
 /** Serve one catalog over the socket. Resolves once listening. */
 export interface ServeCatalogOptions {
   catalogIdentity?: string
+  /** Lists require complete initial discovery; known-path reads do not. */
+  discovery?: Promise<ThreadRef[]>
   /**
    * Retire when the process RSS stays above `MAX_DAEMON_RSS`. On by default
    * for the detached daemon; a catalog served from a worker thread inside a
@@ -328,6 +330,7 @@ function catalogService(
             return
           }
           case "list":
+            await options.discovery
             reply({
               id: frame.id,
               ok: true,
@@ -522,7 +525,11 @@ export function serveCatalogOnPort(
 export interface DaemonClient {
   stats: DaemonStats
   refresh(): Promise<DaemonStats>
-  list(filter?: { cwd?: string; harness?: string }): Promise<ThreadRef[]>
+  /** Publish the snapshot in wire order, before any later catalog events. */
+  list(
+    filter?: { cwd?: string; harness?: string },
+    onSnapshot?: (refs: ThreadRef[]) => void
+  ): Promise<ThreadRef[]>
   open(path: string): Promise<Thread | null>
   page(
     path: string,
@@ -681,12 +688,26 @@ async function connectDaemonLink(
     })
 
   const requestList = (
-    filter: { cwd?: string; harness?: string } = {}
+    filter: { cwd?: string; harness?: string } = {},
+    onSnapshot?: (refs: ThreadRef[]) => void
   ): Promise<ThreadRef[]> =>
     new Promise((resolve, reject) => {
       const id = nextId++
-      const timer = requestTimer(id, reject)
-      pending.set(id, { kind: "list", resolve, reject, timer })
+      // Initial discovery can outlast a ping. Use the existing data-read budget.
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, 30_000))
+      pending.set(id, {
+        kind: "list",
+        resolve: (refs) => {
+          try {
+            onSnapshot?.(refs)
+            resolve(refs)
+          } catch (error) {
+            reject(error)
+          }
+        },
+        reject,
+        timer,
+      })
       send({ id, op: "list", cwd: filter.cwd, harness: filter.harness })
     })
 

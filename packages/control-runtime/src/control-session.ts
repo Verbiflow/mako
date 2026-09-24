@@ -1053,6 +1053,28 @@ export function createControlSession(
       )
     const input = toolInputSchema.parse(tool.inputSchema)
     const args = await resolveDriverPaths(inputArguments)
+    if (tool.name === "get_window_state" && args.max_depth !== undefined && !input.properties?.max_depth)
+      throw new ControlFault(
+        "unsupported-operation",
+        "This native driver does not advertise depth-limited reads. Update the driver or omit maxDepth; no observation was dispatched.",
+        "not-dispatched"
+      )
+    if (tool.name === "click" && args.button === "middle" && !input.properties?.button)
+      throw new ControlFault(
+        "unsupported-operation",
+        "This native driver does not advertise middle-click support; nothing was dispatched.",
+        "not-dispatched"
+      )
+    if (
+      (tool.name === "press_key" || tool.name === "hotkey") &&
+      args.element_token !== undefined &&
+      !input.properties?.element_token
+    )
+      throw new ControlFault(
+        "unsupported-operation",
+        "This native driver cannot address a keyboard action to a field; nothing was dispatched.",
+        "not-dispatched"
+      )
     delete args.session
     if (input.properties?.session) args.session = session
     const hasCursor = available.some(
@@ -1465,10 +1487,11 @@ export function createControlSession(
     const request = controlInput(
       ControlObserveRequestSchema.safeParse(raw),
       "observation options",
-      'Use observe({max:50,match:{role:"button",name:"Save"}}); optional keys: within, query, interactive.'
+      'Use observe({max:50,match:{role:"button",name:"Save"}}); optional keys: within, query, interactive. Native windows also accept maxDepth:1..25 to bound traversal; browser pages do not.'
     )
     const scope: ComputerArguments = { within: request.within }
     if (request.match) scope.match = request.match
+    if (request.maxDepth !== undefined) scope.maxDepth = request.maxDepth
     const key = controlTargetKey(request.target)
     invalidateControlTarget(key)
     if (request.target.kind === "page") {
@@ -1541,17 +1564,18 @@ export function createControlSession(
     // A failed refresh must not leave older controls actionable. Clear this
     // only after a complete, validated observation below.
     controlUncertain.add(key)
+    const observationArgs: ComputerArguments = {
+      pid: request.target.pid,
+      window_id: request.target.window_id,
+      max_elements: request.within.length || request.match ? 1000 : request.max,
+      include_screenshot: false,
+    }
+    if (request.maxDepth !== undefined) observationArgs.max_depth = request.maxDepth
     const snapshot =
       controlData(
         await invokeTool(
           "get_window_state",
-          {
-            pid: request.target.pid,
-            window_id: request.target.window_id,
-            max_elements:
-              request.within.length || request.match ? 1000 : request.max,
-            include_screenshot: false,
-          },
+          observationArgs,
           signal
         )
       )
@@ -1768,9 +1792,8 @@ export function createControlSession(
     }
     if (
       operation.kind === "pointer" &&
-      (operation.button === "middle" ||
-        operation.count === 3 ||
-        (operation.button === "right" && operation.count !== 1))
+      (operation.count === 3 ||
+        (operation.button !== "left" && operation.count !== 1))
     )
       throw new Error(
         "This native pointer combination is unsupported; nothing was dispatched"
@@ -1794,12 +1817,10 @@ export function createControlSession(
       )
     if (operation.kind === "press-key") {
       const args: ComputerArguments = { ...base }
+      if (operation.ref) args.element_token = operation.ref
       if (operation.modifiers.length > 0)
         args.keys = [...operation.modifiers, operation.key]
-      else {
-        args.key = operation.key
-        if (operation.ref) args.element_token = operation.ref
-      }
+      else args.key = operation.key
       const action = operation.modifiers.length > 0 ? "hotkey" : "press_key"
       return controlData(await invokeTool(action, args, signal))
     }
@@ -1808,6 +1829,8 @@ export function createControlSession(
         "ref" in operation.at
           ? { ...base, element_token: operation.at.ref }
           : { ...base, x: operation.at.x, y: operation.at.y }
+      if (operation.button === "middle")
+        return controlData(await invokeTool("click", { ...args, button: "middle" }, signal))
       const action =
         operation.button === "right"
           ? "right_click"
@@ -2507,7 +2530,7 @@ export function createControlSession(
       handles:
         "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across exec commands. App windows are selected explicitly; no implicit first window.",
       actions:
-        "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?,focus_change?}; focus_change reports an observed native focus interruption (even if restored); reobserve before another action, never replay it. Missing focus_change is not proof of continuous focus isolation. native settling reports notification quiet/deadline/unavailable, never action success. Refs expire after mutation or observation.",
+        "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); Native window.observe also accepts maxDepth:1..25 (e.g. 5 for outer dialog controls); depth-limited reads remain incomplete when descendants are omitted and cannot prove absence or uniqueness. handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?,focus_change?}; focus_change reports an observed native focus interruption (even if restored); reobserve before another action, never replay it. Missing focus_change is not proof of continuous focus isolation. native settling reports notification quiet/deadline/unavailable, never action success. Refs expire after mutation or observation.",
       observations:
         "Observation has nodes, lines, coverage, get({role,name,within?}) returns one node object; pass node.ref (a string) to setValue/click/activate, not the node object. select({role?,name?,text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. role/name use the same exact names as get/locator; text searches role, accessibility name and value, not arbitrary visible DOM text. Strings only, not regular expressions. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. Use role names exactly as observed: native roles such as TextField/Button may differ from browser textbox/button. No app-specific instructions are assumed.",
       assertions:

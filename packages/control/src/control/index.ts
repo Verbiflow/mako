@@ -49,6 +49,7 @@ export {
   type NativeSettling,
   type ControlCall,
   type ControlObservationData,
+  type NativeObserveOptions,
   type ExecutionReceipt,
   type ElementSelector,
   type ElementExpectation,
