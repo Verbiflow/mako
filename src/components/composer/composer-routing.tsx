@@ -28,11 +28,6 @@ export function ComposerRouting() {
       ) : (
         <NextSessionModePicker />
       )}
-      {moving ? (
-        <span className="animate-enter flex h-7 items-center gap-1 rounded-md bg-fill-selected px-2 text-label font-medium text-foreground">
-          continues here on send
-        </span>
-      ) : null}
     </>
   )
 }

@@ -727,7 +727,11 @@ export function Composer() {
   )
   const newHarness = useThreads((state) => state.composerHarness)
   const placeholder = opening
-    ? `Draft a reply for ${harnessTitle(opening.ref.harness)} — ${opening.kind === "loading" ? "loading conversation…" : "conversation could not load"}`
+    ? opening.kind !== "loading"
+      ? `Draft a reply for ${harnessTitle(newHarness)} — conversation could not load`
+      : newHarness === opening.ref.harness
+        ? `Draft a reply for ${harnessTitle(newHarness)} — loading conversation…`
+        : `Draft a reply — moves this conversation to ${harnessTitle(newHarness)} once it loads`
     : liveOwnsComposer && liveHarness
       ? liveStarting
         ? `Queue a message for ${harnessTitle(liveHarness)}`
