@@ -35,9 +35,9 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | --- | --- | --- |
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
 | Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
-| Native capture/input | Installed Mac +mako.17; exact-value routes, bounded settling, recording and scoped gestures. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures or sustained native 60 fps. Linux +19 accepts 60 fps, but this iteration's native CLI clip is only 0.62 seconds. Installed Mac +17 remains fixed at 30; GNOME capture polls at ~5 fps. |
+| Native capture/input | Mac +mako.21 selected for new launches; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | +mako.17 selected for new Mac driver launches. Revised CLI candidate `7b0a2c623f935da0` passes fresh-agent browser/native and packaged checks; prior candidate evidence includes 40 Aside jobs. | Installed app remains `345bfd91c64009c6`; the latest idle update timed out without replacement. Post-install CLI-only repetition and extension rollout remain open. Candidate/source-host tests are not installed-host proof. |
+| Installed components | +mako.21 installed for new Mac driver launches; existing daemons retain their executable. Signed candidate `33153e3c6176bd87` includes the menu/role and dialog-error fixes; packaged CLI, startup/reopen, Aside save/confirmation, native exact text/capture and dialog-refusal checks pass. Prior candidate evidence includes 40 Aside jobs. | Installed app remains `345bfd91c64009c6`; the previous idle update timed out. The subsequent idle rollout aborted at 11:37 UTC when a dev host appeared and another conversation started; nothing was replaced. No rollout is currently queued. The newer signed candidate is prepared but not queued; two running conversations were still reported at the final readiness check. See `local-control-cli-deployment.json` for the earlier aborted attempt. Post-install CLI-only repetition and extension rollout remain open. Candidate/source-host tests are not installed-host proof. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -173,6 +173,13 @@ work. Native AMD CLI acceptance now passes; repeat remaining provider launch
 paths. Streaming stays paused until the release gate closes. LC-22 also tracks
 bounded partial output from failed exec programs.
 
+September 24 source continuation: the shared runtime now allocates private Unix
+endpoints by UTF-8 byte length, including long state/TMPDIR paths. Desktop/cloud
+runtime roots preserve crash cleanup ownership. Startup failure, dead-owner
+cleanup, active-session preservation and packed relocation pass; no dependency
+was added. [Socket and native-read evidence](local-control-dialog-depth-evidence.md).
+These source changes still require desktop rollout.
+
 ## LC-21 — Responsive capture, recordings and cursor
 
 **Status: scoped short-run source and packaged Aside acceptance passed; sustained 1080p runs still fail. Idle rollout and native rates remain open.**
@@ -256,6 +263,11 @@ candidate results; the Linux fixture is 640×420, not sustained 1080p acceptance
 The longer Mac run retained 3,400 distinct frames over 60.05 seconds (**56.62 fps**),
 below the 57 fps acceptance floor. Foreground samples changed from Aside to Mako;
 the sampler cannot establish who caused that change. The run did not pass.
+Subsequent +19 trials passed the existing 57 fps floor: **57.44** distinct fps
+for 30 seconds and **57.35** for 60 seconds at 1920×1080, with all 331/613
+foreground samples unchanged. The signed driver is now selected for new launches.
+Existing daemons were left running. This does not establish exact 60 fps, real
+human input or proactive focus prevention; the failed longer trial remains above.
 [Candidate provenance, failures and reproduction](local-control-native-capture-evidence.md).
 
 Done per backend when moving content supplies approximately 60 distinct source
@@ -430,7 +442,54 @@ overlapping those jobs and no foreground change during the test interval. It ran
 the installed +mako.17 driver through the CLI. Human attestation is pending; this
 does not establish IME composition or proactive prevention of deliberate activation.
 
-Next: proactive Mac focus protection, menus and cross-process dialogs; clipboard
+September 24 continuation: shared observation filtering now preserves in-window
+popup/context menus. Three real AppKit popup selections passed through scoped CLI
+locators without activation notifications. General menus/dialogs remain unproven.
+
+September 24 capture/dialog continuation: +19 passed bounded settling, background
+click/right/middle/double-click/scroll and cursor recording (862 frames, 19 pointer
+events, no sampled foreground change). Background drag still refuses. A real file
+sheet can open despite AXPress acknowledgment error -25204. Shared-engine errors
+now explicitly preserve that uncertainty. Unavailable sheet observations produce
+`observation-unavailable`, block further input and never become empty successful
+reads; malformed snapshots produce `invalid-driver-response`. The CLI regression
+passes against the installed +19 driver and frozen source runtime. Parent-tree
+Cancel remains refused because exact sheet ownership is unresolved; this is a
+failure-handling pass, not completed dialog control. These engine fixes pass source and packaged CLI acceptance in signed candidate
+`33153e3c6176bd87`; the desktop app replacement remains pending.
+
+September 24 file-sheet continuation: **+mako.21 is signed and installed for new
+Mac driver launches**. Shared bounded discovery resolves the panel's own native
+window ID for observation and input. The installed-driver CLI passes three
+cancellations and one exact file selection, independent AppKit confirmation,
+unchanged foreground, untouched decoy/parent controls and stale/cross-window
+refusal. Ordinary settling, menu selections and cursor recording also pass;
+377 Mac unit tests and final full lint pass. Existing daemons were not restarted.
+
+Panel coverage remains honestly incomplete because AppKit returns attribute
+errors. This validates explicit refs, not strict whole-panel locator uniqueness,
+raw sheet keys, Save As or cross-process ViewBridge dialogs. Proactive window-tag
+experiments did not establish prevention and shipped no change. Physical typing
+coordination remains unanswered. Broader compositor gestures remain open.
+[Full evidence and retained failures](local-control-file-sheet-evidence.md).
+
+September 24 bounded-read continuation: sandboxed Open and Save As each pass
+three cancellations and a confirmed file operation, with Apple's separate panel
+service identified, unchanged foreground, untouched decoy/parent and stale-ref
+refusals. A real expanded Save panel exhausted the 1,000-node budget before its
+buttons. Native `observe({maxDepth:5})` now bounds traversal; it returned 83–84
+lines with a 244 ms median in the final run. Coverage remains incomplete, and
+unsupported drivers/browser targets refuse the option. This is source-engine
+acceptance with installed +21, not a new desktop rollout.
+
+The same depth contract passes labwc, Weston and KWin with twenty background
+form jobs each on Linux +19. Long UTF-8 socket paths now use private short
+endpoints, with startup/crash cleanup and conservative orphan reaping tested.
+The existing Docker image was reused; test containers were removed. Core/engine,
+packed-consumer checks and full lint pass.
+[Evidence, failures and exact limits](local-control-dialog-depth-evidence.md).
+
+Next: proactive Mac focus protection, raw cross-process key/pointer delivery and other dialog families; clipboard
 consumption/collision handling; physical Japanese IME and simultaneous human typing.
 Broaden Electron/Qt/rich-editor coverage. The explicit Terminal GUI job now passes:
 background launch, native command typing, high-level Return, independent output
@@ -461,6 +520,15 @@ Both standalone CLI workflows and eleven lifecycle scenarios pass, with retained
 media decoded and selected images inspected. The VM and temporary network/key
 were removed. [Evidence and limits](local-control-native-validation.md).
 
+Current-version continuation: KWin 6.3.6, labwc 0.8.3 and Weston 14.0.2 pass
+twenty ARM64 background jobs each after fixing current AT-SPI `button` role
+normalization. Capture/gesture support is not established by these form jobs.
+
+September 24 bounded-read checks: current shared engine + Linux +19 passes
+`maxDepth:1` on all three compositors, keeps omitted descendants incomplete and
+then completes all sixty background form jobs. This adds read-contract coverage;
+it does not enable unverified gestures or capture.
+
 Next: extend compositor/version and real display/GPU coverage. AMD x64 Sway now
 has scale/rotation and hidden-job evidence. ARM64 Sway additionally has load
 evidence; GNOME 46 has
@@ -488,12 +556,23 @@ FileSets from the canonical release manifest, fixing the omitted `control-runtim
 mapping and preserving JS/license-only Control payloads. Both packaged startup
 routes passed. Other target and actual default-host rollout claims remain separate.
 
-The new signed ARM64 candidate is **662,856,997 bytes**, with 1,081 verified build
-files and 671 resolved imports. Media recipe 2 passes packaged browser/native
+The latest signed ARM64 candidate `a0c8c955359372bb` is **662,922,799 bytes**,
+with 684 resolved imports. Media recipe 2 passes packaged browser/native
 cursor encoding without Homebrew; the packager rejects a stale recipe/source
 manifest even when its old binary hashes still match.
 
-Next: measure full installed bytes and cold start per browser/native/mixed cloud
+September 24 Docker audit: normal runs reuse images, but 72 stopped Mako test
+containers retain 7.49 GB of writable data; seventeen Mako image tags remain.
+Cargo/target/media volumes retain ~6.39 GB for rebuild speed. The global builder
+reports 25.85 GB private cache across projects. Its full disk report fails on a
+missing snapshot; no reliable total or global prune is claimed. The new compositor
+runner saves evidence and removes each test container, reusing one dependency
+image. [Evidence and remaining cleanup](local-control-native-validation.md#local-docker-retention).
+
+Next: align the Rust build image with the pinned driver toolchain to avoid repeat
+downloads; bound image/build-cache retention, retain unique historical evidence before
+removing stopped test containers, and diagnose the missing Docker snapshot.
+Measure full installed bytes and cold start per browser/native/mixed cloud
 image and desktop target, not just source payload or driver size. Audit a reduced
 native build profile by dependency/section size before removing upstream code.
 Keep exact public dependencies, target-specific media, source/licenses and provenance.

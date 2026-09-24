@@ -1,6 +1,7 @@
 # Native source-rate evidence
 
-Measured 2026-09-24. These are candidate tests, not installed acceptance.
+Measured 2026-09-24. The tested +19 driver is now installed for new launches.
+Capture measurements used the source runtime; the desktop-host rollout remains open.
 The [wayfinder](local-control-map.md#lc-21--responsive-capture-recordings-and-cursor)
 owns remaining work; [capture backends](local-control-capture-backends.md) records
 the open-source comparison and replacement plan.
@@ -10,8 +11,9 @@ the open-source comparison and replacement plan.
 Driver `0.28.2+mako.19` uses base
 `fc188250b4ca8549b8e61f937fdb1fb560770e86` and patch SHA-256
 `e4ce26102114895bb3ebe23813015ee48d2b10c09dddf7ec353a1cedf5c04cf8`.
-Mac ARM64 and Linux ARM64 artifacts were built. This revision has no native x64
-acceptance yet. Installed Mac driver selection remains `+mako.17`.
+Mac ARM64, Linux ARM64 and Linux x64 artifacts were built. Native AMD functional
+acceptance is recorded in [platform validation](local-control-native-validation.md);
+it is not sustained 1080p evidence. Mac driver selection is now `+mako.19`.
 
 Requested fps now reaches the capture backend and its acknowledgment. Mac and
 X11 advertise a maximum of 60; GNOME's PNG source advertises 5. Old drivers
@@ -34,6 +36,8 @@ count is not the Mac visual-counter distinct-frame measurement.
 | Mac `+18`, diagnostic pre-observation, 10 seconds | 570 distinct frames / 10.041667 s = 56.76 fps. | Foreground changed; not an unchanged-foreground pass. |
 | Mac `+19`, first operation, 10 seconds | 577 distinct frames / 10.03 s = **57.53 fps**, 1920×1080. | Passed the short diagnostic and all 117 foreground samples stayed on Aside. Does not establish sustained acceptance. |
 | Mac `+19`, first operation, 60 seconds | 3,404 frames, 3,400 distinct / 60.051667 s = **56.62 fps**, 1920×1080. | Below the 57 fps sustained floor. Foreground samples included Aside (341) and Mako (179). Sampling alone cannot attribute the change to human activity or another process; unchanged foreground was not established. |
+| Mac `+19`, repeat, 30 seconds | 1,754 distinct / 30.536667 s = **57.44 fps**, 1920×1080. | Passed the 57 fps floor; all 331 foreground samples unchanged. |
+| Mac `+19`, repeat, 60 seconds | 3,479 frames, 3,475 distinct / 60.59 s = **57.35 fps**, 1920×1080. | Passed the 57 fps floor; all 613 foreground samples unchanged. Exact 60 fps and physical input are not established. |
 | Linux ARM64 X11 `+18` | 33 source frames / 2.366667 s = **13.94 fps**, 640×420. | The final file advertised 60 fps through duplicated output frames. Functional checks passed; source throughput was poor. |
 | Linux ARM64 X11 `+19` | 138 source frames / 2.434 s = **56.70 fps**, 640×420. | Ten exact writes, covered-window pixels and playable interrupted recording passed. Short functional evidence only; no 1080p, distinct-marker or sustained claim. |
 
@@ -51,7 +55,9 @@ and physical IME/concurrent human typing also remain separate open tests.
 ## Reproduction and artifacts
 
 Use `scripts/test-native-capture-rate.mjs 60 60` under the permission-granted
-Electron host with the candidate driver first on `PATH`. Its default path records
+Electron host. To select a candidate, set `MAKO_TEST_DRIVER` to its exact absolute
+executable path; a missing candidate fails without fallback. Otherwise it uses
+the installed selection. The CLI runtime is frozen before launch. Its default path records
 as the first control operation. `MAKO_RATE_PREOBSERVE=1` is only a diagnostic
 comparison. Each run writes its driver path/version, calls, source probe,
 distinct-frame count, foreground samples and outcome to a private temporary
@@ -69,3 +75,11 @@ Machine-local JSON and media are under
 `linux-arm64-19/`. They are ignored and may be absent from a fresh clone. This
 tracked summary and the executable fixtures preserve the method and outcome;
 missing artifacts never count as a pass.
+
+The repeat capture evidence, retained 60-second source video and gesture/cursor
+recording are in `docs/audits/2026-09-24/local-control-native-parity/capture-dialog-continuation/`.
+The separate gesture clip contains 862 frames over 14.89 seconds, 19 pointer
+events and no dropped frames; it decodes and the cursor frame was inspected.
+It covers click, right/middle/double-click and scroll, while background drag refuses.
+The driver installation verified the signed package and records the prior selection
+for rollback. Existing native daemons were not restarted.

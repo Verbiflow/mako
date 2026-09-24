@@ -15,8 +15,8 @@ user confirmed retaining it on 2026-09-22.
 The upstream npm SDK was a different native implementation, selected only by an
 experimental environment variable and benchmark option. It bundled an unpatched
 0.28.1 dylib despite the installed +mako.12 executable. The selector, adapter,
-benchmark option, dependency and lockfile entries have been removed. No provider
-loses the shared MCP route. Cua's Rust SDK inside the executable is still used;
+benchmark option, dependency and lockfile entries have been removed. Every provider retains the shared CLI/session engine; MCP is only the
+internal transport to the native executable. Cua's Rust SDK inside the executable is still used;
 removing the npm SDK does not remove that internal Rust library.
 
 ## Browser transports
@@ -47,8 +47,8 @@ are included in the distribution, not discarded to reduce its size.
 | Target | Evidence and packaging status |
 | --- | --- |
 | macOS ARM64 desktop | Signed app recipe, bundled media, startup and archive recording checks. Patched native executable is separately installed. |
-| macOS ARM64 native | +mako.17 signed and installed for new launches; background settling/recording and three system-activation recovery trials pass. Existing daemons were not restarted. General proactive focus protection remains open. |
-| Linux ARM64 native | +mako.17 packaged with portal input/helper 10; four Sway scale/rotation/load workflows and forty hidden jobs pass. Earlier +mako.14 covers eleven transforms/scales. Prior GNOME/libei acceptance remains scoped to GNOME 46. FFmpeg comes from the runtime image. |
+| macOS ARM64 native | +mako.21 signed and installed for new launches; exact AppKit file selection/cancellation passes. The earlier +19 60-second 1080p source capture reached 57.35 distinct fps with unchanged foreground. Background settling/gestures/cursor recording pass; earlier activation-recovery evidence is retained. Existing daemons were not restarted. General proactive focus protection remains open. |
+| Linux ARM64 native | +mako.19 passes current KWin/labwc/Weston semantic jobs. Earlier +mako.17 packaged portal input/helper 10; four Sway scale/rotation/load workflows and forty hidden jobs pass. Earlier +mako.14 covers eleven transforms/scales. Prior GNOME/libei acceptance remains scoped to GNOME 46. FFmpeg comes from the runtime image. |
 | Linux x64 native | +mako.19 packaged; native AMD acceptance passes thirty exact-value jobs, 400/400 concurrent synthetic keystrokes, X11 gesture/recording/interruption, three Sway scale/rotation cases, current CLI browser/native jobs and eleven lifecycle scenarios. Earlier Intel/+mako.17 evidence is retained. [Exact results](local-control-native-validation.md). |
 | Linux desktop / Intel Mac / Windows desktop | Generic electron-builder declarations are not release evidence. Complete target-specific native/media bundling and acceptance are missing. |
 
@@ -149,8 +149,22 @@ checks both browser encoding and native transparent cursor composition.
 
 `0.28.2+mako.19` adds requested native capture rates, a CoreGraphics first-use
 preflight and writable-pipe waits on Linux. Mac ARM64 and Linux ARM64 packages
-match the reviewed patch; they are acceptance candidates, not an installed
-upgrade or x64 proof. The selected installed driver remains +17. The new API
+match the reviewed patch. Native AMD +19 acceptance is recorded separately.
+Mac +19 is now installed for new launches after sustained capture and gesture
+checks; existing daemons retain their executable and the previous selection is
+recorded for rollback. Desktop app installation remains separate and pending. The new API
 reads backend rate capabilities rather than assuming 60 fps on every platform.
 No new runtime capture dependency was added. The [backend reuse plan](local-control-capture-backends.md)
 tracks the larger PipeWire/DMA-BUF work and its target-specific dependency budget.
+
+## September 24 endpoint and dialog continuation
+
+Long state paths now use private short Unix endpoints. The helper is shared by
+the Node runtime and Electron adapter; desktop/cloud runtime roots keep their
+existing cleanup owners. Bounded dead-owner cleanup preserves active sockets and
+unrelated files. Packed-consumer, crash and startup-failure checks pass without
+adding dependencies. The compositor revalidation reused one existing image and
+removed every labeled test container. [Evidence](local-control-dialog-depth-evidence.md).
+
+These engine changes are local. The Mac native driver remains +21; Linux tests
+used the previous +19 package. Neither is evidence of a new desktop installation.

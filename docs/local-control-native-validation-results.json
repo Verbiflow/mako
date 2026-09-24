@@ -68,5 +68,309 @@
     "nativeCli": "passed",
     "videosDecoded": 4
   },
-  "cleanup": "EC2 instance, key pair and temporary network removed; local temporary key files removed"
+  "cleanup": "EC2 instance, key pair and temporary network removed; local temporary key files removed",
+  "currentCompositors": {
+    "architecture": "arm64",
+    "display": "nested Xvfb, native Wayland clients, software renderer",
+    "before": "All three failed before the first Save: current AT-SPI button role was not normalized",
+    "after": [
+      {
+        "compositor": "kwin_wayland",
+        "passed": true,
+        "jobs": 20,
+        "runtime": {
+          "arch": "arm64",
+          "compositor": "kwin 6.3.6",
+          "driver": "cua-driver 0.28.2+mako.19",
+          "driverSha256": "b6e59da5ad3955f829705d33d5d6f2deea3176c63b9cd02b81b13d6e0cf02ecb",
+          "hostSha256": "601a666deb847c5194ceb2ae5877ee28f3cb4757b10b60437a4cf6e36258dd85",
+          "probeSha256": "6ba35565bfaa7bb2adc7e470d475e1076ce34d1e6217cc8b0b75149175a10bdf"
+        }
+      },
+      {
+        "compositor": "labwc",
+        "passed": true,
+        "jobs": 20,
+        "runtime": {
+          "arch": "arm64",
+          "compositor": "labwc 0.8.3",
+          "driver": "cua-driver 0.28.2+mako.19",
+          "driverSha256": "b6e59da5ad3955f829705d33d5d6f2deea3176c63b9cd02b81b13d6e0cf02ecb",
+          "hostSha256": "601a666deb847c5194ceb2ae5877ee28f3cb4757b10b60437a4cf6e36258dd85",
+          "probeSha256": "6ba35565bfaa7bb2adc7e470d475e1076ce34d1e6217cc8b0b75149175a10bdf"
+        }
+      },
+      {
+        "compositor": "weston",
+        "passed": true,
+        "jobs": 20,
+        "runtime": {
+          "arch": "arm64",
+          "compositor": "weston 14.0.2",
+          "driver": "cua-driver 0.28.2+mako.19",
+          "driverSha256": "b6e59da5ad3955f829705d33d5d6f2deea3176c63b9cd02b81b13d6e0cf02ecb",
+          "hostSha256": "601a666deb847c5194ceb2ae5877ee28f3cb4757b10b60437a4cf6e36258dd85",
+          "probeSha256": "6ba35565bfaa7bb2adc7e470d475e1076ce34d1e6217cc8b0b75149175a10bdf"
+        }
+      }
+    ],
+    "captureAndGestures": false,
+    "maintainedRunnerRepeat": {
+      "passed": true,
+      "jobs": 60,
+      "failureCleanupPassed": true,
+      "transientReadinessTimeoutRecoveredSeconds": 2.31,
+      "persistentReadinessTimeoutRefusedSeconds": 10.16,
+      "cancellationCleanupPassed": true
+    }
+  },
+  "macPopupMenu": {
+    "passed": true,
+    "driver": "0.28.2+mako.17",
+    "selections": [
+      "Second choice",
+      "Third choice",
+      "First choice"
+    ],
+    "activationEvents": 0,
+    "menuOpens": 3,
+    "menuCloses": 3,
+    "route": "public CLI, scoped native locators",
+    "installedHost": false,
+    "candidateBuild": "a0c8c955359372bb",
+    "candidatePassed": true
+  },
+  "dockerAudit": {
+    "stoppedMakoContainers": 72,
+    "writableBytes": 7488356352,
+    "makoImageTags": 17,
+    "cacheVolumesKiB": {
+      "arm64": 3858320,
+      "cargo": 298208,
+      "media": 19400,
+      "x64": 2060048
+    },
+    "sharedBuilderPrivateGB": 25.85,
+    "sharedBuilderTotalGB": 47.47,
+    "totalDiskUsage": "unknown: Docker system df failed on missing snapshot 16546",
+    "prunedDockerResources": false
+  },
+  "candidate": {
+    "build": "a0c8c955359372bb",
+    "bytes": 662922799,
+    "imports": 684,
+    "packagedStartup": true,
+    "cli": true,
+    "asideRegularProfile": true,
+    "nativeTextAndScreenshot": true,
+    "nativePopupMenu": true,
+    "installed": false
+  },
+  "macCaptureDialogContinuation": {
+    "driver": "0.28.2+mako.19",
+    "driverInstalledForNewLaunches": true,
+    "existingDaemonsRestarted": false,
+    "capture": [
+      {
+        "seconds": 30.536667,
+        "frames": 1754,
+        "distinct": 1754,
+        "fps": 57.43914357123519,
+        "unchangedForegroundSamples": 331
+      },
+      {
+        "seconds": 60.59,
+        "frames": 3479,
+        "distinct": 3475,
+        "fps": 57.35269846509325,
+        "unchangedForegroundSamples": 613
+      }
+    ],
+    "captureDimensions": [
+      1920,
+      1080
+    ],
+    "acceptanceFloorFps": 57,
+    "gestureRecording": {
+      "frames": 862,
+      "pointerEvents": 19,
+      "droppedFrames": 0,
+      "decoded": true,
+      "cursorFrameInspected": true,
+      "backgroundDrag": "refused"
+    },
+    "dialogRefusalContract": "passed-source-cli-installed-driver",
+    "fileSheetInput": "unresolved-exact-window-ownership",
+    "desktopInstallation": "aborted-host-changed",
+    "newEngineFixInstalled": false,
+    "physicalInputAttestation": "pending",
+    "ime": "pending-participation"
+  },
+  "dialogCandidate": {
+    "build": "33153e3c6176bd87",
+    "bytes": 662925477,
+    "imports": 684,
+    "verifiedBuildFiles": 1091,
+    "packagedStartup": true,
+    "launchServicesStartup": true,
+    "cli": true,
+    "dialogRefusal": true,
+    "installed": false,
+    "queued": false,
+    "asideRegularProfile": true,
+    "nativeExactTextAndScreenshot": true
+  },
+  "macFileSheets": {
+    "version": "0.28.2+mako.21",
+    "installedForNewLaunches": true,
+    "patchSha256": "62b7469be7a86b65d8f440c27dcf8b2b3a7e6da61e03707a2e9eef3a0fa1b3a6",
+    "binarySha256": "7ca6fa6359f9d621b8186f818de23ed5060a64ea196adc0c97ae4622756fa776",
+    "installedCliRounds": 4,
+    "cancelRounds": 3,
+    "exactFileSelection": true,
+    "unchangedForegroundNotifications": true,
+    "crossWindowAndStaleReferencesRejected": true,
+    "treeCoverage": "incomplete-retained",
+    "regressions": {
+      "menuSelections": 3,
+      "recordingFrames": 901,
+      "pointerEvents": 19,
+      "droppedFrames": 0,
+      "videoDecoded": true,
+      "cursorInspected": true
+    },
+    "unitTestsPassed": 377,
+    "unitTestsIgnored": 2,
+    "lint": "passed-five-existing-warnings",
+    "proactiveFocus": "experiment-did-not-establish-prevention",
+    "physicalInput": "awaiting-coordination",
+    "desktopAppReplaced": false,
+    "linuxAcceptanceVersion": "0.28.2+mako.19"
+  },
+  "dialogDepthContinuation": {
+    "save": {
+      "passed": true,
+      "rounds": 4,
+      "cancels": 3,
+      "confirmed": 1,
+      "remoteService": "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/com.apple.appkit.xpc.openAndSavePanelService.xpc/Contents/MacOS/com.apple.appkit.xpc.openAndSavePanelService",
+      "foregroundEvents": [],
+      "readLines": [
+        84,
+        83,
+        83,
+        83,
+        83
+      ],
+      "medianReadMs": 244.42825000000084,
+      "maxReadMs": 665.5069999999996
+    },
+    "open": {
+      "passed": true,
+      "rounds": 4,
+      "cancels": 3,
+      "confirmed": 1,
+      "remoteService": "/System/Library/Frameworks/AppKit.framework/Versions/C/XPCServices/com.apple.appkit.xpc.openAndSavePanelService.xpc/Contents/MacOS/com.apple.appkit.xpc.openAndSavePanelService",
+      "foregroundEvents": [],
+      "readLines": [
+        227,
+        227,
+        227,
+        227,
+        227
+      ],
+      "medianReadMs": 526.3835419999996,
+      "maxReadMs": 920.0519169999989
+    },
+    "linux": {
+      "kwin_wayland": {
+        "passed": true,
+        "jobs": 20,
+        "shallow": {
+          "scope": {
+            "within": [],
+            "maxDepth": 1
+          },
+          "coverage": {
+            "complete": false,
+            "omitted": 0,
+            "textComplete": true
+          },
+          "depths": [
+            0,
+            1,
+            1
+          ]
+        },
+        "runtime": {
+          "arch": "arm64",
+          "compositor": "kwin 6.3.6",
+          "driver": "cua-driver 0.28.2+mako.19",
+          "driverSha256": "b6e59da5ad3955f829705d33d5d6f2deea3176c63b9cd02b81b13d6e0cf02ecb",
+          "hostSha256": "601a666deb847c5194ceb2ae5877ee28f3cb4757b10b60437a4cf6e36258dd85",
+          "probeSha256": "0ac6b90e4003c83dc3bdec8d01f830e63a4a89d4249512486748c3b202b6ddc3"
+        }
+      },
+      "weston": {
+        "passed": true,
+        "jobs": 20,
+        "shallow": {
+          "scope": {
+            "within": [],
+            "maxDepth": 1
+          },
+          "coverage": {
+            "complete": false,
+            "omitted": 0,
+            "textComplete": true
+          },
+          "depths": [
+            0,
+            1,
+            1
+          ]
+        },
+        "runtime": {
+          "arch": "arm64",
+          "compositor": "weston 14.0.2",
+          "driver": "cua-driver 0.28.2+mako.19",
+          "driverSha256": "b6e59da5ad3955f829705d33d5d6f2deea3176c63b9cd02b81b13d6e0cf02ecb",
+          "hostSha256": "601a666deb847c5194ceb2ae5877ee28f3cb4757b10b60437a4cf6e36258dd85",
+          "probeSha256": "0ac6b90e4003c83dc3bdec8d01f830e63a4a89d4249512486748c3b202b6ddc3"
+        }
+      },
+      "labwc": {
+        "passed": true,
+        "jobs": 20,
+        "shallow": {
+          "scope": {
+            "within": [],
+            "maxDepth": 1
+          },
+          "coverage": {
+            "complete": false,
+            "omitted": 0,
+            "textComplete": true
+          },
+          "depths": [
+            0,
+            1
+          ]
+        },
+        "runtime": {
+          "arch": "arm64",
+          "compositor": "labwc 0.8.3",
+          "driver": "cua-driver 0.28.2+mako.19",
+          "driverSha256": "b6e59da5ad3955f829705d33d5d6f2deea3176c63b9cd02b81b13d6e0cf02ecb",
+          "hostSha256": "601a666deb847c5194ceb2ae5877ee28f3cb4757b10b60437a4cf6e36258dd85",
+          "probeSha256": "0ac6b90e4003c83dc3bdec8d01f830e63a4a89d4249512486748c3b202b6ddc3"
+        }
+      }
+    },
+    "socketCleanup": "passed-long-utf8-paths-distinct-sessions-startup-failure-worker-parent-crash-dead-owner-live-and-unrelated-preservation",
+    "installedDriver": "0.28.2+mako.21",
+    "engine": "source-only; frozen package runtime during GUI and Linux runs; desktop rollout not performed",
+    "physicalInput": "coordination-unanswered",
+    "proactiveFocus": "general-deliberate-activation-prevention-not-established"
+  }
 }

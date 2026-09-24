@@ -89,6 +89,18 @@ It does not prove a UI postcondition. Actions do not automatically read the UI
 or replay input. `expect` polls observations, defaults to five seconds, and
 never reissues the action.
 
+For native shortcuts, `window.pressKey('Left',{modifiers:['Shift'],ref})`
+keeps the addressed field through modifier-key delivery. The equivalent locator
+call reads once and sends that field's fresh ref. An older driver that cannot
+address a keyboard action to a field refuses before dispatch. This does not
+enable background Command shortcuts or bypass exact-window checks.
+
+Native `window.click(point,{button:'middle'})` uses a real middle-button event
+when the driver advertises support. `point` must carry the latest screenshot's
+`view` and returned-image coordinates. An actionable ref can also be used;
+structural nodes without a ref require a screenshot. Repeated middle/right
+clicks and triple clicks remain unsupported in the native public API.
+
 Assertions compare the selected node's exact structured value or states.
 Empty strings and false states are meaningful. Duplicate observed names fail;
 an unrelated field containing the same text does not count. Absence requires
@@ -122,6 +134,14 @@ reject duplicate controls. Exact browser text assertions read the matched DOM
 control's current value, including empty strings, rather than inferring an
 empty value from a missing accessibility property. Values still have an output
 budget; truncated values cannot establish equality.
+
+For a native dialog whose directory tree crowds out its buttons, use an explicit
+shallow read: `await state.window.observe({maxDepth:5,max:250})`. `maxDepth` accepts
+1–25 and limits the native traversal itself. The observation records this limit
+in `scope.maxDepth`. Use its fresh refs for the visible controls; omitted
+children keep `coverage.complete:false`, so this cannot prove global uniqueness
+or absence. This option is native-only and refuses if the driver does not support
+it. Browser observations use `within`/`match` instead.
 
 Native scopes currently filter a driver read of up to 1,000 elements. They save
 returned context but do not avoid the underlying whole-window read. Incomplete
