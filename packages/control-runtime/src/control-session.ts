@@ -1,3 +1,4 @@
+import { controlReplDocumentation } from "./control-agent-docs.js"
 import type { JsonValue } from "./json.js"
 import {
   nativeCapture,
@@ -17,6 +18,7 @@ import {
   PROGRAM_TIME_LIMIT_MS,
   controlArtifactsDirectory,
   type ControlProgramOutput,
+  type ControlProgramExecution,
 } from "@mako/control/program"
 import {
   actionReceipt,
@@ -159,6 +161,7 @@ export const COMPUTER_TOOL_INPUTS = {
 }
 export const controlHelpInputSchema = z
   .object({
+    syntax: z.enum(["script", "repl"]).optional(),
     topic: z
       .enum([
         "discovery",
@@ -2477,6 +2480,8 @@ export function createControlSession(
   }
 
   const CONTROL_ACTIONS = [
+    "help",
+    "status",
     "capabilities",
     "targets",
     "connect",
@@ -2503,30 +2508,31 @@ export function createControlSession(
         ],
       }
     }
+    const result = args.syntax === "repl" ? "" : "return "
     const reference = {
       version: 2,
-      execution: "Run mako-control exec --source-file workflow.js (or - for stdin). It waits for completion and preserves state between commands. Return only needed values; explicit images become files. Use mako-control api --topic examples for focused recipes.",
+      execution: "Mako agents use the persistent js MCP tool: top-level await and normal bindings, without top-level return; control.rewriteDocumentation() restores instructions. Shell users run mako-control exec --source-file workflow.js (or - for stdin). It waits for completion and preserves state between commands. Return only needed values; explicit images become files. Use mako-control api --topic examples for focused recipes.",
       examples: {
-        discovery: "return await control.browsers()",
-        connectAndOpen: "// Use an exact ID from control.browsers(); connect is explicit.\nconst id='BROWSER_ID_FROM_DISCOVERY'; await control.connectBrowser(id); state.tab=await control.openTab({browser:id,url:'https://example.com'}); return await state.tab.observe();",
-        existingTarget: "// Replace TARGET_JSON with the complete JSON returned by CLI open/claim; preserve lease and generation.\nstate.tab=control.tab(TARGET_JSON); return await state.tab.observe();",
-        dialog: "return await state.tab.dialog({}); // Inspect pending.type/message first. In a later command, after deciding: return await state.tab.dialog({respond:'accept'});",
-        observedRef: "const view=await state.tab.observe(); const node=view.get({role:'textbox',name:'Name'}); await state.tab.setValue(node.ref,'Ada'); return await state.tab.expect({role:'textbox',name:'Name',value:'Ada'});",
-        nativeWindow: "// Use the exact pid/window_id from apps() and windows(pid).\nstate.window=control.window({pid:1234,window_id:56}); return await state.window.observe();",
+        discovery: `${result}await control.browsers()`,
+        connectAndOpen: `// Use an exact ID from control.browsers(); connect is explicit.\nconst id='BROWSER_ID_FROM_DISCOVERY'; await control.connectBrowser(id); state.tab=await control.openTab({browser:id,url:'https://example.com'}); ${result}await state.tab.observe();`,
+        existingTarget: `// Replace TARGET_JSON with the complete JSON returned by CLI open/claim; preserve lease and generation.\nstate.tab=control.tab(TARGET_JSON); ${result}await state.tab.observe();`,
+        dialog: `${result}await state.tab.dialog({}); // Inspect pending.type/message first. In a later command, after deciding: ${result}await state.tab.dialog({respond:'accept'});`,
+        observedRef: `const view=await state.tab.observe(); const node=view.get({role:'textbox',name:'Name'}); await state.tab.setValue(node.ref,'Ada'); ${result}await state.tab.expect({role:'textbox',name:'Name',value:'Ada'});`,
+        nativeWindow: `// Use the exact pid/window_id from apps() and windows(pid).\nstate.window=control.window({pid:1234,window_id:56}); ${result}await state.window.observe();`,
         scopedEdit:
-          "const form=state.tab.locator({role:'form',name:'Profile'}); await form.locator({role:'textbox',name:'Name'}).setValue('Ada'); await form.locator({role:'button',name:'Save'}).click(); return await state.tab.expect({within:[{role:'form',name:'Profile'}],role:'textbox',name:'Name',value:'Ada'});",
+          `const form=state.tab.locator({role:'form',name:'Profile'}); await form.locator({role:'textbox',name:'Name'}).setValue('Ada'); await form.locator({role:'button',name:'Save'}).click(); ${result}await state.tab.expect({within:[{role:'form',name:'Profile'}],role:'textbox',name:'Name',value:'Ada'});`,
         screenshot:
           "emitImage(await state.tab.locator({role:'form',name:'Profile'}).locator({role:'button',name:'Save'}).screenshot())",
         recordStart:
-          "state.recording=await state.tab.record(); return state.recording",
-        recordStop: "return await state.recording.stop()",
-        recordStatus: "return await state.recording.status()",
+          `state.recording=await state.tab.record(); ${result}state.recording`,
+        recordStop: `${result}await state.recording.stop()`,
+        recordStatus: `${result}await state.recording.status()`,
         note: "Examples assume state.tab is your opened/claimed tab; substitute exact observed form/control names. Stop may return finalizing: collect status, never restart the recording. invalid-request and target-ambiguous are not-dispatched for that operation; earlier program steps may have completed. Correct just the failed step. Unknown outcomes require fresh target evidence before more input.",
       },
       discovery:
-        "control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,preferred,transport,guidance?,lastInterruption?,connection,...}]}; control.tabs(browser) -> {kind:'pages',browser,pages:[{targetId,title,url,selectable,...}]}. These methods return objects, not arrays.",
+        `control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,preferred,transport,guidance?,lastInterruption?,connection,...}]}; control.tabs(browser) -> {kind:'pages',browser,pages:[{targetId,title,url,selectable,...}]}. These methods ${result}objects, not arrays.`,
       connection:
-        "await control.connectBrowser(id) explicitly connects an exact discovered browser and returns its connection state. A disconnected desk is ready to connect without an extension or remote-debugging setup. Choose the dev desk by origin/sourceRoot; open a hidden task tab there to inspect or capture Mako. This is a separate view, not a screenshot of the user’s visible window. Chromium profiles still require their installed extension. Example: const {browsers} = await control.browsers(); await control.connectBrowser(browsers.find(b => b.id === chosenId).id); state.tab = await control.openTab({browser:chosenId}); return await state.tab.observe(); No implicit reconnect or action replay.",
+        `await control.connectBrowser(id) explicitly connects an exact discovered browser and returns its connection state. A disconnected desk is ready to connect without an extension or remote-debugging setup. Choose the dev desk by origin/sourceRoot; open a hidden task tab there to inspect or capture Mako. This is a separate view, not a screenshot of the user’s visible window. Chromium profiles still require their installed extension. Example: const {browsers} = await control.browsers(); await control.connectBrowser(browsers.find(b => b.id === chosenId).id); state.tab = await control.openTab({browser:chosenId}); ${result}await state.tab.observe(); No implicit reconnect or action replay.`,
       handles:
         "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across exec commands. App windows are selected explicitly; no implicit first window.",
       actions:
@@ -2607,6 +2613,13 @@ export function createControlSession(
       if (closed)
         throw new Error("Local Control is closing; no new action was accepted")
       signal.throwIfAborted()
+      if (action === "status") {
+        controlInput(z.object({}).strict().safeParse(args), "status options", "Use control.status().")
+        return status()
+      }
+      if (action === "help") return z.json().parse(await controlHelp(controlInput(
+        controlHelpInputSchema.safeParse(args), "help options", 'Use {topic:"actions"} or {domain:"Page",method:"navigate"}.'
+      )))
       if (action === "capabilities") {
         const target = controlInput(
           z.object({ target: ControlTargetSchema }).strict().safeParse(args),
@@ -2773,6 +2786,7 @@ export function createControlSession(
           ],
       extra: !unified && browserCall ? { browser: BROWSER_ACTIONS } : {},
       artifacts,
+      replDocumentation: unified ? controlReplDocumentation : undefined,
       call: async (command, signal, namespace) => {
         if (unified) return runControl(command, signal)
         if (namespace === "browser") {
@@ -2875,7 +2889,7 @@ export function createControlSession(
     async execute(
       input: z.input<typeof ControlProgramRequestSchema>,
       signal: AbortSignal,
-      execution: { yield?: boolean } = {}
+      execution: ControlProgramExecution = {}
     ): Promise<ControlProgramOutput[]> {
       assertOpen()
       const request = controlInput(
@@ -2903,6 +2917,10 @@ export function createControlSession(
       } finally {
         signal.removeEventListener("abort", cancelled)
       }
+    },
+    async resetProgram(signal: AbortSignal) {
+      assertOpen()
+      await (await program()).reset(signal)
     },
     async call(
       input: ComputerArguments,

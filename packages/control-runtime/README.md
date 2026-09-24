@@ -1,7 +1,7 @@
 # @mako/control-runtime
 
-The shared Node engine for Mako browser and computer control, with a composable
-`mako-control` CLI. Requires Node 24+. Electron is not a dependency. Importing the
+The shared Node engine for Mako browser and computer control, with a persistent JavaScript
+MCP adapter and a composable `mako-control` CLI. Requires Node 24+. Electron is not a dependency. Importing the
 package opens no browser, driver, socket or session. Programs are trusted local
 JavaScript; this package is not a sandbox.
 
@@ -37,6 +37,24 @@ The native executable and browser are separate platform dependencies. The caller
 owns their installation and permissions. Closing the runtime does not delete
 artifacts or terminate an externally supplied browser.
 
+## MCP integration
+
+```js
+import { createControlMcpServer, controlAgent } from '@mako/control-runtime/mcp'
+
+// runtime is the same createControlRuntime instance owned above.
+const server = createControlMcpServer(controlAgent(runtime))
+await server.connect(yourMcpTransport)
+// Closing server ends this adapter. The runtime owner still controls cleanup.
+```
+
+`js` evaluates top-level await with persistent bindings; `js_reset` clears program
+state without closing targets or recordings. First-use docs and focused help are
+versioned with the engine. In a worker host, pass a typed function using
+`invokeControlSession(descriptor, operation, signal)` instead of `controlAgent`.
+Both paths borrow one engine. No shell command or second session is involved.
+Mako routes task-scoped cancellation to that worker and revokes access at task end.
+
 ## Shell composition
 
 Keep the session owner running for the duration of a shell workflow.
@@ -59,6 +77,7 @@ cleans up its process group after crashes, cancellation and lost parent IPC.
 ## Integration contracts
 
 - Root: `createControlRuntime`, explicit standalone ownership and configuration.
+- `/mcp`: `createControlMcpServer` and `controlAgent` for direct typed integration.
 - `/session`: session engine, desktop worker supervisor, private shell server/client and protocol validation.
 - `/browser`: `BrowserService` for hosts sharing connections across task owners.
 - `/host`: session and native-driver adapters for an existing permission-owning host.
@@ -66,7 +85,7 @@ cleans up its process group after crashes, cancellation and lost parent IPC.
 - `/desktop`: explicit discovery and registration for Mako's desktop integration.
 
 `/cli` resolves the sole public executable entrypoint. Internal files have no wildcard
-exports. CLI and desktop use the same targeting, capture and cleanup code.
+exports. MCP, CLI and desktop use the same targeting, capture and cleanup code.
 Changes to engine code invalidate old CLI session descriptors; reconnect using the
 current owner instead of silently mixing versions.
 

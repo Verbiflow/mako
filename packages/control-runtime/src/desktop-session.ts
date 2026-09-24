@@ -1,3 +1,5 @@
+import { readControlSession, invokeControlSession } from "./control-session-client.js"
+import type { SessionOperation } from "./control-session-protocol.js"
 import { fork, type ChildProcess } from "node:child_process"
 import { rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -133,7 +135,9 @@ export async function startDesktopControlSession(
     void exit
       .then(() => rm(directory, { recursive: true, force: true }))
       .catch(() => {})
+    const descriptor = await readControlSession(sessionFile)
     return {
+      request: (operation: SessionOperation, signal: AbortSignal) => invokeControlSession(descriptor, operation, signal),
       launch: { bin: directory, command, sessionFile } satisfies ControlLaunch,
       pid: child.pid,
       exited: exit,

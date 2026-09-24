@@ -1,0 +1,19 @@
+/** Shared, versioned with the engine. No task IDs, credentials or app guesses. */
+export const controlJsDescription = `Control browsers and native apps using persistent JavaScript and the initialized control SDK. Prefer a purpose-built API/CLI when it directly supports the task.
+On first use or after reset, make one discovery call, then read the returned documentation before acting:
+- Browser work: await control.browsers()
+- Native app work: await control.apps()
+If you already have exact target IDs, bind that target and observe it instead. Never guess IDs or silently substitute a browser.
+Use top-level await; let/const bindings persist. The last expression and console.log emit compact JSON. Images require emitImage(await handle.screenshot()). Do not use top-level return.
+After lost/compacted context: await control.rewriteDocumentation(). Focused help: await control.help({topic:"actions"}). Await every operation, verify the exact outcome, and never replay unknown input. This tool waits for completion; there are no numeric continuation tickets.`
+
+export const controlReplDocumentation = `Mako browser and computer use — persistent JavaScript
+The initialized control SDK shares one task session with the mako-control CLI. Both use the same targets, leases, refs, recordings and input guards. MCP never starts a CLI subprocess.
+Use top-level await and normal let/const bindings. The last expression is printed; console.log(value) prints additional compact JSON. No top-level return. state is shared with CLI exec programs; lexical bindings belong to this REPL. CLI exec uses an async function and return, with state for persistent values.
+First discover the requested browser/app. Browser lists and apps/windows are objects, not arrays. Use only exact IDs and target receipts. Connect a disconnected browser explicitly with await control.connectBrowser(id); do not switch browsers or direct-debugging routes after failure.
+Bind a window: let win=control.window({pid,window_id}); await win.observe(). Open a page: let tab=await control.openTab({browser:id,url:"https://example.com"}); await tab.observe(). Claim an existing listed tab with await control.claimTab({browser:id,tab:targetId}). Reads and images are explicit; binding alone does not observe.
+Before input, read the exact target and use observed role/name/ref. Reobserve after mutation before reusing refs. Semantic locators resolve one complete match and never retry a mutation. A dispatched receipt is not success: use observe() or expect() to verify. Incomplete coverage cannot prove absence. handle.capabilities() reports this target’s available routes; do not infer support from its app name.
+Batch only deterministic actions whose targets and expected results are known. Await every action. Late callbacks cannot act in another cell. Ordinary errors retain bindings; cancellation, timeout or worker failure clear them. Earlier steps may already have completed: inspect the exact target before deciding what to do next. Reset clears program state for both interfaces, not tabs, apps, leases or recordings.
+Explicit screenshots: emitImage(await tab.screenshot()). Large output spills whole to artifact files; no silent truncation. Shell pipelines can use the task’s mako-control CLI. No foreground activation or browser reconnect is implied by reading state.
+Runtime readiness: await control.status() (no permission prompt). checkpoint({remember:{key:value}}) and recall() retain bounded JSON task memory in shared state.
+More detail: await control.help({topic:"connection"|"actions"|"observations"|"assertions"|"recording"|"page"|"native"|"output"|"examples"}). Each topic is a literal string; choose one. After lost context, await control.rewriteDocumentation() restores the sections already used. Scripts are trusted local JavaScript, not an OS sandbox.`

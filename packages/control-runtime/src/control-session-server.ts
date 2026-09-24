@@ -1,3 +1,4 @@
+import { controlAgent } from "./control-agent.js"
 import { createServer } from "node:http"
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
@@ -62,6 +63,9 @@ export async function serveControlSession(
         return session.help(operation.args)
       case "diagnostics":
         return { ...session.diagnostics(), requests: [...diagnostics] }
+      case "js-reset":
+      case "js":
+        return controlAgent(session)(operation, signal)
       case "exec": {
         const blocks = await session.execute(
           { source: operation.source },
@@ -181,10 +185,10 @@ export async function serveControlSession(
       for await (const chunk of request) {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
         bytes += buffer.length
-        if (bytes > 512 * 1024)
+        if (bytes > 1024 * 1024)
           throw new ControlFault(
             "input-limit",
-            "Request exceeds 512 KiB.",
+            "Request exceeds 1 MiB.",
             "not-dispatched"
           )
         chunks.push(buffer)

@@ -153,3 +153,14 @@ export async function requestControlSession(
     )
   }
 }
+
+/** Typed callers consume engine values; transport receipts stay at this boundary. */
+export async function invokeControlSession(
+  descriptor: SessionDescriptor,
+  operation: SessionOperation,
+  signal: AbortSignal
+) {
+  const reply = await requestControlSession(descriptor, operation, signal)
+  if (!reply.ok) throw new ControlFault(reply.fault.code, reply.fault.message, reply.fault.outcome)
+  return reply.value
+}

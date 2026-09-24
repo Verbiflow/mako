@@ -17,7 +17,8 @@
     "./contracts": "./dist/contracts.js",
     "./session": "./dist/session.js",
     "./extension": "./dist/browser-extension-protocol.js",
-    "./cli": "./dist/control-cli.js"
+    "./cli": "./dist/control-cli.js",
+    "./mcp": "./dist/control-mcp.js"
   },
   "bin": {
     "mako-control": "dist/control-cli.js"

@@ -17,9 +17,16 @@ export const SessionDescriptorSchema = z
   })
   .strict()
 export type SessionDescriptor = z.infer<typeof SessionDescriptorSchema>
+export const ControlJsInputSchema = z.object({
+  code: z.string().min(1).max(100_000).describe("JavaScript with top-level await; normal bindings persist between calls."),
+  timeout_ms: z.number().int().min(1).max(60_000).default(30_000).describe("Execution deadline in milliseconds, 1–60000. Timeout resets program bindings; never replay an uncertain action."),
+  title: z.string().min(1).max(100).optional().describe("Short description of the operation for the user."),
+}).strict()
 const jsonObject = z.record(z.string(), z.json())
 export const SessionOperationSchema = z.discriminatedUnion("method", [
   z.object({ method: z.literal("status") }).strict(),
+  ControlJsInputSchema.extend({ method: z.literal("js") }),
+  z.object({ method: z.literal("js-reset") }).strict(),
   z
     .object({ method: z.literal("help"), args: jsonObject.default({}) })
     .strict(),
