@@ -15,6 +15,7 @@ const CaptureStateRow = z.object({
   token: z.string(),
   deleted: z.union([z.literal(0), z.literal(1)]),
   revision: z.string().nullable(),
+  observedRevision: z.string().nullable(),
 })
 const ArchiveContentRow = z.object({ ref: z.string(), entries: z.string() })
 const ArchivedThreadRefSchema = ThreadRefSchema.extend({
@@ -127,6 +128,15 @@ export class SessionArchive {
         // Capture admission needs the revision, never the transcript payload.
         // The primary path index still fetches a potentially huge sessions row.
         database.exec("CREATE INDEX IF NOT EXISTS sessions_capture_revision ON sessions(path, revision)")
+        // Discovery can be cheaper/less detailed than a complete read. Record
+        // the observation that produced a snapshot separately from its full ref.
+        // A peer write changes the capture token and invalidates this evidence,
+        // including writes by older builds that know nothing about this table.
+        database.exec(`CREATE TABLE IF NOT EXISTS archive_observations (
+          path TEXT PRIMARY KEY,
+          observed_revision TEXT NOT NULL,
+          capture_token TEXT NOT NULL
+        )`)
         database.exec("COMMIT")
       } catch (error) {
         database.exec("ROLLBACK")
@@ -174,7 +184,7 @@ export class SessionArchive {
   note(ref: ThreadRef, read: () => Promise<Thread | null>): void {
     if (this.stopping || this.deleted.has(ref.path)) return
     const state = this.captureState(ref.path)
-    if (state?.deleted || state?.revision === revisionOf(ref)) {
+    if (state?.deleted || (state?.revision === revisionOf(ref) || state?.observedRevision === revisionOf(ref))) {
       this.cancel(ref.path)
       return
     }
@@ -249,6 +259,7 @@ export class SessionArchive {
     database.exec("BEGIN IMMEDIATE")
     try {
       database.prepare("DELETE FROM sessions WHERE path = ?").run(path)
+      database.prepare("DELETE FROM archive_observations WHERE path = ?").run(path)
       database
         .prepare(
           `
@@ -295,7 +306,7 @@ export class SessionArchive {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (this.latest.get(ref.path) !== capture) return
       const before = this.captureState(ref.path)
-      if (before?.deleted || before?.revision === revisionOf(ref)) return
+      if (before?.deleted || (before?.revision === revisionOf(ref) || before?.observedRevision === revisionOf(ref))) return
       const native = await read()
       if (
         !native ||
@@ -341,6 +352,14 @@ export class SessionArchive {
         `
           )
           .run(ref.path, metadata, entries, revision)
+        database.prepare(`
+          INSERT INTO archive_observations (path, observed_revision, capture_token)
+          SELECT path, ?, token FROM archive_captures WHERE path = ? AND deleted = 0
+          ON CONFLICT(path) DO UPDATE SET
+            observed_revision=excluded.observed_revision, capture_token=excluded.capture_token
+          WHERE archive_observations.observed_revision != excluded.observed_revision
+            OR archive_observations.capture_token != excluded.capture_token
+        `).run(revisionOf(ref), ref.path)
         database.exec("COMMIT")
       } catch (error) {
         database.exec("ROLLBACK")
@@ -366,8 +385,11 @@ export class SessionArchive {
     const row = this.database
       ?.prepare(
         `
-      SELECT token, deleted, revision FROM archive_captures
-      LEFT JOIN sessions INDEXED BY sessions_capture_revision USING (path) WHERE path = ?
+      SELECT token, deleted, revision, observed_revision AS observedRevision FROM archive_captures
+      LEFT JOIN sessions INDEXED BY sessions_capture_revision USING (path)
+      LEFT JOIN archive_observations ON archive_observations.path = archive_captures.path
+        AND archive_observations.capture_token = archive_captures.token
+      WHERE archive_captures.path = ?
     `
       )
       .get(path)

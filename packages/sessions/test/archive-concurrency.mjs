@@ -25,7 +25,7 @@ test('capture admission reads the revision index without fetching transcript row
   const plans=[]
   try {
     DatabaseSync.prototype.prepare=function(sql,...args) {
-      if(/SELECT token, deleted, revision FROM archive_captures/.test(sql)) {
+      if(/SELECT token, deleted, revision, observed_revision AS observedRevision FROM archive_captures/.test(sql)) {
         plans.push(prepare.call(db,'EXPLAIN QUERY PLAN '+sql).all(value.ref.path))
       }
       return prepare.call(this,sql,...args)
@@ -68,6 +68,40 @@ test('existing archives gain the index without changing contents, tokens or form
     assert.equal(reads,0)
     assert.equal((await reopened.read('/fixture/native')).entries[0].text,'Retained history')
   } finally {await reopened.stop()}
+})
+
+test('all-six cheap discovery observations retain enriched snapshots without repeated translation', async(a,b,location)=>{
+  for(const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+    const observed={...ref('source-one'),harness,path:'/fixture/'+harness}
+    const complete={ref:{...observed,model:'native-model'},entries:[{kind:'user',text:'Retain every turn'}]}
+    let reads=0
+    a.note(observed,async()=>{reads++;return complete});await a.flush()
+    assert.equal((await a.read(observed.path)).ref.model,'native-model')
+    b.note(observed,async()=>{reads++;return complete});await b.flush()
+    assert.equal(reads,1,'peer does not translate an already-captured observation')
+    const restarted=new SessionArchive(location)
+    try {
+      await restarted.load()
+      restarted.note(observed,async()=>{reads++;return complete});await restarted.flush()
+      assert.equal(reads,1,'observation evidence survives process lifetime')
+      const changed={...observed,revision:'source-two',settings:{model:'new-model'}}
+      restarted.note(changed,async()=>({ref:{...changed,model:'new-model'},entries:complete.entries}));await restarted.flush()
+      assert.equal((await b.read(observed.path)).ref.model,'new-model','changed metadata is still captured')
+    }finally{await restarted.stop()}
+  }
+})
+
+test('a legacy peer write invalidates discovery observation evidence through its capture token', async(a,b,location)=>{
+  const observed=ref('hint'),complete=thread('hint','old',{model:'enriched'})
+  a.note(observed,async()=>complete);await a.flush()
+  const legacy=new DatabaseSync(join(location,'archive.sqlite'))
+  legacy.function('mako_archive_writer',()=>1)
+  legacy.prepare('UPDATE sessions SET entries=?, revision=? WHERE path=?').run(JSON.stringify([{kind:'user',text:'peer'}]),'peer-revision',observed.path)
+  legacy.close()
+  let reads=0
+  b.note(observed,async()=>{reads++;return {...complete,entries:[{kind:'user',text:'current native state'}]}});await b.flush()
+  assert.equal(reads,1,'a different committed token requires a current read')
+  assert.equal((await a.read(observed.path)).entries[0].text,'current native state')
 })
 
 test('settings-only and equal-length content corrections are retained', async (a) => {
