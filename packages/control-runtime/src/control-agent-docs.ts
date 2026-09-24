@@ -2,7 +2,7 @@
 export const controlJsDescription = `Control browsers and native apps using persistent JavaScript and the initialized control SDK. Prefer a purpose-built API/CLI when it directly supports the task.
 On first use or after reset, make one discovery call, then read the returned documentation before acting:
 - Browser work: await control.browsers()
-- Native app work: await control.apps()
+- Native app work: await control.apps(); if the task already supplies a pid, use await control.windows(pid) instead.
 If you already have exact target IDs, bind that target and observe it instead. Never guess IDs or silently substitute a browser.
 Use top-level await; let/const bindings persist. The last expression and console.log emit compact JSON. Images require emitImage(await handle.screenshot()). Do not use top-level return.
 After lost/compacted context: await control.rewriteDocumentation(). Focused help: await control.help({topic:"actions"}). Await every operation, verify the exact outcome, and never replay unknown input. This tool waits for completion; there are no numeric continuation tickets.`

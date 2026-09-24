@@ -233,16 +233,22 @@ test('old connections retain reads but cannot insert, update or delete after mig
   } finally {old.close()}
 })
 
-test('noisy discovery returning identical content makes no database write',async(a,_b,location)=>{
+test('noisy discovery records admission once without rewriting retained content',async(a,_b,location)=>{
   const value=thread()
   await capture(a,value)
   const observer=new DatabaseSync(join(location,'archive.sqlite'))
-  const before=observer.prepare('PRAGMA data_version').get().data_version
+  const row=observer.prepare('SELECT * FROM sessions').get()
+  const token=observer.prepare('SELECT * FROM archive_captures').get()
   let reads=0
   a.note(ref('noisy-discovery'),async()=>{reads++;return value})
   await a.flush()
   assert.equal(reads,1)
-  assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before)
+  assert.deepEqual(observer.prepare('SELECT * FROM sessions').get(),row)
+  assert.deepEqual(observer.prepare('SELECT * FROM archive_captures').get(),token)
+  const before=observer.prepare('PRAGMA data_version').get().data_version
+  a.note(ref('noisy-discovery'),async()=>{reads++;return value});await a.flush()
+  assert.equal(reads,1,'repeated observation performs no translation')
+  assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before,'no repeated metadata write')
   observer.close()
 })
 

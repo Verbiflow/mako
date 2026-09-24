@@ -270,10 +270,23 @@ export class ControlProgramRuntime {
     execution: ControlProgramExecution
   ): Promise<ControlProgramOutput[]> {
     const compiled = new URL("./worker.js", import.meta.url)
-    this.worker ??= new Worker(
-      existsSync(compiled) ? compiled : new URL("./worker.ts", import.meta.url),
-      { env: {}, resourceLimits: { maxOldGenerationSizeMb: 128 } }
-    )
+    if (!this.worker) {
+      const created = new Worker(
+        existsSync(compiled) ? compiled : new URL("./worker.ts", import.meta.url),
+        { env: {}, resourceLimits: { maxOldGenerationSizeMb: 128 } }
+      )
+      // A timer or abandoned promise can fail after a cell returned. Per-run
+      // listeners have gone by then; an unhandled Worker error would otherwise
+      // kill the desktop session owner, taking its targets and recordings too.
+      // Invalidate only this worker. The next call recreates bindings/docs while
+      // the shared control session remains alive; nothing is replayed.
+      const invalidate = () => {
+        if (this.worker === created) this.worker = undefined
+      }
+      created.on("error", invalidate)
+      created.once("exit", invalidate)
+      this.worker = created
+    }
     const worker = this.worker
     const controller = new AbortController()
     const active = AbortSignal.any([signal, controller.signal])
