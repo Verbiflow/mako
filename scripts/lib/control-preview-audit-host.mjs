@@ -55,6 +55,7 @@ process.once(
         (image) => image,
         (activity) => host.event({ type: "control-activity", activity })
       )
+      const focusEvents = []
       let active = true
       const host = await startWebHost(
         socket,
@@ -69,8 +70,24 @@ process.once(
             const value = previews.read(id, watching, watcher)
             return JSON.stringify({ ok: true, value: watching ? value : null })
           }
+          if (channel === "mako:audit-capture")
+            return JSON.stringify({
+              ok: true,
+              value: {
+                focusEvents,
+                bindings: [...browser.bindings.values()].map((binding) => ({
+                  focusUsers: binding.focus.users,
+                  focusEnabled: binding.focus.enabled,
+                  captureRunning: binding.capture.running,
+                  captureConsumers: binding.capture.subscribers.size,
+                })),
+              },
+            })
           if (channel === "mako:audit-cpu")
-            return JSON.stringify({ ok: true, value: process.cpuUsage() })
+            return JSON.stringify({
+              ok: true,
+              value: { ...process.cpuUsage(), memory: process.memoryUsage() },
+            })
           assert.equal(channel, "mako:audit-browser")
           const command = BrowserCommandSchema.parse(args[0])
           const value = await browser.execute(
@@ -79,6 +96,21 @@ process.once(
             AbortSignal.timeout(10_000)
           )
           if (command.action === "open") {
+            const binding = [...browser.bindings.values()].find(
+              (binding) => binding.target.tab === value.tab
+            )
+            const send = binding.connection.send.bind(binding.connection)
+            binding.connection.send = async (
+              method,
+              params,
+              signal,
+              session
+            ) => {
+              const response = await send(method, params, signal, session)
+              if (method === "Emulation.setFocusEmulationEnabled")
+                focusEvents.push({ at: Date.now(), enabled: params.enabled })
+              return response
+            }
             previews.observe({
               conversationId: "preview-audit",
               kind: "browser",
