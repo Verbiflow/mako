@@ -33,14 +33,19 @@ export async function invokeWithRecovery<T>(
     return await run(1)
   } catch (error) {
     if (!(error instanceof RuntimeDisconnectedError)) throw error
-    if (error.conversationId) throw error
+    // Losing a read reply never makes a user action's delivery uncertain.
+    const failure = hostCallReplay(channel) === "read"
+      ? new RuntimeDisconnectedError(false, error.conversationId) : error
+    if (failure.conversationId) throw failure
     link.lost()
-    if (hostCallReplay(channel) === "never") throw error
-    if (!(await link.whenConnected(timeoutMs))) throw error
+    if (hostCallReplay(channel) === "never") throw failure
+    if (!(await link.whenConnected(timeoutMs))) throw failure
     try { return await run(2) }
     catch (retryError) {
       // A later refusal cannot resolve whether the first mutation was accepted.
       if (error.unconfirmed && hostCallReplay(channel) === "replay") throw error
+      if (retryError instanceof RuntimeDisconnectedError && hostCallReplay(channel) === "read")
+        throw new RuntimeDisconnectedError(false, retryError.conversationId)
       throw retryError
     }
   }

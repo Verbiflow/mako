@@ -8,6 +8,7 @@ import type { OwnerResolution } from "./contracts/thread-continuation.js"
 import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "./session-memory.js"
 import { ensureRuntime, runtimeLocation } from "./runtime-service.js"
 import { invokeRuntime, probeRuntime, subscribeRuntime, RuntimeDisconnectedError } from "./runtime-connection.js"
+import { hostHistoryPaging } from "./host-client.js"
 
 const snapshotIdentity = z.object({
   session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional() }),
@@ -23,6 +24,7 @@ const liveTarget = z.object({ kind: z.literal("live"), id: z.string() })
 // Only conversation operations cross hosts. Workspace state, app lifecycle,
 // provider discovery and new conversations stay on the receiving host.
 const conversationCalls = new Set([
+  "mako:live-read",
   "mako:live-continue", "mako:live-snapshot", "mako:live-state", "mako:live-prompt", "mako:live-permission",
   "mako:live-mode", "mako:live-cancel", "mako:live-close", "mako:live-edit-queued",
   "mako:live-clear-queue", "mako:live-earlier", "mako:live-bind", "mako:read-live-file",
@@ -87,7 +89,7 @@ export class SharedConversations {
       }
       if (!await this.reachable(route)) return this.unavailable()
       await this.follow(route)
-      const value = await invokeRuntime(route.socket, this.client, "mako:live-snapshot", [route.conversationId])
+      const value = await invokeRuntime(route.socket, this.client, "mako:live-snapshot", [route.conversationId], 1, { history: hostHistoryPaging() })
       if (value == null) return this.unavailable()
       const identity = snapshotIdentity.parse(value)
       if (identity.session.id !== route.conversationId) return this.unavailable()
@@ -179,7 +181,7 @@ export class SharedConversations {
     await this.follow(route)
     // Preserve the original request id. The owner's journal settles a replay;
     // this router never retries a mutation after an ambiguous transport error.
-    const value = await invokeRuntime(route.socket, this.client, channel, args)
+    const value = await invokeRuntime(route.socket, this.client, channel, args, 1, { history: hostHistoryPaging() })
     if (channel === "mako:live-fork") {
       const fork = snapshotIdentity.parse(value)
       const input = z.object({ id: z.string(), provider: z.string() }).parse(args[1])
@@ -307,7 +309,7 @@ export class SharedConversations {
           this.memory.routeForConversation(event.data.batch.id)?.socket === socket)
           this.emit(packet.payload)
       }
-    }, disconnected, { observer: true })
+    }, disconnected, { observer: true, history: true, eventLimit: 32 * 1024 * 1024 })
   }
 
   dispose(): void {

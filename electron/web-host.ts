@@ -1,3 +1,4 @@
+import { encodeRuntimeResponse } from "./runtime-response.js"
 import { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 import {
   createServer,
@@ -33,12 +34,12 @@ async function readRequest(request: IncomingMessage) {
 /** Host transport shared by desktop and browser gateways on a private Unix socket. */
 export async function startWebHost(
   socket: string,
-  invoke: (channel: string, args: unknown[], client?: string) => Promise<string>,
+  invoke: (channel: string, args: unknown[], client?: string, history?: boolean) => Promise<string>,
   file: (request: Request, client?: string) => Promise<Response>,
   disconnected?: (client: string) => void,
   runtime?: RuntimeInfo
 ) {
-  const streams = new Map<ServerResponse, { client: string; observer: boolean }>()
+  const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Set<ServerResponse>()
   let closed = false
@@ -102,7 +103,11 @@ export async function startWebHost(
       response.write(JSON.stringify({ channel: "ready", runtime }) + "\n")
       clearTimeout(releases.get(clientId))
       releases.delete(clientId)
-      streams.set(response, { client: clientId, observer: request.headers["x-mako-observer"] === "1" })
+      const requestedLimit = Number(request.headers["x-mako-event-limit"])
+      const eventLimit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 64 * 1024 && requestedLimit <= 32 * 1024 * 1024
+        ? requestedLimit : 512 * 1024
+      streams.set(response, { client: clientId, observer: request.headers["x-mako-observer"] === "1",
+        history: request.headers["x-mako-history"] === "1", eventLimit })
       response.once("close", () => {
         streams.delete(response)
         if (!closed && client.data && ![...streams.values()].some((entry) => entry.client === clientId)) {
@@ -128,13 +133,25 @@ export async function startWebHost(
         const encoded = await invoke(
           channel,
           args.map((arg) => (arg.kind === "absent" ? undefined : arg.value)),
-          clientId
+          clientId,
+          request.headers["x-mako-history"] === "1"
         )
         // close() may already have answered this call with the farewell.
         if (response.destroyed || response.headersSent) return
+        const reply = await encodeRuntimeResponse(
+          encoded,
+          channel === "mako:control-preview" &&
+            request.headers["accept-encoding"] === "br"
+        )
+        // Compression is asynchronous; shutdown still owns an in-flight reply.
+        if (response.destroyed || response.headersSent) return
         response
-          .writeHead(200, { "content-type": "application/json" })
-          .end(encoded)
+          .writeHead(200, {
+            "content-type": "application/json",
+            "content-encoding": reply.encoding,
+            vary: "Accept-Encoding",
+          })
+          .end(reply.body)
       })
       .catch((error) => {
         const reply: z.input<typeof RuntimeReplySchema> = {
@@ -164,11 +181,26 @@ export async function startWebHost(
     client?: string
   ) => {
     const line = JSON.stringify({ channel, payload }) + "\n"
+    let invalidation: string | undefined
+    const bytes = Buffer.byteLength(line)
     for (const [stream, owner] of streams) {
       if (client && client !== owner.client) continue
       if (stream.writableLength > 8 * 1024 * 1024)
         stream.destroy(new Error("Web client stopped consuming host events"))
-      else stream.write(line)
+      else {
+        if (owner.history && channel === "event" && bytes > owner.eventLimit) {
+          const live = z.object({ type: z.literal("live-batch"), batch: z.object({
+            id: z.string(), revision: z.number(), epoch: z.string().optional(),
+          }) }).safeParse(payload)
+          if (live.success) {
+            invalidation ??= JSON.stringify({ channel, payload: { type: "live-batch",
+              batch: { ...live.data.batch, updates: [], historyChanged: true } } }) + "\n"
+            stream.write(invalidation)
+            continue
+          }
+        }
+        stream.write(line)
+      }
     }
   }
   return {

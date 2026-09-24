@@ -63,7 +63,7 @@ import type {
   LiveStartOptions,
   LiveSummary,
 } from "./shared.js"
-import { reduceLiveUpdates, mergeLiveUpdates } from "./contracts/live-content.js"
+import { reduceLiveUpdates, mergeLiveUpdates, changedLiveBlockStart } from "./contracts/live-content.js"
 import type { InterruptionReason } from "./contracts/live-conversations.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
 import { CONNECTION_LOST_STOP } from "./contracts/providers-acp.js"
@@ -2927,6 +2927,8 @@ export class LiveConversations {
         revision: snapshot.revision,
         epoch: this.epoch,
         updates,
+        changedFrom: changedLiveBlockStart(previous.blocks, snapshot.blocks),
+        blockCount: snapshot.blocks.length,
         nativeAgents:
           previous.nativeAgents !== snapshot.nativeAgents
             ? snapshot.nativeAgents

@@ -4,6 +4,9 @@ import { LineAssembler } from "@mako/sessions"
 import { RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, type RuntimeCall } from "./contracts/runtime.js"
 import { RuntimeDisconnectedError, HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import type { z } from "zod"
+import { hostCallReplay } from "./contracts/host-call-policy.js"
+
+import { readRuntimeResponse, RuntimeResponseLimitError, type RuntimeTransfer } from "./runtime-response.js"
 
 export { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 
@@ -42,38 +45,87 @@ interface RuntimeRequest<Schema extends z.ZodType> {
   body?: RuntimeCall
   client?: string
   timeoutMs?: number
+  onTransfer?: (transfer: RuntimeTransfer) => void
+  history?: boolean
 }
 
-export async function runtimeRequest<Schema extends z.ZodType>({ socket, path, schema, body, client, timeoutMs = 45_000 }: RuntimeRequest<Schema>): Promise<z.output<Schema>> {
+export async function runtimeRequest<Schema extends z.ZodType>({
+  socket,
+  path,
+  schema,
+  body,
+  client,
+  timeoutMs = 45_000,
+  onTransfer,
+  history = false,
+}: RuntimeRequest<Schema>): Promise<z.output<Schema>> {
   return new Promise((resolve, reject) => {
     const headers = new Map([["content-type", "application/json"]])
     if (client) headers.set("x-mako-window", client)
+    if (history) headers.set("x-mako-history", "1")
+    if (body?.channel === "mako:control-preview")
+      headers.set("accept-encoding", "br")
     let receivedReply = false
-    const req = request({ socketPath: socket, path, method: body === undefined ? "GET" : "POST", headers: Object.fromEntries(headers) }, (response) => {
-      receivedReply = true
-      const chunks: Buffer[] = []
-      let bytes = 0
-      response.on("data", (chunk: Buffer) => {
-        bytes += chunk.length
-        if (bytes > 32 * 1024 * 1024) response.destroy(new Error("Mako host response exceeded its limit"))
-        else chunks.push(chunk)
-      })
-      const invalidReply = (error: Error) => reject(path === "/rpc" ? new RuntimeDisconnectedError(true) : error)
-      response.on("error", invalidReply)
-      response.on("end", () => {
-        try {
-          // A host whose close() has begun answers anything but an RPC with 503 on a closing connection.
-          if (response.statusCode === 503) throw new RuntimeDisconnectedError(false)
-          if (response.statusCode !== 200) throw new Error(`Mako host returned ${response.statusCode}`)
-          resolve(schema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))))
-        } catch (error) {
-          if (response.statusCode === 200) invalidReply(error instanceof Error ? error : new Error("Invalid host reply"))
-          else reject(error)
+    const req = request(
+      {
+        socketPath: socket,
+        path,
+        method: body === undefined ? "GET" : "POST",
+        headers: Object.fromEntries(headers),
+      },
+      (response) => {
+        receivedReply = true
+        const invalidReply = (error: Error) => {
+          // A rejected history/read response says nothing about host liveness
+          // or action delivery. Keep the real reason (including size limits).
+          if (body && hostCallReplay(body.channel) === "read")
+            reject(new Error(error instanceof RuntimeResponseLimitError
+              ? "The host response is too large to load in this version of Mako."
+              : `Mako could not read the host response: ${error.message}`, { cause: error }))
+          else reject(path === "/rpc" ? new RuntimeDisconnectedError(true) : error)
         }
-      })
-    })
-    req.setTimeout(timeoutMs, () => req.destroy(path === "/rpc" ? new RuntimeDisconnectedError(true) : new Error("Mako host request timed out")))
-    req.on("error", (error) => reject(path === "/rpc" && receivedReply ? new RuntimeDisconnectedError(true) : error))
+        void readRuntimeResponse(response).then((transfer) => {
+          try {
+            // A host whose close() has begun answers anything but an RPC with 503 on a closing connection.
+            if (response.statusCode === 503)
+              throw new RuntimeDisconnectedError(false)
+            if (response.statusCode !== 200)
+              throw new Error(`Mako host returned ${response.statusCode}`)
+            const value = schema.parse(JSON.parse(transfer.body))
+            try {
+              onTransfer?.({
+                encoding: transfer.encoding,
+                wireBytes: transfer.wireBytes,
+                decodedBytes: transfer.decodedBytes,
+              })
+            } catch {
+              /* Diagnostics cannot change an RPC's outcome. */
+            }
+            resolve(value)
+          } catch (error) {
+            if (response.statusCode === 200)
+              invalidReply(
+                error instanceof Error ? error : new Error("Invalid host reply")
+              )
+            else reject(error)
+          }
+        }, invalidReply)
+      }
+    )
+    req.setTimeout(timeoutMs, () =>
+      req.destroy(
+        path === "/rpc"
+          ? new RuntimeDisconnectedError(true)
+          : new Error("Mako host request timed out")
+      )
+    )
+    req.on("error", (error) =>
+      reject(
+        path === "/rpc" && receivedReply
+          ? new RuntimeDisconnectedError(true)
+          : error
+      )
+    )
     req.end(body === undefined ? undefined : JSON.stringify(body))
   })
 }
@@ -130,34 +182,64 @@ export async function runtimeInfo(socket: string): Promise<RuntimeInfo | null> {
   throw new RuntimeDisconnectedError(false)
 }
 
-export async function invokeRuntime(socket: string, client: string, channel: string, args: unknown[], attempt = 1, options?: { timeoutMs: number }) {
+export async function invokeRuntime(
+  socket: string,
+  client: string,
+  channel: string,
+  args: unknown[],
+  attempt = 1,
+  options?: {
+    timeoutMs?: number
+    onTransfer?: (transfer: RuntimeTransfer) => void
+    history?: boolean
+  }
+) {
   const encoded = JSON.stringify({
     channel,
-    args: args.map((value) => value === undefined ? { kind: "absent" } : { kind: "value", value }),
+    args: args.map((value) =>
+      value === undefined ? { kind: "absent" } : { kind: "value", value }
+    ),
     attempt: attempt > 1 ? attempt : undefined,
   })
   const body = RuntimeCallSchema.parse(JSON.parse(encoded))
   let reply: z.output<typeof RuntimeReplySchema>
   try {
-    reply = await runtimeRequest({ socket, path: "/rpc", schema: RuntimeReplySchema, body, client, timeoutMs: options?.timeoutMs ?? 5 * 60_000 })
+    reply = await runtimeRequest({
+      socket,
+      path: "/rpc",
+      schema: RuntimeReplySchema,
+      body,
+      client,
+      timeoutMs: options?.timeoutMs ?? 5 * 60_000,
+      onTransfer: options?.onTransfer,
+      history: options?.history ?? false,
+    })
   } catch (error) {
     throw error instanceof Error ? (disconnection(error) ?? error) : error
   }
   if (!reply.ok) {
-    if (reply.code === "owner-unavailable") throw new RuntimeDisconnectedError(reply.unconfirmed ?? true, reply.conversationId)
-    if (reply.code === HOST_RESTARTING_CODE) throw new RuntimeDisconnectedError(true)
-    if (reply.code === HOST_CLOSED_CODE) throw new RuntimeDisconnectedError(false)
+    if (reply.code === "owner-unavailable")
+      throw new RuntimeDisconnectedError(
+        reply.unconfirmed ?? true,
+        reply.conversationId
+      )
+    if (reply.code === HOST_RESTARTING_CODE)
+      throw new RuntimeDisconnectedError(true)
+    if (reply.code === HOST_CLOSED_CODE)
+      throw new RuntimeDisconnectedError(false)
     throw new Error(reply.error)
   }
   return reply.value
 }
 
-export function subscribeRuntime(socket: string, client: string, receive: (packet: z.infer<typeof RuntimePacketSchema>) => void, disconnected: () => void, options: { observer?: boolean } = {}) {
+export function subscribeRuntime(socket: string, client: string, receive: (packet: z.infer<typeof RuntimePacketSchema>) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number } = {}) {
   let closed = false
   let ended = false
   const end = () => { if (!ended && !closed) { ended = true; disconnected() } }
   const headers = new Map([["x-mako-window", client]])
   if (options.observer) headers.set("x-mako-observer", "1")
+  if (options.history) headers.set("x-mako-history", "1")
+  if (options.eventLimit) headers.set("x-mako-event-limit", String(options.eventLimit))
   const req = request({ socketPath: socket, path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
     const lines = new LineAssembler(32 * 1024 * 1024)
     if (response.statusCode !== 200) { response.destroy(); end(); return }

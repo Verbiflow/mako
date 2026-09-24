@@ -228,7 +228,9 @@ import { installGitIpc } from "./ipc/git.js"
 import { fileResponse } from "./file-response.js"
 import { startWebHost } from "./web-host.js"
 import { SharedConversations } from "./shared-conversations.js"
-import { registerIpc as handle, invokeHost, installConversationRouting } from "./ipc/register.js"
+import { registerIpc as handle, invokeHost, installConversationRouting, installHistoryPresentation } from "./ipc/register.js"
+import { LiveHistoryReader } from "./live-history-reader.js"
+import { LiveHistoryReadSchema, type LiveHistoryRead } from "./contracts/live-history.js"
 import { installSessionIpc } from "./ipc/session.js"
 import { installWorkspaceIpc, stopWorkspaceIpc } from "./ipc/workspace.js"
 import type {
@@ -497,6 +499,8 @@ const controlPreviews = new ControlPreviews(
 let controlService: Awaited<ReturnType<typeof startControlService>> | null =
   null
 let liveConversations: LiveConversations
+const liveHistory = new LiveHistoryReader(pageThread, threadBlock)
+installHistoryPresentation(value => liveHistory.present(value))
 let threadArchives: ThreadArchives
 /**
  * Runtime versions are a per-user fact, like the provider profiles beside
@@ -1553,6 +1557,9 @@ function bindIpc() {
   })
   handle("mako:live-snapshot", (_event, id: string) =>
     liveConversations.refreshedSnapshot(id)
+  )
+  handle("mako:live-read", (_event, id: string, input: LiveHistoryRead) =>
+    liveHistory.read(id, LiveHistoryReadSchema.parse(input), () => liveConversations.refreshedSnapshot(id))
   )
   handle(
     "mako:live-state",

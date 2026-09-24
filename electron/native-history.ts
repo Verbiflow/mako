@@ -2,7 +2,7 @@ import type { ThreadPage } from "@mako/sessions"
 
 type ReadPage = (path: string, before?: number) => Promise<ThreadPage | null>
 
-function revision(page: ThreadPage): string {
+export function nativeHistoryRevision(page: ThreadPage): string {
   return JSON.stringify([
     page.ref.path,
     page.ref.nativeId,
@@ -27,7 +27,7 @@ export async function captureNativeHistory(
     const earlier = await read(path, page.start)
     if (
       !earlier ||
-      revision(earlier) !== revision(latest) ||
+      nativeHistoryRevision(earlier) !== nativeHistoryRevision(latest) ||
       earlier.start >= page.start ||
       earlier.start + earlier.entries.length !== page.start
     )

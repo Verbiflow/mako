@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 
-const clients = new AsyncLocalStorage<string>()
+const clients = new AsyncLocalStorage<{ id: string; history: boolean }>()
 
 export function hostClient(): string {
-  return clients.getStore() ?? "app"
+  return clients.getStore()?.id ?? "app"
 }
 
-export function withHostClient<Result>(id: string, run: () => Result): Result {
-  return clients.run(id, run)
+export function hostHistoryPaging(): boolean { return clients.getStore()?.history ?? false }
+
+export function withHostClient<Result>(id: string, run: () => Result, history = false): Result {
+  return clients.run({ id, history }, run)
 }
