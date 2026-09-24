@@ -1878,7 +1878,8 @@ detached daemon, and an `open` through the worker is never raced against a
 read on the host thread. Before this a 38 MB Cursor store or a locked
 SQLite database stalled every RPC while it was read.
 
-`SessionCatalog.open` keeps the last four translated threads warm, and a
+`SessionCatalog.open` keeps translated threads warm within count and native-byte
+budgets defined in `catalog.ts`, and a
 write invalidates only what it can have changed: a per-file store drops its
 own path, a shared database (`rescanRoot`) drops that provider's threads and
 no other's. Before this the cache was one entry that any rescan cleared, so
@@ -1887,6 +1888,17 @@ the Codex thread on screen re-read a 3.7 GB tail (135 ms, on every reopen and
 every preview). `packages/sessions/test/streaming-correctness.mjs` covers the
 scoping and the bound; `test/daemon.mjs` covers the port transport, including
 a port transferred into a real worker.
+
+Directory notifications can silently stop arriving. Followed sessions therefore
+share file-stat subscriptions, with provider-owned `observationPaths` for WALs,
+metadata and synthetic database locators. Keep these subscriptions scoped to
+viewers, release them with the last viewer, and drain in-flight observation
+before closing provider resources. `test/observation-lifecycle.mjs` exercises
+delivery without directory events and cleanup; the native provider tests
+verify their source mappings. Periodic discovery also runs every 30 seconds,
+shares overlapping sweeps and refreshes missing/configured root subscriptions;
+`test/discovery-lifecycle.mjs` verifies new sessions without directory events.
+A rejected discovery must preserve known sessions, not declare an empty store.
 
 launchd is consulted through `launchctl print`, never through the exit code
 of `bootstrap` or `bootout`: a bootstrap that loads the job has returned an
