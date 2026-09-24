@@ -225,6 +225,7 @@ export async function recoverThreadReader(path: string): Promise<void> {
   const viewing = threadsStore.get().viewing
   if (!viewing || viewing.ref.path !== path || !hasBridge()) return
   const generation = ++viewingGeneration
+  threadsStore.set({ viewing: { ...viewing, loadingEarlier: false } })
   const current = () => generation === viewingGeneration && threadsStore.get().viewing?.ref.path === path
   try {
     for (let attempt = 0; attempt < 3; attempt++) {

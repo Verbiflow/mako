@@ -76,7 +76,8 @@ This is a capability inventory, not a matched model-performance benchmark.
 Codex app-server, Claude SDK, Cursor SDK and the ACP launch path receive the new
 endpoint. The production startup note advertises MCP first. The real-provider
 acceptance harness now wires that endpoint and asks for the fixture outcome
-without naming a CLI or MCP tool. Those new model trials have not yet been run.
+without naming a CLI or MCP tool. Fresh Codex and Claude browser/native trials
+now pass for the scope below. Cursor and Grok ACP repeats also pass; Cursor’s native JavaScript mistakes remain recorded below.
 
 ## Validation and limits
 
@@ -102,13 +103,94 @@ synthetic browser inventory, not native capture latency, model context usage or
 an equal-or-better task benchmark. Logs and the engine identity are preserved in
 `docs/audits/2026-09-24/local-control-agent-repl/` (ignored).
 
-No new third-party dependency was added. The new source has not been installed
-into the desktop app. Signed candidate `0d02dc53d0a315ff` predates it; invoking that
-candidate's Electron executable against the new worker establishes runtime
-compatibility, not acceptance of a newly packaged application.
+No new third-party dependency was added. Signed candidate `3c1d563e25a9bd78`
+contains the MCP implementation and the review's discovery/scope guidance fixes.
+It also includes the ACP negotiation and idle-worker crash fixes below. Its
+control code matches the tested source. It replaces the older `0d02dc53d0a315ff`
+candidate for this rollout. The first queue aborted when the shared host changed.
+A fresh retry was queued at 2026-09-24 22:37 UTC; only this conversation was active.
+The retry cleans up verified leftover bundle browser helpers and orphaned crash
+reporters after host exit, using the existing installer helpers. It will verify
+the expected host/build and run the same MCP acceptance against the installed
+app. The [live receipt](local-control-mcp-deployment.json) distinguishes waiting
+from installed-and-validated; the current installed app is still `345bfd91c64009c6`.
 
-Remaining: fresh-agent discovery/adherence and complete browser/native jobs through
-normal provider startup, interrupted/resumed jobs, a rebuilt signed candidate,
-installed extension/host acceptance and current Linux MCP execution. Existing
+Remaining: broader discovery/adherence and complete jobs, interrupted/resumed
+provider sessions, installed shared-host acceptance and current Linux MCP execution. Existing
 native focus/input/compositor gaps remain in LC-24/25. This checkpoint does not
 establish overall ChatGPT parity or complete usability superiority over the old MCP.
+
+## September 24 re-review and fresh-agent acceptance
+
+The browser test still explicitly coached the CLI despite the accepted MCP
+design. It now supplies the task and browser choice only; normal production
+startup and the tool description must establish discovery. Both tests require
+actual `mako-control` MCP calls. Browser completion requires exactly one correct
+submission with trusted input/click events, a screenshot and closing the created
+tab. Native completion is independently read from an AppKit fixture; a second
+user turn checks exact Unicode and surrounding spaces while foreground sampling
+continues. These are real installed provider runs through source Mako launch code
+and a frozen control worker, not mocked model responses.
+
+| Provider/model | Browser, regular Aside profile | Native, two user turns |
+| --- | --- | --- |
+| Codex / `gpt-6-astra` | Passed: 9 MCP calls, 53.4 s, zero tool errors | Passed: 12 MCP calls, exact values, target never sampled foreground |
+| Claude / `claude-fable-5-1` | Repeat passed: 7 MCP calls, 44.1 s, zero tool errors | Repeat passed: 4 MCP calls, exact values, target never sampled foreground |
+| Cursor / `auto-smart` | Repeat passed: 13 MCP calls, 70.6 s, zero tool errors | Repeat completed: 18 MCP calls, three recovered JavaScript errors, exact values, target never sampled foreground |
+| Grok ACP / `grok-4.7` | Not run in this review | Repeat passed: 6 actual endpoint calls, exact values, target never sampled foreground |
+
+Preserved failures matter:
+
+- ACP prepared the control server but omitted it from the negotiated session’s
+  server list. Grok could not discover it and fell back to the CLI. The negotiated
+  list now includes the same typed HTTP endpoint when the provider supports HTTP.
+  The original test falsely counted a tool-search title as MCP use; acceptance now
+  counts actual requests received by the endpoint. The original Grok run is a
+  discovery failure despite its correct UI outcome.
+- Cursor’s first native run lost the entire task session after a JavaScript error
+  left a promise outstanding. A later worker error arrived after per-call error
+  listeners had been removed, so Node terminated the desktop session owner.
+  Lifetime error/exit listeners now invalidate only that program worker. A
+  controlled delayed-error reproduction loses the session on `1226a367de0c1b11`
+  and preserves it after the fix. HTTP ownership and final packaged tests prove
+  the existing tab survives and fresh documentation returns. No actions replay.
+  Cursor’s repeat finished both native turns; its three variable/reference coding
+  mistakes recovered without session loss. This is not a zero-error native run.
+
+- Claude's first browser job finished correctly but used `within:[{role:'form'}]`
+  without the required name. It observed after the refusal and did not repeat the
+  completed writes. The zero-error gate failed. Help now explicitly requires both
+  observed role and name and recommends an unscoped read when no named scope was
+  observed. Strict targeting was retained; no guessed scope was accepted.
+- Claude's first native follow-up hit the test runner's permission allowlist while
+  inspecting the JSON fixture file with a shell command. The initial UI job had
+  passed. The follow-up now supplies its exact JSON string directly; the repeated
+  test still independently checks the same background UI outcome. This was an
+  acceptance-runner limitation, not a native delivery failure.
+- Initial native discovery enumerated apps despite a supplied pid. Entry guidance
+  now names `control.windows(pid)` for that case. A help template also accidentally
+  removed the prose word “return” in REPL mode; that wording is corrected.
+
+Call counts include discovery and verification. These few runs do not establish a
+statistical improvement, and their different models are not a matched comparison.
+Provider snapshots encode tool output differently, so persisted byte counts must
+not be compared as model tokens. No token-efficiency superiority is claimed.
+
+Candidate `3c1d563e25a9bd78` passed signature/package checks (1,100 frozen files,
+693 resolved host imports), CLI/shared-state checks, and direct plus LaunchServices
+startup/reopen. `scripts/test-packaged-control-mcp.mjs` then exercised the actual
+packaged HTTP MCP endpoint, private worker and installed Aside extension together:
+scoped exact Unicode save, a confirmation interruption followed by inspection and
+acceptance without click replay, unchanged Billing form, explicit screenshot,
+reset and an idle worker fault preserving the tab, and cleanup. The same task session completed an exact
+native value edit, verification and window screenshot without fronting its fixture.
+The expected dialog interruption returned in 369 ms in this run. This is candidate
+acceptance using the installed extension, not a claim that the default desktop host
+has already switched builds.
+
+Regression checks: persistent REPL/HTTP cancellation and ownership tests pass;
+full lint has five existing React Compiler warnings and no errors. Reproducible
+entry points are `test-provider-e2e.mjs <provider> --control --browser` and
+`test-packaged-control-mcp.mjs <Mako.app>`. Logs and sanitized summaries are in
+`docs/audits/2026-09-24/local-control-mcp-review/` (ignored); no credentials or
+raw user browser content belong in tracked evidence.

@@ -38,7 +38,7 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.21 selected for new launches; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | +mako.21 installed for new Mac driver launches; existing daemons retain their executable. Latest signed candidate `0d02dc53d0a315ff` includes the dialog/depth/socket changes, addressed modified keys and public middle-click. Its packaged CLI, both startup/reopen routes, bundled media, two-field keyboard and sandboxed Save As checks pass. Earlier candidate evidence includes Aside jobs; those do not certify this exact candidate. | Installed app remains `345bfd91c64009c6`; the previous idle update timed out. The subsequent idle rollout aborted at 11:37 UTC when a dev host appeared and another conversation started; nothing was replaced. No rollout is currently queued. Candidate `0d02dc53d0a315ff` is prepared but not queued; its readiness check still found running Mako processes. See `local-control-cli-deployment.json` for the earlier aborted attempt. This candidate predates the persistent-JS MCP adapter. Rebuild and installed MCP/extension acceptance remain open. Candidate/source-host tests are not installed-host proof. |
+| Installed components | +mako.21 installed for new Mac driver launches. Latest signed candidate `3c1d563e25a9bd78` includes persistent-JS MCP, the ACP negotiation fix and idle-worker crash containment. Packaged HTTP MCP → private worker → regular Aside/native acceptance, explicit images, dialog recovery, reset/worker-fault retention, CLI/state/cleanup and both startup routes pass. | Installed app remains `345bfd91c64009c6`. The first installation attempt aborted when the shared host changed. A fresh idle-only retry was queued at 2026-09-24 22:37 UTC; only this conversation was active at that check. [Live deployment receipt](local-control-mcp-deployment.json). Installer refuses host/build changes, retains the previous app, verifies the new host and reruns installed MCP checks. Candidate acceptance is not installed-host proof. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -148,7 +148,7 @@ September 24 acceptance:
   lost-worker browser ownership cleanup and stripping inherited control secrets.
 - Packed Node imports/types, relocation, code identity, worker/artifact lifecycle,
   package bounds and secret canaries passed for the CLI-only candidate. The new
-  `/mcp` export needs the revised package acceptance in LC-29.
+  `/mcp` export now passes the revised package acceptance in LC-29.
 - The final shell fixture took 3.50 s; command p50 was 100 ms and p90 114 ms
   including process startup. These are fixture timings, not real-page or viewer
   latency. Four concurrent programs also preserved shared state.
@@ -389,7 +389,16 @@ state. This also closes the older LC-14 contention/invalidation work.
 
 ## LC-23 — Preview isolation and installed browser rollout
 
-**Status: signed candidate passes packaged Aside acceptance; idle installation aborted on host replacement.**
+**Status: current MCP candidate `3c1d563e25a9bd78` passes packaged Aside/native
+acceptance; installation is waiting for idle.** [Live receipt](local-control-mcp-deployment.json).
+The first MCP attempt aborted at 15:10 UTC when the shared host changed; no app
+was replaced. The user-requested retry was queued at 22:37 UTC against the current
+host. Only this conversation was active at that check. After the host exits, the
+retry uses the existing installer cleanup for verified bundle browser helpers and
+orphaned crash reporters, then rechecks the host, candidate and installed build
+before replacement. It reruns packaged CLI and MCP acceptance after the installed
+host starts. The live receipt is authoritative; queueing is not installation.
+Earlier attempts below are historical.
 
 Candidate `1e3322212fc98974` passed both packaged startup routes. Its idle-only
 installer subsequently aborted because the shared host changed, without replacing
@@ -653,7 +662,7 @@ runs; symbols, marketing fps and synthetic transport timings are not substitutes
 
 ## LC-29 — Agent discovery and MCP integration
 
-**Status: persistent-JS MCP implemented and locally tested; fresh-agent and installed acceptance remain open.**
+**Status: fresh Codex/Claude/Cursor browser jobs and Codex/Claude/Cursor/Grok ACP native jobs completed; final signed candidate passes. Installation waits for idle. Broader comparative usability remains open.**
 [Discovery audit and accepted design](local-control-cli-discovery.md).
 [Implementation, retired-MCP comparison and test evidence](local-control-agent-repl.md).
 This supplements LC-20 and LC-27. MCP is the primary Mako agent interface; the CLI
@@ -666,7 +675,7 @@ Local implementation now exposes `js` and `js_reset`, with persistent bindings,
 first-use/focused docs, explicit images and shared ownership. Tests pass for real
 MCP-over-HTTP cancellation, revoked grants, package consumers, stale refs across
 interfaces and reset without target cleanup. No new dependency or CLI subprocess
-was added. The signed candidate predates this work; it is not installed.
+was added. Candidate `3c1d563e25a9bd78` includes the re-review fixes and passes packaged HTTP MCP acceptance; it is waiting for idle installation.
 
 Separate whether the agent discovers the available tool from whether it follows
 its targeting, observation, verification and recovery rules. Current startup
@@ -674,30 +683,33 @@ injection now advertises the unified MCP `js` tool, with the CLI as an optional
 file-pipeline interface. The earlier CLI-only injection linked to `--help`. Prior fresh trials received the CLI explicitly,
 so their success does not establish discovery during an ordinary user task.
 
+The new trials give only the outcome and target; actual endpoint requests prove
+MCP use. Codex/Claude browser runs used 9/7 calls; Cursor used 13. Native two-turn
+runs preserved exact Unicode/whitespace and never sampled the fixture foreground.
+Cursor completed with three recovered JavaScript mistakes, so native zero-error
+usability remains open. The review caught and fixed ACP dropping the control
+endpoint after negotiation and an idle worker error killing the entire session.
+The latter is reproduced against superseded candidate `1226a367de0c1b11` and
+passes the new candidate while retaining its tab. Failed runs and test-runner
+limitations are preserved in the [review](local-control-agent-repl.md#september-24-re-review-and-fresh-agent-acceptance).
+The Japanese physical IME test remains deferred at the user's request.
+
 Next:
 
-1. Trace actual prompt/environment delivery through Codex, Claude, Cursor and ACP,
-   including resume, compaction, fresh bindings, worker loss and child-agent shells.
-   Identify source/candidate/installed builds rather than assuming the current
-   source instructions reached a reported session.
-2. Read relevant Mako session records for observed wrong routes, guessed commands,
-   repeated help, fabricated refs, false completion and unsafe retries. Separate
-   test/development commands from actual agent use; retain no raw credentials or
-   private browser content in tracked evidence.
-3. **Implemented locally; validate in fresh agents and the release candidate:** the accepted SDK/CLI/MCP boundary. Use a persistent JavaScript worker
-   with top-level await and ordinary bindings, a concise model-visible entry tool,
-   first-use documentation, focused browser/native help and explicit documentation
-   refresh after lost context. Calls go directly through the typed session client;
-   no CLI subprocess, second engine, or old numeric-cell tool shape. Preserve task
-   leases, exact observations, explicit images, cancellation and unknown outcomes.
-   Reset clears program bindings without closing the task’s targets or recordings.
-   Validate reset, timeout, ordinary errors, late callbacks, transport disconnect,
-   CLI/MCP interoperation, provider startup and packaged consumers before rollout.
-4. Run browser/native held-out jobs with the normal production startup prompt,
-   without telling the agent which tool to select. Measure first correct action,
-   tool adoption, help calls/bytes, invalid calls, interventions, total context,
-   independently verified completion and any unintended input/replay. Include
-   repeated/resumed tasks, not only a fresh agent handed an executable path.
+1. Complete the queued idle installation and its automatic installed MCP checks.
+   Then verify an ordinary task launched by the new default desktop host; invoking
+   installed ASAR modules alone does not prove that host's provider bootstrap.
+2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
+   interruption/resume, compaction, fresh bindings and child-agent discovery.
+   Preserve exact source/candidate/installed identities for every result.
+3. Improve the remaining observed usability costs, including Cursor's recovered
+   JavaScript mistakes and unnecessary help. Use held-out jobs and matched baseline
+   runs to measure invalid calls, help bytes, first correct action, total context,
+   exact completion, latency and unintended input. The few successful runs above
+   are not a statistical comparison with the retired MCP or ChatGPT.
+4. Preserve shared SDK/engine invariants during rollout: target leases, exact refs,
+   explicit images, cancellation, unknown outcomes and no automatic input replay.
+   The regression suite now covers idle worker failure without losing the task.
 
 Done for a declared provider/build matrix when complete tasks improve discovery
 and rule adherence without sacrificing exact outcomes, latency or context cost.
