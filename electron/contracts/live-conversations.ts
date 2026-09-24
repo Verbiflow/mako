@@ -163,6 +163,8 @@ export interface LiveBatch {
 }
 
 export type LiveDriverEvent =
+  | { type: "live-question-answered"; id: string; answer: import("./live-questions.js").NativeQuestionAnswer }
+  | { type: "live-question"; id: string; question: import("./live-questions.js").NativeQuestion }
   | { type: "live-approval-decision"; id: string; decision: import("./approval-response.js").NativeApprovalDecision }
   | { type: "live-permission-ended"; id: string; requestId: string; observationId: string; source: import("./approval-response.js").ApprovalEndSource }
   | { type: "live-action-result"; id: string; actionId: string; result: import("./live-actions.js").LiveActionResult }

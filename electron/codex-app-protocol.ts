@@ -1,3 +1,4 @@
+import { codexAsyncQuestion, codexAnsweredQuestions } from "./providers/codex/questions.js"
 import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
 import {
@@ -300,10 +301,14 @@ function handleItem(
   const tracker = itemTracker(context, turnId, item.id)
   switch (item.type) {
     case "userMessage":
-      if (completed && replay) {
+      if (completed) {
         const originalText = item.content
           .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
           .join("\n")
+        if (context.threadId)
+          for (const answer of codexAnsweredQuestions(context.threadId, originalText))
+            context.protocol.observeQuestionAnswer?.(answer)
+        if (!replay) return
         const attachments = item.content.flatMap((part) =>
           part.attachment ? [part.attachment] : []
         )
@@ -322,7 +327,11 @@ function handleItem(
         })
       return
     case "agentMessage":
-      if (completed) emitFinalText(context, "text", item.text, tracker.acpId)
+      if (completed) {
+        emitFinalText(context, "text", item.text, tracker.acpId)
+        if (item.questions && context.threadId)
+          context.protocol.observeQuestion?.(codexAsyncQuestion(context.threadId, turnId, item.id, item.questions))
+      }
       return
     case "reasoning":
       if (completed) {

@@ -151,17 +151,8 @@ export interface PromptAttachment {
   path?: string
 }
 
-export interface LiveInputQuestion {
-  id: string
-  header: string
-  question: string
-  isSecret: boolean
-  allowOther: boolean
-  required?: boolean
-  valueType?: "string" | "number" | "integer" | "boolean" | "string-array"
-  options: Array<{ label: string; description: string; value?: string }>
-  defaultValues?: string[]
-}
+export type { LiveInputQuestion } from "./live-questions.js"
+import type { LiveInputQuestion } from "./live-questions.js"
 
 export interface LivePermissionRequest {
   /** Present only when the adapter established an exact native occurrence. */

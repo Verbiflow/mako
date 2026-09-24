@@ -30,7 +30,7 @@ export type ThreadItem =
       id: string
       content: UserMessageContent[]
     }
-  | { type: "agentMessage"; id: string; text: string }
+  | { type: "agentMessage"; id: string; text: string; questions?: import("./providers/codex/questions.js").CodexAsyncQuestion[] }
   | { type: "reasoning"; id: string; summary: string[]; content: string[] }
   | {
       type: "commandExecution"
@@ -163,6 +163,8 @@ export type ItemTracker = {
 }
 
 export interface ProtocolCallbacks {
+  observeQuestionAnswer?(answer: import("./contracts/live-questions.js").NativeQuestionAnswer): void
+  observeQuestion?(question: import("./contracts/live-questions.js").NativeQuestion): void
   actionResult?(actionId: string, result: import("./contracts/live-actions.js").LiveActionResult): void
   handleFatal(message: string): void
   updateState(patch: Partial<LiveSessionState>): void

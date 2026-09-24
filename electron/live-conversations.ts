@@ -1,3 +1,4 @@
+import { LiveQuestions } from "./live-questions.js"
 import { LiveApprovals } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
@@ -83,6 +84,7 @@ export const PROVIDER_WARM_LIMIT = 2
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
   private readonly checkpoints: LiveCheckpoints
+  private readonly questions: LiveQuestions
   private readonly approvals: LiveApprovals
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
@@ -132,6 +134,10 @@ export class LiveConversations {
       this.fork(id, input)
     )
     this.approvals = new LiveApprovals(access)
+    this.questions = new LiveQuestions(access, {
+      continue: (id, bindingId, requestId, text, displayText) => { this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText) },
+      steer: (id, input) => this.act(id, input),
+    })
     this.actions = new LiveActions(access)
     this.transfers = new LiveTransfers(access)
     this.children = new LiveChildren(access)
@@ -1323,7 +1329,7 @@ export class LiveConversations {
     const resident = this.records.get(id)
     // A reconnect may recover retained evidence before the new driver is ready.
     // Its generation-fenced callback and exact saved native occurrence own admission.
-    if (!resident || (!resident.driver && event.type !== "live-approval-decision")) return
+    if (!resident || (!resident.driver && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
     if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
       const finishedRequest = resident.snapshot.requests.find(
@@ -1397,6 +1403,10 @@ export class LiveConversations {
           observedAt: Date.now(),
         }),
       }
+    } else if (event.type === "live-question-answered") {
+      this.questions.observeAnswer(resident, bindingId, event.answer)
+    } else if (event.type === "live-question") {
+      this.questions.observe(resident, bindingId, event.question)
     } else if (event.type === "live-approval-decision") {
       this.approvals.decision(resident, bindingId, event.decision)
     } else if (event.type === "live-permission-ended") {
@@ -1444,7 +1454,7 @@ export class LiveConversations {
       }
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
-    if (event.type === "live-session" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent")
+    if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent")
       this.flush(resident)
     else this.schedule(resident)
     if (event.type === "live-session" || event.type === "live-agent") {
@@ -1460,7 +1470,7 @@ export class LiveConversations {
   }
 
   continueBinding(id: string, bindingId: string, requestId: string, text: string,
-    attachments: PromptAttachment[] = [], tuning?: SessionSettings): LiveSnapshot {
+    attachments: PromptAttachment[] = [], tuning?: SessionSettings, displayText?: string): LiveSnapshot {
     const resident = this.require(id)
     const control = this.control(resident)
     const binding = control.bindings.find((item) => item.id === bindingId)
@@ -1468,8 +1478,8 @@ export class LiveConversations {
     const existing = resident.snapshot.requests.find((item) => item.id === requestId)
     const transfer = control.transfers.find((item) => item.input.id === requestId)
     if (transfer || (!existing && (control.activeBindingId !== bindingId || (!resident.driver && !resident.hibernating && resident.snapshot.session.connection !== "hibernated"))))
-      return this.transfer(id, { id: requestId, bindingId, provider: binding.provider, text, attachments, tuning })
-    this.submit(id, requestId, text, attachments, tuning, bindingId)
+      return this.transfer(id, { id: requestId, bindingId, provider: binding.provider, text, attachments, tuning, displayText })
+    this.submit(id, requestId, text, attachments, tuning, bindingId, displayText)
     return resident.snapshot
   }
 
@@ -1479,7 +1489,8 @@ export class LiveConversations {
     text: string,
     attachments: PromptAttachment[] = [],
     tuning?: SessionSettings,
-    targetBindingId?: string
+    targetBindingId?: string,
+    displayText?: string
   ): LiveRequest {
     assertLifecycleAdmission()
     const resident = this.require(id)
@@ -1492,6 +1503,7 @@ export class LiveConversations {
       attachments,
       tuning,
       targetBindingId,
+      displayText,
       status: "queued",
     })
     const inputDigest = promptFingerprint(
@@ -2280,6 +2292,10 @@ export class LiveConversations {
     requestId: string,
     response: LivePermissionResponse
   ): Promise<void> {
+    if (this.control(this.require(id)).questions?.some(question => question.id === requestId)) {
+      await this.questions.answer(id, requestId, response)
+      return
+    }
     await this.approvals.respond(id, requestId, response)
   }
 

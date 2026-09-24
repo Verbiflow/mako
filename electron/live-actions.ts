@@ -364,7 +364,7 @@ export class LiveActions {
         kind: "user",
         requestId: input.id,
         steeringFor: input.requestId,
-        text: input.text,
+        text: input.displayText ?? input.text,
         attachments:
           retained.kind !== "compact"
             ? retained.attachments.map((attachment) => ({

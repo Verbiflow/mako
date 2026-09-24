@@ -6,7 +6,7 @@ import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch
 import { CodexAgents } from "./providers/codex/agents.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { codexWireSettings } from "./providers/codex/settings.js"
+import { codexInteractiveConfig, codexWireSettings } from "./providers/codex/settings.js"
 import { codexInput } from "./providers/codex/input.js"
 import type {
   ProviderSteerInput,
@@ -189,6 +189,8 @@ async function startCodex(
         for (const agent of live.agents.project(item, replay))
           engine.emitAgent(live, agent)
       },
+      observeQuestionAnswer: answer => emit({ type: "live-question-answered", id: live.id, answer }),
+      observeQuestion: question => emit({ type: "live-question", id: live.id, question }),
       handleServerRequest: (rpcId, method, params) =>
         handleServerRequest(live, permissionCallbacks, rpcId, method, params),
       resolveServerRequest: (rpcId) => resolveServerRequest(live, permissionCallbacks, rpcId),
@@ -460,9 +462,7 @@ function threadTuning(
 ): Omit<RpcParams["thread/start"], "cwd"> {
   const result: Omit<RpcParams["thread/start"], "cwd"> = {}
   const selected = codexWireSettings(tuning)
-  const base = selected.effort
-    ? { model_reasoning_effort: selected.effort }
-    : undefined
+  const base = codexInteractiveConfig(selected.effort)
   const config = mergeCodexConfig(base, mcpConfig)
   if (selected.model) result.model = selected.model
   if (selected.serviceTier !== undefined)

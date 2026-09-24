@@ -43,3 +43,17 @@ export function codexWireSettings(settings?: SessionSettings) {
       serviceTier === undefined ? undefined : codexServiceTier(serviceTier),
   }
 }
+
+type CodexInteractiveConfig = {
+  "features.default_mode_request_user_input": true
+  model_reasoning_effort?: string
+}
+
+/** Mako can answer native questions during ordinary interactive turns. */
+export function codexInteractiveConfig(effort?: string) {
+  const config: CodexInteractiveConfig = {
+    "features.default_mode_request_user_input": true,
+  }
+  if (effort) config.model_reasoning_effort = effort
+  return config
+}

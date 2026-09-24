@@ -52,6 +52,8 @@ export interface ProviderStartOptions extends LiveStartOptions {
 }
 
 export interface ProviderLiveDriver extends ProviderCapability {
+  /** Native session-lived question observation and user-input encoding. */
+  sessionQuestions?: { encodeAnswer(question: import("../contracts/live-questions.js").NativeQuestion, answers: Record<string, string[]>): string }
   approvalEvidence: ApprovalEvidenceCapability
   observesNativeAgents?: true
   steer?(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult>

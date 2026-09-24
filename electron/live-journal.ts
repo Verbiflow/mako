@@ -1,3 +1,4 @@
+import { LiveInputQuestionSchema } from "./contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "./contracts/approval-response.js"
 import { PromptDeliverySchema } from "./contracts/prompt-delivery.js"
 import { NativeAgentRosterSchema } from "./contracts/native-agents.js"
@@ -35,25 +36,7 @@ export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
 
 const LegacyHostModeSchema = z.object({ enforcement: z.literal("host") })
 
-const question = z.object({
-  id: z.string(),
-  header: z.string(),
-  question: z.string(),
-  isSecret: z.boolean(),
-  allowOther: z.boolean(),
-  required: z.boolean().optional(),
-  valueType: z
-    .enum(["string", "number", "integer", "boolean", "string-array"])
-    .optional(),
-  options: z.array(
-    z.object({
-      label: z.string(),
-      description: z.string(),
-      value: z.string().optional(),
-    })
-  ),
-  defaultValues: z.array(z.string()).optional(),
-})
+
 export const LiveRequestSchema = z.object({
   nativeDelivery: PromptDeliverySchema.optional(),
   targetBindingId: z.string().optional(),
@@ -148,7 +131,7 @@ const MetadataSchema = z.object({
           kind: z.string().optional(),
         })
       ),
-      questions: z.array(question).optional(),
+      questions: z.array(LiveInputQuestionSchema).optional(),
     })
   ),
 })

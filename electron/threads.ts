@@ -26,6 +26,7 @@ import {
   connectDaemonPort,
   daemonMemoryUnsafe,
   defaultCatalog,
+  defaultCatalogIdentity,
   renderTranscript,
   renderTranscriptBundle,
   type TranscriptBundle,
@@ -364,7 +365,8 @@ async function connectViaDaemon(): Promise<boolean> {
   let client: DaemonClient | null = null
   try {
     client = await connectDaemon()
-    if (daemonIsForeign(client.stats, daemonScript())) {
+    const identity = await defaultCatalogIdentity(join(homedir(), ".mako", "archive"))
+    if (daemonIsForeign(client.stats, daemonScript(), identity)) {
       // A checkout never evicts the daemon the user relies on; it watches
       // locally instead. The installed app replaces any vintage but its own.
       if (!daemonLoginOwner()) {

@@ -7,6 +7,7 @@ export const LiveActionInputSchema = z.discriminatedUnion("kind", [
     id: z.string().uuid(),
     requestId: z.string().uuid(),
     text: z.string().min(1).max(1_000_000),
+    displayText: z.string().max(1_000_000).optional(),
     attachments: z.array(PromptAttachmentSchema).max(100),
   }),
   z.object({
@@ -15,6 +16,7 @@ export const LiveActionInputSchema = z.discriminatedUnion("kind", [
     requestId: z.string().uuid(),
     queuedRequestId: z.string().uuid(),
     text: z.string().min(1).max(1_000_000),
+    displayText: z.string().max(1_000_000).optional(),
     attachments: z.array(PromptAttachmentSchema).max(100),
   }),
   z.object({ kind: z.literal("compact"), id: z.string().uuid(), requestId: z.string().uuid().optional() }),

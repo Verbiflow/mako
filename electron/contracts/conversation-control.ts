@@ -1,3 +1,4 @@
+import { LiveQuestionSchema } from "./live-questions.js"
 import { ApprovalResponseSchema, NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval } from "./approval-response.js"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
 import { z } from "zod"
@@ -13,6 +14,7 @@ export const TransferInputSchema = z.object({
   id: z.string().uuid(),
   provider: z.string().min(1),
   text: z.string().max(1_000_000),
+  displayText: z.string().max(1_000_000).optional(),
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
@@ -118,6 +120,7 @@ export const DelegateInputSchema = z.object({
 })
 export type DelegateInput = z.infer<typeof DelegateInputSchema>
 export const ConversationControlSchema = z.object({
+  questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),
   // Native questions and later resolutions, independent of local answer intents.
   approvalObservations: z.array(z.object({ bindingId: z.string(), identity: NativeApprovalIdentitySchema, decision: NativeApprovalDecisionSchema.optional() })

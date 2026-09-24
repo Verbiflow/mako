@@ -1,3 +1,4 @@
+import { CodexAsyncQuestionsSchema } from "./providers/codex/questions.js"
 import { CodexReportedAccessSchema } from "./providers/codex/access.js"
 import {
   CodexAgentItemSchema,
@@ -359,7 +360,12 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
     }
     case "agentMessage": {
       const text = stringValue(root.text)
-      return text === undefined ? null : { type, id, text }
+      if (text === undefined) return null
+      if (root.delivery === "async" && root.questions != null) {
+        const questions = CodexAsyncQuestionsSchema.safeParse(root.questions)
+        return questions.success ? { type, id, text, questions: questions.data } : null
+      }
+      return { type, id, text }
     }
     case "reasoning": {
       const summary = stringArray(root.summary)

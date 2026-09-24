@@ -435,7 +435,7 @@ export class LiveTransfers {
             id: transfer.input.id,
             targetBindingId: transfer.input.bindingId,
             text: transfer.input.text,
-            displayText: transfer.input.text,
+            displayText: transfer.input.displayText ?? transfer.input.text,
             attachments: transfer.input.attachments,
             context:
               manifest.includesBase || manifest.toBlock > manifest.fromBlock
