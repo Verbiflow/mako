@@ -12,7 +12,7 @@ parity has not been established.
   including findings that were corrected, not reproduced, or remain open.
 - **Architecture:** [ownership boundaries, diagnostics and change tests](local-control-architecture.md).
 - **CLI refactor:** [shared engine and shell contract](local-control-cli.md).
-  The installed CLI/MCP form workflow passes; the newer capture/recording build is in release acceptance.
+  CLI-only source acceptance passes; installed-host rollout remains open.
 - **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
 - **Interactive streaming:** [reference findings, transport experiments and local/remote scope](local-control-streaming.md).
 - **Streaming choice and VNC:** [Selkies/pixelflux prototype, Moonlight comparison and compatibility boundary](local-control-streaming.md#september-24-selection-browser-streaming-moonlight-and-vnc).
@@ -35,13 +35,14 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | --- | --- | --- |
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
 | Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
-| Native capture/input | Patched driver +mako.17; tested exact-value routes, bounded settling, recording and scoped gesture coverage. Mac focus recovery is reactive, with observed 23–99 ms interruptions. | General proactive focus prevention, physical IME/concurrent typing, universal gestures or native 60 fps. The +19 candidate requests up to 60 fps on Mac/X11; installed +17 remains fixed at 30. GNOME window capture still polls at ~5 fps. |
-| Standalone Linux | Node launcher without Electron; final ARM64 and native Intel x64 packages pass eleven lifecycle scenarios, including crash/cancellation/process-group cleanup. Temporary EC2 resources removed. | Public distribution, AMD, x64 Wayland, all compositor families, or latest CLI acceptance on native x64 hardware. |
-| Installed components | +mako.17 selected for new Mac driver launches. Fresh agents passed CLI/MCP scoped Aside editing on host `3e3f6a31a7970952`; the earlier queued installer aborted on host replacement. | Signed candidate `b1d91522d82480b1` passes 40 Aside jobs and interrupted recording; idle rollout aborted on a changed host; post-install repetition has not run. Candidate/source-host tests are not default installed-host proof. |
+| Native capture/input | Installed Mac +mako.17; exact-value routes, bounded settling, recording and scoped gestures. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures or sustained native 60 fps. Linux +19 accepts 60 fps, but this iteration's native CLI clip is only 0.62 seconds. Installed Mac +17 remains fixed at 30; GNOME capture polls at ~5 fps. |
+| Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
+| Installed components | +mako.17 selected for new Mac driver launches. Revised CLI candidate `7b0a2c623f935da0` passes fresh-agent browser/native and packaged checks; prior candidate evidence includes 40 Aside jobs. | Installed app remains `345bfd91c64009c6`; the latest idle update timed out without replacement. Post-install CLI-only repetition and extension rollout remain open. Candidate/source-host tests are not installed-host proof. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
 [native Intel jobs](audits/2026-09-23/local-control-native-x64-cloud19/README.md),
+[current AMD and physical typing validation](local-control-native-validation.md),
 [Mac focus and Sway timing](audits/2026-09-23/local-control-focus15/README.md),
 [earlier installed Aside](audits/2026-09-22/local-control-packaging/README.md).
 Audit media and machine-local artifacts may be ignored or absent in a fresh clone;
@@ -54,9 +55,10 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
   browsers and future Linux cloud jobs use that engine with verified backend
   capabilities. Live streaming is an engine output, not a third automation system.
 - Complete CLI-first agent delivery: a CLI must not require an MCP call to obtain
-  its session. The desktop still has that coupling. Retire default Local Control
-  MCP injection after independent bootstrap and caller acceptance; the public adapter and launcher must be deleted. This does
-  not remove other Mako MCP integrations or the native driver's private protocol.
+  its session. Independent desktop bootstrap and public MCP adapter/launcher
+  deletion are implemented and candidate-tested. Preserve that boundary during
+  installed rollout. Other Mako MCP integrations and the native driver's private
+  protocol remain separate.
 - Live preview/recording performance target: 1920×1080 at 60 distinct fps.
   1440p/4K is optional, not a release gate. Preserve full-detail explicit screenshots
   and exact coordinate geometry. Do not resize user pages to satisfy a video target.
@@ -91,13 +93,13 @@ required acceptance criteria, not follow-up polish.
    with raw-action uncertainty, capture geometry and precise recovery messages.
    Keep the full [agent issue ledger](local-control-agent-issues.md) accounted for.
 2. **Finish LC-20 release acceptance for the shared engine and CLI.** Carry those
-   correctness rules into both adapters; test real pipes and separate commands.
+   correctness rules into browser and native CLI workflows; test real pipes and separate commands.
 3. **Finish LC-21's interactive capture path and LC-24's native gaps.** Measure
    complete input → visible result and distinct source frames, then optimize.
    Native/transport investigation can proceed independently of the CLI adapter.
 4. **Complete LC-25/LC-26 target acceptance and packaging**, then LC-23's installed
    host/extension rollout. Run acceptance on the exact artifacts being deployed.
-5. **Close LC-27 with repeated complete jobs through both interfaces and multiple
+5. **Close LC-27 with repeated complete jobs through the CLI and multiple
    harnesses.** Record the remaining unsupported cells explicitly.
 
 The order is a working sequence, not a claim that every platform investigation
@@ -106,8 +108,12 @@ Statuses below distinguish implementation from deployment and broader acceptance
 
 ## LC-20 — Shared engine and composable CLI
 
-**Status: CLI-only source migration implemented; acceptance and installation in progress.**
-[Commands and lifecycle contract](local-control-cli.md).
+**Status: revised signed candidate and fresh-agent jobs pass; idle deployment timed out without replacing the app.**
+[Commands and lifecycle contract](local-control-cli.md),
+[September 24 evidence](local-control-cli-evidence.md),
+[fresh-agent CLI and reference review](local-control-cli-review.md),
+[modal fix and packaged acceptance](local-control-cli-modal.md),
+[live deployment receipt](local-control-cli-deployment.json).
 
 `createControlSession` owns program state, native policy, target evidence,
 recovery and recordings. Desktop task supervisors start one worker and supply an
@@ -116,47 +122,56 @@ credentials stay in worker IPC. The public MCP adapter, managed injection, expor
 and launcher are deleted. Private Cua protocol and unrelated MCPs remain.
 
 CLI command/group help works offline, with signatures, outputs, examples and
-structured `--json` help. `api` loads focused runtime reference. Disposable CLI
+structured `--json` help. `api` loads focused runtime reference. Separate CLI
 processes share state through an owner-only Unix socket with exact session/code
 identity. Text reads take no screenshots; media is written to files. No source,
 continuation ticket or uncertain action is automatically replayed.
 
-September 24 source proofs: actual CLI workflow passed in 3.98 s; ordinary fixture
-commands were mostly 87–138 ms including process startup (not real-app latency).
-Lossless Unicode, stale-coordinate refusal, broken pipes, cancellation and
-recording finalization passed. Desktop supervisor tests cover explicit stop,
-worker SIGKILL and parent SIGKILL, including removal of task shim/socket files.
-Native keyboard capability and direct-engine regression tests passed. MCP
-registry tests confirm no managed Local Control server and preserve other MCPs.
-Fresh-provider and packaged acceptance are underway; no installed rollout claim.
+September 24 acceptance:
 
+- Fresh Codex, Claude and Cursor browser jobs used the CLI, completed verified
+  forms with trusted input, read screenshots and closed their task tabs. Codex
+  also completed a native AppKit form. Cursor's earlier private-socket workaround
+  is a rejected run; the repeat used a frozen runtime and passed through the CLI.
+- A native Terminal CLI job independently verified its command output with 67
+  unchanged foreground samples. This is separate from physical IME/human typing.
+- Real Linux ARM64 Chromium and GTK CLI workflows passed exact values, scoped or
+  resized captures, recording finalization and cleanup. All eleven isolated
+  Linux lifecycle scenarios passed. The current CLI also passes native AMD x64
+  browser/native jobs and all eleven lifecycle scenarios; see the native validation.
+- Desktop tests cover explicit stop, worker/parent SIGKILL, private-file cleanup,
+  lost-worker browser ownership cleanup and stripping inherited control secrets.
+- Packed Node imports/types, relocation, code identity, worker/artifact lifecycle,
+  package bounds and secret canaries passed. No public MCP entrypoint ships.
+- The final shell fixture took 3.50 s; command p50 was 100 ms and p90 114 ms
+  including process startup. These are fixture timings, not real-page or viewer
+  latency. Four concurrent programs also preserved shared state.
 
-Evidence: separate-process MCP/CLI fixture checks, full legacy MCP/driver
-regressions, real Linux Chromium form/capture/recording job and all eleven existing
-Linux lifecycle scenarios. The shell fixture measured roughly 80–155 ms per
-command including process startup across local runs, not real-page latency.
-Native ARM64 CLI acceptance now covers exact GTK text, an independently counted
-Save, 640×420 capture, requested 320×210 capture, JPEG conversion, playable video
-and cleanup. Four simultaneous shell programs preserve session state. Cancelled
-recording waiters, repeated stop and unrelated-tab work during held shutdown pass
-the MCP/CLI fixture; finalization is owned by the session. [Evidence and limits](audits/2026-09-23/local-control-cli-media.md).
-Real Linux browser recording finalized at 780×494 while its button screenshot was 65×37;
-the clipped capture did not resize the video. See the [CLI evidence](audits/2026-09-23/local-control-session-cli.md).
+Help efficiency remains an LC-22 acceptance item: Cursor completed correctly but
+made eight help calls. Preserve that evidence; do not call the learning overhead
+solved solely because the task passed. Fresh ACP-provider workflows also remain
+unmeasured; their launch paths share the CLI environment/instructions.
 
-Fresh agents used installed build `3e3f6a31a7970952` through separate CLI/MCP
-processes: exact Unicode state, stdin/source files, spaced output paths, strict
-ambiguous-Save refusal, scoped save/read and element capture passed. The installed
-CLI is present inside the app; there is no automatic global shell alias. The
-source CLI now adds `shot --format png|jpeg` so file workflows can choose bytes
-explicitly. A later source-runtime native Terminal job passed through high-level
-Return with independently verified output and 82 unchanged foreground samples.
+Signed candidate `15ebe10a1502342e` passed actual ASAR worker/CLI tests, both
+packaged startup routes and 40 regular-profile Aside jobs. The run verified exact
+values, duplicate Save refusal, dialog handling, recording, interrupted-video
+retention, reconnect and stale-handle refusal; all 326 foreground samples stayed
+on the initial app. This tests the candidate against the installed extension,
+not the default installed shared host. The full app is 662,882,436 bytes.
 
-Next: roll out the exact new capture/recording build after active work ends,
-repeat the new package on native x64 (the workflow includes both CLI jobs), and
-extend sustained-load/encoder-failure coverage beyond these jobs. Preserve short
-verified scripts alongside separate commands. Viewer/network latency and full
-backend-stage diagnostics remain distinct measurement work, not claims derived
-from CLI startup timings.
+The revised candidate `7b0a2c623f935da0` includes result-publication and startup
+cancellation corrections, event-driven modal interruption, mouse/key cleanup and
+focus restoration after dialogs. Two fresh agents passed against its immutable
+ASAR, including media and browser close verification. Browser help needed two
+calls; native needed three including a logging repeat. The older generated
+candidate was removed after shutdown; its historical acceptance remains above.
+
+Next: complete installation and installed acceptance after active work ends. The
+September 24 idle wait expired after 30 minutes; nothing was replaced. Read the
+[deployment receipt](local-control-cli-deployment.json) for actual state. The updater refuses host/build replacement and never force-stops
+work. Native AMD CLI acceptance now passes; repeat remaining provider launch
+paths. Streaming stays paused until the release gate closes. LC-22 also tracks
+bounded partial output from failed exec programs.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
@@ -275,12 +290,24 @@ contract bugs, not general discovery/usability acceptance.
 Shared input boundaries now return bounded `invalid-request/not-dispatched` faults
 for common target, selector, read, action, screenshot and recording mistakes.
 Misspelled click options cannot fall through to a default left click. Ambiguous,
-missing and incomplete locator results carry explicit pre-dispatch faults. MCP
+missing and incomplete locator results carry explicit pre-dispatch faults. CLI
 recovery warns that earlier program steps may already have completed; response
 validation after a write still preserves unknown outcomes and the recovery guard.
 Public scoped-edit/screenshot help examples pass against duplicate controls in
 real Linux Chromium. [Evidence](audits/2026-09-23/local-control-input-contract.md).
 This is executable-help acceptance, not a fresh-agent usability pass.
+
+The first blind review needed 18 browser help/API calls and 16 logged native
+help/API calls plus initial help. Revised packaged trials used two browser help
+calls and three native calls (two distinct views) while completing exact edits,
+modal recovery and media. The five-second click delay and modal focus-reset
+attachment loss are fixed and regression-tested. Six result-publication failure
+cases and both Linux startup signals preserve post-dispatch uncertainty.
+[Modal and learning-cost evidence](local-control-cli-modal.md).
+
+New recovery gap: a later exec failure hides earlier console/image output. Keep
+outcome uncertainty and no-replay behavior; design bounded partial-result receipts
+so agents can recover useful evidence without repeating completed actions.
 
 Next: finish capability/result typing, understandable validation and recovery,
 consistent role/name/text semantics, and consolidated executable help examples.
@@ -365,10 +392,18 @@ modules and bundled encoders; it does not certify the old installed host.
 The attempted installer verified host identity and never force-stopped work. Its
 post-install packaged-media/Aside checks did not run. Read
 `release/control-capture-20260924/install-state.json`; the attempt ended `not-installed` at 06:29 UTC after the shared host changed.
-No app was replaced. Installed build remains `3e3f6a31a7970952`; restart/rollout
-must be revalidated against the current host, not silently resumed.
+That attempt replaced no app. A later readiness check found installed app
+`345bfd91c64009c6` on disk and an active shared host; the earlier installed build
+identifiers above describe those earlier runs. Restart/rollout must be revalidated
+against the current host, not silently resumed.
 Only `installed-and-accepted` closes that deployment gate. A host replacement,
 cancelled quit or deadline aborts without replacing the app.
+
+The newer CLI-only candidate `15ebe10a1502342e` also passes 40 Aside jobs,
+recording, interrupted artifact retention, reconnect and stale-handle refusal,
+with 326 unchanged foreground samples. Its actual packaged CLI and worker pass
+state/cleanup checks. See [CLI candidate evidence](local-control-cli-evidence.md).
+It has not replaced the default installed host.
 
 Next: define the supported fixture/preview boundary and enforce it at the host
 bridge before offering side-effect-free previews. Merely describing a live desk
@@ -387,6 +422,13 @@ page-triggered extension downloads still need attribution/completion support.
 ## LC-24 — Native accuracy and background behavior
 
 **Status: partial; safe refusals remain part of the contract.**
+
+September 24 physical-input continuation: ordinary English typing and IME are now
+separate modes of `scripts/test-native-human-input.mjs`. The English trial retained
+the exact two-line text during eight background edit/save jobs, with 78 keydowns
+overlapping those jobs and no foreground change during the test interval. It ran
+the installed +mako.17 driver through the CLI. Human attestation is pending; this
+does not establish IME composition or proactive prevention of deliberate activation.
 
 Next: proactive Mac focus protection, menus and cross-process dialogs; clipboard
 consumption/collision handling; physical Japanese IME and simultaneous human typing.
@@ -413,8 +455,15 @@ not a reason to stop testing Mako's own implementation.
 **Status: standalone lifecycle implemented; platform coverage is incomplete.**
 [Runtime](local-control-runtime.md) and [contributor CI](local-control-ci.md).
 
-Next: extend native Intel X11 evidence to AMD/x64 Wayland and missing compositor
-routes. ARM64 Sway has scale/rotation/load and hidden-job evidence; GNOME 46 has
+September 24: +mako.19/current CLI passes on native AMD EC2. The portable runner's
+X11 jobs/recordings and Sway normal, 150%, and 150% plus 90-degree rotation all pass.
+Both standalone CLI workflows and eleven lifecycle scenarios pass, with retained
+media decoded and selected images inspected. The VM and temporary network/key
+were removed. [Evidence and limits](local-control-native-validation.md).
+
+Next: extend compositor/version and real display/GPU coverage. AMD x64 Sway now
+has scale/rotation and hidden-job evidence. ARM64 Sway additionally has load
+evidence; GNOME 46 has
 scoped capture/input evidence; Weston/labwc have semantic hidden-job evidence,
 not equivalent capture/gesture support. KWin 5.27.11 ARM64 now passes twenty exact
 background form jobs, independent Save counts, unchanged duplicate-name cover
@@ -477,9 +526,9 @@ GTK jobs preserve targeting, media and cleanup. See
 [extraction evidence](local-control-package-evidence.md) for exact scope,
 measurements and limitations; LC-26 owns full installed size per target.
 
-Next: public distribution/versioning and installed desktop/Aside acceptance;
-run this package revision on the native x64 contributor runner. These are not
-implied by a local source move or ARM64 container run. Physical input and broader
+Next: public distribution/versioning, installed desktop/Aside acceptance and
+publishing/running the contributor workflow. Current native AMD package/CLI
+acceptance passes; that is separate from a GitHub workflow run. Physical input and broader
 compositor coverage remain in LC-24/25.
 
 ## LC-27 — Complete-job accuracy, performance and harness evaluation

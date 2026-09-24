@@ -1,0 +1,8 @@
+{
+  "state": "aborted",
+  "updatedAt": "2026-09-24T10:07:15.362Z",
+  "candidateBuild": "7b0a2c623f935da0",
+  "previousBuild": "345bfd91c64009c6",
+  "candidate": "/Users/kashyab/makomono/mako/release/cli-modal-20260924/mac-arm64/Mako.app",
+  "message": "Idle update deadline expired; nothing replaced"
+}

@@ -1,23 +1,24 @@
 # Local Control on desktop and cloud
 
-Local Control does not require Electron. The native x64 acceptance run on EC2
-used a Node MCP process, the native driver and a private Linux desktop. Its
-runtime dependency manifest contains no Electron or provider runtime. Browser
+Local Control does not require Electron. Agents use the Node CLI and shared
+session engine, the native driver and a private Linux desktop. The native
+driver's internal protocol is not a public MCP adapter. The runtime dependency
+manifest contains no Electron or provider runtime. Browser
 control is also a Node service; Electron is an adapter for controlling Mako’s
 own hidden windows, not a dependency of the browser service.
 
 The full Mako application host currently still runs in Electron, including
 `electron/start.mjs --web`. That flag removes its visible desktop window; it
 does not turn the entire workspace/provider host into a standalone Node app.
-The Local Control files living under `electron/` does not mean they import the
-Electron runtime. Do not package the whole Mako app merely to run these files.
+The engine lives in `packages/control-runtime`; `electron/` contains desktop
+integration. Do not package the whole Mako app merely to run Local Control.
 
 ## Current boundaries
 
 | Component | Owner and dependencies | Evidence / remaining work |
 | --- | --- | --- |
 | Public API and program worker | `packages/control`; Node and Zod | Shared across providers; no Electron import. |
-| Shared session and CLI | `packages/control-runtime/src/control-session.ts` owns native policy/state; task workers expose a private CLI socket. | Node runtime; previous native Intel evidence predates CLI-only migration. |
+| Shared session and CLI | `packages/control-runtime/src/control-session.ts` owns native policy/state; task workers expose a private CLI socket. | Current standalone browser/native CLI jobs pass on native AMD x64; older Intel evidence predates the migration. |
 | Browser transport, targets and recording | `packages/control-runtime/src/browser-service.ts`; Node, ws, image decoding and FFmpeg when recording | Composed directly with the session using `browserCall`; no Electron dependency. |
 | Native driver | Patched Cua executable | Separate process. macOS uses the desktop host’s responsibility/permission chain; Linux uses the job’s display and accessibility bus. |
 | Hidden Mako desk | Electron `BrowserWindow` adapter | Only needed to inspect Mako itself. Dev screenshot and recording pass after renderer readiness. |
@@ -97,6 +98,11 @@ The engine is the reusable `@mako/control-runtime` Node package; see
 [its public imports and CLI examples](../packages/control-runtime/README.md).
 `runtime/control` only assembles deployment dependencies. It has no second engine.
 Run `npm run build:control-runtime`, then prepare the target's reviewed inputs:
+
+Container builds require Docker BuildKit (`docker buildx version` should work).
+An older daemon using its legacy builder cannot execute this recipe's cache
+mount. Install Buildx and enable BuildKit before building; this is a build-tool
+requirement, not an additional runtime service.
 
 ```sh
 node scripts/package-control-runtime.mjs --platform=linux-x64 \

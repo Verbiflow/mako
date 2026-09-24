@@ -1,0 +1,311 @@
+{
+  "date": "2026-09-24",
+  "scope": "CLI-only source acceptance; not installed-host proof",
+  "engineBuild": "3c76b0f7ea300e243037712bc7e906746cc13a7d02e2c68449c6e303cfbd5053",
+  "shell": {
+    "passed": true,
+    "ms": 3495,
+    "timings": [
+      {
+        "command": "api",
+        "ms": 102
+      },
+      {
+        "command": "connect",
+        "ms": 104
+      },
+      {
+        "command": "open",
+        "ms": 100
+      },
+      {
+        "command": "observe",
+        "ms": 102
+      },
+      {
+        "command": "observe",
+        "ms": 95
+      },
+      {
+        "command": "exec",
+        "ms": 151
+      },
+      {
+        "command": "shot",
+        "ms": 124
+      },
+      {
+        "command": "shot",
+        "ms": 94
+      },
+      {
+        "command": "shot",
+        "ms": 91
+      },
+      {
+        "command": "exec",
+        "ms": 100
+      },
+      {
+        "command": "exec",
+        "ms": 100
+      },
+      {
+        "command": "exec",
+        "ms": 95
+      },
+      {
+        "command": "exec",
+        "ms": 105
+      },
+      {
+        "command": "act",
+        "ms": 97
+      },
+      {
+        "command": "exec",
+        "ms": 101
+      },
+      {
+        "command": "act",
+        "ms": 93
+      },
+      {
+        "command": "diagnostics",
+        "ms": 96
+      },
+      {
+        "command": "status",
+        "ms": 88
+      },
+      {
+        "command": "status",
+        "ms": 95
+      },
+      {
+        "command": "exec",
+        "ms": 148
+      },
+      {
+        "command": "observe",
+        "ms": 104
+      },
+      {
+        "command": "exec",
+        "ms": 98
+      },
+      {
+        "command": "record",
+        "ms": 114
+      },
+      {
+        "command": "record",
+        "ms": 98
+      },
+      {
+        "command": "record",
+        "ms": 98
+      },
+      {
+        "command": "open",
+        "ms": 99
+      },
+      {
+        "command": "observe",
+        "ms": 99
+      },
+      {
+        "command": "exec",
+        "ms": 107
+      },
+      {
+        "command": "exec",
+        "ms": 107
+      },
+      {
+        "command": "exec",
+        "ms": 107
+      },
+      {
+        "command": "exec",
+        "ms": 108
+      },
+      {
+        "command": "record",
+        "ms": 100
+      },
+      {
+        "command": "session",
+        "ms": 99
+      },
+      {
+        "command": "status",
+        "ms": 86
+      }
+    ]
+  },
+  "desktop": {
+    "desktop": true,
+    "startAndChecksMs": 1041.263083,
+    "parallelHelpMs": 102.77762499999994
+  },
+  "cursor": {
+    "status": "passed",
+    "helpCalls": 8,
+    "helpOutputBytes": 9494
+  },
+  "linuxBrowser": [
+    {
+      "passed": true,
+      "pixels": {
+        "width": 65,
+        "height": 37
+      },
+      "recording": {
+        "status": "finished",
+        "width": 780,
+        "height": 494,
+        "duration": "0.700000"
+      },
+      "publicExamples": {
+        "scopedEdit": true,
+        "scopedScreenshot": true,
+        "ambiguousClickRefused": true
+      },
+      "cleanup": {
+        "version": 1,
+        "ready": true,
+        "reason": "session-stop",
+        "clean": true,
+        "workerExit": {
+          "code": 0,
+          "signal": null
+        },
+        "runtimeRemoved": true
+      }
+    }
+  ],
+  "linuxNative": [
+    {
+      "passed": true,
+      "pixels": {
+        "width": 640,
+        "height": 420
+      },
+      "resized": {
+        "width": 320,
+        "height": 210
+      },
+      "jpeg": "image/jpeg",
+      "recording": {
+        "status": "finished",
+        "width": 640,
+        "height": 420,
+        "duration": "0.667000"
+      },
+      "concurrentPrograms": [
+        2,
+        3,
+        1,
+        4
+      ],
+      "cleanup": {
+        "version": 1,
+        "ready": true,
+        "reason": "session-stop",
+        "clean": true,
+        "workerExit": {
+          "code": 0,
+          "signal": null
+        },
+        "runtimeRemoved": true
+      }
+    }
+  ],
+  "linuxLifecycle": {
+    "passed": true,
+    "scenarios": 11,
+    "architecture": "arm64"
+  },
+  "candidate": {
+    "build": "15ebe10a1502342e",
+    "appBytes": 662882436,
+    "signature": "verified",
+    "packagedCLI": {
+      "packagedControl": "passed",
+      "engineBuild": "3c76b0f7ea300e243037712bc7e906746cc13a7d02e2c68449c6e303cfbd5053",
+      "checks": [
+        "ASAR worker and CLI",
+        "offline help",
+        "exact state across shell processes",
+        "matching code identity",
+        "public MCP absent",
+        "shutdown cleanup"
+      ]
+    },
+    "startup": "passed direct and LaunchServices",
+    "aside": {
+      "status": "passed",
+      "jobs": 40,
+      "jobTimesMs": [
+        1120.0885000000003,
+        863.2100829999999,
+        1048.5152500000004,
+        821.519209,
+        834.8792090000006,
+        846.2805829999998,
+        806.8259999999991,
+        857.5532919999987,
+        1081.526833,
+        971.6720000000005,
+        1029.3094579999997,
+        826.4593749999985,
+        828.612959,
+        832.9474580000006,
+        820.5610410000008,
+        846.8159170000017,
+        813.5089590000025,
+        827.5952089999992,
+        815.2360410000001,
+        825.8112080000028,
+        790.1411670000016,
+        836.8065830000014,
+        800.060040999997,
+        789.5537919999988,
+        804.1241670000018,
+        840.9457920000023,
+        797.484708,
+        799.7245829999993,
+        844.6283750000002,
+        780.6805410000015,
+        847.8602499999979,
+        824.5017499999994,
+        841.1917500000018,
+        794.3329159999994,
+        799.9406659999986,
+        800.0632080000032,
+        823.3185420000009,
+        924.9725410000028,
+        779.4464169999992,
+        804.0601249999963
+      ],
+      "billing": "untouched",
+      "foregroundBefore": 2976,
+      "foregroundSamples": {
+        "2976": 326
+      },
+      "recording": {
+        "status": "finished",
+        "pointerSamples": 60,
+        "width": 1920,
+        "height": 728,
+        "duration": "16.966667"
+      },
+      "interrupted": {
+        "status": "interrupted",
+        "retainedVideo": true
+      }
+    },
+    "installation": "pending; running host preserved"
+  }
+}

@@ -11,6 +11,8 @@ It runs for relevant pull requests and manual dispatches once the workflow is
 published. Contributors do not need AWS or Vercel accounts.
 
 Native Intel Xeon acceptance passed on a disposable EC2 VM on 2026-09-23.
+The current CLI/+mako.19 passes X11, Sway scale/rotation, both CLI jobs and eleven
+lifecycle scenarios on AMD EPYC on September 24; see [evidence](local-control-native-validation.md).
 The GitHub workflow is prepared locally; that is not a published workflow run.
 The [runtime design](local-control-runtime.md) distinguishes this test package
 from the standalone cloud-service launcher, which now has its own lifecycle suite.
@@ -22,9 +24,12 @@ from the standalone cloud-service launcher, which now has its own lifecycle suit
   refusal checks.
 - Native gestures, recorded cursor paths, covered-window recording and retained
   playable video after interruption.
+- Sway native Wayland input and screenshot geometry at 100%, 150%, and 150% with
+  90-degree rotation; ten hidden-window edits per case while another window keeps
+  focus. Hidden capture must refuse rather than return another window's pixels.
 - Separate CLI browser/native jobs on the prepared runtime: exact form values,
   screenshots, recordings, concurrent script state and supervisor cleanup. These
-  new CLI steps are prepared locally; a prior x64 pass does not cover them.
+  CLI steps pass on the September 24 AMD run, with retained media inspected.
 - Native x64 execution, checked against the host's CPU/vendor and Docker
   architecture before tests start. The evidence records the driver and payload
   hashes. ARM translation does not pass this runner's preflight.
@@ -71,7 +76,7 @@ repository root, create a new payload directory:
 
 ```sh
 node scripts/linux-control/prepare-acceptance.mjs \
-  release/control-driver/0.28.2+mako.17/linux-x64 \
+  release/control-driver/0.28.2+mako.19/linux-x64 \
   release/local-control-acceptance
 ```
 
@@ -95,7 +100,7 @@ sh scripts/linux-control/run-acceptance.sh
 The runner verifies CPU and payload hashes, installs dependencies with the
 committed lockfile and lifecycle scripts disabled, and builds a runtime-only
 image without Rust or Chromium. Docker receives only the Dockerfile as its build
-context. Both suites run even if one fails; the runner collects diagnostics and
+context. All five suites run even if one fails; the runner collects diagnostics and
 removes its named containers on exit. Copy back `evidence/`, then destroy the VM.
 Payloads under `release/` are already gitignored. Do not commit recordings,
 generated executables or machine-specific cloud state.

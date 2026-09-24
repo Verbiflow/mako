@@ -1,0 +1,72 @@
+{
+  "date": "2026-09-24",
+  "hardware": "AMD EPYC 9R14, EC2 m7a.xlarge, native x86_64",
+  "driver": {
+    "version": "0.28.2+mako.19",
+    "binarySha256": "e2bd5ad5d75ffa51d2cbb1a77a9428e2e310d6cfb07e84a2d5cf483fbe490b17",
+    "patchSha256": "e4ce26102114895bb3ebe23813015ee48d2b10c09dddf7ec353a1cedf5c04cf8"
+  },
+  "physicalTyping": {
+    "status": "passed-awaiting-human-attestation",
+    "driver": "cua-driver 0.28.2+mako.17",
+    "jobs": 8,
+    "overlappingKeydowns": 78,
+    "durationSeconds": 22.149910926818848,
+    "exactText": true,
+    "focusInterruptions": 0,
+    "imeTested": false
+  },
+  "x11": {
+    "status": "passed",
+    "jobs": 30,
+    "medianJobMs": 273.47876949999954,
+    "concurrentSyntheticTyping": {
+      "expected": 400,
+      "duringJobs": 400,
+      "actual": 400
+    },
+    "recordingPassed": true
+  },
+  "sway": [
+    {
+      "configuration": "sway-fractional",
+      "passed": true,
+      "hiddenJobs": 10,
+      "dragMs": 401,
+      "corner": [
+        224,
+        88,
+        69
+      ]
+    },
+    {
+      "configuration": "sway-normal",
+      "passed": true,
+      "hiddenJobs": 10,
+      "dragMs": 401,
+      "corner": [
+        224,
+        88,
+        69
+      ]
+    },
+    {
+      "configuration": "sway-rotated",
+      "passed": true,
+      "hiddenJobs": 10,
+      "dragMs": 403,
+      "corner": [
+        224,
+        88,
+        69
+      ]
+    }
+  ],
+  "cloud": {
+    "lifecycleScenarios": 11,
+    "browserCli": "passed",
+    "nativeCli": "passed",
+    "videosDecoded": 4
+  },
+  "cleanup": "EC2 instance, key pair and temporary network removed; local temporary key files removed"
+}

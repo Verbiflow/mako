@@ -49,7 +49,7 @@ are included in the distribution, not discarded to reduce its size.
 | macOS ARM64 desktop | Signed app recipe, bundled media, startup and archive recording checks. Patched native executable is separately installed. |
 | macOS ARM64 native | +mako.17 signed and installed for new launches; background settling/recording and three system-activation recovery trials pass. Existing daemons were not restarted. General proactive focus protection remains open. |
 | Linux ARM64 native | +mako.17 packaged with portal input/helper 10; four Sway scale/rotation/load workflows and forty hidden jobs pass. Earlier +mako.14 covers eleven transforms/scales. Prior GNOME/libei acceptance remains scoped to GNOME 46. FFmpeg comes from the runtime image. |
-| Linux x64 native | +mako.17 packaged; 30 exact-value jobs, 400/400 synthetic concurrent keystrokes and X11 gesture/recording/interruption acceptance pass under translation. Native Intel Xeon acceptance now passes on EC2: thirty jobs, 400/400 synthetic concurrent keystrokes, X11 gesture/recording and interruption retention. AMD and x64 Wayland remain untested. |
+| Linux x64 native | +mako.19 packaged; native AMD acceptance passes thirty exact-value jobs, 400/400 concurrent synthetic keystrokes, X11 gesture/recording/interruption, three Sway scale/rotation cases, current CLI browser/native jobs and eleven lifecycle scenarios. Earlier Intel/+mako.17 evidence is retained. [Exact results](local-control-native-validation.md). |
 | Linux desktop / Intel Mac / Windows desktop | Generic electron-builder declarations are not release evidence. Complete target-specific native/media bundling and acceptance are missing. |
 
 Linux packaging requires `--arch=arm64` or `--arch=x64`, applies the pinned patch

@@ -1,7 +1,8 @@
 # Composable Local Control commands
 
-The installed shared engine and CLI passed a fresh-agent Aside form workflow.
-New capture/recording fixes still need installed rollout; see
+CLI-only source and signed-candidate acceptance pass for browser and native computer use. The
+idle installation and installed checks are tracked in the
+[deployment receipt](local-control-cli-deployment.json); see
 [Wayfinder LC-20](local-control-map.md#lc-20--shared-engine-and-composable-cli).
 The [architecture contract](local-control-architecture.md) owns the boundaries;
 the [issue ledger](local-control-agent-issues.md) tracks the original agent failures.
@@ -26,9 +27,19 @@ observations, route checks, assertions and recording implementation.
 Source acceptance covers separate CLI processes, lossless state, cancellation
 without replay, recording waiter cancellation, code/session mismatch, explicit
 shutdown, killed workers and killed parents. The managed MCP regression confirms
-Local Control is absent while other integrations remain. These results do not
-establish installed-host rollout or fresh-agent acceptance on every provider.
+Local Control is absent while other integrations remain. Fresh Codex, Claude and Cursor browser jobs and a Codex native AppKit job also
+passed. The [acceptance record](local-control-cli-evidence.md) retains
+failed attempts and limits, including Cursor’s eight help calls. The signed candidate also passes packaged CLI startup and 40 regular-profile Aside
+jobs. These results do not establish installed-host rollout or fresh-agent acceptance on every provider.
 Streaming work remains paused until those migration release gates are closed.
+
+## Dialog interruption
+
+A click/key operation that opens a modal can return `dialog-open/unknown` before
+its acknowledgement. Never repeat the input. Inspect `tab.dialog({})`, answer
+explicitly, then observe the exact tab before continuing. Answering a dialog does
+not itself prove the original action succeeded. Page focus restoration waits for
+the dialog to close; task teardown still resets or detaches.
 
 ## One session across commands
 
