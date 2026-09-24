@@ -17,6 +17,7 @@ interface FixtureTarget {
   type?: string
   browserContextId?: string
 }
+type HeldInputType = "mouseMoved" | "mousePressed" | "mouseReleased" | "keyDown" | "rawKeyDown" | "keyUp"
 export async function browserFixture() {
   const server = new WebSocketServer({ port: 0, host: "127.0.0.1" })
   await new Promise<void>((resolve) => server.once("listening", resolve))
@@ -47,6 +48,7 @@ export async function browserFixture() {
     downloadOnClick: boolean
     downloadBehavior: JsonObject | null
     dialogAnswers: JsonObject[]
+    nextDialog?: string
     cookies: JsonObject[]
     historyIndex: number
     history: string[]
@@ -77,6 +79,10 @@ export async function browserFixture() {
   let delayedCookies: (() => void) | undefined
   let holdAxRead = false
   let delayedAxRead: (() => void) | undefined
+  const heldInputs: {
+    type: HeldInputType
+    dispatch: (command: z.infer<typeof commandSchema>, complete: (error?: string) => void) => void
+  }[] = []
   server.on("connection", (socket) => {
     connections++
     sockets.add(socket)
@@ -101,6 +107,14 @@ export async function browserFixture() {
         socket.send(
           JSON.stringify({ method, sessionId: command.sessionId, params })
         )
+      if (command.method === "Input.dispatchMouseEvent" || command.method === "Input.dispatchKeyEvent") {
+        const index = heldInputs.findIndex((input) => input.type === command.params.type)
+        if (index !== -1) {
+          const [input] = heldInputs.splice(index, 1)
+          input!.dispatch(command, (error) => error === undefined ? reply({}) : fail(error))
+          return
+        }
+      }
       switch (command.method) {
         case "Page.startScreencast":
           reply({})
@@ -366,10 +380,18 @@ export async function browserFixture() {
           break
         case "Page.handleJavaScriptDialog":
           page.dialogAnswers.push(command.params)
-          reply({})
-          emit("Page.javascriptDialogClosed", {
-            result: command.params.accept === true,
-          })
+          if (page.nextDialog) {
+            const message = page.nextDialog
+            page.nextDialog = undefined
+            emit("Page.javascriptDialogClosed", { result: command.params.accept === true })
+            emit("Page.javascriptDialogOpening", { type: "confirm", message })
+            reply({})
+          } else {
+            reply({})
+            emit("Page.javascriptDialogClosed", {
+              result: command.params.accept === true,
+            })
+          }
           break
         case "Page.setDownloadBehavior":
           page.downloadBehavior = command.params
@@ -498,6 +520,22 @@ export async function browserFixture() {
     axNodes,
     targets,
     page,
+    /** Hold one exact input acknowledgement, while still receiving other commands. */
+    holdNextInput(type: HeldInputType) {
+      let complete: ((error?: string) => void) | undefined
+      const dispatched = new Promise<z.infer<typeof commandSchema>>((resolve) => {
+        heldInputs.push({ type, dispatch(command, finish) { complete = finish; resolve(command) } })
+      })
+      return {
+        dispatched,
+        complete(error?: string) {
+          if (!complete) throw new Error(`No pending ${type} acknowledgement`)
+          const finish = complete
+          complete = undefined
+          finish(error)
+        },
+      }
+    },
     setRecordingFrame: (frame: string) => { recordingFrame = frame },
     holdNextRecordingStop: () => { holdStop = true },
     completeRecordingStop: () => { delayedStop?.(); delayedStop = undefined },

@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 const run = promisify(execFile)
@@ -168,6 +168,13 @@ try {
   })
   const closeup = await program(examples.screenshot)
   assert.ok((await stat(closeup.path)).size > 0)
+  if (process.env.MAKO_RUNTIME_EVIDENCE) {
+    const evidence = process.env.MAKO_RUNTIME_EVIDENCE
+    await mkdir(evidence, { recursive: true })
+    for (const [source, name] of [[shot.path, "button.png"], [join(directory, "field.png"), "field.png"], [closeup.path, "closeup.png"], [complete.video, "recording.mp4"], [complete.timeline, "timeline.json"]])
+      await cp(source, join(evidence, name))
+    await writeFile(join(evidence, "media.json"), JSON.stringify({ receipt: complete, media: probe }, null, 2))
+  }
   await command(["session", "stop"])
   stopped = true
   const launcher = await until(

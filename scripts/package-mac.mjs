@@ -276,6 +276,7 @@ try {
   await auditPackage(app, "darwin-arm64", join(output, "package-size.json"))
   const imports = assertPackagedImports(app)
   const signature = localIdentity ? await verifyLocalSignature(app, localIdentity) : null
+  execFileSync(process.execPath, [join(project, "scripts/test-packaged-control-cli.mjs"), app], { cwd: project, stdio: "inherit", timeout: 45_000 })
   execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app], { cwd: project, stdio: "inherit", timeout: 180_000 })
   execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app, "--launch-services"], { cwd: project, stdio: "inherit", timeout: 180_000 })
   await writeFile(

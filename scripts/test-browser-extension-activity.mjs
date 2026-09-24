@@ -166,9 +166,22 @@ assert.ok(
 assert.equal(calls.at(-1)[1].expression, "window.makoCursor?.({clear:true})")
 const visibleCalls = calls.length
 calls.length = 0
+cursor.action("target", 1, "Input.dispatchMouseEvent", { type: "mousePressed", x: 10, y: 20 })
+await new Promise((resolve) => setImmediate(resolve))
+cursor.action("target", 1, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 10, y: 20 })
+await new Promise((resolve) => setImmediate(resolve))
+const pointerFeedback = calls
+  .filter(([method, params]) => method === "Runtime.evaluate" && params.expression.startsWith("window.makoCursor?.("))
+  .map(([, params]) => JSON.parse(params.expression.slice("window.makoCursor?.(".length, -1)))
+assert.deepEqual(pointerFeedback.map((action) => action.pressed), [true, false], "Release clears pressed cursor feedback")
+calls.length = 0
 tab.active = false
 await cursor.refresh()
+calls.length = 0
+cursor.action("target", 1, "Input.dispatchMouseEvent", { type: "mousePressed", x: 10, y: 20 })
+cursor.action("target", 1, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 10, y: 20 })
 cursor.action("target", 1, "Input.insertText", { text: "secret" })
+assert.equal(calls.length, 0, "Hidden pointer press/release and typing issue no feedback commands")
 await cursor.clear("target")
 assert.ok(
   calls.every((c) => !JSON.stringify(c).includes("secret")),

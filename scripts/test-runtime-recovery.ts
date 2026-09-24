@@ -125,6 +125,12 @@ assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION }, script), false, "a d
 assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION, script: "/Users/someone/pi-ui/node_modules/@mako/sessions/dist/daemon-main.js" }, script), true)
 assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION - 1, script }, script), true)
 assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION + 1, script }, script), true)
+const catalogIdentity = "reader-and-roots-a"
+assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION, script: "/another/install/daemon.js", catalogIdentity }, script, catalogIdentity), false, "identical readers and roots may share across installation paths")
+assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION, script, catalogIdentity }, script, "reader-and-roots-b"), true, "same script path must not hide changed readers or account roots")
+assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION - 1, script, catalogIdentity }, script, catalogIdentity), true, "matching catalog identity never overrides wire compatibility")
+assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION, script: "/another/install/daemon.js" }, script, catalogIdentity), true, "missing identity never permits cross-install sharing")
+assert.equal(daemonIsForeign({ version: PROTOCOL_VERSION, script }, script, catalogIdentity), true, "the same script path cannot replace missing scope evidence")
 
 console.log("Runtime recovery: reads and id-settled mutations repeat after reconnect as attempt 2, other mutations never do, refused and dropped calls are told apart, and foreign daemons are recognised")
 

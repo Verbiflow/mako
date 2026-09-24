@@ -214,6 +214,52 @@ function fixture() {
   assert.deepEqual(f.toggles(), [], "Off policy never changes page focus")
   capture.end("finished")
 }
+{
+  const f = fixture(),
+    focus = new BrowserFocus(f.connection, "capture-dialog")
+  const capture = new BrowserCapture(f.connection, "capture-dialog", focus)
+  const preview = await capture.subscribe({ frame() {}, ended() {} })
+  const action = await focus.acquire()
+  await focus.setDialogOpen(true)
+  await action()
+  await focus.setDialogOpen(false)
+  assert.deepEqual(f.toggles(), [true], "Closing a dialog cannot reset focus still owned by capture")
+  await preview()
+  assert.deepEqual(f.toggles(), [true, false], "The last capture consumer resets focus after the dialog closes")
+  capture.end("finished")
+  await focus.close()
+}
+{
+  const f = fixture(),
+    focus = new BrowserFocus(f.connection, "dialog-outlives-capture")
+  const capture = new BrowserCapture(f.connection, "dialog-outlives-capture", focus)
+  const preview = await capture.subscribe({ frame() {}, ended() {} })
+  await focus.setDialogOpen(true)
+  await preview()
+  assert.deepEqual(f.toggles(), [true], "A pending dialog defers reset even after the last capture consumer leaves")
+  await focus.setDialogOpen(false)
+  await focus.setDialogOpen(false)
+  assert.deepEqual(f.toggles(), [true, false], "Duplicate closure notifications reset the abandoned hold only once")
+  capture.end("finished")
+  await focus.close()
+}
+for (const resetFails of [false, true]) {
+  const f = fixture(),
+    focus = new BrowserFocus(f.connection, "close-with-dialog")
+  const release = await focus.acquire()
+  await focus.setDialogOpen(true)
+  await release()
+  assert.deepEqual(f.toggles(), [true])
+  if (resetFails) f.failDisable()
+  const closing = focus.close()
+  if (resetFails) await assert.rejects(closing, /Reset response lost/)
+  else await closing
+  assert.deepEqual(f.toggles(), [true, false], "Session closure must reset focus even while a dialog is pending")
+  assert.equal(f.calls.filter((call) => call.method === "Target.detachFromTarget").length, resetFails ? 1 : 0,
+    "A failed teardown reset detaches the exact session")
+  await focus.setDialogOpen(false)
+  await assert.rejects(focus.acquire(), /attachment ended/)
+}
 console.log(
-  "Browser focus: capture/input ownership, screenshot continuity, idempotent release, uncertain reset detachment and interrupted acquisition passed"
+  "Browser focus: capture/input/dialog ownership, modal teardown, screenshot continuity, idempotent release, uncertain reset detachment and interrupted acquisition passed"
 )

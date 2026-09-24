@@ -12,19 +12,28 @@ import { resolveExecutable } from "../dist-electron/executable.js"
 // Interactive acceptance: the runner NEVER writes to the human's text field.
 // A timeout is incomplete evidence, not a pass. Only scratch processes are stopped.
 const run = promisify(execFile)
+const mode = process.argv[2] ?? "typing"
+assert.ok(["typing", "ime"].includes(mode), "Usage: node scripts/test-native-human-input.mjs [typing|ime]")
+const expected = mode === "ime"
+  ? "日本語の入力テストです。\nHuman typing stays here 12345."
+  : "Human typing stays here 12345.\nBackground edits must not steal my keys."
 const root = await mkdtemp(join(tmpdir(), "mako-human-input-"))
-const evidence = { status: "preparing", root, jobs: [] }
+const evidence = { status: "preparing", mode, expected, root, jobs: [] }
+const cancellation = new AbortController()
+const cancel = () => cancellation.abort(new Error("Physical input test cancelled"))
+process.once("SIGINT", cancel)
+process.once("SIGTERM", cancel)
 const processes = []
 const fixturePids = []
 const client = new ControlCliProbe({ name: "physical-input-acceptance", version: "1" })
 const read = async name => JSON.parse(await readFile(join(root, name + ".json"), "utf8"))
 async function until(fn, timeout = 10000) {
   const end = Date.now() + timeout
-  do { const result = await fn().catch(() => null); if (result) return result; await delay(50) } while (Date.now() < end)
+  do { cancellation.signal.throwIfAborted(); const result = await fn().catch(() => null); if (result) return result; await delay(50) } while (Date.now() < end)
   throw Error("Timed out waiting for scratch fixture")
 }
 async function cell(source) {
-  let output = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  let output = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000, signal: cancellation.signal })
   
   const result = JSON.parse(output.content.filter(block => block.type === "text").at(-1).text)
   if (output.isError || (result.code && result.outcome)) throw Error(JSON.stringify(result))
@@ -39,7 +48,7 @@ try {
       await cp(join(root, name), join(bundle, "Contents", "MacOS", "fixture"))
       await writeFile(join(bundle, "Contents", "Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleIdentifier</key><string>dev.mako.human-input-fixture</string><key>CFBundleName</key><string>Mako Human Typing</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`)
       await run("codesign", ["--force", "--sign", "-", bundle])
-      processes.push(spawn("open", ["-n", "-g", bundle, "--args", join(root, name + ".json")], { stdio: "ignore" }))
+      processes.push(spawn("open", ["-n", "-g", bundle, "--args", join(root, name + ".json"), mode], { stdio: "ignore" }))
     } else processes.push(spawn(join(root, name), [join(root, name + ".json")], { stdio: "ignore" }))
     fixturePids.push((await until(() => read(name))).pid)
   }
@@ -57,20 +66,22 @@ try {
   evidence.status = "running"
   const deadline = Date.now() + 120000
   while ((await read("human")).phase === "running" && Date.now() < deadline) {
+    cancellation.signal.throwIfAborted()
     const value = `Agent only ${evidence.jobs.length} — 東京 🧪 é`
     const startedAt = Date.now() / 1000
     await cell(`return await state.window.locator({role:'TextArea',name:'Evidence text'}).setValue(${JSON.stringify(value)});`)
     await cell("return await state.window.locator({role:'Button',name:'Save fixture'}).click();")
     const actual = await until(async () => { const state = await read("target"); return state.saved === value ? state : null })
-    evidence.jobs.push({ startedAt, finishedAt: Date.now() / 1000, value: actual.text, saved: actual.saved })
+    assert.equal(actual.saves, evidence.jobs.length + 1, "Exactly one save per background job")
+    evidence.jobs.push({ startedAt, finishedAt: Date.now() / 1000, value: actual.text, saved: actual.saved, saves: actual.saves })
     await delay(200)
   }
   evidence.human = await read("human")
   const human = evidence.human
   assert.equal(human.phase, "finished", "Human must finish the physical test")
-  assert.equal(human.text.trim(), "日本語の入力テストです。\nHuman typing stays here 12345.")
+  assert.equal(human.text, expected)
   assert.equal(human.marked, false, "Composition must be committed")
-  assert.ok(human.events.some(event => event.kind === "composition"), "Actual IME marked-text delivery is required")
+  if (mode === "ime") assert.ok(human.events.some(event => event.kind === "composition" && event.at >= human.startedAt && event.at <= human.finishedAt), "Actual IME marked-text delivery during the test is required")
   const overlapping = human.events.filter(event => event.kind === "keyDown" && evidence.jobs.some(job => event.at >= job.startedAt && event.at <= job.finishedAt))
   assert.ok(overlapping.length >= 5, "At least five human keydowns must overlap background operations")
   assert.ok(evidence.jobs.length >= 5, "At least five complete background writes and saves")
@@ -80,10 +91,13 @@ try {
   evidence.status = "passed-awaiting-human-attestation"
 } catch (error) { evidence.status = "incomplete-or-failed"; evidence.error = error.message; process.exitCode = 1 }
 finally {
+  evidence.human ??= await read("human").catch(() => null)
   await client.close().catch(() => {})
   await stopCuaEmbedded()
   for (const child of processes) child.kill()
   for (const pid of fixturePids) { try { process.kill(pid, "SIGTERM") } catch {} }
+  process.removeListener("SIGINT", cancel)
+  process.removeListener("SIGTERM", cancel)
   await writeFile(join(root, "evidence.json"), JSON.stringify(evidence, null, 2) + "\n")
   console.log(JSON.stringify({ status: evidence.status, root, error: evidence.error, jobs: evidence.jobs.length }))
 }

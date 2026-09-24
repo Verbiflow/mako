@@ -199,3 +199,41 @@ try {
 } finally {
   await router.close()
 }
+
+// Modal handlers hold debugger acknowledgements; visual feedback must follow dispatch.
+{
+  const messages = [], dispatches = [], feedback = []
+  let acknowledge
+  const modalRouter = new ExtensionRouter({
+    ...api,
+    debugger: {
+      ...api.debugger,
+      attach: async () => {},
+      detach: async () => {},
+      sendCommand: (target, method, params) => {
+        dispatches.push({ target, method, params })
+        return new Promise((resolve) => { acknowledge = resolve })
+      },
+    },
+  }, (message) => messages.push(message), {
+    tasks: { track: async () => {}, release: async () => {} },
+    cursor: { action: (...args) => feedback.push(args), clear: async () => {} },
+    downloads: { release() {} },
+    settled() {},
+  })
+  try {
+    await modalRouter.request("modal", { id: 1, method: "Target.attachToTarget", params: { targetId: "page" } })
+    const sessionId = messages.at(-1).result.sessionId
+    const params = { type: "mouseReleased", x: 12, y: 34, buttons: 0 }
+    const pending = modalRouter.request("modal", { id: 2, method: "Input.dispatchMouseEvent", params, sessionId })
+    assert.equal(dispatches.length, 1)
+    assert.deepEqual(feedback, [["page", 1, "Input.dispatchMouseEvent", params]], "Feedback must arrive before the held debugger acknowledgement")
+    assert.equal(messages.some((message) => message.id === 2), false)
+    acknowledge({})
+    await pending
+    assert.equal(messages.at(-1).kind, "response")
+    assert.equal(dispatches.length, 1, "Acknowledgement cannot cause another input dispatch")
+    assert.equal(feedback.length, 1, "Acknowledgement cannot replay feedback")
+  } finally { await modalRouter.close() }
+  console.log("Browser extension router: feedback precedes held input acknowledgement without replay")
+}

@@ -1,6 +1,6 @@
 // Opt-in real-provider probe: permitted writes are nonce files in its disposable workspace.
 import { spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { randomInt, randomUUID } from "node:crypto"
 import { mkdtemp, mkdir, writeFile, readFile, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -136,6 +136,16 @@ async function run() {
       providers: [],
     }),
   }
+  const nativePrompt = observedDriver.prompt
+  observedDriver.prompt = async (...args) => {
+    if(args[1].startsWith('<send_user_message_question_reply>'))events.push({type:'test-answer-prompt'})
+    return nativePrompt(...args)
+  }
+  const nativeSteer = observedDriver.steer
+  if(nativeSteer) observedDriver.steer = async (...args) => {
+    if(args[1].text.startsWith('<send_user_message_question_reply>'))events.push({type:'test-answer-steer'})
+    return nativeSteer(...args)
+  }
   let owner = new LiveConversations(dependencies)
   const externalDecision = Boolean(process.env.MAKO_NATIVE_APPROVAL_EXTERNAL)
   const externalIdentities = new Map()
@@ -194,12 +204,12 @@ async function run() {
   bindAcp(observer)
   bindCodexApp(observer)
   const result = { provider, mode, approvalEvidence: driver.approvalEvidence, root, cases: [], events }
-  const wait = async (predicate, handle, ms = 90_000) => {
+  const wait = async (predicate, handle, ms = 90_000, retainFailure = false) => {
     const deadline = Date.now() + ms
     while (Date.now() < deadline) {
       if (interrupted) throw new Error("Native probe interrupted")
       const snapshot = owner.snapshot(id)
-      if (snapshot?.session.status === "failed")
+      if (snapshot?.session.status === "failed" && !retainFailure)
         throw new Error(snapshot.session.error ?? "Provider failed")
       const transfer = snapshot?.control?.transfers.at(-1)
       if (transfer?.state.kind === "failed") throw new Error(transfer.state.error)
@@ -214,6 +224,57 @@ async function run() {
     }
     throw new Error("Native approval probe deadline")
   }
+  const checkQuestion = async (label, prior) => {
+      const questionMode = process.env.MAKO_NATIVE_QUESTION_MODE
+      if (questionMode) await owner.setMode(id, driver.modes?.find(item=>item.access===questionMode)?.id ?? questionMode)
+      const request = randomUUID()
+      const choices = process.env.MAKO_NATIVE_QUESTION_CHOICES ? Array.from({length:4},()=>`CHOICE_${randomUUID()}`) : null
+      const prompt = choices
+        ? `Use your native structured question tool to ask exactly one question with these four exact choices: ${choices.join(', ')}. Wait for the selection, then reply with only the selected value. Do not ask in plain text, guess, use other tools, or pick an answer yourself.`
+        : 'Use your native structured question or user-input tool to ask exactly one question: "What is the verification phrase?" Allow a free-text answer (an Other option is fine). Wait for the answer, then reply with exactly that phrase. Do not ask in plain text, guess the phrase, run commands, read files, or call any other tools.'
+      owner.submit(id, request, prompt)
+      const asked = await wait(s => s?.permissions.length || s?.requests.some(r => r.id === request && ['completed', 'failed', 'interrupted'].includes(r.status)))
+      const permission = asked.permissions[0]
+      if (!permission?.questions?.length || permission.questions.length !== 1) throw Error('Native runtime did not emit the requested single structured question')
+      const question = permission.questions[0]
+      if (!choices && question.options.length && !question.allowOther) throw Error('Native question did not allow a verification phrase')
+      // Generate after the native question arrived. The only path by which the
+      // runtime can learn this value is the answer to this exact occurrence.
+      if (choices && (question.options.length!==choices.length || question.options.some(o=>!choices.includes(o.value??o.label)))) throw Error('Native choices differ from the requested values')
+      const selected = choices ? question.options[randomInt(question.options.length)] : null
+      const phrase = selected ? selected.value ?? selected.label : `ANSWER_${randomUUID()}`
+      if (prior) {
+        const sent = answerDispatches
+        await owner.permission(id, prior.approvalId, {kind:'answers',answers:{[prior.questionId]:[prior.phrase]}})
+        if (answerDispatches!==sent || !owner.snapshot(id).permissions.some(p=>p.id===permission.id)) throw Error('An old answer replayed or cleared the newer question')
+      }
+      const sentBefore = answerDispatches
+      await capture(label+'-pending')
+      if (page) {
+        const selector = selected
+          ? `([...document.querySelectorAll('fieldset button')].find(e=>e.textContent.trim()===${JSON.stringify(selected.label)}&&e.getClientRects().length))`
+          : `([...document.querySelectorAll('fieldset input')].find(e=>e.getClientRects().length))`
+        const point = await page.executeJavaScript(`(()=>{const input=${selector};if(!input)throw Error('Native question control missing');const r=input.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+        for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
+        if (!selected) await page.debugger.sendCommand('Input.insertText',{text:phrase})
+        await capture(label+'-answer-draft')
+        const submit = await page.executeJavaScript("(()=>{const b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Send answers'&&e.getClientRects().length);if(!b||b.disabled)throw Error('Question answer is not ready');const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
+        for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...submit})
+      } else await sendApproval(permission.id,{kind:'answers',answers:{[question.id]:[phrase]}})
+      const answered = await wait(s => s?.requests.some(r=>r.id===request&&r.status==='completed'))
+      const start = answered.blocks.findIndex(b=>b.type==='user'&&b.requestId===request)
+      const response = answered.blocks.slice(start+1).filter(b=>b.type==='text').map(b=>b.text).join('')
+      if (start < 0 || !response.includes(phrase)) throw Error('Native continuation did not consume the submitted verification phrase')
+      if (answerDispatches !== sentBefore+1 || answered.permissions.some(p=>p.id===permission.id)) throw Error('Question answer dispatched more than once or stayed pending')
+      const receipt = answered.control?.approvalResponses?.find(r=>r.id===permission.id)
+      if (!receipt) throw Error('Structured answer receipt was not retained')
+      const evidence = {requestId:request,approvalId:permission.id,questionId:question.id,phrase,kind:selected?"choice":"free-text",continuationContainsAnswer:true,dispatches:1,receipt,staleAnswerDispatched:prior?false:undefined}
+      await render(answered)
+      await capture(label+'-completed')
+      if (questionMode) await owner.setMode(id,mode)
+      return evidence
+  }
+
   try {
     await owner.start(provider, cwd, {
       conversationId: id,
@@ -223,6 +284,17 @@ async function run() {
     })
     await wait((s) => s?.session.status === "ready")
     result.nativeId = owner.snapshot(id).session.nativeId
+    if (process.env.MAKO_NATIVE_ASYNC_QUESTIONS) {
+      if(!page)throw Error('Async question proof requires --ui')
+      const {checkAsyncQuestions}=await import('./native-async-question-checks.mjs')
+      await checkAsyncQuestions({owner:()=>owner,reopen:async()=>{
+        await owner.close(id)
+        owner.stop()
+        owner=new LiveConversations(dependencies)
+        renderedRevision=undefined
+      },id,page,wait,render,capture,events,result})
+      return
+    }
     if (process.env.MAKO_NATIVE_APPROVAL_CHECK_INHERITED) {
       const session = owner.snapshot(id).session
       result.inheritedMode = session.currentMode
@@ -320,41 +392,7 @@ async function run() {
       }
       console.log(JSON.stringify({ provider, ...record }))
     }
-    if (process.env.MAKO_NATIVE_APPROVAL_QUESTIONS) {
-      const questionMode = process.env.MAKO_NATIVE_QUESTION_MODE
-      if (questionMode) await owner.setMode(id, driver.modes?.find(item=>item.access===questionMode)?.id ?? questionMode)
-      const request = randomUUID()
-      owner.submit(id, request, 'Use your native structured question or user-input tool to ask exactly one question: "What is the verification phrase?" Allow a free-text answer (an Other option is fine). Wait for the answer, then reply with exactly that phrase. Do not ask in plain text, guess the phrase, run commands, read files, or call any other tools.')
-      const asked = await wait(s => s?.permissions.length || s?.requests.some(r => r.id === request && ['completed', 'failed', 'interrupted'].includes(r.status)))
-      const permission = asked.permissions[0]
-      if (!permission?.questions?.length || permission.questions.length !== 1) throw Error('Native runtime did not emit the requested single structured question')
-      const question = permission.questions[0]
-      if (question.options.length && !question.allowOther) throw Error('Native question did not allow a verification phrase')
-      // Generate after the native question arrived. The only path by which the
-      // runtime can learn this value is the answer to this exact occurrence.
-      const phrase = `ANSWER_${randomUUID()}`
-      const sentBefore = answerDispatches
-      await capture('question-pending')
-      if (page) {
-        const point = await page.executeJavaScript("(()=>{const input=[...document.querySelectorAll('fieldset input')].find(e=>e.getClientRects().length);if(!input)throw Error('Native question input missing');const r=input.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
-        for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
-        await page.debugger.sendCommand('Input.insertText',{text:phrase})
-        await capture('question-answer-draft')
-        const submit = await page.executeJavaScript("(()=>{const b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Send answers'&&e.getClientRects().length);if(!b||b.disabled)throw Error('Question answer is not ready');const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
-        for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...submit})
-      } else await sendApproval(permission.id,{kind:'answers',answers:{[question.id]:[phrase]}})
-      const answered = await wait(s => s?.requests.some(r=>r.id===request&&r.status==='completed'))
-      const start = answered.blocks.findIndex(b=>b.type==='user'&&b.requestId===request)
-      const response = answered.blocks.slice(start+1).filter(b=>b.type==='text').map(b=>b.text).join('')
-      if (start < 0 || !response.includes(phrase)) throw Error('Native continuation did not consume the submitted verification phrase')
-      if (answerDispatches !== sentBefore+1 || answered.permissions.some(p=>p.id===permission.id)) throw Error('Question answer dispatched more than once or stayed pending')
-      const receipt = answered.control?.approvalResponses?.find(r=>r.id===permission.id)
-      if (!receipt) throw Error('Structured answer receipt was not retained')
-      result.question = {requestId:request,approvalId:permission.id,phrase,continuationContainsAnswer:true,dispatches:1,receipt}
-      await render(answered)
-      await capture('question-completed')
-      if (questionMode) await owner.setMode(id,mode)
-    }
+    if (process.env.MAKO_NATIVE_APPROVAL_QUESTIONS) result.question = await checkQuestion('question')
     if (process.env.MAKO_NATIVE_APPROVAL_CANCEL) {
       const cancelNonce = randomUUID(), cancelPath = join(cwd, 'cancelled.txt'), request = randomUUID()
       owner.submit(id, request, `In this disposable fixture, request approval to execute exactly: printf '%s' '${cancelNonce}' >> '${cancelPath}'. Do not run any other command or write any other file.`)
@@ -362,12 +400,27 @@ async function run() {
       await capture('cancel-pending')
       const sentBeforeCancel = answerDispatches
       await owner.cancel(id)
-      const cancelled = await wait(s => !s?.permissions.length && s?.requests.some(r => r.id === request && ['canceled', 'interrupted'].includes(r.status)))
+      const checkContinuation = Boolean(process.env.MAKO_NATIVE_APPROVAL_CANCEL_CONTINUE)
+      const cancelled = await wait(s => !s?.permissions.length && s?.requests.some(r => r.id === request && ['canceled', 'interrupted', ...(checkContinuation ? ['failed'] : [])].includes(r.status)), undefined, 90_000, checkContinuation)
       if (await readFile(cancelPath, 'utf8').catch(() => null) !== null) throw Error('Cancelled pending operation executed')
       if (answerDispatches !== sentBeforeCancel) throw Error('Cancellation dispatched an approval answer')
       result.cancellation = { requestStatus: cancelled.requests.find(r => r.id === request).status, questionRemoved: true, fileAbsent: true, answerDispatched: false }
+      if (cancelled.session.error) result.cancellation.nativeError = cancelled.session.error
       await render(cancelled)
       await capture('cancel-completed')
+      if (checkContinuation) {
+        const followup = randomUUID()
+        const originalNativeId = cancelled.session.nativeId
+        owner.submit(id, followup, 'Do not use any tools. Recall the exact UUID from the earlier successful allow.txt command and reply with only that UUID.')
+        const continued = await wait(s => s?.requests.some(r => r.id === followup && ['completed', 'failed', 'interrupted'].includes(r.status)), undefined, 90_000, true)
+        const followupStatus = continued.requests.find(r => r.id === followup).status
+        const start = continued.blocks.findIndex(b => b.type === 'user' && b.requestId === followup)
+        const response = continued.blocks.slice(start + 1).filter(b => b.type === 'text').map(b => b.text).join('')
+        const marker = result.cases.find(item => item.decision === 'allow').nonce
+        result.afterCancellation = { followupStatus, sameNativeSession: continued.session.nativeId === originalNativeId, contextRecalled: start >= 0 && response.includes(marker), sessionStatus: continued.session.status, connection: continued.session.connection }
+        if (followupStatus !== 'completed' || !result.afterCancellation.sameNativeSession || !result.afterCancellation.contextRecalled) throw Error('Same-session continuation after cancellation did not retain context')
+        await capture('cancel-followup-completed')
+      }
     }
     if (dropDecisions || process.env.MAKO_NATIVE_APPROVAL_REOPEN) {
       const requireNativeDecisions = dropDecisions
@@ -408,6 +461,7 @@ async function run() {
       result.reconnect = { priorConnection: before.session.connection, sameSession: true, receipts: resumed.control?.approvalResponses, answersReplayed: false, answerDispatches, executionCountsUnchanged: true, exactNativeDecisions: requireNativeDecisions }
       await render(resumed)
       await capture('reconnected-native-evidence')
+      if (result.question) result.questionAfterReconnect = await checkQuestion('question-after-reconnect', result.question)
       if (page && requireNativeDecisions) {
         const point = await page.executeJavaScript("(()=>{const r=document.querySelector('button[aria-label=\"Conversation actions\"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
         for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})

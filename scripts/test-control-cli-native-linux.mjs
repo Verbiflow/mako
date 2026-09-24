@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 const run = promisify(execFile)
@@ -77,7 +77,7 @@ try {
   }
   const targetFile = join(directory, "target.json")
   await writeFile(targetFile, JSON.stringify(target))
-  await program(
+  const capabilities = await program(
     `state.window=control.window(${JSON.stringify(target)});return await state.window.capabilities()`
   )
   const observation = await command(["observe", "--target-file", targetFile])
@@ -148,7 +148,7 @@ try {
   assert.equal(jpeg.mimeType, "image/jpeg")
   assert.equal((await readFile(jpeg.path)).readUInt16BE(0), 0xffd8)
   await assert.rejects(
-    command(["record", "start", "--target-file", targetFile, "--fps", "60"]),
+    command(["record", "start", "--target-file", targetFile, "--fps", "61"]),
     (error) =>
       error.code === 2 && JSON.parse(error.stderr).outcome === "not-dispatched"
   )
@@ -159,6 +159,8 @@ try {
     targetFile,
     "--directory",
     join(directory, "recordings"),
+    "--fps",
+    String(capabilities.recording.maxFps),
   ])
   const receiptFile = join(directory, "recording.json")
   await writeFile(receiptFile, JSON.stringify(recording))
@@ -194,6 +196,13 @@ try {
     ).stdout
   )
   assert.ok(Number(media.format.duration) > 0)
+  if (process.env.MAKO_RUNTIME_EVIDENCE) {
+    const evidence = process.env.MAKO_RUNTIME_EVIDENCE
+    await mkdir(evidence, { recursive: true })
+    for (const [source, name] of [[shot.path, "window.png"], [smaller.path, "resized.png"], [jpeg.path, "window.jpg"], [complete.video, "recording.mp4"], [complete.timeline, "timeline.json"]])
+      await cp(source, join(evidence, name))
+    await writeFile(join(evidence, "media.json"), JSON.stringify({ capabilities, receipt: complete, media }, null, 2))
+  }
   await command(["session", "stop"])
   stopped = true
   const launcher = await until(() => read(join(output, "launcher.json")))

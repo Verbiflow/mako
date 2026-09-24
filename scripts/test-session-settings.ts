@@ -3,7 +3,7 @@ import { normalizeCodexModels } from "@mako/sessions/model-catalog"
 import assert from "node:assert/strict"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import { applyAcpSettings } from "../electron/acp-config.ts"
-import { codexWireSettings } from "../electron/providers/codex/settings.ts"
+import { codexInteractiveConfig, codexWireSettings } from "../electron/providers/codex/settings.ts"
 
 const model: SessionConfigOption = {
   id: "model",
@@ -187,6 +187,12 @@ assert.deepEqual(
   { model: undefined, effort: "high", serviceTier: "default" }
 )
 assert.equal(codexWireSettings().serviceTier, undefined)
+assert.deepEqual(codexInteractiveConfig(), { "features.default_mode_request_user_input": true })
+assert.deepEqual(codexInteractiveConfig("high"), {
+  "features.default_mode_request_user_input": true,
+  model_reasoning_effort: "high",
+})
+assert.equal("config" in codexWireSettings(), false, "Interactive questions must not alter headless launch settings")
 console.log(
   "Session settings transports: sequential ACP acknowledgement and rejection, Codex reset"
 )
