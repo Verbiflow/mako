@@ -294,7 +294,7 @@ unwrapped from its MCP envelope), `steps` (`view`, `act`, `until`,
 (the background input ladder and the keyboard verdicts).
 
 `@mako/control-runtime` (`packages/control-runtime`) owns the Node session engine,
-CLI, browser connections, driver lifecycle, capture and recording. Its root
+MCP adapter, CLI, browser connections, driver lifecycle, capture and recording. Its root
 `createControlRuntime({artifacts,browsers?,native?})` requires explicit standalone
 configuration. `/host`, `/browser` and `/session` serve the desktop and
 transport adapters; `/contracts` and `/extension` are safe schema-only imports.
@@ -310,8 +310,10 @@ holds the measurements the design rests on.
 
 Every provider receives a task-owned `mako-control` CLI and private session file.
 `ControlSessions` starts the worker; provider environments receive PATH/session
-configuration through `applyControlEnvironment`. The public Local Control MCP
-adapter is removed; retain the native driver’s private protocol. Local Control
+configuration through `applyControlEnvironment`. Mako agents primarily use the
+`mako-control` MCP `js`/`js_reset` adapter from `@mako/control-runtime/mcp`. It borrows
+that same session; it never starts a CLI subprocess or a second engine. The retired
+status/help/exec tools stay removed. Keep the native driver’s private protocol. Local Control
 v2 programs use `control.app({pid})`, `control.window({pid,window_id})`,
 `control.tab(target)`, `control.openTab` and `control.claimTab`. The bound client
 in `packages/control/src/control/client.ts` owns API composition; the host owns
@@ -319,7 +321,10 @@ routing, target validation, driver sessions and foreground checks. Public
 `control.act/observe/advanced/wait` and the separate `page` helper are retired.
 The internal driver test executor and browser regression harness are not public provider APIs.
 
-Keep handles in `state` across cells. The worker's AsyncLocalStorage associates
+MCP uses top-level await and persistent lexical bindings; first-use documentation
+comes from the worker, with `control.rewriteDocumentation()` after lost context.
+CLI exec still takes an async body with `return`; keep shared handles in `state`.
+MCP reset clears program state without closing owned targets or recordings. The worker's AsyncLocalStorage associates
 calls with their executing cell; a timer from a finished cell cannot borrow a
 new run. Ordinary script errors preserve state; timeout, cancellation and worker
 faults reset it. Programs are trusted local JavaScript, not an OS sandbox.
