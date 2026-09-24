@@ -579,6 +579,12 @@ export const acp = {
     }
   },
 
+  async answerQuestion(questionId: string, answers: Record<string, string[]> | null): Promise<void> {
+    const current = activeLiveAcp(acpStore.get())
+    if (!current || !hasBridge()) return
+    await answerLiveApproval(current.key, questionId, answers ? { kind: "answers", answers } : { kind: "choice", optionId: null })
+  },
+
   answerPermission(
     optionId: string | null,
     answers?: Record<string, string[]>

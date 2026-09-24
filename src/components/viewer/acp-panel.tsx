@@ -1,3 +1,4 @@
+import { latestPendingQuestion } from "../../../electron/contracts/live-questions"
 import { ApprovalStatus } from "./approval-status"
 import { promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, turnStops } from "@/state/prompt-delivery"
 import { agentActivity } from "@/state/agent-activity"
@@ -72,6 +73,7 @@ export function AcpPanel() {
       <RetainedRequests />
       <ApprovalStatus />
       <Permission />
+      <SessionQuestion />
     </div>
   )
 }
@@ -273,11 +275,32 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   )
 }
 
+function SessionQuestion() {
+  const control = useAcp(state => activeLiveAcp(state)?.control)
+  const requests = useAcp(state => activeLiveAcp(state)?.requests ?? EMPTY_QUEUE)
+  const blocking = useAcp(state => activeLiveAcp(state)?.permission)
+  const question = useMemo(() => control && !blocking ? latestPendingQuestion(control, requests) : undefined, [control, requests, blocking])
+  if (!question) return null
+  return <QuestionPermission key={question.id} permission={{
+    id: question.id, sessionId: question.bindingId, title: "Question", options: [], questions: question.native.questions.filter(item => !question.answered?.includes(item.id)),
+  }} onAnswer={answers => acp.answerQuestion(question.id, answers)} dismissLabel="Dismiss" />
+}
+
 function QuestionPermission({
   permission,
+  onAnswer = answers => acp.answerPermission(null, answers ?? undefined),
+  dismissLabel = "Cancel",
 }: {
   permission: LivePermissionRequest
+  onAnswer?: (answers: Record<string, string[]> | null) => void | Promise<void>
+  dismissLabel?: string
 }) {
+  const [submitting, setSubmitting] = useState(false)
+  const answer = (values: Record<string, string[]> | null) => {
+    if (submitting) return
+    setSubmitting(true)
+    void Promise.resolve(onAnswer(values)).finally(() => setSubmitting(false))
+  }
   const questions = permission.questions ?? []
   const [answers, setAnswers] = useState<Record<string, string[]>>(() =>
     Object.fromEntries(
@@ -373,19 +396,20 @@ function QuestionPermission({
       <div className="flex items-center justify-end gap-1.5 pt-3">
         <button
           type="button"
-          onClick={() => acp.answerPermission(null)}
+          disabled={submitting}
+          onClick={() => answer(null)}
           className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground"
         >
-          Cancel
+          {dismissLabel}
         </button>
         <button
           type="button"
-          disabled={!complete}
+          disabled={!complete || submitting}
           onClick={() =>
-            acp.answerPermission(
-              null,
+            answer(
               Object.fromEntries(
                 Object.entries(answers)
+                  .filter(([id]) => questions.some(question => question.id === id))
                   .map(([id, values]) => [
                     id,
                     values.map((value) => value.trim()).filter(Boolean),
