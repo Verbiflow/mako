@@ -7,6 +7,7 @@ import {
 } from "../../electron/shared.ts"
 import { hostCallInputs } from "../../electron/contracts/host-call-inputs.ts"
 import { invokeWithRecovery } from "../../electron/runtime-retry.ts"
+import { hostCallReplay } from "../../electron/contracts/host-call-policy.ts"
 import { RuntimeDisconnectedError, HOST_CLOSED_CODE, HOST_OUTAGE_MESSAGE, HOST_RESTARTING_CODE } from "../../electron/contracts/host-connection.ts"
 import { setClientStorageScope } from "../lib/client-storage-scope"
 import { createWebNotificationChannels } from "./web-notifications.ts"
@@ -68,7 +69,7 @@ export async function installWebBridge(): Promise<void> {
       reply = await fetch("/__mako/rpc", {
         method: "POST",
         signal: AbortSignal.timeout(5 * 60_000),
-        headers: { "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId },
+        headers: { "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" },
         body: JSON.stringify({
           channel,
           args: args.map((value) =>
@@ -87,7 +88,11 @@ export async function installWebBridge(): Promise<void> {
     // This transport shares createMakoBridge's result contract with Electron IPC.
     let result
     try { result = await reply.json() }
-    catch { throw new RuntimeDisconnectedError(true) }
+    catch {
+      if (hostCallReplay(channel) === "read")
+        throw new Error("Mako could not read the host response. The response was incomplete or invalid.")
+      throw new RuntimeDisconnectedError(true)
+    }
     if (!result.ok) {
       if (result.code === "owner-unavailable") throw new RuntimeDisconnectedError(result.unconfirmed ?? true, result.conversationId)
       if (result.code === HOST_RESTARTING_CODE) throw new RuntimeDisconnectedError(true)
@@ -107,7 +112,7 @@ export async function installWebBridge(): Promise<void> {
   )
   const response = await fetch("/__mako/events", {
     method: "POST",
-    headers: { "x-mako-client": "web", "x-mako-window": clientId },
+    headers: { "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" },
   })
   if (!response.ok) throw refusal(response)
   if (!response.body)
@@ -256,7 +261,7 @@ export async function installWebBridge(): Promise<void> {
       for (let attempt = 0; !stopped; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, Math.min(4_000, 500 * (attempt + 1))))
         try {
-          const next = await fetch("/__mako/events", { method: "POST", headers: { "x-mako-client": "web", "x-mako-window": clientId } })
+          const next = await fetch("/__mako/events", { method: "POST", headers: { "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" } })
           if (!next.ok || !next.body) continue
           reader = next.body.pipeThrough(new TextDecoderStream()).getReader()
           parts.length = 0

@@ -16,6 +16,7 @@ export interface AcpQueuedPrompt {
 }
 
 interface AcpConversationBase {
+  history?: LiveSnapshot["history"]
   replyBindingId?: string
   pendingPrompts?: PendingPrompt[]
   nativeAgents?: LiveSnapshot["nativeAgents"]

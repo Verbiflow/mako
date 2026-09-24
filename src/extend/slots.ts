@@ -8,7 +8,6 @@ import type {
 } from "@/lib/types"
 import type {
   AttachmentContent,
-  BlockAddress,
   ToolDetail,
 } from "@mako/sessions"
 import type { AttachmentInput } from "@/lib/attachments"
@@ -103,7 +102,7 @@ export interface ToolCall {
    * Present while `result` is only the head of the output. The row asks for
    * the rest when it opens; a tool view can show `rest.length` meanwhile.
    */
-  rest?: { length: number; at: BlockAddress }
+  rest?: import("../../electron/contracts/conversation-session").ToolContentRest
 }
 
 export interface ToolViewProps {

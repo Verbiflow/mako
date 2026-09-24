@@ -1,3 +1,4 @@
+import { readLiveSnapshot } from "@/state/live-history"
 import { toast } from "sonner"
 import { z } from "zod"
 import { getMako } from "@/lib/bridge"
@@ -46,8 +47,7 @@ export async function performLiveAction(
     if (result.state.kind === "uncertain" || result.state.kind === "failed") toast.error(result.state.reason)
     return actionRetainsInput(result)
   } catch (error) {
-    const snapshot = await getMako()
-      .liveSnapshot(id)
+    const snapshot = await readLiveSnapshot(id)
       .catch(() => null)
     if (snapshot) {
       applyLiveSnapshot(snapshot)
@@ -70,7 +70,7 @@ export async function acknowledgeLiveAction(
 ): Promise<void> {
   try {
     await getMako().liveAcknowledgeAction(id, actionId)
-    const snapshot = await getMako().liveSnapshot(id)
+    const snapshot = await readLiveSnapshot(id)
     if (snapshot) applyLiveSnapshot(snapshot)
   } catch (error) {
     toast.error(error instanceof Error ? error.message : String(error))

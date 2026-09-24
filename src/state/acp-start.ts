@@ -1,3 +1,4 @@
+import { readLiveSnapshot } from "@/state/live-history"
 import { stagePrompt } from "@/state/acp-pending"
 import { noteFolderUse, prefsStore } from "@/state/prefs"
 import { projectAcp } from "@/state/live-projection"
@@ -179,7 +180,7 @@ export async function restorePendingStart(command: Extract<OutboxCommand, { kind
     blocks: [], queued: [], hiddenUserPrompt: null, createdAt: Date.now(), updatedAt: Date.now(), unconfirmedStart: input }
   const existing = acpStore.get().conversations[input.conversationId]
   if (existing?.kind === "live") {
-    const snapshot = await getMako().liveSnapshot(existing.key).catch(() => null)
+    const snapshot = await readLiveSnapshot(existing.key).catch(() => null)
     if (snapshot && (!input.initialRequest || snapshot.requests.some((request) => request.id === input.initialRequest?.id))) {
       adoptStart(starting, snapshot, input)
       settleMessage(commandId(command))
@@ -235,7 +236,7 @@ async function attemptStart(starting: StartingAcpConversation, input: LiveStartO
     retryDelays.delete(starting.key)
     return true
   } catch (error) {
-    let accepted = await getMako().liveSnapshot(starting.key).catch(() => null)
+    let accepted = await readLiveSnapshot(starting.key).catch(() => null)
     if (accepted && input.initialRequest && !accepted.requests.some((request) => request.id === input.initialRequest?.id) &&
         !accepted.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id)) accepted = null
     if (!accepted && input.resume && input.threadPath) {

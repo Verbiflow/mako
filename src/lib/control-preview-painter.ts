@@ -31,15 +31,22 @@ export function createControlPreviewPainter(canvas: {
           await image.decode()
           if (closed) return
           // The source validates dimensions too. Bound this DOM allocation at its boundary.
-          if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth * image.naturalHeight > 16_000_000) continue
-          await new Promise<void>(resolve => {
+          if (
+            !image.naturalWidth ||
+            !image.naturalHeight ||
+            image.naturalWidth * image.naturalHeight > 16_000_000
+          )
+            continue
+          await new Promise<void>((resolve) => {
             finishPaint = resolve
             painting = requestAnimationFrame(() => {
               painting = undefined
               finishPaint = undefined
               if (!closed && context) {
-                if (canvas.width !== image.naturalWidth) canvas.width = image.naturalWidth
-                if (canvas.height !== image.naturalHeight) canvas.height = image.naturalHeight
+                if (canvas.width !== image.naturalWidth)
+                  canvas.width = image.naturalWidth
+                if (canvas.height !== image.naturalHeight)
+                  canvas.height = image.naturalHeight
                 context.drawImage(image, 0, 0)
               }
               resolve()
@@ -51,7 +58,9 @@ export function createControlPreviewPainter(canvas: {
           if (decoding === image) decoding = undefined
         }
       }
-    } finally { running = false }
+    } finally {
+      running = false
+    }
   }
 
   return {

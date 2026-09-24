@@ -9,9 +9,20 @@ import { reduceLiveUpdates } from "../../electron/contracts/live-content"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
+import { isHostReconnectingError } from "../../electron/contracts/host-connection"
+import { prependLiveHistory, readLiveSnapshot, readLiveValue } from "@/state/live-history"
+import type { LiveHistoryPage } from "../../electron/contracts/live-history"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, LiveBatch[]>()
+// Invalid/oversized snapshots cannot be repaired by refetching on every token.
+// Activation and reconnect retry them. Transient outages may recover on a later
+// batch even if the independent event stream stayed connected throughout.
+const failed = new Map<string, { description: string; reconnecting: boolean }>()
+
+function restoredLive(id: string): void {
+  if (failed.delete(id)) toast.dismiss(`live-restore:${id}`)
+}
 
 /**
  * Whether `incoming` continues the numbering `held` was built on. Revisions
@@ -24,6 +35,7 @@ function sameEpoch(held: { epoch?: string } | undefined, incoming: { epoch?: str
 }
 
 export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null): void {
+  restoredLive(snapshot.session.id)
   for (const request of snapshot.requests) settleMessage(request.id, true)
   for (const transfer of snapshot.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   const id = snapshot.session.id
@@ -36,6 +48,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     (prompt) => !snapshot.requests.some((request) => request.id === prompt.id) &&
       !snapshot.control?.transfers.some((transfer) => transfer.input.id === prompt.id)
   )
+  const observedChange = existing?.kind === "live" && sameEpoch(existing, snapshot) &&
+    pending.get(id)?.some(batch => sameEpoch(batch, snapshot) && batch.revision > (existing.revision ?? 0) && batch.revision <= snapshot.revision)
   replaceAcpConversation(id, {
     key: id,
     replyBindingId: replyBindingId === undefined ? existing?.replyBindingId : replyBindingId ?? undefined,
@@ -60,6 +74,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     blocks: snapshot.blocks,
     revision: snapshot.revision,
     epoch: snapshot.epoch ?? existing?.epoch,
+    history: snapshot.history,
     hydrated: true,
     projection: projectLive(snapshot, existing?.projection, pendingPrompts),
     permission: snapshot.permissions[0] ?? null,
@@ -75,13 +90,14 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     ),
   })
   const restored = acpStore.get().conversations[id]
+  if (observedChange) notifyCompletion(existing.requests, snapshot.requests)
   if (restored?.kind === "live") acknowledgeComposerSettings(restored)
   if (restored?.kind === "live")
     syncThreadStatus(
       restored,
       existing?.kind === "live" ? existing.session.status : "starting",
       existing?.threadPath,
-      "hydrate"
+      observedChange ? undefined : "hydrate"
     )
   const buffered = pending.get(id) ?? []
   pending.delete(id)
@@ -93,18 +109,26 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   const existing = fetching.get(id)
   if (existing) return existing
   let restored = false
-  const fetch = getMako()
-    .liveSnapshot(id)
+  const fetch = readLiveSnapshot(id)
     .then((snapshot) => {
       restored = true
       if (snapshot) applyLiveSnapshot(snapshot)
-      else pending.delete(id)
+      else {
+        pending.delete(id)
+        restoredLive(id)
+      }
       return snapshot !== null
     })
     .catch((error) => {
-      if (!quiet) toast.error("The live conversation could not be restored", {
-        description: error instanceof Error ? error.message : String(error),
-      })
+      const description = error instanceof Error ? error.message : String(error)
+      const previous = failed.get(id)
+      // Transport outages belong to the shared reconnect/owner state. They
+      // are not a new conversation failure on every refresh or in every tab.
+      const reconnecting = error instanceof Error && isHostReconnectingError(error)
+      if (!quiet && !reconnecting && previous?.description !== description)
+        toast.error("Conversation could not refresh", { id: `live-restore:${id}`, description })
+      // A quiet probe must not consume the user's first visible error.
+      failed.set(id, { description: quiet && !reconnecting ? previous?.description ?? "" : description, reconnecting })
       return false
     })
     .finally(() => {
@@ -122,9 +146,11 @@ export function applyLiveBatch(batch: LiveBatch): void {
   for (const request of batch.requests ?? []) settleMessage(request.id, true)
   for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   const current = acpStore.get().conversations[batch.id]
+  if (current?.kind === "live" && sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
   if (
     current?.kind === "live" &&
     !current.hydrated &&
+    !batch.historyChanged &&
     acpStore.get().activeKey !== batch.id &&
     !fetching.has(batch.id)
   ) {
@@ -168,17 +194,25 @@ export function applyLiveBatch(batch: LiveBatch): void {
     // screen are not what this batch was reduced against, so it is buffered
     // and a fresh snapshot is taken rather than merged onto the wrong state.
     !sameEpoch(current, batch) ||
+    batch.historyChanged ||
+    (current.history && (batch.base !== undefined || batch.baseCoveredBlocks !== undefined ||
+      (batch.changedFrom !== undefined && batch.changedFrom < current.history.blockStart) ||
+      batch.updates.some(update => update.kind === "tool-update" && current.blocks.some(block =>
+        block.type === "tool" && block.id === update.id && block.historyRest)))) ||
     batch.revision > (current.revision ?? 0) + 1
   ) {
     // A bounded buffer is only an optimization. The host snapshot remains authoritative.
     const buffered = pending.get(batch.id) ?? []
     pending.set(batch.id, [...buffered.slice(-127), batch])
-    void hydrateLive(batch.id)
+    const failure = failed.get(batch.id)
+    if (!failure || failure.reconnecting) void hydrateLive(batch.id)
     return
   }
   if (batch.revision <= (current.revision ?? 0)) return
   const session = batch.session ?? current.session
   const blocks = reduceLiveUpdates(current.blocks, batch.updates)
+  const history = current.history ? { ...current.history,
+    blockEnd: batch.blockCount ?? current.history.blockStart + blocks.length } : undefined
   const base = batch.base === undefined ? (current.base ?? null) : batch.base
   const baseCoveredBlocks = batch.baseCoveredBlocks ?? current.baseCoveredBlocks
   const requests = batch.requests ?? current.requests
@@ -201,6 +235,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     requests,
     pendingPrompts,
     blocks,
+    history,
     session,
     revision: batch.revision,
     epoch: batch.epoch ?? current.epoch,
@@ -232,7 +267,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
         ? current.projection
         : acpStore.get().activeKey === batch.id
           ? projectLive(
-              { blocks, base, baseCoveredBlocks, session, requests },
+              { blocks, base, baseCoveredBlocks, history, session, requests },
               current.projection,
               pendingPrompts
             )
@@ -352,6 +387,18 @@ export function hydrateLiveSummaries(
 }
 
 export async function loadEarlierLive(id: string): Promise<void> {
+  const held = acpStore.get().conversations[id]
+  if (held?.kind === "live" && held.history) {
+    const before = held.history.before
+    if (!before) return
+    const page = await readLiveValue<LiveHistoryPage>(id, { kind: "earlier", token: held.history.token, before })
+    const current = acpStore.get().conversations[id]
+    if (current?.kind !== "live" || current.history?.token !== held.history.token ||
+        current.history.before?.blocks !== before.blocks || current.history.before?.base !== before.base) return
+    const next = prependLiveHistory({ ...current, base: current.base ?? null }, page)
+    replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, undefined, next.pendingPrompts) })
+    return
+  }
   const snapshot = await getMako().liveEarlier(id)
   applyLiveSnapshot(snapshot)
 }

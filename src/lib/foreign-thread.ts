@@ -105,6 +105,7 @@ export function threadToMessages(
           block.output !== undefined ||
           Boolean(block.attachments?.length) ||
           Boolean(block.details?.length) ||
+          Boolean(block.contentOmitted || block.attachmentsOmitted || block.outputLength) ||
           block.error === true ||
           block.canceled === true
         ) {
@@ -122,7 +123,7 @@ export function threadToMessages(
             block.outputLength !== undefined &&
             block.output !== undefined &&
             block.outputLength > block.output.length
-          if (trimmedOutput || block.attachmentsOmitted)
+          if (trimmedOutput || block.attachmentsOmitted || block.contentOmitted)
             result.rest = {
               length: block.outputLength ?? block.output?.length ?? 0,
               at: { entry: entryIndex, block: blockIndex },

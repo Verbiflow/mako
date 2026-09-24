@@ -1,3 +1,4 @@
+import { readLiveSnapshot } from "@/state/live-history"
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
 import type { TransferInput } from "@/lib/types"
@@ -13,7 +14,7 @@ export async function submitTransfer(id: string, input: TransferInput): Promise<
     if (acpStore.get().activeKey === id) leaveViewerForLive(input.provider)
     return true
   } catch (error) {
-    const snapshot = await getMako().liveSnapshot(id).catch(() => null)
+    const snapshot = await readLiveSnapshot(id).catch(() => null)
     if (snapshot?.control?.transfers.some((transfer) => transfer.input.id === input.id)) {
       applyLiveSnapshot(snapshot)
       return true

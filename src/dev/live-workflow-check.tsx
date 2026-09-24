@@ -17,6 +17,7 @@ import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { WorkspaceFocusContext } from "@/components/stage/workspace-focus-context"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
+import { HostConnectionNotice } from "@/components/shell/host-connection-notice"
 import { applyLiveSnapshot } from "@/state/live-recovery"
 import { acpStore } from "@/state/acp"
 import { threadsStore } from "@/state/thread-store"
@@ -300,6 +301,7 @@ export function Fixture() {
             className={`mx-auto flex min-h-0 w-full flex-1 ${narrow ? "max-w-[760px]" : "max-w-[1280px]"}`}
           >
             <main className="flex min-w-0 flex-1 flex-col">
+              <HostConnectionNotice />
               <AcpPanel />
               <Composer />
             </main>

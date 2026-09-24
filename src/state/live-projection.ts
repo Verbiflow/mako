@@ -15,7 +15,7 @@ export interface LiveProjection {
   plan: AcpPlanEntry[]
   files: TouchedFile[]
 }
-type ProjectionInput = Pick<LiveSnapshot, "blocks" | "base" | "baseCoveredBlocks"> & {
+type ProjectionInput = Pick<LiveSnapshot, "blocks" | "base" | "baseCoveredBlocks" | "history"> & {
   session: Pick<LiveSnapshot["session"], "status" | "harness">
   requests?: LiveSnapshot["requests"]
 }
@@ -42,7 +42,7 @@ export function projectLive(
       snapshot.blocks,
       snapshot.session.status === "running",
       snapshot.session.harness,
-      held.cursor
+      { ...held.cursor, offset: snapshot.history?.blockStart, token: snapshot.history?.token }
     )
     const tail = reconcileMessages(
       previous.messages.slice(held.messageStart),
@@ -101,7 +101,8 @@ export function projectLive(
     blocks,
     snapshot.session.status === "running",
     snapshot.session.harness,
-    { start: snapshot.baseCoveredBlocks ?? 0, turn: 0, plan: [] }
+    { start: localCovered(snapshot), turn: snapshot.history?.turnStart ?? 0, plan: [],
+      offset: snapshot.history?.blockStart, token: snapshot.history?.token }
   )
   const base = snapshot.base
     ? threadToMessages(
@@ -110,6 +111,13 @@ export function projectLive(
         snapshot.base.ref.harness
       )
     : []
+  if (snapshot.history) {
+    const token = snapshot.history.token
+    for (const message of base)
+      message.blocks = message.blocks.map(block => block.type === "toolResult" && block.rest && "at" in block.rest
+        ? { ...block, rest: { length: block.rest.length, live: { token, at: { kind: "base", ...block.rest.at } } } }
+        : block)
+  }
   const messages = reconcileMessages(
     previous?.messages ?? [],
     foldTools([...base, ...live.messages])
@@ -134,6 +142,8 @@ function canProjectTail(
     held.pending !== pending ||
     held.input.base !== input.base ||
     held.input.baseCoveredBlocks !== input.baseCoveredBlocks ||
+    held.input.history?.blockStart !== input.history?.blockStart ||
+    held.input.history?.token !== input.history?.token ||
     held.input.requests !== input.requests ||
     held.input.session.status !== input.session.status ||
     held.input.session.harness !== input.session.harness ||
@@ -159,14 +169,14 @@ function remember(
   previous?: ProjectionCache
 ): void {
   const start = Math.max(
-    input.baseCoveredBlocks ?? 0,
+    localCovered(input),
     input.blocks.findLastIndex(
       (block) => block.type === "user" && !block.steeringFor
     )
   )
-  let turn = previous?.cursor.turn ?? 0
+  let turn = previous?.cursor.turn ?? input.history?.turnStart ?? 0
   let plan = previous?.cursor.plan ?? []
-  for (let index = previous?.cursor.start ?? input.baseCoveredBlocks ?? 0; index < start; index++) {
+  for (let index = previous?.cursor.start ?? localCovered(input); index < start; index++) {
     const block = input.blocks[index]
     if (block?.type === "user" && !block.steeringFor) turn++
     if (block?.type === "plan") plan = block.entries
@@ -176,7 +186,7 @@ function remember(
     user?.type === "user"
       ? user.requestId
         ? `acp-request-${user.requestId}`
-        : `acp-user-${start}`
+        : `acp-user-${start + (input.history?.blockStart ?? 0)}`
       : undefined
   const unchanged = previous?.cursor.start === start
   const messageStart = unchanged
@@ -221,6 +231,7 @@ export function projectAcp(conversation: AcpConversation): LiveProjection {
       blocks: conversation.blocks,
       base: conversation.base ?? null,
       baseCoveredBlocks: conversation.baseCoveredBlocks,
+      history: conversation.history,
       requests: conversation.requests,
       session:
         conversation.kind === "live"
@@ -230,4 +241,8 @@ export function projectAcp(conversation: AcpConversation): LiveProjection {
     conversation.projection,
     conversation.pendingPrompts
   )
+}
+
+function localCovered(input: ProjectionInput): number {
+  return Math.max(0, (input.baseCoveredBlocks ?? 0) - (input.history?.blockStart ?? 0))
 }

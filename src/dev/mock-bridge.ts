@@ -1327,6 +1327,10 @@ export function installMockBridge() {
     }),
     liveAttach: async () => null,
     liveSnapshot: async (id: string) => liveSnapshots.get(id) ?? null,
+    liveRead: async (id: string) => {
+      const data = JSON.stringify(await window.mako!.liveSnapshot(id))
+      return { record: "00000000-0000-4000-8000-000000000001", offset: 0, data, total: data.length, next: null }
+    },
     liveContinue: async (id, _bindingId, requestId, text, attachments, tuning) => {
       await window.mako!.livePrompt(id, requestId, text, attachments, tuning)
       const snapshot = await window.mako!.liveSnapshot(id)

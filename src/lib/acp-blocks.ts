@@ -18,10 +18,9 @@ export function acpBlocksToMessages(
   blocks: AcpBlock[],
   running: boolean,
   provider?: string,
-  cursor?: { start: number; turn: number; plan: AcpPlanEntry[] }
+  cursor?: { start: number; turn: number; plan: AcpPlanEntry[]; offset?: number; token?: string }
 ): AcpConversation {
   const messages: ChatMessage[] = []
-  const prompts = new Map<string, string>()
   let plan: AcpPlanEntry[] = cursor?.plan ?? []
   let assistant: ChatMessage | null = null
   let turn = cursor?.turn ?? 0
@@ -42,6 +41,7 @@ export function acpBlocksToMessages(
 
   for (let index = cursor?.start ?? 0; index < blocks.length; index += 1) {
     const block = blocks[index]!
+    const absolute = index + (cursor?.offset ?? 0)
     switch (block.type) {
       case "user":
         turnProvider = block.provider ?? provider
@@ -50,31 +50,29 @@ export function acpBlocksToMessages(
         messages.push({
           id: block.requestId
             ? `acp-request-${block.requestId}`
-            : `acp-user-${index}`,
+            : `acp-user-${absolute}`,
           requestId: block.requestId,
           role: "user",
           steeringFor: block.steeringFor
-            ? prompts.get(block.steeringFor)
+            ? `acp-request-${block.steeringFor}`
             : undefined,
           blocks: [
             { type: "text", text: block.text },
             ...(block.attachments ?? []),
           ],
         })
-        if (block.requestId)
-          prompts.set(block.requestId, `acp-request-${block.requestId}`)
         break
       case "proposed-plan":
-        append(block, index)
+        append(block, absolute)
         break
       case "text":
-        append({ type: "text", text: block.text }, index)
+        append({ type: "text", text: block.text }, absolute)
         break
       case "attachment":
-        append(block.attachment, index)
+        append(block.attachment, absolute)
         break
       case "thinking":
-        append({ type: "thinking", thinking: block.text }, index)
+        append({ type: "thinking", thinking: block.text }, absolute)
         break
       case "tool": {
         const name = liveToolName(block.toolKind, block.title)
@@ -86,7 +84,7 @@ export function acpBlocksToMessages(
             kind: block.toolKind,
             arguments: block.input,
           },
-          index
+          absolute
         )
         const failed = block.status === "failed"
         const canceled = /cancel/i.test(block.status)
@@ -109,8 +107,10 @@ export function acpBlocksToMessages(
               streaming: !finished,
               attachments: block.attachments,
               details: block.details,
+              rest: block.historyRest && cursor?.token ? { length: block.historyRest.length,
+                live: { token: cursor.token, at: { kind: "live", index: block.historyRest.index } } } : undefined,
             },
-            index
+            absolute
           )
         }
         break
@@ -120,12 +120,12 @@ export function acpBlocksToMessages(
         append(
           {
             type: "toolResult",
-            id: `plan-${index}`,
+            id: `plan-${absolute}`,
             name: "Plan",
             text: "",
             details: [{ type: "plan", entries: block.entries }],
           },
-          index
+          absolute
         )
         break
     }

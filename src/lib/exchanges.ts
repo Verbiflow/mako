@@ -122,6 +122,18 @@ export function toExchanges(
         steered.response.push(message)
         continue
       }
+      if (message.steeringFor) {
+        // Its question may be on an earlier page. Keep a steer in the answer
+        // until that page arrives; it must not become a new question.
+        let leading = exchanges[0]?.id === LEAD_EXCHANGE_ID ? exchanges[0] : undefined
+        if (!leading) {
+          leading = { id: LEAD_EXCHANGE_ID, response: [], system: [] }
+          exchanges.unshift(leading)
+        }
+        current ??= leading
+        leading.response.push(message)
+        continue
+      }
       current = {
         id: message.id,
         prompt: message,
