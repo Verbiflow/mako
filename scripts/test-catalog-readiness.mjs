@@ -21,6 +21,7 @@ const state = {
   scan: deferred(),
   prepare: Promise.resolve(),
   daemonEnabled: false,
+  sharedEnabled: false,
   list: null,
 }
 globalThis.__catalogReadinessTest = state
@@ -104,6 +105,7 @@ state.Worker = class extends EventEmitter {
   }
 }
 const mocks = {
+  "./catalog-connection.js": `export const connectOnDemandCatalog = async () => globalThis.__catalogReadinessTest.sharedEnabled ? globalThis.__catalogReadinessTest.connect() : null;`,
   electron: `export const app = { getPath: () => globalThis.__catalogReadinessTest.root };`,
   "node:worker_threads": `export class MessageChannel { port1 = { close() {} }; port2 = {} }; export const Worker = globalThis.__catalogReadinessTest.Worker;`,
   "@mako/sessions": `const s = globalThis.__catalogReadinessTest;
@@ -399,6 +401,32 @@ try {
   assert.ok(!threads.listThreads().some(ref => ref.path === "old-catalog"))
   assert.equal(threads.threadsReady(), true)
   threads.stopThreads()
+
+  // Login opt-out still shares an on-demand reader; disconnection recovers once.
+  state.daemonEnabled = false
+  state.sharedEnabled = true
+  state.list = deferred()
+  const workerCount = state.workers.length
+  install()
+  assert.equal((await threads.pageThread("cursor")).ref.harness, "cursor")
+  assert.equal(threads.threadsReady(), false)
+  assert.equal(state.workers.length, workerCount)
+  const shared = state.clients.at(-1)
+  const staleSharedList = state.list
+  state.list = null
+  shared.close()
+  const recovered = await Promise.all(providers.map(provider => threads.pageThread(provider)))
+  assert.deepEqual(recovered.map(page => page.ref.harness), providers)
+  assert.equal(state.clients.at(-1).closed, false)
+  assert.equal(state.workers.length, workerCount)
+  staleSharedList.resolve([{harness:"codex",path:"stale-shared-reader"}])
+  await tick()
+  assert.ok(!threads.listThreads().some(ref => ref.path === "stale-shared-reader"))
+  assert.equal(threads.threadsReady(), true)
+  threads.stopThreads()
+  assert.equal(state.clients.at(-1).closed, true)
+  await tick()
+  assert.equal(state.workers.length, workerCount, "stop does not start another reader")
 
   console.log(
     "Catalog readiness: all-six/future reads, missing source, follow replacement, recovery/fallback, failure and stop/reinstall passed"

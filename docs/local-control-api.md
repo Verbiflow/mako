@@ -1,21 +1,23 @@
 # Local Control API
 
-The public agent interface is the task-owned `mako-control` CLI for browser and
-computer use. `mako-control --help` works offline; command-specific help includes
-arguments, results, exit codes and examples. `api --topic examples` supplies
-complete scripts; native schema help connects the driver only when requested.
+Mako agents use the `mako-control` MCP `js` tool for browser and computer use.
+The initialized `control` SDK supports top-level await and persistent JavaScript
+bindings. Start with `await control.browsers()` or `await control.apps()`; read the
+returned documentation before acting. The last expression prints compact JSON.
+Use `console.log(value)` for additional evidence and `emitImage(...)` for images.
 
-```sh
-printf '%s' 'return await control.browsers()' | mako-control exec --source-file -
-```
+`control.help({topic:"actions"})` returns focused signatures and examples in the
+current execution syntax. `control.rewriteDocumentation()` restores instructions
+after compaction. `js_reset` clears program bindings and shared `state`, preserving
+owned targets and recordings. Ordinary errors preserve bindings; timeout,
+cancellation and worker failure reset them. Earlier actions may have completed:
+observe the exact target before deciding what to do next, never replay a program.
 
-`exec` takes an async JavaScript body and waits for its result. It never returns a
-continuation ticket. Await calls and return only needed evidence. Keep handles in
-`state` across commands; ordinary errors preserve it, while cancellation and
-timeout reset the worker. Top-level declarations do not persist. Callbacks from
-completed programs cannot acquire a later program's authority. Invalid arguments
-report `invalid-request` / `not-dispatched` for that operation; earlier steps may
-have completed. Correct only the failed step.
+The composable `mako-control` CLI and Node SDK use the same TypeScript engine,
+leases, observations, input guards and recording lifecycle. The MCP adapter calls
+that engine directly, without CLI subprocesses. CLI `exec --source-file` takes an
+async function body with `return`; only `state` persists between those scripts.
+The examples below use MCP syntax. Neither interface returns continuation tickets.
 
 ## Preferred browser
 
@@ -48,7 +50,7 @@ const inventory = await control.app({pid: 123}).windows();
 const selected = inventory.windows.find(w => w.title === 'My document');
 if (!selected) throw new Error('Document window missing');
 state.window = control.window({pid: 123, window_id: selected.window_id});
-return await state.window.observe();
+await state.window.observe();
 ```
 
 Window selection is explicit. A missing window never falls back to another one.
@@ -59,7 +61,7 @@ selecting a target. Known targets can be bound directly without rediscovery.
 ```js
 state.tab = await control.openTab({browser: 'known-browser-id', url: 'https://example.com'});
 // For a discovered existing tab: control.claimTab({browser, tab}).
-return await state.tab.observe();
+await state.tab.observe();
 ```
 
 Tab handles retain exact browser, tab, generation and lease identity. Defaults
@@ -75,7 +77,7 @@ const receipt = await state.tab.setValue(email.ref, 'alice@example.com');
 const proof = await state.tab.expect({
   role: 'textbox', name: 'Email', value: 'alice@example.com'
 });
-return {receipt, proof};
+({receipt, proof});
 ```
 
 Window handles have the same observation, assertion and input methods. Native
@@ -179,7 +181,7 @@ Diffs ignore ref churn; removed lines contain no actionable old refs.
 ```js
 const before = await state.window.observe();
 state.before = before;
-return before.select({roles: ['TextField', 'Button'], max: 20});
+before.select({roles: ['TextField', 'Button'], max: 20});
 ```
 
 No observation emits a screenshot automatically. Capture explicitly:
@@ -216,7 +218,7 @@ remain unknown even if their cause is a response-schema error. Common examples
 are available in `mako-control api --topic examples`; replace example labels
 with exact names from your observation.
 
-Control failures preserve a `code` and an `outcome` across worker and CLI
+Control failures preserve a `code` and an `outcome` across worker, MCP and CLI
 boundaries: `not-dispatched`, `rejected`, or `unknown`. An unknown outcome may
 have changed the UI. Observe the affected target before deciding what to do;
 do not retry merely because a transport failed. High-level input is blocked
@@ -266,7 +268,7 @@ automatically. Mako retains ownership for cleanup until the tab actually closes.
 const form = state.tab.locator({role: 'form', name: 'Shipping'});
 await form.locator({role: 'textbox', name: 'Address'}).setValue('42 Lake Street');
 await form.locator({role: 'button', name: 'Save'}).click();
-return await form.read({max: 40});
+await form.read({max: 40});
 ```
 
 Locators store selectors, resolve a fresh exact match before each action and
@@ -302,7 +304,7 @@ state.recording = await state.tab.record({
   maxDurationMs: 120000,
   maxSide: 1600
 });
-return state.recording;
+state.recording;
 ```
 
 Browser previews and recordings share a temporary CDP focus-emulation hold.
@@ -334,9 +336,9 @@ foreground drag, MPX and Wayland gesture cursors still need separate evidence. R
 does not relax an operation's foreground requirement.
 
 ```js
-return await state.recording.stop();
+await state.recording.stop();
 // In a later cell, inspect completion without repeating stop or input:
-return await state.recording.status();
+await state.recording.status();
 ```
 
 `stop()` begins finalization. Receipts report `recording`, `finalizing`,
@@ -395,7 +397,7 @@ visible DOM text. Selectors use strings, not regular expressions.
 ```js
 emitImage(await state.tab.locator({role:'button',name:'Save'}).screenshot({maxSide:2048}))
 state.recording = await state.tab.record({name:'Save workflow',fps:60,maxSide:1920})
-return await state.recording.stop()
+await state.recording.stop()
 ```
 
 Recording start requires a real persisted frame. No-frame startup refuses without
@@ -430,15 +432,15 @@ the mutation, then observe again. Dialog replies and event reads can run while
 navigation is waiting. Answering a currently open dialog does not verify or retry
 the preceding action.
 
-Cancelling exec stops its script worker; any dispatched action still needs
+Cancelling a program stops its script worker; any dispatched action still needs
 observation before further input. A cancelled recording finalization waiter does
 not discard the recording; inspect its exact receipt through record status.
 
-## Shared shell session and browser-wide ownership
+## Shared task session and browser-wide ownership
 
 [Composable CLI commands](local-control-cli.md) use `createControlSession` through
-a private Unix socket. The desktop supervisor supplies the exact CLI/session to
-the provider at task launch; Linux session start returns its descriptor.
+a private Unix socket. The desktop supervisor supplies the task-bound MCP endpoint and matching CLI/session
+to the provider at launch; Linux session start returns its descriptor.
 Shell commands preserve the same target generations, refs, recordings and script
 state. `diagnostics` returns bounded command/request metadata without arguments
 or page contents. A normal shell command exiting does not close the engine.

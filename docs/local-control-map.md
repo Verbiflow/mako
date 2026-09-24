@@ -2,7 +2,7 @@
 
 Updated 2026-09-24. This is the current plan for browser and computer control across
 all harnesses, desktop Mac and isolated Linux cloud jobs. The goal is accurate,
-responsive complete workflows with a composable API and CLI. Full ChatGPT/Codex
+responsive complete workflows through a typed engine, agent MCP and composable CLI. Full ChatGPT/Codex
 parity has not been established.
 
 ## Start here
@@ -11,9 +11,9 @@ parity has not been established.
 - **Every complaint from the agent:** [issue ledger](local-control-agent-issues.md),
   including findings that were corrected, not reproduced, or remain open.
 - **Architecture:** [ownership boundaries, diagnostics and change tests](local-control-architecture.md).
-- **CLI discovery and adherence:** [LC-29](#lc-29--cli-discovery-and-agent-adherence) is active: inspect actual startup delivery and unprompted CLI use, not just successful commands.
+- **CLI discovery and adherence:** [LC-29](#lc-29--cli-discovery-and-agent-adherence) is active: implement and validate the unified MCP integration, including ordinary agent discovery.
 - **CLI refactor:** [shared engine and shell contract](local-control-cli.md).
-  CLI-only source acceptance passes; installed-host rollout remains open.
+  Prior CLI-only acceptance is historical; MCP-first integration supersedes that delivery choice.
 - **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
 - **Interactive streaming:** [reference findings, transport experiments and local/remote scope](local-control-streaming.md).
 - **Streaming choice and VNC:** [Selkies/pixelflux prototype, Moonlight comparison and compatibility boundary](local-control-streaming.md#september-24-selection-browser-streaming-moonlight-and-vnc).
@@ -80,11 +80,13 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Active priority (September 24): finish CLI-only browser and computer use.**
-The user explicitly chose removal of the public Local Control MCP adapter, not an
-optional compatibility mode. Streaming investigation/implementation is paused
-until this migration passes its correctness, usability, lifecycle and packaging
-checks. Preserve the existing browser/native functionality, lossless values,
+**Active priority (September 24, revised): SDK + composable CLI + persistent JS MCP.**
+After reviewing the current unified cua_repl evidence, the user explicitly replaced
+the CLI-only Mako integration decision. Mako agents should discover browser and
+computer use through one persistent JavaScript MCP adapter, calling the shared
+SDK/session directly, never spawning CLI commands. The CLI remains a first-class
+interface for external users and file pipelines. Streaming work stays behind this
+integration’s correctness, discovery, lifecycle and packaging acceptance. Preserve the existing browser/native functionality, lossless values,
 exact target checks, background policy and recording cleanup. Agent-friendly
 per-command help, composable files/stdin and minimal startup/context cost are
 required acceptance criteria, not follow-up polish.
@@ -119,8 +121,10 @@ Statuses below distinguish implementation from deployment and broader acceptance
 `createControlSession` owns program state, native policy, target evidence,
 recovery and recordings. Desktop task supervisors start one worker and supply an
 exact CLI shim/session descriptor through every provider launch path. Browser
-credentials stay in worker IPC. The public MCP adapter, managed injection, export
-and launcher are deleted. Private Cua protocol and unrelated MCPs remain.
+credentials stay in worker IPC. The old status/help/exec MCP adapter and launcher
+were deleted. The September 24 revised decision adds a persistent-JS MCP adapter
+that borrows this same engine; LC-29 owns its implementation and acceptance.
+Private Cua protocol and unrelated MCPs remain.
 
 CLI command/group help works offline, with signatures, outputs, examples and
 structured `--json` help. `api` loads focused runtime reference. Separate CLI
@@ -143,7 +147,8 @@ September 24 acceptance:
 - Desktop tests cover explicit stop, worker/parent SIGKILL, private-file cleanup,
   lost-worker browser ownership cleanup and stripping inherited control secrets.
 - Packed Node imports/types, relocation, code identity, worker/artifact lifecycle,
-  package bounds and secret canaries passed. No public MCP entrypoint ships.
+  package bounds and secret canaries passed for the CLI-only candidate. The new
+  `/mcp` export needs the revised package acceptance in LC-29.
 - The final shell fixture took 3.50 s; command p50 was 100 ms and p90 114 ms
   including process startup. These are fixture timings, not real-page or viewer
   latency. Four concurrent programs also preserved shared state.
@@ -650,7 +655,11 @@ runs; symbols, marketing fps and synthetic transport timings are not substitutes
 
 **Status: investigation active; user reports agents finding the CLI harder than MCP.**
 [Initial source audit, measurements and acceptance design](local-control-cli-discovery.md).
-This supplements LC-20 and LC-27; the public MCP adapter stays removed.
+This supplements LC-20 and LC-27. MCP is the primary Mako agent interface; the CLI
+is a thin optional consumer for external users. All control logic stays in the
+shared TypeScript SDK/engine. The user superseded the CLI-only decision: add
+a new persistent-JS MCP adapter over the shared session, not the retired
+status/help/exec tool collection. [Accepted design](local-control-cli-discovery.md#accepted-design-sdk-cli-and-persistent-js-mcp).
 
 Separate whether the agent discovers the available tool from whether it follows
 its targeting, observation, verification and recovery rules. Current startup
@@ -668,11 +677,15 @@ Next:
    repeated help, fabricated refs, false completion and unsafe retries. Separate
    test/development commands from actual agent use; retain no raw credentials or
    private browser content in tracked evidence.
-3. Compare a compact task-oriented bootstrap and focused help against the current
-   version. Explain when to use the CLI, exact discovery, session ownership,
-   persistent handles, files/stdin, explicit images and unknown-outcome recovery.
-   Check operational examples against the actual parser/engine. Avoid restoring
-   a large catalog to every prompt or adding another control implementation.
+3. Implement the accepted SDK/CLI/MCP boundary. Use a persistent JavaScript worker
+   with top-level await and ordinary bindings, a concise model-visible entry tool,
+   first-use documentation, focused browser/native help and explicit documentation
+   refresh after lost context. Calls go directly through the typed session client;
+   no CLI subprocess, second engine, or old numeric-cell tool shape. Preserve task
+   leases, exact observations, explicit images, cancellation and unknown outcomes.
+   Reset clears program bindings without closing the task’s targets or recordings.
+   Validate reset, timeout, ordinary errors, late callbacks, transport disconnect,
+   CLI/MCP interoperation, provider startup and packaged consumers before rollout.
 4. Run browser/native held-out jobs with the normal production startup prompt,
    without telling the agent which tool to select. Measure first correct action,
    tool adoption, help calls/bytes, invalid calls, interventions, total context,

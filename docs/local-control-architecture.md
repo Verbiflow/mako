@@ -1,6 +1,6 @@
 # Local Control architecture and change boundaries
 
-Design requirements, 2026-09-23. The [wayfinder](local-control-map.md) owns progress.
+Design requirements, revised 2026-09-24. The [wayfinder](local-control-map.md) owns progress.
 The user wants one system that can evolve without fragile cross-component fixes:
 local Mac, remote browsers and future isolated Linux jobs must reuse the browser/
 computer engine, with low-latency media where useful. Human takeover is deferred.
@@ -10,7 +10,9 @@ The session extraction is implemented locally; release acceptance is tracked in 
 
 ```mermaid
 flowchart TD
-  Harness[Harness through CLI] --> Session[Shared task session]
+  Harness[Mako agent MCP js] --> SDK[Typed SDK and program worker]
+  CLI[Optional composable CLI] --> SDK
+  SDK --> Session[Shared task session]
   Session --> Browser[Browser backend]
   Session --> Native[Native backend]
   Browser --> Capture[Owned capture and recording]
@@ -32,7 +34,7 @@ behind backend capabilities and the supervisor that actually owns the resources.
 | Task session | Program lifetime/state, authoritative grants/leases, observation/ref validity, action ordering, uncertainty and cancellation. | Separate command/viewer ownership maps or target selection based on whichever process happens to answer. |
 | Browser/native backend | Exact target attachment, backend input/capture mechanisms, supported capabilities and truthful results. | A false promise that every backend supports the same gestures, capture scope, background delivery or frame rate. |
 | Capture and recording owner | Shared source lifetime, actual geometry/timestamps, bounded subscribers, interruption and artifact finalization. | Consumer-managed stream start/stop races, recording geometry inferred from viewport metadata, or preview quality silently defining saved evidence. |
-| CLI/viewer adapters | Request validation/formatting, transport lifecycle and consumer subscriptions. | Another planner, automatic action replay, a second ref cache or private input shortcuts. |
+| MCP/CLI/viewer adapters | Request validation/formatting, transport lifecycle and consumer subscriptions. | Another planner, automatic action replay, a second ref cache or private input shortcuts. |
 | Process supervisor | Launch, readiness, resource limits, process groups, shutdown and artifact retention for resources it owns. | Assuming Electron, a user desktop or a cloud provider is always present; destroying a shared user browser as if it were an owned test process. |
 
 These are ownership boundaries, not a requirement to create six new packages or
@@ -114,7 +116,7 @@ Diagnostics must have an instrumentation-overhead check of their own.
 
 | Change exercise | Acceptance criterion |
 | --- | --- |
-| Replace public MCP with CLI | Same session engine and backend jobs; adapter-specific code covers parsing, output, exit codes and connection lifetime. No duplicated action policy or targets. |
+| Add or change an agent/CLI adapter | Same session engine and backend jobs; adapter-specific code covers parsing, output, exit codes and connection lifetime. No duplicated action policy or targets. |
 | Swap JPEG delivery for a measured media candidate | Input/observation contracts and artifact fidelity are unchanged; only media adapter/capability and viewer integration change. Existing streams retain scoped cleanup. |
 | Add a Linux capture/compositor route | Backend implementation, capability registration and conformance fixtures change. Harness/CLI command handlers need no per-compositor branches. |
 | Inject a detach after input dispatch | Every adapter reports unknown outcome, prevents unsafe continuation and requires fresh evidence. A fresh unrelated target still works. |
@@ -133,8 +135,10 @@ independent saved state and no-replay checks while optimizing.
    contract. Establish the diagnostic fields needed to compare implementations.
 2. Extract the task-session owner from MCP registration without changing callers'
    behavior. Test it with injected backend/transport faults and shutdown races.
-3. Move session startup into task supervisors; migrate callers to the composable
-   CLI and delete public MCP. Verify truthful capabilities and consistent outcomes.
+3. Keep session startup in task supervisors. Mako agents use persistent-JS MCP
+   over the typed engine; the optional CLI borrows the same session. Retire the
+   former status/help/exec tools. Verify discovery, cancellation, truthful
+   capabilities and consistent outcomes. This supersedes the CLI-only decision.
 4. Add the measured media transport/capture changes behind that owner. Keep local,
    remote-browser and isolated-Linux composition explicit at startup.
 5. Remove superseded paths, duplicated caches, timers, compatibility branches and

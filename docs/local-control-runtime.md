@@ -1,7 +1,8 @@
 # Local Control on desktop and cloud
 
-Local Control does not require Electron. Agents use the Node CLI and shared
-session engine, the native driver and a private Linux desktop. The native
+Local Control does not require Electron. Mako agents use the persistent JavaScript MCP adapter over the shared TypeScript
+engine; external callers can use its Node SDK or basic CLI. Native Linux jobs also
+need the driver and a private desktop. The native
 driver's internal protocol is not a public MCP adapter. The runtime dependency
 manifest contains no Electron or provider runtime. Browser
 control is also a Node service; Electron is an adapter for controlling Mako’s

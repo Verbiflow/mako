@@ -36,9 +36,7 @@ if (!worker) {
   assert.equal(await realpath(process.execPath), await realpath(executable))
   const archive = join(app, "Contents/Resources/app.asar")
   const require = createRequire(join(archive, "package.json"))
-  assert.throws(() => require.resolve("@mako/control-runtime/mcp"), {
-    code: "ERR_PACKAGE_PATH_NOT_EXPORTED",
-  })
+  const { createControlMcpServer } = await import(pathToFileURL(require.resolve("@mako/control-runtime/mcp")).href)
   const manifest = JSON.parse(
     await readFile(
       join(archive, "node_modules/@mako/control-runtime/package.json"),
@@ -54,6 +52,12 @@ if (!worker) {
     taskId: "packaged-cli",
   })
   try {
+    const adapter = createControlMcpServer(owner.request)
+    await adapter.close()
+    const initialized = await owner.request({method:"js",code:"let packaged=41; packaged",timeout_ms:5000}, AbortSignal.timeout(7000))
+    assert.equal(initialized.isError, undefined, JSON.stringify(initialized))
+    const continued = await owner.request({method:"js",code:"++packaged",timeout_ms:5000}, AbortSignal.timeout(7000))
+    assert.match(JSON.stringify(continued), /42/)
     const help = JSON.parse(
       (await run(owner.launch.command, ["shot", "--help", "--json"])).stdout
     )

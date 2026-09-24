@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { readFile } from "node:fs/promises"
 import { setTimeout as delay } from "node:timers/promises"
 import { ControlSessions } from "../electron/control-sessions.js"
@@ -17,6 +20,11 @@ const browsers = new BrowserService([fixture.definition])
 const service = await startControlService(browsers, () => {})
 const sessions = new ControlSessions(async () => undefined)
 const reasons: string[] = []
+const grants = await startConversationMcp({
+  authorizeAgent: (conversationId, bindingId) => { assert.equal(conversationId, "conversation"); assert.equal(bindingId, "binding") },
+  availableProviders: () => [], delegate: async () => {}, childTasks: () => [], cancelChild: () => {},
+}, (bindingId, operation, signal) => sessions.request(bindingId, operation, signal))
+const agent = new Client({ name: "desktop-agent", version: "1" })
 try {
   const launch = await sessions.start(
     "binding",
@@ -38,6 +46,28 @@ try {
   assert.equal(env.MAKO_CONTROL_SESSION_FILE, launch.sessionFile)
   assert.ok(env.PATH?.startsWith(launch.bin))
   assert.ok(controlLaunchInstructions(launch).includes(launch.command))
+  const grant = grants.mint("binding", "conversation")
+  assert.ok(grant.controlUrl)
+  await agent.connect(new StreamableHTTPClientTransport(new URL(grant.controlUrl), {
+    requestInit: { headers: { Authorization: `Bearer ${grant.token}` } },
+  }))
+  assert.deepEqual((await agent.listTools()).tools.map(t => t.name), ["js", "js_reset"])
+  const result = await agent.callTool({ name: "js", arguments: { code: 'await control.browsers()' } })
+  assert.equal(result.isError, undefined, JSON.stringify(result))
+  assert.match(JSON.stringify(result), /Mako browser and computer use/)
+  const retained = await agent.callTool({ name: "js", arguments: { code: 'let retained=41; retained' } })
+  assert.equal(retained.isError, undefined)
+  const resumed = await agent.callTool({ name: "js", arguments: { code: '++retained' } })
+  assert.match(JSON.stringify(resumed), /42/)
+  const interrupted = new AbortController()
+  const running = agent.callTool({ name: "js", arguments: { code: 'await new Promise(r=>setTimeout(r,5000)); state.tooLate=true' } }, undefined, { signal: interrupted.signal })
+  await delay(100)
+  interrupted.abort()
+  await assert.rejects(running)
+  const recovered = await agent.callTool({ name: "js", arguments: { code: 'typeof retained' } })
+  assert.equal(recovered.isError, undefined, JSON.stringify(recovered))
+  assert.match(JSON.stringify(recovered), /undefined/)
+  assert.match(JSON.stringify(recovered), /Mako browser and computer use/)
   await run(launch.command, ["connect", "--browser", "fixture"])
   await run(launch.command, ["open", "--browser", "fixture"])
   assert.equal(fixture.targets.size, 1)
@@ -53,14 +83,21 @@ try {
   }
   assert.deepEqual(reasons, ["failed"])
   assert.equal(sessions.get("binding"), undefined)
+  const gone = await agent.callTool({ name: "js", arguments: { code: 'await control.browsers()' } })
+  assert.equal(gone.isError, true)
+  assert.match(JSON.stringify(gone), /session-closed/)
+  grants.revoke("binding", "conversation")
+  await assert.rejects(agent.listTools(), {code:401})
   await sessions.close()
   await assert.rejects(sessions.start("late"), /closing/)
   applyControlEnvironment(env)
   assert.equal(env.MAKO_CONTROL_SESSION_FILE, undefined)
   console.log(
-    "Desktop owner: exact CLI environment without browser credentials, lost-worker browser cleanup, late-start refusal"
+    "Desktop owner: real HTTP MCP persistent bindings, routed cancellation, revoked/failed task refusal, shared worker cleanup and credential isolation"
   )
 } finally {
+  await agent.close()
+  grants.close()
   await sessions.close()
   await service.close()
   browsers.close()

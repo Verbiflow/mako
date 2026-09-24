@@ -41,7 +41,7 @@ try {
   const { serveControlSession, controlSessionBuild: installedBuild } = await load("@mako/control-runtime/session")
   assert.equal(await installedBuild(), await controlSessionBuild(), "Identity survives archive installation and relocation")
   assert.throws(() => require.resolve("@mako/control-runtime/dist/control-session.js"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" })
-  assert.throws(() => require.resolve("@mako/control-runtime/mcp"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" })
+  const { createControlMcpServer, controlAgent } = await load("@mako/control-runtime/mcp")
   const output = join(directory, "output")
   await mkdir(output)
   const empty = createControlRuntime({ artifacts: output })
@@ -51,6 +51,13 @@ try {
   await empty.close()
   runtime = createControlRuntime({ artifacts: output, browsers: [fixture.definition] })
   shell = await serveControlSession(runtime)
+  const agentRequest = controlAgent(runtime)
+  const initialized = await agentRequest({method:"js",code:"let packed=41; packed",timeout_ms:5000}, AbortSignal.timeout(7000))
+  assert.equal(initialized.isError, undefined, JSON.stringify(initialized))
+  const continued = await agentRequest({method:"js",code:"++packed",timeout_ms:5000}, AbortSignal.timeout(7000))
+  assert.match(JSON.stringify(continued), /42/)
+  const adapter = createControlMcpServer(agentRequest)
+  await adapter.close()
   const cli = require.resolve("@mako/control-runtime/cli")
   async function command(args, input = "", expectedExit = 0) {
     const child = spawn(process.execPath, [cli, ...args, "--session-file", shell.file], { cwd: directory, stdio: ["pipe", "pipe", "pipe"] })
@@ -88,11 +95,14 @@ try {
   await writeFile(join(directory, "consumer.ts"), `
 import { createControlRuntime, type ControlRuntimeOptions } from '@mako/control-runtime';
 import { serveControlSession } from '@mako/control-runtime/session';
+import { createControlMcpServer, controlAgent } from '@mako/control-runtime/mcp';
 import { BrowserService } from '@mako/control-runtime/browser';
 import { startDesktopControlSession } from '@mako/control-runtime/session';
 import { controlClient } from '@mako/control/control';
 const options: ControlRuntimeOptions = {artifacts:'/tmp/example'};
 const runtime = createControlRuntime(options);
+const adapter = createControlMcpServer(controlAgent(runtime));
+await adapter.close();
 const host = new BrowserService([]);
 const client = controlClient((action, args) => runtime.call({action, ...args}, new AbortController().signal));
 const page = client.tab({kind:'page',browser:'job',tab:'one',lease:'lease',generation:'one'});

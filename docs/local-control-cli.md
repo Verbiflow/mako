@@ -1,13 +1,21 @@
 # Composable Local Control commands
 
-CLI-only source and signed-candidate acceptance pass for browser and native computer use. The
+Historical CLI-only source and signed-candidate acceptance passed for browser and native computer use. The
 idle installation and installed checks are tracked in the
 [deployment receipt](local-control-cli-deployment.json); see
 [Wayfinder LC-20](local-control-map.md#lc-20--shared-engine-and-composable-cli).
 The [architecture contract](local-control-architecture.md) owns the boundaries;
 the [issue ledger](local-control-agent-issues.md) tracks the original agent failures.
 
-## CLI-only migration
+## Current integration
+
+Mako agents now primarily use the persistent JavaScript MCP adapter. The CLI is
+an optional composable interface for external callers; both borrow the same task
+engine. The previous CLI-only delivery decision below is superseded by
+[LC-29](local-control-map.md#lc-29--cli-discovery-and-agent-adherence). Its tests
+remain evidence for the underlying engine, not acceptance of the new MCP adapter.
+
+## Earlier CLI-only migration
 
 The September 24 source now starts task-owned desktop workers independently of
 MCP. Codex, ACP providers, Claude SDK and Cursor SDK receive an exact CLI shim on
