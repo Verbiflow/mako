@@ -7,6 +7,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
+    "./jsonl": "./dist/jsonl.js",
     ".": "./dist/index.js",
     "./tool-output": "./dist/tool-output.js",
     "./content": "./dist/content.js",

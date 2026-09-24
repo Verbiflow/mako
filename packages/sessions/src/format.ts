@@ -271,7 +271,7 @@ export function userTextFrom(text: string | undefined): string | undefined {
   // Strip only complete leading metadata envelopes, preserving the request after them.
   let body = text.trim()
   const envelope =
-    /^<(skill|rules|available_skills|recommended_plugins|environment_context|user_instructions|system_info|system_instruction|app-context|multi_agent_mode|additional_metadata|task-notification|command-name|command-message|local-command|system-reminder)(?:\s[^>]*)?>[\s\S]*?<\/\1>\s*/i
+    /^<(mako-local-control|skill|rules|available_skills|recommended_plugins|environment_context|user_instructions|system_info|system_instruction|app-context|multi_agent_mode|additional_metadata|task-notification|command-name|command-message|local-command|system-reminder)(?:\s[^>]*)?>[\s\S]*?<\/\1>\s*/i
   while (envelope.test(body)) body = body.replace(envelope, "").trimStart()
   const lines = body.split("\n")
   const firstAt = lines.findIndex((line) => line.trim())

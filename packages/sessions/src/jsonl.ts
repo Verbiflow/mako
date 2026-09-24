@@ -89,14 +89,17 @@ export async function readHead(path: string, bytes: number): Promise<string> {
  * truncation); reading restarts from zero so offsets never point into a file
  * that no longer exists in that shape.
  */
-async function readLineBatch(
+export async function readLineBatch(
   path: string,
   fromByte: number,
-  onLine: (line: string) => void | boolean
+  onLine: (line: string) => void | boolean,
+  evidence?: { identity: string; strict: true }
 ): Promise<LineRead> {
   const handle = await open(path, "r")
   try {
     const info = await handle.stat()
+    if (evidence && evidence.identity !== `${info.dev}:${info.ino}`)
+      throw new Error("Native evidence source changed while opening")
     const size = info.size
     const reset = size < fromByte
     let cursor = reset ? 0 : fromByte
@@ -125,6 +128,7 @@ async function readLineBatch(
           if (!skipping) {
             const segment = chunk.subarray(start, read.bytesRead)
             if (carryBytes + segment.length > MAX_LINE_BYTES) {
+              if (evidence?.strict) throw new Error("Native evidence record exceeds the read limit")
               carry = []
               carryBytes = 0
               skipping = true
@@ -164,6 +168,7 @@ async function readLineBatch(
             }
           }
         } else {
+          if (evidence?.strict) throw new Error("Native evidence record exceeds the read limit")
           carry = []
           carryBytes = 0
           consumed = nextByte
