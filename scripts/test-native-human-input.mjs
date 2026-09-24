@@ -1,3 +1,4 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -5,8 +6,6 @@ import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
 import { resolveExecutable } from "../dist-electron/executable.js"
 
@@ -17,7 +16,7 @@ const root = await mkdtemp(join(tmpdir(), "mako-human-input-"))
 const evidence = { status: "preparing", root, jobs: [] }
 const processes = []
 const fixturePids = []
-const client = new Client({ name: "physical-input-acceptance", version: "1" })
+const client = new ControlCliProbe({ name: "physical-input-acceptance", version: "1" })
 const read = async name => JSON.parse(await readFile(join(root, name + ".json"), "utf8"))
 async function until(fn, timeout = 10000) {
   const end = Date.now() + timeout
@@ -25,12 +24,8 @@ async function until(fn, timeout = 10000) {
   throw Error("Timed out waiting for scratch fixture")
 }
 async function cell(source) {
-  let output = await client.callTool({ name: "mako_control_exec", arguments: { source } }, undefined, { timeout: 70000 })
-  for (;;) {
-    const receipt = JSON.parse(output.content.find(block => block.type === "text")?.text ?? "{}")
-    if (receipt.status !== "running") break
-    output = await client.callTool({ name: "mako_control_exec", arguments: { cell: receipt.cell } }, undefined, { timeout: 70000 })
-  }
+  let output = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   const result = JSON.parse(output.content.filter(block => block.type === "text").at(-1).text)
   if (output.isError || (result.code && result.outcome)) throw Error(JSON.stringify(result))
   return result
@@ -53,8 +48,7 @@ try {
   evidence.driver = (await run(driver, ["--version"])).stdout.trim()
   const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.human-input")
   assert.ok(socket)
-  await client.connect(new StdioClientTransport({ command: process.execPath,
-    args: [resolve("packages/control-runtime/dist/computer-tools-main.js"), "--driver", driver, "--socket", socket], env: { ...process.env }, stderr: "inherit" }))
+  await client.start({native:{driver:driver,socket:socket},env:{ ...process.env }})
   await cell(`state.window=control.window({pid:${target.pid},window_id:${target.window}});return await state.window.observe();`)
   evidence.status = "waiting-for-human"
   console.log(JSON.stringify({ status: evidence.status, root }))

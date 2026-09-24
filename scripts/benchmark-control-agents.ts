@@ -2,10 +2,9 @@
  * Runs a model agent against the shipped computer-control surface and
  * measures what the surface costs it: turns, wall time, prompt tokens and
  * whether the user's frontmost application ever changed. The tool the model
- * sees is the server's own `mako_computer_exec` description and the system
- * prompt is the server's own instructions; nothing here shortens or
- * rewrites a result, so a regression in the reference, the helpers or the
- * spill shows up as extra turns or tokens in the table.
+ * sees is a shell with the task-owned mako-control CLI. Command output and
+ * file receipts remain intact, so regressions in help, targeting or output
+ * handling appear as extra turns or tokens.
  *
  * Without `--live` the script checks its own task definitions (the reply
  * checkers against sample replies, a task file's shape) and exits. With
@@ -27,7 +26,6 @@
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
-  access,
   appendFile,
   mkdtemp,
   readFile,
@@ -36,13 +34,9 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import {
-  StdioClientTransport,
-  getDefaultEnvironment,
-} from "@modelcontextprotocol/sdk/client/stdio.js"
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
+import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { z } from "zod"
-import { type ControlProgramRequest } from "@mako/control/program"
 import {
   cuaEmbeddedPid,
   ensureCuaEmbedded,
@@ -464,7 +458,7 @@ interface Surface {
     args: JsonObject
   ): Promise<z.infer<typeof toolResultSchema>>
   exec(
-    request: string | ControlProgramRequest
+    request: string
   ): Promise<z.infer<typeof toolResultSchema>>
   close(): Promise<void>
 }
@@ -479,72 +473,30 @@ async function openSurface(
   )
   if (!socket)
     throw new Error("the native driver is not installed or did not start")
-  const entry = join(process.cwd(), "packages", "control-runtime", "dist", "computer-tools-main.js")
-  await access(entry).catch(() => {
-    throw new Error(
-      "The production computer server is not built. Run npm run build:electron before the benchmark."
-    )
-  })
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [
-      entry,
-      "--socket",
-      socket,
-      "--driver",
-      resolveExecutable("cua-driver"),
-      ...(surface === "legacy" ? ["--driver-test"] : []),
-    ],
-    env: {
-      ...getDefaultEnvironment(),
-      MAKO_TASK_ID: `agent-benchmark-${randomUUID()}`,
-    },
-    stderr: "pipe",
-  })
-  const client = new Client({
-    name: "mako-control-agent-benchmark",
-    version: "1",
-  })
-  await client.connect(transport)
-  const { tools } = await client.listTools()
-  const execName =
-    surface === "unified" ? "mako_control_exec" : "mako_computer_exec"
-  const exec = tools.find((tool) => tool.name === execName)
-  if (!exec) throw new Error(`the server offers no ${execName}`)
-  const call = async (name: string, args: JsonObject) =>
-    toolResultSchema.parse(
-      await client.callTool({ name, arguments: args }, undefined, {
-        timeout: 90_000,
-      })
-    )
+  if (surface === "legacy") {
+    // Internal fixture administration only. Agents use the CLI below.
+    const session = controlSessionProbe({command:resolveExecutable("cua-driver"),args:["mcp","--embedded","--socket",socket]},"benchmark-fixture",undefined,{surface:"driver"})
+    return {instructions:session.instructions,tools:[],call:async()=>{throw Error("Driver test helpers are not an agent API")},exec:source=>session.request({method:"exec",arguments:{source}}),close:()=>session.close()}
+  }
+  const client = new ControlCliProbe({name:`agent-benchmark-${randomUUID()}`})
+  await client.start({native:{driver:resolveExecutable("cua-driver"),socket}})
+  const launch = client.session.launch
   return {
-    instructions: client.getInstructions() ?? "",
-    tools: tools.map((tool) => ({
-      type: "function" as const,
-      function: {
-        name: tool.name,
-        description: tool.description ?? "",
-        parameters: tool.inputSchema,
-      },
-    })),
-    call,
-    exec: async (request) => {
-      const source = z.string().safeParse(request)
-      return toolResultSchema.parse(
-        await client.callTool(
-          {
-            name: execName,
-            arguments: source.success ? { source: source.data } : request,
-          },
-          undefined,
-          { timeout: 90_000 }
-        )
-      )
+    instructions: "Use mako-control for browser and computer use. Your task session is attached. Run mako-control --help for commands; api --topic examples explains multi-step JavaScript. Read exact targets, verify intended results, and never replay uncertain actions. Files and stdin compose with shell tools.",
+    tools: [{type:"function",function:{name:"shell",description:"Run a shell command. mako-control is on PATH and attached to your task session. stdout and stderr are returned with the exit code.",parameters:{type:"object",properties:{command:{type:"string"}},required:["command"],additionalProperties:false}}}],
+    call: async (name,args) => {
+      if(name!=="shell") throw Error(`Unknown tool ${name}`)
+      const command=z.object({command:z.string()}).strict().parse(args).command
+      try {
+        const result=await runCommand("/bin/sh",["-c",command],{env:{...process.env,PATH:`${launch.bin}:${process.env.PATH??""}`,MAKO_CONTROL_SESSION_FILE:launch.sessionFile},timeout:90000,maxBuffer:1024*1024})
+        return {content:[{type:"text",text:JSON.stringify({exitCode:0,...result})}]}
+      } catch(error) {
+        const result=z.object({code:z.union([z.string(),z.number()]).optional(),stdout:z.string().optional(),stderr:z.string().optional()}).parse(error)
+        return {isError:true,content:[{type:"text",text:JSON.stringify(result)}]}
+      }
     },
-    close: async () => {
-      await client.close()
-      await transport.close()
-    },
+    exec: async source => toolResultSchema.parse(await client.request({method:"exec",arguments:{source}})),
+    close:()=>client.close(),
   }
 }
 
@@ -1121,6 +1073,7 @@ if (!options.live) {
   process.env.MAKO_CONTROL_ARTIFACTS ??= join(root, "artifacts")
   const out = options.out ?? join(root, "results.jsonl")
   await writeFile(out, "")
+  if(options.surface !== "unified") throw Error("The legacy agent API was removed; use --surface unified (CLI)")
   const surface = await openSurface(root, options.surface)
   const administration =
     options.surface === "legacy"

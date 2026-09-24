@@ -1,11 +1,10 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { resolveExecutable } from "../dist-electron/executable.js"
 import {
   ensureCuaEmbedded,
@@ -47,7 +46,7 @@ await writeFile(
 <label>Email <input id="shipping" aria-label="Email" value="old" oninput="window.inputLog.push(this.value);if(!this.value)this.value='old'"></label><button>Save</button></form>
 <form aria-label="Billing" onsubmit="event.preventDefault()"><label>Email <input id="billing" aria-label="Email" value="untouched"></label><button>Save</button></form>`
 )
-const client = new Client({ name: "control-api-e2e", version: "2" })
+const client = new ControlCliProbe({ name: "control-api-e2e", version: "2" })
 const service = await startControlService(new BrowserService([]), () => {})
 let pagePid
 let samples
@@ -66,30 +65,14 @@ async function until(fn) {
 }
 async function cell(source, image = false) {
   const started = performance.now()
-  let result = await client.callTool(
-    { name: "mako_control_exec", arguments: { source } },
-    undefined,
-    { timeout: 70_000 }
-  )
+  let result = await client.request({method:"exec",arguments:{ source }}, { timeout: 70_000 })
   // Collect the runtime's text receipt without replaying source.
-  for (;;) {
-    const first = result.content.find((block) => block.type === "text")
-    let receipt
-    try {
-      receipt = first && JSON.parse(first.text)
-    } catch {}
-    if (receipt?.status !== "running" || !Number.isInteger(receipt.cell)) break
-    result = await client.callTool(
-      { name: "mako_control_exec", arguments: { cell: receipt.cell } },
-      undefined,
-      { timeout: 70_000 }
-    )
-  }
+  
   assert.ok(!result.isError, JSON.stringify(result))
   if (image) {
     assert.ok(
-      result.content.some((block) => block.type === "image"),
-      "explicit image emission"
+      result.content.some((block) => block.type === "text" && JSON.parse(block.text).artifact === true),
+      "explicit image emission writes a file artifact"
     )
     assert.ok(
       result.content.some(
@@ -112,33 +95,14 @@ try {
   const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
   assert.ok(socket)
   const credentials = service.mint("control-api-e2e", "binding")
-  await client.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        resolve("packages/control-runtime/dist/computer-tools-main.js"),
-        "--driver",
-        resolveExecutable("cua-driver"),
-        "--socket",
-        socket,
-      ],
-      env: {
+  await client.start({native:{driver:resolveExecutable("cua-driver"),socket:socket},browser:{url:credentials.url,token:credentials.token},env:{
         ...process.env,
         MAKO_CONTROL_URL: credentials.url,
         MAKO_CONTROL_TOKEN: credentials.token,
         MAKO_TASK_ID: "api-e2e",
-      },
-      stderr: "pipe",
-    })
-  )
-  const fullHelp = await client.callTool({
-    name: "mako_control_help",
-    arguments: {},
-  })
-  const focusedHelp = await client.callTool({
-    name: "mako_control_help",
-    arguments: { topic: "target" },
-  })
+      }})
+  const fullHelp = await client.request({method:"help",arguments:{}})
+  const focusedHelp = await client.request({method:"help",arguments:{ topic: "actions" }})
   const fullBytes = Buffer.byteLength(JSON.stringify(fullHelp))
   const focusedBytes = Buffer.byteLength(JSON.stringify(focusedHelp))
   assert.ok(

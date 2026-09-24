@@ -1,12 +1,11 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
 import { resolveExecutable } from "../dist-electron/executable.js"
 
@@ -19,7 +18,7 @@ await mkdir(join(bundle, "Contents/MacOS"), { recursive: true })
 await exec("xcrun", ["swiftc", "-O", "scripts/lib/native-focus-fixture.swift", "-o", binary], { timeout: 180000 })
 await writeFile(join(bundle, "Contents/Info.plist"), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleIdentifier</key><string>dev.mako.focus-fixture</string><key>CFBundleName</key><string>Mako Focus Fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>')
 await exec("codesign", ["--force", "--sign", "-", bundle])
-const client = new Client({ name: "native-focus-regression", version: "1" })
+const client = new ControlCliProbe({ name: "native-focus-regression", version: "1" })
 const evidence = { passed: false, root, calls: [], trials: [] }
 let pid
 const read = async () => JSON.parse(await readFile(status, "utf8"))
@@ -34,12 +33,8 @@ async function until(fn) {
 }
 async function cell(source) {
   const start = performance.now()
-  let response = await client.callTool({ name: "mako_control_exec", arguments: { source } }, undefined, { timeout: 70000 })
-  for (;;) {
-    const data = JSON.parse(response.content.find(item => item.type === "text").text)
-    if (data.status !== "running") break
-    response = await client.callTool({ name: "mako_control_exec", arguments: { cell: data.cell } }, undefined, { timeout: 70000 })
-  }
+  let response = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   const result = JSON.parse(response.content.filter(item => item.type === "text").at(-1).text)
   evidence.calls.push({ source, result, milliseconds: performance.now() - start })
   if (response.isError || (result.code && result.outcome)) throw Error(JSON.stringify(result))
@@ -54,7 +49,7 @@ try {
   const driver = resolveExecutable("cua-driver")
   evidence.driver = { path: driver, version: (await exec(driver, ["--version"])).stdout.trim() }
   const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve("packages/control-runtime/dist/computer-tools-main.js"), "--driver", driver, "--socket", socket], env: { ...process.env }, stderr: "inherit" }))
+  await client.start({native:{driver:driver,socket:socket},env:{ ...process.env }})
   await cell(`state.window=control.window({pid:${pid},window_id:${initial.window}});return await state.window.observe();`)
   for (let index = 0; index < 3; index++) {
     const receipt = await cell("state.view=await state.window.observe();state.ref=state.view.nodes.find(n=>n.role==='Button' && n.name==='Attempt system activation').ref;return await state.window.click(state.ref);")

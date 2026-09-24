@@ -1,12 +1,11 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
 import { resolveExecutable } from "../dist-electron/executable.js"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
@@ -27,16 +26,12 @@ await run("xcrun", ["swiftc", "-O", "scripts/lib/native-capture-rate-fixture.swi
 await writeFile(join(bundle, "Contents/Info.plist"), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleIdentifier</key><string>dev.mako.capture-rate</string><key>CFBundleName</key><string>Mako Capture Rate</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>')
 await run("codesign", ["--force", "--sign", "-", bundle])
 const evidence = {status:"running", root, requested:{seconds,fps}, calls:[]}
-const client = new Client({name:"native-capture-rate",version:"1"})
+const client = new ControlCliProbe({name:"native-capture-rate",version:"1"})
 let pid
 let sampler
 async function cell(source) {
-  let result = await client.callTool({name:"mako_control_exec",arguments:{source}}, undefined, {timeout:70000})
-  for (;;) {
-    const receipt = JSON.parse(result.content.find(part => part.type === "text").text)
-    if (receipt.status !== "running") break
-    result = await client.callTool({name:"mako_control_exec",arguments:{cell:receipt.cell}}, undefined, {timeout:70000})
-  }
+  let result = await client.request({method:"exec",arguments:{source}}, {timeout:70000})
+  
   evidence.calls.push({source,result})
   assert.ok(!result.isError,JSON.stringify(result))
   const value = JSON.parse(result.content.filter(part => part.type === "text").at(-1).text)
@@ -59,7 +54,7 @@ try {
   const driver = resolveExecutable("cua-driver")
   evidence.driver = {path:driver,version:(await run(driver,["--version"])).stdout.trim()}
   const socket = await ensureCuaEmbedded(join(root,"driver"),"dev.mako.capture-rate")
-  await client.connect(new StdioClientTransport({command:process.execPath,args:[resolve("packages/control-runtime/dist/computer-tools-main.js"),"--driver",driver,"--socket",socket],env:{...process.env},stderr:"inherit"}))
+  await client.start({native:{driver:driver,socket:socket},env:{...process.env}})
   if (process.env.MAKO_RATE_PREOBSERVE === "1") await cell(`return await control.window({pid:${pid},window_id:${initial.window}}).observe()` )
   await cell(`state.window=control.window({pid:${pid},window_id:${initial.window}});state.recording=await state.window.record({directory:${JSON.stringify(root)},fps:${fps},maxSide:1920,cursor:false,maxDurationMs:${(seconds+20)*1000}});return state.recording`)
   await delay(seconds*1000)

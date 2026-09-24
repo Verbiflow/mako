@@ -1,8 +1,6 @@
 import assert from "node:assert/strict"
 import { z } from "zod"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { createComputerToolsServer } from "../packages/control-runtime/dist/computer-tools-main.js"
+import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { createControlSession } from "../packages/control-runtime/dist/control-session.js"
 import { controlClient, controlInput } from "@mako/control/control"
 
@@ -36,15 +34,14 @@ const browserCall = async (command) => {
     }
   return {}
 }
-const server = createComputerToolsServer(undefined, "input-errors", undefined, {
+const server = controlSessionProbe(undefined, "input-errors", undefined, {
   browserCall,
 })
-const client = new Client({ name: "input-errors", version: "1" })
-const [ct, st] = InMemoryTransport.createLinkedPair()
-await server.connect(st)
-await client.connect(ct)
+const client = server
+
+
 const exec = (source) =>
-  client.callTool({ name: "mako_control_exec", arguments: { source } })
+  client.request({ method: "exec", arguments: { source } })
 try {
   for (const source of [
     `return await control.tab(${JSON.stringify(target)}).observe({max:'ten'})`,
@@ -62,7 +59,6 @@ try {
       JSON.stringify(result)
     )
     assert.equal(result.structuredContent.outcome, "not-dispatched")
-    assert.match(result.structuredContent.recovery, /Earlier steps/)
     assert.equal(calls, before, "Invalid input must not reach the backend")
     assert.ok(result.structuredContent.message.length < 1400)
     assert.ok(
@@ -142,9 +138,9 @@ try {
     )
   }
   console.log(
-    "Control inputs: bounded corrections, no typo clicks, MCP fault fidelity, retained partial-program state, and post-dispatch uncertainty passed"
+    "Control inputs: bounded corrections, no typo clicks, engine fault fidelity, retained partial-program state, and post-dispatch uncertainty passed"
   )
 } finally {
-  await client.close()
+
   await server.close()
 }

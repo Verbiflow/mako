@@ -1,13 +1,11 @@
 import assert from "node:assert/strict"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import {
   CallToolResultSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js"
 import { ExecutionReceiptSchema } from "@mako/control/control"
 import { z } from "zod"
-import { createComputerToolsServer } from "../packages/control-runtime/src/computer-tools-main.js"
+import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 
 // Reproduce Terminal's transient titled window without relaxing the separate
@@ -75,21 +73,17 @@ const driver: ComputerDriverClient = {
   onClose() {},
   async close() {},
 }
-const server = createComputerToolsServer(
+const server = controlSessionProbe(
   { command: "unused-fixture", args: [] },
   "native-keyboard-capabilities",
   async () => driver,
   { surface: "control" }
 )
-const client = new Client({
-  name: "native-keyboard-capabilities",
-  version: "1",
-})
-const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+const client = server
 async function run(source: string) {
   const response = CallToolResultSchema.parse(
-    await client.callTool({
-      name: "mako_control_exec",
+    await client.request({
+      method: "exec",
       arguments: { source },
     })
   )
@@ -102,8 +96,8 @@ const press = `const w=control.window({pid:42,window_id:7});
 try {return {receipt:await w.pressKey('return')}}
 catch(e) {return {error:e.message,outcome:e.outcome}}`
 try {
-  await server.connect(serverTransport)
-  await client.connect(clientTransport)
+
+
   if (process.platform !== "darwin") {
     const refused = await run(press)
     assert.ok("error" in refused)
@@ -179,6 +173,6 @@ catch(e) {return {error:e.message,outcome:e.outcome}}`)
     )
   }
 } finally {
-  await client.close()
+
   await server.close()
 }

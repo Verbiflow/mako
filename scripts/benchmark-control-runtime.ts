@@ -17,7 +17,7 @@ import {
   BrowserService,
   type BrowserFocusPolicy,
 } from "../packages/control-runtime/src/browser-service.js"
-import { createComputerToolsServer } from "../packages/control-runtime/src/computer-tools-main.js"
+import { controlSessionProbe, type SessionProbe } from "./lib/control-session-probe.ts"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../electron/cua-embedded.js"
 import { resolveExecutable } from "../electron/executable.js"
 import {
@@ -108,6 +108,16 @@ async function connect(server: Server, name: string) {
       await client.close()
       await server.close()
     },
+  }
+}
+
+async function connectEngine(session: SessionProbe, _name: string) {
+  const reference = await session.help({})
+  return {
+    call: async (method: string, args: Record<string, JsonValue>) => toolResult.parse(await session.request({method, arguments: args})),
+    catalog: {tools:0,names:[],catalogBytes:Buffer.byteLength(JSON.stringify(reference)),instructionBytes:Buffer.byteLength(session.instructions)},
+    has: (method: string) => method === "exec",
+    close: () => session.close(),
   }
 }
 
@@ -340,8 +350,8 @@ async function benchmarkBrowser(): Promise<SurfaceReport> {
 }
 
 async function benchmarkComputer(): Promise<SurfaceReport> {
-  const surface = await connect(
-    createComputerToolsServer(
+  const surface = await connectEngine(
+    controlSessionProbe(
       {
         command: process.execPath,
         args: ["--input-type=module", "--eval", driverSource],
@@ -359,38 +369,9 @@ async function benchmarkComputer(): Promise<SurfaceReport> {
       workflow: {},
       oversize: {},
     }
-    if (surface.has("mako_computer_get_window_state")) {
-      report.single.direct = await lane(1, async () => [
-        await surface.call("mako_computer_get_window_state", {
-          pid: 42,
-          window_id: 7,
-        }),
-      ])
-      report.workflow.direct = await lane(2, async () => {
-        const view = await surface.call("mako_computer_get_window_state", {
-          pid: 42,
-          window_id: 7,
-        })
-        const token = z
-          .object({
-            elements: z.array(z.object({ element_token: z.string() })),
-          })
-          .parse(JSON.parse(view.content[0]?.text ?? "{}")).elements[0]!
-          .element_token
-        const click = await surface.call("mako_computer_click", {
-          element_token: token,
-        })
-        return [view, click]
-      })
-      report.workflow.direct.hostActions = 2
-      report.single.direct.hostActions = 1
-      report.oversize.direct = oversizeVerdict(
-        await surface.call("mako_computer_get_accessibility_tree", { pid: 42 })
-      )
-    }
-    if (surface.has("mako_computer_exec")) {
+    if (surface.has("exec")) {
       const exec = (source: string) =>
-        surface.call("mako_computer_exec", { source })
+        surface.call("exec", { source })
       report.single.program = await lane(1, async () => [
         await exec(
           "return await computer.get_window_state({pid:42,window_id:7})"
@@ -419,8 +400,8 @@ async function benchmarkComputer(): Promise<SurfaceReport> {
 }
 
 async function benchmarkUnifiedControl(): Promise<SurfaceReport> {
-  const surface = await connect(
-    createComputerToolsServer(
+  const surface = await connectEngine(
+    controlSessionProbe(
       {
         command: process.execPath,
         args: ["--input-type=module", "--eval", driverSource],
@@ -439,7 +420,7 @@ async function benchmarkUnifiedControl(): Promise<SurfaceReport> {
       oversize: {},
     }
     const exec = (source: string) =>
-      surface.call("mako_control_exec", { source })
+      surface.call("exec", { source })
     const exactTarget = { kind: "window", pid: 42, window_id: 7 }
     report.single.program = await lane(1, async () => [
       await exec(
@@ -471,8 +452,8 @@ return {snapshot:first.observation,controls:first.lines.length,route:action.rout
 }
 
 async function benchmarkUnifiedPage(): Promise<SurfaceReport> {
-  const surface = await connect(
-    createComputerToolsServer(undefined, "benchmark-unified-page", undefined, {
+  const surface = await connectEngine(
+    controlSessionProbe(undefined, "benchmark-unified-page", undefined, {
       surface: "control",
       browserCall,
     }),
@@ -486,7 +467,7 @@ async function benchmarkUnifiedPage(): Promise<SurfaceReport> {
       oversize: {},
     }
     const exec = (source: string) =>
-      surface.call("mako_control_exec", { source })
+      surface.call("exec", { source })
     const pageTarget = { kind: "page", ...target }
     report.single.program = await lane(1, async () => [
       await exec(
@@ -600,8 +581,8 @@ async function liveComputerCatalog() {
     "dev.mako.benchmark"
   )
   if (!socket) return undefined
-  const surface = await connect(
-    createComputerToolsServer(
+  const surface = await connectEngine(
+    controlSessionProbe(
       {
         command: resolveExecutable("cua-driver"),
         args: ["mcp", "--embedded", "--socket", socket],

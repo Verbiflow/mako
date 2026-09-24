@@ -1,3 +1,9 @@
+import {spawn, execFile} from "node:child_process"
+import {promisify} from "node:util"
+import {writeFile, readFile} from "node:fs/promises"
+import {join} from "node:path"
+import {setTimeout as delay} from "node:timers/promises"
+
 export const cocoaFixtureSource = `
 import AppKit
 final class Handler: NSObject {
@@ -35,3 +41,23 @@ Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
 }
 app.run()
 `
+
+/** Native AppKit fixture; Electron input is covered separately through pages. */
+export async function startCocoaFixture({root,title}) {
+  const source=join(root,"native-proof.swift"), binary=join(root,"native-proof"), status=join(root,"native-proof.json")
+  await writeFile(source,cocoaFixtureSource.replace('"Mako cocoa fixture"',JSON.stringify(title)))
+  await promisify(execFile)("xcrun",["swiftc","-O","-o",binary,source],{timeout:180000})
+  const child=spawn(binary,[status],{stdio:"ignore"})
+  const state=async()=>JSON.parse(await readFile(status,"utf8"))
+  async function until(check,what,timeoutMs=15000) {
+    const deadline=Date.now()+timeoutMs
+    while(Date.now()<deadline) {
+      const result=await check().catch(()=>undefined)
+      if(result) return result
+      if(child.exitCode!==null) throw Error("Native fixture exited")
+      await delay(30)
+    }
+    throw Error(`Fixture condition timed out: ${what}`)
+  }
+  return {state,until,started:()=>until(state,"native fixture startup"),stop:()=>child.kill("SIGTERM")}
+}

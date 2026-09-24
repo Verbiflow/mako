@@ -161,13 +161,15 @@ assert.equal(codexAccessTier(accessModeId("edits")), "edits")
 assert.throws(() => codexAccessTier(accessModeId("plan")), /does not offer/)
 assert.throws(() => codexAccessTier("agent"), /does not offer/)
 // The thread response's own approval/sandbox pair is the level the session
-// opened with; anything it does not report floors at the out-of-box default.
+// opened with; missing or custom policies must remain unclassified.
 const workspaceWrite = { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false } as const
 assert.equal(codexObservedTier({ approvalPolicy: "on-request", sandbox: { type: "readOnly", networkAccess: false }, approvalsReviewer: "user" }), "ask")
 assert.equal(codexObservedTier({ approvalPolicy: "on-request", sandbox: workspaceWrite, approvalsReviewer: "user" }), "edits")
 assert.equal(codexObservedTier({ approvalPolicy: "on-request", sandbox: workspaceWrite, approvalsReviewer: "auto_review" }), "auto")
 assert.equal(codexObservedTier({ approvalPolicy: "never", sandbox: { type: "dangerFullAccess" } }), "full")
-assert.equal(codexObservedTier({}), "ask")
+assert.equal(codexObservedTier({}), null)
+assert.equal(codexObservedTier({ approvalPolicy: "never", sandbox: { type: "readOnly", networkAccess: false } }), null)
+assert.equal(codexObservedTier({ sandbox: { type: "externalSandbox", networkAccess: "enabled" } }), null)
 
 // Claude: Full access is a real mode now.
 assert.ok(ClaudeModeSchema.safeParse("bypassPermissions").success)

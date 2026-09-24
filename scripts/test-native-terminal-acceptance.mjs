@@ -1,11 +1,10 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
@@ -19,28 +18,14 @@ const run = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-native-terminal-"))
 const directory = resolve(process.argv[2] ?? root)
 await mkdir(directory, { recursive: true })
-const client = new Client({ name: "native-terminal-acceptance", version: "1" })
+const client = new ControlCliProbe({ name: "native-terminal-acceptance", version: "1" })
 const evidence = { status: "running", root, directory, cells: [] }
 let scratchId
 let terminalPid
 let sampler
 async function cell(source) {
-  let result = await client.callTool(
-    { name: "mako_control_exec", arguments: { source } },
-    undefined,
-    { timeout: 70000 }
-  )
-  for (;;) {
-    const receipt = JSON.parse(
-      result.content.find((part) => part.type === "text")?.text ?? "{}"
-    )
-    if (receipt.status !== "running") break
-    result = await client.callTool(
-      { name: "mako_control_exec", arguments: { cell: receipt.cell } },
-      undefined,
-      { timeout: 70000 }
-    )
-  }
+  let result = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   evidence.cells.push({ at: new Date().toISOString(), source, result })
   assert.ok(!result.isError, JSON.stringify(result))
   return JSON.parse(
@@ -64,20 +49,7 @@ try {
     "dev.mako.native-terminal-acceptance"
   )
   assert.ok(socket)
-  await client.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        resolve("packages/control-runtime/dist/computer-tools-main.js"),
-        "--driver",
-        driver,
-        "--socket",
-        socket,
-      ],
-      env: { ...process.env },
-      stderr: "inherit",
-    })
-  )
+  await client.start({native:{driver:driver,socket:socket},env:{ ...process.env }})
   const existing = await cell(
     "return (await control.apps()).apps.find(a=>a.bundle_id==='com.apple.Terminal') ?? null"
   )

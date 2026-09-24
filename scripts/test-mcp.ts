@@ -16,7 +16,7 @@ import {
 } from "../electron/mcp.js"
 import { integrationCatalog } from "../electron/integrations.js"
 import { BROWSER_TOOL_INPUTS } from "../electron/browser-tools-main.js"
-import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/computer-tools-main.js"
+import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/control-session.js"
 import {
   cuaEmbeddedSocket,
   ensureCuaEmbedded,
@@ -24,7 +24,6 @@ import {
 } from "../electron/cua-embedded.js"
 import { atomicJsonMcpMerge, mergeJsonMcpConfig } from "../electron/mcp-sync.js"
 import {
-  isMakoNodeServer,
   type McpDiscoveredDefinition,
 } from "../electron/mcp-registry.js"
 import type { JsonValue } from "../electron/codex-app-json.js"
@@ -54,9 +53,6 @@ function discovered(
 
 function testProtocolVersion(): void {
   assert.equal(LATEST_PROTOCOL_VERSION, "2025-11-25")
-  assert.equal(isMakoNodeServer("mako-control"), true)
-  assert.equal(isMakoNodeServer("mako-browser-use"), false)
-  assert.equal(isMakoNodeServer("mako-local-control"), false)
   assert.deepEqual(
     mergeMcpDefinitions([
       discovered("cursor", "mako-browser-use", {
@@ -74,6 +70,10 @@ function testProtocolVersion(): void {
           "/Applications/Mako.app/Contents/MacOS/Mako",
           join("/app", "dist-electron", "computer-tools-main.js"),
         ],
+      }),
+      discovered("codex", "mako-control", {
+        command: "/usr/bin/env",
+        args: ["ELECTRON_RUN_AS_NODE=1", "/Applications/Mako.app/Contents/MacOS/Mako", "/app/node_modules/@mako/control-runtime/dist/computer-tools-main.js"],
       }),
       discovered("codex", "mako-local-tools", {
         command: "/usr/bin/env",
@@ -464,7 +464,7 @@ function testAcpProjection(): void {
 }
 
 async function testManagedDefinitions(): Promise<void> {
-  const definitions = await managedMcpDefinitions("/app", "/electron", {
+  const definitions = await managedMcpDefinitions({
     PATH: "",
   })
   assert.equal(
@@ -484,159 +484,26 @@ async function testManagedDefinitions(): Promise<void> {
     definitions.some((entry) => entry.definition.name === "mako-local-control"),
     false
   )
-  const controlTools = definitions.find(
-    (entry) => entry.definition.name === "mako-control"
-  )
-  assert.ok(controlTools)
-  assert.equal(controlTools.definition.args?.includes("--driver-test"), false)
-  const managedSnapshot: McpRegistrySnapshot = {
-    cwd: tmpdir(),
-    generatedAt: 1,
-    servers: mergeMcpDefinitions(definitions),
-    providers: [],
-  }
-  assert.deepEqual(
-    acpMcpServers(managedSnapshot, "claude", ["stdio", "http"])
-      .map((server) => server.name)
-      .sort(),
-    definitions
-      .filter(
-        (entry) =>
-          !entry.definition.blockReason &&
-          entry.definition.name === "mako-control"
-      )
-      .map((entry) => entry.definition.name)
-      .sort()
-  )
-  const cursor = z
-    .object({
-      mcpServers: z.record(
-        z.string(),
-        z.object({ env: z.record(z.string(), z.string()) })
-      ),
-    })
-    .parse(
-      JSON.parse(mergeJsonMcpConfig("", controlTools.definition, "cursor"))
-    )
-  assert.deepEqual(cursor.mcpServers["mako-control"]?.env, {
-    ELECTRON_RUN_AS_NODE: "1",
-  })
+  assert.equal(definitions.some(entry => entry.definition.name === "mako-control"), false)
+  const snapshot: McpRegistrySnapshot = {cwd:tmpdir(),generatedAt:1,providers:[],servers:mergeMcpDefinitions(definitions)}
+  assert.ok(!acpMcpServers(snapshot,"claude",["stdio","http"]).some(server => server.name === "mako-control"))
+  assert.ok(!JSON.stringify(codexMcpConfig(snapshot)).includes("mako-control"))
 }
 
 async function testManagedCommandIsolation(): Promise<void> {
-  if (process.platform !== "darwin") return
-  const directory = await mkdtemp(join(tmpdir(), "mako-mcp-command-env-"))
-  const report = join(directory, "environment.json")
-  const command = join(directory, "cua-driver")
-  const keys = ["MAKO_BACKEND_TOKEN", "MAKO_CUA_SOCKET"]
-  await writeFile(
-    command,
-    `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(report)}, JSON.stringify(${JSON.stringify(keys)}.filter(key => process.env[key])))\n`
-  )
-  await chmod(command, 0o755)
+  const directory = await mkdtemp(join(tmpdir(), "mako-no-control-mcp-"))
+  const report = join(directory, "unexpected-driver-start")
+  await writeFile(join(directory, "cua-driver"), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(report)},'started')\n`, {mode:0o755})
   try {
-    await managedMcpDefinitions("/app", "/electron", {
-      PATH: directory,
-      MAKO_BACKEND_TOKEN: "backend-secret",
-      MAKO_CUA_SOCKET: "/tmp/cua.sock",
-    })
-    assert.deepEqual(JSON.parse(await readFile(report, "utf8")), [])
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
+    await managedMcpDefinitions({PATH:directory,MAKO_BACKEND_TOKEN:"secret",MAKO_CUA_SOCKET:"/tmp/cua.sock"})
+    await assert.rejects(stat(report), {code:"ENOENT"})
+  } finally {await rm(directory,{recursive:true,force:true})}
 }
 
 async function testMakoRuntimeProjection(): Promise<void> {
-  const managed = (
-    name: "mako-control",
-    command: string,
-    args: string[]
-  ): McpDiscoveredDefinition => ({
-    definition: {
-      name,
-      transport: "stdio",
-      command,
-      args,
-      envNames: ["ELECTRON_RUN_AS_NODE"],
-      headerNames: [],
-      portable: true,
-    },
-    origin: {
-      provider: "mako",
-      account: "local",
-      scope: "managed",
-      provenance: "Mako managed (test)",
-    },
-  })
-  const snapshot: McpRegistrySnapshot = {
-    cwd: tmpdir(),
-    generatedAt: 1,
-    providers: [],
-    servers: mergeMcpDefinitions([
-      managed("mako-control", process.execPath, ["computer-tools.js"]),
-    ]).map((server) => ({
-      ...server,
-      managed: true,
-      availability: "available" as const,
-    })),
-  }
-  const acpServers = acpMcpServers(snapshot, "claude", ["stdio"])
-  assert.deepEqual(
-    acpServers.map((server) => server.name),
-    ["mako-control"]
-  )
-  assert.deepEqual(
-    acpServers.find((server) => server.name === "mako-control")?.env,
-    [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
-  )
-  const conversationUrl = "http://127.0.0.1:43123/mcp"
-  const scopedServers = z
-    .object({ mcp_servers: z.record(z.string(), z.json()) })
-    .parse(codexMcpConfig(snapshot, conversationUrl)).mcp_servers
-  assert.deepEqual(scopedServers["mako-conversations"], {
-    url: conversationUrl,
-    bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN",
-  })
-  const codex = codexMcpConfig(snapshot)
-  const servers = z
-    .object({ mcp_servers: z.record(z.string(), z.json()) })
-    .parse(codex).mcp_servers
-  for (const [name, definition] of Object.entries(servers))
-    assert.deepEqual(
-      scopedServers[name],
-      definition,
-      "conversation tools preserve existing server configuration"
-    )
-  assert.deepEqual(Object.keys(servers).sort(), ["mako-control"])
-  const localControl = snapshot.servers.find(
-    (server) => server.name === "mako-control"
-  )
-  assert.ok(localControl)
-  const preview = await previewMcpSync(snapshot, localControl.id, {
-    provider: "claude",
-    account: "default",
-    scope: "user",
-  })
-  assert.equal(preview.action, "blocked")
-  assert.match(preview.blockReason ?? "", /sessions launched by Mako/)
-
-  const nativeSnapshot: McpRegistrySnapshot = {
-    ...snapshot,
-    servers: mergeMcpDefinitions([
-      managed("mako-control", process.execPath, ["computer-tools.js"]),
-      discovered("claude", "node_repl", { command: process.execPath }),
-    ]).map((server) => ({
-      ...server,
-      managed: server.origins.some((origin) => origin.provider === "mako"),
-      availability: "available" as const,
-    })),
-  }
-  assert.deepEqual(
-    acpMcpServers(nativeSnapshot, "claude", ["stdio"]).map(
-      (server) => server.name
-    ),
-    ["mako-control"]
-  )
+  const snapshot: McpRegistrySnapshot = {cwd:tmpdir(),generatedAt:1,providers:[],servers:[]}
+  const url = "http://127.0.0.1:43123/mcp"
+  assert.deepEqual(codexMcpConfig(snapshot,url), {mcp_servers:{"mako-conversations":{url,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN"}}})
 }
 
 async function testMakoBackendProjection(): Promise<void> {
@@ -647,7 +514,7 @@ async function testMakoBackendProjection(): Promise<void> {
   process.env.MAKO_BACKEND_URL = url
   process.env.MAKO_BACKEND_TOKEN = token
   try {
-    const definitions = await managedMcpDefinitions("/app", "/electron", {
+    const definitions = await managedMcpDefinitions({
       PATH: "",
       MAKO_BACKEND_URL: url,
       MAKO_BACKEND_TOKEN: token,

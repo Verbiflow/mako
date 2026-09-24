@@ -191,7 +191,19 @@ assert.equal(
 )
 assert.equal(parseThreadResponse({ thread: { id: "ephemeral", path: null } }).valid, true)
 assert.equal(parseThreadResponse({ thread: { id: "legacy" } }).valid, true)
+const effectivePolicy = parseThreadResponse({ thread: { id: "native-full" }, approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "dangerFullAccess" } })
+assert.ok(effectivePolicy.valid)
+if (effectivePolicy.valid) {
+  assert.equal(effectivePolicy.value.approvalPolicy, "on-request")
+  assert.equal(effectivePolicy.value.approvalsReviewer, "user")
+  assert.deepEqual(effectivePolicy.value.sandbox, { type: "dangerFullAccess" }, "Native policy must survive the parser before it reaches the picker")
+}
+
 assert.equal(parseThreadResponse({ thread: { id: "invalid", path: 3 } }).valid, false)
+const futurePolicy = parseThreadResponse({ thread: { id: "future-policy" }, sandbox: { type: "futureSandbox" }, approvalPolicy: "on-request" })
+assert.ok(futurePolicy.valid)
+if (futurePolicy.valid) assert.equal(futurePolicy.value.sandbox, undefined)
+
 assert.equal(
   parseNotification("item/agentMessage/delta", { threadId: "thread-1" }),
   null

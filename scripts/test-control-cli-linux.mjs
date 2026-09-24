@@ -155,7 +155,7 @@ try {
     (error) =>
       error.code === 3 && JSON.parse(error.stderr).code === "target-ambiguous"
   )
-  const examples = (await command(["help"])).examples
+  const examples = (await command(["api", "--topic", "examples"])).examples
   await program(examples.scopedEdit)
   const independent = await program(
     "return (await state.tab.cdp('Runtime.evaluate',{expression:\"JSON.stringify({profile:document.querySelector('form input').value,original:document.querySelector('input').value,profileSaves:window.profileSaves,saves:window.saves})\",returnByValue:true})).result.value"

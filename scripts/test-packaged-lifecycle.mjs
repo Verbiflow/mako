@@ -24,6 +24,7 @@ const StartupTraceSchema = z.object({
   queuedMs: z.number().nonnegative().optional(),
   resolveMs: z.number().nonnegative().optional(),
 })
+const approvalChecks = process.argv.includes("--approvals")
 const rendererOnly = process.argv.includes("--renderer-only")
 const warmStart = process.argv.includes("--warm")
 const uiStart = process.argv.includes("--ui-start")
@@ -34,6 +35,7 @@ const args = process.argv
   .filter(
     (arg) =>
       arg !== "--renderer-only" &&
+      arg !== "--approvals" &&
       arg !== "--warm" &&
       arg !== "--ui-start" &&
       arg !== modelFlag
@@ -504,7 +506,18 @@ function answer(snapshot, requestId) {
   const index = snapshot.blocks.findIndex(
     (block) => block.type === "user" && block.requestId === requestId
   )
-  assert.ok(index >= 0)
+  if (index < 0) {
+    const request = snapshot.requests.find(item => item.id === requestId)
+    assert.ok(request, 'Requested turn is missing')
+    const entries = snapshot.base?.entries ?? []
+    const matches = entries.flatMap((entry, at) => entry.kind === 'user' && entry.text === request.text ? [at] : [])
+    assert.equal(matches.length, 1, 'Native history must contain one exact matching prompt')
+    const following = entries.slice(matches[0] + 1)
+    const nextUser = following.findIndex(entry => entry.kind === 'user')
+    return following.slice(0, nextUser < 0 ? undefined : nextUser)
+      .filter(entry => entry.kind === 'assistant').flatMap(entry => entry.blocks)
+      .filter(block => block.type === 'text').map(block => block.text).join('\n')
+  }
   return snapshot.blocks
     .slice(index + 1)
     .filter((block) => block.type === "text")
@@ -587,6 +600,7 @@ try {
   const permissions = await bridge("computerPermissions", [])
   const metadata = JSON.parse(extractFile(join(app, "Contents/Resources/app.asar"), "package.json").toString("utf8"))
   assert.equal(permissions.persistentAcrossUpdates, metadata.makoDistribution === "signed" || metadata.makoDistribution === "local")
+  report.build = metadata.makoBuild
   report.phases.push({ phase: "permission-status", ...permissions })
   console.log("Packaged renderer, preload, and read-only permission status ready in an isolated profile")
   if (!rendererOnly) {
@@ -619,6 +633,11 @@ try {
     const first = await completed(requestId, { startedAt: sentAt })
     assert.ok(answer(first, requestId).includes(marker))
     const nativeId = first.session.nativeId
+    let approvalEvidence
+    if (approvalChecks) {
+      const { checkPackagedApprovals } = await import('./packaged-approval-checks.mjs')
+      approvalEvidence = await checkPackagedApprovals({ bridge, command, evaluate, waitFor, answer, conversationId, workspace, root, report })
+    }
     report.phases.push({
       phase: "provider-completion",
       submittedThrough: uiStart ? "composer" : "bridge",
@@ -692,6 +711,13 @@ try {
     ])
     const resumed = await completed(nextId)
     assert.equal(resumed.session.nativeId, nativeId)
+    if (approvalEvidence) {
+      for (const receipt of approvalEvidence.receipts) {
+        const retained = resumed.control.approvalResponses.find(item=>item.id===receipt.id)
+        assert.ok(retained && retained.digest===receipt.digest,'Installed restart lost an approval receipt')
+      }
+      report.phases.push({ phase: 'approval-restart', sameNativeSession: true, retainedReceipts: approvalEvidence.receipts.length })
+    }
     assert.ok(
       answer(resumed, nextId).includes(marker),
       "Resumed provider must recall the original marker"
@@ -706,6 +732,9 @@ try {
   report.outcome = "passed"
 } catch (error) {
   report.outcome = "failed"
+  report.error = error instanceof Error ? error.message : String(error)
+  const shot = await command('Page.captureScreenshot', { format: 'png' }).catch(() => null)
+  if (shot) await writeFile(join(root, 'failure.png'), Buffer.from(shot.data, 'base64'))
   throw error
 } finally {
   await stopPackage()

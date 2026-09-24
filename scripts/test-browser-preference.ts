@@ -1,5 +1,4 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { startControlService } from "../electron/control-service.js"
 import { z } from "zod"
 import assert from "node:assert/strict"
@@ -143,14 +142,14 @@ try {
   assert.equal(tabInterruption([], "target_closed").includes("Aside"), false)
   const host = await startControlService(service, () => {})
   const credentials = host.mint("preferred-api", "preferred-binding")
-  const client = new Client({name:"preferred-browser-test",version:"1"})
+  const client = new ControlCliProbe({name:"preferred-browser-test",version:"1"})
   try {
-    await client.connect(new StdioClientTransport({command:process.execPath,args:[join(process.cwd(),"packages/control-runtime/dist/computer-tools-main.js")],env:{PATH:process.env.PATH ?? "",MAKO_CONTROL_URL:credentials.url,MAKO_CONTROL_TOKEN:credentials.token},stderr:"pipe"}))
-    const result = await client.callTool({name:"mako_control_exec",arguments:{source:"state.page = await control.openTab({}); return state.page.target;"}})
+    await client.start({browser:{url:credentials.url,token:credentials.token},env:{PATH:process.env.PATH ?? "",MAKO_CONTROL_URL:credentials.url,MAKO_CONTROL_TOKEN:credentials.token}})
+    const result = await client.request({method:"exec",arguments:{source:"state.page = await control.openTab({}); return state.page.target;"}})
     assert.equal(result.isError, undefined, JSON.stringify(result))
     const content = z.array(z.object({type:z.string(),text:z.string().optional()}).passthrough()).parse(result.content)
     const returned = content.filter(b=>b.type==="text").at(-1)?.text
-    assert.equal(z.object({browser:z.string()}).parse(JSON.parse(returned!)).browser,"chrome", "Public MCP resolves the saved profile without a browser argument")
+    assert.equal(z.object({browser:z.string()}).parse(JSON.parse(returned!)).browser,"chrome", "Public CLI resolves the saved profile without a browser argument")
   } finally { await client.close(); await host.close() }
   console.log(
     "PASS: persisted browser choice, explicit overrides, unchanged existing handles, unavailable-profile refusal, serialized saves, scoped event diagnostics, no probes or reconnects"

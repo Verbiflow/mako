@@ -1,3 +1,4 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { cocoaFixtureSource as cocoaSource } from "./lib/cocoa-fixture.mjs"
 import { Appshots } from "../dist-electron/appshots.js"
 import assert from "node:assert/strict"
@@ -7,8 +8,8 @@ import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import { controlSessionProbe } from "./lib/control-session-probe.ts"
+import { browserControlClient } from "../packages/control-runtime/src/browser-control-client.js"
 import { resolveExecutable } from "../dist-electron/executable.js"
 import {
   cuaEmbeddedPid,
@@ -24,7 +25,7 @@ import {
 } from "./lib/control-fixture.mjs"
 
 // Live check of Mako's computer control against the installed driver and a
-// real backgrounded Electron window. Every action is a mako_computer_exec
+// real backgrounded Electron window. Every driver regression action uses the internal test executor; public actions use CLI exec. 
 // program. The invariant throughout: the user's frontmost application never
 // changes, and the fixture stays behind it. A second Electron instance is
 // launched by Mako with a page route and driven through the browser object,
@@ -84,7 +85,7 @@ const cocoaBuild = (async () => {
   }
   return "built"
 })()
-const client = new Client({ name: "mako-control-e2e", version: "1" })
+let client
 let outcome = { status: "failed", error: "Test did not complete" }
 const events = []
 let appshots
@@ -93,10 +94,8 @@ let controlService
 /** Run one program and parse its return value. */
 async function exec(label, source) {
   const start = performance.now()
-  const result = await client.callTool(
-    { name: "mako_computer_exec", arguments: { source } },
-    undefined,
-    { timeout: 70_000 }
+  const result = await client.request(
+    { method: "exec", arguments: { source } },
   )
   // Logged and emitted blocks come first; the return value is the last text block.
   const text = result.content.filter((block) => block.type === "text")
@@ -156,34 +155,9 @@ try {
   browserService = new BrowserService([])
   controlService = await startControlService(browserService, () => {})
   const credentials = controlService.mint("mako-control-e2e", "binding")
-  await client.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        resolve("packages/control-runtime/dist/computer-tools-main.js"),
-        "--driver-test",
-        "--driver",
-        resolveExecutable("cua-driver"),
-        "--socket",
-        socket,
-      ],
-      env: {
-        ...process.env,
-        MAKO_CONTROL_URL: credentials.url,
-        MAKO_CONTROL_TOKEN: credentials.token,
-        MAKO_TASK_ID: "e2e",
-      },
-      stderr: "pipe",
-    })
-  )
-  const tools = (await client.listTools()).tools.map((tool) => tool.name).sort()
-  assert.deepEqual(tools, [
-    "mako_computer_exec",
-    "mako_computer_help",
-    "mako_computer_status",
-  ])
+  client = controlSessionProbe({command:resolveExecutable("cua-driver"),args:["mcp","--embedded","--socket",socket],env:{...process.env}},"driver-e2e",undefined,{surface:"driver",browserCall:browserControlClient({MAKO_CONTROL_URL:credentials.url,MAKO_CONTROL_TOKEN:credentials.token})})
   const help = JSON.parse(
-    (await client.callTool({ name: "mako_computer_help", arguments: {} }))
+    (await client.request({ method: "help", arguments: {} }))
       .content[0].text
   )
   for (const action of [
@@ -450,7 +424,7 @@ try {
     )
   }
   const statusAfterMenu = JSON.parse(
-    (await client.callTool({ name: "mako_computer_status", arguments: {} }))
+    (await client.request({ method: "status", arguments: {} }))
       .content[0].text
   )
   assert.equal(
@@ -593,7 +567,7 @@ try {
     launched.page_route.browser
   )
   const pageStatusAfter = JSON.parse(
-    (await client.callTool({ name: "mako_computer_status", arguments: {} }))
+    (await client.request({ method: "status", arguments: {} }))
       .content[0].text
   )
   assert.equal(
@@ -700,7 +674,7 @@ try {
     cocoa = null
   }
 
-  const routedClient = new Client({
+  const routedClient = new ControlCliProbe({
     name: "mako-routed-control-e2e",
     version: "1",
   })
@@ -710,36 +684,16 @@ try {
       "mako-routed-control-e2e",
       "binding"
     )
-    await routedClient.connect(
-      new StdioClientTransport({
-        command: process.execPath,
-        args: [
-          resolve("packages/control-runtime/dist/computer-tools-main.js"),
-          "--driver",
-          resolveExecutable("cua-driver"),
-          "--socket",
-          socket,
-        ],
-        env: {
+    await routedClient.start({native:{driver:resolveExecutable("cua-driver"),socket:socket},browser:{url:routedCredentials.url,token:routedCredentials.token},env:{
           ...process.env,
           MAKO_CONTROL_URL: routedCredentials.url,
           MAKO_CONTROL_TOKEN: routedCredentials.token,
           MAKO_TASK_ID: "routed-e2e",
-        },
-        stderr: "pipe",
-      })
-    )
-    assert.deepEqual(
-      (await routedClient.listTools()).tools.map((tool) => tool.name).sort(),
-      ["mako_control_exec", "mako_control_help", "mako_control_status"]
-    )
+        }})
     const routedText = `routed-${randomUUID().slice(0, 8)}`
     const started = performance.now()
     const setRouted = () =>
-      routedClient.callTool(
-        {
-          name: "mako_control_exec",
-          arguments: {
+      routedClient.request({method:"exec",arguments:{
             source: `const tabs=await control.tabs(${JSON.stringify(launched.page_route.browser)});
 const selected=tabs.pages.find(tab=>tab.selectable && tab.title==='Mako page fixture');
 if(!selected) throw Error('Fixture tab missing');
@@ -749,24 +703,10 @@ const ref=observed.get({role:'textbox',name:'Proof'}).ref;
 const receipt=await tab.setValue(ref,${JSON.stringify(routedText)});
 const proof=await tab.expect({role:'textbox',name:'Proof',value:${JSON.stringify(routedText)}});
 return {receipt,proof,observation:await tab.observe()};`,
-          },
-        },
-        undefined,
-        { timeout: 70_000 }
-      )
+          }}, { timeout: 70_000 })
     let result = await setRouted()
     // Resume a yielded cell; never replay its source.
-    for (;;) {
-      const text = result.content.find((block) => block.type === "text")
-      const receipt = text ? JSON.parse(text.text) : null
-      if (receipt?.status !== "running" || !Number.isInteger(receipt.cell))
-        break
-      result = await routedClient.callTool(
-        { name: "mako_control_exec", arguments: { cell: receipt.cell } },
-        undefined,
-        { timeout: 70_000 }
-      )
-    }
+    
     assert.ok(!result.isError, JSON.stringify(result))
     const value = JSON.parse(
       result.content.filter((block) => block.type === "text").at(-1).text

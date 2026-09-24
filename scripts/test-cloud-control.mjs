@@ -3,13 +3,13 @@ import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { createRequire } from "node:module"
 import { mkdtemp, readFile, readdir, writeFile, mkdir } from "node:fs/promises"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 const root = process.env.MAKO_RUNTIME_ROOT ?? "/opt/mako-control"
 const require = createRequire(join(root, "package.json"))
-const { Client } = require("@modelcontextprotocol/sdk/client/index.js")
-const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js")
+const cli = require.resolve("@mako/control-runtime/cli")
+const launcher = join(dirname(cli), "cloud-control-main.js")
 const run = promisify(execFile)
 const evidence = process.env.MAKO_RUNTIME_EVIDENCE ?? await mkdtemp("/tmp/mako-runtime-proof-")
 await mkdir(evidence, { recursive: true })
@@ -45,39 +45,40 @@ async function start(name, options = {}) {
   const output = join(evidence, name)
   const path = join(evidence, `${name}.json`)
   await writeFile(path, JSON.stringify({ output, browser: { executable: "/usr/bin/chromium", sandbox: false }, startupMs: 15000, shutdownMs: 10000, ...options }))
-  const child = spawn(process.execPath, [require.resolve("@mako/control-runtime/cloud"), "--config", path], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, MAKO_CREDENTIAL_CANARY: "must-not-reach-worker" } })
+  const child = spawn(process.execPath, [launcher, "--config", path], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, MAKO_CREDENTIAL_CANARY: "must-not-reach-worker" } })
   active.add(child)
   const exited = new Promise(resolve => child.once("exit", (code, signal) => { active.delete(child); resolve({ code, signal }) }))
   let log = ""
   child.stderr.on("data", data => { log += data.toString() })
-  const client = new Client({ name: "standalone-acceptance", version: "1" })
-  const transport = new StdioServerTransport(child.stdout, child.stdin)
-  const connecting = client.connect(transport).catch(error => { throw new Error(`${name}: ${error.message}: ${log}`) })
-  // If startup fails the transport doesn't own the child; tell the client.
-  child.once("exit", () => transport.onclose?.())
-  await connecting
+  child.stdout.resume()
   const ready = await until(() => read(join(output, "ready.json")))
-  async function cell(source, signal) {
-    let reply = await client.callTool({ name: "mako_control_exec", arguments: { source } }, undefined, { timeout: 45000, signal })
-    while (true) {
-      const receipt = JSON.parse(reply.content.find(b => b.type === "text")?.text ?? "{}")
-      if (receipt.status !== "running") break
-      reply = await client.callTool({ name: "mako_control_exec", arguments: { cell: receipt.cell } }, undefined, { timeout: 45000, signal })
-    }
-    assert.ok(!reply.isError, JSON.stringify(reply))
-    const images = reply.content.filter(b => b.type === "image")
-    for (const [i, image] of images.entries()) await writeFile(join(output, `capture-${i}.png`), Buffer.from(image.data, "base64"))
-    return JSON.parse(reply.content.filter(b => b.type === "text").at(-1)?.text ?? "null")
+  const sessionFile = join(output, "session.json")
+  await until(() => read(sessionFile))
+  async function command(args, source, signal) {
+    const call=spawn(process.execPath,[cli,...args,"--session-file",sessionFile],{stdio:["pipe","pipe","pipe"]})
+    let stdout="",stderr=""
+    call.stdout.on("data",bytes=>stdout+=bytes);call.stderr.on("data",bytes=>stderr+=bytes)
+    const cancel=()=>call.kill("SIGINT")
+    signal?.addEventListener("abort",cancel,{once:true})
+    call.stdin.end(source)
+    try {
+      const code=await new Promise((done,reject)=>{call.once("error",reject);call.once("close",done)})
+      assert.equal(code,0,stderr)
+      return JSON.parse(stdout)
+    } finally {signal?.removeEventListener("abort",cancel)}
   }
-  return { output, child, client, ready, cell, exited, async end(kind = "eof") {
-    if (kind === "eof") child.stdin.end()
+  async function cell(source,signal) {
+    const blocks=await command(["exec","--source-file","-"],source,signal)
+    return blocks.filter(block=>block.type==="result").at(-1)?.value ?? null
+  }
+  return { output, child, ready, cell, exited, async end(kind = "session-stop") {
+    if (kind === "session-stop") await command(["session","stop"])
     else if (kind === "worker-crash") process.kill(ready.pid, "SIGKILL")
     else if (kind === "backend-crash") process.kill(ready.backends.find(b => b.name === "browser").pid, "SIGKILL")
     else if (kind === "driver-crash") process.kill(ready.backends.find(b => b.name === "driver").pid, "SIGKILL")
     else if (kind !== "none") child.kill(kind)
     const exit = await Promise.race([exited, delay(20000).then(() => { throw new Error(`${name}: launcher did not exit`) })])
     await until(async () => (await Promise.all([ready.pid, ...ready.backends.map(b => b.pid)].map(alive))).every(v => !v) && (await groupProcesses(ready.pid)).length === 0)
-    await client.close()
     const worker = await read(join(output, "worker.json")).catch(() => null)
     const launcher = await read(join(output, "launcher.json")).catch(() => null)
     if (kind !== "SIGKILL") assert.ok(launcher.runtimeRemoved)
@@ -161,7 +162,7 @@ try {
     const output=join(evidence,name)
     const config=join(evidence,`${name}.json`)
     await writeFile(config,JSON.stringify({output,browser:{executable,sandbox:false},startupMs:2000,shutdownMs:2000}))
-    const child=spawn(process.execPath,[require.resolve("@mako/control-runtime/cloud"),"--config",config],{stdio:["pipe","ignore","ignore"]})
+    const child=spawn(process.execPath,[launcher,"--config",config],{stdio:["pipe","ignore","ignore"]})
     const exit=new Promise(resolve=>child.once("exit",(code,signal)=>resolve({code,signal})))
     if(signal){await until(async()=>Boolean(await readFile(startupMarker,"utf8")), 2000);child.kill(signal)}
     const exited=await Promise.race([exit,delay(8000).then(()=>{child.kill("SIGKILL");throw new Error(`${name} did not stop`)})])
@@ -172,7 +173,7 @@ try {
     results.push({name,exit:exited,launcher:receipt})
   }
   // Existing output is a refusal, never permission to remove another job's files.
-  await assert.rejects(run(process.execPath, [require.resolve("@mako/control-runtime/cloud"), "--config", join(evidence, "browser-a.json")]), /EEXIST/)
+  await assert.rejects(run(process.execPath, [launcher, "--config", join(evidence, "browser-a.json")]), /EEXIST/)
   console.log(JSON.stringify({ passed: true, evidence, scenarios: results.length, video, duration: media.format.duration }))
 } finally {
   for (const child of active) child.kill("SIGTERM")

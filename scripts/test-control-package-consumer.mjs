@@ -19,6 +19,7 @@ try {
     const result = await run(npm, ["pack", `./packages/${name}`, "--ignore-scripts", "--json", "--pack-destination", directory])
     const [pack] = JSON.parse(result.stdout)
     assert.ok(pack.files.some(file => file.path === "LICENSE"))
+    assert.ok(!pack.files.some(file => /computer-tools-main/.test(file.path)), "Removed public adapter cannot ship")
     assert.ok(pack.files.some(file => file.path === "README.md"))
     assert.ok(pack.files.some(file => file.path === "dist/index.d.ts"))
     assert.ok(!pack.files.some(file => /(?:\.map$|\.pyc$|\.env|\.tsbuildinfo|node_modules|^src\/|^test\/)/.test(file.path)))
@@ -33,13 +34,14 @@ try {
   for (const name of ["control", "control-runtime"])
     assert.equal((await lstat(join(directory, "node_modules/@mako", name))).isSymbolicLink(), false)
   const binHelp = await run(join(directory, "node_modules/.bin/mako-control"), ["--help"], { cwd: directory })
-  assert.match(binHelp.stdout, /composable commands/)
+  assert.match(binHelp.stdout, /browser and computer use/)
   const require = createRequire(join(directory, "package.json"))
   const load = name => import(pathToFileURL(require.resolve(name)).href)
   const { createControlRuntime } = await load("@mako/control-runtime")
   const { serveControlSession, controlSessionBuild: installedBuild } = await load("@mako/control-runtime/session")
   assert.equal(await installedBuild(), await controlSessionBuild(), "Identity survives archive installation and relocation")
   assert.throws(() => require.resolve("@mako/control-runtime/dist/control-session.js"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" })
+  assert.throws(() => require.resolve("@mako/control-runtime/mcp"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" })
   const output = join(directory, "output")
   await mkdir(output)
   const empty = createControlRuntime({ artifacts: output })
@@ -76,7 +78,7 @@ try {
   const shot = await command(["shot", "--target-file", "-", "--output", join(output, "proof.png")], JSON.stringify(target))
   assert.ok(shot.width > 0 && shot.height > 0)
   assert.ok((await readFile(shot.path)).length > 100)
-  const help = await command(["help", "--input", "-"], JSON.stringify({ domain: "Page", method: "navigate" }))
+  const help = await command(["api", "--input", "-"], JSON.stringify({ domain: "Page", method: "navigate" }))
   assert.ok(JSON.stringify(help).includes("navigate"), "Pinned protocol JSON resolves from a declared dependency")
   const spilled = await command(["exec", "--source-file", "-"], "return 'x'.repeat(50000)")
   const artifact = spilled.find(block => block.value?.artifact)?.value
@@ -87,14 +89,14 @@ try {
 import { createControlRuntime, type ControlRuntimeOptions } from '@mako/control-runtime';
 import { serveControlSession } from '@mako/control-runtime/session';
 import { BrowserService } from '@mako/control-runtime/browser';
-import { createComputerToolsServer } from '@mako/control-runtime/mcp';
+import { startDesktopControlSession } from '@mako/control-runtime/session';
 import { controlClient } from '@mako/control/control';
 const options: ControlRuntimeOptions = {artifacts:'/tmp/example'};
 const runtime = createControlRuntime(options);
 const host = new BrowserService([]);
 const client = controlClient((action, args) => runtime.call({action, ...args}, new AbortController().signal));
 const page = client.tab({kind:'page',browser:'job',tab:'one',lease:'lease',generation:'one'});
-void page; void createComputerToolsServer; void host;
+void page; void startDesktopControlSession; void host;
 const shell = await serveControlSession(runtime);
 await shell.close(); await runtime.close();
 `)

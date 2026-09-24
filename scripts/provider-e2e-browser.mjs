@@ -55,7 +55,7 @@ export async function runBrowserFixture(
         requestId = randomUUID(),
         cwd = join(root, `browser-${provider}`)
       await mkdir(cwd)
-      const result = { flow: "model-browser-mcp", provider, status: "pending" }
+      const result = { flow: "model-browser-cli", provider, status: "pending" }
       results.push(result)
       const wait = async (predicate) => {
         const deadline = Date.now() + 240_000
@@ -65,18 +65,8 @@ export async function runBrowserFixture(
             const once = permission.options.find(
               (option) => option.kind === "allow_once"
             )
-            const permitted = [
-              "mako_control_status",
-              "mako_control_help",
-              "mako_control_exec",
-            ].some(
-              (tool) =>
-                permission.title ===
-                  `mako-control: Allow the mako-control MCP server to run tool "${tool}"?` ||
-                permission.title === `mcp__mako-control__${tool}` ||
-                permission.title === `mako-control: ${tool}` ||
-                permission.title === `mako-control-${tool}: ${tool}`
-            )
+            const permitted = /mako-control/.test(JSON.stringify(permission)) || JSON.stringify(permission).includes(cwd)
+
             if (!once || !permitted)
               throw new Error(
                 `Permission outside browser fixture grant: ${permission.title}`
@@ -103,7 +93,7 @@ export async function runBrowserFixture(
         owner.submit(
           id,
           requestId,
-          `This is an authorized disposable browser integration test. Use mako_control_exec programs only. Through control.openTab({browser,url}), open ${url}/${provider} in the connected browser, keep its returned tab handle in state, and emitImage(await state.tab.screenshot()). Read the displayed fixture value and count the red and blue squares. Use tab.observe, observation.get, tab.setValue and tab.click to fill all three form fields and click Verify, then confirm the page says Verified successfully. Use real browser input and click events, not direct network requests, DOM value assignments, or synthetic DOM events. Do not use shell, files, another browser server, or other websites. Close only your created fixture page through tab.close() after verification. Reply with the fixture value and the counts.`
+          `This is an authorized disposable browser integration test. Use the attached mako-control CLI for browser operations. Run --help as needed; use exec --source-file for programs. Through control.openTab({browser,url}), open ${url}/${provider} in the connected browser, keep its returned tab handle in state, and emitImage(await state.tab.screenshot()). Read the displayed fixture value and count the red and blue squares. Use tab.observe, observation.get, tab.setValue and tab.click to fill all three form fields and click Verify, then confirm the page says Verified successfully. Use real browser input and click events, not direct network requests, DOM value assignments, or synthetic DOM events. If the CLI reports a build mismatch, stop and report it; never bypass the CLI or construct private socket requests. Use shell commands and local screenshot files as needed; do not use another browser server or other websites. Close only your created fixture page through tab.close() after verification. Reply with the fixture value and the counts.`
         )
         const completed = await wait((snapshot) =>
           snapshot?.requests.some(
@@ -112,6 +102,7 @@ export async function runBrowserFixture(
           )
         )
         const calls = completed.blocks.filter((block) => block.type === "tool")
+        if (JSON.stringify(calls).includes("incompatible-session")) throw new Error("Runtime changed during acceptance; private-protocol workarounds do not count as CLI acceptance")
         const reply = completed.blocks
           .filter((block) => block.type === "text")
           .map((block) => block.text)
@@ -146,6 +137,7 @@ export async function runBrowserFixture(
         result.status = "passed"
         result.nativeId = completed.session.nativeId
         result.toolCalls = calls.map((block) => block.title)
+        if (result.toolCalls.some(title => /mako_(control|computer)_/.test(title))) throw new Error("Removed Local Control MCP tool was used")
         result.submission = records[0]
       } catch (error) {
         result.status = "failed"
@@ -157,7 +149,7 @@ export async function runBrowserFixture(
             join(root, `browser-${provider}.json`),
             JSON.stringify(snapshot, null, 2)
           )
-        if (snapshot) owner.close(id)
+        if (snapshot) await owner.close(id)
       }
       console.log(JSON.stringify(result))
     }

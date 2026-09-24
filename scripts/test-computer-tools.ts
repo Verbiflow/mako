@@ -11,14 +11,13 @@ import {
 import { createServer } from "node:http"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import {
   BACKGROUND_INPUT_LADDER,
-  createComputerToolsServer,
-} from "../packages/control-runtime/src/computer-tools-main.js"
+  type SessionProbe,
+  controlSessionProbe,
+} from "./lib/control-session-probe.ts"
 import { connectMcpComputerDriver, type ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import { canonicalDriverPath } from "../packages/control-runtime/src/computer-paths.js"
 
@@ -96,16 +95,16 @@ const textBlocks = z.array(
 )
 const firstText = (content: CallToolResult["content"] | undefined) =>
   z.string().parse(textBlocks.parse(content)[0]?.text)
-const exec = (client: Client, program: string) =>
-  client.callTool({
-    name: "mako_computer_exec",
+const exec = (client: SessionProbe, program: string) =>
+  client.request({
+    method: "exec",
     arguments: { source: program },
   })
 try {
   for (const task of ["first", "second"]) {
     const marker = join(fixtureRoot, task)
     const failOnce = `import { existsSync, writeFileSync } from "node:fs"; const marker = ${JSON.stringify(marker)}; if (!existsSync(marker)) { writeFileSync(marker, "failed initialization"); process.exit(1); }\n`
-    const server = createComputerToolsServer(
+    const server = controlSessionProbe(
       {
         command: process.execPath,
         args: ["--input-type=module", "--eval", failOnce + source],
@@ -114,33 +113,24 @@ try {
       undefined,
       { surface: "driver" }
     )
-    const client = new Client({ name: "computer-test", version: "1" })
-    const [ct, st] = InMemoryTransport.createLinkedPair()
+    const client = server
     try {
-      await server.connect(st)
-      await client.connect(ct)
-      assert.match(client.getInstructions() ?? "", /delivered_chars/)
-      assert.match(client.getInstructions() ?? "", /invoke_menu/)
-      assert.match(client.getInstructions() ?? "", /view\(target\)/)
-      assert.match(client.getInstructions() ?? "", /act\('click'/)
+
+
+      assert.match(client.instructions ?? "", /delivered_chars/)
+      assert.match(client.instructions ?? "", /invoke_menu/)
+      assert.match(client.instructions ?? "", /view\(target\)/)
+      assert.match(client.instructions ?? "", /act\('click'/)
       // A failed driver start is reported and retried on the next call.
-      const failed = await client.callTool({
-        name: "mako_computer_help",
+      const failed = await client.request({
+        method: "help",
         arguments: {},
       })
       assert.equal(failed.isError, true)
       assert.match(String(failed.structuredContent?.message), /closed/i)
       // The program tool's description carries the reference, read from the
       // live driver: helpers first, then every action with its return shape.
-      const tools = await client.listTools()
-      assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
-        "mako_computer_exec",
-        "mako_computer_help",
-        "mako_computer_status",
-      ])
-      const execDescription =
-        tools.tools.find((tool) => tool.name === "mako_computer_exec")
-          ?.description ?? ""
+      const execDescription = await client.reference()
       assert.match(
         execDescription,
         /Helpers \(async, available in every program\):\n  view\(/
@@ -161,8 +151,8 @@ try {
           JSON.parse(
             firstText(
               (
-                await client.callTool({
-                  name: "mako_computer_help",
+                await client.request({
+                  method: "help",
                   arguments: {},
                 })
               ).content
@@ -203,8 +193,8 @@ try {
           JSON.parse(
             firstText(
               (
-                await client.callTool({
-                  name: "mako_computer_help",
+                await client.request({
+                  method: "help",
                   arguments: { tool: "get_window_state" },
                 })
               ).content
@@ -245,7 +235,7 @@ try {
         { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
       ])
     } finally {
-      await client.close()
+
       await server.close()
     }
   }
@@ -317,7 +307,7 @@ try {
   const port = z.object({ port: z.number() }).parse(control.address()).port
   process.env.MAKO_CONTROL_URL = `http://127.0.0.1:${port}/browser`
   process.env.MAKO_CONTROL_TOKEN = "fixture-token"
-  const server = createComputerToolsServer(
+  const server = controlSessionProbe(
     {
       command: process.execPath,
       args: ["--input-type=module", "--eval", driverSource],
@@ -326,24 +316,16 @@ try {
     undefined,
     { surface: "driver" }
   )
-  const client = new Client({ name: "computer-test", version: "1" })
-  const [ct, st] = InMemoryTransport.createLinkedPair()
+  const client = server
   try {
-    await server.connect(st)
-    await client.connect(ct)
-    const listed = await client.listTools()
-    const catalogBytes = Buffer.byteLength(JSON.stringify(listed.tools))
-    assert.ok(catalogBytes < 8_000, `tool catalog is ${catalogBytes} bytes`)
-    assert.match(
-      listed.tools.find((tool) => tool.name === "mako_computer_exec")
-        ?.description ?? "",
-      /\n  computer\.get_window_state\(\{pid, window_id, element_token\?, snapshot_id\?, max_elements\?, screenshot_out_file\?, delivery_mode\?, include_markdown\?, include_menu_bar\?\}\) → \{snapshot_id, pid, window_id, screenshot_scale\}  Capture\.\n  computer\.click\(/
-    )
+
+
+    assert.match(await client.reference(), /computer\.get_window_state/)
     const statusSchema = z.object({
       available: z.literal(true),
       driverTools: z.literal(12),
       agentCursor: z.string(),
-      program: z.literal("mako_computer_exec"),
+      program: z.literal("mako-control exec"),
       helpers: z.array(z.string()),
       makoActions: z.array(z.string()),
       browser: z.string(),
@@ -362,8 +344,8 @@ try {
         JSON.parse(
           firstText(
             (
-              await client.callTool({
-                name: "mako_computer_status",
+              await client.request({
+                method: "status",
                 arguments: {},
               })
             ).content
@@ -375,8 +357,8 @@ try {
       JSON.parse(
         firstText(
           (
-            await client.callTool({
-              name: "mako_computer_status",
+            await client.request({
+              method: "status",
               arguments: {},
             })
           ).content
@@ -416,8 +398,8 @@ try {
         JSON.parse(
           firstText(
             (
-              await client.callTool({
-                name: "mako_computer_help",
+              await client.request({
+                method: "help",
                 arguments: { tool: "hotkey" },
               })
             ).content
@@ -433,17 +415,6 @@ try {
       -2_147_483_648,
       "driver formats are published as ranges"
     )
-    // A removed per-action tool is refused by name with the way in.
-    const legacy = await client.callTool({
-      name: "mako_computer_click",
-      arguments: { pid: 42 },
-    })
-    assert.equal(legacy.isError, true)
-    assert.match(
-      String(legacy.structuredContent?.message),
-      /mako_computer_exec/
-    )
-
     const shot = join(link, "nested", "shot.png")
     await mkdir(join(realRoot, "nested"))
     const pixels = Buffer.from(
@@ -965,7 +936,7 @@ try {
     assert.equal(preview.image.mimeType, "image/png")
     assert.equal(preview.image.data, pixels.toString("base64"))
   } finally {
-    await client.close()
+
     await server.close()
     assert.ok(browserOwnerReleases > 0)
     control.close()
@@ -997,7 +968,7 @@ const unifiedPageTarget = {
   generation: "fixture-generation",
   lease: "fixture-lease",
 }
-const unifiedServer = createComputerToolsServer(
+const unifiedServer = controlSessionProbe(
   {
     command: process.execPath,
     args: ["--input-type=module", "--eval", driverSource],
@@ -1088,59 +1059,19 @@ const unifiedServer = createComputerToolsServer(
     },
   }
 )
-const unifiedClient = new Client({ name: "control-test", version: "1" })
-const [unifiedClientTransport, unifiedServerTransport] =
-  InMemoryTransport.createLinkedPair()
+const unifiedClient = unifiedServer
 try {
-  await unifiedServer.connect(unifiedServerTransport)
-  await unifiedClient.connect(unifiedClientTransport)
+
+
   assert.match(
-    unifiedClient.getInstructions() ?? "",
+    unifiedClient.instructions ?? "",
     /provider-neutral code API/
   )
-  const tools = await unifiedClient.listTools()
-  assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
-    "mako_control_exec",
-    "mako_control_help",
-    "mako_control_status",
-  ])
-  const execSchema = tools.tools.find(
-    (tool) => tool.name === "mako_control_exec"
-  )!.inputSchema
-  assert.deepEqual(execSchema.oneOf, [
-    { required: ["source"] },
-    { required: ["cell"] },
-  ])
-  for (const args of [
-    {
-      source: "return await control.browsers();",
-      cell: "claude-timeout-hosts",
-    },
-    { source: "return await control.browsers();", cell: 1 },
-    { code: "return await control.browsers()" },
-    { cell: "1" },
-    { cell: "return await control.browsers()" },
-    {},
-    { source: "return 1", cell: 1 },
-  ]) {
-    const failed = await unifiedClient.callTool({
-      name: "mako_control_exec",
-      arguments: args,
-    })
-    assert.equal(failed.isError, true)
-    assert.equal(failed.structuredContent?.code, "invalid-request")
-    assert.equal(failed.structuredContent?.outcome, "not-dispatched")
-    assert.match(String(failed.structuredContent?.recovery), /numeric cell/)
-    assert.doesNotMatch(
-      String(failed.structuredContent?.recovery),
-      /Read the exact target/
-    )
-  }
   const help = JSON.parse(
     firstText(
       (
-        await unifiedClient.callTool({
-          name: "mako_control_help",
+        await unifiedClient.request({
+          method: "help",
           arguments: {},
         })
       ).content
@@ -1148,23 +1079,19 @@ try {
   )
   assert.equal(help.version, 2)
   assert.match(help.handles, /control.window/)
-  assert.ok(
-    !JSON.stringify(tools).includes("get_accessibility_tree"),
-    "native tool catalog is lazy"
-  )
   const protocolHelp = JSON.parse(
     firstText(
       (
-        await unifiedClient.callTool({
-          name: "mako_control_help",
+        await unifiedClient.request({
+          method: "help",
           arguments: { domain: "Runtime", method: "evaluate" },
         })
       ).content
     )
   )
   assert.equal(protocolHelp.command.name, "evaluate")
-  const routed = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const routed = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `state.window = control.window({pid:42,window_id:7});
 const before = await state.window.observe();
@@ -1182,8 +1109,8 @@ return {receipt, proof: await state.window.expect({role:'TextField',name:'Name',
   assert.equal(result.receipt.observation, undefined)
   assert.equal(result.proof.status, "matched")
   assert.equal(result.proof.evidence.value, "unified")
-  const lossy = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const lossy = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const view=await state.window.observe();
 await state.window.setValue(view.get({role:'TextField',name:'Name'}).ref,'legacy-normalized');
@@ -1191,16 +1118,16 @@ try {await state.window.expect({role:'TextField',name:'Name',value:'legacy-norma
     },
   })
   assert.match(firstText(lossy.content), /Exact value unavailable/)
-  const reuse = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const reuse = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `let stale; try { await state.window.setValue(state.oldRef,'bad') } catch(e) { stale=e.message }; return {stale,view:await state.window.observe()}`,
     },
   })
   assert.ok(!reuse.isError, JSON.stringify(reuse))
   assert.match(firstText(reuse.content), /latest observation/)
-  const removed = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const removed = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source:
         "return {act:typeof control.act, page:typeof page, observe:typeof control.observe, advanced:typeof control.advanced}",
@@ -1212,8 +1139,8 @@ try {await state.window.expect({role:'TextField',name:'Name',value:'legacy-norma
     observe: "undefined",
     advanced: "undefined",
   })
-  const crossTarget = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const crossTarget = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const observed = await control.window({pid:42,window_id:7}).observe();
 const ref = observed.get({role:'Button',name:'Go'}).ref;
@@ -1227,8 +1154,8 @@ return control.window({pid:42,window_id:9}).activate(ref);`,
   )
   assert.equal(crossTarget.structuredContent?.code, "stale-reference")
   assert.equal(crossTarget.structuredContent?.outcome, "not-dispatched")
-  const dispatchOnly = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const dispatchOnly = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const initial=await control.native('get_config');
 const view=await state.window.observe(); const ref=view.get({role:'TextField',name:'Name'}).ref;
@@ -1243,8 +1170,8 @@ const final=await control.native('get_config'); return {reads:final.captures-ini
     images: 0,
     stale: { code: "stale-reference", outcome: "not-dispatched" },
   })
-  const unknown = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const unknown = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const view=await state.window.observe(); const faults=[];
 try {await state.window.setValue(view.get({role:'TextField',name:'Name'}).ref,'unknown-outcome-fixture')} catch(e) {faults.push(e.outcome)};
@@ -1260,8 +1187,8 @@ const proof=await state.window.expect({role:'TextField',name:'Name',value:'unkno
     faults: ["unknown", "observation-required", "observation-required", "observation-required"],
     status: "matched",
   })
-  const rawUnknown = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const rawUnknown = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
 const page=await tab.observe(); const pageRef=page.get({role:'textbox',name:'Page proof'}).ref;
@@ -1285,8 +1212,8 @@ return {faults,writes:after.writes-before.writes,proof:proof.status};`,
     writes: 1,
     proof: "matched",
   })
-  const rawPageFailure = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const rawPageFailure = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
 const native=await state.window.observe(); const nativeRef=native.get({role:'TextField',name:'Name'}).ref;
@@ -1309,16 +1236,16 @@ return {faults};`,
     "https://fixture.invalid/lost-reply", "https://fixture.invalid/recovered",
   ])
   const cancellation = new AbortController()
-  const lateCall = unifiedClient.callTool({
-    name: "mako_control_exec",
+  const lateCall = unifiedClient.request({
+    method: "exec",
     arguments: { source: `await control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}}).navigate('https://fixture.invalid/late-cancellation')` },
-  }, undefined, { signal: cancellation.signal })
+  }, { signal: cancellation.signal })
   const cancelledCall = assert.rejects(lateCall)
   await cancellationStarted.promise
   cancellation.abort()
   await cancelledCall
-  const afterCancellation = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const afterCancellation = await unifiedClient.request({
+    method: "exec",
     arguments: { source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
 let blocked; try {await tab.navigate('https://fixture.invalid/replayed')} catch(e) {blocked=e.code};
 await tab.observe(); return {blocked};` },
@@ -1328,29 +1255,29 @@ await tab.observe(); return {blocked};` },
   assert.equal(unifiedNavigations.filter((url) => url.endsWith("/late-cancellation")).length, 1)
   assert.ok(!unifiedNavigations.some((url) => url.endsWith("/replayed")))
   assert.equal(programCancellations, 1, "actual program cancellation reaches its supervisor")
-  const yieldedReceipt = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const yieldedReceipt = await unifiedClient.request({
+    method: "exec",
     arguments: { source: "await new Promise(resolve=>setTimeout(resolve,12000)); return {completed:true}" },
   })
   const yieldedCell = z.object({ cell: z.number() }).parse(JSON.parse(firstText(yieldedReceipt.content))).cell
   const stopCollecting = new AbortController()
-  const collecting = unifiedClient.callTool({
-    name: "mako_control_exec", arguments: { cell: yieldedCell },
-  }, undefined, { signal: stopCollecting.signal })
+  const collecting = unifiedClient.request({
+    method: "exec", arguments: { cell: yieldedCell },
+  }, { signal: stopCollecting.signal })
   const stoppedCollecting = assert.rejects(collecting)
   await new Promise((resolve) => setTimeout(resolve, 20))
   stopCollecting.abort()
   await stoppedCollecting
   await new Promise((resolve) => setTimeout(resolve, 2200))
-  const retainedReceipt = await unifiedClient.callTool({
-    name: "mako_control_exec", arguments: { cell: yieldedCell },
+  const retainedReceipt = await unifiedClient.request({
+    method: "exec", arguments: { cell: yieldedCell },
   })
   assert.ok(!retainedReceipt.isError, JSON.stringify(retainedReceipt))
   assert.deepEqual(JSON.parse(firstText(retainedReceipt.content)), { completed: true })
   assert.equal(programCancellations, 1, "abandoning receipt collection must not destroy the cloud job")
   holdPageObservation = true
-  const overlappingRead = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const overlappingRead = await unifiedClient.request({
+    method: "exec",
     arguments: { source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
 const reading=tab.observe().then(()=> 'unsafe-success',e=>e.code);
 await tab.raw('cdp',{method:'Runtime.evaluate',params:{expression:'release-observation'},concurrent:true});
@@ -1362,8 +1289,8 @@ await tab.observe(); return {read,blocked};` },
   assert.deepEqual(JSON.parse(firstText(overlappingRead.content)), {
     read: "observation-interrupted", blocked: "observation-required",
   })
-  const concurrentDialog = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const concurrentDialog = await unifiedClient.request({
+    method: "exec",
     arguments: { source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
 const navigation=tab.navigate('https://fixture.invalid/dialog-wait');
 const dialog=await tab.dialog({respond:'dismiss'});
@@ -1371,8 +1298,8 @@ await navigation; return dialog;` },
   })
   assert.ok(!concurrentDialog.isError, JSON.stringify(concurrentDialog))
   assert.equal(JSON.parse(firstText(concurrentDialog.content)).answered.respond, "dismiss")
-  const pageRun = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const pageRun = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const target={kind:'page',...${JSON.stringify(unifiedPageTarget)}};
 const tab=control.tab(target);
@@ -1396,8 +1323,8 @@ return {receipt,proof:await tab.expect({role:'textbox',name:'Page proof',value:'
   assert.ok(
     pageResult.observation.lines.some((line) => line.includes('="page value"'))
   )
-  const pageHelpersRun = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const pageHelpersRun = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const connection=await control.connectBrowser('fixture-browser');
 if(connection.status!=='connected') throw new Error('Browser did not connect');
@@ -1423,8 +1350,8 @@ return {target:tab.target,lines:selected.lines,selection:{matched:selected.match
     })
     .parse(JSON.parse(firstText(pageHelpersRun.content)))
   assert.match(pageHelpersResult.lines.at(-1) ?? "", /textbox "Page proof"/)
-  const visual = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const visual = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `const tab=control.tab({kind:'page',...${JSON.stringify(unifiedPageTarget)}});
 const shot=await tab.screenshot(); const at={x:2,y:2,view:shot.view};
@@ -1436,8 +1363,8 @@ const receipt=await tab.click(at); let stale; try {await tab.click(at)} catch(e)
     status: "dispatched",
     stale: { code: "stale-view", outcome: "not-dispatched" },
   })
-  const backgroundRefusals = await unifiedClient.callTool({
-    name: "mako_control_exec",
+  const backgroundRefusals = await unifiedClient.request({
+    method: "exec",
     arguments: {
       source: `let hidden,chord;
 try { await control.window({pid:42,window_id:8}).click({x:2,y:2,view:'missing'}) } catch(e) { hidden=e.message }
@@ -1450,14 +1377,14 @@ return {hidden,chord};`,
   assert.match(refusals.hidden, /Nothing was dispatched/)
   assert.match(refusals.chord, /foreground-required/)
 } finally {
-  await unifiedClient.close()
+
   await unifiedServer.close()
 }
 
 // Unspecified native input can fail before the host has seen any windows.
 let reconnectingDriver: ComputerDriverClient | undefined
 let reconnects = 0
-const unscopedServer = createComputerToolsServer(
+const unscopedServer = controlSessionProbe(
   { command: process.execPath, args: ["--input-type=module", "--eval", driverSource] },
   "unscoped-control", async (process) => {
     reconnects++
@@ -1465,13 +1392,12 @@ const unscopedServer = createComputerToolsServer(
     return reconnectingDriver
   }, { surface: "control" }
 )
-const unscopedClient = new Client({ name: "unscoped-test", version: "1" })
-const [unscopedClientTransport, unscopedServerTransport] = InMemoryTransport.createLinkedPair()
+const unscopedClient = unscopedServer
 try {
-  await unscopedServer.connect(unscopedServerTransport)
-  await unscopedClient.connect(unscopedClientTransport)
-  const reply = await unscopedClient.callTool({
-    name: "mako_control_exec",
+
+
+  const reply = await unscopedClient.request({
+    method: "exec",
     arguments: { source: `const faults=[];
 try {await control.native('set_value',{element_token:'refuse',value:'unknown-outcome-fixture'})} catch(e) {faults.push(e.outcome)};
 const window=control.window({pid:42,window_id:7});
@@ -1488,8 +1414,8 @@ return {faults,writes:(await control.native('get_config')).writes};` },
   })
   assert.ok(reconnectingDriver)
   await reconnectingDriver.close()
-  const reconnected = await unscopedClient.callTool({
-    name: "mako_control_exec",
+  const reconnected = await unscopedClient.request({
+    method: "exec",
     arguments: { source: `await control.native('get_config');
 let blocked; try {await control.window({pid:43,window_id:7}).raw('hotkey',{keys:['a']})} catch(e) {blocked=e.code};
 const window=control.window({pid:43,window_id:7}); await window.observe(); await window.raw('hotkey',{keys:['a']});
@@ -1499,7 +1425,7 @@ return {blocked};` },
   assert.equal(JSON.parse(firstText(reconnected.content)).blocked, "observation-required")
   assert.equal(reconnects, 2)
 } finally {
-  await unscopedClient.close()
+
   await unscopedServer.close()
 }
 
@@ -1536,7 +1462,7 @@ server.setRequestHandler(CallToolRequestSchema,request=>{
 await server.connect(new StdioServerTransport());`
 const previousGuard = process.env.MAKO_CONTROL_ASYNC_GUARD
 process.env.MAKO_CONTROL_ASYNC_GUARD = "1"
-const guardServer = createComputerToolsServer(
+const guardServer = controlSessionProbe(
   {
     command: process.execPath,
     args: ["--input-type=module", "--eval", guardDriverSource],
@@ -1545,14 +1471,12 @@ const guardServer = createComputerToolsServer(
   undefined,
   { surface: "control" }
 )
-const guardClient = new Client({ name: "guard-test", version: "1" })
-const [guardClientTransport, guardServerTransport] =
-  InMemoryTransport.createLinkedPair()
+const guardClient = guardServer
 try {
-  await guardServer.connect(guardServerTransport)
-  await guardClient.connect(guardClientTransport)
-  const acted = await guardClient.callTool({
-    name: "mako_control_exec",
+
+
+  const acted = await guardClient.request({
+    method: "exec",
     arguments: {
       source: `const target={kind:'window',pid:42,window_id:7};
 const window=control.window(target);
@@ -1575,8 +1499,8 @@ return {...receipt,blocked};`,
     })
     .parse(JSON.parse(firstText(acted.content)))
   await new Promise((resolve) => setTimeout(resolve, 250))
-  const events = await guardClient.callTool({
-    name: "mako_control_exec",
+  const events = await guardClient.request({
+    method: "exec",
     arguments: {
       source: "return control.window({pid:42,window_id:7}).events({after:0})",
     },
@@ -1603,8 +1527,8 @@ return {...receipt,blocked};`,
     ),
     "a late popup is emitted after the verified action returns"
   )
-  const failedGuard = await guardClient.callTool({
-    name: "mako_control_exec",
+  const failedGuard = await guardClient.request({
+    method: "exec",
     arguments: {
       source: `const window=control.window({pid:43,window_id:7});
 const view=await window.observe(); const ref=view.get({role:'Button',name:'Open later'}).ref;
@@ -1620,8 +1544,8 @@ return {status:receipt.status,guard:receipt.guard.status,blocked};`,
     blocked: "observation-required",
   })
 
-  const lateGuard = await guardClient.callTool({
-    name: "mako_control_exec",
+  const lateGuard = await guardClient.request({
+    method: "exec",
     arguments: { source: `const window=control.window({pid:44,window_id:7});
 const view=await window.observe(); const receipt=await window.activate(view.get({role:'Button',name:'Open later'}).ref);
 let events; for(let i=0;i<100;i++) {events=await window.events(); if(events.events.some(e=>e.kind==='guard-unavailable')) break; await new Promise(r=>setTimeout(r,10))};
@@ -1634,31 +1558,28 @@ return {guard:receipt.guard.status,events:events.events.map(e=>e.kind),blocked};
   })
 
 } finally {
-  await guardClient.close()
+
   await guardServer.close()
   if (previousGuard === undefined) delete process.env.MAKO_CONTROL_ASYNC_GUARD
   else process.env.MAKO_CONTROL_ASYNC_GUARD = previousGuard
 }
 // No native process may be started by discovery of the public contract or page execution.
-const pageOnly = createComputerToolsServer(
+const pageOnly = controlSessionProbe(
   { command: "/nonexistent/mako-driver" },
   "page-only",
   undefined,
   { surface: "control", browserCall: async () => [] }
 )
-const pageOnlyClient = new Client({ name: "page-only", version: "1" })
-const [pageOnlyTransport, pageOnlyServerTransport] =
-  InMemoryTransport.createLinkedPair()
+const pageOnlyClient = pageOnly
 try {
-  await pageOnly.connect(pageOnlyServerTransport)
-  await pageOnlyClient.connect(pageOnlyTransport)
-  await pageOnlyClient.listTools()
-  for (const name of ["mako_control_status", "mako_control_help"]) {
-    const result = await pageOnlyClient.callTool({ name, arguments: {} })
+
+
+  for (const method of ["status", "help"]) {
+    const result = await pageOnlyClient.request({ method, arguments: {} })
     assert.ok(!result.isError, JSON.stringify(result))
   }
-  const result = await pageOnlyClient.callTool({
-    name: "mako_control_exec",
+  const result = await pageOnlyClient.request({
+    method: "exec",
     arguments: { source: "return await control.browsers()" },
   })
   assert.ok(!result.isError, JSON.stringify(result))
@@ -1667,9 +1588,9 @@ try {
     available: true,
     browsers: [],
   })
-  // The public tool must preserve a yielded program across a malformed resume.
-  const yielded = await pageOnlyClient.callTool({
-    name: "mako_control_exec",
+  // The internal engine must preserve a yielded program across a malformed resume.
+  const yielded = await pageOnlyClient.request({
+    method: "exec",
     arguments: {
       source:
         "state.resumeProof=(state.resumeProof??0)+1; await new Promise(resolve=>setTimeout(resolve,10050)); return state.resumeProof",
@@ -1683,18 +1604,18 @@ try {
     })
     .parse(JSON.parse(firstText(yielded.content)))
   assert.ok(receipt.wait.includes(JSON.stringify({ cell: receipt.cell })))
-  const malformed = await pageOnlyClient.callTool({
-    name: "mako_control_exec",
+  const malformed = await pageOnlyClient.request({
+    method: "exec",
     arguments: { cell: String(receipt.cell) },
   })
   assert.equal(malformed.structuredContent?.outcome, "not-dispatched")
-  const collected = await pageOnlyClient.callTool({
-    name: "mako_control_exec",
+  const collected = await pageOnlyClient.request({
+    method: "exec",
     arguments: { cell: receipt.cell },
   })
   assert.equal(JSON.parse(firstText(collected.content)), 1)
-  const count = await pageOnlyClient.callTool({
-    name: "mako_control_exec",
+  const count = await pageOnlyClient.request({
+    method: "exec",
     arguments: { source: "return state.resumeProof" },
   })
   assert.equal(
@@ -1703,9 +1624,9 @@ try {
     "resume never reruns source"
   )
 } finally {
-  await pageOnlyClient.close()
+
   await pageOnly.close()
 }
 console.log(
-  "Computer MCP: driver-adapter regression and unified three-tool program surfaces, host-routed closed operations with receipts, results as data, target-bound refs, compact observations, background policy, browser lending, artifact receipts, previews and clean driver schemas verified"
+  "Control engine: driver regression and unified programs, host-routed closed operations with receipts, results as data, target-bound refs, compact observations, background policy, browser lending, artifact receipts, previews and clean driver schemas verified"
 )

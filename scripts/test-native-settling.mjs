@@ -1,3 +1,4 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -5,8 +6,6 @@ import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
@@ -47,7 +46,7 @@ let fixtureErrors = ""
 app.stderr.on("data", (chunk) => {
   fixtureErrors = (fixtureErrors + chunk.toString()).slice(-65536)
 })
-const client = new Client({ name: "native-settling-proof", version: "1" })
+const client = new ControlCliProbe({ name: "native-settling-proof", version: "1" })
 const evidence = { passed: false, root, calls: [] }
 let samples
 const read = async () => JSON.parse(await readFile(status, "utf8"))
@@ -62,22 +61,8 @@ async function until(fn, timeout = 10000) {
 }
 async function cell(source) {
   const start = performance.now()
-  let output = await client.callTool(
-    { name: "mako_control_exec", arguments: { source } },
-    undefined,
-    { timeout: 70000 }
-  )
-  for (;;) {
-    const receipt = JSON.parse(
-      output.content.find((block) => block.type === "text")?.text ?? "{}"
-    )
-    if (receipt.status !== "running") break
-    output = await client.callTool(
-      { name: "mako_control_exec", arguments: { cell: receipt.cell } },
-      undefined,
-      { timeout: 70000 }
-    )
-  }
+  let output = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   const result = JSON.parse(
     output.content.filter((block) => block.type === "text").at(-1).text
   )
@@ -100,20 +85,7 @@ try {
   }
   const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
   assert.ok(socket)
-  await client.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        resolve("packages/control-runtime/dist/computer-tools-main.js"),
-        "--driver",
-        resolveExecutable("cua-driver"),
-        "--socket",
-        socket,
-      ],
-      env: { ...process.env },
-      stderr: "inherit",
-    })
-  )
+  await client.start({native:{driver:resolveExecutable("cua-driver"),socket:socket},env:{ ...process.env }})
   samples = sampleFrontmost()
   const observed = await cell(
     `state.target={pid:${state.pid},window_id:${state.window}};state.window=control.window(state.target);return await state.window.observe();`

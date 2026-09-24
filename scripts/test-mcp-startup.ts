@@ -50,7 +50,7 @@ const listing = mock.method(providerHost.mcpSources, "list", () => [source])
 const previousPath = process.env.PATH
 process.env.PATH = `${root}${delimiter}${previousPath ?? ""}`
 try {
-  const snapshot = await discoverMcpRegistry(root, root)
+  const snapshot = await discoverMcpRegistry(root)
   assert.ok(
     snapshot.servers.some((server) => server.name === "fixture"),
     "Provider discovery must run alongside the managed driver probe, not before it"

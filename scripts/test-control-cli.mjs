@@ -5,9 +5,7 @@ import { mkdtemp, readFile, writeFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { createComputerToolsServer } from "../packages/control-runtime/dist/computer-tools-main.js"
+import { createControlSession, serveControlSession } from "../packages/control-runtime/dist/session.js"
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { browserFixture } from "./browser-control-fixture.ts"
 
@@ -19,22 +17,14 @@ const browserCall = (command, signal) =>
   browsers.execute("cli-proof", command, signal)
 browserCall.close = () =>
   browsers.releaseOwner("cli-proof", { finalizeRecordings: true })
-const server = createComputerToolsServer(undefined, "cli-proof", undefined, {
+const session = createControlSession(undefined, "cli-proof", undefined, {
   surface: "control",
-  cli: true,
   browserCall,
 })
-const client = new Client({ name: "cli-proof", version: "1" })
-const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-await server.connect(serverTransport)
-await client.connect(clientTransport)
-const value = (reply) => {
-  assert.ok(!reply.isError, JSON.stringify(reply))
-  return JSON.parse(reply.content.find((block) => block.type === "text").text)
-}
+const server = await serveControlSession(session)
 const started = performance.now()
 const timings = []
-let sessionFile
+let sessionFile = server.file
 async function command(args, { stdin, code = 0 } = {}) {
   const before = performance.now()
   const child = spawn(
@@ -65,11 +55,8 @@ async function command(args, { stdin, code = 0 } = {}) {
   return JSON.parse(stderr)
 }
 try {
-  sessionFile = value(
-    await client.callTool({ name: "mako_control_status", arguments: {} })
-  ).sessionFile
   assert.ok(sessionFile)
-  assert.ok(await command(["help"]))
+  assert.ok(await command(["api"]))
   assert.equal((await stat(sessionFile)).mode & 0o777, 0o600)
   await command(["connect", "--browser", "fixture"])
   const target = await command(["open", "--browser", "fixture"])
@@ -149,24 +136,14 @@ try {
     "output-exists"
   )
   assert.equal(captures(), captured, "Refuse existing output before capture")
-  value(
-    await client.callTool({
-      name: "mako_control_exec",
-      arguments: { source: 'state.shared = "東京 🧪"; return state.shared' },
-    })
-  )
+  await command(["exec", "--source-file", "-"], {stdin: 'state.shared = "東京 🧪"; return state.shared'})
   const shared = await command(["exec", "--source-file", "-"], {
     stdin:
       "state.count = (state.count ?? 0) + 1; return {shared:state.shared,count:state.count}",
   })
   assert.deepEqual(shared.at(-1).value, { shared: "東京 🧪", count: 1 })
   assert.equal(
-    value(
-      await client.callTool({
-        name: "mako_control_exec",
-        arguments: { source: "return state.count" },
-      })
-    ),
+    (await command(["exec", "--source-file", "-"], {stdin: "return state.count"})).at(-1).value,
     1
   )
   const imageResult = await command(["exec", "--source-file", "-"], {
@@ -205,12 +182,7 @@ try {
   assert.equal(await pipeExit, 4, pipeError)
   assert.equal(JSON.parse(pipeError).outcome, "unknown")
   assert.equal(
-    value(
-      await client.callTool({
-        name: "mako_control_exec",
-        arguments: { source: "return state.pipeWrites" },
-      })
-    ),
+    (await command(["exec", "--source-file", "-"], {stdin: "return state.pipeWrites"})).at(-1).value,
     1
   )
   assert.equal(
@@ -402,7 +374,6 @@ try {
     })
   )
 } finally {
-  await client.close()
   await server.close()
   browsers.close()
   await fixture.close()

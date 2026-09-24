@@ -1,4 +1,4 @@
-// Opt-in real-provider probe: writes only one nonce file in its disposable workspace.
+// Opt-in real-provider probe: permitted writes are nonce files in its disposable workspace.
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, mkdir, writeFile, readFile, symlink } from "node:fs/promises"
@@ -218,11 +218,18 @@ async function run() {
     await owner.start(provider, cwd, {
       conversationId: id,
       title: "Mako disposable native approval probe",
-      modeId: mode,
+      modeId: process.env.MAKO_NATIVE_APPROVAL_CHECK_INHERITED ? undefined : mode,
       tuning: models[provider] ? { model: models[provider] } : undefined,
     })
     await wait((s) => s?.session.status === "ready")
     result.nativeId = owner.snapshot(id).session.nativeId
+    if (process.env.MAKO_NATIVE_APPROVAL_CHECK_INHERITED) {
+      const session = owner.snapshot(id).session
+      result.inheritedMode = session.currentMode
+      if (session.currentMode !== process.env.MAKO_NATIVE_APPROVAL_CHECK_INHERITED) throw Error('Native inherited policy was not reported accurately')
+      await capture('inherited-policy')
+      await owner.setMode(id, mode)
+    }
     if (provider === "opencode") {
       await owner.setMode(id, "plan")
       if (owner.snapshot(id).session.currentMode !== "plan") throw Error("Native Plan selection was not observed")
@@ -264,11 +271,11 @@ async function run() {
             const scoped =
               permission.title.includes(nonce) ||
               permission.title.includes(path)
-            const choice = permission.options.find(
-              (option) =>
-                option.kind ===
-                (decision === "allow" && scoped ? "allow_once" : "reject_once")
-            )
+            const choice = decision === "allow" && scoped
+              ? permission.options.find(option => option.kind === "allow_once")
+              : permission.options.find(option => option.kind === "reject_once") ?? permission.options.find(option => option.kind === "reject_always")
+            if (!choice) throw Error('Native runtime offered no applicable approval choice')
+            record.nativeChoice = { id: choice.optionId, name: choice.name, kind: choice.kind }
             if (!scoped && decision === "allow") record.unscopedRefusal = true
             if (page && choice) {
               await capture(access+'-'+decision+'-pending')
@@ -313,6 +320,41 @@ async function run() {
       }
       console.log(JSON.stringify({ provider, ...record }))
     }
+    if (process.env.MAKO_NATIVE_APPROVAL_QUESTIONS) {
+      const questionMode = process.env.MAKO_NATIVE_QUESTION_MODE
+      if (questionMode) await owner.setMode(id, driver.modes?.find(item=>item.access===questionMode)?.id ?? questionMode)
+      const request = randomUUID()
+      owner.submit(id, request, 'Use your native structured question or user-input tool to ask exactly one question: "What is the verification phrase?" Allow a free-text answer (an Other option is fine). Wait for the answer, then reply with exactly that phrase. Do not ask in plain text, guess the phrase, run commands, read files, or call any other tools.')
+      const asked = await wait(s => s?.permissions.length || s?.requests.some(r => r.id === request && ['completed', 'failed', 'interrupted'].includes(r.status)))
+      const permission = asked.permissions[0]
+      if (!permission?.questions?.length || permission.questions.length !== 1) throw Error('Native runtime did not emit the requested single structured question')
+      const question = permission.questions[0]
+      if (question.options.length && !question.allowOther) throw Error('Native question did not allow a verification phrase')
+      // Generate after the native question arrived. The only path by which the
+      // runtime can learn this value is the answer to this exact occurrence.
+      const phrase = `ANSWER_${randomUUID()}`
+      const sentBefore = answerDispatches
+      await capture('question-pending')
+      if (page) {
+        const point = await page.executeJavaScript("(()=>{const input=[...document.querySelectorAll('fieldset input')].find(e=>e.getClientRects().length);if(!input)throw Error('Native question input missing');const r=input.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
+        for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
+        await page.debugger.sendCommand('Input.insertText',{text:phrase})
+        await capture('question-answer-draft')
+        const submit = await page.executeJavaScript("(()=>{const b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Send answers'&&e.getClientRects().length);if(!b||b.disabled)throw Error('Question answer is not ready');const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
+        for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...submit})
+      } else await sendApproval(permission.id,{kind:'answers',answers:{[question.id]:[phrase]}})
+      const answered = await wait(s => s?.requests.some(r=>r.id===request&&r.status==='completed'))
+      const start = answered.blocks.findIndex(b=>b.type==='user'&&b.requestId===request)
+      const response = answered.blocks.slice(start+1).filter(b=>b.type==='text').map(b=>b.text).join('')
+      if (start < 0 || !response.includes(phrase)) throw Error('Native continuation did not consume the submitted verification phrase')
+      if (answerDispatches !== sentBefore+1 || answered.permissions.some(p=>p.id===permission.id)) throw Error('Question answer dispatched more than once or stayed pending')
+      const receipt = answered.control?.approvalResponses?.find(r=>r.id===permission.id)
+      if (!receipt) throw Error('Structured answer receipt was not retained')
+      result.question = {requestId:request,approvalId:permission.id,phrase,continuationContainsAnswer:true,dispatches:1,receipt}
+      await render(answered)
+      await capture('question-completed')
+      if (questionMode) await owner.setMode(id,mode)
+    }
     if (process.env.MAKO_NATIVE_APPROVAL_CANCEL) {
       const cancelNonce = randomUUID(), cancelPath = join(cwd, 'cancelled.txt'), request = randomUUID()
       owner.submit(id, request, `In this disposable fixture, request approval to execute exactly: printf '%s' '${cancelNonce}' >> '${cancelPath}'. Do not run any other command or write any other file.`)
@@ -334,8 +376,14 @@ async function run() {
       const before = owner.snapshot(id)
       const sentAnswers = answerDispatches
       if (requireNativeDecisions && !before.control.approvalResponses.every(r => r.origin.native && !r.nativeDecision)) throw Error('Lost-event test did not retain unresolved native identities')
-      if (!owner.hibernateIfIdle(id)) throw Error('Disposable session could not hibernate')
-      await wait(s => s?.session.connection === 'hibernated', undefined, 20_000)
+      // Some native Stop implementations already close their transport. Reopen
+      // that retained session directly; only connected sessions need hibernation.
+      if (before.session.connection === 'connected') {
+        if (!owner.hibernateIfIdle(id)) throw Error('Disposable session could not hibernate')
+        await wait(s => s?.session.connection === 'hibernated', undefined, 20_000)
+      } else if (before.session.connection !== 'disconnected' || before.session.status !== 'ready') {
+        throw Error('Disposable session is not ready for owner reopen')
+      }
       owner.stop()
       dropDecisions = false
       owner = new LiveConversations(dependencies)
@@ -350,14 +398,14 @@ async function run() {
         if (content !== (item.fileMatches ? item.nonce : null)) throw Error(`Reconnect changed ${item.decision} execution count`)
       }
       if (answerDispatches !== sentAnswers) throw Error('Reconnect replayed an approval answer')
-      if (JSON.stringify(resumed.control?.approvalObservations) !== JSON.stringify(before.control?.approvalObservations)) throw Error('Reconnect lost external native resolutions')
+      if (externalDecision && JSON.stringify(resumed.control?.approvalObservations) !== JSON.stringify(before.control?.approvalObservations)) throw Error('Reconnect lost external native resolutions')
       const priorReceipts = before.control?.approvalResponses ?? []
       for (const prior of priorReceipts) {
         const retained = resumed.control?.approvalResponses?.find(receipt => receipt.id === prior.id)
         if (!retained || retained.digest !== prior.digest) throw Error('Reconnect lost an approval receipt')
         if (!requireNativeDecisions && !prior.nativeDecision && retained.nativeDecision) throw Error('Reconnect fabricated native decision evidence')
       }
-      result.reconnect = { sameSession: true, receipts: resumed.control?.approvalResponses, answersReplayed: false, answerDispatches, executionCountsUnchanged: true, exactNativeDecisions: requireNativeDecisions }
+      result.reconnect = { priorConnection: before.session.connection, sameSession: true, receipts: resumed.control?.approvalResponses, answersReplayed: false, answerDispatches, executionCountsUnchanged: true, exactNativeDecisions: requireNativeDecisions }
       await render(resumed)
       await capture('reconnected-native-evidence')
       if (page && requireNativeDecisions) {

@@ -1,3 +1,4 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
@@ -6,8 +7,6 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
 const browser = process.argv[2]
@@ -44,23 +43,17 @@ assert.ok(definitions.some((entry) => entry.id === browser))
 const service = new BrowserService(definitions, { preferencePath: join(root, "preferences.json") })
 const host = await startControlService(service, () => {})
 const credentials = host.mint("installed-browser-acceptance", "test")
-const client = new Client({ name: "installed-browser-acceptance", version: "2" })
+const client = new ControlCliProbe({ name: "installed-browser-acceptance", version: "2" })
 let samples
 async function cell(source) {
-  let result = await client.callTool({ name: "mako_control_exec", arguments: { source } }, undefined, { timeout: 70000 })
-  for (;;) {
-    const text = result.content.find((block) => block.type === "text")?.text
-    let receipt
-    try { receipt = JSON.parse(text) } catch {}
-    if (receipt?.status !== "running") break
-    result = await client.callTool({ name: "mako_control_exec", arguments: { cell: receipt.cell } }, undefined, { timeout: 70000 })
-  }
+  let result = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   assert.ok(!result.isError, JSON.stringify(result))
   return JSON.parse(result.content.filter((block) => block.type === "text").at(-1).text)
 }
 try {
   await service.connect(browser)
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(runtimeRoot, "computer-tools-main.js")], env: { ...process.env, MAKO_CONTROL_URL: credentials.url, MAKO_CONTROL_TOKEN: credentials.token, MAKO_TASK_ID: "installed-browser-acceptance" }, stderr: "pipe" }))
+  await client.start({browser:{url:credentials.url,token:credentials.token},env:{ ...process.env, MAKO_CONTROL_URL: credentials.url, MAKO_CONTROL_TOKEN: credentials.token, MAKO_TASK_ID: "installed-browser-acceptance" },runtimeRoot})
   evidence.frontmostBefore = await frontmostPid()
   samples = sampleFrontmost()
   await cell(`state.tab=await control.openTab({browser:${JSON.stringify(browser)},url:${JSON.stringify(`http://127.0.0.1:${page.address().port}`)},background:true});return true`)

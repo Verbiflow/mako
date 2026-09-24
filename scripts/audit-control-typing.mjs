@@ -1,9 +1,8 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { resolveExecutable } from "../dist-electron/executable.js"
 import {
   ensureCuaEmbedded,
@@ -28,7 +27,7 @@ const page = await startElectronFixture({
   policy: "prohibited",
   start: false,
 })
-const client = new Client({ name: "typing-audit", version: "1" })
+const client = new ControlCliProbe({ name: "typing-audit", version: "1" })
 const service = await startControlService(new BrowserService([]), () => {})
 let pagePid
 let samples
@@ -47,25 +46,9 @@ async function until(fn) {
 }
 async function cell(source, image = false) {
   const started = performance.now()
-  let result = await client.callTool(
-    { name: "mako_control_exec", arguments: { source } },
-    undefined,
-    { timeout: 70_000 }
-  )
+  let result = await client.request({method:"exec",arguments:{ source }}, { timeout: 70_000 })
   // Collect the runtime's text receipt without replaying source.
-  for (;;) {
-    const first = result.content.find((block) => block.type === "text")
-    let receipt
-    try {
-      receipt = first && JSON.parse(first.text)
-    } catch {}
-    if (receipt?.status !== "running" || !Number.isInteger(receipt.cell)) break
-    result = await client.callTool(
-      { name: "mako_control_exec", arguments: { cell: receipt.cell } },
-      undefined,
-      { timeout: 70_000 }
-    )
-  }
+  
   assert.ok(!result.isError, JSON.stringify(result))
   if (image) {
     assert.ok(
@@ -91,25 +74,12 @@ async function cell(source, image = false) {
 try {
   const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
   const credentials = service.mint("typing-audit", "binding")
-  await client.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        resolve("packages/control-runtime/dist/computer-tools-main.js"),
-        "--driver",
-        resolveExecutable("cua-driver"),
-        "--socket",
-        socket,
-      ],
-      env: {
+  await client.start({native:{driver:resolveExecutable("cua-driver"),socket:socket},browser:{url:credentials.url,token:credentials.token},env:{
         ...process.env,
         MAKO_CONTROL_URL: credentials.url,
         MAKO_CONTROL_TOKEN: credentials.token,
         MAKO_TASK_ID: "typing-audit",
-      },
-      stderr: "pipe",
-    })
-  )
+      }})
   const baseline = await frontmostPid()
   samples = sampleFrontmost()
   const launched = await cell(

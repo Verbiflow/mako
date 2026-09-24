@@ -1,9 +1,10 @@
+import {snapshotControlRuntime} from "./lib/control-runtime-snapshot.mjs"
+import {startCocoaFixture} from "./lib/cocoa-fixture.mjs"
 import { verifyNativeDelivery } from "./provider-delivery-fixture.mjs"
 import { launchEvidence, verifyLaunchEvidence } from "./provider-launch-evidence.mjs"
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
 import {
   sampleFrontmost,
-  startElectronFixture,
 } from "./lib/control-fixture.mjs"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -125,24 +126,34 @@ async function runElectron() {
     browserOperations.push({ conversationId, action: command.action })
     return value
   }
+  const { ControlSessions } = await import("../dist-electron/control-sessions.js")
+  const { controlLaunchInstructions } = await import("../dist-electron/control-launch.js")
+  const { resolveExecutable } = await import("../dist-electron/executable.js")
+  const runtimeSnapshot = await snapshotControlRuntime(root)
+  const sessions = new ControlSessions(async () => {
+    const socket = await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")
+    return socket ? {socket,driver:resolveExecutable("cua-driver")} : undefined
+  }, runtimeSnapshot.startDesktopControlSession)
   let control
   let mcp
   const dependencies = {
-    mcpSnapshot: (cwd) => discoverMcpRegistry(cwd, root),
+    mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
     root: join(root, "journals"),
     appPath: root,
     driver: (provider) => providerHost.liveDrivers.get(provider),
     providers: () =>
       providerHost.liveDrivers.list().map((driver) => driver.provider),
-    tools: (binding, id) => {
+    tools: async (binding, id) => {
       const conversation = mcp?.mint(binding, id)
       return conversation
-        ? { ...conversation, control: control?.mint(id, binding) }
+        ? { ...conversation, control: await sessions.start(binding, control?.mint(id, binding), async () => {await control?.revoke(id,binding)}) }
         : undefined
     },
+    controlInstructions: binding => { const launch=sessions.get(binding);return launch ? controlLaunchInstructions(launch) : undefined },
     revokeTools: async (binding, id) => {
       mcp?.revoke(binding, id)
       await control?.revoke(id, binding)
+      await sessions.stop(binding)
     },
     history: (path, before) => catalog.page(path, before),
     checkpoint: (path, provider) => checkpoint(provider, path),
@@ -166,12 +177,7 @@ async function runElectron() {
   const results = []
   const controlTitle = `Mako provider control ${randomUUID()}`
   const controlFixture = controlMode
-    ? await startElectronFixture({
-        root,
-        name: "provider-control-fixture",
-        title: controlTitle,
-        initial: "provider-control-seed",
-      })
+    ? await startCocoaFixture({root,title:controlTitle})
     : undefined
   const controlStarted = controlFixture
     ? await controlFixture.started()
@@ -406,7 +412,7 @@ async function runElectron() {
           id,
           requestId,
           controlMode
-            ? `Read proof.txt to obtain the exact fixture value. Then use Mako's local computer control MCP to operate the background window titled ${JSON.stringify(controlTitle)}. The target pid is ${String(controlStarted?.pid)}. Replace its Proof field with that fixture value, press its Verify proof button, and reply "done". Do not bring the target to the foreground. This is an authorized disposable integration test.`
+            ? `Read proof.txt to obtain the exact fixture value. Then use Mako's attached mako-control CLI to operate the background window titled ${JSON.stringify(controlTitle)}. The target pid is ${String(controlStarted?.pid)}. Replace its Proof field with that fixture value, press its Verify proof button, and reply "done". Do not bring the target to the foreground. This is an authorized disposable integration test.`
             : process.argv.includes("--shell")
               ? "Run the shell command `cat proof.txt` with your terminal or shell tool and reply with only the fixture value it prints. This is an authorized disposable integration test. Do not modify files."
               : "Read proof.txt in this workspace using your file tool. Reply with only the fixture value. This is an authorized disposable integration test. Do not modify files."
@@ -668,10 +674,10 @@ async function runElectron() {
           .map((block) => block.title)
         if (
           controlMode &&
-          !result.toolCalls.some((title) => /mako_computer_exec/i.test(title))
+          result.toolCalls.some((title) => /mako_(?:control|computer)_/i.test(title))
         )
           throw new Error(
-            `The provider changed the fixture without the requested local-control tool: ${JSON.stringify(result.toolCalls)}`
+            `The provider used a removed Local Control MCP tool: ${JSON.stringify(result.toolCalls)}`
           )
         result.proof = nonce
         await writeFile(
@@ -795,7 +801,7 @@ async function runElectron() {
         join(root, "results.json"),
         JSON.stringify(results, null, 2)
       )
-      owner.close(id)
+      await owner.close(id)
     }
     if (process.argv.includes("--remote")) {
       const { runRelayFixture } = await import("./provider-e2e-relay.mjs")
@@ -897,7 +903,7 @@ async function runElectron() {
         join(root, "results.json"),
         JSON.stringify(results, null, 2)
       )
-      owner.close(id)
+      await owner.close(id)
     }
     if (process.argv.includes("--delegate")) {
       const cwd = join(root, "delegation-fixture")
@@ -969,8 +975,8 @@ async function runElectron() {
         join(root, "results.json"),
         JSON.stringify(results, null, 2)
       )
-      owner.close(id)
-      owner.close(childId)
+      await owner.close(id)
+      await owner.close(childId)
     }
     if (process.argv.includes("--restart")) {
       // The restart runs on the first requested provider whose driver can
@@ -1079,7 +1085,7 @@ async function runElectron() {
         join(root, "results.json"),
         JSON.stringify(results, null, 2)
       )
-      owner.close(id)
+      await owner.close(id)
     }
     if (
       process.argv.includes("--fork") ||
@@ -1191,8 +1197,8 @@ async function runElectron() {
         join(root, "results.json"),
         JSON.stringify(results, null, 2)
       )
-      owner.close(id)
-      owner.close(forkId)
+      await owner.close(id)
+      await owner.close(forkId)
     }
     if (process.argv.includes("--flows")) {
       const cwd = join(root, "transfer-fixture")
@@ -1320,6 +1326,7 @@ async function runElectron() {
       await rm(cuaRoot, { recursive: true, force: true })
     }
     mcp.close()
+    await sessions.close()
     control.close()
     controlFixture?.stop()
     // A fixture ran in the user's real provider store, so the session it

@@ -1,10 +1,9 @@
+import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { mkdtemp, readFile, writeFile, realpath } from "node:fs/promises"
-import { join, resolve, dirname, delimiter } from "node:path"
+import { join, dirname, delimiter } from "node:path"
 import { promisify } from "node:util"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
@@ -32,7 +31,7 @@ const fixture = spawn(
   [root],
   { stdio: "ignore" }
 )
-const client = new Client({ name: "background-native-job", version: "1" })
+const client = new ControlCliProbe({ name: "background-native-job", version: "1" })
 const evidence = {
   driver,
   executable: await realpath(driver),
@@ -54,23 +53,8 @@ async function until(check) {
   throw Error("Independent fixture condition timed out")
 }
 async function cell(source) {
-  let result = await client.callTool(
-    { name: "mako_control_exec", arguments: { source } },
-    undefined,
-    { timeout: 70000 }
-  )
-  for (;;) {
-    let receipt
-    try {
-      receipt = JSON.parse(result.content.find((b) => b.type === "text")?.text)
-    } catch {}
-    if (receipt?.status !== "running") break
-    result = await client.callTool(
-      { name: "mako_control_exec", arguments: { cell: receipt.cell } },
-      undefined,
-      { timeout: 70000 }
-    )
-  }
+  let result = await client.request({method:"exec",arguments:{ source }}, { timeout: 70000 })
+  
   assert.ok(!result.isError, JSON.stringify(result))
   return JSON.parse(result.content.filter((b) => b.type === "text").at(-1).text)
 }
@@ -82,20 +66,7 @@ try {
     "dev.mako.background-job",
     { ...process.env, PATH: dirname(driver) + delimiter + process.env.PATH }
   )
-  await client.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        resolve("packages/control-runtime/dist/computer-tools-main.js"),
-        "--driver",
-        driver,
-        "--socket",
-        socket,
-      ],
-      env: process.env,
-      stderr: "pipe",
-    })
-  )
+  await client.start({native:{driver:driver,socket:socket},env:process.env})
   const baseline = await frontmostPid()
   samples = sampleFrontmost()
   await cell(
