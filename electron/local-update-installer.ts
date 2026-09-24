@@ -4,6 +4,7 @@ import {
   mkdtemp,
   open,
   readdir,
+  realpath,
   rename,
   rm,
   unlink,
@@ -149,24 +150,33 @@ export function daemonProcessIds(output: string): number[] {
 }
 
 export async function runningBundleProcesses(
-  bundle: string
+  bundle: string,
+  run: Run = (command, args) => execute(command, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 })
 ): Promise<number[]> {
   const [byTitle, byExecutable] = await Promise.all(
     ["comm=", "ucomm="].map(async (field) => {
-      const { stdout } = await execute("ps", ["-axo", "pid=", "-o", field], {
-        timeout: 10_000,
-        maxBuffer: 4 * 1024 * 1024,
-      })
+      const { stdout } = await run("ps", ["-axo", "pid=", "-o", field])
       return stdout
     })
   )
   const daemons = new Set(daemonProcessIds(byTitle!))
-  return [
+  const titles = new Map(processLines(byTitle!).map(({ pid, command }) => [pid, command]))
+  const candidates = [
     ...new Set([
       ...bundleProcessIds(byTitle!, bundle),
       ...bundleProcessIds(byExecutable!, bundle),
     ]),
   ].filter((pid) => !daemons.has(pid))
+  const retained = await Promise.all(candidates.map(async (pid) => {
+    if (titles.get(pid) !== "mako-browser-host") return false
+    const files = await run("lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"]).catch(() => null)
+    const helpers = files?.stdout.split("\n").filter(line => line.startsWith("n/") &&
+      line.endsWith("/Contents/Frameworks/Mako Helper.app/Contents/MacOS/Mako Helper")) ?? []
+    // The browser bridge runs from a retained bundle so replacing /Applications
+    // cannot affect it. Its OS executable name is still "Mako Helper".
+    return helpers.length > 0 && helpers.every(line => !line.startsWith(`n${bundle}/Contents/`))
+  }))
+  return candidates.filter((_pid, index) => !retained[index])
 }
 
 /** Browser-owned native messaging survives host Quit. Its extension reconnects. */
@@ -199,6 +209,7 @@ export async function stopOrphanedBundleCrashReporters(
 ): Promise<void> {
   if (uid === undefined) return
   const executable = join(bundle, "Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler")
+  const resolvedExecutable = await realpath(executable).catch(() => executable)
   const parse = (output: string) => output.split("\n").flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/.exec(line)
     return match && Number(match[2]) === 1 && Number(match[3]) === uid && match[4]!.trim() === executable
@@ -207,7 +218,7 @@ export async function stopOrphanedBundleCrashReporters(
   const { stdout } = await run("ps", ["-axo", "pid=,ppid=,uid=,comm="])
   for (const pid of parse(stdout)) {
     const files = await run("lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"]).catch(() => null)
-    if (!files?.stdout.split("\n").includes(`n${executable}`)) continue
+    if (!files?.stdout.split("\n").some(line => line === `n${executable}` || line === `n${resolvedExecutable}`)) continue
     const current = await run("ps", ["-p", String(pid), "-o", "pid=,ppid=,uid=,comm="]).catch(() => null)
     if (!current || !parse(current.stdout).includes(pid)) continue
     try { signal(pid) } catch (error) {

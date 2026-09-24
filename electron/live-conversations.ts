@@ -1117,7 +1117,10 @@ export class LiveConversations {
         conversationId: binding.id,
         resume: binding.nativeId,
         observedAgents: resident.snapshot.nativeAgents?.agents.filter((agent) => agent.bindingId === binding.id && agent.provider === binding.provider),
-        observedApprovals: this.control(resident).approvalResponses?.flatMap(receipt => receipt.origin.bindingId === binding.id && receipt.origin.native && !receipt.nativeDecision ? [receipt.origin.native] : []),
+        observedApprovals: [...new Map([
+          ...(this.control(resident).approvalObservations?.flatMap(item => item.bindingId === binding.id && !item.decision ? [item.identity] : []) ?? []),
+          ...(this.control(resident).approvalResponses?.flatMap(receipt => receipt.origin.bindingId === binding.id && receipt.origin.native && !receipt.nativeDecision ? [receipt.origin.native] : []) ?? []),
+        ].map(identity => [JSON.stringify([identity.scope, identity.sessionId, identity.requestId]), identity])).values()],
         threadPath: binding.path,
         title: resident.snapshot.session.title,
         tuning,

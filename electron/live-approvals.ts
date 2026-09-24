@@ -35,11 +35,15 @@ export class LiveApprovals {
       prior?.bindingId === origin.bindingId && origin.native !== undefined
         ? sameNativeApproval(prior.native, origin.native)
         : isDeepStrictEqual(prior, origin)
+    if (origin.native && control.approvalObservations?.some(item => item.decision && item.bindingId === origin.bindingId && sameNativeApproval(item.identity, origin.native))) return
     if (control.approvalResponses?.some(receipt => sameOccurrence(receipt.origin) &&
       (receipt.nativeDecision || receipt.state.kind !== "not-submitted" || !receipt.state.pending))) return
     const previous = resident.snapshot.permissions.find(item => sameOccurrence(item.origin))
     resident.snapshot = {
       ...resident.snapshot,
+      control: origin.native && !(control.approvalObservations ?? []).some(item => item.bindingId === origin.bindingId && sameNativeApproval(item.identity, origin.native)) && (control.approvalObservations?.length ?? 0) < 2000
+        ? { ...control, approvalObservations: [...(control.approvalObservations ?? []), { bindingId: origin.bindingId, identity: origin.native }] }
+        : control,
       permissions: [
         ...resident.snapshot.permissions.filter(item => item !== previous),
         { ...request, id: previous?.id ?? randomUUID(), origin },
@@ -47,7 +51,7 @@ export class LiveApprovals {
     }
   }
 
-  /** Late evidence can clear only the question belonging to its exact saved receipt. */
+  /** Native evidence settles only its exact binding and native occurrence. */
   decision(resident: Resident, bindingId: string, raw: NativeApprovalDecision): void {
     const control = this.host.control(resident)
     const binding = control.bindings.find(item => item.id === bindingId)
@@ -55,13 +59,17 @@ export class LiveApprovals {
     const decision = NativeApprovalDecisionSchema.parse(raw)
     const matches = control.approvalResponses?.filter(receipt => receipt.origin.bindingId === bindingId &&
       receipt.origin.native && sameNativeApproval(receipt.origin.native, decision.identity)) ?? []
-    // An ambiguous association cannot establish which answer the harness consumed.
-    if (matches.length !== 1 || matches[0].nativeDecision) return
+    const observations = control.approvalObservations?.filter(item => item.bindingId === bindingId && sameNativeApproval(item.identity, decision.identity)) ?? []
+    // Keep observed native questions after their transient UI row disappears.
+    // Native output and decision observation can arrive in either order.
+    if (observations.length > 1 || observations[0]?.decision || matches.length > 1 || (!observations.length && matches.length !== 1)) return
     resident.snapshot = { ...resident.snapshot,
-      permissions: resident.snapshot.permissions.filter(request => request.id !== matches[0].id || !isDeepStrictEqual(request.origin, matches[0].origin)),
+      permissions: resident.snapshot.permissions.filter(request => request.origin?.bindingId !== bindingId || !sameNativeApproval(request.origin.native, decision.identity)),
       control: { ...control,
-      approvalResponses: control.approvalResponses?.map(receipt => receipt === matches[0] ? { ...receipt, nativeDecision: decision } : receipt),
-    } }
+        approvalObservations: control.approvalObservations?.map(item => item === observations[0] ? { ...item, decision } : item),
+        approvalResponses: control.approvalResponses?.map(receipt => receipt === matches[0] && !receipt.nativeDecision ? { ...receipt, nativeDecision: decision } : receipt),
+      },
+    }
   }
 
   /** Exact occurrence reconciliation. A bare native ID may name a newer request. */
