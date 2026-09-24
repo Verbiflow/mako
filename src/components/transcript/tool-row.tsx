@@ -17,6 +17,7 @@ import { ToolDetails } from "./tool-details"
 import { TranscriptAttachment } from "./attachment"
 import { viewer } from "@/state/viewer"
 import { loadThreadBlock } from "@/state/thread-viewing"
+import { loadLiveHistoryDetail } from "@/state/live-history"
 import {
   ChevronRightIcon,
   CircleAlertIcon,
@@ -35,6 +36,8 @@ import { Shimmer } from "@/components/ui/shimmer"
  */
 export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false)
+  const [readError, setReadError] = useState<string | null>(null)
+  const [readAttempt, setReadAttempt] = useState(0)
   const dense = usePrefs((prefs) => prefs.denseTools)
   const source = useTranscriptSource()
   const view = useToolView(call)
@@ -46,9 +49,19 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   // row opens, and the head stays on screen until it lands.
   const rest = open ? call.rest : undefined
   const threadPath = source.threadPath
+  const liveId = source.liveId
   useEffect(() => {
-    if (rest && threadPath) void loadThreadBlock(threadPath, rest.at)
-  }, [rest, threadPath])
+    if (!rest) return
+    let active = true
+    const read = "live" in rest && liveId
+      ? loadLiveHistoryDetail(liveId, rest.live.token, rest.live.at)
+      : "at" in rest && threadPath ? loadThreadBlock(threadPath, rest.at)
+      : Promise.reject(new Error("The source of this output is unavailable."))
+    void read.then(() => { if (active) setReadError(null) }, error => {
+      if (active) setReadError(error instanceof Error ? error.message : String(error))
+    })
+    return () => { active = false }
+  }, [rest, threadPath, liveId, readAttempt])
 
   return (
     <div
@@ -99,13 +112,13 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
 
       {open ? (
         <div className="border-t border-hairline">
-          {call.details?.length ? <ToolDetails details={call.details} /> : null}
-          {Body && !call.details?.some((detail) => detail.type === "diff") ? (
+          {!rest && call.details?.length ? <ToolDetails details={call.details} /> : null}
+          {!rest && (Body && !call.details?.some((detail) => detail.type === "diff") ? (
             <Body call={call} expanded />
           ) : (
             <DefaultBody call={call} dense={dense} />
-          )}
-          {call.attachments?.length ? (
+          ))}
+          {!rest && call.attachments?.length ? (
             <div className="space-y-2 p-2.5">
               {call.attachments.map((attachment, index) => (
                 <TranscriptAttachment
@@ -117,7 +130,8 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
           ) : null}
           {rest ? (
             <p className="px-2.5 pb-2 text-label">
-              <Shimmer text={`Reading the rest of this output${rest.length ? ` · ${rest.length.toLocaleString()} characters` : ""}`} />
+              {readError ? <><span role="alert">{readError}</span>{" "}<button type="button" className="pressable underline" onClick={() => { setReadError(null); setReadAttempt(value => value + 1) }}>Try again</button></>
+                : <Shimmer text={`Reading the rest of this output${rest.length ? ` · ${rest.length.toLocaleString()} characters` : ""}`} />}
             </p>
           ) : null}
         </div>

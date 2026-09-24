@@ -5,6 +5,7 @@ import { ChangingLabel } from "@/components/ui/changing-label"
 import { Collapse } from "@/components/ui/collapse"
 import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
+import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
 import { acp, useAcp, activeLiveAcp } from "@/state/acp"
 import { PlanSummary } from "./tool-details"
@@ -691,8 +692,9 @@ function SystemNote({ message }: { message: ChatMessage }) {
 /* ------------------------------------------------------------------ */
 
 function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; streaming?: boolean; interrupted?: boolean | TurnStop }) {
+  const { liveId } = useTranscriptSource()
   const text = responseText(exchange)
-  const { copied, copy } = useCopy(text)
+  const { copied, copy } = useCopy(text, undefined, () => completeLiveAnswer(liveId, exchange))
   const last = exchange.response.at(-1)
   if (!text && !last?.timestamp && !interrupted) return null
 
