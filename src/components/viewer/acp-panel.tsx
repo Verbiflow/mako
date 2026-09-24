@@ -85,6 +85,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
   const session = useAcp((state) => activeLiveAcp(state)?.session ?? null)
   const projection = useAcp((state) => activeAcp(state)?.projection)
   const history = useAcp((state) => activeAcp(state)?.base)
+  const historyWindow = useAcp((state) => activeAcp(state)?.history)
   // Stable from the first keystroke of a start through promotion and any
   // later binding: the transcript keeps its scroll position and its turns.
   const identity = useAcp((state) => activeAcp(state)?.draftKey ?? "none")
@@ -130,7 +131,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       source={{ liveId: sessionId }}
       identity={identity}
       entrance={!continued}
-      hasEarlier={history?.hasEarlier}
+      hasEarlier={Boolean(historyWindow?.before || history?.hasEarlier)}
       loadingEarlier={loadingEarlier}
       onLoadEarlier={loadEarlier}
       exchanges={exchanges}
