@@ -86,7 +86,8 @@ function codexDefinition(
 
 export function codexMcpConfig(
   snapshot: McpRegistrySnapshot,
-  conversationToolsUrl?: string
+  conversationToolsUrl?: string,
+  controlUrl?: string
 ): JsonObject {
   const servers: JsonObject = {}
   for (const definition of projectRuntimeDefinitions(snapshot, "codex", [
@@ -99,6 +100,11 @@ export function codexMcpConfig(
   if (conversationToolsUrl)
     servers["mako-conversations"] = {
       url: conversationToolsUrl,
+      bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN",
+    }
+  if (controlUrl)
+    servers["mako-control"] = {
+      url: controlUrl,
       bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN",
     }
   return Object.keys(servers).length > 0 ? { mcp_servers: servers } : {}

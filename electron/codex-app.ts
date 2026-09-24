@@ -75,6 +75,7 @@ type Live = {
   state: LiveSessionState
   tuning?: Tuning
   conversationToolsUrl?: string
+  controlUrl?: string
   mcpSnapshot: McpRegistrySnapshot
   nextRequestId: number
   pending: Map<string, PendingRpc>
@@ -163,6 +164,7 @@ async function startCodex(
     tuning: options.tuning,
     emit: (event) => emit(event),
     conversationToolsUrl: options.conversationTools?.url,
+    controlUrl: options.conversationTools?.controlUrl,
     mcpSnapshot,
     nextRequestId: 0,
     pending: new Map(),
@@ -437,7 +439,8 @@ async function openThread(
     live.tuning,
     codexMcpConfig(
       live.mcpSnapshot,
-      live.conversationToolsUrl
+      live.conversationToolsUrl,
+      live.controlUrl
     )
   )
   if (fork)

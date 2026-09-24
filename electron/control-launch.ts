@@ -15,5 +15,5 @@ export function applyControlEnvironment(
 }
 
 export function controlLaunchInstructions(control: ControlLaunch): string {
-  return `<mako-local-control>\nBrowser and computer use: run ${JSON.stringify(control.command)} --help, then use its composable commands or exec --source-file. Your task session is already attached; no setup tool is needed. Read help only as needed. Screenshots are files; verify action results explicitly and never replay an unknown outcome.\n</mako-local-control>`
+  return `<mako-local-control>\nBrowser and computer use: use the mako-control MCP js tool; its first result supplies the SDK documentation. After lost context call control.rewriteDocumentation(). For shell/file pipelines, ${JSON.stringify(control.command)} --help exposes the same task session. MCP and CLI share target ownership and program state; do not start another session. Verify results explicitly and never replay an unknown outcome.\n</mako-local-control>`
 }

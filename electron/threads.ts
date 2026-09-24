@@ -24,6 +24,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { MessageChannel, Worker } from "node:worker_threads"
 import { app } from "electron"
+import { connectOnDemandCatalog } from "./catalog-connection.js"
 import {
   connectDaemon,
   connectDaemonPort,
@@ -151,7 +152,7 @@ let daemon: DaemonClient | null = null
 /** The serving reader whose initial discovery has also completed. */
 let discoveredSource: SessionCatalog | DaemonClient | null = null
 /** Who serves `daemon`: the user's detached daemon or this host's own worker thread. */
-let daemonKind: "process" | "worker" | null = null
+let daemonKind: "process" | "shared" | "worker" | null = null
 let catalogWorker: Worker | null = null
 let daemonMonitor: ReturnType<typeof setInterval> | null = null
 let activityEngine: ProviderActivityEngine | null = null
@@ -348,7 +349,7 @@ export function installThreads(send: (event: HostEvent) => void): void {
   catalogStartup = catalogTask(signal, async () => {
     await loadLineage()
     signal.throwIfAborted()
-    // The installed app enables login capture by default; explicit opt-outs stay local.
+    // The installed app enables login capture by default; explicit opt-outs use only an on-demand reader.
     await refreshDaemonLoginJob()
     signal.throwIfAborted()
     if (!(await daemonLoginEnabled())) {
@@ -509,7 +510,7 @@ async function connectViaDaemon(signal: AbortSignal): Promise<boolean> {
  */
 async function adoptClient(
   client: DaemonClient,
-  kind: "process" | "worker",
+  kind: "process" | "shared" | "worker",
   signal: AbortSignal
 ): Promise<boolean> {
   if (signal.aborted || stopping) {
@@ -746,6 +747,24 @@ async function startDaemon(signal: AbortSignal): Promise<boolean> {
 async function runLocalCatalog(signal: AbortSignal): Promise<void> {
   signal.throwIfAborted()
   if (catalog || daemon) return
+  try {
+    const client = await connectOnDemandCatalog(signal)
+    if (client && await adoptClient(client, "shared", signal)) {
+      hostLog("threads", "shared catalog connected", { pid: client.stats.pid })
+      client.onClose(() => {
+        if (daemon !== client) return
+        daemon = null
+        daemonKind = null
+        if (!stopping) void recoverCatalog(signal, () => runLocalCatalog(signal))
+      })
+      return
+    }
+  } catch (error) {
+    signal.throwIfAborted()
+    hostWarn("threads", "shared catalog unavailable", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
   if (await runCatalogWorker(signal)) return
   await runInProcessCatalog(signal)
 }

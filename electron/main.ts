@@ -1958,7 +1958,7 @@ app.whenReady().then(async () => {
     }
   )
   trace("journals ready")
-  conversationMcp = await startConversationMcp(liveConversations)
+  conversationMcp = await startConversationMcp(liveConversations, (bindingId, operation, signal) => controlSessions.request(bindingId, operation, signal))
   trace("conversation tools ready")
   controlService = await startControlService(
     browserControl,

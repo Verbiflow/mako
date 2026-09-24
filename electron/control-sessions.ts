@@ -1,3 +1,5 @@
+import { ControlFault } from "@mako/control/control"
+import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import { hostWarn } from "./host-log.js"
 import {
   startDesktopControlSession,
@@ -78,6 +80,13 @@ export class ControlSessions {
   }
   get(bindingId: string): ControlLaunch | undefined {
     return this.launches.get(bindingId)
+  }
+  async request(bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) {
+    const pending = this.sessions.get(bindingId)
+    const session = await pending
+    if (!session || this.sessions.get(bindingId) !== pending)
+      throw new ControlFault("session-closed", "This task’s Local Control session is no longer active.", "not-dispatched")
+    return session.request(operation, signal)
   }
   async stop(bindingId: string): Promise<void> {
     const pending = this.sessions.get(bindingId)

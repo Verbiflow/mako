@@ -246,6 +246,10 @@ async function startAcp(
   } : null
   const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
   if (conversationMcp) preparedServers.push(conversationMcp)
+  if (options.conversationTools?.controlUrl) preparedServers.push({
+    type: "http", name: "mako-control", url: options.conversationTools.controlUrl,
+    headers: [{ name: "Authorization", value: `Bearer ${options.conversationTools.token}` }],
+  })
   const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
   const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
     root: join(app.getPath("userData"), "approval-evidence"), env,
