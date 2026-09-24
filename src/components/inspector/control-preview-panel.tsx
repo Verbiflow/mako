@@ -30,7 +30,9 @@ export function ControlPreviewPanel() {
       <section className="flex h-full flex-col" aria-label="Control preview">
         <Blank
           icon={<MonitorIcon />}
-          title={conversationId ? "Nothing observed yet" : "No live conversation"}
+          title={
+            conversationId ? "Nothing observed yet" : "No live conversation"
+          }
           body={
             conversationId
               ? "When this task drives a browser tab or an app window, its latest view appears here."
@@ -38,7 +40,10 @@ export function ControlPreviewPanel() {
           }
         />
         {error ? (
-          <p role="status" className="shrink-0 px-4 pb-4 text-center text-label text-faint">
+          <p
+            role="status"
+            className="shrink-0 px-4 pb-4 text-center text-label text-faint"
+          >
             {error}
           </p>
         ) : null}
@@ -90,7 +95,11 @@ export function ControlPreviewPanel() {
           <NativeControlPreview
             key={`${conversationId}:${preview.window.pid}:${preview.window.windowId}`}
             id={conversationId}
-            poster={frame ? `data:${frame.image.mimeType};base64,${frame.image.data}` : undefined}
+            poster={
+              frame
+                ? `data:${frame.image.mimeType};base64,${frame.image.data}`
+                : undefined
+            }
             className="block h-auto w-full rounded-lg object-contain"
           />
         ) : frame ? (
@@ -125,7 +134,9 @@ export function ControlPreviewPanel() {
           </p>
         ) : null}
         <p className="mt-4 px-0.5 text-label leading-relaxed text-faint">
-          Browser previews stay live while this panel is open. App windows stream during activity when capture is available; otherwise the latest screenshot remains visible.
+          Browser previews stay live while this panel is open. App windows
+          stream during activity when capture is available; otherwise the latest
+          screenshot remains visible.
         </p>
       </div>
     </section>

@@ -2,10 +2,7 @@ import { NativeControlPreview } from "./native-control-preview"
 import { ControlPreviewImage } from "./control-preview-image"
 import { useEffect, useRef, useState } from "react"
 import { GlobeIcon, MonitorIcon, XIcon } from "lucide-react"
-import {
-  useControlPreview,
-  watchControlPreview,
-} from "@/state/control-preview"
+import { useControlPreview, watchControlPreview } from "@/state/control-preview"
 
 /** The containing timeline owns its position; this never creates a system window or portal. */
 export function ControlPreviewOverlay({
@@ -56,9 +53,7 @@ function TaskPreview({ id }: { id: string }) {
         </button>
       ) : (
         visible &&
-        activity && (
-          <PreviewCard id={id} onClose={() => setCollapsed(true)} />
-        )
+        activity && <PreviewCard id={id} onClose={() => setCollapsed(true)} />
       )}
     </div>
   )
