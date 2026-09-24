@@ -53,7 +53,11 @@ export interface ProviderStartOptions extends LiveStartOptions {
 
 export interface ProviderLiveDriver extends ProviderCapability {
   /** Native session-lived question observation and user-input encoding. */
-  sessionQuestions?: { encodeAnswer(question: import("../contracts/live-questions.js").NativeQuestion, answers: Record<string, string[]>): string }
+  sessionQuestions?: {
+    encodeAnswer(question: import("../contracts/live-questions.js").NativeQuestion, answers: Record<string, string[]>): string
+    /** Read-only native catch-up. Reject unavailable/incomplete evidence; never return partial history. */
+    history?(binding: ProviderBinding): Promise<import("../contracts/live-questions.js").NativeQuestionHistory>
+  }
   approvalEvidence: ApprovalEvidenceCapability
   observesNativeAgents?: true
   steer?(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult>

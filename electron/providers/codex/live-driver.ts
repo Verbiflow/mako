@@ -1,11 +1,12 @@
 import { codexQuestionAnswer } from "./questions.js"
+import { readCodexQuestionHistory } from "./question-reader.js"
 import { codexExecutableCandidates } from "./executable.js"
 import { codexAccessModes, CODEX_DEFAULT_MODE } from "./access.js"
 import type { ProviderLiveDriver } from "../live-driver.js"
 
 export const codexLiveDriver: ProviderLiveDriver = {
   provider: "codex",
-  sessionQuestions: { encodeAnswer: codexQuestionAnswer },
+  sessionQuestions: { encodeAnswer: codexQuestionAnswer, history: readCodexQuestionHistory },
   approvalEvidence: { kind: "request-lifecycle", reason: "App-server resolves a request before validating or applying its answer, including cancellation and error paths. It does not report the consumed decision." },
   observesNativeAgents: true,
   canResume: true,

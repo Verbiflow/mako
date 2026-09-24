@@ -112,6 +112,8 @@ export interface LiveRequest {
 }
 
 export interface LiveSummary {
+  /** Saved session questions keep their conversation controls available after process exit. */
+  hasSessionQuestions?: boolean
   nativePaths?: string[]
   session: LiveSessionState
   revision: number

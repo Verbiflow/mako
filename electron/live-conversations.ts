@@ -312,6 +312,7 @@ export class LiveConversations {
     return [
       ...[...this.recovered.values()].map((summary) => ({ ...summary, epoch: this.epoch })),
       ...[...this.records.values()].map(({ snapshot }) => ({
+        hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
         nativePaths: snapshot.control?.bindings.flatMap((binding) =>
           binding.path ? [binding.path] : []
         ),
@@ -348,6 +349,12 @@ export class LiveConversations {
   async refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
     const resident = this.load(id)
     if (!resident) return null
+    try {
+      const catchup = this.questions.reconcile(resident)
+      if (catchup) await catchup
+    } catch (error) {
+      hostLog("live", "native question refresh deferred", { conversation: id, error: errorMessage({ error }) })
+    }
     this.flush(resident)
     const base = resident.snapshot.base
     const bindings = resident.snapshot.control?.bindings ?? []
@@ -512,7 +519,10 @@ export class LiveConversations {
       updates: [],
       timer: null,
     })
-    return snapshot
+    try { await this.questions.reconcile(this.require(id)) } catch (error) {
+      hostLog("live", "native question import deferred", { conversation: id, error: errorMessage({ error }) })
+    }
+    return this.require(id).snapshot
   }
 
   start(
@@ -1558,6 +1568,7 @@ export class LiveConversations {
         text,
         attachments,
         tuning,
+        displayText,
       })
       return request
     }

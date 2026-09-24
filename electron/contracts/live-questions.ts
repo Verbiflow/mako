@@ -44,6 +44,13 @@ export const NativeQuestionAnswerSchema = z.object({
 export type NativeQuestionAnswer = z.infer<typeof NativeQuestionAnswerSchema>
 export type LiveQuestion = z.infer<typeof LiveQuestionSchema>
 
+/** Positive evidence after complete source catch-up; absence never retires a question. */
+export const NativeQuestionHistorySchema = z.array(z.object({
+  question: NativeQuestionSchema,
+  answered: z.array(z.string()),
+})).max(2000)
+export type NativeQuestionHistory = z.infer<typeof NativeQuestionHistorySchema>
+
 function unanswered(question: LiveQuestion, bindingId: string): boolean {
   return !question.dismissed && question.bindingId === bindingId && question.native.questions.some(item => !question.answered?.includes(item.id))
 }

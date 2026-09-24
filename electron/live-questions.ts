@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { NativeQuestionSchema, NativeQuestionAnswerSchema, type NativeQuestionAnswer, type NativeQuestion } from "./contracts/live-questions.js"
+import { NativeQuestionSchema, NativeQuestionAnswerSchema, NativeQuestionHistorySchema, type NativeQuestionAnswer, type NativeQuestion } from "./contracts/live-questions.js"
 import type { LivePermissionResponse } from "./contracts/providers-acp.js"
 import type { LiveAction, LiveActionInput } from "./contracts/live-actions.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
+import type { ProviderBinding } from "./contracts/conversation-control.js"
+import type { NativeQuestionHistory } from "./contracts/live-questions.js"
 
 interface QuestionDelivery {
   continue(id: string, bindingId: string, requestId: string, text: string, displayText: string): void
@@ -14,6 +16,57 @@ export class LiveQuestions {
   private readonly host: LiveAccess
   private readonly delivery: QuestionDelivery
   constructor(host: LiveAccess, delivery: QuestionDelivery) { this.host = host; this.delivery = delivery }
+
+  /** Merge one complete native observation without replacing local intent or dismissal. */
+  reconcile(resident: Resident, required = false): Promise<void> | undefined {
+    const control = this.host.control(resident)
+    const initial = control.bindings.find(item => item.id === control.activeBindingId)
+    const history = initial && this.host.dependencies.driver(initial.provider)?.sessionQuestions?.history
+    if (!initial || !history) return
+    this.host.discoverNativePath(resident)
+    const binding = this.host.control(resident).bindings.find(item => item.id === initial.id)
+    if (!binding || (!required && (!binding.path || !binding.nativeId))) return
+    return this.reconcileHistory(resident, binding, history)
+  }
+
+  private async reconcileHistory(resident: Resident, binding: ProviderBinding, history: (binding: ProviderBinding) => Promise<NativeQuestionHistory>): Promise<void> {
+    const generation = resident.generation
+    const evidence = NativeQuestionHistorySchema.parse(await history(binding))
+    const current = this.host.control(resident)
+    const active = current.bindings.find(item => item.id === current.activeBindingId)
+    if (this.host.load(resident.snapshot.session.id) !== resident || generation !== resident.generation ||
+      active?.id !== binding.id || active.nativeId !== binding.nativeId || active.path !== binding.path)
+      throw new Error("The session changed while checking its questions; refresh before answering")
+    if (evidence.some(entry => entry.question.sessionId !== binding.nativeId))
+      throw new Error("Question history belongs to a different native session")
+    const key = (question: NativeQuestion) => JSON.stringify([question.sessionId, question.turnId, question.itemId])
+    const questions = [...(current.questions ?? [])]
+    const indices = new Map(questions.flatMap((question, index) => question.bindingId === binding.id ? [[key(question.native), index] as const] : []))
+    let changed = false
+    for (const entry of evidence) {
+      const identity = key(entry.question)
+      const index = indices.get(identity)
+      const previous = index === undefined ? undefined : questions[index]
+      const native = previous?.native ?? entry.question
+      const answered = [...new Set([...(previous?.answered ?? []), ...entry.answered.filter(id => native.questions.some(item => item.id === id))])]
+      if (previous && answered.length === (previous.answered?.length ?? 0)) continue
+      const next = previous ? { ...previous, answered } : { id: randomUUID(), bindingId: binding.id, native, answered }
+      if (index === undefined) { indices.set(identity, questions.length); questions.push(next) }
+      else questions[index] = next
+      changed = true
+    }
+    // A missed older question must not jump ahead of a newer live question.
+    const sourceOrder = new Map(evidence.map((entry, index) => [key(entry.question), index]))
+    const ordered = questions.filter(question => question.bindingId === binding.id).sort((a, b) =>
+      (sourceOrder.get(key(a.native)) ?? Infinity) - (sourceOrder.get(key(b.native)) ?? Infinity))
+    let offset = 0
+    const merged = questions.map(question => question.bindingId === binding.id ? ordered[offset++]! : question)
+    if (!changed && merged.every((question, index) => question === questions[index])) return
+    if (questions.length > 2000) throw new Error("This conversation has reached its saved question limit")
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, control: { ...current, questions: merged } }
+    try { this.host.flush(resident) } catch (error) { resident.snapshot = previous; throw error }
+  }
 
   observe(resident: Resident, bindingId: string, raw: NativeQuestion): void {
     const native = NativeQuestionSchema.parse(raw)
@@ -47,6 +100,13 @@ export class LiveQuestions {
 
   async answer(id: string, questionId: string, response: LivePermissionResponse): Promise<boolean> {
     const resident = this.host.require(id)
+    // Dismissal is local. Sending requires fresh native evidence when available.
+    const prior = this.host.control(resident)
+    const owned = resident.snapshot.requests.some(request => request.id === questionId) ||
+      prior.transfers.some(transfer => transfer.input.id === questionId) ||
+      prior.actions?.some(action => action.input.id === questionId && action.state.kind !== "not-accepted")
+    const catchup = response.kind !== "choice" && !owned ? this.reconcile(resident, true) : undefined
+    if (catchup) await catchup
     const control = this.host.control(resident)
     const question = control.questions?.find(item => item.id === questionId)
     if (!question) return false
@@ -72,13 +132,19 @@ export class LiveQuestions {
       throw new Error("Complete the answers for this question")
     const text = capability.encodeAnswer(native, response.answers)
     const displayText = native.questions.map(item => `${item.question}\n${response.answers[item.id]!.join("\n")}`).join("\n\n")
+    const canContinue = () => {
+      const current = this.host.control(resident)
+      const latest = current.questions?.find(item => item.id === question.id)
+      return latest && !latest.dismissed && current.activeBindingId === latest.bindingId &&
+        native.questions.every(item => !latest.answered?.includes(item.id))
+    }
     const request = resident.snapshot.requests.find(item => item.id === question.id)
     const action = control.actions?.find(item => item.input.id === question.id)
     const transfer = control.transfers.find(item => item.input.id === question.id)
     const previousText = request?.text ?? (action?.input.kind !== "compact" ? action?.input.text : undefined) ?? transfer?.input.text
     if (previousText !== undefined) {
       if (previousText !== text) throw new Error("This question already has a different saved answer")
-      if (action?.state.kind === "not-accepted" && !request && !transfer && remaining.questions.length && !question.dismissed && this.host.control(resident).activeBindingId === question.bindingId)
+      if (action?.state.kind === "not-accepted" && !request && !transfer && remaining.questions.length && canContinue())
         this.delivery.continue(id, question.bindingId, question.id, text, displayText)
       return true
     }
@@ -88,7 +154,7 @@ export class LiveQuestions {
     if (resident.snapshot.session.status === "running" && running?.nativeRun && resident.driver?.steer) {
       const sent = await this.delivery.steer(id, { kind: "steer", id: question.id, requestId: running.id, text, displayText, attachments: [] })
       // An authoritative refusal is safe to queue. Unknown delivery never is.
-      if (sent.state.kind === "not-accepted" && this.host.control(resident).activeBindingId === question.bindingId)
+      if (sent.state.kind === "not-accepted" && canContinue())
         this.delivery.continue(id, question.bindingId, question.id, text, displayText)
     } else {
       this.delivery.continue(id, question.bindingId, question.id, text, displayText)

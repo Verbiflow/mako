@@ -207,6 +207,7 @@ export class LiveJournal {
       revision,
       threadPath,
       createdAt,
+      hasSessionQuestions: Boolean(control?.questions?.length),
       nativeBindings: control?.bindings ?? [{ provider: session.harness, nativeId: session.nativeId }],
       nativePaths: control?.bindings.flatMap((binding) =>
         binding.path ? [binding.path] : []
