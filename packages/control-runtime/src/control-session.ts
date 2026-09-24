@@ -1362,8 +1362,12 @@ export function createControlSession(
   }
   const controlData = (result: Parameters<typeof toolResultData>[0]) => {
     const refused = toolResultError(result)
-    if (refused !== undefined)
-      throw new ControlFault("native-driver-error", refused, "unknown")
+    if (refused !== undefined) {
+      const message = refused.includes("AXUIElementPerformAction") && refused.includes("-25204")
+        ? `${refused}. The app may have acted without acknowledging the request. Observe the window and any new dialog before deciding whether to repeat the action.`
+        : refused
+      throw new ControlFault("native-driver-error", message, "unknown")
+    }
     return toolResultData(result)
   }
   const nativeCapabilities = async (
@@ -1534,7 +1538,10 @@ export function createControlSession(
       reconcileControlTarget(request.target)
       return observation
     }
-    const state = nativeViewSchema.parse(
+    // A failed refresh must not leave older controls actionable. Clear this
+    // only after a complete, validated observation below.
+    controlUncertain.add(key)
+    const snapshot =
       controlData(
         await invokeTool(
           "get_window_state",
@@ -1548,7 +1555,21 @@ export function createControlSession(
           signal
         )
       )
-    )
+    const parsedSnapshot = nativeViewSchema.safeParse(snapshot)
+    if (!parsedSnapshot.success) {
+      if (snapshot.degraded === true)
+        throw new ControlFault(
+          "observation-unavailable",
+          "The native driver could not provide accessibility controls for this window. A sheet may expose its controls through its parent window; observe that parent, or request a screenshot explicitly. No usable observation was created.",
+          "rejected"
+        )
+      throw new ControlFault(
+        "invalid-driver-response",
+        "The native driver returned an invalid accessibility snapshot. Observe this window again before using its controls. No usable observation was created.",
+        "unknown"
+      )
+    }
+    const state = parsedSnapshot.data
     const availableLines = elementLines(state.elements, {
       interactive: request.interactive,
       query: request.query,
@@ -1568,7 +1589,6 @@ export function createControlSession(
       const parsed = nativeElementSchema.safeParse(raw)
       if (!parsed.success) return []
       const element = parsed.data
-      if (nativeRole(element.role).startsWith("Menu")) return []
       const node: z.infer<typeof ControlObservationSchema>["nodes"][number] = {
         depth: element.depth,
         role: nativeRole(element.role),

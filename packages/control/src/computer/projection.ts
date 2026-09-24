@@ -11,7 +11,7 @@ import type { JsonObject, JsonValue } from "../json.js"
  * as lines with the menu bar dropped, 483 with only interactive roles.
  */
 
-/** The application's menu bar, which the driver includes in a *window* state. */
+/** Menu roles; the role alone does not establish menu-bar ancestry. */
 export const MENU_ROLES: ReadonlySet<string> = new Set([
   "AXMenuBar",
   "AXMenuBarItem",
@@ -34,7 +34,7 @@ export const PASSIVE_ROLES: ReadonlySet<string> = new Set([
 
 const nativeRoles = new Map([
   ["entry", "TextField"], ["text", "TextArea"], ["password text", "TextField"],
-  ["push button", "Button"], ["toggle button", "Button"], ["check box", "CheckBox"],
+  ["push button", "Button"], ["button", "Button"], ["toggle button", "Button"], ["check box", "CheckBox"],
   ["radio button", "RadioButton"], ["combo box", "ComboBox"], ["label", "StaticText"],
   ["panel", "Group"], ["filler", "Group"], ["frame", "Window"], ["window", "Window"], ["dialog", "Dialog"],
   ["document web", "WebArea"], ["document frame", "WebArea"], ["heading", "Heading"],
@@ -108,11 +108,10 @@ export function elementLines(
 ): string[] {
   const query = options.query?.toLowerCase()
   const lines: string[] = []
-  for (const raw of elements) {
+  for (const raw of windowElements(elements)) {
     const parsed = ElementSchema.safeParse(raw)
     if (!parsed.success) continue
     const element = parsed.data
-    if (MENU_ROLES.has(`AX${nativeRole(element.role)}`)) continue
     if (options.interactive && PASSIVE_ROLES.has(`AX${nativeRole(element.role)}`)) continue
     if (
       query &&
@@ -210,6 +209,34 @@ const windowStateSchema = z.looseObject({
   returned_element_count: z.number().int().optional(),
 })
 
+const menuBoundarySchema = z.object({
+  role: z.string(),
+  depth: z.number().int().nonnegative().optional(),
+})
+
+/** Driver rows are a preorder tree. Omit only proven menu-bar branches. */
+function windowElements<T>(elements: readonly T[]): T[] {
+  let menuDepth: number | undefined
+  return elements.filter((raw) => {
+    const parsed = menuBoundarySchema.safeParse(raw)
+    if (!parsed.success) {
+      menuDepth = undefined
+      return true
+    }
+    const { depth, role } = parsed.data
+    if (menuDepth !== undefined && depth !== undefined && depth > menuDepth)
+      return false
+    menuDepth = undefined
+    if (["MenuBar", "MenuBarItem"].includes(nativeRole(role))) {
+      menuDepth = depth
+      return false
+    }
+    // Missing depth cannot prove ancestry. Keep a popup/context menu rather
+    // than silently remove an actionable control from the agent's view.
+    return true
+  })
+}
+
 /**
  * A window state without the application's menu bar. On a real app 118 of
  * 180 elements were the Apple menu and its Recent Items; none of them is
@@ -219,10 +246,7 @@ const windowStateSchema = z.looseObject({
 export function withoutMenuBar(structuredContent: JsonObject): JsonObject {
   const state = windowStateSchema.safeParse(structuredContent)
   if (!state.success) return structuredContent
-  const kept = state.data.elements.filter((raw) => {
-    const element = ElementSchema.safeParse(raw)
-    return !element.success || !MENU_ROLES.has(`AX${nativeRole(element.data.role)}`)
-  })
+  const kept = windowElements(state.data.elements)
   const omitted = state.data.elements.length - kept.length
   if (omitted === 0) return structuredContent
   return {

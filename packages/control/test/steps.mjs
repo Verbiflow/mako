@@ -14,7 +14,8 @@ const screens = {
       label: "Dashboard",
       value: "Dashboard",
     },
-    { element_token: "s0000000a:3", role: "AXMenuItem", label: "About" },
+    { role: "AXMenuBar", depth: 0 },
+    { element_token: "s0000000a:3", role: "AXMenuItem", label: "About", depth: 1 },
   ],
   settings: [
     { element_token: "s0000000b:1", role: "AXButton", label: "Back" },

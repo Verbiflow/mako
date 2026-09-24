@@ -11,6 +11,7 @@ import {
   windowKind,
   withWindowKinds,
   withoutMenuBar,
+  nativeRole,
 } from "../dist/computer/index.js"
 
 const element = (index, role, label, value, extra = {}) => ({
@@ -34,7 +35,7 @@ const elements = [
   element(2, "AXStaticText", "Dashboard", "Dashboard"),
   element(3, "AXTextField", "Search settings", "gpt"),
   element(4, "AXMenuBar", null, null),
-  element(5, "AXMenuItem", "About This Mac", null),
+  element(5, "AXMenuItem", "About This Mac", null, { depth: 3 }),
   element(6, "AXCheckBox", null, 1, { enabled: false, selected: true }),
 ]
 
@@ -108,6 +109,31 @@ assert.equal(
   "nothing to drop returns the same object"
 )
 assert.deepEqual(withoutMenuBar({ other: 1 }), { other: 1 })
+
+// A menu inside the window remains actionable. App-menu descendants disappear
+// by ancestry, including rows whose role is not itself a menu role.
+const menuRows = [
+  element(0, "AXWindow", "Form", null, { depth: 0 }),
+  element(1, "AXPopUpButton", "Choice", null, { depth: 1 }),
+  element(2, "AXMenu", null, null, { depth: 2 }),
+  element(3, "AXMenuItem", "Second choice", null, { depth: 3 }),
+  element(4, "AXMenuBar", null, null, { depth: 0 }),
+  element(5, "AXMenuBarItem", "App", null, { depth: 1 }),
+  element(6, "AXStaticText", "Unrelated menu detail", null, { depth: 2 }),
+  element(7, "AXMenu", "Context menu", null, { depth: 0 }),
+  element(8, "AXMenuItem", "Paste here", null, { depth: 1 }),
+]
+const menuView = withoutMenuBar({ elements: menuRows })
+assert.deepEqual(menuView.elements.map(row => row.element_token), [0, 1, 2, 3, 7, 8].map(i => `s00000001:${i}`))
+assert.equal(menuView.menu_bar_elements_omitted, 3)
+assert.ok(elementLines(menuRows).some(line => line.includes('MenuItem "Second choice"')))
+assert.deepEqual(elementLines(menuRows), elementLines(menuView.elements), "Projection is idempotent")
+assert.deepEqual(withoutMenuBar({ elements: [
+  { role: "AXMenuBar" }, { role: "AXMenuItem", label: "Unknown ancestry" },
+]}).elements, [{ role: "AXMenuItem", label: "Unknown ancestry" }])
+assert.equal(nativeRole("button"), "Button", "Current AT-SPI button role")
+assert.equal(nativeRole("push button"), "Button", "Earlier AT-SPI role remains supported")
+assert.equal(nativeRole("AXButton"), "Button")
 
 // Window kinds: Finder's untitled 30px strips are helpers, titled windows documents,
 // an untitled window of real size is unknown.
