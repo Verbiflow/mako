@@ -101,7 +101,8 @@ if (!worker) {
           "offline help",
           "exact state across shell processes",
           "matching code identity",
-          "public MCP absent",
+          "typed MCP adapter and persistent JS",
+          "retired MCP executable absent",
           "shutdown cleanup",
         ],
       })

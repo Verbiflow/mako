@@ -17,7 +17,7 @@ const installed = app === '/Applications/Mako.app'
 const proof = `${installed ? 'installed' : 'packaged'}${retained ? '-retained' : ''}`
 const root = await mkdtemp(join(tmpdir(), 'mako-packaged-history-'))
 const profile = join(root, 'profile')
-const evidence = resolve('docs/audits/2026-09-23/live-history-performance')
+const evidence = resolve(process.env.MAKO_HISTORY_EVIDENCE_DIR ?? 'docs/audits/2026-09-23/live-history-performance')
 await mkdir(evidence, { recursive: true })
 const providers = ['claude', 'codex', 'cursor', 'grok', 'devin', 'opencode']
 const cases = []
@@ -86,8 +86,12 @@ async function capture(name) {
 }
 async function selectConversation(item) {
   const selector = `[data-conversation-id="${item.id}"]`
-  if (!await evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`))
-    await evaluate(`(()=>{const first=document.querySelector('[data-conversation-id="${cases[0].id}"]');const section=first?.closest('section');Array.from(section?.querySelectorAll('button')??[]).find(b=>b.textContent.trim().startsWith('More'))?.click()})()`)
+  if (!await evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`)) {
+    // Reload restores the collapsed group. Its first fixture may itself be
+    // hidden, so find the group through any currently rendered fixture row.
+    const siblings = cases.map(entry => `[data-conversation-id="${entry.id}"]`).join(',')
+    await evaluate(`(()=>{const row=document.querySelector(${JSON.stringify(siblings)});const section=row?.closest('section');Array.from(section?.querySelectorAll('button')??[]).find(b=>b.textContent.trim().startsWith('More'))?.click()})()`)
+  }
   await until(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `${item.provider} rail row`)
   await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
   await until(() => evaluate(`document.querySelector('.composer-input')?.getAttribute('placeholder')?.toLowerCase().includes(${JSON.stringify(item.provider)})`), `${item.provider} active composer`)

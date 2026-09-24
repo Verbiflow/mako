@@ -134,6 +134,11 @@ async function runElectron() {
     const socket = await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")
     return socket ? {socket,driver:resolveExecutable("cua-driver")} : undefined
   }, runtimeSnapshot.startDesktopControlSession)
+  const controlMcpCalls = []
+  const requestControl = (bindingId, operation, signal) => {
+    controlMcpCalls.push({ bindingId, method: operation.method })
+    return sessions.request(bindingId, operation, signal)
+  }
   let control
   let mcp
   const dependencies = {
@@ -166,7 +171,7 @@ async function runElectron() {
   let owner = new LiveConversations(dependencies)
   bindAcp((event) => owner.observe(event))
   bindCodexApp((event) => owner.observe(event))
-  mcp = await startConversationMcp(owner, (binding, operation, signal) => sessions.request(binding, operation, signal))
+  mcp = await startConversationMcp(owner, requestControl)
   control = await startControlService(browser, (id, binding) =>
     owner.authorizeAgent(id, binding)
   )
@@ -390,7 +395,7 @@ async function runElectron() {
                 await new Promise((resolve) => setTimeout(resolve, 250))
               }
               owner = new LiveConversations(dependencies)
-              mcp = await startConversationMcp(owner, (binding, operation, signal) => sessions.request(binding, operation, signal))
+              mcp = await startConversationMcp(owner, requestControl)
               return owner
             },
           })
@@ -455,6 +460,25 @@ async function runElectron() {
             frontmostSeen,
             targetFronted: false,
           }
+          // A second user turn must reuse the task safely. Do not tell the model
+          // which tool, handle variable or API method it chose on the first turn.
+          const nextValue = `  ${randomUUID()} é 🧪  `
+          const followupId = randomUUID()
+          const following = sampleFrontmost()
+          let followupFrontmost
+          try {
+            owner.submit(id, followupId,
+              `Update the same background fixture again, this time with this exact JSON string value, including its surrounding spaces: ${JSON.stringify(nextValue)}. Press Verify proof and confirm the result. Keep the window in the background.`)
+            completed = await waitFor(id, snapshot => snapshot?.requests.some(request => request.id === followupId && request.status === "completed"))
+          } finally {
+            followupFrontmost = [...(await following.stop()).keys()]
+          }
+          const followupState = await controlFixture.until(async () => {
+            const state = await controlFixture.state()
+            return state.input === nextValue && state.value === nextValue ? state : null
+          }, `${driver.provider} verified exact follow-up value`, 5000)
+          if (followupFrontmost.includes(controlStarted.pid)) throw new Error("Follow-up fronted the fixture")
+          result.control.followup = { state: followupState, frontmostSeen: followupFrontmost, targetFronted: false }
         } else if (!response.includes(nonce))
           throw new Error(
             `The real response did not contain the value from the fixture file: ${JSON.stringify(response.slice(0, 600))}`
@@ -679,6 +703,10 @@ async function runElectron() {
           throw new Error(
             `The provider used a removed Local Control MCP tool: ${JSON.stringify(result.toolCalls)}`
           )
+        if (controlMode) {
+          result.control.mcpCalls = controlMcpCalls.filter(call => call.method === "js" && completed.control.bindings.some(binding => binding.id === call.bindingId)).length
+          if (!result.control.mcpCalls) throw new Error("The agent did not call the task's Mako Control MCP endpoint")
+        }
         result.proof = nonce
         await writeFile(
           join(root, `${driver.provider}.json`),
@@ -735,7 +763,8 @@ async function runElectron() {
           root,
           drivers.map((driver) => driver.provider),
           browserOperations,
-          models
+          models,
+          controlMcpCalls
         ))
       )
       await writeFile(
@@ -1035,7 +1064,7 @@ async function runElectron() {
         await new Promise((resolve) => setTimeout(resolve, 250))
       }
       owner = new LiveConversations(dependencies)
-      mcp = await startConversationMcp(owner, (binding, operation, signal) => sessions.request(binding, operation, signal))
+      mcp = await startConversationMcp(owner, requestControl)
       const requestId = randomUUID()
       owner.submit(
         id,

@@ -411,6 +411,7 @@ try {
   assert.equal((await threads.pageThread("cursor")).ref.harness, "cursor")
   assert.equal(threads.threadsReady(), false)
   assert.equal(state.workers.length, workerCount)
+  threads.followThread("cursor", 10)
   const shared = state.clients.at(-1)
   const staleSharedList = state.list
   state.list = null
@@ -418,6 +419,7 @@ try {
   const recovered = await Promise.all(providers.map(provider => threads.pageThread(provider)))
   assert.deepEqual(recovered.map(page => page.ref.harness), providers)
   assert.equal(state.clients.at(-1).closed, false)
+  assert.ok(state.events.some(event => event.type === "thread-reader-reset" && event.path === "cursor"), "selected view must refresh before following a replacement reader")
   assert.equal(state.workers.length, workerCount)
   staleSharedList.resolve([{harness:"codex",path:"stale-shared-reader"}])
   await tick()

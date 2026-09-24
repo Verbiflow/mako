@@ -6,6 +6,7 @@ import {
 } from "../electron/shared.ts"
 import {
   loadThreadBlock,
+  recoverThreadReader,
   threadViewingActions,
 } from "../src/state/thread-viewing.ts"
 import { threadsStore } from "../src/state/thread-store.ts"
@@ -156,6 +157,59 @@ assert.equal(swapped.entries[1].blocks[0], shown?.entries[1]?.kind === "assistan
 assert.equal(swapped.entries[0], shown?.entries[0], "other entries keep identity")
 assert.equal(swapped.streamReplaceFrom, 1, "the projection restarts at the entry that changed")
 assert.equal(swapped.streamRevision, (shown?.streamRevision ?? 0) + 1)
+// Every provider uses the same recovery path; earlier loaded pages and drafts survive.
+for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+  const ref = { ...paged, harness, path: `/recovery/${harness}` }
+  threadsStore.set({ viewing: { ref, entries: [{kind:"user",text:"old"}], pageStart: 40, totalEntries: 41, hasEarlier: true } })
+  rememberDraft(ref.path, "Unsent recovery draft")
+  pending.delete(ref.path)
+  const recovered = recoverThreadReader(ref.path)
+  await waitFor(ref.path)
+  const recent = pending.get(ref.path)!
+  pending.delete(ref.path)
+  recent.resolve({ref,checkpoint:222,entries:[{kind:"user",text:"new during outage"}],start:42,total:43,hasEarlier:true})
+  await waitFor(ref.path)
+  pending.get(ref.path)!.resolve({ref,checkpoint:222,entries:[{kind:"user",text:"earlier"},{kind:"user",text:"old"}],start:40,total:43,hasEarlier:true})
+  await recovered
+  assert.deepEqual(threadsStore.get().viewing?.entries.map(e=>e.kind === "user" ? e.text : ""),["earlier","old","new during outage"])
+  assert.equal(threadsStore.get().viewing?.pageStart,40)
+  assert.equal(follows.at(-1),ref.path)
+  assert.equal(draftText(ref.path),"Unsent recovery draft")
+}
+// A source rewritten between pages must not produce a mixed visible snapshot
+// or an endless recovery loop. Keep the old readable history and expose retry.
+const changingRef = threadsStore.get().viewing!.ref
+const retained = threadsStore.get().viewing!
+threadsStore.set({ viewing: { ...retained, loadingEarlier: true } })
+pending.delete(changingRef.path)
+const changing = recoverThreadReader(changingRef.path)
+const followsBeforeChanging = follows.length
+assert.equal(threadsStore.get().viewing?.loadingEarlier, false)
+for (let attempt = 0; attempt < 3; attempt++) {
+  await waitFor(changingRef.path)
+  const tail = pending.get(changingRef.path)!
+  pending.delete(changingRef.path)
+  tail.resolve({ ref: changingRef, checkpoint: attempt, entries: [{ kind: "user", text: "unstable tail" }], start: 42, total: 43, hasEarlier: true })
+  await waitFor(changingRef.path)
+  const earlier = pending.get(changingRef.path)!
+  pending.delete(changingRef.path)
+  earlier.resolve({ ref: changingRef, checkpoint: attempt + 10, entries: [{ kind: "user", text: "different snapshot" }], start: 40, total: 43, hasEarlier: true })
+}
+await changing
+assert.equal(threadsStore.get().viewing?.entries, retained.entries)
+assert.equal(threadsStore.get().opening?.kind, "failed")
+assert.equal(follows.length, followsBeforeChanging)
+assert.equal(draftText(changingRef.path), "Unsent recovery draft")
+const recoveryRef=threadsStore.get().viewing!.ref
+pending.delete(recoveryRef.path)
+const late = recoverThreadReader(recoveryRef.path)
+await waitFor(recoveryRef.path)
+threadViewingActions.closeViewer()
+pending.get(recoveryRef.path)!.resolve({ref:recoveryRef,entries:[],start:0,total:0,hasEarlier:false})
+const count=follows.length
+await late
+assert.equal(threadsStore.get().viewing,null)
+assert.equal(follows.length,count,"a departed view never follows a late recovered snapshot")
 threadViewingActions.closeViewer()
 console.log(
   "Thread opening: exact draft/provider ownership, out-of-order results, readable failure state, explicit close and in-place block loading verified"
