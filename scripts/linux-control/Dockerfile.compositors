@@ -1,0 +1,17 @@
+# Test-only current compositor coverage. No compositor package enters a release.
+FROM node:24-trixie-slim
+LABEL dev.mako.control.test="compositor"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    kwin-wayland weston labwc xvfb x11-utils xauth dbus-x11 at-spi2-core \
+    python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
+    libxkbcommon0 libxtst6 libxi6 libssl3t64 libcap2-bin \
+    fonts-noto-cjk fonts-noto-color-emoji ca-certificates libgl1-mesa-dri \
+    && if getcap /usr/bin/kwin_wayland | grep -q .; then setcap -r /usr/bin/kwin_wayland; fi \
+    && rm -rf /var/lib/apt/lists/*
+USER node
+ENV XDG_RUNTIME_DIR=/tmp/mako-compositor-runtime XDG_SESSION_TYPE=wayland \
+    GDK_BACKEND=wayland LIBGL_ALWAYS_SOFTWARE=1 QT_QUICK_BACKEND=software \
+    KWIN_COMPOSE=Q WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
+    CUA_DRIVER_RS_ENABLE_WAYLAND=1 CUA_DRIVER_RS_TELEMETRY_ENABLED=0 \
+    NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge
+WORKDIR /repo

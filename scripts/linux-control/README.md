@@ -12,7 +12,7 @@ Electron. The commands below also support local isolated development.
 Build the repository's control package and shared host modules first, then:
 
 ```sh
-docker build -t mako-control-linux:platform-v2 -f scripts/linux-control/Dockerfile .
+docker build -t mako-control-linux:platform-v2 - < scripts/linux-control/Dockerfile
 node scripts/package-control-driver-linux.mjs /absolute/path/to/patched-cua --arch=arm64
 ```
 
@@ -53,13 +53,14 @@ Build `mako-control-linux:gnome` with `Dockerfile.gnome`, then build the test-on
 compositor image. These packages do not enter the shipped application:
 
 ```sh
-docker build -t mako-control-linux:portable-wayland -f scripts/linux-control/Dockerfile.portable-wayland .
+docker build -t mako-control-linux:portable-wayland - < scripts/linux-control/Dockerfile.portable-wayland
 docker run --name mako-portable-wayland \
   -v "$PWD:/repo:ro" \
   -v "$PWD/release/control-driver/0.28.2+mako.17/linux-arm64:/driver:ro" \
   -e MAKO_COMPOSITOR=labwc \
   mako-control-linux:portable-wayland sh /repo/scripts/linux-control/start-portable-wayland.sh
 docker cp mako-portable-wayland:/tmp/portable-wayland-evidence.json ./portable-wayland-evidence.json
+docker rm mako-portable-wayland
 ```
 
 Use `MAKO_COMPOSITOR=weston` and a different container name for Weston. Both run
@@ -73,8 +74,8 @@ physical-device claim. The evidence includes runtime versions and hashes.
 ## GNOME Wayland
 
 `Dockerfile.gnome` supplies GNOME 46, AT-SPI, GTK, fonts and FFmpeg in a private
-headless session. Build it with `docker build -t mako-control-linux:gnome -f
-scripts/linux-control/Dockerfile.gnome .`. Then run the compiled host and the
+headless session. Build it with `docker build -t mako-control-linux:gnome - <
+scripts/linux-control/Dockerfile.gnome`. Then run the compiled host and the
 packaged driver/helper together:
 
 ```sh
@@ -84,6 +85,8 @@ docker run --name mako-gnome-acceptance --user root \
   -v "$PWD/release/control-driver/0.28.2+mako.13/linux-arm64/wayland-helper/winrects@cua:/helper:ro" \
   mako-control-linux:gnome sh -c 'rmdir /run/systemd/seats; dbus-daemon --system --fork; exec runuser -u ubuntu -- sh /repo/scripts/linux-control/start-gnome.sh'
 docker cp mako-gnome-acceptance:/tmp/gnome-evidence.json ./gnome-evidence.json
+# Copy recording/PNG artifacts too before removing the stopped container.
+docker rm mako-gnome-acceptance
 ```
 
 The empty `/run/systemd/seats` directory is removed only inside this container to
@@ -153,3 +156,38 @@ app with duplicate names, no target/cover focus changes, and refusal of unverifi
 raw input/capture. It does not establish KDE recording/gestures, Plasma 6, native
 x64 or physical keyboard behavior. Collect `/tmp/portable-wayland-evidence.json`
 and `/tmp/compositor.log`, then remove the named test container.
+
+
+## Current compositor versions and cleanup
+
+The September 24 current-version suite passes KWin 6.3.6, labwc 0.8.3 and
+Weston 14.0.2 on ARM64. Each runs twenty semantic background form jobs. This
+extends the earlier versions above; it does not establish KDE capture/gestures.
+Current AT-SPI reports `button` instead of `push button`; both map to the public
+`Button` role. The unmodified host failed before its first Save on all three.
+
+Build this test-only image once, then reuse it across source changes. It needs no
+checkout context and contains neither Rust tooling nor the full GNOME desktop:
+
+```sh
+docker build -t mako-control-linux:compositors-current - < scripts/linux-control/Dockerfile.compositors
+sh scripts/linux-control/run-compositors.sh /absolute/prepared-payload /absolute/packaged-driver /absolute/new-evidence
+```
+
+Use a frozen, compiled payload with Linux `npm ci` dependencies and the portable
+runner/probe/fixture files. `MAKO_COMPOSITOR_IMAGE` selects an existing image for
+older-version coverage. The runner uses one image for all three isolated desktops,
+collects each run's evidence and removes its container on success, failure or a
+handled interruption. It does not build an image for each test. SIGKILL or an
+engine crash can bypass shell cleanup; the `dev.mako.control.test` label identifies
+these new test containers for inspection. Never prune unrelated containers or
+volumes on a shared development machine.
+
+Build caches and the architecture-specific Cargo volumes deliberately survive
+runs to avoid recompilation. Keep stable image tags per environment/target; don't
+create another tag for each attempt. Separate evidence files from container
+retention. `docker image ls` sizes include shared layers and cannot be summed to
+calculate occupied disk space. Audit `docker system df -v` and `docker buildx du`
+before choosing a bounded cleanup. Runtime images use the prepared release
+context in `runtime/control/Dockerfile`; never build that Dockerfile with the
+whole checkout as context.

@@ -41,7 +41,13 @@ def verify_managed_window():
                     ["xprop", "-root", "_NET_CLIENT_LIST"],
                     capture_output=True, text=True, timeout=2,
                 )
-            except (OSError, subprocess.TimeoutExpired) as error:
+            except subprocess.TimeoutExpired as error:
+                diagnostic = str(error)
+                if time.monotonic() >= managed_deadline:
+                    break
+                stop.wait(0.05)
+                continue
+            except OSError as error:
                 diagnostic = str(error)
                 break
             diagnostic = result.stdout + result.stderr
@@ -74,20 +80,29 @@ while time.monotonic() < deadline:
         last = "waiting for Openbox's startup callback"
         time.sleep(0.05)
         continue
-    result = subprocess.run(
-        ["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"],
-        capture_output=True, text=True, timeout=2,
-    )
+    try:
+        result = subprocess.run(
+            ["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"],
+            capture_output=True, text=True, timeout=min(2, max(0.01, deadline - time.monotonic())),
+        )
+    except subprocess.TimeoutExpired as error:
+        last = str(error)
+        time.sleep(0.05)
+        continue
     last = result.stdout + result.stderr
     if result.returncode == 0:
         if mode == "server":
             sys.exit(0)
         match = re.search(r"window id # (0x[0-9a-fA-F]+)", result.stdout)
         if match:
-            owner = subprocess.run(
-                ["xprop", "-id", match[1], "_NET_SUPPORTING_WM_CHECK", "_NET_WM_NAME"],
-                capture_output=True, text=True, timeout=2,
-            )
+            try:
+                owner = subprocess.run(
+                    ["xprop", "-id", match[1], "_NET_SUPPORTING_WM_CHECK", "_NET_WM_NAME"],
+                    capture_output=True, text=True, timeout=min(2, max(0.01, deadline - time.monotonic())),
+                )
+            except subprocess.TimeoutExpired as error:
+                last = str(error)
+                continue
             if owner.returncode == 0 and match[1] in owner.stdout and "Openbox" in owner.stdout:
                 verify_managed_window()
                 sys.exit(0)
