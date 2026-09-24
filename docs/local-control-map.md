@@ -32,7 +32,7 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Area | What is established | What is not established |
 | --- | --- | --- |
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
-| Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. Dense hidden Electron test: ~59 distinct recorded frames/s and 59.8 preview updates/s at 1600×1000. | Installed-host presentation/input latency, sustained efficiency and current Aside capture acceptance. Inactive headless tabs may produce no frames. |
+| Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained efficiency and current Aside capture acceptance. Inactive headless tabs may produce no frames. |
 | Native capture/input | Patched driver +mako.17; tested exact-value routes, bounded settling, recording and scoped gesture coverage. Mac focus recovery is reactive, with observed 23–99 ms interruptions. | General proactive focus prevention, physical IME/concurrent typing, universal gestures or native 60 fps. Mac/X11 capture requests 30 fps; GNOME window capture polls at ~5 fps. |
 | Standalone Linux | Node launcher without Electron; final ARM64 and native Intel x64 packages pass eleven lifecycle scenarios, including crash/cancellation/process-group cleanup. Temporary EC2 resources removed. | Public distribution, AMD, x64 Wayland, all compositor families, or latest CLI acceptance on native x64 hardware. |
 | Installed components | +mako.17 selected for new Mac driver launches. Earlier regular-profile Aside extension 0.3.2 passed 80 saved jobs. | Latest shared host/capture fixes have not replaced the running Mako app. Earlier Aside acceptance does not validate these newer changes. |
@@ -119,14 +119,32 @@ from CLI startup timings.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: browser fixes locally tested; efficiency and native rates remain open.**
+**Status: viewer decode failure fixed; lossless shared-host compression measured; installed Aside capture and native rates remain open.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 
-Next: measure renderer presentation and click-to-visible p50/p95, real scrolling,
-CPU, memory and bytes on busy pages. Dense frame JSON currently reaches ~555 KB;
-the capture fixture consumed about 1.5 Electron CPU cores. Evaluate a more efficient
-transport against that baseline with unchanged text readability. Finish actual
+The production image renderer repeatedly replaced an unfinished async decode.
+The new pixel-reading audit reproduced only 10 readable frames in four seconds
+despite 222 host updates. A bounded decoder now keeps the last complete image and
+one newest waiting frame. Corrected runs reached ~59–60 composited frames/s;
+two viewers plus recording passed 36 exact input/visible-marker checks, zero
+decoded-pixel differences at 1920×1080, and independent viewer/recording cleanup.
+[Reproduction, measurements and limits](local-control-preview-evidence.md).
+
+A separate-host comparison reduced socket response bodies from 17.62 to 11.98 MB/s
+with identical decoded pixels and ~59 distinct fps. A later CPU-instrumented pair
+was slower (49.75 vs 56.35 fps); tail latency and total resource cost remain open.
+This is negotiated Brotli transport compression; Electron IPC still expands the
+full preview JSON. Installed Aside 0.3.2 supplies no frames for the default hidden
+tab policy; emulated lease focus restores frames but changes page focus semantics.
+That diagnostic passed 36 inputs, exact 2560×1440 pixels and 73 unchanged foreground
+samples at 52.24 fps. Production policy remains unchanged pending the user’s choice.
+
+Next: resolve that capture policy and verify the actual installed shared host,
+remote delivery and instrumentation overhead. The original fixture used ~2.1 Electron CPU cores,
+including source animation and offscreen measurement. These are different workloads
+from the earlier ~555 KB/frame, ~1.5-core capture-only fixture. Measure memory and
+sustained resource cost before selecting a transport, with unchanged text fidelity. Finish actual
 pixel/DPR policy, resize/no-frame reporting, cursor legibility and all gesture routes.
 Thread requested fps through native capabilities/capture, replacing GNOME's polling
 source where needed. A getUserMedia constraint does not upgrade native recording.
@@ -230,7 +248,14 @@ state. This also closes the older LC-14 contention/invalidation work.
 
 ## LC-23 — Preview isolation and installed browser rollout
 
-**Status: open for new isolation behavior and latest installed acceptance.**
+**Status: signed candidate verified and idle-only install queued; installed acceptance incomplete.**
+
+Candidate `1e3322212fc98974` passed both packaged startup routes. The installed host
+was still `1f2c6af3acd5149e` with two active runs; installation waits for idle.
+The receipt is `release/preview-transport-20260923/install-state.json`. Aside
+extension 0.3.2 passed 20 exact form jobs and 188 unchanged foreground samples,
+then recording refused because the hidden tab supplied no frames. This does not
+pass the recording/reconnect phases. [Evidence](local-control-preview-evidence.md#installed-aside-and-release-acceptance).
 
 Next: define the supported fixture/preview boundary and enforce it at the host
 bridge before offering side-effect-free previews. Merely describing a live desk
@@ -284,6 +309,12 @@ separate from the locally prepared workflow and completed EC2 acceptance.
 
 **Status: initial cleanup and target packages tested; further reduction open.**
 [Architecture, sizes and target matrix](local-control-packaging.md).
+
+September 23: the signed ARM64 candidate is 662,787,567 installed bytes; 1,077
+frozen build files and 664 imports verified. Packaging now derives workspace
+FileSets from the canonical release manifest, fixing the omitted `control-runtime`
+mapping and preserving JS/license-only Control payloads. Both packaged startup
+routes passed. Other target and actual default-host rollout claims remain separate.
 
 Next: measure full installed bytes and cold start per browser/native/mixed cloud
 image and desktop target, not just source payload or driver size. Audit a reduced

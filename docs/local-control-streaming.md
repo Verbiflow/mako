@@ -41,9 +41,14 @@ Neither article proves Mako needs Go, a particular codec, or a new agent runtime
 - [Recording](../packages/control-runtime/src/control-recording.ts) retains source frames and finalizes
   files separately. Preview presentation and recorded evidence have different
   lifetimes and quality requirements.
-- Existing measurements count host deliveries and decoded recording frames.
-  They do not measure frames actually shown by a remote viewer or a complete
-  human input → visible response loop.
+- The [local compositor audit](local-control-preview-evidence.md) now reads independent
+  sequence/input markers from the production viewer's composited pixels. It exposed
+  an async-image replacement failure, fixed with a bounded decoder that retains
+  completed pixels. Local 1080p capture reaches ~59–60 distinct viewer frames/s;
+  a separate-host socket comparison cuts response bodies by 32.86% with unchanged
+  decoded pixels. Later CPU-instrumented results include a slower run; see the report.
+  Installed Aside capture exposed a hidden-tab no-frame limitation. Actual updated
+  installed-host, physical display and remote-network acceptance remain open.
 
 Keep those existing ownership and bounded-work mechanisms. The experiments below
 must show an improvement over them, not replace them with a second session engine.
@@ -76,6 +81,12 @@ they remain owned components of Local Control, not another automation service.
 ## Experiments in order
 
 ### 1. Measure the viewer before selecting a transport
+
+Local browser baseline and regression command: `npm run audit:control-preview`.
+Use `-- --baseline` to rebuild the old image renderer as a controlled comparison,
+or `-- --two-viewers --recording` for concurrent consumers. The benchmark uses
+isolated fixture windows and production capture/state/renderer code; it never
+connects to a regular browser profile. [Results and scope](local-control-preview-evidence.md).
 
 Build a synthetic page/app with an independently checkable animation sequence and
 input-response marker. Observe the displayed sequence at the viewer, not only a
