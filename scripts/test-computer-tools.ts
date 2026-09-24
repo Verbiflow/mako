@@ -43,8 +43,8 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 const server = new Server({name:'driver',version:'1'},{capabilities:{tools:{}}});
 const target = {session:{type:'string'},pid:{type:'integer',format:'int32'},window_id:{type:'integer',format:'uint32'},element_token:{type:'string'},snapshot_id:{type:'string'},max_elements:{type:'integer',format:'uint32'},screenshot_out_file:{type:'string'},delivery_mode:{type:'string',enum:['background','foreground']}};
 server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
-  {name:'get_window_state',description:'Capture. Returns both.',inputSchema:{type:'object',properties:target,required:['session','pid','window_id']},outputSchema:{type:'object',properties:{snapshot_id:{type:['string','number']},pid:{type:'integer',format:'int32'},window_id:{type:'integer',format:'uint32'},screenshot_scale:{type:'number',format:'double'}}}},
-  {name:'click',description:'Click',inputSchema:{type:'object',properties:target,required:['session']}},
+  {name:'get_window_state',description:'Capture. Returns both.',inputSchema:{type:'object',properties:{...target,max_depth:{type:'integer'}},required:['session','pid','window_id']},outputSchema:{type:'object',properties:{snapshot_id:{type:['string','number']},pid:{type:'integer',format:'int32'},window_id:{type:'integer',format:'uint32'},screenshot_scale:{type:'number',format:'double'}}}},
+  {name:'click',description:'Click',inputSchema:{type:'object',properties:{...target,button:{type:'string',enum:['left','right','middle']}},required:['session']}},
   {name:'hotkey',description:'Press a key combination.',inputSchema:{type:'object',properties:{...target,keys:{type:'array',items:{type:'string'}}},required:['session','keys']}},
   {name:'list_apps',description:'Apps',inputSchema:{type:'object',properties:{session:{type:'string'}}}},
   {name:'list_windows',description:'Windows',inputSchema:{type:'object',properties:{session:{type:'string'},pid:{type:'integer'},on_screen_only:{type:'boolean'}}}},
@@ -56,7 +56,7 @@ server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[
   {name:'set_agent_cursor_motion',description:'Configure only movement physics and visibility timing for a session cursor.',inputSchema:{type:'object',properties:{session:{type:'string'},glide_duration_ms:{type:['number','null']},dwell_after_click_ms:{type:['number','null']}},required:['session']}},
   {name:'get_config',description:'Config.',inputSchema:{type:'object',properties:{}}}
 ]}));
-const cursorCalls=[];
+const cursorCalls=[]; const keyboardCalls=[]; const pointerCalls=[];
 let writes=0; let clicks=0; let fieldValue=''; let captures=0; let images=0; let newest=''; let refreshes=0;
 // Like the driver: every capture is a new snapshot and only the newest
 // snapshot's tokens are honoured.
@@ -64,6 +64,7 @@ const stale=(token)=>typeof token==='string'&&token!=='refuse'&&!token.startsWit
 server.setRequestHandler(CallToolRequestSchema,async request=>{
   const args=request.params.arguments;
   if(request.params.name==='get_window_state'){
+    if(args.window_id===9004 && args.max_depth!==5) throw new Error('Native max_depth was not forwarded');
     if(args.window_id===9001 || args.window_id===9002 || (args.window_id===9003 && ++refreshes>1)){const value=args.window_id!==9002?{degraded:true,degraded_reason:'ax_window_unresolved',elements:[],elements_complete:true}:{snapshot_id:123,elements:[]};return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};}
     captures+=1; if(args.include_screenshot!==false) images+=1; newest='s'+(10+captures).toString(16).padStart(8,'0');
     const elements=[{element_token:newest+':0',role:'AXButton',label:'Go'},{element_token:newest+':90',role:'AXMenuBar',depth:0},{element_token:newest+':1',role:'AXMenuItem',label:'About',depth:1},...(clicks?[{element_token:newest+':2',role:'AXStaticText',label:'Done',value:'Done'}]:[]),{element_token:newest+':3',role:'AXTextField',label:'Name',value:fieldValue,value_exact:fieldValue!=='legacy-normalized'}];
@@ -71,14 +72,14 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
     return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
   }
   if(stale(args.element_token)) return {isError:true,content:[{type:'text',text:'element_token is stale; call get_window_state again to refresh'}]};
-  if(request.params.name==='click'){ if(args.element_token==='refuse') return {isError:true,content:[{type:'text',text:'no such element in this snapshot'}]}; clicks+=1; const value={route:'accessibility',effect:'unverifiable',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='click'){ pointerCalls.push(args); if(args.element_token==='refuse') return {isError:true,content:[{type:'text',text:'no such element in this snapshot'}]}; clicks+=1; const value={route:'accessibility',effect:'unverifiable',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_agent_cursor_motion'){ cursorCalls.push({session:args.session,glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms}); const value={motion:{glide_duration_ms:args.glide_duration_ms,dwell_after_click_ms:args.dwell_after_click_ms},session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_agent_cursor_enabled'){ cursorCalls.push({session:args.session,enabled:args.enabled}); const value={enabled:args.enabled,session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
-  if(request.params.name==='get_config'){ const value={cursorCalls,captures,images,writes}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='get_config'){ const value={cursorCalls,captures,images,writes,keyboardCalls,pointerCalls}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_value'){ writes+=1; fieldValue=args.value; if(args.value==='ax-unacknowledged-fixture') return {isError:true,content:[{type:'text',text:'AX action failed: AXUIElementPerformAction(AXPress) returned -25204'}]}; if(args.value==='unknown-outcome-fixture') return {isError:true,content:[{type:'text',text:'connection lost after possible write'}]}; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='invoke_menu'){ const value={effect:'invoked',path:args.path,forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='zoom') return {content:[{type:'image',mimeType:'image/png',data:'aW1hZ2U='}],structuredContent:{pid:args.pid,window_id:args.window_id,screenshot_scale:4}};
-  if(request.params.name==='hotkey'){ const dropped=args.keys.includes('x'); const value={effect:'unverifiable',keys:args.keys,delivery:{mode:args.delivery_mode??'background'},pid:args.pid,...(dropped?{escalation:{reason:'delivery_failed',target:'foreground'},route:'synthetic_events'}:{})}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='hotkey'){ keyboardCalls.push(args); const dropped=args.keys.includes('x'); const value={effect:'unverifiable',keys:args.keys,delivery:{mode:args.delivery_mode??'background'},pid:args.pid,...(dropped?{escalation:{reason:'delivery_failed',target:'foreground'},route:'synthetic_events'}:{})}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='list_apps'){ const value={apps:[{pid:1,active:true,name:'Other'},{pid:42,active:false,name:'Fixture'}]}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='list_windows'){ const value={windows:[{pid:args.pid,window_id:7,z_index:1,is_on_screen:true},{pid:args.pid,window_id:8,title:'',bounds:{x:0,y:0,width:1352,height:30},is_on_screen:false},{pid:args.pid,window_id:9,title:'Downloads',bounds:{x:0,y:0,width:900,height:600},is_on_screen:true}]}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='get_accessibility_tree'){ const value={pid:args.pid,elements:Array.from({length:4000},(_,index)=>({element_index:index,role:'AXStaticText',label:'Row '+index+' '+'description '.repeat(6)}))}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
@@ -134,6 +135,13 @@ try {
       // The program tool's description carries the reference, read from the
       // live driver: helpers first, then every action with its return shape.
       const execDescription = await client.reference()
+      const unsupportedDepth = await client.request({
+        method: "exec",
+        arguments: { source: "return await computer.get_window_state({pid:42,max_depth:5})" },
+      })
+      assert.equal(unsupportedDepth.isError, true)
+      assert.equal(unsupportedDepth.structuredContent?.code, "unsupported-operation")
+      assert.equal(unsupportedDepth.structuredContent?.outcome, "not-dispatched")
       assert.match(
         execDescription,
         /Helpers \(async, available in every program\):\n  view\(/
@@ -1190,6 +1198,16 @@ const proof=await state.window.expect({role:'TextField',name:'Name',value:'unkno
     faults: ["unknown", "observation-required", "observation-required", "observation-required"],
     status: "matched",
   })
+  const shallow = await unifiedClient.request({
+    method: "exec",
+    arguments: { source: `const panel=control.window({pid:42,window_id:9004});const before=await control.native('get_config');const view=await panel.observe({maxDepth:5});const after=await control.native('get_config');return {scope:view.data.scope,complete:view.coverage.complete,reads:after.captures-before.captures,images:after.images-before.images};` },
+  })
+  assert.ok(!shallow.isError, JSON.stringify(shallow))
+  const shallowView = JSON.parse(firstText(shallow.content))
+  assert.equal(shallowView.scope.maxDepth, 5)
+  assert.equal(shallowView.complete, false, "An incomplete backend read stays incomplete")
+  assert.equal(shallowView.reads, 1)
+  assert.equal(shallowView.images, 0)
   const unavailable = await unifiedClient.request({
     method: "exec",
     arguments: { source: `const failures=[];
@@ -1406,6 +1424,53 @@ const receipt=await tab.click(at); let stale; try {await tab.click(at)} catch(e)
     status: "dispatched",
     stale: { code: "stale-view", outcome: "not-dispatched" },
   })
+  const addressedChord = await unifiedClient.request({
+    method: "exec",
+    arguments: { source: `const w=control.window({pid:42,window_id:7});
+const before=await control.native('get_config');
+const view=await w.observe(); const ref=view.get({role:'TextField',name:'Name'}).ref;
+const receipt=await w.pressKey('Left',{modifiers:['Shift'],ref});
+const after=await control.native('get_config');
+return {receipt,before,after};` },
+  })
+  assert.ok(!addressedChord.isError, JSON.stringify(addressedChord))
+  const addressed = JSON.parse(firstText(addressedChord.content))
+  assert.equal(addressed.receipt.status, "dispatched")
+  assert.equal(addressed.after.keyboardCalls.length, addressed.before.keyboardCalls.length + 1)
+  const delivered = addressed.after.keyboardCalls.at(-1)
+  assert.equal(delivered.pid, 42)
+  assert.equal(delivered.window_id, 7)
+  assert.match(delivered.element_token, /^s[0-9a-f]+:3$/)
+  assert.deepEqual(delivered.keys, ["Shift", "Left"])
+  assert.equal(addressed.after.captures, addressed.before.captures + 1)
+  assert.equal(addressed.after.images, addressed.before.images)
+  const staleChord = await unifiedClient.request({
+    method: "exec",
+    arguments: { source: `const w=control.window({pid:42,window_id:7});
+const view=await w.observe(); const ref=view.get({role:'TextField',name:'Name'}).ref;
+await w.observe(); const before=await control.native('get_config');
+let error; try {await w.pressKey('Left',{modifiers:['Shift'],ref})} catch(e) {error={code:e.code,outcome:e.outcome}};
+return {error,before,after:await control.native('get_config')};` },
+  })
+  assert.ok(!staleChord.isError, JSON.stringify(staleChord))
+  const staleAddressed = JSON.parse(firstText(staleChord.content))
+  assert.deepEqual(staleAddressed.error, {code:"stale-reference",outcome:"not-dispatched"})
+  assert.deepEqual(staleAddressed.after.keyboardCalls, staleAddressed.before.keyboardCalls)
+  const middleClick = await unifiedClient.request({
+    method: "exec",
+    arguments: { source: `const w=control.window({pid:42,window_id:7});
+const view=await w.observe(); const ref=view.get({role:'Button',name:'Go'}).ref;
+const before=await control.native('get_config');
+const receipt=await w.click(ref,{button:'middle'});
+return {receipt,before,after:await control.native('get_config')};` },
+  })
+  assert.ok(!middleClick.isError, JSON.stringify(middleClick))
+  const middle = JSON.parse(firstText(middleClick.content))
+  assert.equal(middle.receipt.status, "dispatched")
+  assert.equal(middle.after.pointerCalls.length, middle.before.pointerCalls.length + 1)
+  assert.equal(middle.after.pointerCalls.at(-1).button, "middle")
+  assert.match(middle.after.pointerCalls.at(-1).element_token, /^s[0-9a-f]+:0$/)
+  assert.equal(middle.after.images, middle.before.images)
   const backgroundRefusals = await unifiedClient.request({
     method: "exec",
     arguments: {
@@ -1422,6 +1487,26 @@ return {hidden,chord};`,
 } finally {
 
   await unifiedServer.close()
+}
+
+// Older drivers must not silently reinterpret an addressed key or middle button.
+for (const missing of ["button", "element_token"] as const) {
+  const legacy = driverSource.replace(
+    "const args=request.params.arguments;",
+    "const args=request.params.arguments; if(request.params.name==='hotkey' || request.params.name==='click') throw new Error('Actuator must not run');"
+  ).replace(
+    "]}));\nconst cursorCalls",
+    "].map(tool=>{if(tool.name==='click' || tool.name==='hotkey') delete tool.inputSchema.properties[" + JSON.stringify(missing) + "];return tool})}));\nconst cursorCalls"
+  )
+  const server = controlSessionProbe({command:process.execPath,args:["--input-type=module","--eval",legacy]}, "legacy-input-" + missing, undefined, {surface:"control"})
+  try {
+    const result = await server.request({method:"exec",arguments:{source:`const w=control.window({pid:42,window_id:7});
+const view=await w.observe();const ref=view.get({role:'TextField',name:'Name'}).ref;
+return ${missing === "button" ? "w.click(ref,{button:'middle'})" : "w.pressKey('Left',{modifiers:['Shift'],ref})"};`}})
+    assert.equal(result.isError, true)
+    assert.equal(result.structuredContent?.code, "unsupported-operation")
+    assert.equal(result.structuredContent?.outcome, "not-dispatched")
+  } finally { await server.close() }
 }
 
 // Unspecified native input can fail before the host has seen any windows.

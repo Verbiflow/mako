@@ -56,6 +56,10 @@ try {
   assert.equal(window.pid, target.pid)
   assert.match(window.title, /^Mako target(?: \[fixture\.py\])?$/)
   await cell(`state.window=control.window({pid:${target.pid},window_id:${JSON.stringify(window.window_id ?? window.id)}});return await state.window.observe();`)
+  evidence.shallow = await cell("const view=await state.window.observe({maxDepth:1,max:250});return {scope:view.data.scope,coverage:view.coverage,depths:view.nodes.map(node=>node.depth)};")
+  assert.equal(evidence.shallow.scope.maxDepth, 1)
+  assert.equal(evidence.shallow.coverage.complete, false, "Omitted descendants cannot establish absence")
+  assert.ok(evidence.shallow.depths.length > 0 && evidence.shallow.depths.every(depth=>depth<=1))
   for (let index = 0; index < 20; index++) {
     const text = `Background ${index}: 日本語 🧪 é\nExact form values stay in their own process.`
     await cell(`await state.window.locator({role:'TextArea',name:'Exact text'}).setValue(${JSON.stringify(String(index))});await state.window.locator({role:'TextArea',name:'Long text'}).setValue(${JSON.stringify(text)});return await state.window.locator({role:'Button',name:'Save'}).click();`)

@@ -5,8 +5,10 @@ import {join} from 'node:path'
 
 /** Import an actual native question that this packaged profile has never observed. */
 export async function checkPackagedQuestionHistory({bridge,command,evaluate,waitFor,root,report,restart,source}) {
-  await waitFor(()=>bridge('threads',[]),result=>result.ready,'native catalog readiness',120000)
+  const readyAtCapture=(await bridge('threads',[])).ready
+  const captureStarted=performance.now()
   const imported=await bridge('liveCapture',[randomUUID(),source])
+  const captureMs=performance.now()-captureStarted
   const id=imported.session.id, question=imported.control.questions.find(q=>q.native.questions.some(item=>!q.answered?.includes(item.id)))
   assert.ok(question,'Native capture must import an unanswered question')
   const snapshot=()=>bridge('liveSnapshot',[id])
@@ -40,5 +42,5 @@ export async function checkPackagedQuestionHistory({bridge,command,evaluate,wait
   const records=(await readFile(source,'utf8')).trim().split('\n').map(line=>JSON.parse(line))
   const count=records.filter(r=>r.type==='response_item'&&r.payload.type==='message'&&r.payload.role==='user'&&JSON.stringify(r.payload.content).includes(phrase)).length
   assert.equal(count,1)
-  report.phases.push({phase:'native-history-import',questionId:question.id,native:question.native,phrase,sameNativeSession:true,nativeAnswerInputs:count,pendingRestored:true,duplicateAfterRestart:true})
+  report.phases.push({phase:'native-history-import',readyAtCapture,captureMs:Math.round(captureMs),questionId:question.id,native:question.native,phrase,sameNativeSession:true,nativeAnswerInputs:count,pendingRestored:true,duplicateAfterRestart:true})
 }

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { access, chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import {
@@ -568,8 +568,9 @@ async function testEmbeddedCuaHost(): Promise<void> {
   const previousSocket = process.env.MAKO_CUA_SOCKET
   const directory = await mkdtemp(join(tmpdir(), "mako-cua-embedded-"))
   const command = join(directory, "cua-driver")
-  const state = join(directory, "state")
-  const source = `#!${process.execPath}\nconst net = require("node:net")\nif (process.env.CUA_DRIVER_EMBEDDED !== "1") process.exit(2)\nif (process.env.CUA_DRIVER_HOST_BUNDLE_ID !== "dev.mako.test") process.exit(3)\nif (!process.argv.includes("--no-overlay")) process.exit(4)\nconst index = process.argv.indexOf("--socket")\nconst socket = process.argv[index + 1]\nconst server = net.createServer(connection => connection.end())\nserver.listen(socket)\nprocess.on("SIGTERM", () => server.close(() => process.exit(0)))\n`
+  const state = join(directory, "long-state-" + "界".repeat(35))
+  const source = `#!${process.execPath}\nconst net = require("node:net")\nif (process.env.CUA_DRIVER_EMBEDDED !== "1") process.exit(2)\nif (process.env.CUA_DRIVER_HOST_BUNDLE_ID !== "dev.mako.test") process.exit(3)\nif (!process.argv.includes("--no-overlay")) process.exit(4)\nconst index = process.argv.indexOf("--socket")\nconst socket = process.argv[index + 1]\nconst server = net.createServer(connection => connection.end())\nprocess.umask(0o077)\nserver.listen(socket)\nprocess.on("SIGTERM", () => server.close(() => process.exit(0)))\n`
+  let endpoint: string | undefined
   try {
     await writeFile(command, source)
     await chmod(command, 0o755)
@@ -577,6 +578,9 @@ async function testEmbeddedCuaHost(): Promise<void> {
       PATH: directory,
     })
     assert.ok(socket)
+    endpoint = socket
+    assert.ok(Buffer.byteLength(socket) <= 103)
+    assert.equal((await stat(socket)).mode & 0o077, 0)
     assert.equal(cuaEmbeddedSocket(), socket)
     assert.equal(process.env.MAKO_CUA_SOCKET, previousSocket)
   } finally {
@@ -584,6 +588,19 @@ async function testEmbeddedCuaHost(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 50))
     assert.equal(cuaEmbeddedSocket(), null)
     assert.equal(process.env.MAKO_CUA_SOCKET, previousSocket)
+    if (endpoint) {
+      await assert.rejects(access(endpoint))
+      await assert.rejects(access(dirname(endpoint)))
+    }
+    await writeFile(command, `#!${process.execPath}\nprocess.stderr.write(process.argv[process.argv.indexOf("--socket")+1]);process.exit(7)\n`)
+    let failedSocket: string | undefined
+    await assert.rejects(ensureCuaEmbedded(state, "dev.mako.test", { PATH: directory }), (error) => {
+      assert.ok(error instanceof Error)
+      failedSocket = error.message
+      return true
+    })
+    assert.ok(failedSocket)
+    await assert.rejects(access(dirname(failedSocket)))
     await rm(directory, { recursive: true, force: true })
   }
 }

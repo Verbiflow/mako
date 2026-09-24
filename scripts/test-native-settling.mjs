@@ -196,7 +196,9 @@ try {
   for (const button of ["right", "middle"]) {
     evidence.buttons.push(
       await cell(
-        `return await control.native('click',{...state.target,x:440,y:150,button:${JSON.stringify(button)}});`
+        button === "middle"
+          ? "const shot=await state.window.screenshot({maxSide:300});const g=shot.coordinates;return await state.window.click({x:440*g.imageWidth/g.sourceWidth,y:150*g.imageHeight/g.sourceHeight,view:shot.view},{button:'middle'});"
+          : `return await control.native('click',{...state.target,x:440,y:150,button:${JSON.stringify(button)}});`
       )
     )
     await until(async () =>

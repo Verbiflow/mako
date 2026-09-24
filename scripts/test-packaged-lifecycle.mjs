@@ -607,6 +607,10 @@ try {
   report.phases.push({ phase: "permission-status", ...permissions })
   console.log("Packaged renderer, preload, and read-only permission status ready in an isolated profile")
   if (!rendererOnly) {
+    if (process.env.MAKO_PACKAGE_QUESTION_SOURCE) {
+      const {checkPackagedQuestionHistory}=await import('./packaged-question-history-checks.mjs')
+      await checkPackagedQuestionHistory({bridge,command,evaluate,waitFor,root,report,source:process.env.MAKO_PACKAGE_QUESTION_SOURCE,restart:async()=>{await stopPackage();await startPackage()}})
+    }
     const text = `Remember this marker for the next turn: ${marker}. Reply with just the marker. Do not use tools or modify files.`
     let requestId = randomUUID(),
       sentAt = Date.now()
@@ -645,10 +649,6 @@ try {
     if (process.env.MAKO_PACKAGE_ASYNC_QUESTIONS) {
       const { checkPackagedAsyncQuestions } = await import('./packaged-async-question-checks.mjs')
       await checkPackagedAsyncQuestions({bridge,command,evaluate,waitFor,conversationId,root,report,restart:async()=>{await stopPackage();await startPackage()}})
-    }
-    if (process.env.MAKO_PACKAGE_QUESTION_SOURCE) {
-      const {checkPackagedQuestionHistory}=await import('./packaged-question-history-checks.mjs')
-      await checkPackagedQuestionHistory({bridge,command,evaluate,waitFor,root,report,source:process.env.MAKO_PACKAGE_QUESTION_SOURCE,restart:async()=>{await stopPackage();await startPackage()}})
     }
     report.phases.push({
       phase: "provider-completion",
