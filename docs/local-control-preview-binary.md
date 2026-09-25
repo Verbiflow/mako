@@ -1,8 +1,7 @@
 # Binary preview delivery
 
 September 24, 2026. [Wayfinder LC-21](local-control-map.md#lc-21--responsive-capture-recordings-and-cursor)
-owns this change. Implementation and focused tests are local; final production-decoder acceptance
-and installed rollout remain open. Continuous recording is a separate change in
+owns this change. Implementation and source/package correctness checks pass locally. Final one/two-viewer recordings complete; heavier-load recording interruptions and installed rollout remain open. Continuous recording is a separate change in
 [the media investigation](local-control-media-investigation.md).
 
 ## Boundary and ownership
@@ -67,12 +66,14 @@ and independently rejects preview/video freezes of half a second or longer. It
 reports p50/p95/max gaps; crossing the minimum does not mean there are no dropped
 frames or shorter hitches. Historical failed runs below retain their original verdict.
 
-| One-minute Aside run, two viewers + recording | Preview / decoded video | Other evidence |
+| One-minute Aside run | Preview / decoded video | Other evidence |
 | --- | --- | --- |
 | Shared HTML image decode, before final receiver change | 50.02 / 54.33 distinct fps | All 36 inputs and both full-pixel comparisons pass. Finished 67.4 s video; longest recorded hold 233.3 ms. 326 foreground samples unchanged. Misses even the revised floor. |
 | Isolated WebCodecs candidate | 55.41 / 56.00 distinct fps | All 36 inputs and both full-pixel comparisons pass. Longest recorded hold 116.7 ms. Meets the revised rate floor; final production implementation still requires its own run. |
 | Production decoder, two viewers, before RGB encoder input | 54.41 / 53.55 distinct fps | All 36 inputs and both pixel comparisons pass. Finished 68.65 s video, 150 ms longest recorded hold, 326 unchanged foreground samples. Below the revised floor. Click/type/scroll p95: 365/131/123 ms. |
 | Production decoder, one viewer, before RGB encoder input | 50.96 preview fps; recording interrupted | All 36 inputs and the pixel comparison pass. Encoder lag exceeded two seconds after 34.88 s; independently verified partial output retains 31 s. This fails long-recording acceptance. |
+| Final production, one viewer + recording | **56.43 / 55.07 distinct fps** | Finished 66.85 s video. All 36 inputs and full-pixel comparison pass; 344 foreground samples unchanged. Preview p95/max gap 21.8/181.6 ms; longest recorded hold 116.7 ms. Passes revised audit. |
+| Final production, two viewers + recording | **55.30 / 54.95 distinct fps** | Finished 67.48 s video. All 36 inputs and both full-pixel comparisons pass; 337 foreground samples unchanged. Preview p95/max gap 26.5/101.5 ms; longest recorded hold 116.7 ms. The script's exact video floor misses by three frames in a minute. This is retained as a marginal rate result, not erased or repeatedly retried. |
 
 The WebCodecs candidate used 12.87 MB/s binary response bodies with no base64
 expansion across Electron IPC. Electron fixture CPU averaged 0.67 core and Node
@@ -118,6 +119,35 @@ removed. The sustained run reports socket bytes and decoded/IPC payload bytes
 separately. Raw JPEG delivery may use more wire bytes than Brotli-compressed base64
 for repetitive fixtures, while avoiding the expanded JSON and compression work.
 
-Remaining gates: final production one/two-viewer runs and installed-host acceptance. Existing tests cover concurrent input, exact pixels, reconnect and web-desk delivery; these do not replace installed acceptance. Complete process accounting still needs installed
+Remaining gates: recorder reliability under simultaneous workload, installed-host acceptance and broader platform/viewer coverage. The final source runs establish roughly 55–56 fps with correct inputs and pixels, not overload-proof recording or sustained 60 fps. Existing tests cover reconnect and web-desk delivery; these do not replace installed acceptance. Complete process accounting still needs installed
 browser/encoder CPU. Linux Selkies/pixelflux and Sunshine/Moonlight comparisons
 follow this delivery change; no new streaming dependency has been adopted.
+
+
+## Verification and next work
+
+- Runtime/app/Electron types pass. Full lint passes with five existing React Compiler
+  warnings; anti-slop reports zero warnings/errors.
+- Preview, capture-sharing, binary transport, runtime recovery and complete recording
+  regression suites pass. Real Electron interleaved screenshot/playback and two real
+  same-origin web clients pass.
+- The isolated npm consumer passes public imports/types, worker recording, exact
+  values and cleanup. The final Linux ARM64 smoke records 38 frames / 1.267 s in
+  the existing offline image. No image build/pull and no new dependency. This is
+  synthetic worker evidence, not Linux compositor or native x64 acceptance.
+- Final single-viewer click/type/scroll p95: 209/65/129 ms. Two viewers: 199/77/107 ms.
+  Final viewer CPU averages 0.62/0.67 core for one/two viewers, separate Node host
+  0.99/1.12 cores. Browser and encoder CPU remain excluded from those totals.
+
+Next: profile source delivery, main-thread scheduling and encoder backpressure
+under concurrent work, retaining the failure and playable-prefix contract. Then
+run the selected isolated Selkies/pixelflux comparison and Sunshine/Moonlight native
+reference. Installation must validate the exact new host/client package. The
+previous installed MCP acceptance does not certify this media build. A final read
+of `/Applications/Mako.app` identifies build `5bfc1df4acea215e`; its ASAR has no
+binary preview reader. No installation was performed by this media task.
+
+Local evidence is retained in [the manifest](audits/2026-09-24/binary-preview/manifest.json)
+with source/artifact hashes, successful and failed reports, final videos, rejected
+experiments and check logs. The directory is gitignored; only synthetic fixtures
+were captured. The manifest distinguishes final source from earlier experiments.

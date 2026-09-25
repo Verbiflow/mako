@@ -81,7 +81,7 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. Preview and recording share the original encoded image bytes; viewers share JPEG decoding, and packets, queues and decoder resources have explicit limits and cleanup. The latest experimental decoder minute passed all 36 exact inputs and both full-pixel comparisons at **55.41 distinct preview fps / 56.00 recorded fps**. The user accepts roughly 56 fps; 60 remains the target, rather than a reason to block an otherwise reliable result. Final production-decoder, compatibility and packaging checks are underway. These media changes are not installed. [Binary preview evidence and remaining gates](local-control-preview-binary.md). The next backend work is the isolated Linux Selkies/pixelflux prototype and Sunshine/Moonlight comparison. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
+**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. Preview and recording share encoded source bytes; viewers share JPEG decoding, with bounded packets/queues and explicit cleanup. Final production minute-long Aside runs reached **56.43 preview / 55.07 recorded fps** with one viewer and **55.30 / 54.95 fps** with two. All 36 exact inputs per run and all full-pixel comparisons pass; recordings finish. The user accepts roughly 56 fps, with 60 as the target. The two-viewer video missed the script's exact 55 fps cutoff by three frames; this marginal result is retained. Heavier-load trials still interrupted recording, so overload reliability remains open. Types, lint, recovery, public package and Linux ARM64 worker checks pass. **These media changes are not installed.** [Binary-preview evidence and remaining gates](local-control-preview-binary.md). Next profile recorder backpressure under concurrent work, then run the isolated Linux Selkies/pixelflux and Sunshine/Moonlight comparisons. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
 
 **Preserved integration decision (September 24): SDK + composable CLI + persistent JS MCP.**
 After reviewing the current unified cua_repl evidence, the user explicitly replaced
@@ -191,14 +191,14 @@ These source changes still require desktop rollout.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: installed runtime/MCP acceptance passes. Continuous recording and binary previews are local; final production-decoder media checks and rollout remain open. The user accepts roughly 56 distinct fps; 60 remains the target.**
+**Status: installed runtime/MCP acceptance passes. Continuous recording and binary previews pass local correctness/package checks. Final one/two-viewer jobs complete at roughly 55–56 fps with exact inputs/pixels; heavier-load recording interruptions and rollout remain open. The user accepts roughly 56 fps; 60 remains the target.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 
 The [current investigation](local-control-media-investigation.md) records the
 implementation, failed experiments and acceptance gates. Continuous encoding
 removes source-JPEG staging; clocks/cursor timing and native no-transform output
-have focused tests. [Binary delivery and shared JPEG decoding](local-control-preview-binary.md) now keep preview pixels out of JSON. Finish their final checks, then compare isolated Selkies/pixelflux and Sunshine/Moonlight. Packaged
+have focused tests. [Binary delivery and shared JPEG decoding](local-control-preview-binary.md) now keep preview pixels out of JSON. The final source runs complete with exact pixels; profile the retained overload failures and compare isolated Selkies/pixelflux and Sunshine/Moonlight. Packaged
 FFmpeg's fragmented and hybrid modes retain 120 decoded frames after a synthetic
 encoder kill, whereas `+faststart` output is unreadable; clean runs retain all
 180. This is container evidence, not a new capture-rate result. Hybrid needs no
@@ -412,8 +412,13 @@ state. This also closes the older LC-14 contention/invalidation work.
 
 ## LC-23 — Preview isolation and installed browser rollout
 
-**Status: build `3c1d563e25a9bd78` is installed; package/host identity and
-installed CLI/MCP browser/native acceptance pass.** The post-install JSON failure
+September 24 media check: the installed app is now `5bfc1df4acea215e` (revision
+`1d142af383e73b0539913c289664cdac03e9ec8f`). Its ASAR does not contain the binary
+preview reader. The accepted `3c1d563e25a9bd78` evidence below refers to the earlier
+build; this media task did not revalidate the intervening installation.
+
+**Status: build `3c1d563e25a9bd78` passed installed package/host identity and
+CLI/MCP browser/native acceptance.** The post-install JSON failure
 was cached ASAR metadata after bundle replacement, fixed in the shared deployment
 metadata reader with a regression test. Reconnect, cancellation, exact-value,
 image and cleanup checks pass. Real Codex compaction through the default installed
@@ -726,7 +731,13 @@ migration or count source-search keyword matches as control use.
 
 Next:
 
-1. The installed Mac/Aside + Codex milestone is closed. LC-21 continuous encoding and binary preview delivery are local. Finish production-decoder and rollout checks, then run the Selkies/pixelflux prototype. The user accepts roughly 56 fps, with 60 as the target. Preserve exact values, pixels, recovery and freeze checks; report measured rates instead of equating container fps with distinct motion.
+Current LC-21 investigation: [recording efficiency](local-control-recording-efficiency.md)
+now accounts for browser/encoder resources. A loaded one-minute run finishes but
+misses the normal rate floor; cursor caching and bounded encoder threads are under
+validation. The isolated pinned Linux capture prototype has started. No media
+rollout or upstream dependency adoption is implied.
+
+1. The installed Mac/Aside + Codex milestone is closed. LC-21 continuous encoding and binary preview delivery are local. Production one/two-viewer correctness checks complete; profile the recorded overload interruptions, validate rollout and run the Selkies/pixelflux prototype. The user accepts roughly 56 fps, with 60 as the target. Preserve exact values, pixels, recovery and freeze checks; report measured rates instead of equating container fps with distinct motion.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
    interruption/resume, compaction, fresh bindings and child-agent discovery.
    Preserve exact source/candidate/installed identities for every result.
