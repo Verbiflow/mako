@@ -56,6 +56,7 @@ export function webHostProxy(socket) {
           return
         }
         const headers = { "content-type": "application/json" }
+        if (request.headers.accept === "application/vnd.mako.preview.v1") headers.accept = request.headers.accept
         if (request.headers["x-mako-window"]) headers["x-mako-window"] = request.headers["x-mako-window"]
         if (request.headers["x-mako-history"] === "1") headers["x-mako-history"] = "1"
         if (preview && request.headers.range)

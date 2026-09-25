@@ -53,7 +53,9 @@ export interface ProviderStartOptions extends LiveStartOptions {
 }
 
 export interface ProviderLiveDriver extends ProviderCapability {
-  /** Native session-lived question observation and user-input encoding. */
+  /** Nonblocking session questions. Ordinary user input retires their Mako forms;
+   * exact answers preserve other questions. Native history supplies the same
+   * retirement evidence after external continuation. Blocking approvals stay separate. */
   sessionQuestions?: {
     encodeAnswer(question: import("../contracts/live-questions.js").NativeQuestion, answers: Record<string, string[]>): string
     /** Read-only native catch-up. Reject unavailable/incomplete evidence; never return partial history. */

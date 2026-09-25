@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { ensureRuntime, runtimeDataRoot } from "./runtime-service.js"
-import { invokeRuntime, runtimeFile, subscribeRuntime } from "./runtime-connection.js"
+import { invokeRuntime, invokeRuntimePreview, runtimeFile, subscribeRuntime } from "./runtime-connection.js"
 import { invokeWithRecovery, type RecoveryLink } from "./runtime-retry.js"
 import { HOST_OUTAGE_MESSAGE } from "./contracts/host-connection.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
@@ -250,6 +250,8 @@ async function start() {
         return result.canceled ? null : result.filePaths[0]
       }
       if (!runtime.info.methods.includes(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
+      if (channel === "mako:control-preview")
+        return invokeWithRecovery(channel, () => invokeRuntimePreview(runtime.socket, client.id, args), client.link)
       const result = await invokeWithRecovery(channel, (attempt) => invokeRuntime(runtime.socket, client.id, channel, args, attempt, { history: true }), client.link)
       if (channel === "mako:boot") {
         if (pendingCommand) { event.sender.send("mako:event", { type: "app-command", command: pendingCommand }); pendingCommand = null }

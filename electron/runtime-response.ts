@@ -14,7 +14,7 @@ export class RuntimeResponseLimitError extends Error {
 }
 
 export interface RuntimeTransfer {
-  encoding: "identity" | "br"
+  encoding: "identity" | "br" | "binary"
   wireBytes: number
   decodedBytes: number
 }

@@ -59,12 +59,14 @@ export function createCodexQuestionHistory() {
     }
     let verified = Boolean(append)
     const answer = (text: string) => {
-      for (const reply of codexAnsweredQuestions(sessionId, text)) {
+      const replies = codexAnsweredQuestions(sessionId, text)
+      for (const reply of replies) {
         const matches = byItem.get(reply.itemId)
         if (matches?.length !== 1) continue
         const entry = matches[0]!
         entry.answered = [...new Set([...entry.answered, ...reply.questionIds.filter(id => entry.question.questions.some(q => q.id === id))])]
       }
+      return replies.length > 0
     }
     const read = await readLineBatch(path, append ? previous.size : 0, line => {
       if (!line.trim()) return
@@ -94,7 +96,13 @@ export function createCodexQuestionHistory() {
           entries.push(entry)
           byItem.set(item.id, [...(byItem.get(item.id) ?? []), entry])
         } else if (item.type === "UserMessage") {
-          if (item.content) answer(userText(item.content))
+          if (!item.content) throw new Error("Native question history has an incomplete user message")
+          // Native committed input is the boundary. response_item also contains
+          // injected environment/context messages, so it is not such evidence.
+          if (!answer(userText(item.content))) {
+            for (const entry of entries)
+              if (entry.question.questions.some(question => !entry.answered.includes(question.id))) entry.retired = true
+          }
         }
       } else if (record.type === "response_item") {
         const user = UserMessage.safeParse(record.payload)

@@ -31,12 +31,24 @@ export class LiveQuestions {
 
   private async reconcileHistory(resident: Resident, binding: ProviderBinding, history: (binding: ProviderBinding) => Promise<NativeQuestionHistory>): Promise<void> {
     const generation = resident.generation
+    const before = this.host.control(resident)
+    const inputs = new Set([
+      ...resident.snapshot.requests.map(request => request.id),
+      ...(before.actions ?? []).map(action => action.input.id),
+      ...before.transfers.map(transfer => transfer.input.id),
+    ])
     const evidence = NativeQuestionHistorySchema.parse(await history(binding))
     const current = this.host.control(resident)
     const active = current.bindings.find(item => item.id === current.activeBindingId)
     if (this.host.load(resident.snapshot.session.id) !== resident || generation !== resident.generation ||
       active?.id !== binding.id || active.nativeId !== binding.nativeId || active.path !== binding.path)
       throw new Error("The session changed while checking its questions; refresh before answering")
+    const answers = new Set(current.questions?.map(question => question.id))
+    const newInput = (id: string) => !inputs.has(id) && !answers.has(id)
+    if (resident.snapshot.requests.some(request => newInput(request.id)) ||
+      current.actions?.some(action => newInput(action.input.id)) ||
+      current.transfers.some(transfer => newInput(transfer.input.id)))
+      throw new Error("New input arrived while checking older questions; refresh before answering")
     if (evidence.some(entry => entry.question.sessionId !== binding.nativeId))
       throw new Error("Question history belongs to a different native session")
     const key = (question: NativeQuestion) => JSON.stringify([question.sessionId, question.turnId, question.itemId])
@@ -49,8 +61,9 @@ export class LiveQuestions {
       const previous = index === undefined ? undefined : questions[index]
       const native = previous?.native ?? entry.question
       const answered = [...new Set([...(previous?.answered ?? []), ...entry.answered.filter(id => native.questions.some(item => item.id === id))])]
-      if (previous && answered.length === (previous.answered?.length ?? 0)) continue
-      const next = previous ? { ...previous, answered } : { id: randomUUID(), bindingId: binding.id, native, answered }
+      const retired = previous?.retired || entry.retired
+      if (previous && answered.length === (previous.answered?.length ?? 0) && retired === previous.retired) continue
+      const next = previous ? { ...previous, answered, retired } : { id: randomUUID(), bindingId: binding.id, native, answered, retired }
       if (index === undefined) { indices.set(identity, questions.length); questions.push(next) }
       else questions[index] = next
       changed = true
@@ -135,7 +148,7 @@ export class LiveQuestions {
     const canContinue = () => {
       const current = this.host.control(resident)
       const latest = current.questions?.find(item => item.id === question.id)
-      return latest && !latest.dismissed && current.activeBindingId === latest.bindingId &&
+      return latest && !latest.dismissed && !latest.retired && current.activeBindingId === latest.bindingId &&
         native.questions.every(item => !latest.answered?.includes(item.id))
     }
     const request = resident.snapshot.requests.find(item => item.id === question.id)
@@ -148,7 +161,7 @@ export class LiveQuestions {
         this.delivery.continue(id, question.bindingId, question.id, text, displayText)
       return true
     }
-    if (!remaining.questions.length || question.dismissed || control.activeBindingId !== question.bindingId || resident.closing || resident.opening || resident.transferring || resident.rewinding || resident.storageFault)
+    if (!remaining.questions.length || question.dismissed || question.retired || control.activeBindingId !== question.bindingId || resident.closing || resident.opening || resident.transferring || resident.rewinding || resident.storageFault)
       throw new Error("This question is no longer available on the current session")
     const running = resident.snapshot.requests.find(item => item.status === "dispatching")
     if (resident.snapshot.session.status === "running" && running?.nativeRun && resident.driver?.steer) {

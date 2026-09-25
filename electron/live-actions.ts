@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util"
+import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import type { LiveRequest } from "./contracts/live-conversations.js"
 import { createHash } from "node:crypto"
 import {
@@ -360,6 +361,11 @@ export class LiveActions {
       .actions?.find((item) => item.input.id === input.id)
     if (current?.state.kind !== "dispatching") return current ?? action
     if (result.kind === "accepted" && input.kind !== "compact") {
+      // A delayed acknowledgement cannot retire questions that arrived after
+      // this input was sent. A question answer is not an ordinary follow-up.
+      resident.snapshot = { ...resident.snapshot,
+        control: retireQuestionsForInput(this.host.control(resident), input.id, control.questions ?? []),
+      }
       resident.updates.push({
         kind: "user",
         requestId: input.id,

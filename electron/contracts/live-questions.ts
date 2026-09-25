@@ -36,6 +36,8 @@ export const LiveQuestionSchema = z.object({
   bindingId: z.string().uuid(),
   native: NativeQuestionSchema,
   dismissed: z.boolean().optional(),
+  /** No longer a current prompt after the user moved on; not native cancellation. */
+  retired: z.literal(true).optional(),
   answered: z.array(z.string()).optional(),
 })
 export const NativeQuestionAnswerSchema = z.object({
@@ -48,11 +50,20 @@ export type LiveQuestion = z.infer<typeof LiveQuestionSchema>
 export const NativeQuestionHistorySchema = z.array(z.object({
   question: NativeQuestionSchema,
   answered: z.array(z.string()),
+  retired: z.literal(true).optional(),
 })).max(2000)
 export type NativeQuestionHistory = z.infer<typeof NativeQuestionHistorySchema>
 
 function unanswered(question: LiveQuestion, bindingId: string): boolean {
-  return !question.dismissed && question.bindingId === bindingId && question.native.questions.some(item => !question.answered?.includes(item.id))
+  return !question.dismissed && !question.retired && question.bindingId === bindingId && question.native.questions.some(item => !question.answered?.includes(item.id))
+}
+
+/** Retire only the questions seen when ordinary input was accepted. Answers keep other questions. */
+export function retireQuestionsForInput(control: ConversationControl, inputId: string, observed = control.questions): ConversationControl {
+  if (!observed?.length || control.questions?.some(question => question.id === inputId)) return control
+  const ids = new Set(observed.filter(question => unanswered(question, control.activeBindingId)).map(question => question.id))
+  if (!ids.size) return control
+  return { ...control, questions: control.questions?.map(question => ids.has(question.id) ? { ...question, retired: true } : question) }
 }
 
 /** Build answer ownership once, rather than scanning all history per question. */

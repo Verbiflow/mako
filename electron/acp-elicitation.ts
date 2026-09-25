@@ -15,7 +15,7 @@ function elicitationOptions(
 ): LiveInputQuestion["options"] {
   if (titled)
     return titled.map((option) => ({
-      label: option.title,
+      label: option.title.trim() || option.const,
       description: option.description ?? "",
       value: option.const,
     }))

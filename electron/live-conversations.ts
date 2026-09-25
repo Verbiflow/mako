@@ -1,4 +1,5 @@
 import { LiveQuestions } from "./live-questions.js"
+import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { LiveApprovals } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
@@ -82,6 +83,7 @@ export const PROVIDER_WARM_LIMIT = 2
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
+  private shutdown?: Promise<void>
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
   private readonly checkpoints: LiveCheckpoints
   private readonly questions: LiveQuestions
@@ -1582,6 +1584,7 @@ export class LiveConversations {
     const previousSnapshot = resident.snapshot
     resident.snapshot = {
       ...resident.snapshot,
+      control: request.continues?.auto ? this.control(resident) : retireQuestionsForInput(this.control(resident), request.id),
       requests: [...resident.snapshot.requests, request],
     }
     // Rejected acceptance must never become a later executable request.
@@ -2633,15 +2636,19 @@ export class LiveConversations {
     return resident.snapshot.session.status === "closed" && !resident.driver && !resident.connections.size && !resident.closing && !resident.opening && !resident.hibernating && !resident.waking && !resident.transferring && !resident.checkpointing && !resident.rewinding && !resident.snapshot.control?.children.length
   }
 
-  stop(): void {
+  stop(): Promise<void> {
+    if (this.shutdown) return this.shutdown
+    const closing: Promise<unknown>[] = []
     this.actions.stop()
     for (const resident of this.records.values()) {
+      for (const pending of [resident.hibernating, resident.waking, resident.openingOperation, resident.transferOperation])
+        if (pending) closing.push(pending)
       this.clearHibernationTimer(resident)
       resident.generation += 1
       const driver = resident.driver
       resident.driver = null
       for (const [bindingId, connection] of resident.connections) {
-        void Promise.resolve(connection.driver.close(bindingId)).then(
+        closing.push(Promise.resolve().then(() => connection.driver.close(bindingId)).then(
           () => {
             const binding = this.control(resident).bindings.find(
               (candidate) => candidate.id === bindingId
@@ -2654,8 +2661,8 @@ export class LiveConversations {
               )
           },
           () => undefined
-        )
-        void this.revokeTools(bindingId, resident.snapshot.session.id)
+        ))
+        closing.push(Promise.resolve(this.revokeTools(bindingId, resident.snapshot.session.id)))
       }
       if (
         resident.opening &&
@@ -2667,7 +2674,7 @@ export class LiveConversations {
         const binding = this.control(resident).bindings.find(
           (candidate) => candidate.id === bindingId
         )
-        void Promise.resolve(driver?.close(bindingId)).then(
+        closing.push(Promise.resolve().then(() => driver?.close(bindingId)).then(
           () => {
             if (binding?.nativeId)
               this.releaseHold(
@@ -2677,8 +2684,8 @@ export class LiveConversations {
               )
           },
           () => undefined
-        )
-        void this.revokeTools(bindingId, resident.snapshot.session.id)
+        ))
+        closing.push(Promise.resolve(this.revokeTools(bindingId, resident.snapshot.session.id)))
       }
       // A continuation this host was about to send goes with it; the next
       // host offers the button instead of promising a send it cannot make.
@@ -2702,6 +2709,7 @@ export class LiveConversations {
     }
     for (const resident of this.records.values()) resident.journal.close()
     this.records.clear()
+    return this.shutdown = Promise.allSettled(closing).then(() => {})
   }
 
   /**
@@ -2805,7 +2813,7 @@ export class LiveConversations {
     resident.snapshot = {
       ...resident.snapshot,
       control: {
-        ...control,
+        ...(request.continues?.auto ? control : retireQuestionsForInput(control, request.id)),
         children: control.children.map((child) =>
           child.deliveryId === request.id && child.delivery === "queued"
             ? { ...child, delivery: "delivered" }

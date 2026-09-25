@@ -225,13 +225,17 @@ export function jwtClaims(token: string | undefined): JwtClaims {
   }
 }
 
-export async function readKeychain(service: string): Promise<string | null> {
+export async function readKeychain(
+  service: string,
+  account?: string
+): Promise<string | null> {
   if (process.platform !== "darwin") return null
   try {
     const { stdout } = await run("security", [
       "find-generic-password",
       "-s",
       service,
+      ...(account ? ["-a", account] : []),
       "-w",
     ])
     return stdout.trim() || null

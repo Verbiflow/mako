@@ -1,3 +1,4 @@
+import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { disconnectNativeAgents } from "./contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
@@ -90,7 +91,7 @@ export class LiveTransfers {
     resident.snapshot = {
       ...previous,
       control: {
-        ...control,
+        ...retireQuestionsForInput(control, command.id),
         transfers: [
           ...control.transfers,
           {

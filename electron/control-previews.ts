@@ -147,7 +147,7 @@ export class ControlPreviews {
       : entry.preview
   }
 
-  private frame(entry: PreviewEntry, image: ControlImage, stream = false) {
+  private frame(entry: PreviewEntry, image: ControlImage, stream = false, capturedAt = Date.now()) {
     // The native thumbnail boundary decodes and bounds pixels before retention.
     let thumbnail: ControlImage | null
     try {
@@ -160,8 +160,9 @@ export class ControlPreviews {
     if (!thumbnail || thumbnail.data.length > 2 * 1024 * 1024) return
     entry.preview.frame = {
       id: randomUUID(),
-      image: thumbnail,
-      capturedAt: Date.now(),
+      image: { mimeType: thumbnail.mimeType, bytes: Buffer.from(thumbnail.data, "base64") },
+      capturedAt,
+      publishedAt: Date.now(),
     }
   }
 
@@ -218,7 +219,7 @@ export class ControlPreviews {
             if (!latest) return
             const now = performance.now()
             entry.nextFrameAt = Math.max((entry.nextFrameAt ?? now) + 1000 / 60, now)
-            this.frame(entry, { data: latest.data, mimeType: "image/jpeg" }, true)
+            this.frame(entry, { data: latest.data, mimeType: "image/jpeg" }, true, latest.capturedAt)
             this.changed(entry.preview.activity)
           }
           const remaining =

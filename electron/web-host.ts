@@ -12,6 +12,7 @@ import type { HostEvent, TerminalEvent } from "./shared.js"
 import { RuntimeCallSchema, type RuntimeInfo, type RuntimeReplySchema } from "./contracts/runtime.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import { hostLog } from "./host-log.js"
+import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
 
 /** Sent to every call still waiting when the host closes, so no client is left to infer a reset. */
 const FAREWELL = JSON.stringify({ ok: false, error: HOST_RECONNECTING_MESSAGE, code: HOST_RESTARTING_CODE })
@@ -37,11 +38,13 @@ export async function startWebHost(
   invoke: (channel: string, args: unknown[], client?: string, history?: boolean) => Promise<string>,
   file: (request: Request, client?: string) => Promise<Response>,
   disconnected?: (client: string) => void,
-  runtime?: RuntimeInfo
+  runtime?: RuntimeInfo,
+  preview?: (args: unknown[], client: string) => Promise<ControlPreview | null>
 ) {
   const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Set<ServerResponse>()
+  const media = new Map<ServerResponse, string>()
   let closed = false
   const farewell = (response: ServerResponse, body = FAREWELL) => {
     if (response.destroyed || response.headersSent) return
@@ -127,6 +130,26 @@ export async function startWebHost(
     response.once("close", () => pending.delete(response))
     void readRequest(request)
       .then(async ({ channel, args, attempt }) => {
+        if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
+          if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
+          if (media.size >= 16 || [...media.values()].filter(owner => owner === clientId).length >= 2)
+            throw new Error("Preview delivery is busy; wait for the current frame before requesting another")
+          media.set(response, clientId)
+          const deadline = setTimeout(() => response.destroy(), 5000)
+          deadline.unref()
+          const release = () => { clearTimeout(deadline); media.delete(response) }
+          response.once("finish", release)
+          response.once("close", release)
+          const value = await preview(args.map(arg => arg.kind === "absent" ? undefined : arg.value), clientId)
+          if (response.destroyed || response.headersSent) return
+          const packet = encodePreviewMedia(value)
+          response.writeHead(200, { "content-type": PREVIEW_MEDIA_TYPE,
+            "content-length": packet.header.byteLength + packet.bytes.byteLength,
+            "x-content-type-options": "nosniff", vary: "Accept" })
+          response.write(packet.header)
+          response.end(packet.bytes)
+          return
+        }
         // A replayed mutation is answered by its id; the line is the receipt
         // that a dropped call was settled rather than repeated.
         if (attempt !== undefined && attempt > 1) hostLog("rpc", "replayed call", { channel, client: clientId, attempt })

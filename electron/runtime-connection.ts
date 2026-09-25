@@ -5,6 +5,7 @@ import { RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReply
 import { RuntimeDisconnectedError, HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import type { z } from "zod"
 import { hostCallReplay } from "./contracts/host-call-policy.js"
+import { requestRuntimePreview } from "./runtime-preview.js"
 
 import { readRuntimeResponse, RuntimeResponseLimitError, type RuntimeTransfer } from "./runtime-response.js"
 
@@ -230,6 +231,16 @@ export async function invokeRuntime(
     throw new Error(reply.error)
   }
   return reply.value
+}
+
+export function invokeRuntimePreview(socket: string, client: string, args: unknown[],
+  onTransfer?: (transfer: RuntimeTransfer) => void) {
+  const body = RuntimeCallSchema.parse({ channel: "mako:control-preview",
+    args: args.map(value => value === undefined ? { kind: "absent" } : { kind: "value", value }),
+  })
+  return requestRuntimePreview(socket, client, body, onTransfer).catch(error => {
+    throw error instanceof Error ? (disconnection(error) ?? error) : error
+  })
 }
 
 export function subscribeRuntime(socket: string, client: string, receive: (packet: z.infer<typeof RuntimePacketSchema>) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number } = {}) {

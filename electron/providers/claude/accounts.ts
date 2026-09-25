@@ -9,7 +9,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises"
-import { homedir } from "node:os"
+import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import type {
   AccountUsage,
@@ -214,10 +214,31 @@ async function listAccounts(
 /** Claude Code 2.1+ scopes its Keychain entry by the config dir it runs in. */
 function scopedService(configDir: string): string {
   const suffix = createHash("sha256")
-    .update(configDir)
+    .update(configDir.normalize("NFC"))
     .digest("hex")
     .slice(0, 8)
   return `Claude Code-credentials-${suffix}`
+}
+
+/** Follow native secure-storage precedence; a stale file must not shadow Keychain. */
+async function readCredentials(env: NodeJS.ProcessEnv): Promise<string | null> {
+  const override = env.CLAUDE_SECURESTORAGE_CONFIG_DIR
+  const configured = override ?? env.CLAUDE_CONFIG_DIR
+  const dir = (configured || join(homedir(), HOME)).normalize("NFC")
+  const username = env.USER || userInfo().username
+  const account = /^[a-zA-Z0-9._-]+$/.test(username) ? username : "claude-code-user"
+  const keychain = await readKeychain(
+    configured ? scopedService(dir) : "Claude Code-credentials",
+    account
+  )
+  if (keychain !== null) return keychain
+  try {
+    return await readFile(join(dir, ".credentials.json"), "utf8")
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return null
+    throw error
+  }
 }
 
 /**
@@ -235,9 +256,8 @@ async function captureAccount(name: string): Promise<void> {
   try {
     // Credentials are required — an account with no keys is nothing.
     let captured = false
-    const source = join(realHome, ".credentials.json")
-    if (existsSync(source)) {
-      const credentials = await readFile(source, "utf8")
+    const credentials = await readCredentials(process.env)
+    if (credentials) {
       if (!hasCredentials(credentials))
         throw new Error(
           "The Claude Code login is invalid. Sign in with the CLI and capture it again."
@@ -246,26 +266,8 @@ async function captureAccount(name: string): Promise<void> {
         mode: 0o600,
       })
       await chmod(join(dir, ".credentials.json"), 0o600)
-      captured = true
-    }
-
-    // On macOS live credentials usually live in Keychain. Claude Code 2.1+
-    // reads an entry scoped to the config dir it wakes up in, so capture both.
-    const keychainJson = await readKeychain(
-      process.env.CLAUDE_CONFIG_DIR
-        ? scopedService(realHome)
-        : "Claude Code-credentials"
-    )
-    if (keychainJson) {
-      if (!hasCredentials(keychainJson))
-        throw new Error(
-          "The Claude Code login is invalid. Sign in with the CLI and capture it again."
-        )
-      await writeFile(join(dir, ".credentials.json"), keychainJson, {
-        mode: 0o600,
-      })
-      await writeKeychain(scopedService(dir), keychainJson)
-      scopedLoginSaved = true
+      await writeKeychain(scopedService(dir), credentials)
+      scopedLoginSaved = process.platform === "darwin"
       captured = true
     }
 
@@ -319,31 +321,20 @@ async function accountEnv(
     throw new Error(
       "The selected Claude Code account no longer exists. Select another account or capture it again."
     )
-  const credentials = existsSync(join(dir, ".credentials.json"))
-    ? await readFile(join(dir, ".credentials.json"), "utf8")
-    : await readKeychain(scopedService(dir))
+  // An explicit account owns its credential home, including secure storage.
+  delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
+  env.CLAUDE_CONFIG_DIR = dir
+  const credentials = await readCredentials(env)
   if (!credentials || !hasCredentials(credentials))
     throw new Error(
       "The selected Claude Code account has no valid credentials. Sign in with the CLI and capture it again."
     )
   await ensureSharedLinks(defaultHome(base), dir, SHARED_LINKS)
-  env.CLAUDE_CONFIG_DIR = dir
   return env
 }
 
-async function usageForDir(
-  dir: string,
-  isDefault: boolean
-): Promise<AccountUsage> {
-  let raw: string | null
-  try {
-    raw = await readFile(join(dir, ".credentials.json"), "utf8")
-  } catch {
-    // The default account on macOS keeps credentials in Keychain.
-    raw = isDefault
-      ? await readKeychain("Claude Code-credentials")
-      : await readKeychain(scopedService(dir))
-  }
+async function usageForEnv(env: NodeJS.ProcessEnv): Promise<AccountUsage> {
+  const raw = await readCredentials(env)
   let token: string | null = null
   try {
     token = raw ? (parseAccessToken(raw) ?? null) : null
@@ -380,14 +371,16 @@ async function usageForDir(
 }
 
 async function accountUsage(name: string): Promise<AccountUsage> {
-  // Router-managed accounts resolve by identity, not by a Mako-owned dir.
+  if (name === "default") return usageForEnv(process.env)
+  // Use the same captured-before-router precedence as native launches.
   const routed = (await subrouterAccounts()).find(
     (account) => account.name === name
   )
-  const dir =
-    routed?.dir ??
-    (name === "default" ? defaultHome() : accountDir("claude", name))
-  return usageForDir(dir, name === "default")
+  const captured = accountDir("claude", name)
+  const dir = existsSync(captured) ? captured : routed?.dir ?? captured
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: dir }
+  delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
+  return usageForEnv(env)
 }
 
 export const claudeAccountCapability: SelectableAccountCapability = {

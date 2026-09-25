@@ -2,7 +2,7 @@ import { browserApplicationIcon } from "./browser-icon.js"
 import { z } from "zod"
 import { recoveryCapabilities } from "./providers/live-driver.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
-import { handleQuit } from "./background-lifecycle.js"
+import { backgroundLifecycle } from "./background-lifecycle.js"
 import { devHostBuild } from "./dev-host-build.js"
 import { RUNTIME_PROTOCOL } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
@@ -230,7 +230,7 @@ import { installGitIpc } from "./ipc/git.js"
 import { fileResponse } from "./file-response.js"
 import { startWebHost } from "./web-host.js"
 import { SharedConversations } from "./shared-conversations.js"
-import { registerIpc as handle, invokeHost, installConversationRouting, installHistoryPresentation } from "./ipc/register.js"
+import { registerIpc as handle, invokeHost, invokeHostPreview, installConversationRouting, installHistoryPresentation, stopHostCalls } from "./ipc/register.js"
 import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "./contracts/live-history.js"
 import { installSessionIpc } from "./ipc/session.js"
@@ -568,6 +568,7 @@ function emitTerminalWake() {
 }
 
 function emit(event: HostEvent, client?: string) {
+  if (hostClosing) return
   if (event.type === "threads" || event.type === "thread-ref")
     liveConversations?.discoverNativePaths()
   if (event.type === "thread-run" && event.run.status !== "running")
@@ -593,6 +594,7 @@ function emit(event: HostEvent, client?: string) {
  */
 const RELAUNCH_EXIT_CODE = 75
 let relaunching = false
+let hostClosing = false
 let shuttingDown = false
 let application: ReturnType<typeof installApplicationIpc> | undefined
 if (persistentHost)
@@ -2013,6 +2015,7 @@ app.whenReady().then(async () => {
   })
   if (sessionMemory) {
     const conversations = new SharedConversations(sessionMemory, (event) => {
+      if (hostClosing) return
       webHost?.conversationEvent(event)
       for (const renderer of rendererWindows) renderer.webContents.send("mako:event", event)
     }, {
@@ -2064,7 +2067,8 @@ app.whenReady().then(async () => {
         version: app.getVersion(),
         devBuild: loadedDevBuild,
         methods: Object.keys(hostCallInputs),
-      }
+      },
+      invokeHostPreview
     )
   }
   trace("host listening")
@@ -2116,15 +2120,16 @@ app.on("window-all-closed", () => {
   if (!persistentHost && process.platform !== "darwin") app.quit()
 })
 
-app.on("before-quit", (event) =>
-  handleQuit(event, {
+const quitLifecycle = backgroundLifecycle({
     hasActiveWork: () => persistentHost || hasActiveWork(),
     isRestarting: () => relaunching || shuttingDown,
     hide: () => {
       for (const renderer of rendererWindows) renderer.hide()
       app.dock?.hide()
     },
-    cleanup: () => {
+    cleanup: async () => {
+      hostClosing = true
+      const callsDrained = stopHostCalls()
       desktopNotifier.dispose()
       application?.dispose()
       sharedConversations?.dispose()
@@ -2156,17 +2161,25 @@ app.on("before-quit", (event) =>
       runtimeUpdates.stop()
       void stopRelayWorker()
       stopThreads()
+      await callsDrained
+      await liveConversations?.stop()
       stopDrivers()
       stopAcp()
       stopCodexApps()
       nativeRequests?.stop()
       conversationMcp?.close()
-      liveConversations?.stop()
       sessionMemory?.close()
       threadArchives?.close()
       void workspaceClients.dispose()
-      // After the ordinary shutdown, tell the dev launcher to bring us back.
-      if (relaunching && isDev && !persistentHost) app.exit(RELAUNCH_EXIT_CODE)
     },
-  })
-)
+    quit: () => {
+      if (relaunching && isDev && !persistentHost) app.exit(RELAUNCH_EXIT_CODE)
+      else app.quit()
+    },
+    failed: (error) => {
+      hostWarn("lifecycle", "shutdown failed", { error: String(error) })
+      app.exit(1)
+    },
+})
+app.on("before-quit", quitLifecycle.beforeQuit)
+app.on("will-quit", quitLifecycle.willQuit)
