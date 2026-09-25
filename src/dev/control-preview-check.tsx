@@ -21,7 +21,7 @@ const painter = canvas.getContext("2d")!
 painter.fillRect(0, 0, 640, 360)
 const image: NonNullable<ControlPreview["frame"]>["image"] = {
   mimeType: "image/png",
-  data: canvas.toDataURL().split(",")[1]!,
+  bytes: Uint8Array.from(atob(canvas.toDataURL().split(",")[1]!), char => char.charCodeAt(0)),
 }
 const bridge = getMako()
 let frame = 0

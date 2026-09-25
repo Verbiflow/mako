@@ -1,3 +1,4 @@
+import { PREVIEW_MEDIA_TYPE, collectPreviewMedia } from "@mako/control-runtime/contracts"
 import {
   createMakoBridge,
   RuntimeInfoSchema,
@@ -69,7 +70,7 @@ export async function installWebBridge(): Promise<void> {
       reply = await fetch("/__mako/rpc", {
         method: "POST",
         signal: AbortSignal.timeout(5 * 60_000),
-        headers: { "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" },
+        headers: { "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1", ...(channel === "mako:control-preview" ? { accept: PREVIEW_MEDIA_TYPE } : {}) },
         body: JSON.stringify({
           channel,
           args: args.map((value) =>
@@ -85,6 +86,15 @@ export async function installWebBridge(): Promise<void> {
     }
     if (reply.status === 502 || reply.status === 503 || reply.status === 504) throw new RuntimeDisconnectedError(true)
     if (!reply.ok) throw refusal(reply)
+    if (channel === "mako:control-preview" && reply.headers.get("content-type") === PREVIEW_MEDIA_TYPE) {
+      if (!reply.body) throw new Error("Missing preview response")
+      const reader = reply.body.getReader()
+      async function* chunks() {
+        try { for (;;) { const next = await reader.read(); if (next.done) return; yield next.value } }
+        finally { await reader.cancel(); reader.releaseLock() }
+      }
+      return (await collectPreviewMedia(chunks())).preview
+    }
     // This transport shares createMakoBridge's result contract with Electron IPC.
     let result
     try { result = await reply.json() }
@@ -99,6 +109,7 @@ export async function installWebBridge(): Promise<void> {
       if (result.code === HOST_CLOSED_CODE) throw new RuntimeDisconnectedError(false)
       throw new Error(result.error)
     }
+    if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching Mako client and host.")
     return result.value
   }
   /**

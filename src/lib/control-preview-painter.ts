@@ -13,6 +13,7 @@ export function createControlPreviewPainter(canvas: {
   let latest: Frame | undefined
   let lastId: string | undefined
   let decoding: HTMLImageElement | undefined
+  let activeUrl: string | undefined
   let painting: number | undefined
   let finishPaint: (() => void) | undefined
   let running = false
@@ -26,7 +27,9 @@ export function createControlPreviewPainter(canvas: {
         latest = undefined
         const image = new Image()
         decoding = image
-        image.src = `data:${frame.image.mimeType};base64,${frame.image.data}`
+        const url = URL.createObjectURL(new Blob([frame.image.bytes], { type: frame.image.mimeType }))
+        activeUrl = url
+        image.src = url
         try {
           await image.decode()
           if (closed) return
@@ -55,6 +58,8 @@ export function createControlPreviewPainter(canvas: {
         } catch {
           // Retain the last complete frame on malformed pixels or cancellation.
         } finally {
+          URL.revokeObjectURL(url)
+          if (activeUrl === url) activeUrl = undefined
           if (decoding === image) decoding = undefined
         }
       }
@@ -77,6 +82,8 @@ export function createControlPreviewPainter(canvas: {
       if (painting !== undefined) cancelAnimationFrame(painting)
       finishPaint?.()
       if (decoding) decoding.src = ""
+      if (activeUrl) URL.revokeObjectURL(activeUrl)
+      activeUrl = undefined
     },
   }
 }
