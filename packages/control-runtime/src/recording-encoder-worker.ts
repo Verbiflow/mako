@@ -1,3 +1,4 @@
+/// <reference lib="es2024.arraybuffer" />
 import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
 import { RecordingEncoderProcess } from "./recording-encoder-process.js"
@@ -36,6 +37,21 @@ let queuedFrames = 0
 let rendering: Promise<void> = Promise.resolve()
 let writing: Promise<void> = Promise.resolve()
 let finishing = false
+function releasePixels() {
+  if (!pixels) return
+  // Node >=24 supports detaching an owned ArrayBuffer. Sharp gives us a full,
+  // unpooled output allocation; never detach a slice or a shared allocation.
+  // Waiting for the pipe callback before this call ensures no native write can
+  // still read it. Repeats retain the current frame until a replacement arrives.
+  if (
+    !(pixels.buffer instanceof ArrayBuffer) ||
+    pixels.byteOffset !== 0 ||
+    pixels.byteLength !== pixels.buffer.byteLength
+  )
+    throw new Error("Video worker cannot release unowned frame memory")
+  pixels.buffer.transfer(0)
+  pixels = undefined
+}
 port.on("message", (input) => {
   const parsed = command.safeParse(input)
   if (!parsed.success) {
@@ -62,9 +78,10 @@ port.on("message", (input) => {
     rendering = rendering
       .then(async () => {
         const renderStart = performance.now()
+        let image = pixels
         if (value.image) {
           const { bytes, frame, at, pointer, press } = value.image
-          pixels = await renderRecordingImage(
+          image = await renderRecordingImage(
             Buffer.from(bytes),
             frame,
             at,
@@ -75,11 +92,12 @@ port.on("message", (input) => {
             "rgb"
           )
         }
-        if (!pixels || pixels.length !== frameBytes)
+        if (!image || image.length !== frameBytes)
           throw new Error("Video worker received invalid frame dimensions")
-        const image = pixels
         const renderMs = performance.now() - renderStart
         await writing
+        if (image !== pixels) releasePixels()
+        pixels = image
         const pipeStart = performance.now()
         writing = encoder!.write(image)
         void writing.then(
@@ -128,6 +146,9 @@ port.on("message", (input) => {
       await rendering
       await writing.catch(() => {})
       const result = await encoder.finish()
+      // A timed-out write can reject before its native pipe callback. Finalize
+      // waits for the child and its stdio to close before releasing that buffer.
+      releasePixels()
       port.postMessage({ kind: "finished", id: value.id, result })
       port.close()
     }

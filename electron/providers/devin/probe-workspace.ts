@@ -23,7 +23,9 @@ const OwnerSchema = z.discriminatedUnion("state", [
   }),
   z.object({ version: z.literal(1), state: z.literal("cleanup") }),
 ])
-const SessionSchema = z.object({ id: z.string().uuid() })
+// Devin issues both UUIDs and word-based IDs. Keep CLI arguments bounded and
+// unable to become flags; ownership comes from the exact workspace query below.
+const SessionSchema = z.object({ id: z.string().min(1).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/) })
 
 export async function withDevinProbeWorkspace<T>(
   executable: string,

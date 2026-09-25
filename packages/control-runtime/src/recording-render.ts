@@ -147,8 +147,17 @@ export async function renderRecordingImage(
   const patchHeight =
     Math.max(...overlays.map((overlay) => overlay.top + overlay.raw.height)) -
     top
-  const composition = sharp(pixels, { raw: { width, height, channels: 3 } })
-    .extract({ left, top, width: patchWidth, height: patchHeight })
+  // Pass only the affected rows across Sharp's native boundary. Supplying the
+  // full frame and extracting inside libvips still retains/imports a 6 MiB raw
+  // image for an operation that touches at most 30×32 pixels.
+  const background = Buffer.allocUnsafe(patchWidth * patchHeight * 3)
+  for (let row = 0; row < patchHeight; row++) {
+    const start = ((top + row) * width + left) * 3
+    pixels.copy(background, row * patchWidth * 3, start, start + patchWidth * 3)
+  }
+  const composition = sharp(background, {
+    raw: { width: patchWidth, height: patchHeight, channels: 3 },
+  })
     .composite(
       overlays.map((overlay) => ({
         ...overlay,
