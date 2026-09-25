@@ -28,7 +28,11 @@ try {
     await writeFile(join(configRoot, 'settings.json'), JSON.stringify(settings))
     const config = { cwd: root, env: { ...env }, settingSources: ['user'] }
     const before = structuredClone(config)
-    assert.equal(await prepareClaudePermissionObserver({ root, config, sessionId: randomUUID(), previous: [], publish() {} }), undefined)
+    const sessionId = randomUUID(), previous = { scope: randomUUID(), sessionId, requestId: 'answered-tool' }
+    const known = await prepareClaudePermissionObserver({ root, config, sessionId, previous: [previous], publish() {} })
+    assert.equal(known.identify('new-tool'), undefined, 'Configured monitoring creates no new event-observation claim')
+    assert.deepEqual(known.identify('answered-tool'), previous, 'Changing monitoring cannot resurrect an answered callback')
+    await known.dispose()
     assert.deepEqual(config, before, 'Native user telemetry, opt-outs and headers helpers stay unchanged')
   }
   console.log('PASS actual native settings reader: account-scoped configuration, destination, opt-out and helper preservation')

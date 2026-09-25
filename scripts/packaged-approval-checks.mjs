@@ -30,6 +30,15 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     assert.ok(point, `Native approval button missing: ${label}`)
     for (const type of ['mousePressed','mouseReleased']) await command('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
   }
+  async function captureConfirmation(label) {
+    const point = await evaluate(`(()=>{const r=document.querySelector('button[aria-label="Conversation actions"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+    for (const type of ['mousePressed','mouseReleased']) await command('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
+    await waitFor(() => evaluate("document.body.textContent.includes('Agent recorded your answer')"), Boolean, 'native answer confirmation visible')
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await capture(label+'-native-confirmation')
+    await command('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+    await command('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+  }
   const cases = []
   report.phases.push({ phase: 'native-approvals', mode, cases })
   async function checkQuestion(prior) {
@@ -80,14 +89,7 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     if (process.env.MAKO_PACKAGE_QUESTION_DECISIONS) {
       assert.ok(receipts[0].origin.native, 'The question must retain its native occurrence')
       assert.equal(receipts[0].nativeDecision?.answerDigest, receipts[0].nativeAnswerDigest ?? receipts[0].digest, 'The native runtime must confirm this exact encoded answer')
-      const point = await evaluate(`(()=>{const r=document.querySelector('button[aria-label="Conversation actions"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
-      for (const type of ['mousePressed','mouseReleased']) await command('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
-      await waitFor(() => evaluate("document.body.textContent.includes('Agent recorded your answer')"), Boolean, 'native answer confirmation visible')
-      // Let the existing popover entrance finish before capturing its actual UI.
-      await new Promise(resolve => setTimeout(resolve, 300))
-      await capture(label+'-native-confirmation')
-      await command('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-      await command('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+      await captureConfirmation(label)
     }
     const evidence = {phase:label,requestId,approvalId:permission.id,questionId:question.id,phrase,receipt:receipts[0],continuationContainsAnswer:true,priorAnswerDidNotClearQuestion:prior?true:undefined}
     report.phases.push(evidence)
@@ -139,14 +141,17 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
       receipt = observed.control.approvalResponses.find(item=>item.id===permission.id)
       assert.deepEqual(receipt.nativeDecision.identity, receipt.origin.native)
       assert.equal(receipt.nativeDecision.answerDigest, receipt.nativeAnswerDigest ?? receipt.digest)
+      await captureConfirmation(decision)
     }
     record.receipt = receipt
     record.status = finished.requests.find(item=>item.id===requestId).status
     record.fileMatches = contents===nonce
     await capture(`${decision}-completed`)
     if (decision==='cancel') {
-      // A runtime may fail the cancelled command. Prove the existing session can continue.
-      assert.equal(finished.session.connection, 'connected')
+      // Stop may close the native transport to discard queued SDK input. The
+      // acceptance contract is continuation in the same session, not the same process.
+      assert.ok(finished.session.connection === 'connected' ||
+        (finished.session.connection === 'disconnected' && finished.session.status === 'ready'))
       const followup = randomUUID(), expected = cases.find(item=>item.decision==='allow').nonce
       await bridge('livePrompt',[conversationId,followup,'Reply only with the nonce from the command you were allowed to execute earlier. Do not use tools or modify files.',[]])
       const continued = await waitFor(() => bridge('liveSnapshot',[conversationId]), snapshot => {
@@ -158,7 +163,7 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
       assert.equal(continued.permissions.length, 0)
       assert.ok(answer(continued,followup).includes(expected),'Cancellation lost the existing native context')
       assert.equal(await readFile(path,'utf8').catch(error=>{if(error.code==='ENOENT')return null;throw error}),null)
-      record.continuation = { requestId: followup, sameSession: true, rememberedPriorAllowedNonce: true, cancelledFileAbsent: true }
+      record.continuation = { requestId: followup, priorConnection: finished.session.connection, sameSession: true, rememberedPriorAllowedNonce: true, cancelledFileAbsent: true }
       await capture('cancel-continued')
     }
     if (decision==='allow' && process.env.MAKO_PACKAGE_APPROVAL_QUESTIONS) questionEvidence = await checkQuestion()
