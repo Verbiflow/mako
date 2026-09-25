@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..47c6d6d 100644
+index a91f724..4ee2f65 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..47c6d6d 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..ca2e935 100644
+index 351b086..b5e7cc9 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..ca2e935 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.21"
++version = "0.28.2+mako.23"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -343,7 +343,7 @@ index ec46f81..64e0292 100644
  
  impl ToolResult {
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
-index d3db85f..0caa654 100644
+index d3db85f..90aaeb7 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording.rs
 @@ -141,12 +141,14 @@ struct TurnCapture {
@@ -1022,7 +1022,7 @@ index d3db85f..0caa654 100644
 +        assert_eq!(action["pointer_dispatches"][0]["x"], 0.25);
 +        assert_eq!(action["pointer_dispatches"].as_array().unwrap().len(), 1);
 +        assert!(!directory.path().join("turn-00001/before.png").exists());
-+        for (index, tool) in ["drag", "scroll", "move_cursor"].iter().enumerate() {
++        for (index, tool) in ["drag", "scroll", "move_cursor", "right_click", "double_click"].iter().enumerate() {
 +            let pending = session
 +                .begin_owned_turn(tool, &args, now_ms(), Some("point-owner"), false)
 +                .unwrap();
@@ -1184,6 +1184,177 @@ index 43779ee..7e27dec 100644
          "last_video_path": state.last_video_path,
          // Session that owns the live recording (the daemon-injected
          // `_session_id`), or null when started anonymously. Informational; the
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
+index 727d305..ce026d7 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
+@@ -358,6 +358,40 @@ fn lifecycle_records() -> &'static Mutex<HashMap<String, LifecycleRecord>> {
+     LIFECYCLE_RECORDS.get_or_init(|| Mutex::new(HashMap::new()))
+ }
+ 
++/// A trusted transport owns this lease for its persistent control connection.
++/// Only implicit sessions borrow that connection's lifetime. Named sessions
++/// retain their own idle TTL; explicit end/revocation always wins.
++static LIVE_TRANSPORTS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
++
++pub struct TransportSessionLease {
++    owner: String,
++}
++
++pub fn retain_transport_session(owner: String) -> TransportSessionLease {
++    *LIVE_TRANSPORTS
++        .get_or_init(Default::default)
++        .lock()
++        .unwrap()
++        .entry(owner.clone())
++        .or_default() += 1;
++    TransportSessionLease { owner }
++}
++
++impl Drop for TransportSessionLease {
++    fn drop(&mut self) {
++        let mut owners = LIVE_TRANSPORTS
++            .get_or_init(Default::default)
++            .lock()
++            .unwrap();
++        if let Some(count) = owners.get_mut(&self.owner) {
++            *count -= 1;
++            if *count == 0 {
++                owners.remove(&self.owner);
++            }
++        }
++    }
++}
++
+ #[derive(Debug, Clone)]
+ pub struct LifecycleSessionSnapshot {
+     pub runtime_id: String,
+@@ -1578,51 +1612,37 @@ fn finish_session_end(session_id: &str, reason: SessionEndReason) {
+ /// here instead of leaking its cursor / recording. Sessions touched within the
+ /// TTL are left untouched.
+ pub fn evict_idle(ttl: Duration) -> Vec<String> {
+-    let now = Instant::now();
+-    let lifecycle = lifecycle_records()
+-        .lock()
+-        .unwrap()
+-        .iter()
+-        .map(|(id, record)| (id.clone(), (record.in_flight, record.idle_ttl)))
+-        .collect::<HashMap<_, _>>();
+-    let stale: Vec<String> = {
+-        let map = activity().lock().unwrap();
+-        map.iter()
+-            .filter(|(id, last)| {
+-                let (in_flight, session_ttl) = lifecycle.get(*id).copied().unwrap_or_default();
+-                now.duration_since(**last) >= session_ttl.unwrap_or(ttl) && in_flight == 0
+-            })
+-            .map(|(id, _)| id.clone())
+-            .collect()
+-    };
+-    for id in &stale {
+-        end_session_with_reason(id, SessionEndReason::IdleTimeout);
+-    }
+-    stale
++    evict_idle_with_prefix(ttl, "")
+ }
+ 
+ /// Runtime-scoped form of [`evict_idle`]. The namespace prefix is minted by
+ /// the trusted runtime and never accepted from a tool argument.
+ pub fn evict_idle_with_prefix(ttl: Duration, prefix: &str) -> Vec<String> {
+     let now = Instant::now();
+-    let lifecycle = lifecycle_records()
++    let lifecycle = lifecycle_records().lock().unwrap().clone();
++    let owners = LIVE_TRANSPORTS
++        .get_or_init(Default::default)
+         .lock()
+-        .unwrap()
+-        .iter()
+-        .map(|(id, record)| (id.clone(), (record.in_flight, record.idle_ttl)))
+-        .collect::<HashMap<_, _>>();
++        .unwrap();
+     let stale: Vec<String> = {
+         let map = activity().lock().unwrap();
+         map.iter()
+             .filter(|(id, last)| {
+-                let (in_flight, session_ttl) = lifecycle.get(*id).copied().unwrap_or_default();
++                let record = lifecycle.get(*id);
++                let in_flight = record.map_or(0, |record| record.in_flight);
++                let session_ttl = record.and_then(|record| record.idle_ttl).unwrap_or(ttl);
++                let connection_owned = record.is_some_and(|record| {
++                    record.implicit && owners.contains_key(&record.owner_transport)
++                });
+                 id.starts_with(prefix)
+-                    && now.duration_since(**last) >= session_ttl.unwrap_or(ttl)
++                    && now.duration_since(**last) >= session_ttl
+                     && in_flight == 0
++                    && !connection_owned
+             })
+             .map(|(id, _)| id.clone())
+             .collect()
+     };
++    drop(owners);
+     for id in &stale {
+         end_session_with_reason(id, SessionEndReason::IdleTimeout);
+     }
+@@ -2036,6 +2056,59 @@ mod tests {
+         assert_eq!(cleanup_calls.load(Ordering::SeqCst), 1);
+     }
+ 
++    #[test]
++    fn live_transport_retains_only_implicit_sessions_and_never_revives_ended_ones() {
++        let prefix = "test-live-transport-E81:";
++        let owner = format!("{prefix}owner");
++        let implicit = format!("{prefix}implicit");
++        let named = format!("{prefix}named");
++        let other = format!("{prefix}other-owner");
++        let lease = retain_transport_session(owner.clone());
++        let duplicate = retain_transport_session(owner.clone());
++        for (id, bound_owner, is_implicit) in [
++            (&implicit, &owner, true),
++            (&named, &owner, false),
++            (&other, &other, true),
++        ] {
++            activate_session(
++                id,
++                None,
++                bound_owner,
++                is_implicit,
++                SessionTransport::Daemon,
++                SessionClientKind::Mcp,
++            )
++            .unwrap();
++        }
++        let ended = evict_idle_with_prefix(Duration::ZERO, prefix);
++        assert!(ended.contains(&named));
++        assert!(ended.contains(&other));
++        assert!(!ended.contains(&implicit));
++        drop(duplicate);
++        assert!(evict_idle_with_prefix(Duration::ZERO, prefix).is_empty());
++        assert!(end_session_for_owner(&implicit, &owner));
++        assert!(
++            is_session_ended(&implicit),
++            "a live lease cannot override explicit end"
++        );
++        drop(lease);
++        assert!(is_session_ended(&implicit));
++
++        let closed = format!("{prefix}closed");
++        let lease = retain_transport_session(owner.clone());
++        activate_session(
++            &closed,
++            None,
++            &owner,
++            true,
++            SessionTransport::Daemon,
++            SessionClientKind::Mcp,
++        )
++        .unwrap();
++        drop(lease);
++        assert_eq!(evict_idle_with_prefix(Duration::ZERO, prefix), vec![closed]);
++    }
++
+     #[test]
+     fn trusted_idle_ttl_override_controls_snapshot_and_eviction() {
+         let sid = "test-trusted-lifecycle-ttl-A9B0C1";
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 index d93bf6d..5b56d72 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
@@ -1431,6 +1602,125 @@ index 5d6ac1f..227f638 100644
                  let _ = serve_handle.join();
              }
          }
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+index a26a6bf..c5c9af3 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+@@ -323,6 +323,16 @@ impl SdkAdapter {
+             .map(|_| ())
+     }
+ 
++    pub fn retain_transport_session(
++        &self,
++        transport_session: &str,
++    ) -> cua_driver_core::session::TransportSessionLease {
++        cua_driver_core::session::retain_transport_session(format!(
++            "{}{}",
++            self.runtime_prefix, transport_session
++        ))
++    }
++
+     pub fn end_transport_sessions(&self, transport_session: &str) -> usize {
+         let owner = format!("{}{}", self.runtime_prefix, transport_session);
+         cua_driver_core::session::end_sessions_for_owner(
+@@ -547,6 +557,29 @@ mod tests {
+         sdk.shutdown().await.expect("shutdown");
+     }
+ 
++    #[tokio::test]
++    async fn connected_implicit_session_survives_idle_sweep_until_transport_close() {
++        let _runtime_guard = crate::test_runtime_lock().lock().await;
++        let sdk = SdkAdapter::load(host_driver()).await.expect("SDK adapter");
++        let sid = "adapter-connected-idle";
++        let lease = sdk.retain_transport_session(sid);
++        let args = json!({"_session_id": sid, "_transport_session_id": sid});
++        let started = sdk.invoke_raw("start_session", args.clone()).await.unwrap();
++        assert_ne!(started["isError"], true);
++        assert!(cua_driver_core::session::evict_idle_with_prefix(
++            std::time::Duration::ZERO,
++            &sdk.runtime_prefix
++        )
++        .is_empty());
++        assert!(!sdk.is_session_ended(sid));
++        let read = sdk.invoke_raw("get_session", args).await.unwrap();
++        assert_ne!(read["isError"], true);
++        assert_eq!(sdk.end_transport_sessions(sid), 1);
++        assert!(sdk.is_session_ended(sid));
++        drop(lease);
++        sdk.shutdown().await.unwrap();
++    }
++
+     #[tokio::test]
+     async fn public_observation_mirror_revives_an_implicit_transport_session() {
+         let _runtime_guard = crate::test_runtime_lock().lock().await;
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index 67e123b..fe2a2ec 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -1050,6 +1050,7 @@ pub async fn run_serve(
+                     // connection EOFs (graceful proxy exit OR kill -9, both
+                     // kernel-guaranteed), the post-loop block reaps the session.
+                     let mut control_session_id: Option<String> = None;
++                    let mut control_session_lease = None;
+                     let mut trusted_session: Option<TrustedConnectionSession> = None;
+ 
+                     while let Ok(Some(line)) = lines.next_line().await {
+@@ -1334,7 +1335,7 @@ pub async fn run_serve(
+                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                 ).await;
+                             }
+-                            "session_begin" => {
++                            "session_begin" if control_session_id.is_none() && trusted_session.is_none() => {
+                                 // The proxy's persistent control connection.
+                                 // Record the session_id so this connection's EOF
+                                 // (graceful proxy exit OR kill -9) reaps the
+@@ -1342,6 +1343,7 @@ pub async fn run_serve(
+                                 // the ONLY place a connection is marked control;
+                                 // per-call connections never send this. ACK ok.
+                                 if let Some(sid) = req.session_id.as_deref() {
++                                    control_session_lease = Some(reg.retain_transport_session(sid));
+                                     control_session_id = Some(sid.to_owned());
+                                     active_proxy_sessions()
+                                         .lock()
+@@ -1401,6 +1403,7 @@ pub async fn run_serve(
+                     if let Some(sid) = control_session_id {
+                         active_proxy_sessions().lock().unwrap().remove(&sid);
+                         reg.end_transport_sessions(&sid);
++                        drop(control_session_lease);
+                     }
+                     if let Some(connection) = trusted_session {
+                         detach_trusted_connection(&trusted_resume_registry, connection).await;
+@@ -1811,6 +1814,7 @@ pub async fn run_serve(
+                     // ERROR_BROKEN_PIPE on the next read, ending the while-let
+                     // loop equally reliably.
+                     let mut control_session_id: Option<String> = None;
++                    let mut control_session_lease = None;
+                     let mut trusted_session: Option<TrustedConnectionSession> = None;
+ 
+                     while let Ok(Some(line)) = lines.next_line().await {
+@@ -2074,12 +2078,13 @@ pub async fn run_serve(
+                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                 ).await;
+                             }
+-                            "session_begin" => {
++                            "session_begin" if control_session_id.is_none() && trusted_session.is_none() => {
+                                 // The proxy's persistent control connection (see
+                                 // the unix branch). Record the session_id so this
+                                 // pipe instance's EOF / broken-pipe reaps the
+                                 // session in the post-loop block below. ACK ok.
+                                 if let Some(sid) = req.session_id.as_deref() {
++                                    control_session_lease = Some(reg.retain_transport_session(sid));
+                                     control_session_id = Some(sid.to_owned());
+                                     active_proxy_sessions()
+                                         .lock()
+@@ -2128,6 +2133,7 @@ pub async fn run_serve(
+                     if let Some(sid) = control_session_id {
+                         active_proxy_sessions().lock().unwrap().remove(&sid);
+                         reg.end_transport_sessions(&sid);
++                        drop(control_session_lease);
+                     }
+                     if let Some(connection) = trusted_session {
+                         detach_trusted_connection(&trusted_resume_registry, connection).await;
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs b/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
 index 2695747..1bb1383 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
@@ -7447,6 +7737,46 @@ index f0e211e..d76faf1 100644
 -        );
 -    }
  }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/double_click.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/double_click.rs
+index 70f10f7..7dc0e85 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/double_click.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/double_click.rs
+@@ -7,7 +7,7 @@ use serde_json::Value;
+ use std::sync::Arc;
+ 
+ use crate::ax::bindings::{
+-    copy_action_names, element_screen_center, kAXErrorSuccess, perform_action, AXUIElementRef,
++    AXUIElementRef, copy_action_names, element_screen_center, kAXErrorSuccess, perform_action,
+ };
+ 
+ use super::ToolState;
+@@ -139,7 +139,7 @@ impl Tool for DoubleClickTool {
+             // Thread the resolved session cursor key into the blocking AX path
+             // so its ClickPulse lands on THIS session's cursor, not "default".
+             let ck = cursor_key.clone();
+-            let result = tokio::task::spawn_blocking(move || {
++            let result = cua_driver_core::recording::spawn_blocking(move || {
+                 ax_double_click(
+                     pid,
+                     wid,
+@@ -165,7 +165,7 @@ impl Tool for DoubleClickTool {
+             None => {
+                 return ToolResult::error(
+                     "Either element_index + window_id or x + y must be provided.",
+-                )
++                );
+             }
+         };
+         let mut cy = match args.get("y").and_then(|v| v.as_f64()) {
+@@ -245,7 +245,7 @@ impl Tool for DoubleClickTool {
+         );
+ 
+         let fg = delivery_mode.is_foreground() && window_id.is_some();
+-        let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
++        let result = cua_driver_core::recording::spawn_blocking(move || -> anyhow::Result<()> {
+             let do_click = move || -> anyhow::Result<()> {
+                 if let Some(wid) = window_id {
+                     crate::input::mouse::click_at_xy_with_window_local(
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
 index f5eb9d0..ed3a201 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
@@ -7794,6 +8124,37 @@ index 393f17c..6b7ee71 100644
                      })
                  })
                  .await
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/right_click.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/right_click.rs
+index 835551d..cb78ee3 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/right_click.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/right_click.rs
+@@ -7,7 +7,7 @@ use serde_json::Value;
+ use std::sync::Arc;
+ 
+ use crate::ax::bindings::{
+-    copy_action_names, copy_string_attr, kAXErrorSuccess, perform_action, AXUIElementRef,
++    AXUIElementRef, copy_action_names, copy_string_attr, kAXErrorSuccess, perform_action,
+ };
+ 
+ use super::ToolState;
+@@ -154,7 +154,7 @@ impl Tool for RightClickTool {
+                 Err(refusal_result) => return refusal_result,
+             };
+ 
+-            let result = tokio::task::spawn_blocking(move || {
++            let result = cua_driver_core::recording::spawn_blocking(move || {
+                 ax_show_menu(element_guard.as_ptr(), idx, pid, wid)
+             })
+             .await;
+@@ -245,7 +245,7 @@ impl Tool for RightClickTool {
+         };
+ 
+         let fg = delivery_mode.is_foreground() && window_id.is_some();
+-        let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
++        let result = cua_driver_core::recording::spawn_blocking(move || -> anyhow::Result<()> {
+             let do_it = move || -> anyhow::Result<()> {
+                 let m: Vec<&str> = modifiers.iter().map(String::as_str).collect();
+                 if let Some(wid) = window_id {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 index 64b98e1..1e1f210 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs

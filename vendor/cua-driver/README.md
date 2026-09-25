@@ -3,7 +3,11 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.21`. The current Mac candidate adds bounded attached-sheet
+`0.28.2+mako.23`. +22 retains recording context through right/double-click
+blocking workers. +23 retains connected implicit sessions across SDK idle cleanup;
+named TTL, explicit end and transport-close cleanup remain enforced. See
+[media and lifecycle evidence](../../docs/local-control-media-fixes.md).
+The earlier +21 release adds bounded attached-sheet
 discovery shared by observation and exact input validation. It still requires the
 sheet's own CGWindowID; no title, geometry or parent-window substitution is allowed.
 Mac +21 is signed and installed for new launches; exact file selection and
@@ -55,7 +59,7 @@ package. Sway hidden capture/video and other compositors remain unverified. Linu
 passes complete jobs and X11 recording under OrbStack translation.
 Native AMD +19 acceptance covers X11 jobs/gestures/recording, Sway scale and
 rotation and standalone lifecycle; see [platform validation](../../docs/local-control-native-validation.md).
-Linux remains at +19 until +21 target packaging and acceptance complete.
+Linux remains at +19 until current target packaging and acceptance complete.
 
 `node scripts/package-control-driver.mjs <checkout>` signs the Mac build and checks
 its binary/version. `node scripts/install-control-driver.mjs` installs the manifest's
@@ -64,8 +68,8 @@ an immutable version under `~/Library/Application Support/mako/control-drivers/`
 and atomically selects it through `~/.local/bin/cua-driver`. The installer verifies
 provenance/signature before selection, keeps the previous executable for running
 daemons and rollback, and refuses unknown launcher targets or another install lock.
-It does not restart active daemons. Version `0.28.2+mako.17` is now selected on this
-Mac for new launches; the running Mako host/extension deployment remains separate.
+It does not restart active daemons. The selection receipt records the active version for new launches; the running
+Mako host and daemon deployment remain separate.
 
 Installer upgrade/repeat/lock/verification-failure tests and signed installation
 passed. The preceding +mako.12 release passed 375 Mac tests (two existing ignores) and
