@@ -1,10 +1,10 @@
 import { applyControlEnvironment } from "../../control-launch.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { accountEnv } from "../../accounts.js"
-import { resolveExecutable } from "../../executable.js"
 import { acpMcpServers } from "../../mcp-runtime.js"
 import type { ProviderStartOptions } from "../live-driver.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
+import { claudeRuntime } from "./runtime.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
 
 export async function claudeSdkOptions(
@@ -14,10 +14,8 @@ export async function claudeSdkOptions(
 ): Promise<Options> {
   const env = await trace.step("account", () => accountEnv("claude", process.env))
   applyControlEnvironment(env, input.conversationTools?.control)
-  const executable = trace.sync("runtime-discovery", () => env.CLAUDE_CODE_EXECUTABLE
-    ? resolveExecutable(env.CLAUDE_CODE_EXECUTABLE, env)
-    : undefined)
-  if (env.CLAUDE_CODE_EXECUTABLE && !executable)
+  const runtime = trace.sync("runtime-discovery", () => claudeRuntime(env))
+  if (env.CLAUDE_CODE_EXECUTABLE && !runtime)
     throw new Error("The configured Claude Code executable is unavailable")
   const tuning = ClaudeTuningSchema.parse(input.tuning?.options ?? {})
   const initialMode = ClaudeModeSchema.safeParse(input.modeId)
@@ -66,7 +64,9 @@ export async function claudeSdkOptions(
   return {
     cwd,
     env,
-    pathToClaudeCodeExecutable: executable ?? undefined,
+    // Native approval observation requires the SDK to choose its own build.
+    pathToClaudeCodeExecutable:
+      runtime?.kind === "configured" ? runtime.executable : undefined,
     resume: input.fork?.nativeId ?? input.resume,
     sessionId: input.fork || !input.resume ? input.conversationId : undefined,
     forkSession: input.fork ? true : undefined,

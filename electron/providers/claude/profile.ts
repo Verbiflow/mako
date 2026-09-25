@@ -11,6 +11,7 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { withDiscoveryStream } from "../profile-transport.js"
+import { claudeRuntime } from "./runtime.js"
 
 import { z } from "zod"
 
@@ -54,9 +55,14 @@ function discover(
   cwd?: string,
   publish?: (catalog: Catalog) => void
 ) {
+  // Only the executable sessions launch may name models: a newer `claude` on
+  // PATH lists models the session runtime rejects.
+  const runtime = claudeRuntime(env)
+  if (!runtime)
+    return Promise.reject(new Error("Claude Code is unavailable"))
   return withDiscoveryStream(
     {
-      command: env.CLAUDE_CODE_EXECUTABLE ?? "claude",
+      command: runtime.executable,
       args: claudeDiscoveryArgs,
       env,
       cwd,
