@@ -118,6 +118,15 @@ export class ControlRecording {
     changedFrames: 0,
     sourceMetadataMs: 0,
     journalWriteMs: 0,
+    // One sample per encoded second, bounded by the recording duration limit.
+    progress: new Array<{
+      atMs: number
+      frames: number
+      renderMs: number
+      pipeMs: number
+      workerWaitMs: number
+      scheduleLagMs: number
+    }>(),
   }
   private dropped = 0
   private writing: Promise<void> | undefined
@@ -789,6 +798,18 @@ export class ControlRecording {
             this.firstWrite?.resolve()
             recordedFrame.firstOutputFrame ??= ordinal
             this.outputFrames++
+            if (this.outputFrames % this.options.fps === 0)
+              this.encodingTiming.progress.push({
+                atMs: performance.now() - this.start,
+                frames: this.outputFrames,
+                renderMs: this.encodingTiming.renderMs,
+                pipeMs: this.encodingTiming.pipeMs,
+                workerWaitMs: this.encodingTiming.workerWaitMs,
+                scheduleLagMs: Math.max(
+                  0,
+                  performance.now() - this.start - (ordinal + 1) * interval
+                ),
+              })
             if (
               this.outputFrames % this.options.fps === 0 &&
               (await stat(join(this.directory, "recording.partial.mp4"))).size >
@@ -953,7 +974,7 @@ export class ControlRecording {
         press,
         width,
         height,
-        true
+        "transparent"
       )
       previousState = state
       yield rendered

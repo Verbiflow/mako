@@ -47,7 +47,7 @@ export class RecordingEncoderProcess {
         "-f",
         "rawvideo",
         "-pixel_format",
-        "rgba",
+        "rgb24",
         "-video_size",
         `${width}x${height}`,
         "-framerate",

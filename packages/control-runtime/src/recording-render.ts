@@ -1,4 +1,4 @@
-import sharp, { type OverlayOptions } from "sharp"
+import sharp from "sharp"
 import { z } from "zod"
 
 const pointer = z.object({
@@ -40,13 +40,20 @@ function cursorPixels() {
   ).then(([pointer, press]) => ({ pointer, press })))
 }
 
+type CursorOverlay = {
+  input: Buffer
+  raw: { width: number; height: number; channels: 4 }
+  left: number
+  top: number
+}
+
 function cursorOverlay(
   input: Buffer,
   left: number,
   top: number,
   width: number,
   height: number
-): OverlayOptions | undefined {
+): CursorOverlay | undefined {
   const offsetX = Math.max(0, -left)
   const offsetY = Math.max(0, -top)
   const visibleWidth = Math.min(28 - offsetX, width - Math.max(0, left))
@@ -82,13 +89,14 @@ export async function renderRecordingImage(
   press: RecordingRender["press"],
   width: number,
   height: number,
-  transparent = false
+  output: "rgba" | "rgb" | "transparent" = "rgba"
 ) {
+  const transparent = output === "transparent"
   const image = sharp(bytes).resize(width, height, {
     fit: "contain",
     background: transparent ? { r: 0, g: 0, b: 0, alpha: 0 } : "#171614",
   })
-  const overlays: OverlayOptions[] = []
+  const overlays: CursorOverlay[] = []
   if (pointer) {
     const viewportWidth = frame.viewportWidth ?? frame.width
     const viewportHeight = frame.viewportHeight ?? frame.height
@@ -119,5 +127,42 @@ export async function renderRecordingImage(
       addOverlay(pixels.pointer, x - 5, y - 4)
     }
   }
-  return image.ensureAlpha().composite(overlays).raw().toBuffer()
+  // Native overlay sheets retain libvips' full alpha normalization, including
+  // hidden RGB values outside the artwork. Their post-stop path is not the
+  // continuous opaque browser-frame hot path.
+  if (output !== "rgb")
+    return image.ensureAlpha().composite(overlays).raw().toBuffer()
+  const pixels = await image.removeAlpha().raw().toBuffer()
+  if (!overlays.length) return pixels
+
+  // libvips composites in floating point. Doing that across a 1080p image for
+  // a 28×32 cursor converts millions of untouched pixels on every frame.
+  // Use the same compositor on only the artwork's clipped bounding rectangle;
+  // copy that result into this owned frame, preserving every other byte.
+  const left = Math.min(...overlays.map((overlay) => overlay.left))
+  const top = Math.min(...overlays.map((overlay) => overlay.top))
+  const patchWidth =
+    Math.max(...overlays.map((overlay) => overlay.left + overlay.raw.width)) -
+    left
+  const patchHeight =
+    Math.max(...overlays.map((overlay) => overlay.top + overlay.raw.height)) -
+    top
+  const composition = sharp(pixels, { raw: { width, height, channels: 3 } })
+    .extract({ left, top, width: patchWidth, height: patchHeight })
+    .composite(
+      overlays.map((overlay) => ({
+        ...overlay,
+        left: overlay.left - left,
+        top: overlay.top - top,
+      }))
+    )
+  const patch = await composition.removeAlpha().raw().toBuffer()
+  for (let row = 0; row < patchHeight; row++)
+    patch.copy(
+      pixels,
+      ((top + row) * width + left) * 3,
+      row * patchWidth * 3,
+      (row + 1) * patchWidth * 3
+    )
+  return pixels
 }

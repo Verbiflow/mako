@@ -71,7 +71,8 @@ port.on("message", (input) => {
             pointer,
             press,
             width,
-            height
+            height,
+            "rgb"
           )
         }
         if (!pixels || pixels.length !== frameBytes)
@@ -113,7 +114,7 @@ port.on("message", (input) => {
         value.fps,
         (reason) => port.postMessage({ kind: "failed", reason })
       )
-      frameBytes = value.width * value.height * 4
+      frameBytes = value.width * value.height * 3
       width = value.width
       height = value.height
       port.postMessage({ kind: "initialized", id: value.id })
