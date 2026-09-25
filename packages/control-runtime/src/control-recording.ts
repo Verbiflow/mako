@@ -50,7 +50,7 @@ interface Pointer {
   pressed: boolean
 }
 interface IncomingFrame {
-  data: string
+  data: Buffer
   width: number
   height: number
   metadata: {
@@ -345,7 +345,7 @@ export class ControlRecording {
     })
   }
   frame(
-    data: string,
+    data: Buffer,
     width: number,
     height: number,
     metadata: {
@@ -397,7 +397,7 @@ export class ControlRecording {
         ? now + interval
         : Math.max(this.nextWriteAt + interval, now)
     if (
-      data.length > 12_000_000 ||
+      data.length > 9_000_000 ||
       this.frames.length >=
         Math.ceil((this.options.maxDurationMs * this.options.fps) / 1000) + 2
     ) {
@@ -417,7 +417,7 @@ export class ControlRecording {
       this.dropped++
       return Promise.resolve()
     }
-    const bytes = Buffer.from(data, "base64")
+    const bytes = data
     this.writing = (async () => {
       const imageMetadata = await sharp(bytes, {
         limitInputPixels: 16_000_000,

@@ -93,7 +93,7 @@ export class BrowserRecordings {
       unsubscribe = await capture.subscribe({
         frame: (value) => {
           void recording
-            .frame(value.data, value.viewportWidth, value.viewportHeight, {
+            .frame(value.bytes, value.viewportWidth, value.viewportHeight, {
               pageScaleFactor: value.pageScaleFactor,
               offsetTop: value.offsetTop,
               capturedAt: value.capturedAt,

@@ -24,19 +24,25 @@ export const ControlActivitySchema = z.object({
   updatedAt: z.number(),
 })
 export type ControlActivity = z.infer<typeof ControlActivitySchema>
+export const ControlPreviewFrameSchema = z.object({
+  id: z.string().max(128),
+  image: z.object({
+    bytes: z.custom<Uint8Array<ArrayBuffer>>(
+      (bytes) =>
+        bytes instanceof Uint8Array &&
+        bytes.buffer instanceof ArrayBuffer &&
+        bytes.byteLength > 0 &&
+        bytes.byteLength <= 2 * 1024 * 1024
+    ),
+    mimeType: z.enum(["image/png", "image/jpeg"]),
+  }),
+  capturedAt: z.number(),
+  /** Host publication is separate from the source's epoch timestamp. */
+  publishedAt: z.number().optional(),
+})
 export const ControlPreviewSchema = z.object({
   activity: ControlActivitySchema,
   window: AppshotTargetSchema.optional(),
-  frame: z.object({
-    id: z.string().max(128),
-    image: z.object({
-      bytes: z.custom<Uint8Array<ArrayBuffer>>(bytes => bytes instanceof Uint8Array &&
-        bytes.buffer instanceof ArrayBuffer && bytes.byteLength > 0 && bytes.byteLength <= 2 * 1024 * 1024),
-      mimeType: z.enum(["image/png", "image/jpeg"]),
-    }),
-    capturedAt: z.number(),
-    /** Host publication is separate from the source's epoch timestamp. */
-    publishedAt: z.number().optional(),
-  }).nullable(),
+  frame: ControlPreviewFrameSchema.nullable(),
 })
 export type ControlPreview = z.infer<typeof ControlPreviewSchema>

@@ -8,7 +8,7 @@ export type CaptureConnection = Pick<
   "send" | "onEvent" | "onClose"
 >
 export interface BrowserFrame {
-  data: string
+  bytes: Buffer<ArrayBuffer>
   width: number
   height: number
   viewportWidth: number
@@ -82,11 +82,12 @@ export class BrowserCapture {
       if (!this.running || this.suspended || this.closed) return
       try {
         const value = parsed.data
-        const { width, height } = imageSize(Buffer.from(value.data, "base64"))
+        const bytes = Buffer.from(value.data, "base64")
+        const { width, height } = imageSize(bytes)
         if (width * height > 16_000_000)
           throw new Error("Video frame exceeds the pixel budget")
         this.latest = {
-          data: value.data,
+          bytes,
           width,
           height,
           viewportWidth: value.metadata.deviceWidth,
