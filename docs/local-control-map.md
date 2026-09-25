@@ -38,10 +38,10 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Area | What is established | What is not established |
 | --- | --- | --- |
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
-| Browser capture | Installed ordinary Aside preview/recording reaches 56.84/57.73 distinct fps at 1920×1080 with two viewers, exact inputs and unchanged screenshot pixels. Corrected loaded input-to-visible p95 is 121/73/82 ms for click/type/scroll through a production offscreen viewer. | Both installed loaded recordings interrupt at the two-second backlog guard. Sustained efficiency, physical-screen latency, remote delivery and broader native rates remain open. Focus-off hidden tabs may produce no frames. |
-| Native capture/input | Mac +mako.23 selected for new launches; connected implicit-session idle lifetime and right/double-click cursor acceptance pass; fresh isolated right/double-click recording passes; existing host daemons remain on their original binaries; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
+| Browser capture | Installed ordinary Aside preview/recording reaches 56.84/57.73 distinct fps at 1920×1080 with two viewers, exact inputs and unchanged screenshot pixels. Corrected loaded input-to-visible p95 is 121/73/82 ms for click/type/scroll through a production offscreen viewer. | Earlier installed loaded recordings and the combined-build 120-second isolated-host run interrupt at the two-second backlog guard; the uninstalled timestamped source completes them but preview misses 55 fps. Sustained efficiency, physical-screen latency, remote delivery and broader native rates remain open. Focus-off hidden tabs may produce no frames. |
+| Native capture/input | Mac +mako.23 selected for new launches; connected implicit-session idle lifetime and right/double-click cursor acceptance pass; fresh isolated right/double-click recording passes; the current default-host daemon loads +23 and installed right-click timeline propagation passes; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | Current installed/running build `3c865f5347d339c7` predates the combined candidate; the earlier inspected host used `48bf10dc948aa13c`. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.23 is now selected for new Mac driver launches, with the current installed daemon now verified as +mako.23. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
+| Installed components | Current installed/running combined build is `1fb3bfb7b3d14e96` (21:51:28 UTC), including the other contributor's local changes; fresh default-host browser/native recovery passes. Sustained recording still interrupts. Previous builds `3c865f5347d339c7` and `48bf10dc948aa13c` are historical. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.23 is now selected for new Mac driver launches, with the current installed daemon now verified as +mako.23. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -83,81 +83,61 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone (September 25): signed candidate passes MCP/browser/native recovery and bundled recording; implicit-session idle eviction is fixed; rollout waits for active work.**
-Signed driver `+mako.22` carries recording scope into right-click and double-click
-workers. An isolated driver test through the shared SDK verifies real dispatch
-points, exact saved text, the decoded cursor/press ring and unchanged foreground.
-One repeat retained the cursor but activated the fixture; phase-instrumented
-repetition passed. That foreground counterexample remains in LC-24.
-The fix is included in +23, now selected for new launches. The earlier inspected host used `+mako.22`; the current host now maps to
-`+mako.23`, confirmed from its daemon executable. A new proxy executable alone does not update that daemon.
+**Current milestone (September 25): the combined signed build is installed; fresh default-host browser/native recovery passes. Sustained recording acceptance still fails.**
 
-Browser recording now composites only the cursor rectangle and sends RGB24 rather
-than RGBA to the encoder (25% fewer raw pipe bytes). The pixel oracle preserves
-exact colors; native alpha composition, quality and queue/lag bounds are unchanged.
-Two consecutive 120-second regular Aside runs with two load workers and two viewers
-finish at 57.9 and 57.3 distinct recorded fps (58.1 and 57.2 preview fps). All exact
-inputs and screenshot checks pass. Maximum encoder lag is 95/234 ms; host plus
-encoder costs 1.20–1.22 CPU cores and 442–444 MB peak summed RSS in these source-host
-runs. Earlier failures under higher/variable machine load remain counterevidence;
-this is a scoped workload pass, not unlimited-load or installed-host acceptance.
+`/Applications/Mako.app` and the default host PID 20718 both report build
+`1fb3bfb7b3d14e96`, built at 21:51:28 UTC. The full-workspace build includes the
+other contributor's local changes: all 1,907 source hashes matched before/after
+packaging, with direct ASAR checks of Codex/Claude drivers and permission modules.
+The connected default-host daemon PID 25450 loads `+mako.23`.
+[Combined build](../release/combined-local-20260925/combined-build.json) and
+[installer result](../release/combined-local-20260925/install-state.json) retain
+provenance and the automatic acceptance failures.
 
-[Fixes, evidence and commands](local-control-media-fixes.md) retain the failed
-experiments and deployment distinction. The previous installed build's
-[media evidence](local-control-installed-media.md) remains unchanged. Full lint, build, signed packaging and bundled recording checks pass. The `16c797db97b714df` installer aborted when its host changed; it did not install.
-New signed candidate `1fb3bfb7b3d14e96` adds guarded post-exit helper cleanup. Two
-native jobs through the existing installed task passed, then a discovery call
-exposed implicit-session idle eviction despite a live proxy. `+mako.23` restores
-connection-owned lifetime without reviving explicitly ended sessions. A signed-
-package preview run finalized correctly but missed the preview floor (54.66 fps).
-The final 60-second candidate repeat passes at 58.05 preview/57.55 recorded fps,
-36 exact inputs and unchanged foreground, with host + encoder at 1.62 CPU cores
-and 449 MB peak summed RSS. Both outcomes are retained; these are isolated hosts.
-[Follow-up evidence and limits](local-control-media-fixes.md#installed-follow-up-september-25).
-The signed +23 driver passes a 35.29-second idle pause with a one-second test TTL,
-then exact native values, gestures and decoded cursor/ring; all 284 foreground
-samples stay on Aside. The signed desktop candidate passes MCP reconnect,
-interruption, browser/native exact values and bundled recording. Installer monitor
-56055 reached idle but aborted at 11:07:30 UTC because another installer held the
-application install lock. [Current receipt](../release/media-followup-20260925/install-state.json)
-is **not-installed**, with no post-install checks run. A subsequent check found
-both the installed bundle and running host on older build `3c865f5347d339c7`, not
-candidate `1fb3bfb7b3d14e96`. The lock is now absent and the monitor has exited.
-The prepared monitor includes installed recording, MCP, native idle/cursor and
-120-second preview checks, but these remain unexecuted.
-These jobs distinguish installed modules in isolated hosts from a fresh task on
-the default host. Next: resolve competing installation attempts, retry safe installation and inspect acceptance receipts. The Mako-focused foreground
-counterexample remains unresolved; the coordinated repeat actually measured Dock. Cloud streaming remains
-deferred below.
+Automatic bundled recording, MCP/browser/native recovery and private native
+idle/cursor checks pass. The fresh task then passed regular-profile Aside
+interruption/reclaim and native exact saves, screenshot and recording through the
+actual installed default host. Native right-click recording now contains its three
+pointer samples. No second task session or unknown-action replay was used.
+[Current installed evidence](local-control-installed-media.md#combined-build-installed-follow-up).
 
-**Combined workspace rebuild (21:53 UTC):** rebuilt from the full current workspace,
-including tracked and untracked app changes from the other contributor. All 1,907
-source-file hashes match before/after the build; packaged Codex/Claude live drivers,
-Codex permission observer and related app modules match the compiled workspace.
-Lint, approval/access-mode regressions and both signed startup routes pass.
-The fresh artifact remains build `1fb3bfb7b3d14e96` because packaged code inputs are
-unchanged; its new build timestamp is 21:51:28 UTC. This confirms the other changes
-are included, rather than selecting only Local Control files.
+The 120-second isolated installed-module preview test reached 56.12 distinct fps,
+with all 36 exact input checks and screenshot pixels correct. Recording interrupted
+after 50.10 seconds at the unchanged two-second backlog guard; its playable prefix
+is 47 seconds / 53.06 distinct fps. This remains a failed complete-recording job.
+The first 44.79 seconds cost 1.25 host-plus-encoder CPU cores and 432 MB peak summed
+RSS, excluding browser/viewers and GPU/media-engine power. Earlier two-minute
+source-host passes and shorter candidate passes remain valid only for their scopes.
 
-Monitor 99356 now owns the sole queued install attempt for
-`release/combined-local-20260925/mac-arm64/Mako.app`. The host reports only this
-conversation active and quit waiting for its completion. No competing installer
-or install lock was present. [Combined build receipt](../release/combined-local-20260925/combined-build.json)
-and [current install receipt](../release/combined-local-20260925/install-state.json)
-are the current deployment records. Automatic startup and installed acceptance
-follow the app replacement. That attempt subsequently aborted when the host changed (21:54:38 UTC).
-The replacement host's parent was the idle development host PID 97651. Its
-cross-profile conversation routing could wake the intentionally stopped default
-host. On the next check, the dev host reported no work; normal lifecycle quit
-closed it and its socket became absent. No agent was force-stopped. The combined
-application-source hashes still match the verified build. Retry monitor 19143 now
-waits on this turn, after checking the development host is absent. The original
-failed receipt is preserved as `install-attempt-1.json`; installation and automatic
-acceptance remain pending in the current receipt.
+Next:
 
-Release follow-up: intentional install/quit must suppress cross-profile automatic
-host wake for the duration of replacement. Closing the idle development host
-addresses this rollout; it is not a general fix to shared-host wake coordination.
+1. Finish recording behavior under contention, then validate the installed build.
+   The local worker now explicitly releases consumed RGB buffers after pipe
+   completion. A repeatable render probe uses 44% less CPU with unchanged pixels;
+   the two-minute ordinary source-host job passes at 56.97 preview / 55.52 recorded
+   fps (1.12 host-plus-encoder cores, 476 MB peak summed RSS). The added-load job
+   still interrupts at 33.95 seconds and preview falls to 51.28 fps. The user chose
+   to continue recording at an explicitly reported lower fresh-frame rate under
+   contention. Timestamped variable-rate encoding now does so locally: the loaded
+   job finishes at 121.68 of 121.68 seconds with 54.40 recorded fps and 204
+   reported skipped slots. Ordinary recording passes at 55.22 fps, but preview
+   misses the unchanged 55-fps gate (54.40 ordinary, 52.61 loaded). Linux FFmpeg
+   5.1 compatibility and libx264 timing were corrected after review; only the
+   synthetic Linux worker probe covers them. Next, diagnose preview under
+   contention, then install and repeat the installed jobs.
+   [Timestamped recording evidence](local-control-media-fixes.md#timestamped-recording-under-contention-local-follow-up).
+2. Correct native fixture startup before repeating Mako-focused right/double-click
+   acceptance. The fresh attempt activated the fixture 43 ms after showing it,
+   before any control call. This is a fixture-startup failure, not evidence that
+   the driver stole focus. Earlier action-time foreground counterevidence remains.
+3. Unify successful CLI installation with the in-app installation receipt.
+   Settings still reads an old failure from `updates/install-result.json` despite
+   verified installation. Also coordinate intentional quit with cross-profile
+   auto-wake; gracefully closing the idle development host unblocked this install
+   but is not a general product fix.
+
+[Media fixes and previous attempts](local-control-media-fixes.md) retain the
+source/candidate tests, failed installers and exact driver lifecycle evidence.
 
 **Cloud ordering:** define the Linux cloud-agent environment first (display/compositor, CPU/GPU availability, isolation, network and lifecycle), then choose and validate its capture/encoding/transport backend. Preserve the current Linux implementation and prototype evidence; defer further cloud streaming implementation and Moonlight/Selkies adoption until that prerequisite. Mac and cloud retain the same typed session, ownership and recording API.
 
@@ -269,7 +249,7 @@ These source changes still require desktop rollout.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: hardware recording and cleanup are installed in `9b696b0d9525e7e9`; that checkpoint failed loaded recording and native cursor acceptance. The [September 25 fixes](local-control-media-fixes.md) pass isolated native cursor acceptance and two consecutive loaded source-host Aside recordings. Driver +mako.23 is selected for new launches; signed candidate MCP and native idle/cursor jobs pass. Desktop rollout and fresh default-host acceptance remain pending. The user accepts roughly 56 fps; 60 remains the target.**
+**Status: combined build `1fb3bfb7b3d14e96` and driver +mako.23 are installed. Fresh default-host browser/native recovery and right-click cursor propagation pass. Local render-allocation changes pass a two-minute ordinary source-host job at 56.97 preview / 55.52 recorded fps; added-load recording still interrupts. That fix is not installed. The user approved continued recording at a reported lower frame rate under contention. Local timestamped encoding now completes the added-load two-minute recording at its real duration (54.40 recorded fps, reported skips), but ordinary and loaded preview miss 55 fps (54.40/52.61). None of this is installed. A separate right/double-click test stops at fixture startup before any action. The user accepts roughly 56 fps; 60 remains the target.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 

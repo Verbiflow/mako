@@ -342,3 +342,169 @@ hashes excluding documentation still match the complete combined build. Monitor
 The failed attempt is preserved in `install-attempt-1.json`; the current receipt
 is again waiting-for-idle. Cross-profile intentional-quit/wake coordination remains
 a product follow-up; this operational mitigation does not claim to implement it.
+
+### Combined rollout completed; sustained acceptance failed
+
+Retry 19143 successfully installed the full-workspace build `1fb3bfb7b3d14e96`
+(21:51:28 UTC). Default host 20718 reports the same build, and daemon 25450 loads
++mako.23. All other contributor changes verified by the combined build remain
+included. The receipt now says `installed-checks-failed`: installation succeeded;
+bundled recording, MCP/browser/native recovery and private cursor/idle pass, but
+the two-minute preview/recording job fails sustained recording.
+
+Fresh browser/native recovery through the actual current task also passes,
+including exact values and native right-click cursor propagation. The separate
+right/double-click proof stops before any action because its fixture self-activates
+during startup while Mako is frontmost. The failure trace is retained.
+
+The [installed follow-up](local-control-installed-media.md#combined-build-installed-follow-up)
+records the 56.12 fps preview, recording interruption at 50.10 seconds, playable
+47-second prefix, active-interval resource measurements and next investigation.
+Do not interpret the shorter passes or post-interruption CPU average as sustained
+recording acceptance. Settings' old install-error receipt and cross-profile
+intentional-quit coordination remain separate release follow-ups.
+
+### Render allocation lifetime (local follow-up)
+
+The sampled recording worker repeatedly enters V8 garbage collection when Sharp
+returns a new 6,220,800-byte RGB frame. The worker bounded its live frame count but
+left consumed allocations for GC. Its private owner now detaches a replaced
+frame's complete ArrayBuffer only after the previous pipe write succeeds. Repeats
+retain the current pixels. Finalization waits for encoder/stdio closure before
+release, including timeout/error paths. No SDK caller or preview buffer is detached.
+The supported Node >=24 runtime supplies `ArrayBuffer.transfer(0)`; no dependency,
+heap-budget increase, encoder setting or queue-limit change was added.
+
+Cursor composition now passes only the clipped background rectangle into Sharp,
+keeping the complete output allocation out of that second native operation.
+The independent full-frame oracle remains byte-identical. This small cursor change
+alone showed no convincing speed improvement; it is not claimed as the sustained
+recording fix.
+
+The reusable `scripts/audit-recording-render.ts` serial 1,200-frame probe repeats
+the lifetime comparison using the same owned fixture image. Deferred release costs
+11.50 CPU seconds and 1,192 collections / 359 ms; explicit release costs 6.43 CPU
+seconds and eight collections / 6.9 ms. Wall time is 5.83 versus 5.74 seconds and
+peak RSS is approximately 196 MB in both. This is a **44% render-probe CPU saving**,
+not a 44% whole-recording speedup or an established RAM reduction.
+
+The final ordinary two-minute source-host Aside job with two viewers passes at
+56.97 distinct preview fps and 55.52 recorded fps, with 138 ms maximum encoder lag.
+All 36 exact input checks and both screenshot-pixel comparisons pass. Recorded
+motion has zero invalid markers and a 167 ms longest hold. Click/type/scroll
+input-to-offscreen-visible p95 is 93/79/92 ms. Host plus encoder costs 1.12 CPU cores
+and 476 MB peak summed RSS; browser/viewers and media-engine power are separate.
+A 30-second CPU-profiled ordinary run also finishes and passes. These are source
+hosts using the installed extension and hardware encoder, not installed changes.
+
+The two-worker loaded follow-up still fails: recording stops at 33.95 seconds at
+the existing frame/byte backlog budget, with scheduling lag near two seconds.
+Preview reaches only 51.28 fps across the run. Machine load rises from 12.85 to
+19.50 on 14 logical CPUs. The earlier cursor-only trial completed recording but
+also missed the performance gate (50.59 preview / 51.22 recorded fps). Retain both
+failures; no amount of shorter passing evidence closes the loaded gate.
+
+The user subsequently chose continued recording with a reported lower frame rate
+under contention. The timestamped follow-up below implements that policy locally.
+It must preserve full-detail screenshots, image geometry, source timestamps,
+cursor timing and honest frame/drop accounting. The ordinary performance gate
+remains unchanged; overloaded completion is a separate acceptance condition.
+
+The full recording regression suite passes. A new two-in-flight encoder test
+decodes all 72 replaced/repeated 1080p frames to catch early detach, stale repeats,
+reordering and pixel corruption. Full lint passes with the existing five React
+warnings and no errors. The audit's new `--cpu-profile` flag is restricted to an
+owned source-host fixture; it cannot profile or replace an installed task host.
+
+Evidence is under ignored `docs/audits/2026-09-25/media-sustained/`. Repeat the
+allocation probe serially, without other benchmarks running:
+
+```sh
+node --import tsx scripts/audit-recording-render.ts --source=<owned-fixture-image> --defer-release
+node --import tsx scripts/audit-recording-render.ts --source=<owned-fixture-image>
+```
+
+Omit `--source` to generate a self-contained fixture. Use the established preview
+audit command for complete jobs; add `--cpu-profile` only for diagnosis and report
+its overhead separately. Deployment and heavy-contention acceptance remain open.
+
+
+### Timestamped recording under contention (local follow-up)
+
+The raw RGB pipe previously inferred presentation time from frame count. Dropping
+writes would therefore shorten the video. A private MOV input-framing helper now
+sends explicit microsecond timestamps and references the original RGB allocation;
+only small headers are copied. Timeline/journal version 4 explicitly names
+presentation-timestamp output rather than implying constant-rate frames. The
+existing bundled MOV demuxer and raw-video
+decoder accept it. No dependency, codec, encoder quality or output resolution is
+added or changed. Hardware encoding remains required on macOS.
+
+The recorder skips obsolete frame opportunities under pressure, retains transient
+source states during short stalls while bounded history permits, and discards
+oldest source images only at its existing frame/byte queue limits. It holds static
+images with one-second heartbeat fragments and writes a final sample to preserve
+capture duration. A truly stalled pipe still fails within its existing deadline.
+Receipts and timelines report requested/encoded FPS, skipped frame opportunities,
+unchanged opportunities saved, and source-image evictions separately. Encoded FPS
+is not a claim about distinct visual content. Browser preview and input are unchanged.
+
+The full recording regression suite and 60-second continuous check pass. The
+static check accepts 3,601 source frames but encodes 62 samples over 60.417 seconds;
+capture lasts 60.407 seconds, with no source evictions. Finalization takes 355 ms.
+The separate real-encoder suspension check overflows the bounded source queue,
+then completes with ordered packet timestamps, unchanged duration and the exact
+final source pixels. Short-stall checks decode transient source states and cursor
+positions at their actual presentation intervals. An added cursor-only test first
+failed, then passed after the scheduler included pointer transitions and press
+expiry in the short-stall history. Encoder startup failure now rejects initial
+readiness directly instead of reporting a misleading no-browser-frame timeout.
+
+The first two-minute Aside job completes but misses ordinary performance:
+54.83 preview / 54.79 recorded distinct fps, no invalid marker pixels, 217 ms
+longest recorded hold. Recording finishes at 121.533 seconds for 121.520 seconds
+of capture. All 36 input checks pass; click/type/scroll offscreen-visible p95 is
+86/79/118 ms. Host plus encoder costs 1.13 cores / 456 MB peak summed RSS; whole
+browser, viewers and GPU power are separate. Machine load rises from 8.68 to
+16.74 on 14 logical CPUs. This is a retained failure of the 55-fps ordinary gate,
+not evidence that its threshold should change. It predates the cursor-stall fix.
+
+The video-marker audit explicitly samples presentation time at 60 Hz, so variable
+encoding rates cannot inflate its distinct-frame measurement.
+
+The final ordinary two-minute job, with the cursor-stall fix, finishes at
+121.517 seconds for 121.514 seconds of capture. Recorded motion reaches
+**55.22 distinct fps** (283 ms longest hold, no invalid markers); 97 frame slots
+were skipped and 13 source images evicted. Preview reaches only **54.40 fps**, so
+the job fails the unchanged 55-fps gate. All 36 input checks and both pixel
+comparisons pass; click/type/scroll p95 is 107/83/103 ms. Host plus encoder costs
+1.06 cores / 414 MB peak summed RSS; load rose from 8.67 to 12.77.
+
+The final two-worker loaded job no longer interrupts. The one that previously
+stopped at 33.95 seconds now finishes at 121.683 seconds for 121.679 seconds of
+capture, at 54.40 recorded distinct fps (133 ms longest hold, no invalid markers).
+Its receipt reports 53.83 encoded fps, 204 skipped slots and 9 evicted source
+images. Preview falls to **52.61 fps**, so the job still fails the preview gate.
+Input and pixel checks pass (p95 90/81/122 ms). Host plus encoder costs 1.15
+cores / 448 MB; load rose from 12.68 to 17.86. Both jobs used exactly the source
+and built modules recorded in their identity files. Evidence:
+`timestamped-ordinary-final/` and `timestamped-loaded-final/`. No installed claim.
+
+A later review found two Linux-only defects that the Mac runs could not show. Debian
+bookworm's FFmpeg 5.1 rejects `-enc_time_base demux`, which would fail every Linux
+browser recording at startup. Libx264 B-frames also measured reorder delay in held
+real time: a 1.28-second synthetic recording started at 0.5 seconds and reported
+0.63 seconds. The encoder now passes the input's explicit `1:1000000` time base
+and disables B-frames for timestamped input. On macOS both changes leave packet
+timing byte-identical because VideoToolbox already used `-bf 0`. The Linux
+continuous-recording probe now passes three times in the bookworm package
+acceptance image with the current build; Ubuntu 24.04's FFmpeg 6.1 accepts the
+same input. This is synthetic worker coverage, not Linux browser or compositor
+acceptance.
+
+
+The attempted native-fixture startup change (`.prohibited`, `finishLaunching`,
+then `.accessory`) was reverted: with Aside foreground, the window was discoverable
+without activation but its subsequent observation failed before input. It does
+not close the original Mako-focused startup failure or establish driver focus
+protection. That acceptance item remains separate from browser media work.

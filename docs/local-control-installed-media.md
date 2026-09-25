@@ -4,6 +4,7 @@ September 25, 2026. [Wayfinder LC-21](local-control-map.md#lc-21--responsive-cap
 
 Follow-up: [native cursor fix and source-host sustained recording results](local-control-media-fixes.md).
 The installed-build results below remain scoped to this checkpoint.
+For the newer installed combined build, see [the follow-up](#combined-build-installed-follow-up).
 
 Cleanup deployment is complete. Installed media acceptance is **not complete**:
 ordinary browser recording works, but sustained loaded recording interrupts and
@@ -146,6 +147,57 @@ existing React warnings. New script syntax and diff whitespace checks pass.
 
 Cloud Linux streaming implementation remains deferred until its environment is
 defined; this Mac result does not choose Selkies, Moonlight or another cloud backend.
+
+## Combined build installed follow-up
+
+The full-workspace build `1fb3bfb7b3d14e96` (21:51:28 UTC) is installed and running
+in default host PID 20718. Its native daemon PID 25450 loads the immutable +mako.23
+binary. The build includes the other contributor's changes; the 1,907-file source
+manifest and ASAR comparisons are in `release/combined-local-20260925/`.
+
+Automatic bundled recording, MCP/browser/native recovery and private native
+idle/cursor checks pass. The fresh actual task's `live-recovery/result.json` also
+passes: Aside debugger release retains a playable 2.73-second prefix, stale handles
+refuse, reclaim resumes recording, and six native whitespace/Unicode saves retain
+exact values. Native recording finishes at 15.3 seconds / 480×232, with the actual
+right-click's three pointer samples now present. The fixture stayed out of the
+foreground in 104 samples. This does not establish native 1080p or physical typing.
+
+The separate two-minute preview job executes installed modules in an isolated
+host. Preview reaches 56.12 distinct fps with all 36 exact input checks and both
+screenshot-pixel checks passing. Click/type/scroll input-to-offscreen-visible p95
+is 142/153/127 ms. Recording interrupts at 50.10 seconds when encoder lag exceeds
+two seconds. The retained video is 47 seconds / 1920×1080 / 53.06 distinct fps,
+with no invalid decoded marker samples. This is a failed complete job.
+
+Resource measurements over the first 44.79 seconds, while recording is active,
+show 1.25 host-plus-encoder CPU cores and 432 MB peak summed RSS. The encoder alone
+uses 0.266 cores / 187 MB; fixture including host/viewers uses 1.90 cores / 993 MB.
+The whole existing Aside browser uses 2.48 cores / 4.56 GB; that includes unrelated
+tabs. These groups overlap. GPU/media-engine power is not measured. The 120-second
+average includes the stopped encoder and must not represent active recording cost.
+
+Timing totals show the last 240 outputs (frames 2640–2880) took 5.98 seconds for
+four seconds of video. Rendering accounts for 4.95 seconds and pipe admission for
+3.87 seconds, with overlap. Lag rises from near zero to 1.98 seconds. The worker
+already overlaps one render with one ordered write; neither queue expansion nor
+a relaxed lag guard is justified. The underlying scheduling/throughput cause is
+still unproven.
+
+A separate borrowed-task right/double-click proof aborted at fixture startup.
+Mako PID 20703 was frontmost at window creation; 43 ms later the fixture activated,
+before any control call (`calls: []`). Its initial `orderBack` did not prevent
+AppKit startup activation. Correct the fixture's launch lifecycle before repeating
+this test; do not count it as a driver-action failure or a passing gesture test.
+
+Reports are retained under ignored `docs/audits/2026-09-25/installed-combined/`:
+`live-recovery/`, `preview-failure/`, and `native-startup-failure.json`. The latter
+preserves the failed startup event trace. No private session descriptor is copied.
+
+Settings separately retains an old error from `updates/install-result.json`.
+`LocalUpdates.load()` reads it while the CLI installer uses a different receipt.
+Verified installation succeeded; receipt reconciliation remains a product fix.
+The earlier cross-profile automatic host-wake race also remains a follow-up.
 
 
 September 25 follow-up: the first idle installer aborted on host replacement.
