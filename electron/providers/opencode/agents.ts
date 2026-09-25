@@ -1,9 +1,7 @@
 import { Worker } from "node:worker_threads"
 import { openCodeDatabasePaths } from "@mako/sessions"
 import { z } from "zod"
-import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { NativeAgentObservationSchema, type NativeAgentObservation } from "../../contracts/native-agents.js"
-import type { AcpAgentObserver } from "../acp-source.js"
 
 const reply = z.discriminatedUnion("kind", [z.object({ kind: z.literal("observed"), agents: z.array(NativeAgentObservationSchema) }), z.object({ kind: z.literal("unavailable") })])
 const sessionId = z.string().regex(/^ses_[a-zA-Z0-9]+$/)
@@ -18,7 +16,7 @@ interface Input {
 interface Admission { call: string; baseline?: string; previous?: NativeAgentObservation; previousAdmission?: Admission; ambiguous: boolean }
 
 /** OpenCode v2 metadata observation. */
-export class OpenCodeAgents implements AcpAgentObserver {
+export class OpenCodeAgents {
   private readonly input: Input
   private readonly worker: Worker
   private readonly current = new Map<string, NativeAgentObservation>()
@@ -63,10 +61,8 @@ export class OpenCodeAgents implements AcpAgentObserver {
     this.scan()
   }
 
-  observe(notification: SessionNotification): void {
-    if (this.disposed || notification.sessionId !== this.input.nativeId) return
-    const update = notification.update
-    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return
+  observe(update: { sessionId: string; toolCallId: string; title?: string; rawInput?: unknown; rawOutput?: unknown; status?: string }): void {
+    if (this.disposed || update.sessionId !== this.input.nativeId) return
     this.revision++
     if (update.title === "subagent") this.subagentTools.add(update.toolCallId)
     const args = resume.safeParse(update.rawInput)

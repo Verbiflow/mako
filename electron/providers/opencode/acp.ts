@@ -15,7 +15,13 @@ export const openCodeAcpSource: ProviderAcpSource = {
   async observeAgents(input) {
     const observer = new OpenCodeAgents(input)
     await observer.ready
-    return observer
+    return {
+      observe({ sessionId, update }) {
+        if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return
+        observer.observe({ sessionId, toolCallId: update.toolCallId, title: update.title ?? undefined, rawInput: update.rawInput, rawOutput: update.rawOutput, status: update.status ?? undefined })
+      },
+      dispose: () => observer.dispose(),
+    }
   },
   compaction: { kind: "supported", command: "/compact", completion: { kind: "response" } },
   canResume: true,
