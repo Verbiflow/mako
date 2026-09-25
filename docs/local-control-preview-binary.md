@@ -151,3 +151,14 @@ Local evidence is retained in [the manifest](audits/2026-09-24/binary-preview/ma
 with source/artifact hashes, successful and failed reports, final videos, rejected
 experiments and check logs. The directory is gitignored; only synthetic fixtures
 were captured. The manifest distinguishes final source from earlier experiments.
+
+## Loaded recording and Linux follow-up
+
+The [recording-efficiency investigation](local-control-recording-efficiency.md)
+adds bounded render/write overlap, cursor caching and source-header parsing.
+The covered two-minute loaded Aside recording now completes at 55.11 distinct
+fps; loaded preview is 53.26 fps and does not pass the normal 55 fps gate.
+Full resource costs and rejected encoder experiments are retained. The
+[isolated Linux comparison](local-control-streaming.md#september-24-isolated-prototype-measurements)
+now includes decoded capture, WebSocket and WebRTC measurements. None of these
+results is an installed-media or universal 60 fps claim.

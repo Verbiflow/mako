@@ -1,5 +1,6 @@
 import { z } from "zod"
-import { streamRequest } from "../profile-transport.js"
+import type { DiscoveryStream } from "../profile-transport.js"
+import type { JsonObject } from "../../codex-app-json.js"
 
 // Strip every unrelated effective setting here: this response may contain secrets.
 const EffectiveSettingsSchema = z.object({
@@ -20,28 +21,36 @@ export const claudeDiscoveryArgs = [
   "--strict-mcp-config",
   "--mcp-config",
   '{"mcpServers":{}}',
+  // Metadata probes must never invoke the user's startup/model-switch hooks.
+  "--settings",
+  '{"disableAllHooks":true}',
 ]
 
-export async function claudeResolvedSettings(
-  env: NodeJS.ProcessEnv,
-  cwd: string | undefined,
-  model: string
-) {
-  return streamRequest(
-    env.CLAUDE_CODE_EXECUTABLE ?? "claude",
-    [...claudeDiscoveryArgs, "--model", model],
-    {
-      type: "control_request",
-      request_id: "mako-settings",
-      request: { subtype: "get_settings" },
-    },
-    env,
-    (message) => {
-      const parsed = ClaudeSettingsResponseSchema.safeParse(message)
-      return parsed.success ? parsed.data : undefined
-    },
-    cwd
-  )
+const ControlResponseSchema = z.object({
+  type: z.literal("control_response"),
+  response: z.object({
+    request_id: z.string(),
+    subtype: z.enum(["success", "error"]),
+    response: z.json().optional(),
+  }),
+})
+
+export function claudeDiscoveryControl(stream: DiscoveryStream) {
+  let sequence = 0
+  return (request: JsonObject) => {
+    const id = `mako-discovery-${++sequence}`
+    return stream.request(
+      { type: "control_request", request_id: id, request },
+      (message) => {
+        const parsed = ControlResponseSchema.safeParse(message)
+        if (!parsed.success || parsed.data.response.request_id !== id)
+          return undefined
+        if (parsed.data.response.subtype !== "success")
+          throw new Error("Claude discovery request was rejected")
+        return parsed.data.response.response ?? {}
+      }
+    )
+  }
 }
 
 const SettingsResponseSchema = z.object({
@@ -51,9 +60,8 @@ const SettingsResponseSchema = z.object({
     response: EffectiveSettingsSchema,
   }),
 })
-export const ClaudeSettingsResponseSchema = SettingsResponseSchema.transform(
-  (envelope) => {
-    const settings = envelope.response.response
+export const ClaudeEffectiveSettingsSchema = EffectiveSettingsSchema.transform(
+  (settings) => {
     return {
       effort: settings.applied.effort ?? undefined,
       fast:
@@ -61,4 +69,8 @@ export const ClaudeSettingsResponseSchema = SettingsResponseSchema.transform(
         settings.effective.fastModePerSessionOptIn !== true,
     }
   }
+)
+
+export const ClaudeSettingsResponseSchema = SettingsResponseSchema.transform(
+  (envelope) => ClaudeEffectiveSettingsSchema.parse(envelope.response.response)
 )

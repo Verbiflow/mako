@@ -35,6 +35,93 @@ export function runDiscovery(
   )
 }
 
+export interface DiscoveryStream {
+  request<T>(
+    request: JsonObject,
+    pick: (value: JsonValue) => T | undefined
+  ): Promise<T>
+  notify(message: JsonObject): void
+  endInput(): void
+}
+
+/** One bounded process; adapters own wire methods and exact reply matching. */
+export function withDiscoveryStream<TResult>(
+  options: Parameters<typeof withDiscoveryProcess>[0],
+  run: (stream: DiscoveryStream) => Promise<TResult>
+): Promise<TResult> {
+  return withDiscoveryProcess(options, async ({ child, exited, phase }) => {
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity })
+    let pending:
+      { accept(value: JsonValue): void; reject(error: Error): void } | undefined
+    let closed: Error | undefined
+    const fail = (error: Error) => {
+      closed = error
+      pending?.reject(error)
+      pending = undefined
+    }
+    lines.on("line", (line) => {
+      let message: JsonValue
+      try {
+        message = z.json().parse(JSON.parse(line))
+      } catch {
+        return
+      }
+      pending?.accept(message)
+    })
+    void exited.then(({ code, signal }) =>
+      fail(
+        new Error(
+          `${options.command} exited with ${signal ?? code} before discovery completed`
+        )
+      )
+    )
+    try {
+      return await run({
+        request: <T>(
+          request: JsonObject,
+          pick: (value: JsonValue) => T | undefined
+        ) => {
+          if (closed) return Promise.reject(closed)
+          if (pending)
+            return Promise.reject(
+              new Error("Discovery requests must be sequential")
+            )
+          return new Promise<T>((resolve, reject) => {
+            pending = {
+              reject,
+              accept: (message) => {
+                try {
+                  const selected = pick(message)
+                  if (selected === undefined) return
+                  pending = undefined
+                  resolve(selected)
+                } catch {
+                  pending = undefined
+                  reject(
+                    new Error(
+                      `${options.command} returned an invalid discovery response`
+                    )
+                  )
+                }
+              },
+            }
+            phase("control response")
+            child.stdin.write(`${JSON.stringify(request)}\n`)
+          })
+        },
+        notify: (message) => {
+          if (closed) throw closed
+          child.stdin.write(`${JSON.stringify(message)}\n`)
+        },
+        endInput: () => child.stdin.end(),
+      })
+    } finally {
+      fail(new Error("Discovery stream closed"))
+      lines.close()
+    }
+  })
+}
+
 export function streamRequest<TResult>(
   command: string,
   args: string[],
@@ -46,44 +133,12 @@ export function streamRequest<TResult>(
     typeof withDiscoveryProcess
   >[0]["priority"] = "background"
 ): Promise<TResult> {
-  return withDiscoveryProcess(
+  return withDiscoveryStream(
     { command, args, env, cwd, priority },
-    async ({ child, exited, phase }) => {
-      const lines = createInterface({
-        input: child.stdout,
-        crlfDelay: Infinity,
-      })
-      try {
-        return await new Promise<TResult>((resolve, reject) => {
-          lines.on("line", (line) => {
-            let message: JsonValue
-            try {
-              message = z.json().parse(JSON.parse(line))
-            } catch {
-              return
-            }
-            try {
-              const selected = pick(message)
-              if (selected !== undefined) resolve(selected)
-            } catch {
-              reject(
-                new Error(`${command} returned an invalid discovery response`)
-              )
-            }
-          })
-          phase("control response")
-          child.stdin.end(`${JSON.stringify(request)}\n`)
-          void exited.then(({ code, signal }) =>
-            reject(
-              new Error(
-                `${command} exited with ${signal ?? code} before discovery completed`
-              )
-            )
-          )
-        })
-      } finally {
-        lines.close()
-      }
+    ({ request: send, endInput }) => {
+      const response = send(request, pick)
+      endInput()
+      return response
     }
   )
 }
@@ -94,6 +149,46 @@ const RpcResponseSchema = z.object({
   error: z.object({ code: z.number().optional() }).optional(),
 })
 
+export interface DiscoveryRpc {
+  request(method: string, params?: JsonObject): Promise<JsonValue>
+}
+
+export function withDiscoveryRpc<TResult>(
+  options: Parameters<typeof withDiscoveryProcess>[0] & { jsonrpc: boolean },
+  run: (rpc: DiscoveryRpc) => Promise<TResult>
+): Promise<TResult> {
+  return withDiscoveryStream(options, async (stream) => {
+    let sequence = 0
+    const envelope = (message: JsonObject) => {
+      if (options.jsonrpc) message.jsonrpc = "2.0"
+      return message
+    }
+    const rpc: DiscoveryRpc = {
+      request: (method, params = {}) => {
+        const id = ++sequence
+        return stream.request(envelope({ id, method, params }), (value) => {
+          const parsed = RpcResponseSchema.safeParse(value)
+          if (!parsed.success || parsed.data.id !== id) return undefined
+          if (parsed.data.error) throw new Error(`RPC ${method} failed`)
+          if (parsed.data.result === undefined)
+            throw new Error(`RPC ${method} returned no result`)
+          return parsed.data.result
+        })
+      },
+    }
+    await rpc.request("initialize", {
+      protocolVersion: 1,
+      clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
+      clientCapabilities: { session: { configOptions: { boolean: {} } } },
+      capabilities: { experimentalApi: true },
+    })
+    // The next request carries initialized first on the same ordered pipe.
+    // Notifications have no reply, so they do not occupy a request slot.
+    stream.notify(envelope({ method: "initialized", params: {} }))
+    return run(rpc)
+  })
+}
+
 export function rpcRequest(
   command: string,
   args: string[],
@@ -103,82 +198,7 @@ export function rpcRequest(
   params: JsonObject = {},
   cwd?: string
 ): Promise<JsonValue> {
-  return withDiscoveryProcess(
-    { command, args, env, cwd },
-    async ({ child, exited, phase }) => {
-      const lines = createInterface({
-        input: child.stdout,
-        crlfDelay: Infinity,
-      })
-      try {
-        return await new Promise<JsonValue>((resolve, reject) => {
-          let initialized = false
-          const send = (message: {
-            id?: number
-            method: string
-            params: object
-          }) => {
-            child.stdin.write(
-              `${JSON.stringify(jsonrpc ? { jsonrpc: "2.0", ...message } : message)}\n`
-            )
-          }
-          lines.on("line", (line) => {
-            let value: unknown
-            try {
-              value = JSON.parse(line)
-            } catch {
-              return
-            }
-            const parsed = RpcResponseSchema.safeParse(value)
-            if (!parsed.success || ![1, 2].includes(parsed.data.id)) return
-            const message = parsed.data
-            if (message.error) {
-              reject(
-                new Error(
-                  `${command} ${message.id === 1 ? "initialize" : method} failed (RPC ${message.error.code ?? "error"})`
-                )
-              )
-              return
-            }
-            if (message.result === undefined) {
-              reject(
-                new Error(
-                  `${command} returned a discovery response without a result`
-                )
-              )
-              return
-            }
-            if (message.id === 1 && !initialized) {
-              initialized = true
-              phase(method)
-              send({ method: "initialized", params: {} })
-              send({ id: 2, method, params })
-            } else if (message.id === 2 && initialized) resolve(message.result)
-          })
-          phase("initialize")
-          send({
-            id: 1,
-            method: "initialize",
-            params: {
-              protocolVersion: 1,
-              clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
-              clientCapabilities: {
-                session: { configOptions: { boolean: {} } },
-              },
-              capabilities: { experimentalApi: true },
-            },
-          })
-          void exited.then(({ code, signal }) =>
-            reject(
-              new Error(
-                `${command} exited with ${signal ?? code} before ${method} discovery completed`
-              )
-            )
-          )
-        })
-      } finally {
-        lines.close()
-      }
-    }
+  return withDiscoveryRpc({ command, args, env, cwd, jsonrpc }, (rpc) =>
+    rpc.request(method, params)
   )
 }

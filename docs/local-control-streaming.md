@@ -34,8 +34,8 @@ compare its WebRTC and binary WebSocket modes, and use **Sunshine/Moonlight as t
 native-client performance reference**. For the local Mac, retain ScreenCaptureKit
 and evaluate VideoToolbox encoding; for exact Linux windows, retain the portal
 window-grant boundary described in the [capture backend review](local-control-capture-backends.md).
-These are backend choices under the same session engine. No candidate has been
-adopted or benchmarked inside Mako by this review.
+These are backend choices under the same session engine. No candidate has been adopted. The September 24 isolated prototype below now
+measures capture and a browser viewer, using Mako’s SDK to drive the test browser.
 
 The [continuous-media investigation](local-control-media-investigation.md) adds
 the shared-runtime continuous recorder, packaged FFmpeg crash evidence and the
@@ -76,6 +76,77 @@ queues and independent recovery. It does **not** identify Moonlight, Selkies or 
 specific publicly reusable implementation. Its 55.7 displayed fps, 29.3 ms p95 gap
 and 127.4 ms median click-to-visible are publisher measurements with network and
 different competitor resolutions; they cannot rank Mako without a matched test.
+
+### September 24 isolated prototype measurements
+
+The pinned Selkies/pixelflux experiment reuses an existing ARM64 container image,
+private Xvfb desktop and headless Chromium. Software H.264, 1920×1080, CRF 18,
+60 requested fps, four-CPU/2 GiB limits; one measured minute per viewer. The
+independent marker reader examines decoded pixels, not server callback counts.
+No new image was built/pulled, and no upstream dependency entered Mako's package.
+[Fixture and contributor setup](../scripts/linux-control/README.md#isolated-streaming-comparison).
+
+| Viewer | Distinct fps | p95 / maximum frame gap | Approx. whole-container cores | Peak cgroup memory |
+| --- | ---: | ---: | ---: | ---: |
+| Binary WebSocket | 54.60 | 33.1 / 65.2 ms | 1.34 | 1.68 GB |
+| WebRTC | 53.30 | 33.5 / 149.8 ms | 1.23 | 1.54 GB |
+
+Both have zero invalid marker samples and no sampler errors. Cgroup memory
+includes file/page cache and all fixture processes, not just resident encoder
+memory. CPU includes GTK, capture, encoding, server, Chromium and instrumentation;
+resource reads can include up to one extra polling interval. These are separate
+single runs on a shared Mac VM, not statistical superiority or a remote-network
+comparison. Neither reaches the ordinary 55 fps floor. The results support further
+component evaluation; they do not justify replacing Mako's transport wholesale.
+
+The capture/encoder component reached **58.41 distinct fps (4:2:0)** and
+**58.34 (4:4:4)** after independently decoding the saved H.264 streams. Both had
+zero invalid markers. Raw callback counts exceeded 60 because they include extra
+paint-over output; those counts are not distinct motion. Capture plus GTK used
+0.45 / 0.55 CPU cores, with 181 / 216 MB peak process RSS. Encoded output averaged
+221 / 301 kB/s on this deliberately small changing-region fixture.
+
+Colored 14px text is materially clearer in 4:4:4: sampled RGB mean absolute error
+fell from 4.66 to 0.60 levels out of 255, and PSNR rose from 29.07 to 47.30 dB
+against GTK's source screenshot. Neither is lossless. The extra chroma accuracy
+cost about 36% more encoded bytes and 23% more component CPU in these single runs.
+Do not select 4:2:0 solely for its rate or cost. Preserve exact screenshots for
+agent observations, and validate browser/hardware 4:4:4 decoding before choosing
+that stream format. The three-second post-animation tail still emitted roughly
+19–23 fps, so this experiment does not establish negligible idle cost.
+
+The first WebRTC run negotiated H.264 but delivered no frames with `network=none`.
+A private internal bridge supplied a non-loopback ICE interface; the corrected
+run connected and had zero reported RTP packet loss. No external route or host
+port was published. Retain the failed setup as evidence, not a transport result.
+
+Upstream integration issues are concrete:
+
+- The view-only WebSocket gate rejects `CLIENT_FRAME_ACK`, although the upstream
+  viewer sends it. The one-minute run logs those denials repeatedly. Flow-control
+  telemetry needs a permitted read-only message path before reuse.
+- Startup reports missing realized display/backpressure state. Video starts, but
+  this is not evidence that reconnect/backpressure behavior is correct.
+- Even with gamepads, clipboard, file transfer, audio and commands disabled, the
+  server initializes virtual gamepad sockets and attempts an upload directory.
+  Keep input authority in Mako; evaluate a media-only helper instead of importing
+  an entire second desktop-control system.
+
+The staged pixelflux wheel is 24.03 MB / 52.47 MB unpacked; the full Selkies Python
+stack adds about 87 MiB. Its official wheel includes GPL-enabled codec libraries.
+Dependency selection, notices, size and lifecycle remain adoption gates, not new
+production requirements. Browser decoder compatibility and text quality also
+need to govern 4:4:4 selection; capture support alone is insufficient.
+
+Sunshine/Moonlight remains the native-viewer comparison, not a measured winner.
+This CPU-only headless browser fixture cannot establish GPU/native-client latency.
+Still required: a matched native-viewer host, hardware encoding, network latency/
+loss/reconnect, multi-viewer sharing, Mako ownership integration and exact-window
+Wayland grants. Preserve the standard VNC compatibility boundary below.
+
+Evidence: `docs/audits/2026-09-24/streaming-prototype/` (ignored media/results),
+including `selkies-ws-final`, `selkies-webrtc-final` (failed no-interface setup),
+`selkies-webrtc-internal` and each independent `analysis.json`.
 
 ### Transport and cloud compatibility contract
 

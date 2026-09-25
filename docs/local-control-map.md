@@ -81,7 +81,7 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. Preview and recording share encoded source bytes; viewers share JPEG decoding, with bounded packets/queues and explicit cleanup. Final production minute-long Aside runs reached **56.43 preview / 55.07 recorded fps** with one viewer and **55.30 / 54.95 fps** with two. All 36 exact inputs per run and all full-pixel comparisons pass; recordings finish. The user accepts roughly 56 fps, with 60 as the target. The two-viewer video missed the script's exact 55 fps cutoff by three frames; this marginal result is retained. Heavier-load trials still interrupted recording, so overload reliability remains open. Types, lint, recovery, public package and Linux ARM64 worker checks pass. **These media changes are not installed.** [Binary-preview evidence and remaining gates](local-control-preview-binary.md). Next profile recorder backpressure under concurrent work, then run the isolated Linux Selkies/pixelflux and Sunshine/Moonlight comparisons. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
+**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. The latest recorder overlaps at most two frames, caches cursor artwork and avoids duplicate asynchronous image-header work. A two-minute loaded Aside job completed **127.35 seconds of video at 55.11 distinct recorded fps**, with all 36 exact inputs and both pixel comparisons passing. Maximum schedule lag was 759 ms and queued source bytes peaked at 9.92 MB. Preview was **53.26 fps under that load**, below the normal 55 fps floor. Host plus encoder still used about 2.07 cores / 1.03 GB peak summed RSS; efficiency is improved but software encoding remains expensive. A lower-memory two-thread x264 experiment was rejected after real-workload interruption. The isolated Linux prototype now measures about **58.4 distinct capture fps**, **54.6 WebSocket viewer fps** and **53.3 WebRTC viewer fps**; it has upstream permission/backpressure issues and is not adopted. [Recorder evidence](local-control-recording-efficiency.md), [Linux measurements and remaining adoption gates](local-control-streaming.md#september-24-isolated-prototype-measurements). The final source-identity-checked ordinary run passes at **55.84 preview / 56.15 recorded fps**. The user accepts roughly 56 fps; 60 remains the target. **These media changes are not installed.** Final source build, types, lint, crash/recovery, packed consumer and Linux ARM64 worker checks pass. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
 
 **Preserved integration decision (September 24): SDK + composable CLI + persistent JS MCP.**
 After reviewing the current unified cua_repl evidence, the user explicitly replaced
@@ -198,7 +198,7 @@ These source changes still require desktop rollout.
 The [current investigation](local-control-media-investigation.md) records the
 implementation, failed experiments and acceptance gates. Continuous encoding
 removes source-JPEG staging; clocks/cursor timing and native no-transform output
-have focused tests. [Binary delivery and shared JPEG decoding](local-control-preview-binary.md) now keep preview pixels out of JSON. The final source runs complete with exact pixels; profile the retained overload failures and compare isolated Selkies/pixelflux and Sunshine/Moonlight. Packaged
+have focused tests. [Binary delivery and shared JPEG decoding](local-control-preview-binary.md) now keep preview pixels out of JSON. The final source runs complete with exact pixels; the revised recorder also finishes the covered two-minute loaded job. Linux component/viewer measurements are documented; native Sunshine/Moonlight and installed media acceptance remain. Packaged
 FFmpeg's fragmented and hybrid modes retain 120 decoded frames after a synthetic
 encoder kill, whereas `+faststart` output is unreadable; clean runs retain all
 180. This is container evidence, not a new capture-rate result. Hybrid needs no
@@ -732,12 +732,19 @@ migration or count source-search keyword matches as control use.
 Next:
 
 Current LC-21 investigation: [recording efficiency](local-control-recording-efficiency.md)
-now accounts for browser/encoder resources. A loaded one-minute run finishes but
-misses the normal rate floor; cursor caching and bounded encoder threads are under
-validation. The isolated pinned Linux capture prototype has started. No media
-rollout or upstream dependency adoption is implied.
+now includes browser/encoder CPU and memory, a successful loaded recording,
+rejected threading experiments and exact pixel checks. [Linux streaming](local-control-streaming.md#september-24-isolated-prototype-measurements)
+has sustained component/viewer measurements and a measured colored-text quality
+tradeoff. No media rollout or upstream dependency adoption is implied.
 
-1. The installed Mac/Aside + Codex milestone is closed. LC-21 continuous encoding and binary preview delivery are local. Production one/two-viewer correctness checks complete; profile the recorded overload interruptions, validate rollout and run the Selkies/pixelflux prototype. The user accepts roughly 56 fps, with 60 as the target. Preserve exact values, pixels, recovery and freeze checks; report measured rates instead of equating container fps with distinct motion.
+1. Finish exact-candidate source/installed media acceptance. Preserve the failed
+   overload attempts and the successful 127-second loaded recording; the loaded
+   preview remains below the ordinary rate floor. Before adopting Linux media,
+   isolate capture/encoding from upstream input, fix view-only acknowledgments,
+   verify reconnect/backpressure, decoder quality, idle cost and lifecycle, and
+   measure GPU/native Sunshine/Moonlight and remote-network behavior. The user
+   accepts roughly 56 fps, with 60 as the target. Keep exact values, screenshots,
+   recovery and freeze checks; report distinct motion rather than container fps.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
    interruption/resume, compaction, fresh bindings and child-agent discovery.
    Preserve exact source/candidate/installed identities for every result.
