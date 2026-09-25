@@ -4,9 +4,10 @@
 `scripts/build-control-media.mjs`; run `npm run prepare:control-media` on macOS
 ARM64. It builds FFmpeg/ffprobe with only the codecs, filters and file protocols
 used by recordings. Network protocols and autodetected Homebrew libraries are
-disabled. Recipe 3 explicitly builds Apple's VideoToolbox H.264 encoder. Mac
+disabled. Recipe 3 introduced Apple's VideoToolbox H.264 encoder; recipe 4 removes
+the unused concat demuxer after retiring staged-image browser recording. Mac
 recordings require hardware (`allow_sw=0`), realtime mode, no B-frames and quality
-80; unsupported builds refuse before capture. Native video that needs no transform
+85; unsupported builds refuse before capture. Native video that needs no transform
 still passes through. Linux retains its existing x264 settings pending cloud design.
 
 For a reviewable candidate without replacing an existing build:
