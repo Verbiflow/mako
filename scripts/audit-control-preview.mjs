@@ -34,6 +34,10 @@ if (process.versions.electron) {
   )
   const appArgument = process.argv.find(value => value.startsWith("--runtime-app="))?.slice(14)
   const runtimeApp = appArgument ? resolve(appArgument) : undefined
+  const cpuProfile = process.argv.includes("--cpu-profile")
+  assert.ok(!cpuProfile || (process.argv.includes("--shared-host") && !runtimeApp &&
+    !process.argv.some(value => value.startsWith("--installed-session="))),
+    "--cpu-profile is limited to the owned source-host fixture")
   assert.ok(!runtimeApp || (process.argv.includes("--shared-host") && !process.argv.some(value => value.startsWith("--installed-session="))),
     "--runtime-app measures an isolated packaged host; do not combine it with an installed task session")
   if (runtimeApp) {
@@ -114,6 +118,7 @@ if (process.versions.electron) {
         ?.slice("--extension=".length) ?? "",
     MAKO_PREVIEW_NODE: process.execPath,
     MAKO_PREVIEW_RUNTIME_APP: runtimeApp ?? "",
+    MAKO_PREVIEW_CPU_PROFILE: cpuProfile ? "1" : "0",
     MAKO_PREVIEW_SECONDS: String(seconds),
     MAKO_PREVIEW_LOAD_WORKERS: String(loadWorkers),
     MAKO_PREVIEW_BROWSER_PID: String(browserPid),
@@ -145,7 +150,8 @@ if (process.versions.electron) {
 }
 
 async function audit() {
-  const machine = { logicalCpus: availableParallelism(), loadAverageAtStart: loadavg() }
+  const machine = { logicalCpus: availableParallelism(), loadAverageAtStart: loadavg(),
+    cpuProfiled: process.env.MAKO_PREVIEW_CPU_PROFILE === "1" }
   const { app, BrowserWindow, ipcMain } = await import("electron")
   const { DeskBrowser } = await import("../dist-electron/desk-browser.js")
   const { deskPageForWindow } =
@@ -245,6 +251,8 @@ async function audit() {
           {
             execPath: process.env.MAKO_PREVIEW_RUNTIME_APP
               ? join(process.env.MAKO_PREVIEW_RUNTIME_APP, "Contents/MacOS/Mako") : process.env.MAKO_PREVIEW_NODE,
+            execArgv: process.env.MAKO_PREVIEW_CPU_PROFILE === "1"
+              ? ["--cpu-prof", `--cpu-prof-dir=${root}`] : process.execArgv,
             env: workerEnv,
             stdio: ["ignore", "inherit", "inherit", "ipc"],
           }

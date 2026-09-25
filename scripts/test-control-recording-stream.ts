@@ -16,6 +16,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
 import { z } from "zod"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
+import { RecordingEncoder } from "../packages/control-runtime/src/recording-encoder.js"
 import { mediaExecutable } from "../packages/control-runtime/src/control-media.js"
 
 const execute = promisify(execFile)
@@ -88,6 +89,48 @@ try {
     timeline.frames[0].capturedAt < timeline.startedAt,
     "retain honest source capture time"
   )
+
+  // Exercise both in-flight slots while replacing and repeating owned pixels.
+  // Decode every output: detaching an old frame before its pipe write completes,
+  // or detaching the cached repeat, must not silently produce corrupt video.
+  const orderedDirectory = join(directory, "ordered")
+  await mkdir(orderedDirectory)
+  const ordered = new RecordingEncoder(orderedDirectory, () => {})
+  try {
+    await ordered.initialize(1920, 1080, 60)
+    const colors = [[40, 80, 120], [180, 100, 60], [70, 160, 110]]
+    const images = await Promise.all(colors.map(async ([r, g, b]) =>
+      sharp({ create: { width: 1920, height: 1080, channels: 3,
+        background: { r, g, b } } }).png().toBuffer()
+    ))
+    const pending: Promise<unknown>[] = []
+    const expected: number[][] = []
+    for (let index = 0; index < 72; index++) {
+      if (pending.length === 2) await pending.shift()
+      const color = Math.floor(index / 3) % colors.length
+      expected.push(colors[color]!)
+      pending.push(ordered.write(index % 3 === 0 ? {
+        bytes: images[color]!, frame: { width: 1920, height: 1080 }, at: index * 1000 / 60,
+      } : undefined))
+    }
+    await Promise.all(pending)
+    const result = await ordered.finish()
+    await execute(mediaExecutable("ffmpeg"), [
+      "-v", "error", "-i", result.path, "-vf", "scale=1:1", "-f", "image2",
+      join(orderedDirectory, "frame-%03d.png"),
+    ])
+    const decoded = (await readdir(orderedDirectory)).filter(name => name.endsWith(".png")).sort()
+    assert.equal(decoded.length, expected.length)
+    for (const [index, color] of expected.entries()) {
+      const pixel = await sharp(join(orderedDirectory, decoded[index]!)).removeAlpha().raw().toBuffer()
+      for (const [channel, value] of color.entries())
+        assert.ok(Math.abs(pixel[channel]! - value) <= 4,
+          `Replaced/repeated frame ${index} channel ${channel} changed`)
+    }
+  } finally {
+    ordered.abort("Ordered-frame test complete")
+    await ordered.finish().catch(() => {})
+  }
 
   // High-entropy JPEGs expand to PNG staging larger than the old 512 MiB cap.
   // Keep original source files below that cap; only redundant render staging differs.

@@ -59,7 +59,7 @@ process.stdin.on('data', chunk => {
     let result = {};
     if(request.method==='initialize') result={protocolVersion:1,agentCapabilities:{sessionCapabilities:{delete:{}}},authMethods:[]};
     if(request.method==='session/new') {
-      const id=randomUUID(); db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(id,request.params.cwd,process.pid);
+      const id=process.env.SLUG_IDS ? 'resonant-pendulum' : randomUUID(); db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(id,request.params.cwd,process.pid);
       if(process.env.LOSE_REPLY) process.exit(2);
       result={sessionId:id,configOptions:[{id:'model',name:'Model',category:'model',type:'select',currentValue:'fixture-model',options:[{value:'fixture-model',name:'Fixture model'}]}]};
     }
@@ -86,6 +86,9 @@ try {
     (await records()).map((record) => record.method),
     ["initialize", "session/new", "rm"]
   )
+  assert.equal(await devinDefaultModel(executable, { ...env, SLUG_IDS: "1" }, root), "fixture-model")
+  await assert.rejects(devinDefaultModel(executable, { ...env, SLUG_IDS: "1", LOSE_REPLY: "1" }, root))
+  assert.equal(database.prepare("SELECT COUNT(*) AS total FROM sessions").get()?.total, 1)
   await assert.rejects(
     devinDefaultModel(executable, { ...env, LOSE_REPLY: "1" }, root)
   )
