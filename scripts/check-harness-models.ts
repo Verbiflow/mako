@@ -16,8 +16,6 @@ import {
   optionAccepts,
   resolveSessionSettings,
 } from "@mako/sessions/settings"
-import { harnessProfile } from "../electron/harnesses.ts"
-import { providerHost } from "../electron/providers/index.ts"
 import { claudeProfileLoader } from "../electron/providers/claude/profile.ts"
 import { devinProfileLoader } from "../electron/providers/devin/profile.ts"
 import { availableProviderProfile } from "../electron/providers/profile-loader.ts"
@@ -416,6 +414,10 @@ function assertLiveProfile(profile: HarnessProfile): void {
 
 assertFixtureProfiles()
 if (process.argv.includes("--live")) {
+  // Native SDK children execute JavaScript directly; tsx's import remapping
+  // does not apply to their separate processes. Use the built host for live checks.
+  const { harnessProfile } = await import("../dist-electron/harnesses.js")
+  const { providerHost } = await import("../dist-electron/providers/index.js")
   const loaders = providerHost.profiles.list()
   assert.ok(loaders.length > 0, "No providers registered")
   const failures: string[] = []

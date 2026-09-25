@@ -135,6 +135,19 @@ try {
     Number(denseProbe.streams[0]!.nb_read_frames),
     Math.ceil((denseReceipt.durationMs * 60) / 1000)
   )
+  // Header-only dimensions must retain the previous decoder's pixel limit.
+  // Deliberately malformed PNG dimensions are refused before decoder allocation.
+  const oversized = await sharp({ create: { width: 2, height: 2, channels: 3,
+    background: "black" } }).png().toBuffer()
+  oversized.writeUInt32BE(100_000, 16)
+  oversized.writeUInt32BE(100_000, 20)
+  const refused = await ControlRecording.create(target, { directory }, async () => {})
+  await refused.frame(oversized, 1920, 1080)
+  await refused.stop()
+  const refusal = await refused.settled()
+  assert.equal(refusal.status, "failed")
+  assert.match(refusal.error!, /Invalid recording frame geometry/)
+  assert.equal(refusal.frames, 0)
   // A rendering failure after FFmpeg starts must close its stdin and reap it.
   const tools = join(directory, "failing-media")
   await mkdir(tools)

@@ -34,7 +34,10 @@ const mounts = {
   [join(repo, "packages/control/dist")]: "/opt/mako-control/node_modules/@mako/control/dist",
 }
 const name = `mako-streaming-${randomUUID()}`
-const args = ["run", "--name", name, "--rm", "--init", "--pull=never", "--network=none", "--read-only",
+// ICE needs a non-loopback interface. A disposable internal network supplies
+// one without an external route or published host port.
+const network = mode === "webrtc" ? name : "none"
+const args = ["run", "--name", name, "--rm", "--init", "--pull=never", `--network=${network}`, "--read-only",
   "--cap-drop=ALL", "--security-opt=no-new-privileges", "--cpus=4", "--memory=2g", "--pids-limit=512",
   "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m",
   "-e", `MAKO_STREAMING_SECONDS=${process.env.MAKO_STREAMING_SECONDS ?? 60}`,
@@ -45,7 +48,8 @@ const args = ["run", "--name", name, "--rm", "--init", "--pull=never", "--networ
 ]
 await writeFile(join(output, "provenance.json"), JSON.stringify({ mode, image: metadata.Id,
   architecture: metadata.Architecture, wheelSha256: sha, pixelflux: "40a9d46ba9b8c137b9812825041c68977ddf615f",
-  selkies: "3a46db7d58e4bddf2dd1f031ee9577720545e8ab", cpus: 4, memoryBytes: 2*1024**3, network: "none" }, null, 2))
+  selkies: "3a46db7d58e4bddf2dd1f031ee9577720545e8ab", cpus: 4, memoryBytes: 2*1024**3, network: network === "none" ? "none" : "private internal bridge; no published ports" }, null, 2))
+if (network !== "none") await execute("docker", ["network", "create", "--internal", network])
 const child = spawn("docker", args, { stdio: "inherit" })
 const stop = () => { void execute("docker", ["stop", "--time=5", name]).catch(() => {}) }
 process.once("SIGINT", stop)
@@ -57,4 +61,5 @@ try {
   clearTimeout(deadline)
   process.off("SIGINT", stop)
   process.off("SIGTERM", stop)
+  if (network !== "none") await execute("docker", ["network", "rm", network])
 }

@@ -44,6 +44,9 @@ try {
   await tab.cdp("Page.addScriptToEvaluateOnNewDocument", { source: `
     window.__SELKIES_STREAMING_MODE__=${JSON.stringify(mode)};
     window.fixtureErrors=[];addEventListener('error',e=>fixtureErrors.push(e.message));
+    window.fixturePeers=[];
+    const Peer=window.RTCPeerConnection;
+    window.RTCPeerConnection=class extends Peer{constructor(...args){super(...args);fixturePeers.push(this)}};
   ` })
   await tab.navigate("http://127.0.0.1:8080/")
   await delay(7000)
@@ -85,6 +88,8 @@ try {
   }
   assert.ok(result, "Viewer clock did not complete")
   const resourcesAfter = { cpu: await readFile("/sys/fs/cgroup/cpu.stat", "utf8"), memory: await readFile("/sys/fs/cgroup/memory.current", "utf8") }
+  const rtc = await inspect(`Promise.all(fixturePeers.map(async p=>({connection:p.connectionState,ice:p.iceConnectionState,stats:[...(await p.getStats()).values()].filter(s=>['inbound-rtp','candidate-pair','codec'].includes(s.type))})))`)
+  await writeFile("/output/viewer-rtc.json", JSON.stringify(rtc, null, 2))
   await writeFile("/output/viewer-result.json", JSON.stringify({ mode, scope: "Private headless Chromium decoded-pixel oracle; no physical scanout or network-distance claim", resourcesBefore, resourcesAfter, ...result }, null, 2))
   assert.ok(result.seen.length > 100, JSON.stringify(initial))
   assert.equal(result.invalid, 0)

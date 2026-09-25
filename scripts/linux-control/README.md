@@ -26,6 +26,51 @@ check separate from the complete desktop jobs below. Launching through
 `node --input-type=module -e 'await import("./recording-probe.mjs")'` also checks
 that the encoder worker does not inherit a parent flag invalid for worker files.
 
+## Isolated streaming comparison
+
+`run-streaming-probe.mjs` is an experiment runner, not a packaged backend or a
+self-provisioning installer. It reuses an existing ARM64 image with Python 3.11,
+GTK, Xvfb, Chromium and the public control packages. It never builds or pulls an
+image. The staged cache is intentionally outside the shipped package:
+
+- `python/`: extracted pixelflux 2.1.0 CPython 3.11 ARM64 wheel from revision
+  `40a9d46ba9b8c137b9812825041c68977ddf615f`. The runner verifies its wheel SHA-256.
+- `selkies-source/selkies-3a46db7d58e4bddf2dd1f031ee9577720545e8ab/`: the pinned
+  upstream archive; `web/` is its `addons/selkies-web-core` Vite output.
+- `dependencies/python/`: Linux Python dependencies from that source's pyproject;
+  retain pip's `--report` with resolved versions, public URLs and hashes.
+- `cairo/`: matching ARM64 CPython 3.11 Pycairo and GI Cairo bindings. The test
+  fails at startup if they are absent; a blank fixture is not acceptance.
+
+The default cache is `node_modules/.cache/mako-streaming-prototype`.
+`MAKO_STREAMING_CACHE` and `MAKO_STREAMING_IMAGE` select prepared alternatives.
+Do not silently install upstream dependencies into the contributor's environment.
+A portable artifact-preparation command and x64 wheel selection remain work;
+these experiments do not establish a supported distribution.
+
+After `npm run build:control-runtime`, run one measurement at a time:
+
+```sh
+node scripts/linux-control/run-streaming-probe.mjs capture420 /absolute/new-evidence
+# Other modes: capture444, websockets, webrtc. Use a different empty directory.
+FFMPEG=/absolute/path/to/ffmpeg node scripts/linux-control/analyze-streaming-probe.mjs /absolute/new-evidence
+```
+
+Each job has a private desktop, read-only mounts, four CPU cores, a 2 GiB limit
+and a deadline. Capture and WebSocket tests disable networking; WebRTC uses a
+per-run internal bridge for ICE, without an external route or published ports.
+The runner removes its container and network on completion/handled interruption.
+SIGKILL may leave named resources; inspect the exact `mako-streaming-*` resource
+before removing it. No host desktop, home directory or credentials are mounted.
+View-only credentials are generated inside the container and deleted on exit.
+Selkies input is not a Mako input adapter and must not be enabled for agents.
+
+The independent pixel oracle measures decoded marker changes, frame gaps and
+invalid markers. Capture analysis also compares stationary colored text against
+GTK's source screenshot. Cgroup memory includes page cache; container CPU includes
+the fixture and browser. These are ARM64 Xvfb/software-encoding measurements, not
+physical display, GPU, network-distance, Wayland or x64 performance acceptance.
+
 ## Desktop jobs
 
 Build the repository's control package and shared host modules first, then:

@@ -452,6 +452,16 @@ async function soak() {
     )
   }
 }
+async function captureConversation(name) {
+  const selector = `[data-conversation-id="${conversationId}"]`
+  await waitFor(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), Boolean, "conversation rail row for visual proof")
+  await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
+  await waitFor(() => evaluate(`document.body.textContent.includes(${JSON.stringify(marker)})`), Boolean, "native answer visible")
+  await evaluate("document.fonts.ready.then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))))")
+  const shot = await command("Page.captureScreenshot", { format: "png" })
+  await writeFile(join(root, name), Buffer.from(shot.data, "base64"))
+}
+
 async function completed(requestId, { startedAt, id = conversationId } = {}) {
   let observedContent = false
   let observedDispatch = false
@@ -667,6 +677,7 @@ try {
       nativeIdPresent: Boolean(nativeId),
     })
     console.log("Packaged provider completed a real no-tools turn")
+    await captureConversation("provider-completed.png")
     await waitFor(
       () => bridge("liveSnapshot", [conversationId]),
       (snapshot) =>
@@ -746,6 +757,7 @@ try {
       "Resumed provider must recall the original marker"
     )
     report.phases.push({ phase: "restart-native-resume-recall", passed: true })
+    await captureConversation("native-resume.png")
     await bridge("liveClose", [conversationId])
     console.log(
       "Packaged restart retained the journal and resumed the same native session with marker recall"

@@ -3,8 +3,8 @@
 import assert from "node:assert/strict"
 import { spawn, fork } from "node:child_process"
 import { createServer } from "node:http"
-import { randomUUID } from "node:crypto"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { createHash, randomUUID } from "node:crypto"
+import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir, availableParallelism, loadavg } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -33,6 +33,19 @@ if (process.versions.electron) {
     "--seconds must be an integer from 1 to 120"
   )
   const root = await mkdtemp(join(tmpdir(), "mako-preview-latency-"))
+  const identityPaths = [
+    ...["control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"].flatMap(name => [
+      `packages/control-runtime/src/${name}.ts`, `packages/control-runtime/dist/${name}.js`,
+    ]),
+    "src/components/inspector/control-preview-image.tsx",
+    "src/lib/control-preview-painter.ts",
+    "dist-electron/control-previews.js", "dist-electron/runtime-connection.js",
+  ]
+  const identity = async () => Object.fromEntries(await Promise.all(identityPaths.map(async path =>
+    [path, createHash("sha256").update(await readFile(path)).digest("hex")]
+  )))
+  const before = await identity()
+  await writeFile(join(root, "identity-before.json"), JSON.stringify(before, null, 2))
   const config = {
     plugins: baseline
       ? [
@@ -110,6 +123,9 @@ if (process.versions.electron) {
     })
   } finally {
     await new Promise((resolve) => server.httpServer.close(resolve))
+    const after = await identity()
+    await writeFile(join(root, "identity-after.json"), JSON.stringify(after, null, 2))
+    assert.deepEqual(after, before, "Media implementation changed during measurement")
   }
   console.log(`Preview measurement artifacts: ${root}`)
 }
