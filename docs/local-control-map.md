@@ -1,6 +1,6 @@
 # Local Control wayfinder
 
-Updated 2026-09-24. This is the current plan for browser and computer control across
+Updated 2026-09-25. This is the current plan for browser and computer control across
 all harnesses, desktop Mac and isolated Linux cloud jobs. The goal is accurate,
 responsive complete workflows through a typed engine, agent MCP and composable CLI. Full ChatGPT/Codex
 parity has not been established.
@@ -16,6 +16,7 @@ parity has not been established.
   Prior CLI-only acceptance is historical; MCP-first integration supersedes that delivery choice.
 - **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
 - **Interactive streaming:** [reference findings, transport experiments and local/remote scope](local-control-streaming.md).
+- **Lightweight media:** [Capy, Replicas, Tembo, Synara and T3 review; hardware and low-delay software probes](local-control-media-prior-art.md).
 - **Current media investigation:** [continuous recording, encoder-crash evidence and ordered implementation gates](local-control-media-investigation.md).
 - **Streaming choice and VNC:** [Selkies/pixelflux prototype, Moonlight comparison and compatibility boundary](local-control-streaming.md#september-24-selection-browser-streaming-moonlight-and-vnc).
 - **Using the existing API:** [API reference](local-control-api.md).
@@ -81,7 +82,11 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. The latest recorder overlaps at most two frames, caches cursor artwork and avoids duplicate asynchronous image-header work. A two-minute loaded Aside job completed **127.35 seconds of video at 55.11 distinct recorded fps**, with all 36 exact inputs and both pixel comparisons passing. Maximum schedule lag was 759 ms and queued source bytes peaked at 9.92 MB. Preview was **53.26 fps under that load**, below the normal 55 fps floor. A final-source repeat under higher ambient contention interrupted after **56.44 seconds**, retaining **53 seconds of verified playable video**; input and exact pixels still passed. **Heavy-load reliability remains open.** Host plus encoder in the successful run used about 2.07 cores / 1.03 GB peak summed RSS; efficiency is improved but software encoding remains expensive. A lower-memory two-thread x264 experiment was rejected after real-workload interruption. The isolated Linux prototype now measures about **58.4 distinct capture fps**, **54.6 WebSocket viewer fps** and **53.3 WebRTC viewer fps**; it has upstream permission/backpressure issues and is not adopted. [Recorder evidence](local-control-recording-efficiency.md), [Linux measurements and remaining adoption gates](local-control-streaming.md#september-24-isolated-prototype-measurements). The final source-identity-checked ordinary run passes at **55.84 preview / 56.15 recorded fps**. The user accepts roughly 56 fps; 60 remains the target. **These media changes are not installed.** Final source build, types, lint, crash/recovery, packed consumer and Linux ARM64 worker checks pass. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
+**Current milestone:** LC-21 continuous recording and bounded binary previews are local. Final ordinary Aside acceptance passes at **55.84 preview / 56.15 recorded fps**, with exact inputs and pixels. A loaded run completed 127 seconds, but the final-source loaded repeat interrupted after 56.44 seconds and retained a verified 53-second prefix. **Heavy-load reliability and lightweight resource usage remain open.** The successful loaded run cost about 2.07 cores / 1.03 GB summed host-plus-encoder RSS. Frame-rate success does not meet the efficiency requirement. [Recording evidence](local-control-recording-efficiency.md). Linux component/viewer measurements and upstream issues remain in the [streaming comparison](local-control-streaming.md#september-24-isolated-prototype-measurements). **These media changes are not installed.** Installed Mac/Aside + Codex MCP acceptance is a separate completed milestone.
+
+**Current work (September 25): Mac hardware recording.** The user selected Mac hardware encoding now. Build recipe 3 enables VideoToolbox; the shared engine requires hardware H.264 for browser recordings and native cursor overlays, with no silent software fallback. Validate the reviewed binary, saved text/cursor quality, loaded Aside jobs, interruption cleanup and host/encoder/OS-service resource cost before rollout. This still uses the existing RGBA composition pipe; native buffer capture remains a separate optimization. [Prior-art evidence](local-control-media-prior-art.md).
+
+**Cloud ordering:** define the Linux cloud-agent environment first (display/compositor, CPU/GPU availability, isolation, network and lifecycle), then choose and validate its capture/encoding/transport backend. Preserve the current Linux implementation and prototype evidence; defer further cloud streaming implementation and Moonlight/Selkies adoption until that prerequisite. Mac and cloud retain the same typed session, ownership and recording API.
 
 **Preserved integration decision (September 24): SDK + composable CLI + persistent JS MCP.**
 After reviewing the current unified cua_repl evidence, the user explicitly replaced
@@ -312,7 +317,8 @@ Do not select a language/codec from a product claim or compare host fps with vie
 fps. [Detailed criteria and source](local-control-streaming.md).
 Audio streaming and recording are distinct open capabilities; neither implies
 microphone capture. Full human takeover is deferred; it is not a dependency of low-latency agent use
-or viewing. Remote-browser work does not wait for a managed cloud-agent environment.
+or viewing. Mac work continues now; the September 25 decision defers cloud-specific
+streaming implementation until its Linux environment is defined.
 
 ## LC-22 — Agent-facing contract and discovery
 
@@ -737,15 +743,13 @@ rejected threading experiments and exact pixel checks. [Linux streaming](local-c
 has sustained component/viewer measurements and a measured colored-text quality
 tradeoff. No media rollout or upstream dependency adoption is implied.
 
-1. Finish exact-candidate source/installed media acceptance. Preserve the exact-source 56-second interruption and the successful 127-second
-   loaded recording. Heavy-load reliability remains open. Investigate a continuous
-   encoded/hardware producer and explicit CPU-only capacity; do not increase the
-   queue or silently lower quality to turn the measurement green. Before adopting Linux media,
-   isolate capture/encoding from upstream input, fix view-only acknowledgments,
-   verify reconnect/backpressure, decoder quality, idle cost and lifecycle, and
-   measure GPU/native Sunshine/Moonlight and remote-network behavior. The user
-   accepts roughly 56 fps, with 60 as the target. Keep exact values, screenshots,
-   recovery and freeze checks; report distinct motion rather than container fps.
+1. Ship and validate Mac hardware encoding under LC-21. Require the reviewed
+   VideoToolbox-enabled package, explicit hardware admission, exact dimensions,
+   text/cursor quality, bounded recovery and sustained resource measurements.
+   Retain the previous failed and successful loaded runs. Follow with installed
+   acceptance; do not raise queues or silently lower image quality. Define the
+   cloud-agent environment before resuming Linux streaming backend adoption,
+   Selkies/Moonlight comparisons and remote-network tests.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
    interruption/resume, compaction, fresh bindings and child-agent discovery.
    Preserve exact source/candidate/installed identities for every result.
@@ -768,8 +772,9 @@ claim has yet been established.
 
 Accepted 2026-09-23: borrow low-latency capture/transport techniques now for local
 and remote browser/computer use. Reuse the existing engine with platform/backend
-adapters; do not introduce a third control system or wait for a managed Linux cloud
-product. The main harness remains the action caller. Full human-control/takeover
+adapters; do not introduce a third control system. Updated September 25: implement
+Mac hardware encoding now, and define the Linux cloud-agent environment before
+selecting or implementing its streaming backend. The main harness remains the action caller. Full human-control/takeover
 features and their ownership-policy interview are deferred, not prerequisites.
 [Architecture and experiment scope](local-control-streaming.md#accepted-scope-one-engine-multiple-backends).
 

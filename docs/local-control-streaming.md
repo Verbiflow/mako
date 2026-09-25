@@ -7,6 +7,10 @@ live in [wayfinder LC-21](local-control-map.md#lc-21--responsive-capture-recordi
 This document adds experiments and completion checks, not a claim that a new
 streaming transport or human-takeover feature is implemented.
 
+The [September 25 lightweight-media review](local-control-media-prior-art.md) adds
+current Capy/Tembo evidence, source-reviewed Synara/T3 implementations and measured
+hardware/low-delay software encoder probes. These are not adopted backends.
+
 ## Reference and what it establishes
 
 Saai Arora's [September 18 X post](https://x.com/SaaiArora/status/2101017068724457569)
@@ -377,3 +381,12 @@ isolated Linux acceptance, LC-26 owns package/dependency impact, and LC-27 owns
 matched complete-job measurements. The [issue ledger](local-control-agent-issues.md)
 tracks new gaps as R11–R14 and A12. No implementation or deployment status changes
 merely because this plan or an external performance claim exists.
+
+## September 25 delivery decision
+
+Implement and validate Mac hardware encoding now, through the existing shared
+session engine. Cloud Linux can use a different capture/encoder/transport backend.
+Define the cloud-agent environment, including display, GPU availability, isolation,
+network and lifecycle, before further cloud streaming implementation or adoption.
+The Selkies/pixelflux and Moonlight findings remain evidence, not a selected dependency.
+See [current delivery order](local-control-map.md#delivery-order).
