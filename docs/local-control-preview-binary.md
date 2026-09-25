@@ -29,8 +29,10 @@ host/client pair receives an explicit compatibility error, not broken pixels or
 an automatic agent restart.
 
 Ordinary calls remain JSON. The former preview-only server compression path is
-removed; the ordinary response reader still accepts bounded legacy Brotli replies
-for host/client compatibility. Frames do not enter MCP results or model context.
+removed. September 25's cleanup also removes its unused client decoder: neither
+the current nor installed host produces compressed RPC, and clients do not
+negotiate it. Unexpected encodings are refused without replay; identity JSON
+remains bounded to 32 MiB. Frames do not enter MCP results or model context.
 
 The renderer owns one decode, one completed image awaiting paint, and one newest
 pending source frame. Inspector and overlay share one decode of the same frame

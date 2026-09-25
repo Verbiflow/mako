@@ -132,9 +132,11 @@ Evidence and reproduction scripts:
 Those initial probes made no production changes. The subsequent Mac implementation
 is tracked in [hardware recording](local-control-mac-hardware-recording.md).
 
-## Changes to investigate, in order
+## Implementation direction
 
-1. **Implement and validate Mac hardware encoding now (user decision, September 25).**
+1. **Mac hardware encoding first (user decision, September 25).** The
+   [candidate now passes scoped acceptance](local-control-mac-hardware-recording.md);
+   installation remains separate.
    Use a reviewed VideoToolbox-enabled package, require hardware admission and
    preserve the shared recording API. Include saved text/cursor quality, sustained
    resources, OS service cost and interruption cleanup. Native buffer capture can

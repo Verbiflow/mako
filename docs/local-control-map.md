@@ -82,9 +82,9 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone:** LC-21 continuous recording and bounded binary previews are local. Final ordinary Aside acceptance passes at **55.84 preview / 56.15 recorded fps**, with exact inputs and pixels. A loaded run completed 127 seconds, but the final-source loaded repeat interrupted after 56.44 seconds and retained a verified 53-second prefix. **Heavy-load reliability and lightweight resource usage remain open.** The successful loaded run cost about 2.07 cores / 1.03 GB summed host-plus-encoder RSS. Frame-rate success does not meet the efficiency requirement. [Recording evidence](local-control-recording-efficiency.md). Linux component/viewer measurements and upstream issues remain in the [streaming comparison](local-control-streaming.md#september-24-isolated-prototype-measurements). **These media changes are not installed.** Installed Mac/Aside + Codex MCP acceptance is a separate completed milestone.
+**Current milestone:** Mac hardware recording is implemented and packaged. Signed candidate `b5ec839840ea7ab0` uses recipe-3 VideoToolbox and quality 85, selected after quality 80 failed the broader sampled colored-text gate. Final ordinary and two-worker loaded Aside jobs pass at **58.72/58.79 preview fps** and **58.85/58.63 recorded fps**, with exact inputs and unchanged screenshot pixels. The loaded recording finishes 127 seconds at **460 MB peak summed RSS / 1.28 CPU cores** for host plus encoder; the visible OS encoder service adds about 22 MB / 0.018 cores. Exact-repeat coalescing also passes the minute-long static stress, crash recovery and unchanged native pass-through checks. [Hardware implementation and full evidence](local-control-mac-hardware-recording.md). Earlier software and quality-80 failures remain recorded; this is scoped acceptance, not proof under arbitrary load or a whole-machine resource budget.
 
-**Current work (September 25): Mac hardware recording implemented locally.** Recipe 3 enables VideoToolbox; browser recordings and native cursor overlays require hardware H.264. The ordinary two-viewer Aside run reduced host-plus-encoder peak RSS to **547 MB** and CPU to **1.55 cores**, with 56.17 recorded fps and unchanged inputs/pixels; preview was **54.97 fps**, narrowly below the 55 fps gate. The loaded run still interrupted at 54 seconds with a verified 51-second prefix. Exact-repeat queue coalescing subsequently fixed the static noisy-screen stress failure, preserving all source observations and visual transitions. Hardware encoding alone does not resolve loaded frame processing or establish whole-job efficiency. [Implementation, quality and acceptance](local-control-mac-hardware-recording.md). **Not installed.**
+**Next:** rebuild/sign with the LC-26 streaming cleanup, then validate installed media. The existing signed candidate passes bundled browser/native recording, package/import/signature/size/startup checks, but predates the cleanup and recipe 4. **Not installed:** readiness reported running Mako/shared-host processes. Preserve the current installed MCP acceptance; do not interrupt active work to replace it. Further Mac native-buffer/idle/shared-encoding optimization remains separate from this passing workload. The cleanup's latest full lint and typecheck pass (five existing React warnings); earlier provider lint failures remain historical evidence. [Hardware validation](local-control-mac-hardware-recording.md#acceptance), [cleanup validation](local-control-streaming-cleanup.md).
 
 **Cloud ordering:** define the Linux cloud-agent environment first (display/compositor, CPU/GPU availability, isolation, network and lifecycle), then choose and validate its capture/encoding/transport backend. Preserve the current Linux implementation and prototype evidence; defer further cloud streaming implementation and Moonlight/Selkies adoption until that prerequisite. Mac and cloud retain the same typed session, ownership and recording API.
 
@@ -196,7 +196,7 @@ These source changes still require desktop rollout.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: Mac hardware encoding is implemented locally; see [current evidence](local-control-mac-hardware-recording.md). Moving-content overload remains open. Installed runtime/MCP acceptance passes. Continuous recording and binary previews pass local correctness/package checks. Final one/two-viewer jobs complete at roughly 55–56 fps with exact inputs/pixels; heavier-load recording interruptions and rollout remain open. The user accepts roughly 56 fps; 60 remains the target.**
+**Status: final Mac hardware candidate passes ordinary and two-worker loaded source-host Aside jobs at roughly 58.6–58.9 fps, exact inputs/pixels and lower resources. See [current evidence](local-control-mac-hardware-recording.md). Installed media rollout/acceptance remains open; existing installed MCP acceptance is separate. The user accepts roughly 56 fps; 60 remains the target.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 
@@ -221,7 +221,7 @@ decoded-pixel differences at 1920×1080, and independent viewer/recording cleanu
 A separate-host comparison reduced socket response bodies from 17.62 to 11.98 MB/s
 with identical decoded pixels and ~59 distinct fps. A later CPU-instrumented pair
 was slower (49.75 vs 56.35 fps); tail latency and total resource cost remain open.
-That earlier implementation used negotiated Brotli compression and expanded preview JSON across Electron IPC. The current local binary implementation supersedes that media path; ordinary RPC retains bounded legacy decompression for compatibility. Default input and capture now share a per-tab emulation hold.
+That earlier implementation used negotiated Brotli compression and expanded preview JSON across Electron IPC. Binary preview delivery supersedes that media path. September 25's LC-26 cleanup also removes the unused ordinary-RPC Brotli decoder after checking both source and installed host producers; ordinary RPC uses bounded identity JSON. Default input and capture now share a per-tab emulation hold.
 The first live consumer enables painting; the last disables emulation. Text reads
 stay unchanged, and no tab/window activation is requested. Focus-off embedders keep
 no-frame refusal. Unit checks cover overlapping consumers/actions, screenshot
@@ -615,6 +615,18 @@ separate from the locally prepared workflow and completed EC2 acceptance.
 **Status: initial cleanup and target packages tested; further reduction open.**
 [Architecture, sizes and target matrix](local-control-packaging.md).
 
+**September 25 streaming cleanup — source/build validation passed; rollout pending.**
+Traced LC-21's current callers and removed unnegotiated Brotli response decoding, staged-browser post-stop
+encoding branches, an obsolete Electron media-resolver test and FFmpeg's unused
+concat demuxer (recipe 4). The container-recovery audit now uses the shared encoder
+policy. Native overlay/pass-through, Linux software encoding and PNG/viewer decoder
+fallbacks have live callers and remain. Preview/recording/recovery suites, build,
+typecheck and full lint pass (five existing React warnings). Recipe 4 is validated
+and promoted to the standard local media directory; 71.16 MB of obsolete temporary
+build copies were pruned with provenance preserved. This cleanup postdates signed
+candidate `b5ec839840ea7ab0`; a fresh signed build and installed checks remain.
+[Caller inventory, retained paths and evidence](local-control-streaming-cleanup.md).
+
 September 23: the signed ARM64 candidate is 662,787,567 installed bytes; 1,077
 frozen build files and 664 imports verified. Packaging now derives workspace
 FileSets from the canonical release manifest, fixing the omitted `control-runtime`
@@ -737,17 +749,18 @@ migration or count source-search keyword matches as control use.
 
 Next:
 
-Current LC-21 investigation: [recording efficiency](local-control-recording-efficiency.md)
-now includes browser/encoder CPU and memory, both a successful loaded recording and an exact-source interruption,
-rejected threading experiments and exact pixel checks. [Linux streaming](local-control-streaming.md#september-24-isolated-prototype-measurements)
-has sustained component/viewer measurements and a measured colored-text quality
-tradeoff. No media rollout or upstream dependency adoption is implied.
+Current LC-21 evidence: [Mac hardware recording](local-control-mac-hardware-recording.md)
+contains the final quality/resource/loaded acceptance and signed candidate. Earlier
+[recording efficiency](local-control-recording-efficiency.md) retains the software
+runs and failures. [Linux streaming](local-control-streaming.md#september-24-isolated-prototype-measurements)
+retains prototype results pending the cloud-environment definition. No installed
+media rollout or Linux dependency adoption is implied.
 
-1. Finish Mac hardware package validation and the loaded frame-processing fix under LC-21. Require the reviewed
+1. Complete installed Mac hardware media acceptance under LC-21; the reviewed
    VideoToolbox-enabled package, explicit hardware admission, exact dimensions,
-   text/cursor quality, bounded recovery and sustained resource measurements.
-   Retain the previous failed and successful loaded runs. Follow with installed
-   acceptance; do not raise queues or silently lower image quality. Define the
+   text/cursor quality, bounded recovery and sustained source-host measurements
+   pass. Retain failed and successful runs; do not raise queues or silently lower
+   image quality. Measure native-buffer/idle work as further optimization. Define the
    cloud-agent environment before resuming Linux streaming backend adoption,
    Selkies/Moonlight comparisons and remote-network tests.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
