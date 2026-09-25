@@ -1,4 +1,5 @@
 import { retireQuestionsForInput } from "./contracts/live-questions.js"
+import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "./contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
@@ -313,7 +314,7 @@ export class LiveTransfers {
             ? source.nativeAgents?.agents.filter((agent) => agent.bindingId === prior.id && agent.provider === prior.provider)
             : undefined,
           observedApprovals: prior?.nativeId && !nativeFork
-            ? source.control?.approvalResponses?.flatMap(receipt => receipt.origin.bindingId === prior.id && receipt.origin.native && !receipt.nativeDecision ? [receipt.origin.native] : [])
+            ? knownApprovalOccurrences(source.control, prior.id)
             : undefined,
           fork: nativeFork,
           conversationTools: await this.host.dependencies.tools?.(

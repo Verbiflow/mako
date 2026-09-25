@@ -4,6 +4,23 @@ import { isDeepStrictEqual } from "node:util"
 import { ApprovalSubmissionSchema, NativeApprovalDecisionSchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity, type ApprovalEndSource, type ApprovalOrigin, type ApprovalResponse, type ApprovalSubmission } from "./contracts/approval-response.js"
 import type { LivePermissionRequest, LivePermissionResponse } from "./contracts/providers-acp.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
+import type { ConversationControl } from "./contracts/conversation-control.js"
+
+/** Recovery reads unresolved evidence first, but observers also need answered
+ * identities to recognize callbacks replayed by a replacement connection. */
+export function knownApprovalOccurrences(control: ConversationControl | undefined, bindingId: string): NativeApprovalIdentity[] {
+  const observations = control?.approvalObservations?.filter(item => item.bindingId === bindingId) ?? []
+  const receipts = control?.approvalResponses?.filter(item => item.origin.bindingId === bindingId) ?? []
+  const known = new Map<string, NativeApprovalIdentity>()
+  const add = (identity: NativeApprovalIdentity | undefined) => {
+    if (identity) known.set(JSON.stringify([identity.scope, identity.sessionId, identity.requestId]), identity)
+  }
+  for (const receipt of receipts) if (!receipt.nativeDecision) add(receipt.origin.native)
+  for (const item of observations) if (!item.decision) add(item.identity)
+  for (const receipt of receipts) add(receipt.origin.native)
+  for (const item of observations) add(item.identity)
+  return [...known.values()]
+}
 
 interface SubmissionEvidence { state?: ApprovalSubmission }
 

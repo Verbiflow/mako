@@ -42,7 +42,8 @@ export interface ConversationTools {
 
 /** Host-only launch credentials. Never included in the renderer wire contract or journals. */
 export interface ProviderStartOptions extends LiveStartOptions {
-  /** Exact unresolved native occurrences from this binding; observe only, never answer again. */
+  /** Known native occurrences from this binding, including answered ones. Keep
+   * identities on callback replay; observe only, never send saved answers again. */
   observedApprovals?: import("../contracts/approval-response.js").NativeApprovalIdentity[]
   /** Prior child identities for this exact resumed binding; states require fresh evidence. */
   observedAgents?: NativeAgentObservation[]

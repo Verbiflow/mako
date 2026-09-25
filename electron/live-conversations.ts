@@ -1,6 +1,6 @@
 import { LiveQuestions } from "./live-questions.js"
 import { retireQuestionsForInput } from "./contracts/live-questions.js"
-import { LiveApprovals } from "./live-approvals.js"
+import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
@@ -1135,10 +1135,7 @@ export class LiveConversations {
         conversationId: binding.id,
         resume: binding.nativeId,
         observedAgents: resident.snapshot.nativeAgents?.agents.filter((agent) => agent.bindingId === binding.id && agent.provider === binding.provider),
-        observedApprovals: [...new Map([
-          ...(this.control(resident).approvalObservations?.flatMap(item => item.bindingId === binding.id && !item.decision ? [item.identity] : []) ?? []),
-          ...(this.control(resident).approvalResponses?.flatMap(receipt => receipt.origin.bindingId === binding.id && receipt.origin.native && !receipt.nativeDecision ? [receipt.origin.native] : []) ?? []),
-        ].map(identity => [JSON.stringify([identity.scope, identity.sessionId, identity.requestId]), identity])).values()],
+        observedApprovals: knownApprovalOccurrences(this.control(resident), binding.id),
         threadPath: binding.path,
         title: resident.snapshot.session.title,
         tuning,
