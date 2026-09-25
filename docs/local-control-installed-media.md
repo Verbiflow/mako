@@ -2,6 +2,9 @@
 
 September 25, 2026. [Wayfinder LC-21](local-control-map.md#lc-21--responsive-capture-recordings-and-cursor).
 
+Follow-up: [native cursor fix and source-host sustained recording results](local-control-media-fixes.md).
+The installed-build results below remain scoped to this checkpoint.
+
 Cleanup deployment is complete. Installed media acceptance is **not complete**:
 ordinary browser recording works, but sustained loaded recording interrupts and
 native right-click events are missing from the recording cursor track. No product
@@ -143,3 +146,13 @@ existing React warnings. New script syntax and diff whitespace checks pass.
 
 Cloud Linux streaming implementation remains deferred until its environment is
 defined; this Mac result does not choose Selkies, Moonlight or another cloud backend.
+
+
+September 25 follow-up: the first idle installer aborted on host replacement.
+The signed `1fb3bfb7b3d14e96` candidate and driver +23 now include guarded installer
+helper cleanup and connected implicit-session lifetime, with candidate MCP,
+recording and real idle/native-cursor checks passing. The original foreground
+counterexample remains unresolved. See the [follow-up report](local-control-media-fixes.md#installed-follow-up-september-25)
+and [current installer receipt](../release/media-followup-20260925/install-state.json)
+for rollout state; this historical report is not evidence that the new candidate
+is already installed.
