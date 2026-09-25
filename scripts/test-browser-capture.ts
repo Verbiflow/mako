@@ -74,6 +74,8 @@ assert.deepEqual(
   [480, 300, 1600, 1000]
 )
 assert.equal(recording.length, 1)
+assert.equal(preview[0]!.bytes, recording[0]!.bytes, "Preview and recording share the one decoded byte buffer")
+assert.deepEqual(preview[0]!.bytes, Buffer.from(jpeg, "base64"), "Capture preserves the exact encoded source")
 await capture.screenshot(async () => {
   emit()
   return "still"

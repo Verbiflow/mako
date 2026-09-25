@@ -5,7 +5,7 @@ import { spawn, fork } from "node:child_process"
 import { createServer } from "node:http"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { tmpdir, availableParallelism, loadavg } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
@@ -108,6 +108,7 @@ if (process.versions.electron) {
 }
 
 async function audit() {
+  const machine = { logicalCpus: availableParallelism(), loadAverageAtStart: loadavg() }
   const { app, BrowserWindow, ipcMain } = await import("electron")
   const { DeskBrowser } = await import("../dist-electron/desk-browser.js")
   const { deskPageForWindow } =
@@ -428,11 +429,9 @@ async function audit() {
         )
       : undefined
     if (initialPage) console.error("Fixture document:", initialPage)
-    if (extension)
-      await writeFile(
-        join(root, "extension-source.png"),
-        (await source.webContents.capturePage()).toPNG()
-      )
+    // Keep setup captures out of the sustained source measurement: Chromium's
+    // screenshot surface can differ from this fixture's emulated viewport.
+    // Exact screenshot interference has its own test; source.png is saved below.
     previews?.observe({
       conversationId: "preview-audit",
       kind: "browser",
@@ -487,6 +486,7 @@ async function audit() {
         ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
         : undefined
       memory.push({
+        loadAverage: loadavg(),
         atMs: performance.now() - started,
         electronWorkingSetBytes: app
           .getAppMetrics()
@@ -698,7 +698,6 @@ async function audit() {
         "recording finalization",
         60_000
       )
-      assert.equal(recording.status, "finished", recording.error)
     }
     if (!extension)
       await until(() => captureStops === 1, "last consumer stops capture")
@@ -746,6 +745,8 @@ async function audit() {
     }
     if (extension) await run({ action: "close", target })
     const report = {
+      machine: { ...machine, loadAverageAtEnd: loadavg() },
+      decoder: "shared JPEG ImageDecoder when supported; HTMLImage fallback",
       mediaTransport: process.env.MAKO_PREVIEW_IDENTITY === "1" ? "test-only JSON identity bridge to binary painter" : "bounded binary preview v1",
       boundary: `production ${extension ? "installed extension" : "desk"} capture → ControlPreviews → ${shared ? "separate Node host / private Unix socket → " : ""}Electron IPC/preload → production React overlay → offscreen compositor pixels`,
       clock:
@@ -773,6 +774,7 @@ async function audit() {
       captureStops: extension ? null : captureStops,
       recording: recording && {
         status: recording.status,
+        error: recording.error,
         durationMs: recording.durationMs,
         frames: recording.frames,
         droppedFrames: recording.droppedFrames,
@@ -790,10 +792,15 @@ async function audit() {
     await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2))
     console.log(JSON.stringify(report, null, 2))
     // Preserve input/restoration evidence even when sustained throughput misses its budget.
-    assert.ok(animation.fps >= (durationMs >= 30_000 ? 57 : 45), `Composited unique fps: ${animation.fps}`)
+    if (recording) assert.equal(recording.status, "finished", recording.error)
+    // September 24: user accepts roughly 56 fps. Keep 60 as the target;
+    // the sustained 55 fps floor cannot hide corrupt pixels or long stalls.
+    assert.ok(animation.fps >= (durationMs >= 30_000 ? 55 : 45), `Composited unique fps: ${animation.fps}`)
+    if (durationMs >= 30_000) assert.ok(animation.gapsMs.max < 500, "Preview must not freeze for half a second")
     if (report.recordedMarkers) {
       assert.equal(report.recordedMarkers.invalidFrames, 0, "Recorded marker integrity")
-      assert.ok(report.recordedMarkers.distinctFps >= (durationMs >= 30_000 ? 57 : 45),
+      assert.ok(report.recordedMarkers.longestHoldMs < 500, "Recorded motion must not freeze for half a second")
+      assert.ok(report.recordedMarkers.distinctFps >= (durationMs >= 30_000 ? 55 : 45),
         `Recorded unique fps: ${report.recordedMarkers.distinctFps}`)
     }
   } finally {

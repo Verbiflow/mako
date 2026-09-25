@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { acpLiveDriver } from "../electron/providers/acp-live-driver.js"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -22,6 +23,13 @@ for (const type of ["string", "array"] as const) {
   assert.deepEqual(question.options.map(option => option.label), ["first", "second", "Third choice"])
   assert.deepEqual(elicitationContent([question], {choice: ["second"]}), {choice: type === "string" ? "second" : ["second"]})
 }
+
+// An ACP provider contributes encoding through the same capability as a direct SDK driver.
+const nativeEncoding = () => "a".repeat(64)
+assert.equal(acpLiveDriver({
+  provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
+  approvalAnswerDigest: nativeEncoding, canResume: false, available: () => true, launch: async () => null,
+}).approvalAnswerDigest, nativeEncoding)
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-registry-"))
 const sent: Array<{ id: string; text: string }> = []
@@ -194,6 +202,6 @@ try {
     "Live bridge delivery, concurrent isolation, host queueing, permissions, lifecycle, and lost-start-reply recovery passed"
   )
 } finally {
-  owner.stop()
+  await owner.stop()
   rmSync(root, { recursive: true, force: true })
 }

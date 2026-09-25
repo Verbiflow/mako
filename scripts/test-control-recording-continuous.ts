@@ -43,7 +43,6 @@ if (seconds === 600) randomBytes(width * 150 * 3).copy(pixels)
 const frame = await sharp(pixels, { raw: { width, height, channels: 3 } })
   .jpeg({ quality: 90 })
   .toBuffer()
-const base64 = frame.toString("base64")
 const recording = await ControlRecording.create(
   target,
   { directory: root, fps: 60, cursor: false, maxDurationMs: 600_000 },
@@ -63,7 +62,7 @@ while (
     "recording",
     recording.receipt().error
   )
-  await recording.frame(base64, width, height)
+  await recording.frame(frame, width, height)
   offered++
   if (offered % 60 === 0) {
     sourceFiles += (await readdir(recording.directory)).filter((name) =>
@@ -155,7 +154,7 @@ try {
     { directory: root, fps: 60, cursor: false },
     async () => {}
   )
-  await crashed.frame(base64, width, height)
+  await crashed.frame(frame, width, height)
   await delay(3500)
   const beforeKill = JSON.parse(
     (

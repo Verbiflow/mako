@@ -21,6 +21,7 @@ try {
     let report = true
     let rejectAnswer = false
     const driver: ProviderLiveDriver = {
+      approvalAnswerDigest: () => "a".repeat(64),
       approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Injected native evidence fixture" },
       provider, canResume: true, available: () => true,
       async start(cwd, options) {
@@ -30,6 +31,7 @@ try {
       async prompt() {}, async cancel() {}, close() {}, async setMode() {},
       async permission(_id, _request, _answer, dispatch) {
         dispatch.assertCurrent(); calls++
+        assert.equal(owner.snapshot(id)?.control?.approvalResponses?.at(-1)?.nativeAnswerDigest, "a".repeat(64), "native encoding is durable before dispatch")
         await settle.promise
         if (rejectAnswer) dispatch.report({ kind: "not-submitted", pending: true, reason: "invalid-answer" })
         else if (report) dispatch.report({ kind: "submitted", source: "callback" })
@@ -47,7 +49,7 @@ try {
         return owner.snapshot(id)!.permissions.at(-1)?.id
       }
       const decision = (identity: NativeApprovalIdentity, optionId = "once") => emit({ type: "live-approval-decision", id,
-        decision: { identity, answerDigest: approvalAnswerDigest({ kind: "choice", optionId }), observedAt: 1234 } })
+        decision: { identity, answerDigest: optionId === "once" ? "a".repeat(64) : approvalAnswerDigest({ kind: "choice", optionId }), observedAt: 1234 } })
       const native = { scope: randomUUID(), sessionId: "native-session", requestId: "native-permission" }
       const first = ask(native)
       assert.ok(first)
@@ -78,7 +80,7 @@ try {
       settle.resolve(); await answering
       const firstReceipt = owner.snapshot(id)!.control!.approvalResponses!.find(r => r.id === first)!
       assert.equal(firstReceipt.state.kind, "submitted")
-      assert.equal(firstReceipt.nativeDecision?.answerDigest, firstReceipt.digest, "submission must preserve concurrent native confirmation")
+      assert.equal(firstReceipt.nativeDecision?.answerDigest, firstReceipt.nativeAnswerDigest, "submission must preserve concurrent native confirmation")
       assert.equal(describeApprovalResponse(firstReceipt).title, "Agent recorded your answer")
       assert.equal(ApprovalResponseSchema.safeParse({ ...firstReceipt, nativeDecision: { ...firstReceipt.nativeDecision, identity: nextNative } }).success, false,
         "journal parsing cannot attach another occurrence's native decision")
@@ -100,7 +102,7 @@ try {
       const journal = new LiveJournal(journalRoot, id)
       try { assert.deepEqual(journal.read()?.control?.approvalResponses, JSON.parse(JSON.stringify(owner.snapshot(id)?.control?.approvalResponses))) }
       finally { journal.close() }
-      owner.stop(); owner = new LiveConversations(dependencies)
+      await owner.stop(); owner = new LiveConversations(dependencies)
       await owner.permission(id, newer, { kind: "choice", optionId: "once" })
       assert.equal(calls, 2, "lost replies, native decisions and journal reopen never replay an answer")
       const transferId = randomUUID()
@@ -147,7 +149,7 @@ try {
       try { assert.equal(resolvedJournal.read()?.control?.approvalObservations?.filter(item => item.identity.scope === external.scope && item.identity.requestId === external.requestId && item.decision).length, 1) }
       finally { resolvedJournal.close() }
       assert.equal(calls, 4, "external resolution sends no answer")
-      owner.stop(); owner = new LiveConversations(dependencies)
+      await owner.stop(); owner = new LiveConversations(dependencies)
       const reopenId = randomUUID()
       owner.transfer(id, { id: reopenId, provider, text: "Reopen", attachments: [] })
       for (let i = 0; i < 200 && owner.snapshot(id)?.control?.transfers.at(-1)?.state.kind !== "accepted"; i++) await delay(5)

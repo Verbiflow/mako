@@ -29,7 +29,7 @@ const target = { kind: "page", browser: "fixture", tab: "tab", generation: "one"
 const recording = await ControlRecording.create(target, { directory: output }, async () => { stops++ })
 for (const [index, color] of ["#305070", "#507030"].entries()) {
   const frame = await sharp({ create: { width: 640, height: 480, channels: 3, background: color } }).jpeg().toBuffer()
-  await recording.frame(frame.toString("base64"), 640, 480)
+  await recording.frame(frame, 640, 480)
   recording.pointer({ x: 100 + index * 160, y: 120, pressed: index === 0 })
   await delay(150)
 }

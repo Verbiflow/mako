@@ -45,7 +45,7 @@ async function main() {
     const value = previews.read("conversation", true)
     if (value?.frame && value.frame.id !== lastId) {
       lastId = value.frame.id; frames++; deliveryTimes.push(performance.now())
-      largestBytes = Math.max(largestBytes, JSON.stringify(value).length)
+      largestBytes = Math.max(largestBytes, value.frame.image.bytes.byteLength)
     }
   })
   try {

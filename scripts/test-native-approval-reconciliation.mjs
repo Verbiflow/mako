@@ -74,7 +74,9 @@ async function run() {
     driver.defaultMode
   const events = []
   let answerDispatches = 0
-  let dropDecisions = Boolean(process.env.MAKO_NATIVE_APPROVAL_RECONNECT)
+  const questionDecisions = Boolean(process.env.MAKO_NATIVE_QUESTION_DECISIONS)
+  const matchesAnswer = receipt => receipt.nativeDecision?.answerDigest === (receipt.nativeAnswerDigest ?? receipt.digest)
+  let dropDecisions = Boolean(process.env.MAKO_NATIVE_APPROVAL_RECONNECT) || questionDecisions
   const observer = (event) => {
     if (process.env.MAKO_NATIVE_QUESTION_HISTORY && event.type === "live-session") events.push(event)
     if (process.env.MAKO_NATIVE_QUESTION_HISTORY && (event.type === "live-question" || event.type === "live-question-answered")) return
@@ -250,7 +252,7 @@ async function run() {
       if (prior) {
         const sent = answerDispatches
         const repeated = owner.permission(id, prior.approvalId, {kind:'answers',answers:{[prior.questionId]:[prior.phrase]}})
-        if (prior.receipt.state.kind === 'uncertain')
+        if (prior.receipt.state.kind === 'uncertain' && !owner.snapshot(id).control.approvalResponses.find(r => r.id === prior.approvalId)?.nativeDecision)
           await repeated.then(() => { throw Error('Unconfirmed repeated answer unexpectedly succeeded') }, error => {
             if (!error.message.includes('already saved')) throw error
           })
@@ -281,6 +283,7 @@ async function run() {
       if (answerDispatches !== sentBefore+1 || answered.permissions.some(p=>p.id===permission.id)) throw Error('Question answer dispatched more than once or stayed pending')
       const receipt = answered.control?.approvalResponses?.find(r=>r.id===permission.id)
       if (!receipt) throw Error('Structured answer receipt was not retained')
+      if (questionDecisions && (!receipt.origin.native || (dropDecisions ? receipt.nativeDecision : !matchesAnswer(receipt)))) throw Error('Native question decision evidence does not match this test phase')
       const evidence = {requestId:request,approvalId:permission.id,questionId:question.id,phrase,kind:selected?"choice":"free-text",continuationContainsAnswer:true,dispatches:1,receipt,staleAnswerDispatched:prior?false:undefined}
       await render(answered)
       await capture(label+'-completed')
@@ -449,12 +452,13 @@ async function run() {
       }
     }
     if (dropDecisions || process.env.MAKO_NATIVE_APPROVAL_REOPEN) {
-      const requireNativeDecisions = dropDecisions
+      const requireNativeDecisions = dropDecisions && !questionDecisions
+      const relevant = receipts => questionDecisions ? receipts.filter(r => r.id === result.question.approvalId) : receipts
       await catalog.scan()
       owner.discoverNativePaths()
       const before = owner.snapshot(id)
       const sentAnswers = answerDispatches
-      if (requireNativeDecisions && !before.control.approvalResponses.every(r => r.origin.native && !r.nativeDecision)) throw Error('Lost-event test did not retain unresolved native identities')
+      if ((requireNativeDecisions || questionDecisions) && !relevant(before.control.approvalResponses).every(r => r.origin.native && !r.nativeDecision)) throw Error('Lost-event test did not retain unresolved native identities')
       // Some native Stop implementations already close their transport. Reopen
       // that retained session directly; only connected sessions need hibernation.
       if (before.session.connection === 'connected') {
@@ -468,7 +472,7 @@ async function run() {
       owner = new LiveConversations(dependencies)
       const followup = randomUUID()
       owner.submit(id, followup, 'Do not run any tools. Reply with only: reconnected')
-      const resumed = await wait(s => s?.requests.some(r => r.id === followup && r.status === 'completed') && (!requireNativeDecisions || s.control?.approvalResponses?.every(r => r.nativeDecision?.answerDigest === r.digest)))
+      const resumed = await wait(s => s?.requests.some(r => r.id === followup && r.status === 'completed') && (!(requireNativeDecisions || questionDecisions) || relevant(s.control?.approvalResponses ?? []).every(matchesAnswer)))
       if (resumed.session.nativeId !== result.nativeId) throw Error('Reconnect changed native session')
       const followupStart = resumed.blocks.findIndex(block => block.type === 'user' && block.requestId === followup)
       if (followupStart < 0 || !resumed.blocks.slice(followupStart + 1).filter(block => block.type === 'text').map(block => block.text).join('').includes('reconnected')) throw Error('Reconnect did not produce the requested visible answer')
@@ -482,13 +486,13 @@ async function run() {
       for (const prior of priorReceipts) {
         const retained = resumed.control?.approvalResponses?.find(receipt => receipt.id === prior.id)
         if (!retained || retained.digest !== prior.digest) throw Error('Reconnect lost an approval receipt')
-        if (!requireNativeDecisions && !prior.nativeDecision && retained.nativeDecision) throw Error('Reconnect fabricated native decision evidence')
+        if (!requireNativeDecisions && !(questionDecisions && prior.id === result.question.approvalId) && !prior.nativeDecision && retained.nativeDecision) throw Error('Reconnect fabricated native decision evidence')
       }
-      result.reconnect = { priorConnection: before.session.connection, sameSession: true, receipts: resumed.control?.approvalResponses, answersReplayed: false, answerDispatches, executionCountsUnchanged: true, exactNativeDecisions: requireNativeDecisions }
+      result.reconnect = { priorConnection: before.session.connection, sameSession: true, receipts: resumed.control?.approvalResponses, answersReplayed: false, answerDispatches, executionCountsUnchanged: true, exactNativeDecisions: requireNativeDecisions, exactNativeQuestionDecisions: questionDecisions }
       await render(resumed)
       await capture('reconnected-native-evidence')
       if (result.question) result.questionAfterReconnect = await checkQuestion('question-after-reconnect', result.question)
-      if (page && requireNativeDecisions) {
+      if (page && (requireNativeDecisions || questionDecisions)) {
         const point = await page.executeJavaScript("(()=>{const r=document.querySelector('button[aria-label=\"Conversation actions\"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
         for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
         if (!await page.executeJavaScript("document.body.textContent.includes('Agent recorded your answer')")) throw Error('Recovered native decision did not reach approval history UI')

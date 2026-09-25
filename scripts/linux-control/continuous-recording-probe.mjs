@@ -15,7 +15,7 @@ let stops = 0
 const recording = await ControlRecording.create(target, { directory, fps: 30 }, async () => { stops++ })
 const frame = await sharp({ create: { width: 640, height: 480, channels: 3, background: "#304060" } })
   .jpeg().toBuffer()
-await recording.frame(frame.toString("base64"), 640, 480)
+await recording.frame(frame, 640, 480)
 recording.pointer({ x: 320, y: 240, pressed: true })
 await delay(1200)
 await recording.stop()

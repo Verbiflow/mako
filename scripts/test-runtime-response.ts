@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createServer, request } from "node:http"
 import { randomUUID } from "node:crypto"
-import { brotliCompressSync, brotliDecompressSync } from "node:zlib"
+import { brotliCompressSync } from "node:zlib"
 import { z } from "zod"
 import { startWebHost } from "../electron/web-host.js"
 import {
@@ -13,7 +13,6 @@ import {
   RuntimeDisconnectedError,
 } from "../electron/runtime-connection.js"
 import type { RuntimeTransfer } from "../electron/runtime-response.js"
-import { encodeRuntimeResponse } from "../electron/runtime-response.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-compressed-response-"))
 const socket = join(root, "host.sock")
@@ -32,7 +31,7 @@ const host = await startWebHost(
 )
 async function raw(
   accept: string | undefined,
-  channel = "mako:control-preview"
+  channel = "mako:boot"
 ) {
   return new Promise<{ encoding?: string; bytes: Buffer }>(
     (resolve, reject) => {
@@ -61,54 +60,23 @@ async function raw(
   )
 }
 try {
-  const concurrent = await Promise.all(
-    Array.from({ length: 12 }, () => encodeRuntimeResponse(encoded, true))
-  )
-  assert.equal(
-    concurrent.filter((value) => value.encoding === "br").length,
-    2,
-    "Compression has two slots and no waiting queue"
-  )
-  for (const value of concurrent)
-    assert.equal(
-      value.encoding === "br"
-        ? brotliDecompressSync(value.body).toString()
-        : value.body,
-      encoded
-    )
-  const compressed = await raw("br")
-  assert.equal(compressed.encoding, "br")
-  assert.equal(
-    brotliDecompressSync(compressed.bytes).toString(),
-    encoded,
-    "All JSON/image bytes survive exactly"
-  )
-  assert.ok(compressed.bytes.length < Buffer.byteLength(encoded) / 2)
-  for (const accept of [undefined, "identity", "br;q=0"]) {
-    const legacy = await raw(accept)
-    assert.equal(legacy.encoding, "identity")
-    assert.equal(
-      legacy.bytes.toString(),
-      encoded,
-      "Unnegotiated clients retain the original response"
-    )
+  const compressed = { bytes: brotliCompressSync(Buffer.from(encoded)) }
+  for (const accept of [undefined, "identity", "br", "br;q=0"]) {
+    const value = await raw(accept)
+    assert.equal(value.encoding, undefined)
+    assert.equal(value.bytes.toString(), encoded, "Ordinary RPC replies retain exact JSON values")
   }
-  assert.equal(
-    (await raw("br", "mako:echo")).encoding,
-    "identity",
-    "Other RPCs are unchanged"
-  )
   const transfers: RuntimeTransfer[] = []
   assert.deepEqual(
-    await invokeRuntime(socket, randomUUID(), "mako:control-preview", [], 1, {
+    await invokeRuntime(socket, randomUUID(), "mako:boot", [], 1, {
       onTransfer: (value) => transfers.push(value),
     }),
     payload
   )
   assert.equal(transfers[0]!.decodedBytes, Buffer.byteLength(encoded))
-  assert.equal(transfers[0]!.wireBytes, compressed.bytes.length)
+  assert.equal(transfers[0]!.wireBytes, Buffer.byteLength(encoded))
   assert.deepEqual(
-    await invokeRuntime(socket, randomUUID(), "mako:control-preview", [], 1, {
+    await invokeRuntime(socket, randomUUID(), "mako:boot", [], 1, {
       onTransfer: () => {
         throw new Error("observer failed")
       },
@@ -129,13 +97,14 @@ try {
     response.end(
       mode === "bomb"
         ? bomb
-        : mode === "truncated"
+        : mode === "valid" ? compressed.bytes : mode === "truncated"
           ? compressed.bytes.subarray(0, -1)
           : Buffer.from("bad pixels")
     )
   })
   await new Promise<void>((resolve) => bad.listen(corruptSocket, resolve))
   try {
+    assert.deepEqual(await runtimeRequest({ socket: corruptSocket, path: "/rpc", client: "valid", schema: z.json() }), JSON.parse(encoded), "Legacy compressed host reply remains readable")
     for (const mode of ["malformed", "truncated", "bomb", "unsupported"]) {
       await assert.rejects(
         runtimeRequest({
@@ -148,13 +117,13 @@ try {
           error instanceof RuntimeDisconnectedError && error.unconfirmed
       )
     }
-    assert.equal(replies, 4, "Invalid accepted responses are never retried")
+    assert.equal(replies, 5, "Invalid accepted responses are never retried")
   } finally {
     bad.close()
     bad.closeAllConnections()
   }
   console.log(
-    "Runtime preview transport: negotiated lossless compression, legacy identity, byte diagnostics, expansion limits, malformed/truncated refusal and no replay passed"
+    "Runtime replies: exact ordinary JSON, bounded legacy decompression, byte diagnostics, malformed/truncated refusal and no replay passed"
   )
 } finally {
   host.close()

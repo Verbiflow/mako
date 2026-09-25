@@ -31,7 +31,7 @@ const frame = async (color: string, width = 640, height = 480) =>
     })
       .jpeg()
       .toBuffer()
-  ).toString("base64")
+  )
 await recording.frame(await frame("#3a2828", 480, 300), 1600, 1000)
 await delay(80)
 recording.pointer({ x: 100, y: 100, pressed: true })

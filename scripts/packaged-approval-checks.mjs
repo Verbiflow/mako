@@ -77,6 +77,18 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     assert.ok(answer(finished,requestId).includes(phrase), 'Native continuation must return the phrase supplied only through this question')
     const receipts = finished.control?.approvalResponses?.filter(item=>item.id===permission.id) ?? []
     assert.equal(receipts.length,1,'Exactly one answer receipt must survive')
+    if (process.env.MAKO_PACKAGE_QUESTION_DECISIONS) {
+      assert.ok(receipts[0].origin.native, 'The question must retain its native occurrence')
+      assert.equal(receipts[0].nativeDecision?.answerDigest, receipts[0].nativeAnswerDigest ?? receipts[0].digest, 'The native runtime must confirm this exact encoded answer')
+      const point = await evaluate(`(()=>{const r=document.querySelector('button[aria-label="Conversation actions"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+      for (const type of ['mousePressed','mouseReleased']) await command('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
+      await waitFor(() => evaluate("document.body.textContent.includes('Agent recorded your answer')"), Boolean, 'native answer confirmation visible')
+      // Let the existing popover entrance finish before capturing its actual UI.
+      await new Promise(resolve => setTimeout(resolve, 300))
+      await capture(label+'-native-confirmation')
+      await command('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+      await command('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+    }
     const evidence = {phase:label,requestId,approvalId:permission.id,questionId:question.id,phrase,receipt:receipts[0],continuationContainsAnswer:true,priorAnswerDidNotClearQuestion:prior?true:undefined}
     report.phases.push(evidence)
     await capture(label+'-completed')

@@ -8,6 +8,7 @@ import { createRequire } from 'node:module'
 import { build } from 'esbuild'
 import { preview } from 'vite'
 import { webHostProxy } from '../electron/web-dev-proxy.mjs'
+import { PREVIEW_MEDIA_TYPE, encodePreviewMedia } from '@mako/control-runtime/contracts'
 import { invokeRuntime } from '../dist-electron/runtime-connection.js'
 
 const root = await mkdtemp(join(tmpdir(), 'mako-browser-delivery-'))
@@ -29,6 +30,13 @@ const host = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(chunk)
   const { channel, args } = JSON.parse(Buffer.concat(chunks).toString())
   const values = args.map(arg => arg.kind === 'absent' ? undefined : arg.value)
+  if (channel === 'mako:control-preview') {
+    assert.equal(request.headers.accept, PREVIEW_MEDIA_TYPE)
+    const packet = encodePreviewMedia({ activity: { conversationId: values[0], kind: 'browser', operation: 'observe', target: 'fixture', status: 'running', updatedAt: 3 },
+      frame: { id: 'one', capturedAt: 1, publishedAt: 2, image: { mimeType: 'image/jpeg', bytes: new Uint8Array([0, 127, 255]) } } })
+    response.writeHead(200, { 'content-type': PREVIEW_MEDIA_TYPE })
+    response.write(packet.header); response.end(packet.bytes); return
+  }
   if (channel === 'mako:live-snapshot' && values[0] === 'invalid-read') {
     invalidReads++
     response.writeHead(200, { 'content-type': 'application/json' }).end('{invalid')
@@ -77,6 +85,11 @@ app.whenReady().then(async()=>{
  try {
   for(let i=0;i<2;i++) { const win=new BrowserWindow({show:false,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});windows.push(win);await win.loadURL(${JSON.stringify(origin)});await wait(()=>win.webContents.executeJavaScript('Boolean(window.ready)')); }
   const [a,b]=windows.map(w=>w.webContents);
+  for (const page of [a,b]) {
+    const media = await page.executeJavaScript('window.mako.controlPreview("fixture",true,"viewer").then(p=>({bytes:Array.from(p.frame.image.bytes),capturedAt:p.frame.capturedAt,publishedAt:p.frame.publishedAt}))');
+    assert.deepEqual(media,{bytes:[0,127,255],capturedAt:1,publishedAt:2});
+  }
+  console.log('PASS: two real web clients receive exact binary preview bytes and source/publication clocks through the same-origin gateway');
   const readFailure=await a.executeJavaScript('window.mako.liveSnapshot("invalid-read").then(()=>null,e=>({name:e.name,message:e.message}))');
   assert.match(readFailure.message,/could not read the host response/);
   assert.ok(!/restarting|not confirmed/.test(readFailure.message));

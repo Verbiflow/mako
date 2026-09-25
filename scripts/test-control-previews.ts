@@ -55,10 +55,11 @@ try {
     await delay(5)
   const session = fixture.sessionFor(target.tab)!
   const sourceAt = Date.now() - 1500
-  const emit = () =>
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOioAAAAASUVORK5CYII="
+  const emit = (data = png) =>
     fixture.emit(session, "Page.screencastFrame", {
       sessionId: 1,
-      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOioAAAAASUVORK5CYII=",
+      data,
       metadata: {
         deviceWidth: 1600,
         deviceHeight: 1000,
@@ -106,6 +107,14 @@ try {
     0,
     "Closing one consumer preserves the other"
   )
+  emit(Buffer.concat([Buffer.from(png, "base64"), Buffer.alloc(2 * 1024 * 1024)]).toString("base64"))
+  await delay(50)
+  assert.throws(() => previews.read("task", true, "overlay"), /size limit/,
+    "Oversized frames report unavailable instead of silently resizing or pretending to stay live")
+  assert.doesNotThrow(() => previews.read("task", false, "panel"), "A refused read cannot prevent watcher release")
+  emit()
+  await delay(50)
+  assert.ok(previews.read("task", true, "overlay")?.frame, "Valid source frames resume delivery")
   previews.read("task", false, "overlay")
   previews.observe({
     ...activity,

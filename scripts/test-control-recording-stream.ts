@@ -67,7 +67,7 @@ try {
   })
     .jpeg()
     .toBuffer()
-  await staticRecording.frame(solid.toString("base64"), 160, 120, {
+  await staticRecording.frame(solid, 160, 120, {
     capturedAt: Date.now() - 240,
   })
   await delay(1374)
@@ -108,7 +108,7 @@ try {
     async () => {}
   )
   for (let i = 0; i < frameCount; i++) {
-    await dense.frame(jpeg.toString("base64"), width, height)
+    await dense.frame(jpeg, width, height)
     await delay(18)
   }
   await dense.stop()
@@ -158,11 +158,11 @@ process.stdin.on('end', () => process.exit(0))
       { directory, fps: 60, cursor: false },
       async () => {}
     )
-    await broken.frame(solid.toString("base64"), 160, 120)
+    await broken.frame(solid, 160, 120)
     await delay(120)
-    await broken.frame(solid.toString("base64"), 160, 120)
+    await broken.frame(solid, 160, 120)
     await delay(120)
-    await broken.frame(Buffer.from("invalid image").toString("base64"), 160, 120)
+    await broken.frame(Buffer.from("invalid image"), 160, 120)
     await broken.stop()
     const failure = await broken.settled()
     assert.equal(failure.status, "failed")

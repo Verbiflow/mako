@@ -189,8 +189,8 @@ for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
 const accessDrivers = [cursorDriver, acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), acpLiveDriver(openCodeAcpSource), codexLiveDriver, claudeLiveDriver]
 for (const driver of accessDrivers) validateLiveDriver(driver)
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.approvalEvidence.kind])), {
-  cursor: "no-interactive-requests", devin: "submission-only", grok: "submission-only",
-  opencode: "native-decisions", codex: "request-lifecycle", claude: "request-lifecycle",
+  cursor: "no-interactive-requests", devin: "native-decisions", grok: "submission-only",
+  opencode: "native-decisions", codex: "request-lifecycle", claude: "native-decisions",
 }, "the actual six adapters declare their evidence, independently of shared host fixtures")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, approvalEvidence: undefined }), /Invalid/,
   "registration rejects a new adapter without an approval evidence declaration")

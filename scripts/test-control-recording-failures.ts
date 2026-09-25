@@ -26,7 +26,7 @@ const image = (
   })
     .jpeg()
     .toBuffer()
-).toString("base64")
+)
 
 async function owner(directory: string) {
   const recording = await ControlRecording.create(
@@ -181,7 +181,7 @@ exec ${quote(ffmpeg)} "$@"
     process.kill(pausedPid, "SIGSTOP")
     for (const bytes of images) {
       await delay(120)
-      await shortStall.frame(bytes.toString("base64"), 640, 480)
+      await shortStall.frame(bytes, 640, 480)
     }
     await delay(120)
     process.kill(pausedPid, "SIGCONT")
@@ -255,7 +255,7 @@ exec ${quote(ffmpeg)} "$@"
       })
         .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
         .toBuffer()
-    ).toString("base64")
+    )
     await backlog.frame(image, 640, 480)
     await delay(1500)
     pausedPid = Number(await readFile(pidFile, "utf8"))
