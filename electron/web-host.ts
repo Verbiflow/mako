@@ -1,4 +1,3 @@
-import { encodeRuntimeResponse } from "./runtime-response.js"
 import { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 import {
   createServer,
@@ -161,20 +160,7 @@ export async function startWebHost(
         )
         // close() may already have answered this call with the farewell.
         if (response.destroyed || response.headersSent) return
-        const reply = await encodeRuntimeResponse(
-          encoded,
-          channel === "mako:control-preview" &&
-            request.headers["accept-encoding"] === "br"
-        )
-        // Compression is asynchronous; shutdown still owns an in-flight reply.
-        if (response.destroyed || response.headersSent) return
-        response
-          .writeHead(200, {
-            "content-type": "application/json",
-            "content-encoding": reply.encoding,
-            vary: "Accept-Encoding",
-          })
-          .end(reply.body)
+        response.writeHead(200, { "content-type": "application/json" }).end(encoded)
       })
       .catch((error) => {
         const reply: z.input<typeof RuntimeReplySchema> = {

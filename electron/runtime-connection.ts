@@ -64,8 +64,6 @@ export async function runtimeRequest<Schema extends z.ZodType>({
     const headers = new Map([["content-type", "application/json"]])
     if (client) headers.set("x-mako-window", client)
     if (history) headers.set("x-mako-history", "1")
-    if (body?.channel === "mako:control-preview")
-      headers.set("accept-encoding", "br")
     let receivedReply = false
     const req = request(
       {

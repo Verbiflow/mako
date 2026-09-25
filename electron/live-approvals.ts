@@ -162,6 +162,8 @@ export class LiveApprovals {
     const receipt: ApprovalResponse = {
       id: request.id, origin: request.origin, digest, createdAt: Date.now(), state: { kind: "dispatching" },
     }
+    const nativeAnswerDigest = driver.approvalAnswerDigest?.(request, response)
+    if (nativeAnswerDigest !== undefined) receipt.nativeAnswerDigest = nativeAnswerDigest
     this.save(resident, receipt)
     const evidence: SubmissionEvidence = {}
     try {

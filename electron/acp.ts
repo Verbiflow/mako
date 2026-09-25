@@ -1,5 +1,5 @@
 import { applyControlEnvironment } from "./control-launch.js"
-import type { ApprovalSubmission } from "./contracts/approval-response.js"
+import type { ApprovalSubmission, NativeApprovalIdentity } from "./contracts/approval-response.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { z } from "zod"
@@ -131,7 +131,8 @@ export function bindAcp(send: (event: LiveDriverEvent) => void): void {
 
 async function requestElicitation(
   live: Live,
-  params: CreateElicitationRequest
+  params: CreateElicitationRequest,
+  native?: NativeApprovalIdentity
 ): Promise<CreateElicitationResponse> {
   if (!ElicitationRequest.isForm(params)) return { action: "cancel" }
   const required = new Set(params.requestedSchema.required ?? [])
@@ -145,7 +146,7 @@ async function requestElicitation(
     Object.keys(params.requestedSchema.properties ?? {}).length
   )
     return { action: "cancel" }
-  const response = await askUser(live, params.message, questions)
+  const response = await askUser(live, params.message, questions, native)
   if (response.kind !== "answers") return { action: "decline" }
   const content = elicitationContent(questions, response.answers)
   return content ? { action: "accept", content } : { action: "decline" }
@@ -158,11 +159,13 @@ async function requestElicitation(
 async function askUser(
   live: Live,
   title: string,
-  questions: LiveInputQuestion[]
+  questions: LiveInputQuestion[],
+  native?: NativeApprovalIdentity
 ): Promise<LivePermissionResponse> {
   const requestId = `${live.id}-input-${live.pendingPermissions.size}-${Date.now()}`
   const request: LivePermissionRequest = {
     id: requestId,
+    native,
     sessionId: live.id,
     title,
     options: [],
@@ -361,11 +364,12 @@ async function startAcp(
       return { outcome: { outcome: "selected" as const, optionId: chosen } }
     },
     async unstable_createElicitation(params: CreateElicitationRequest) {
-      return requestElicitation(live, params)
+      return requestElicitation(live, params, approvals?.identifyElicitation?.(params))
     },
     async sessionUpdate(params: SessionNotification) {
       if (live.sessionId && params.sessionId !== live.sessionId) return
       if (live.agents?.observe(params) === "child") return
+      approvals?.observe?.(params)
       live.compaction?.observe(params.update)
       if (params.update.sessionUpdate === "config_option_update") {
         live.configOptions = params.update.configOptions

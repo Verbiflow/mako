@@ -25,6 +25,7 @@ interface PreviewEntry {
   latest?: BrowserFrame
   authorize?: () => void
   publish?: NodeJS.Timeout
+  oversized?: boolean
 }
 
 /** One bounded image per task. Image bytes only cross IPC when its visible preview requests them. */
@@ -67,6 +68,7 @@ export class ControlPreviews {
       entry.authorize = undefined
       entry.preview.frame = null
       entry.preview.window = undefined
+      entry.oversized = false
     }
     entry.preview.activity = next
     if (image) this.frame(entry, image)
@@ -93,6 +95,7 @@ export class ControlPreviews {
     ) {
       this.stop(entry)
       entry.target = target
+      entry.oversized = false
     }
     entry.owner = owner
     entry.authorize = authorize
@@ -140,6 +143,8 @@ export class ControlPreviews {
       entry.watchers.delete(watcher)
       if (entry.watchers.size === 0) this.stop(entry)
     }
+    if (watching && entry.oversized)
+      throw new Error("Preview paused because the captured frame exceeds its size limit")
     // Retain the last screenshot, but release live native capture after the action settles.
     return entry.preview.activity.status !== "running" &&
       Date.now() - entry.preview.activity.updatedAt >= 5_000
@@ -147,23 +152,20 @@ export class ControlPreviews {
       : entry.preview
   }
 
-  private frame(entry: PreviewEntry, image: ControlImage, stream = false, capturedAt = Date.now()) {
-    // The native thumbnail boundary decodes and bounds pixels before retention.
-    let thumbnail: ControlImage | null
-    try {
-      // BrowserCapture already checked the encoded dimensions and byte budget.
-      // Keep its JPEG rather than decoding/resizing/re-encoding every live frame.
-      thumbnail = stream && image.data.length <= 2 * 1024 * 1024 ? image : this.thumbnail(image)
-    } catch {
-      return
+  private frame(entry: PreviewEntry, image: ControlImage | NonNullable<ControlPreview["frame"]>["image"], capturedAt = Date.now()) {
+    let pixels: NonNullable<ControlPreview["frame"]>["image"]
+    if ("bytes" in image) pixels = image // BrowserCapture already validates encoded dimensions.
+    else {
+      // Native snapshots pass the existing thumbnail boundary before retention.
+      let thumbnail: ControlImage | null
+      try { thumbnail = this.thumbnail(image) } catch { return }
+      if (!thumbnail || thumbnail.data.length > 2 * 1024 * 1024) return
+      pixels = { mimeType: thumbnail.mimeType, bytes: Buffer.from(thumbnail.data, "base64") }
     }
-    if (!thumbnail || thumbnail.data.length > 2 * 1024 * 1024) return
-    entry.preview.frame = {
-      id: randomUUID(),
-      image: { mimeType: thumbnail.mimeType, bytes: Buffer.from(thumbnail.data, "base64") },
-      capturedAt,
-      publishedAt: Date.now(),
-    }
+    // Bound actual bytes; base64 expansion no longer consumes the delivery budget.
+    entry.oversized = pixels.bytes.byteLength > 2 * 1024 * 1024
+    if (entry.oversized) return
+    entry.preview.frame = { id: randomUUID(), image: pixels, capturedAt, publishedAt: Date.now() }
   }
 
   private stop(entry: PreviewEntry) {
@@ -219,7 +221,7 @@ export class ControlPreviews {
             if (!latest) return
             const now = performance.now()
             entry.nextFrameAt = Math.max((entry.nextFrameAt ?? now) + 1000 / 60, now)
-            this.frame(entry, { data: latest.data, mimeType: "image/jpeg" }, true, latest.capturedAt)
+            this.frame(entry, { bytes: latest.bytes, mimeType: "image/jpeg" }, latest.capturedAt)
             this.changed(entry.preview.activity)
           }
           const remaining =
