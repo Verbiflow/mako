@@ -64,8 +64,11 @@ assert.equal(probe.streams[0].codec_name, "h264")
 assert.equal(probe.streams[0].r_frame_rate, "60/1", "Browser recording defaults to 60 fps")
 assert.equal(probe.streams[0].width, 1600)
 assert.equal(probe.streams[0].height, 1000)
+if (process.platform === "darwin") assert.equal(probe.streams[0].has_b_frames, 0)
 assert.ok(Number(probe.format.duration) > 0.25)
 const timeline = JSON.parse(await readFile(result.timeline!, "utf8"))
+assert.equal(timeline.videoEncoding.codec, process.platform === "darwin" ? "h264_videotoolbox" : "libx264")
+assert.equal(timeline.videoEncoding.hardwareRequired, process.platform === "darwin")
 assert.ok(
   Math.abs(
     Number(probe.format.duration) -

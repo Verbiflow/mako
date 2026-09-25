@@ -155,7 +155,7 @@ try {
   await writeFile(
     join(tools, "ffmpeg"),
     `#!${process.execPath}
-if (process.argv.includes('-version')) process.exit(0)
+if (process.argv.includes('-encoders')) { console.log(' V..... h264_videotoolbox\\n V..... libx264'); process.exit(0) }
 require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 process.stdin.resume()
 process.stdin.on('end', () => process.exit(0))

@@ -7,7 +7,7 @@ import { CURSOR_SDK_WIRE_VERSION } from "../electron/providers/cursor/sdk/wire.t
 
 const root = await mkdtemp(join(tmpdir(), "cursor-startup-"))
 try {
-  for (const mode of ["progress", "silence", "chatter", "exit", "auth-refusal"] as const) {
+  for (const mode of ["progress", "silence", "chatter", "exit", "auth-refusal", "network-refusal"] as const) {
     const entry = join(root, `${mode}.mjs`)
     await writeFile(entry, `
       import { createInterface } from 'node:readline';
@@ -15,6 +15,10 @@ try {
         const req=JSON.parse(line);
         if (${JSON.stringify(mode)} === 'exit') process.exit(7);
         if (${JSON.stringify(mode)} === 'silence') return;
+        if (${JSON.stringify(mode)} === 'network-refusal') {
+          process.stdout.write(JSON.stringify({id:req.id,ok:false,error:{kind:'network',message:'Network request failed',networkCauses:['UND_ERR_CONNECT_TIMEOUT'],retryable:true}})+'\\n');
+          return;
+        }
         if (${JSON.stringify(mode)} === 'auth-refusal') {
           process.stdout.write(JSON.stringify({id:req.id,ok:false,error:{kind:'authentication',message:'Sign in',retryable:false}})+'\\n');
           return;
@@ -36,6 +40,9 @@ try {
       if (mode === "progress") {
         await client.hello()
         assert.equal(client.alive, true, "startup progress outlives the old request deadline")
+      } else if (mode === "network-refusal") {
+        await assert.rejects(client.request("models", undefined), error => error instanceof CursorSdkError && error.kind === "network" && error.networkCauses?.[0] === "UND_ERR_CONNECT_TIMEOUT")
+        assert.equal(client.alive, true, "a native network error is not a startup silence timeout")
       } else if (mode === "auth-refusal") {
         await assert.rejects(client.request("authStatus", undefined), CursorSdkError)
         assert.equal(client.alive, true, "a typed auth refusal must preserve the sign-in client")

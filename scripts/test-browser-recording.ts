@@ -106,11 +106,11 @@ for (const failStop of [false, true]) {
   )
   assert.ok(result.video)
 }
-{
-  const tools = join(directory, "refused-encoder")
+for (const advertisesEncoder of [false, true]) {
+  const tools = join(directory, `refused-encoder-${advertisesEncoder}`)
   await mkdir(tools)
   await writeFile(join(tools, "ffmpeg"), `#!${process.execPath}
-if (process.argv.includes('-version')) process.exit(0)
+if (process.argv.includes('-encoders')) { console.log(${JSON.stringify(advertisesEncoder ? ' V..... h264_videotoolbox\n V..... libx264' : 'Encoders:')}); process.exit(0) }
 process.stderr.write('Injected encoder startup failure')
 process.exit(1)
 `, { mode: 0o700 })
@@ -121,8 +121,10 @@ process.exit(1)
     const manager = new BrowserRecordings(), source = fixture()
     await assert.rejects(manager.start("owner", target, source.connection, "session",
       { directory }, new AbortController().signal, new BrowserCapture(source.connection, "session")),
-    /encoder|EPIPE/)
-    assert.equal(source.calls.filter(method => method === "Page.stopScreencast").length, 1,
+    /encoder|EPIPE|missing from this FFmpeg/)
+    assert.equal(source.calls.filter(method => method === "Page.startScreencast").length, advertisesEncoder ? 1 : 0,
+      "Missing codec refuses before capture; hardware initialization failure never falls back")
+    assert.equal(source.calls.filter(method => method === "Page.stopScreencast").length, advertisesEncoder ? 1 : 0,
       "A received JPEG alone cannot acknowledge recording startup after encoder failure")
   } finally {
     if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT

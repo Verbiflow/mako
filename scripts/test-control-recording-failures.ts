@@ -55,7 +55,7 @@ async function test() {
   await writeFile(
     join(tools, "ffmpeg"),
     `#!/bin/sh
-if [ "$1" != "-version" ]; then printf '%s\\n' "$$" > ${quote(pidFile)}; fi
+if [ "$2" != "-encoders" ]; then printf '%s\\n' "$$" > ${quote(pidFile)}; fi
 exec ${quote(ffmpeg)} "$@"
 `,
     { mode: 0o700 }
@@ -296,7 +296,7 @@ exec ${quote(ffmpeg)} "$@"
   await writeFile(
     join(tools, "ffmpeg"),
     `#!${process.execPath}
-if (process.argv.includes('-version')) process.exit(0)
+if (process.argv.includes('-encoders')) { console.log(' V..... h264_videotoolbox\\n V..... libx264'); process.exit(0) }
 require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 process.stdin.once('data', () => process.stdin.pause())
 setInterval(() => {}, 1000)

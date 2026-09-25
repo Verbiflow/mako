@@ -13,6 +13,7 @@ assert.equal(process.platform, "darwin", "This recipe currently builds macOS; Li
 assert.equal(process.arch, "arm64")
 const supplied = process.argv[2]
 const work = supplied ? resolve(supplied) : await mkdtemp(join(tmpdir(), "mako-media-build-"))
+const destination = process.argv[3] ? resolve(process.argv[3]) : join(root, "vendor/control-media/darwin-arm64")
 const prefix = join(work, "prefix")
 const sources = join(work, "sources")
 await mkdir(sources, { recursive: true })
@@ -35,10 +36,9 @@ const ffmpegRoot = join(work, `ffmpeg-${ffmpeg.version}`)
 const x264Args = [`--prefix=${prefix}`, "--enable-static", "--disable-cli", "--disable-opencl", "--disable-lsmash", "--disable-swscale", "--disable-ffms", "--enable-pic"]
 run("./configure", x264Args, x264Root)
 run("make", ["-j4", "install"], x264Root)
-const ffmpegArgs = [`--prefix=${prefix}`, "--disable-autodetect", "--disable-network", "--disable-doc", "--disable-debug", "--disable-ffplay", "--disable-shared", "--enable-static", "--enable-gpl", "--enable-libx264", "--pkg-config-flags=--static", "--disable-everything", "--enable-ffmpeg", "--enable-ffprobe", "--enable-avcodec", "--enable-avformat", "--enable-avfilter", "--enable-swscale", "--enable-protocol=file,pipe", "--enable-demuxer=concat,image2,mov,rawvideo", "--enable-decoder=png,mjpeg,h264,rawvideo", "--enable-parser=h264,png,mjpeg", "--enable-encoder=libx264,png", "--enable-muxer=mp4,image2", "--enable-filter=scale,pad,overlay,fps,format,null,copy,buffer,buffersink", "--enable-bsf=h264_mp4toannexb,extract_extradata", "--enable-zlib"]
+const ffmpegArgs = [`--prefix=${prefix}`, "--disable-autodetect", "--disable-network", "--disable-doc", "--disable-debug", "--disable-ffplay", "--disable-shared", "--enable-static", "--enable-gpl", "--enable-libx264", "--pkg-config-flags=--static", "--disable-everything", "--enable-ffmpeg", "--enable-ffprobe", "--enable-avcodec", "--enable-avformat", "--enable-avfilter", "--enable-swscale", "--enable-protocol=file,pipe", "--enable-demuxer=concat,image2,mov,rawvideo", "--enable-decoder=png,mjpeg,h264,rawvideo", "--enable-parser=h264,png,mjpeg", "--enable-videotoolbox", "--enable-encoder=libx264,h264_videotoolbox,png", "--enable-muxer=mp4,image2", "--enable-filter=scale,pad,overlay,fps,format,null,copy,buffer,buffersink", "--enable-bsf=h264_mp4toannexb,extract_extradata", "--enable-zlib"]
 run("./configure", ffmpegArgs, ffmpegRoot, { ...process.env, PKG_CONFIG_LIBDIR: join(prefix, "lib/pkgconfig") })
 run("make", ["-j4"], ffmpegRoot)
-const destination = join(root, "vendor/control-media/darwin-arm64")
 const staging = await mkdtemp(join(root, "vendor/control-media/.build-"))
 const binaries = {}
 for (const name of ["ffmpeg", "ffprobe"]) {

@@ -35,7 +35,7 @@ export async function processResources(roots) {
         executable,
       }
     })
-  return Object.fromEntries(
+  const groups = Object.fromEntries(
     Object.entries(roots).map(([name, root]) => {
       const selected = new Set([root])
       for (;;) {
@@ -52,6 +52,9 @@ export async function processResources(roots) {
       ]
     })
   )
+  groups.videoToolboxServices = rows.filter((row) => row.executable.includes("VTEncoderXPCService"))
+    .map(({ parent: _parent, ...row }) => row)
+  return groups
 }
 
 export function summarizeProcessResources(samples, elapsedMs) {

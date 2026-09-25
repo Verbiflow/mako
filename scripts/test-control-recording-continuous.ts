@@ -139,7 +139,7 @@ const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
 await writeFile(
   join(tools, "ffmpeg"),
   `#!/bin/sh
-if [ "$1" != "-version" ]; then printf '%s\\n' "$$" > ${quote(pidFile)}; fi
+if [ "$2" != "-encoders" ]; then printf '%s\\n' "$$" > ${quote(pidFile)}; fi
 exec ${quote(ffmpeg)} "$@"
 `,
   { mode: 0o700 }

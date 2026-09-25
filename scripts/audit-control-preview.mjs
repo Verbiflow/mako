@@ -34,9 +34,10 @@ if (process.versions.electron) {
   )
   const root = await mkdtemp(join(tmpdir(), "mako-preview-latency-"))
   const identityPaths = [
-    ...["control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"].flatMap(name => [
+    ...["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"].flatMap(name => [
       `packages/control-runtime/src/${name}.ts`, `packages/control-runtime/dist/${name}.js`,
     ]),
+    ...(process.env.MAKO_CONTROL_MEDIA_ROOT ? [join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffmpeg"), join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffprobe")] : []),
     "src/components/inspector/control-preview-image.tsx",
     "src/lib/control-preview-painter.ts",
     "dist-electron/control-previews.js", "dist-electron/runtime-connection.js",
@@ -597,7 +598,7 @@ async function audit() {
       cpuCoreEquivalent: (cpuSeconds * 1000) / elapsed,
       hostCpuCoreEquivalent,
       cpuBoundary:
-        "Electron counters and host counters retain their prior scope. resources includes host descendants/FFmpeg; wholeBrowser includes ALL installed browser tabs, not target-only CPU. fixtureIncludingHost also includes requested synthetic load workers. RSS sums can double-count shared pages.",
+        "Electron counters and host counters retain their prior scope. resources includes host descendants/FFmpeg; wholeBrowser includes ALL installed browser tabs, not target-only CPU. fixtureIncludingHost also includes requested synthetic load workers. videoToolboxServices covers all visible VTEncoderXPCService processes, including other applications; GPU/media-engine power is not measured. RSS sums can double-count shared pages.",
       paints,
       invalidPixelSamples: invalid,
     }
