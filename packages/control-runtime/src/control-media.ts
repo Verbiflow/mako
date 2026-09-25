@@ -11,7 +11,7 @@ export function recordingVideoEncoding(platform = process.platform) {
     ? {
         codec: "h264_videotoolbox" as const,
         hardwareRequired: true,
-        args: ["-c:v", "h264_videotoolbox", "-allow_sw", "0", "-realtime", "1", "-bf", "0", "-q:v", "80"],
+        args: ["-c:v", "h264_videotoolbox", "-allow_sw", "0", "-realtime", "1", "-bf", "0", "-q:v", "85"],
       }
     : {
         codec: "libx264" as const,

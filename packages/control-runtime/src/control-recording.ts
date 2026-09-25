@@ -595,7 +595,7 @@ export class ControlRecording {
         this.encodedDurationMs = result.durationMs
         this.encodedFrames = result.retainedFrames ?? this.outputFrames
         if (result.error) this.error ??= result.error
-      } else if (!this.video) await this.encode()
+      } else if (!this.video) await this.encodeNativeOverlay()
       this.timeline = join(this.directory, "timeline.json")
       await writeFile(
         this.timeline,
@@ -814,14 +814,11 @@ export class ControlRecording {
       throw error
     }
   }
-  private async encode() {
-    const first = this.frames[0]
-    if (!first)
-      throw new Error("No video frames were received; no video was produced")
-    const best = this.frames.reduce((a, b) =>
-      a.width * a.height >= b.width * b.height ? a : b
-    )
-    const metadata = await sharp(join(this.directory, best.file!)).metadata()
+  private async encodeNativeOverlay() {
+    const frame = this.frames[0]
+    if (!this.sourceVideo || !frame?.file)
+      throw new Error("Native capture stopped without a video to finalize")
+    const metadata = await sharp(join(this.directory, frame.file)).metadata()
     const sizeScale = Math.min(
       1,
       this.options.maxSide /
@@ -851,7 +848,8 @@ export class ControlRecording {
         "1",
         "-filter_complex_threads",
         "1",
-        ...(this.sourceVideo ? ["-i", this.sourceVideo] : []),
+        "-i",
+        this.sourceVideo,
         "-f",
         "rawvideo",
         "-pixel_format",
@@ -862,12 +860,8 @@ export class ControlRecording {
         String(this.options.fps),
         "-i",
         "pipe:0",
-        ...(this.sourceVideo
-          ? [
-              "-filter_complex",
-              `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
-            ]
-          : []),
+        "-filter_complex",
+        `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
         ...this.videoEncoding.args,
         "-pix_fmt",
         "yuv420p",
@@ -895,10 +889,10 @@ export class ControlRecording {
     }, 120_000)
     // pipeline bounds queued buffers and waits for stdin backpressure. No rendered
     // images accumulate on disk, even for a dense full-resolution recording.
-    const frames = Readable.from(this.renderFrames(width, height), {
-      objectMode: false,
-      highWaterMark: 1,
-    })
+    const frames = Readable.from(
+      this.renderNativeOverlayFrames({ ...frame, file: frame.file }, width, height),
+      { objectMode: false, highWaterMark: 1 }
+    )
     const streaming = pipeline(frames, child.stdin, {
       signal: controller.signal,
     })
@@ -920,7 +914,8 @@ export class ControlRecording {
     this.video = output
   }
 
-  private async *renderFrames(
+  private async *renderNativeOverlayFrames(
+    frame: Frame & { file: string },
     width: number,
     height: number
   ): AsyncGenerator<Buffer> {
@@ -928,20 +923,13 @@ export class ControlRecording {
       1,
       Math.ceil(((this.endedAt ?? 0) * this.options.fps) / 1000)
     )
-    let frameIndex = 0,
-      pointerIndex = -1,
+    let pointerIndex = -1,
       pressIndex = -1
     let previousState = ""
     let rendered: Buffer | undefined
     for (let index = 0; index < count; index++) {
-      // Use the recording clock directly. Repeating a static image through concat
-      // can double its last duration; CFR has exactly one duration per output frame.
+      // Use the recording clock directly: exactly one duration per output frame.
       const at = (index * 1000) / this.options.fps
-      while (
-        frameIndex + 1 < this.frames.length &&
-        this.frames[frameIndex + 1]!.at <= at
-      )
-        frameIndex++
       while (
         pointerIndex + 1 < this.pointers.length &&
         this.pointers[pointerIndex + 1]!.at <= at
@@ -951,22 +939,21 @@ export class ControlRecording {
       }
       const press = this.pointers[pressIndex]
       const pressed = !!press && at - press.at < 400
-      const state = `${frameIndex}:${pointerIndex}:${pressed}`
+      const state = `${pointerIndex}:${pressed}`
       if (rendered && state === previousState) {
         yield rendered
         continue
       }
-      const frame = this.frames[frameIndex]!
       const pointer = this.pointers[pointerIndex]
       rendered = await renderRecordingImage(
-        await readFile(join(this.directory, frame.file!)),
+        await readFile(join(this.directory, frame.file)),
         frame,
         at,
         pointer,
         press,
         width,
         height,
-        Boolean(this.sourceVideo)
+        true
       )
       previousState = state
       yield rendered
