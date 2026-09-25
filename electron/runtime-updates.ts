@@ -298,6 +298,7 @@ export class RuntimeUpdates {
       provider: source.provider,
       label: source.label,
       description: source.description,
+      primary: source.primary,
     }
     let policy: RuntimeUpdateSource = source
     if (previous?.result) next.result = previous.result

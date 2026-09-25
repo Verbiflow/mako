@@ -32,6 +32,15 @@ export const RecordingReceiptSchema = z.object({
   /** Retained video, which may be shorter than capture after interruption. */
   encodedFrames: z.number().int().nonnegative().optional(),
   encodedDurationMs: z.number().nonnegative().optional(),
+  /** Timestamped browser encoding: encoded FPS is not distinct visual FPS.
+   * Unchanged slots save work; skipped slots report scheduling/backpressure loss.
+   * droppedFrames separately counts source images evicted by queue limits. */
+  frameRate: z.object({
+    requestedFps: z.number().positive(),
+    encodedFps: z.number().nonnegative(),
+    skippedFrameSlots: z.number().int().nonnegative(),
+    unchangedFrameSlots: z.number().int().nonnegative(),
+  }).optional(),
   video: z.string().optional(),
   timeline: z.string().optional(),
   dimensions: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).optional(),
