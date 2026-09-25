@@ -22,17 +22,21 @@ if (qualityArgument !== undefined) assert.ok(Number.isInteger(Number(qualityArgu
 const fixture = imageArgument ? await readFile(imageArgument) : Buffer.from(`<svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg"><rect width="1920" height="1080" fill="#191714"/>${Array.from({length: 45}, (_, i) => `<text x="30" y="${24 + i * 23}" font-family="monospace" font-size="16" fill="${i % 3 === 0 ? '#55bbdd' : '#eeeeee'}">Row ${i}: exact values 0123456789 | Save changes | 1lI O0 {} [] () &amp; @ #</text>`).join("")}</svg>`)
 const source = await sharp(fixture).resize(width, height, {fit: "contain"}).jpeg({quality: 92}).toBuffer()
 await writeFile(join(root, "source.jpg"), source)
-const render = (index) => {
+const render = (index, output = "rgba") => {
   const pointer = {at: index * 1000 / 60, x: 200 + index * 4, y: 400, pressed: index % 30 < 12}
-  return renderRecordingImage(source, {width, height}, pointer.at, pointer, pointer.pressed ? pointer : undefined, width, height)
+  return renderRecordingImage(source, {width, height}, pointer.at, pointer, pointer.pressed ? pointer : undefined, width, height, output)
 }
+const inputFormat = process.argv.find(arg => arg.startsWith("--input-format="))?.slice(15) ?? "rgb24"
+assert.ok(["rgb24", "rgba"].includes(inputFormat), "Use --input-format=rgb24 or rgba")
+const pixelFormat = process.argv.find(arg => arg.startsWith("--pixel-format="))?.slice(15) ?? "yuv420p"
+assert.ok(["yuv420p", "nv12"].includes(pixelFormat), "Use --pixel-format=yuv420p or nv12")
 const results = []
 for (const platform of ["linux", "darwin"]) {
   const encoding = recordingVideoEncoding(platform)
   if (encoding.hardwareRequired && qualityArgument !== undefined)
     encoding.args[encoding.args.indexOf("-q:v") + 1] = qualityArgument
   const output = join(root, `${encoding.codec}.mp4`)
-  const child = spawn(ffmpeg, ["-hide_banner", "-loglevel", "error", "-n", "-filter_threads", "1", "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", `${width}x${height}`, "-framerate", "60", "-i", "pipe:0", "-an", ...encoding.args, "-pix_fmt", "yuv420p", "-g", "60", "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-flush_packets", "1", output], {stdio: ["pipe", "ignore", "pipe"]})
+  const child = spawn(ffmpeg, ["-hide_banner", "-loglevel", "error", "-n", "-filter_threads", "1", "-f", "rawvideo", "-pixel_format", inputFormat, "-video_size", `${width}x${height}`, "-framerate", "60", "-i", "pipe:0", "-an", ...encoding.args, "-pix_fmt", pixelFormat, "-g", "60", "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-flush_packets", "1", output], {stdio: ["pipe", "ignore", "pipe"]})
   let error = "", sampling = false
   const samples = []
   child.stderr.on("data", part => { error = (error + part).slice(-4096) })
@@ -49,7 +53,7 @@ for (const platform of ["linux", "darwin"]) {
   const timer = setInterval(() => void sample(), 250)
   try {
     for (let index = 0; index < frames; index++) {
-      const pixels = await render(index)
+      const pixels = await render(index, inputFormat === "rgba" ? "rgba" : "rgb")
       await new Promise((resolve, reject) => child.stdin.write(pixels, error => error ? reject(error) : resolve()))
     }
     await sample()
@@ -83,7 +87,7 @@ for (const platform of ["linux", "darwin"]) {
   }
   results.push({encoding, elapsedMs, nodeCpuMs: (used.user + used.system) / 1000, resources: summarizeProcessResources(samples, elapsedMs), bytes: (await stat(output)).size, probe, quality})
 }
-const report = {root, scope: "240-frame capacity/quality comparison; OS services include other apps, GPU energy excluded; not sustained capture acceptance", ffmpeg, binarySha256: createHash("sha256").update(await readFile(ffmpeg)).digest("hex"), results}
+const report = {root, inputFormat, pixelFormat, scope: "240-frame capacity/quality comparison; OS services include other apps, GPU energy excluded; not sustained capture acceptance", ffmpeg, binarySha256: createHash("sha256").update(await readFile(ffmpeg)).digest("hex"), results}
 await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2))
 console.log(JSON.stringify(report, null, 2))
 for (const [index, sample] of results[1].quality.entries()) {

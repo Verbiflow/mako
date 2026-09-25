@@ -191,13 +191,13 @@ const accessDrivers = [cursorDriver, acpLiveDriver(devinAcpSource), acpLiveDrive
 for (const driver of accessDrivers) validateLiveDriver(driver)
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.approvalEvidence.kind])), {
   cursor: "no-interactive-requests", devin: "native-decisions", grok: "submission-only",
-  opencode: "native-decisions", codex: "request-lifecycle", claude: "native-decisions",
+  opencode: "native-decisions", codex: "native-decisions", claude: "native-decisions",
 }, "the actual six adapters declare their evidence, independently of shared host fixtures")
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider,
   driver.approvalEvidence.kind === "native-decisions" ? driver.approvalEvidence.nativeRequests : [],
 ])), {
   cursor: [], devin: ["structured-question"], grok: [], opencode: ["tool-permission"],
-  codex: [], claude: ["structured-question"],
+  codex: ["tool-permission"], claude: ["structured-question", "tool-permission"],
 }, "native question evidence must not certify generic tool permissions")
 assert.throws(() => ApprovalEvidenceCapabilitySchema.parse({
   kind: "native-decisions", recovery: "retained-observer", coverage: "Unscoped native evidence",

@@ -737,8 +737,8 @@ try {
     await bridge("livePrompt", [
       conversationId,
       nextId,
-      (process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1" || process.env.MAKO_PACKAGE_QUESTION_RETIREMENT === "1" || process.env.MAKO_PACKAGE_EXTERNAL_QUESTION === "1")
-        ? "Reply only with the original PACKAGE_ marker I asked you to remember at the start of this session, before the async questions. Do not use tools or modify files."
+      (approvalChecks || process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1" || process.env.MAKO_PACKAGE_QUESTION_RETIREMENT === "1" || process.env.MAKO_PACKAGE_EXTERNAL_QUESTION === "1")
+        ? "Reply only with the original PACKAGE_ marker I asked you to remember at the start of this session, before the intervening tests. Do not use tools or modify files."
         : "Reply only with the marker from my previous turn. Do not use tools or modify files.",
       [],
     ])

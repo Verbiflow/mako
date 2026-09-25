@@ -68,6 +68,7 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     }
     const selected = choices ? question.options[randomInt(question.options.length)] : null
     const phrase = selected ? selected.value ?? selected.label : `ANSWER_${randomUUID()}`
+    report.phases.push({phase:label+'-selection',requestId,approvalId:permission.id,questionId:question.id,phrase,options:question.options})
     if (prior) {
       await bridge('livePermission',[conversationId,prior.approvalId,{kind:'answers',answers:{[prior.questionId]:[prior.phrase]}}])
       const snapshot = await bridge('liveSnapshot',[conversationId])
@@ -102,11 +103,17 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     return evidence
   }
   let questionEvidence
-  for (const decision of ['deny', 'allow', 'cancel']) {
+  const decisions = process.env.MAKO_PACKAGE_FILE_APPROVALS ? ['decline', 'deny', 'allow', 'cancel', 'session'] : ['deny', 'allow', 'cancel']
+  for (const decision of decisions) {
+    const fileApproval = decision === 'decline' || decision === 'session'
+    const allowed = decision === 'allow' || decision === 'session'
     const nonce = randomUUID(), requestId = randomUUID(), path = join(workspace, `${decision}.txt`)
     const record = { decision, requestId, nonce, approvals: 0 }
     cases.push(record)
-    await bridge('livePrompt', [conversationId, requestId, `Use your shell tool exactly once to execute: printf '%s' '${nonce}' >> '${path}'. This is a disposable approval fixture. Do not run other commands or edit other files. Request permission. If denied, stop without retrying.`, []])
+    const prompt = fileApproval
+      ? `Use apply_patch exactly once to create ${path} with a single line ${nonce}. Request native approval. This is a disposable approval fixture. If denied stop without retrying. Do not use any other tools or edit any other files.`
+      : `Use your shell tool exactly once to execute: printf '%s' '${nonce}' >> '${path}'. This is a disposable approval fixture. Do not run other commands or edit other files. Request permission. If denied, stop without retrying.`
+    await bridge('livePrompt', [conversationId, requestId, prompt, []])
     const pending = await waitFor(() => bridge('liveSnapshot', [conversationId]), snapshot => {
       if (snapshot?.session.status === 'failed') throw Error(snapshot.session.error)
       const request = snapshot?.requests.find(item=>item.id===requestId)
@@ -114,15 +121,20 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
       return snapshot?.permissions.length > 0
     }, 'native approval', 120_000)
     const permission = pending.permissions[0]
-    assert.ok(permission.title.includes(nonce) && permission.title.includes(path), 'Refuse approval outside this exact disposable command')
+    if (fileApproval) {
+      assert.equal(permission.kind, 'edit')
+      const tool = pending.blocks.find(block => block.type === 'tool' && block.id.endsWith(':'+permission.native?.requestId))
+      assert.ok(tool?.input, 'Native file approval must expose its exact tool paths')
+      assert.deepEqual(JSON.parse(tool.input).paths, [path], 'Refuse approval outside the exact disposable file')
+    } else assert.ok(permission.title.includes(nonce) && permission.title.includes(path), 'Refuse approval outside this exact disposable command')
     record.approvalId = permission.id
     record.approvals++
     await waitFor(() => evaluate(`document.body.textContent.includes(${JSON.stringify(nonce)})`), Boolean, 'approval visible in installed UI')
     await capture(`${decision}-pending`)
     if (decision === 'cancel') await bridge('liveCancel', [conversationId])
     else {
-      const option = decision === 'allow'
-        ? permission.options.find(item=>item.kind==='allow_once')
+      const option = allowed
+        ? permission.options.find(item=>item.kind===(decision === 'session' ? 'allow_always' : 'allow_once'))
         : permission.options.find(item=>item.kind==='reject_once') ?? permission.options.find(item=>item.kind==='reject_always')
       assert.ok(option, 'Native approval option missing')
       record.nativeChoice = { id: option.optionId, name: option.name, kind: option.kind }
@@ -135,7 +147,7 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
       return request && ['completed','interrupted','canceled', ...(decision==='cancel'?['failed']:[])].includes(request.status) && !snapshot.permissions.length
     }, 'native approval completion', 120_000)
     const contents = await readFile(path,'utf8').catch(error=>{if(error.code==='ENOENT')return null;throw error})
-    assert.equal(contents, decision==='allow'?nonce:null, 'Native execution count differs from the selected decision')
+    assert.equal(contents, allowed ? nonce + (fileApproval ? '\n' : '') : null, 'Native execution count differs from the selected decision')
     let receipt = finished.control?.approvalResponses?.find(item=>item.id===permission.id)
     if (decision==='cancel') assert.equal(receipt,undefined,'Stop must not fabricate an approval answer')
     else assert.ok(receipt,'Installed host lost its approval receipt')
@@ -150,7 +162,7 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     }
     record.receipt = receipt
     record.status = finished.requests.find(item=>item.id===requestId).status
-    record.fileMatches = contents===nonce
+    record.fileMatches = contents===nonce + (fileApproval ? '\n' : '')
     await capture(`${decision}-completed`)
     if (decision==='cancel') {
       // Stop may close the native transport to discard queued SDK input. The

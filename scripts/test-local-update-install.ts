@@ -28,6 +28,7 @@ import {
   reconcileGrantIdentity,
   replacePreparedApplication,
   runningBundleProcesses,
+  stopExitedHostHelpers,
   stopBundleBrowserHosts,
   stopOrphanedBundleCrashReporters,
   type LocalInstallReceipt,
@@ -44,6 +45,21 @@ await stopOrphanedBundleCrashReporters("/Applications/Mako.app", async (command,
   return {stdout:args.includes("16") ? `16 222 501 ${crashpad}` : `11 1 501 ${crashpad}`, stderr:""}
 }, pid => reaped.push(pid), 501)
 assert.deepEqual(reaped, [11], "Only the unchanged, owned, exact-bundle orphan is signalled")
+
+const helperCalls: string[] = []
+const helperRun = async (command: string) => {
+  helperCalls.push(command)
+  return { stdout: "", stderr: "" }
+}
+assert.equal(await stopExitedHostHelpers("/Applications/Mako.app", 101, () => {}, helperRun), false)
+assert.deepEqual(helperCalls, [], "A living host forbids even helper discovery")
+const deniedProbe = Object.assign(new Error("denied"), { code: "EPERM" })
+await assert.rejects(stopExitedHostHelpers("/Applications/Mako.app", 101, () => { throw deniedProbe }, helperRun), /denied/)
+assert.deepEqual(helperCalls, [], "An unreadable host is not an exited host")
+assert.equal(await stopExitedHostHelpers("/Applications/Mako.app", 101, () => {
+  throw Object.assign(new Error("gone"), { code: "ESRCH" })
+}, helperRun), true)
+assert.deepEqual(helperCalls, ["ps", "ps"], "Only confirmed exit permits scoped browser/reporter cleanup")
 
 const root = await mkdtemp(join(tmpdir(), "mako-install-test-"))
 async function fixture(name: string) {

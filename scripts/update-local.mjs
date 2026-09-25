@@ -210,7 +210,13 @@ export async function prepareToClose() {
   return {
     async check() {
       const state = await read()
-      if (!state) return
+      if (!state) {
+        // Socket disappearance alone is not process exit. Use the same guarded
+        // cleanup as the in-app installer before waiting on orphaned helpers.
+        const { stopExitedHostHelpers } = await import("../dist-electron/local-update-installer.js")
+        await stopExitedHostHelpers("/Applications/Mako.app", host.pid)
+        return
+      }
       if (state.operation.kind === "error")
         throw new Error(
           state.operation.message ?? "Mako could not close safely."

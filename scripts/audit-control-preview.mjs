@@ -32,8 +32,18 @@ if (process.versions.electron) {
     Number.isInteger(seconds) && seconds >= 1 && seconds <= 120,
     "--seconds must be an integer from 1 to 120"
   )
+  const appArgument = process.argv.find(value => value.startsWith("--runtime-app="))?.slice(14)
+  const runtimeApp = appArgument ? resolve(appArgument) : undefined
+  assert.ok(!runtimeApp || (process.argv.includes("--shared-host") && !process.argv.some(value => value.startsWith("--installed-session="))),
+    "--runtime-app measures an isolated packaged host; do not combine it with an installed task session")
+  if (runtimeApp) {
+    const { verifyLocalSignature, resolveLocalIdentity } = await import("./mac-local-signing.mjs")
+    await verifyLocalSignature(runtimeApp, await resolveLocalIdentity(undefined, runtimeApp))
+  }
   const root = await mkdtemp(join(tmpdir(), "mako-preview-latency-"))
   const identityPaths = [
+    ...(runtimeApp ? [join(runtimeApp, "Contents/Resources/app.asar"),
+      ...["ffmpeg", "ffprobe"].map(name => join(runtimeApp, "Contents/Resources/control-media/darwin-arm64", name))] : []),
     ...["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"].flatMap(name => [
       `packages/control-runtime/src/${name}.ts`, `packages/control-runtime/dist/${name}.js`,
     ]),
@@ -103,6 +113,7 @@ if (process.versions.electron) {
         .find((value) => value.startsWith("--extension="))
         ?.slice("--extension=".length) ?? "",
     MAKO_PREVIEW_NODE: process.execPath,
+    MAKO_PREVIEW_RUNTIME_APP: runtimeApp ?? "",
     MAKO_PREVIEW_SECONDS: String(seconds),
     MAKO_PREVIEW_LOAD_WORKERS: String(loadWorkers),
     MAKO_PREVIEW_BROWSER_PID: String(browserPid),
@@ -224,13 +235,17 @@ async function audit() {
       decodedBytes = 0
     if (shared) {
       if (!installed) {
+        const workerEnv = { ...process.env }
+        if (process.env.MAKO_PREVIEW_RUNTIME_APP) workerEnv.ELECTRON_RUN_AS_NODE = "1"
         worker = fork(
           fileURLToPath(
             new URL("./lib/control-preview-audit-host.mjs", import.meta.url)
           ),
           [],
           {
-            execPath: process.env.MAKO_PREVIEW_NODE,
+            execPath: process.env.MAKO_PREVIEW_RUNTIME_APP
+              ? join(process.env.MAKO_PREVIEW_RUNTIME_APP, "Contents/MacOS/Mako") : process.env.MAKO_PREVIEW_NODE,
+            env: workerEnv,
             stdio: ["ignore", "inherit", "inherit", "ipc"],
           }
         )
@@ -560,6 +575,9 @@ async function audit() {
     const inputWork = (async () => {
       await delay(Math.min(10000, durationMs / 2))
       inputPhase.startedAtMs = performance.now() - started
+      inputPhase.viewport = await source.webContents.executeJavaScript("({width:innerWidth,height:innerHeight})")
+      assert.deepEqual(inputPhase.viewport, { width: 1920, height: 1080 },
+        "Fixture viewport changed before input; fixed-resolution pixel acceptance is invalid")
       if (recording) {
         const receipt = await run({ action: "recording", target, operation: "status", id: recording.id })
         inputPhase.recordingAtStart = receipt.status
@@ -749,8 +767,8 @@ async function audit() {
       `document.querySelector('[aria-label="Hide preview"]').click()`
     )
     await delay(100)
+    const stoppedBeforeRecordingFinalization = !!recording && captureStops !== 0
     if (recording) {
-      assert.equal(captureStops, 0, "Closing every viewer preserves recording")
       await run({
         action: "recording",
         target,
@@ -827,6 +845,9 @@ async function audit() {
     }
     if (extension) await run({ action: "close", target })
     const report = {
+      runtimePackage: process.env.MAKO_PREVIEW_RUNTIME_APP || null,
+      runtimeScope: installed ? "Live installed task session" : process.env.MAKO_PREVIEW_RUNTIME_APP
+        ? "Isolated host executing signed packaged modules; not the desktop's live task host" : "Source fixture host",
       machine: { ...machine, loadAverageAtEnd: loadavg() },
       decoder: "shared JPEG ImageDecoder when supported; HTMLImage fallback",
       mediaTransport: process.env.MAKO_PREVIEW_IDENTITY === "1" ? "test-only JSON identity bridge to binary painter" : "bounded binary preview v1",
@@ -876,7 +897,10 @@ async function audit() {
     await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2))
     console.log(JSON.stringify(report, null, 2))
     // Preserve input/restoration evidence even when sustained throughput misses its budget.
-    if (recording) assert.equal(recording.status, "finished", recording.error)
+    if (recording) {
+      assert.equal(recording.status, "finished", recording.error)
+      assert.equal(stoppedBeforeRecordingFinalization, false, "Closing every viewer preserves recording")
+    }
     // September 24: user accepts roughly 56 fps. Keep 60 as the target;
     // the sustained 55 fps floor cannot hide corrupt pixels or long stalls.
     assert.ok(animation.fps >= (durationMs >= 30_000 ? 55 : 45), `Composited unique fps: ${animation.fps}`)
