@@ -5,7 +5,7 @@ import { spawn } from "node:child_process"
  * full FFmpeg on PATH, not extra filters in Mako's shipped minimal encoder. */
 export async function recordedMarkers(video, seconds = 60) {
   const child = spawn("ffmpeg", ["-v", "error", "-i", video, "-t", String(seconds),
-    "-an", "-vf", "crop=1920:2:0:450,format=gray", "-f", "rawvideo", "pipe:1"],
+    "-an", "-vf", "fps=60,crop=1920:2:0:450,format=gray", "-f", "rawvideo", "pipe:1"],
   { stdio: ["ignore", "pipe", "pipe"] })
   let errors = ""
   child.stderr.on("data", chunk => { errors = (errors + chunk.toString()).slice(-4096) })
@@ -41,7 +41,7 @@ export async function recordedMarkers(video, seconds = 60) {
     assert.equal(await exited, 0, errors)
     assert.equal(filled, 0, "Partial decoded marker row")
     assert.ok(frames > 0)
-    return { scope: "Actual fixture markers in recorded 1920x1080/60 video; source gaps and repeats count against rate",
+    return { scope: "Actual fixture markers sampled at 60 Hz from timestamped 1920x1080 video; source gaps and repeats count against rate",
       seconds: frames / 60, frames, distinctFrames: distinct, invalidFrames: invalid,
       distinctFps: distinct * 60 / frames, longestHoldMs: longestHold * 1000 / 60 }
   } finally { child.kill("SIGKILL"); await exited }

@@ -32,12 +32,6 @@ let mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .
   note("mouseDown", source: event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) ?? 0)
   return event
 }
-// Complete AppKit startup before allowing windows/activation. Switching this
-// unbundled process to accessory before app.run() lets launch itself activate it,
-// even when its only window uses orderBack and no driver action has occurred.
-app.setActivationPolicy(.prohibited)
-app.finishLaunching()
-note("launchFinished")
 app.setActivationPolicy(.accessory)
 let window = NSWindow(contentRect: NSRect(x: 240, y: 240, width: 480, height: 200), styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "Mako cocoa fixture"

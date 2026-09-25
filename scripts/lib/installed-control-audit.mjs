@@ -21,7 +21,7 @@ export async function installedControlAudit(sessionFile) {
   const descriptor = await readControlSession(sessionFile)
   const call = command => invokeControlSession(descriptor, { method: "call", command }, AbortSignal.timeout(30000))
   const modules = {}
-  for (const name of ["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"]) {
+  for (const name of ["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process", "recording-video-input"]) {
     const path = `node_modules/@mako/control-runtime/dist/${name}.js`
     const bytes = extractFile(`${app}/Contents/Resources/app.asar`, path)
     assert.ok(bytes.equals(await readFile(`packages/control-runtime/dist/${name}.js`)), `Installed ${name} must match reviewed build`)
