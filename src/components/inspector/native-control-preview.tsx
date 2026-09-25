@@ -1,17 +1,18 @@
 import type { ControlPreview } from "@/lib/types"
 import { useEffect, useRef, useState } from "react"
+import { ControlPreviewImage } from "./control-preview-image"
 import { controlPreviewStream } from "@/state/control-preview"
 
-export function NativeControlPreview({ id, poster, className = "block max-h-64 w-full object-contain" }: { id: string; poster?: NonNullable<ControlPreview["frame"]>["image"]; className?: string }) {
-  const [posterUrl, setPosterUrl] = useState<string>()
-  useEffect(() => {
-    if (!poster) { setPosterUrl(undefined); return }
-    const url = URL.createObjectURL(new Blob([poster.bytes], { type: poster.mimeType }))
-    setPosterUrl(url)
-    return () => URL.revokeObjectURL(url)
-  }, [poster])
+export function NativeControlPreview({ id, poster, className = "block max-h-64 w-full object-contain" }: { id: string; poster?: NonNullable<ControlPreview["frame"]>; className?: string }) {
   const video = useRef<HTMLVideoElement>(null)
   const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    const element = video.current
+    if (!poster || !element) return
+    const url = URL.createObjectURL(new Blob([poster.image.bytes], { type: poster.image.mimeType }))
+    element.poster = url
+    return () => { element.removeAttribute("poster"); URL.revokeObjectURL(url) }
+  }, [poster, failed])
   const [visible, setVisible] = useState(() => !document.hidden)
   useEffect(() => {
     const changed = () => setVisible(!document.hidden)
@@ -54,12 +55,11 @@ export function NativeControlPreview({ id, poster, className = "block max-h-64 w
     }
   }, [id, visible])
   if (failed)
-    return posterUrl ? (
-      <img
-        src={posterUrl}
-        alt="Latest view of this task's application window"
+    return poster ? (
+      <ControlPreviewImage
+        frame={poster}
+        label="Latest view of this task's application window"
         className={className}
-        decoding="async"
       />
     ) : (
       <span role="status" className="py-6 text-label text-muted-foreground">
@@ -72,7 +72,6 @@ export function NativeControlPreview({ id, poster, className = "block max-h-64 w
       muted
       autoPlay
       playsInline
-      poster={posterUrl}
       aria-label="Live application window"
       className={className}
     />

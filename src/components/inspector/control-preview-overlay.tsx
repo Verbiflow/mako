@@ -67,7 +67,7 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
   const frame = preview?.frame
   const activity = preview?.activity
   const nativeWindow = preview?.window
-  if (!frame && !nativeWindow) return null
+  if (!frame && !nativeWindow && !error) return null
   const surface = activity?.kind === "browser" ? "Browser" : "Computer"
   const label = activity
     ? `${surface} · ${activity.operation.replaceAll("_", " ")}${activity.status === "running" ? " · working" : ""}`
@@ -83,7 +83,7 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
           <NativeControlPreview
             key={`${id}:${nativeWindow.pid}:${nativeWindow.windowId}`}
             id={id}
-            poster={frame?.image}
+            poster={frame ?? undefined}
           />
         ) : (
           frame && (

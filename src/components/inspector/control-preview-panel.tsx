@@ -95,7 +95,7 @@ export function ControlPreviewPanel() {
           <NativeControlPreview
             key={`${conversationId}:${preview.window.pid}:${preview.window.windowId}`}
             id={conversationId}
-            poster={frame?.image}
+            poster={frame ?? undefined}
             className="block h-auto w-full rounded-lg object-contain"
           />
         ) : frame ? (
