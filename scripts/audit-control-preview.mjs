@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 import { recordedMarkers } from "./lib/control-video-markers.mjs"
+import { processResources, summarizeProcessResources } from "./lib/control-process-resources.mjs"
 
 if (process.versions.electron) {
   const { app } = await import("electron")
@@ -71,6 +72,10 @@ if (process.versions.electron) {
     })
   )
   const viewers = process.argv.includes("--two-viewers") ? 2 : 1
+  const loadWorkers = Number(process.argv.find((value) => value.startsWith("--load-workers="))?.split("=")[1] ?? 0)
+  const browserPid = Number(process.argv.find((value) => value.startsWith("--browser-pid="))?.split("=")[1] ?? 0)
+  assert.ok(Number.isInteger(loadWorkers) && loadWorkers >= 0 && loadWorkers <= 4, "--load-workers must be 0–4")
+  assert.ok(Number.isInteger(browserPid) && browserPid >= 0, "--browser-pid must be a process id")
   const env = {
     ...process.env,
     MAKO_PREVIEW_AUDIT_ROOT: root,
@@ -83,6 +88,8 @@ if (process.versions.electron) {
         ?.slice("--extension=".length) ?? "",
     MAKO_PREVIEW_NODE: process.execPath,
     MAKO_PREVIEW_SECONDS: String(seconds),
+    MAKO_PREVIEW_LOAD_WORKERS: String(loadWorkers),
+    MAKO_PREVIEW_BROWSER_PID: String(browserPid),
     MAKO_PREVIEW_WINDOW: process.argv.includes("--background-window")
       ? "1"
       : "0",
@@ -184,6 +191,7 @@ async function audit() {
     fixtureServer,
     focusSamples
   let previews
+  const loadProcesses = []
   let notifications = 0,
     reads = 0,
     bytes = 0
@@ -459,6 +467,7 @@ async function audit() {
               directory: join(root, "recording"),
               fps: 60,
               maxSide: 1920,
+              maxDurationMs: durationMs + 30_000,
             },
           })
         : undefined
@@ -481,6 +490,10 @@ async function audit() {
     )
     const started = performance.now()
     const memory = []
+    const resourceSamples = []
+    const resourceRoots = { fixtureIncludingHost: process.pid }
+    if (worker) resourceRoots.hostAndEncoder = worker.pid
+    if (Number(process.env.MAKO_PREVIEW_BROWSER_PID)) resourceRoots.wholeBrowser = Number(process.env.MAKO_PREVIEW_BROWSER_PID)
     const sampleMemory = async () => {
       const host = shared
         ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
@@ -496,9 +509,22 @@ async function audit() {
           ),
         hostRssBytes: host?.memory?.rss,
         hostHeapBytes: host?.memory?.heapUsed,
+        hostEventLoopMs: host?.eventLoopMs,
       })
+      const resources = await processResources(resourceRoots)
+      resources.encoder = (resources.hostAndEncoder ?? resources.fixtureIncludingHost).filter((row) => row.executable.endsWith("/ffmpeg"))
+      resourceSamples.push(resources)
     }
     await sampleMemory()
+    for (let i = 0; i < Number(process.env.MAKO_PREVIEW_LOAD_WORKERS); i++) {
+      const child = spawn(process.env.MAKO_PREVIEW_NODE, ["-e", `
+        const {createHash}=require('node:crypto'); const bytes=Buffer.alloc(65536,17);
+        let running=true; process.stdin.on('end',()=>{running=false}); process.stdin.resume();
+        setTimeout(()=>{process.exit(0)},180000).unref();
+        function work(){const end=performance.now()+20;while(performance.now()<end)createHash('sha256').update(bytes).digest();if(running)setImmediate(work)}work();
+      `], { stdio: ["pipe", "ignore", "inherit"] })
+      loadProcesses.push(child)
+    }
     while (performance.now() - started < durationMs) {
       await delay(
         Math.min(1000, Math.max(0, durationMs - (performance.now() - started)))
@@ -506,6 +532,7 @@ async function audit() {
       await sampleMemory()
     }
     const elapsed = performance.now() - started
+    for (const child of loadProcesses) child.stdin.end()
     const animated = samples.splice(0)
     const cpuSeconds = app
       .getAppMetrics()
@@ -544,6 +571,9 @@ async function audit() {
     const animation = {
       elapsedMs: elapsed,
       memory,
+      resourceSamples,
+      resources: summarizeProcessResources(resourceSamples, elapsed),
+      requestedLoadWorkers: Number(process.env.MAKO_PREVIEW_LOAD_WORKERS),
       distinctFrames: animated.length,
       fps: (animated.length * 1000) / elapsed,
       gapsMs: stats(gaps),
@@ -551,7 +581,7 @@ async function audit() {
       cpuCoreEquivalent: (cpuSeconds * 1000) / elapsed,
       hostCpuCoreEquivalent,
       cpuBoundary:
-        "Electron fixture processes plus separate Node host; excludes installed browser and FFmpeg",
+        "Electron counters and host counters retain their prior scope. resources includes host descendants/FFmpeg; wholeBrowser includes ALL installed browser tabs, not target-only CPU. fixtureIncludingHost also includes requested synthetic load workers. RSS sums can double-count shared pages.",
       paints,
       invalidPixelSamples: invalid,
     }
@@ -804,6 +834,7 @@ async function audit() {
         `Recorded unique fps: ${report.recordedMarkers.distinctFps}`)
     }
   } finally {
+    for (const child of loadProcesses) child.kill("SIGTERM")
     await focusSamples?.stop()
     previews?.close()
     browser?.close()

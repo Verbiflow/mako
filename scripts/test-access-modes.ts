@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { ApprovalEvidenceCapabilitySchema } from "../electron/providers/approval-capability.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpObservedMode, acpNativeModes, acpSessionModes } from "../electron/acp-access.ts"
 import { accessModeId } from "../electron/contracts/access.ts"
 import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
@@ -192,6 +193,15 @@ assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider
   cursor: "no-interactive-requests", devin: "native-decisions", grok: "submission-only",
   opencode: "native-decisions", codex: "request-lifecycle", claude: "native-decisions",
 }, "the actual six adapters declare their evidence, independently of shared host fixtures")
+assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider,
+  driver.approvalEvidence.kind === "native-decisions" ? driver.approvalEvidence.nativeRequests : [],
+])), {
+  cursor: [], devin: ["structured-question"], grok: [], opencode: ["tool-permission"],
+  codex: [], claude: ["structured-question"],
+}, "native question evidence must not certify generic tool permissions")
+assert.throws(() => ApprovalEvidenceCapabilitySchema.parse({
+  kind: "native-decisions", recovery: "retained-observer", coverage: "Unscoped native evidence",
+}), /Invalid/, "the registration schema requires native evidence to name its request families")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, approvalEvidence: undefined }), /Invalid/,
   "registration rejects a new adapter without an approval evidence declaration")
 assert.throws(() => validateLiveDriver({ ...cursorDriver, modes: [{ id: "ask", name: "Ask", access: "ask", enforcement: "provider" }] }),

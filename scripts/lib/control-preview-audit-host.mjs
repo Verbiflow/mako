@@ -1,5 +1,6 @@
 // Private acceptance process; test-only commands never enter the app registry.
 import assert from "node:assert/strict"
+import { monitorEventLoopDelay } from "node:perf_hooks"
 import { BrowserService } from "@mako/control-runtime/browser"
 import { BrowserCommandSchema } from "@mako/control-runtime/contracts"
 import { extensionBrowsers } from "../../packages/control-runtime/dist/browser-extension-registration.js"
@@ -8,6 +9,8 @@ import { startWebHost } from "../../dist-electron/web-host.js"
 import { hostCallInputs } from "../../dist-electron/contracts/host-call-inputs.js"
 
 let close = () => {}
+const eventLoop = monitorEventLoopDelay({ resolution: 20 })
+eventLoop.enable()
 process.once(
   "message",
   async ({ socket, definition, extension, preferencePath, focusPolicy }) => {
@@ -85,11 +88,14 @@ process.once(
                 })),
               },
             })
-          if (channel === "mako:audit-cpu")
+          if (channel === "mako:audit-cpu") {
+            const eventLoopMs = { mean: eventLoop.mean / 1e6, max: eventLoop.max / 1e6, p95: eventLoop.percentile(95) / 1e6 }
+            eventLoop.reset()
             return JSON.stringify({
               ok: true,
-              value: { ...process.cpuUsage(), memory: process.memoryUsage() },
+              value: { ...process.cpuUsage(), memory: process.memoryUsage(), eventLoopMs },
             })
+          }
           assert.equal(channel, "mako:audit-browser")
           const command = BrowserCommandSchema.parse(args[0])
           const value = await browser.execute(

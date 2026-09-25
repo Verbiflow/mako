@@ -166,7 +166,7 @@ process.stdin.on('end', () => process.exit(0))
     await broken.stop()
     const failure = await broken.settled()
     assert.equal(failure.status, "failed")
-    assert.match(failure.error!, /unsupported image format/)
+    assert.match(failure.error!, /unsupported or corrupt image/)
     const pid = Number(await readFile(pidFile, "utf8"))
     assert.throws(
       () => process.kill(pid, 0),

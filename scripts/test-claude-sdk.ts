@@ -1,7 +1,7 @@
 import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtemp, writeFile, rm } from "node:fs/promises"
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -9,6 +9,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
   SDKAssistantMessage,
+  PermissionUpdate,
 } from "@anthropic-ai/claude-agent-sdk"
 import {
   createClaudeSdkDriver,
@@ -20,6 +21,32 @@ import { ClaudeInput } from "../electron/providers/claude/input.ts"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { ClaudeTranscript } from "../electron/providers/claude/sdk-transcript.ts"
 import type { LiveDriverEvent } from "../electron/shared.ts"
+import { claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
+import { installHostLog, flushHostLog, type HostLogFields } from "../electron/host-log.ts"
+
+const authLogRoot = await mkdtemp(join(tmpdir(), "mako-claude-auth-diagnostics-"))
+installHostLog(join(authLogRoot, "host.log"))
+const authDiagnostics: HostLogFields[] = []
+const diagnostic = claudeAuthDiagnostics({
+  HOME: "/private-user-home", CLAUDE_CONFIG_DIR: "/private-router-scope",
+  CLAUDE_SECURESTORAGE_CONFIG_DIR: "", ANTHROPIC_API_KEY: "secret-api-key",
+  ANTHROPIC_AUTH_TOKEN: "secret-auth-token", CLAUDE_CODE_OAUTH_TOKEN: "secret-oauth-token",
+  ANTHROPIC_BASE_URL: "https://private-server/token=secret",
+}, fields => authDiagnostics.push(fields))
+const refreshFailure = "Failed to authenticate: OAuth session expired and could not be refreshed"
+diagnostic.failure(`A user wrote: ${refreshFailure}`)
+assert.equal(authDiagnostics.length, 0, "ordinary prose must not become native auth evidence")
+diagnostic.failure(refreshFailure)
+diagnostic.failure(refreshFailure)
+assert.equal(authDiagnostics.length, 1, "repeated native errors cannot flood the log")
+assert.equal(authDiagnostics[0]?.secureStorageOverride, true, "empty native override is meaningful")
+assert.equal(authDiagnostics[0]?.apiKeyOverride, true)
+assert.equal(authDiagnostics[0]?.category, "native-refresh-unavailable")
+for (const secret of ["private-user", "private-router", "secret-api", "secret-auth", "secret-oauth", "private-server"])
+  assert.ok(!JSON.stringify(authDiagnostics).includes(secret), "diagnostics must not retain secrets or raw source paths")
+let inheritedScope: HostLogFields | undefined
+claudeAuthDiagnostics({ CLAUDE_CONFIG_DIR: "/private-router-scope" }, fields => { inheritedScope = fields }).failure(refreshFailure)
+assert.notEqual(inheritedScope?.secureStorageScope, authDiagnostics[0]?.secureStorageScope)
 
 class Messages implements AsyncIterable<SDKMessage> {
   private readonly items: SDKMessage[] = []
@@ -200,9 +227,22 @@ const cancelledQuestion = permissions.tool("Bash", { command: "echo harmless" },
 const observedQuestion = permissionEvents.at(-1)
 assert.ok(observedQuestion?.type === "live-permission")
 abort.abort()
-assert.equal((await cancelledQuestion)?.behavior, "deny")
+const cancelledDecision = await cancelledQuestion
+assert.equal(cancelledDecision.behavior, "deny")
+assert.equal(cancelledDecision.decisionClassification, undefined, "an aborted request must not invent a user click")
 assert.deepEqual(permissionEvents.at(-1), { type: "live-permission-ended", id: "permission-fixture",
   requestId: "permission", observationId: observedQuestion.request.observationId, source: "request-aborted" })
+const sessionRule: PermissionUpdate = { type: "addRules", destination: "session", behavior: "allow", rules: [{ toolName: "Bash", ruleContent: "echo:*" }] }
+const persistentRule: PermissionUpdate = { ...sessionRule, destination: "userSettings" }
+for (const [optionId, classification] of [["allow_once", "user_temporary"], ["allow_session", "user_permanent"], ["reject_once", "user_reject"]]) {
+  const reply = permissions.tool("Bash", { command: "echo harmless" }, { ...options, suggestions: [sessionRule, persistentRule] })
+  permissions.respond(options.requestId, { kind: "choice", optionId })
+  const native = await reply
+  assert.equal(native.decisionClassification, classification)
+  if (native.behavior === "allow")
+    assert.deepEqual(native.updatedPermissions, optionId === "allow_session" ? [sessionRule] : undefined,
+      "only native session suggestions reach the native policy engine")
+}
 const queue = new ClaudeInput()
 queue.close()
 assert.throws(() => queue.send(steering.value), /closed/)
@@ -256,6 +296,9 @@ for (const confirmed of [true, false]) {
     assert.ok(failed?.type === "live-session")
     assert.equal(failed.session.status, "failed")
     assert.equal(failed.session.error, authError, "success subtype must not discard is_error result text")
+    await flushHostLog()
+    const authLog = await readFile(join(authLogRoot, "host.log"), "utf8")
+    assert.match(authLog, /claude-auth Native authentication failure .*category=native-refresh-unavailable/)
     assert.equal(receipts.at(-1)?.kind, "accepted", "API failure does not undo SDK acknowledgement")
     const nextAttempt = randomUUID()
     await compactDriver.prompt("compact-fixture", "Next prompt", [], undefined, {
@@ -304,6 +347,21 @@ const assistant: SDKAssistantMessage = {
     },
   },
 }
+diagnostic.observe({ ...assistant, error: "authentication_failed", parent_tool_use_id: "child-tool" })
+assert.equal(authDiagnostics.length, 1, "a child failure must not be attributed to the parent account")
+diagnostic.observe({
+  type: "system", subtype: "init", uuid: randomUUID(), session_id: "fixture",
+  apiKeySource: "none", claude_code_version: "2.1.263", cwd: "/private-workspace",
+  tools: [], mcp_servers: [], model: "fixture", permissionMode: "default",
+  slash_commands: [], output_style: "default", skills: [], plugins: [],
+})
+diagnostic.observe({ ...assistant, error: "authentication_failed" })
+diagnostic.observe({ ...assistant, error: "authentication_failed" })
+assert.equal(authDiagnostics.length, 2)
+assert.equal(authDiagnostics.at(-1)?.nativeVersion, "2.1.263")
+assert.equal(authDiagnostics.at(-1)?.category, "authentication_failed")
+diagnostic.observe({ ...assistant, error: "rate_limit" })
+assert.equal(authDiagnostics.length, 2, "rate limits are not authentication failures")
 projection.project({
   type: "stream_event",
   uuid: randomUUID(),
@@ -487,3 +545,5 @@ try {
 } finally {
   await rm(transcriptRoot, { recursive: true, force: true })
 }
+await flushHostLog()
+await rm(authLogRoot, { recursive: true, force: true })

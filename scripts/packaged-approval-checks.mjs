@@ -122,20 +122,45 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
       await click(option.name)
     }
     const finished = await waitFor(() => bridge('liveSnapshot', [conversationId]), snapshot => {
-      if (snapshot?.session.status==='failed') throw Error(snapshot.session.error)
+      if (snapshot?.session.status==='failed' && decision!=='cancel') throw Error(snapshot.session.error)
       const request = snapshot?.requests.find(item=>item.id===requestId)
-      if (request?.status==='failed') throw Error(request.error??'Native operation failed')
-      return request && ['completed','interrupted','canceled'].includes(request.status) && !snapshot.permissions.length
+      if (request?.status==='failed' && decision!=='cancel') throw Error(request.error??'Native operation failed')
+      return request && ['completed','interrupted','canceled', ...(decision==='cancel'?['failed']:[])].includes(request.status) && !snapshot.permissions.length
     }, 'native approval completion', 120_000)
     const contents = await readFile(path,'utf8').catch(error=>{if(error.code==='ENOENT')return null;throw error})
     assert.equal(contents, decision==='allow'?nonce:null, 'Native execution count differs from the selected decision')
-    const receipt = finished.control?.approvalResponses?.find(item=>item.id===permission.id)
+    let receipt = finished.control?.approvalResponses?.find(item=>item.id===permission.id)
     if (decision==='cancel') assert.equal(receipt,undefined,'Stop must not fabricate an approval answer')
     else assert.ok(receipt,'Installed host lost its approval receipt')
+    if (decision!=='cancel' && process.env.MAKO_PACKAGE_PERMISSION_DECISIONS) {
+      const observed = await waitFor(() => bridge('liveSnapshot',[conversationId]),
+        snapshot => Boolean(snapshot?.control?.approvalResponses?.find(item=>item.id===permission.id)?.nativeDecision),
+        'exact native tool-permission decision')
+      receipt = observed.control.approvalResponses.find(item=>item.id===permission.id)
+      assert.deepEqual(receipt.nativeDecision.identity, receipt.origin.native)
+      assert.equal(receipt.nativeDecision.answerDigest, receipt.nativeAnswerDigest ?? receipt.digest)
+    }
     record.receipt = receipt
     record.status = finished.requests.find(item=>item.id===requestId).status
     record.fileMatches = contents===nonce
     await capture(`${decision}-completed`)
+    if (decision==='cancel') {
+      // A runtime may fail the cancelled command. Prove the existing session can continue.
+      assert.equal(finished.session.connection, 'connected')
+      const followup = randomUUID(), expected = cases.find(item=>item.decision==='allow').nonce
+      await bridge('livePrompt',[conversationId,followup,'Reply only with the nonce from the command you were allowed to execute earlier. Do not use tools or modify files.',[]])
+      const continued = await waitFor(() => bridge('liveSnapshot',[conversationId]), snapshot => {
+        const request = snapshot?.requests.find(item=>item.id===followup)
+        if (request?.status==='failed') throw Error(request.error??'Continuation after cancellation failed')
+        return request?.status==='completed'
+      },'same-session continuation after cancellation',120_000)
+      assert.equal(continued.session.nativeId, finished.session.nativeId)
+      assert.equal(continued.permissions.length, 0)
+      assert.ok(answer(continued,followup).includes(expected),'Cancellation lost the existing native context')
+      assert.equal(await readFile(path,'utf8').catch(error=>{if(error.code==='ENOENT')return null;throw error}),null)
+      record.continuation = { requestId: followup, sameSession: true, rememberedPriorAllowedNonce: true, cancelledFileAbsent: true }
+      await capture('cancel-continued')
+    }
     if (decision==='allow' && process.env.MAKO_PACKAGE_APPROVAL_QUESTIONS) questionEvidence = await checkQuestion()
   }
   return { nativeId: initial.session.nativeId, receipts: (await bridge('liveSnapshot',[conversationId])).control.approvalResponses, checkQuestionAfterRestart: questionEvidence ? () => checkQuestion(questionEvidence) : undefined }

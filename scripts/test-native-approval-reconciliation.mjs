@@ -75,6 +75,9 @@ async function run() {
   const events = []
   let answerDispatches = 0
   const questionDecisions = Boolean(process.env.MAKO_NATIVE_QUESTION_DECISIONS)
+  const nativeRequests = driver.approvalEvidence.kind === 'native-decisions' ? driver.approvalEvidence.nativeRequests : []
+  if (questionDecisions && !nativeRequests.includes('structured-question')) throw Error('This adapter does not declare native structured-question decisions')
+  if (process.env.MAKO_NATIVE_APPROVAL_RECONNECT && !questionDecisions && !nativeRequests.includes('tool-permission')) throw Error('This adapter does not declare native tool-permission decisions')
   const matchesAnswer = receipt => receipt.nativeDecision?.answerDigest === (receipt.nativeAnswerDigest ?? receipt.digest)
   let dropDecisions = Boolean(process.env.MAKO_NATIVE_APPROVAL_RECONNECT) || questionDecisions
   const observer = (event) => {
@@ -389,10 +392,10 @@ async function run() {
           }
         }
       )
-      if (driver.approvalEvidence.kind === "native-decisions" && record.approvals && !dropDecisions) {
+      if (nativeRequests.includes('tool-permission') && record.approvals && !dropDecisions) {
         done = await wait(s => [...seen].every(id => externalDecision
           ? s?.control?.approvalObservations?.some(item => JSON.stringify(item.decision?.identity) === JSON.stringify(externalIdentities.get(id)))
-          : s?.control?.approvalResponses?.some(receipt => receipt.id === id && receipt.nativeDecision?.answerDigest === receipt.digest)), undefined, 5000)
+          : s?.control?.approvalResponses?.some(receipt => receipt.id === id && matchesAnswer(receipt))), undefined, 5000)
         record.nativeDecisionsConfirmed = !externalDecision
         if (externalDecision) {
           record.externalResolutions = done.control.approvalObservations

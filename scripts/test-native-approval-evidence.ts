@@ -22,7 +22,7 @@ try {
     let rejectAnswer = false
     const driver: ProviderLiveDriver = {
       approvalAnswerDigest: () => "a".repeat(64),
-      approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Injected native evidence fixture" },
+      approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission", "structured-question"], coverage: "Injected native evidence fixture" },
       provider, canResume: true, available: () => true,
       async start(cwd, options) {
         emit = options.emit!
@@ -65,7 +65,7 @@ try {
           `${kind} cannot upgrade a receipt to native confirmation`)
         assert.equal(owner.snapshot(id)?.permissions[0]?.id, first)
       }
-      driver.approvalEvidence = { kind: "native-decisions", recovery: "retained-observer", coverage: "Injected native evidence fixture" }
+      driver.approvalEvidence = { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission", "structured-question"], coverage: "Injected native evidence fixture" }
       decision({ ...native, scope: randomUUID() })
       decision({ ...native, sessionId: "wrong-session" })
       assert.equal(owner.snapshot(id)?.control?.approvalResponses?.at(-1)?.nativeDecision, undefined)
