@@ -22,6 +22,14 @@ for (const type of ["string", "array"] as const) {
   assert.ok(question)
   assert.deepEqual(question.options.map(option => option.label), ["first", "second", "Third choice"])
   assert.deepEqual(elicitationContent([question], {choice: ["second"]}), {choice: type === "string" ? "second" : ["second"]})
+  const repeated = options.map(option => ({ ...option, title: " Select this choice ", description: "Native explanation" }))
+  const distinguishable = elicitationQuestion("choice", type === "string"
+    ? { type, oneOf: repeated }
+    : { type, items: { anyOf: repeated } }, true)
+  assert.ok(distinguishable)
+  assert.deepEqual(distinguishable.options.map(option => option.label), ["Select this choice (first)", "Select this choice (second)", "Select this choice (third)"])
+  assert.ok(distinguishable.options.every(option => option.description === "Native explanation"))
+  assert.deepEqual(elicitationContent([distinguishable], {choice: ["second"]}), {choice: type === "string" ? "second" : ["second"]}, "display disambiguation must not change the native answer")
 }
 
 // An ACP provider contributes encoding through the same capability as a direct SDK driver.

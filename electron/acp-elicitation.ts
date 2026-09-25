@@ -13,12 +13,20 @@ function elicitationOptions(
     | null
     | undefined
 ): LiveInputQuestion["options"] {
-  if (titled)
+  if (titled) {
+    const labels = titled.map(option => option.title.trim() || option.const)
+    const counts = new Map<string, number>()
+    for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1)
     return titled.map((option) => ({
-      label: option.title.trim() || option.const,
+      // Native forms can give different values the same human title. Keep the
+      // title, but expose the value so the user can distinguish those choices.
+      label: (counts.get(option.title.trim() || option.const) ?? 0) > 1
+        ? `${option.title.trim() || option.const} (${option.const})`
+        : option.title.trim() || option.const,
       description: option.description ?? "",
       value: option.const,
     }))
+  }
   return (values ?? []).map((value) => ({
     label: value,
     description: "",

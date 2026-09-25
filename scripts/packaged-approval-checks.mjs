@@ -45,8 +45,9 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     const requestId = randomUUID()
     const label = prior ? 'question-after-restart' : 'question'
     const choices = process.env.MAKO_PACKAGE_QUESTION_CHOICES ? Array.from({length:4},()=>`CHOICE_${randomUUID()}`) : null
+    const duplicateTitles = Boolean(process.env.MAKO_PACKAGE_QUESTION_DUPLICATE_TITLES)
     const prompt = choices
-      ? `Use your native structured question tool to ask exactly one question with these four exact choices: ${choices.join(', ')}. Wait for the selection, then reply with only the selected value. Do not ask in plain text, guess, use other tools, or pick an answer yourself.`
+      ? `Use your native structured question tool to ask exactly one question with these four exact choices: ${choices.join(', ')}. ${duplicateTitles ? 'Use each exact choice as its label, and give every option the same description: Select this choice. ' : ''}Wait for the selection, then reply with only the selected value. Do not ask in plain text, guess, use other tools, or pick an answer yourself.`
       : 'Use your native structured question tool to ask exactly one question: "What is the verification phrase?" Allow a free-text answer. Wait for the answer, then reply with exactly that phrase. Do not ask in plain text, guess the phrase, run commands, read files, or call other tools.'
     const tool = process.env.MAKO_PACKAGE_QUESTION_TOOL
     await bridge('livePrompt', [conversationId, requestId, `Question occurrence: ${requestId}. ${tool ? `Call the native ${tool} tool specifically. ` : ''}${prompt}`, []])
@@ -61,6 +62,10 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     assert.ok(choices || !question.options.length || question.allowOther, 'Native question must accept a free-text phrase')
     // Choose after the question arrives. For free text, the answer value is also new.
     if (choices) assert.ok(question.options.length===choices.length && question.options.every(o=>choices.includes(o.value??o.label)), 'Native choices differ from the requested values')
+    if (duplicateTitles) {
+      assert.equal(new Set(question.options.map(o=>o.label)).size, question.options.length, 'Different native choices must be distinguishable in the UI')
+      assert.ok(question.options.every(o=>o.label.includes(o.value??o.label)), 'Duplicate native descriptions must not hide the choice value')
+    }
     const selected = choices ? question.options[randomInt(question.options.length)] : null
     const phrase = selected ? selected.value ?? selected.label : `ANSWER_${randomUUID()}`
     if (prior) {
