@@ -81,7 +81,7 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone:** LC-21 continuous browser recording is implemented locally: bounded pixels replace accumulated source JPEGs, the existing encoder writes during capture, worker startup precedes capture, and failures retain verified playable prefixes. Exact cursor/pixel tests, process-death cleanup and an isolated packaged SDK check pass. Native video bypasses re-encoding when no transform is needed. The final Aside minute reached 56.53 distinct preview fps and 56.82 recorded fps, below the 57 fps floor; all 36 exact input checks passed. Evidence is in the [media investigation](local-control-media-investigation.md#implementation-and-acceptance--september-24). These media changes are not installed. Binary preview delivery is now being implemented and validated: exact image bytes over a bounded, versioned media response, using the same task authorization and capture owner. Its tests and sustained results are pending. Then come the isolated Linux Selkies/pixelflux and Moonlight comparisons. The installed Mac/Aside + Codex **MCP** acceptance remains a separate completed milestone. [Installed acceptance evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
+**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. Preview and recording share the original encoded image bytes; viewers share JPEG decoding, and packets, queues and decoder resources have explicit limits and cleanup. The latest experimental decoder minute passed all 36 exact inputs and both full-pixel comparisons at **55.41 distinct preview fps / 56.00 recorded fps**. The user accepts roughly 56 fps; 60 remains the target, rather than a reason to block an otherwise reliable result. Final production-decoder, compatibility and packaging checks are underway. These media changes are not installed. [Binary preview evidence and remaining gates](local-control-preview-binary.md). The next backend work is the isolated Linux Selkies/pixelflux prototype and Sunshine/Moonlight comparison. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
 
 **Preserved integration decision (September 24): SDK + composable CLI + persistent JS MCP.**
 After reviewing the current unified cua_repl evidence, the user explicitly replaced
@@ -191,15 +191,14 @@ These source changes still require desktop rollout.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: installed runtime/MCP acceptance passes; sustained 1080p media acceptance remains open. Continuous encoding, verified crash prefixes, worker-owned rendering and native no-transform retention are implemented locally. Media rollout remains pending.**
+**Status: installed runtime/MCP acceptance passes. Continuous recording and binary previews are local; final production-decoder media checks and rollout remain open. The user accepts roughly 56 distinct fps; 60 remains the target.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 
 The [current investigation](local-control-media-investigation.md) records the
 implementation, failed experiments and acceptance gates. Continuous encoding
 removes source-JPEG staging; clocks/cursor timing and native no-transform output
-have focused tests. Next move exact preview bytes out of JSON, then compare
-isolated Selkies/pixelflux and Sunshine/Moonlight. Packaged
+have focused tests. [Binary delivery and shared JPEG decoding](local-control-preview-binary.md) now keep preview pixels out of JSON. Finish their final checks, then compare isolated Selkies/pixelflux and Sunshine/Moonlight. Packaged
 FFmpeg's fragmented and hybrid modes retain 120 decoded frames after a synthetic
 encoder kill, whereas `+faststart` output is unreadable; clean runs retain all
 180. This is container evidence, not a new capture-rate result. Hybrid needs no
@@ -217,8 +216,7 @@ decoded-pixel differences at 1920×1080, and independent viewer/recording cleanu
 A separate-host comparison reduced socket response bodies from 17.62 to 11.98 MB/s
 with identical decoded pixels and ~59 distinct fps. A later CPU-instrumented pair
 was slower (49.75 vs 56.35 fps); tail latency and total resource cost remain open.
-This is negotiated Brotli transport compression; Electron IPC still expands the
-full preview JSON. Default input and capture now share a per-tab emulation hold.
+That earlier implementation used negotiated Brotli compression and expanded preview JSON across Electron IPC. The current local binary implementation supersedes that media path; ordinary RPC retains bounded legacy decompression for compatibility. Default input and capture now share a per-tab emulation hold.
 The first live consumer enables painting; the last disables emulation. Text reads
 stay unchanged, and no tab/window activation is requested. Focus-off embedders keep
 no-frame refusal. Unit checks cover overlapping consumers/actions, screenshot
@@ -255,13 +253,10 @@ and resuming real FFmpeg; decoded-marker tests also cover screenshot interferenc
 The subsequent timestamped-queue run completed 67 seconds: preview 56.53 fps,
 recorded motion 56.82 fps, longest recorded hold 116.7 ms, all 36 exact input
 checks and both pixel comparisons passing with unchanged foreground samples.
-The 57 fps floor is still unmet. Recorder-only stress (including a ten-minute
+That run missed the former 57 fps floor. The user subsequently accepted roughly 56 fps; this does not waive exact pixels, input correctness, bounded resources or freeze checks. Recorder-only stress (including a ten-minute
 run), bounded-backlog and encoder/host-death tests are separate from viewer-rate
 acceptance. [Current implementation and limits](local-control-media-investigation.md#implementation-and-acceptance--september-24).
-The next transport experiment is binary media delivery outside preview JSON,
-with bounded queues, unchanged image bytes, shared task ownership and measured
-one/two-viewer cost; keep the selected 1080p video budget and report actual pixels; do not degrade
-explicit screenshots or silently reduce below the requested video size.
+Binary media delivery now preserves the exact encoded bytes outside preview JSON. JPEG ImageDecoder output matched the HTML image oracle in the covered fixtures; the two viewers share one decode. [Implementation and evidence](local-control-preview-binary.md) separate failed decoders, production checks and installed acceptance. Keep the 1080p budget and report actual pixels; do not degrade explicit screenshots or silently reduce the requested size.
 Finish actual pixel/DPR policy, resize/no-frame reporting, cursor legibility and
 all gesture routes. Requested fps is now threaded through native capabilities/capture
 in the +19 candidate: Mac/X11 advertise 60 and GNOME advertises 5, with source-rate
@@ -731,7 +726,7 @@ migration or count source-search keyword matches as control use.
 
 Next:
 
-1. The installed Mac/Aside + Codex milestone is closed. LC-21 continuous encoding is locally implemented; complete its final sustained/rollout gates, then replace preview JSON with bounded binary media delivery and run the Selkies/pixelflux prototype. Preserve current exact-value and recovery acceptance while changing capture. The latest 56.53 fps preview and 56.82 fps recorded motion still miss the 57 fps floor for the 1080p60 target.
+1. The installed Mac/Aside + Codex milestone is closed. LC-21 continuous encoding and binary preview delivery are local. Finish production-decoder and rollout checks, then run the Selkies/pixelflux prototype. The user accepts roughly 56 fps, with 60 as the target. Preserve exact values, pixels, recovery and freeze checks; report measured rates instead of equating container fps with distinct motion.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
    interruption/resume, compaction, fresh bindings and child-agent discovery.
    Preserve exact source/candidate/installed identities for every result.

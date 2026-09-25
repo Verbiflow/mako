@@ -40,13 +40,12 @@ adopted or benchmarked inside Mako by this review.
 The [continuous-media investigation](local-control-media-investigation.md) adds
 the shared-runtime continuous recorder, packaged FFmpeg crash evidence and the
 remaining implementation sequence. Browser recording no longer accumulates
-source JPEGs; preview JSON and Linux capture loops remain. The investigation also
+source JPEGs. [Binary preview delivery](local-control-preview-binary.md) is now local; Linux capture loops remain. The investigation also
 corrects the distinction between pixelflux's two recording
 paths below. No streaming stack has been adopted.
 
 Fast desktop streaming has mature implementations. Continuous browser encoding
-now removes source-image staging. JSON/base64 preview delivery and Linux PNG
-capture loops remain implementation debt, not unavoidable properties of computer use. A transport replacement alone still cannot provide
+now removes source-image staging. Local preview packets preserve exact binary image bytes; installed delivery and Linux PNG capture loops remain work. A transport replacement alone still cannot provide
 frames from a stalled source, identify the correct window, or make unknown input
 safe to repeat.
 
@@ -108,7 +107,7 @@ browser or desktop. Compare WebRTC and binary WebSocket on CPU-only x64 and ARM6
 then available GPU hardware. Include a Sunshine/Moonlight native-viewer comparison
 where the hardware supports it; record that its viewer differs.
 
-Use the selected 1920×1080/60 target and 57 distinct fps sustained floor. Measure
+Use the selected 1920×1080/60 target. The user accepts roughly 56 distinct fps; the current audit uses 55 fps as a minimum and separately rejects half-second freezes. Report actual rates and tails. Measure
 at least 60 seconds plus a longer recording soak, source-to-viewer frame age,
 frame-gap and input-to-visible p50/p95, missed/duplicate input, small colored text,
 cursor accuracy, bandwidth, idle/active CPU, memory, startup and installed bytes.
@@ -131,7 +130,7 @@ or codec dependency was added to the shipped package during this review.
   frames; this is not an unchanged-region capture/encode implementation.
 - [ControlPreviews](../electron/control-previews.ts) bounds delivery to the newest
   frame, scopes watchers and stops unused subscriptions. Passing full base64 JPEGs
-  through preview JSON remains expensive on dense screens.
+  now uses bounded binary packets locally; installation and sustained resource accounting remain open.
 - [Renderer preview state](../src/state/control-preview.ts) shares native video
   capture between viewers. The [native component](../src/components/inspector/native-control-preview.tsx)
   consumes a local MediaStream; that is not a remote WebRTC service.

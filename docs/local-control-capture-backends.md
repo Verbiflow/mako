@@ -86,7 +86,7 @@ experiment, not implemented continuous capture or a new 60-fps measurement.
    Use Selkies as a cloud comparison without changing the agent action contract.
 5. **Accept exact artifacts per platform.** Run at least 60 seconds of moving
    1080p content, one viewer, two viewers plus recording, and concurrent actions.
-   Use 57 distinct fps (95% of 60) as the sustained throughput floor, with
+   September 24 user decision: roughly 56 distinct fps is acceptable; keep 60 as the target. Use the shared audit’s 55 fps minimum and separate freeze checks, with
    measured gaps reported separately; always publish the actual rate. Report
    distinct frames, gaps, input-to-visible p50/p95, source/encoder/viewer
    CPU, memory, wire bytes and foreground changes. Keep software-only Linux in

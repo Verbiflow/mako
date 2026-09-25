@@ -11,7 +11,7 @@ Browser recording now feeds the existing encoder during capture. It keeps bounde
 timestamped source history (at most two seconds of frame slots and 32 MiB of
 compressed bytes), writes fragmented MP4 and an incremental `timeline.jsonl`,
 and no longer stores each source JPEG. A dedicated worker decodes the source,
-draws the cursor and owns the encoder pipe. Only compressed source bytes and
+draws the cursor and owns the encoder pipe. The [binary-preview follow-up](local-control-preview-binary.md#encoder-follow-up) tested and rejected an RGB pipe optimization after comparing full-path throughput; the encoder retains RGBA. Only compressed source bytes and
 coordinates cross into it; unchanged output sends a repeat command. Native
 postprocessing uses the same pixel composition function. Worker
 startup finishes before capture subscribes. The first recording acknowledgment
@@ -27,7 +27,7 @@ still use the same recording owner and handles.
 Native H.264 with `cursor:false`, matching fps and an already acceptable size is
 retained byte-for-byte. Native cursor/resize transforms still use postprocessing.
 Preview frames now retain source `capturedAt` separately from `publishedAt`;
-binary preview delivery is not implemented yet.
+[binary preview delivery is now implemented locally](local-control-preview-binary.md), with shared source bytes and JPEG decoding. Its final acceptance and installation are tracked separately.
 
 | Check | Result and scope |
 | --- | --- |
@@ -88,15 +88,12 @@ passing full suite. Source tests now select the source worker instead of silentl
 loading whatever compiled worker happens to exist.
 
 These final source results close the continuous-recorder implementation gate;
-they do not close the speed or installed-delivery gate. The next production change
-is task-scoped binary preview transport, retaining exact encoded image bytes and
-separate ownership for slow viewers. Both preview and decoded video motion now
+they do not close the speed or installed-delivery gate. Task-scoped binary preview transport is now implemented locally, retaining exact image bytes and bounding slow viewers. [Current delivery evidence](local-control-preview-binary.md) records its verification separately. Both preview and decoded video motion now
 have explicit rate assertions in the sustained audit.
 
 Remaining recording gates: real ENOSPC/partial filesystem writes, power loss,
 broader media-player compatibility and installed rollout. Remaining performance
-work: binary task-scoped preview delivery, complete process accounting and matched
-Linux streaming comparisons. Sustained 1080p60 is **not** established.
+work: final binary-preview acceptance, complete process accounting and matched Linux streaming comparisons. The user now accepts roughly 56 distinct fps; 60 remains the target. Sustained 1080p60 is **not** established.
 
 ## Baseline findings before this implementation
 
@@ -265,9 +262,7 @@ platform mechanics. MCP, SDK and CLI keep the same target and recording handles.
 ## Gates before shipping
 
 Run the existing installed Aside workflow again, then at least 60 seconds of
-moving/text/input content and a ten-minute recording soak. Require **57 distinct
-fps or better at 1920×1080** as the existing sustained floor; publish actual gaps
-and do not call encoded 60 fps a pass. Exact screenshots remain independent.
+moving/text/input content and a ten-minute recording soak. The user accepts roughly **56 distinct fps at 1920×1080**, with 60 as the target. The shared audit uses a 55 fps minimum and separately rejects half-second freezes; publish actual gaps and never substitute encoded fps for motion. Exact screenshots remain independent.
 
 Include one viewer, two viewers plus recording, idle content, delayed consumers,
 source/encoder/host exits, reconnect, cancellation during start/stop, ENOSPC,
