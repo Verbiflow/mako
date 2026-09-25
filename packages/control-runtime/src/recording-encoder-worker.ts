@@ -47,17 +47,13 @@ port.on("message", (input) => {
     encoder?.abort(value.reason)
     return
   }
-  const fail = (error) => {
-    const reason =
-      error instanceof Error ? error.message : "Video encoder failed"
+  const fail = (reason: string) => {
     encoder?.abort(reason)
     port.postMessage({ kind: "failed", id: value.id, reason })
   }
   if (value.kind === "frame") {
     if (!encoder || finishing || queuedFrames >= 2) {
-      fail(
-        new Error("Video worker frame capacity exceeded or encoder unavailable")
-      )
+      fail("Video worker frame capacity exceeded or encoder unavailable")
       return
     }
     queuedFrames++

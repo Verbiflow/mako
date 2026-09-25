@@ -168,6 +168,8 @@ export class ClaudePermissions {
     )
       return {
         behavior: "deny",
+        decisionClassification: response.kind === "choice" && response.optionId === "reject_once"
+          ? "user_reject" : undefined,
         message:
           name === "ExitPlanMode"
             ? "The user has not approved implementation. Continue planning."
@@ -175,6 +177,9 @@ export class ClaudePermissions {
       }
     return {
       behavior: "allow",
+      // Native telemetry otherwise infers allow-once even when it applies session rules.
+      // This describes the submitted choice; it is not an acknowledgement from Claude.
+      decisionClassification: response.optionId === "allow_session" ? "user_permanent" : "user_temporary",
       updatedInput: input,
       updatedPermissions:
         response.optionId === "allow_session"

@@ -13,7 +13,7 @@ import { hostWarn } from "../../host-log.js"
 export const devinAcpSource: ProviderAcpSource = {
   ...devinResumePolicy(),
   provider: "devin",
-  approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Structured question selections from exact native tool events and the saved main branch. Tool permission choices remain submission-only." },
+  approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question"], coverage: "Structured question selections from exact native tool events and the saved main branch. Tool permission choices remain submission-only." },
   toolName: devinToolName,
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
   observeAgents: input => new DevinAgents(input),

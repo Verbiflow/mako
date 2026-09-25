@@ -29,6 +29,7 @@ import { ClaudeTranscript } from "./sdk-transcript.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS } from "../../provider-startup.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
+import { claudeAuthDiagnostics } from "./auth-diagnostics.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
 const CLAUDE_MODES: LiveSessionMode[] = [
@@ -64,6 +65,7 @@ interface Live {
   projection: ClaudeProjection
   permissions: ClaudePermissions
   approvals: ClaudeApprovalObserver
+  authDiagnostics: ReturnType<typeof claudeAuthDiagnostics>
   transcript: ClaudeTranscript
   emit: NonNullable<ProviderStartOptions["emit"]>
   promptReceipt?: { id: string; dispatch: PromptDispatch }
@@ -134,6 +136,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
           conversation: live.state.id, event: message.subtype,
         })
       acknowledge(live, message)
+      live.authDiagnostics.observe(message)
       live.transcript.observe(message)
       live.approvals.observe(message)
       if (message.type === "system" && message.subtype === "compact_boundary" &&
@@ -181,6 +184,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       const failure = message.is_error
         ? (message.subtype === "success" ? message.result : message.errors.join("\n")).slice(0, 2000) || "Claude ended the turn with an error"
         : undefined
+      if (failure) live.authDiagnostics.failure(failure)
       engine.patch(live, {
         nativePath: live.transcript.path,
         nativeForkId,
@@ -202,6 +206,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
     if (!live.closed) throw new Error("Claude Code closed its SDK stream")
   } catch (error) {
     if (live.closed) return
+    if (error instanceof Error) live.authDiagnostics.failure(error.message)
     stop(live)
     engine.patch(live, {
       status: "failed",
@@ -251,7 +256,7 @@ export function createClaudeSdkDriver(
   }
   return {
     provider: "claude",
-    approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Parent AskUserQuestion results, correlated by native session and tool-use ID, live and in the saved branch. Other tool permissions and MCP elicitation retain callback/request-end evidence only." },
+    approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question"], coverage: "Parent AskUserQuestion results, correlated by native session and tool-use ID, live and in the saved branch. Other tool permissions and MCP elicitation retain callback/request-end evidence only." },
     approvalAnswerDigest: claudeApprovalAnswerDigest,
     observesNativeAgents: true,
     canResume: true,
@@ -304,6 +309,8 @@ export function createClaudeSdkDriver(
         observeSpawn = resolve
       })
       hostLog("claude-sdk", "initializing", { conversation: conversationId })
+      const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
+        hostWarn("claude-auth", "Native authentication failure", { conversation: conversationId, ...fields }))
       const query = dependencies.query({
         prompt: input,
         options: {
@@ -347,6 +354,7 @@ export function createClaudeSdkDriver(
         input,
         permissions,
         approvals,
+        authDiagnostics,
         transcript,
         emit: options.emit,
         projection: new ClaudeProjection(),
@@ -399,6 +407,7 @@ export function createClaudeSdkDriver(
         })
         return live.state
       } catch (error) {
+        if (error instanceof Error) authDiagnostics.failure(error.message)
         hostWarn("claude-sdk", "initialization failed", {
           conversation: conversationId, ms: Date.now() - startedAt,
           spawned: startupWatch !== undefined, steps: startupWatch?.summary(),
