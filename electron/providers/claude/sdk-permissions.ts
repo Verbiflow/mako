@@ -5,6 +5,7 @@ import type { CanUseTool, OnElicitation } from "@anthropic-ai/claude-agent-sdk"
 import { ElicitRequestFormParamsSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import type { ClaudeApprovalObserver } from "./approval-observer.js"
+import type { ClaudePermissionObserver } from "./permission-observer.js"
 import {
   elicitationContent,
   elicitationQuestion,
@@ -43,8 +44,10 @@ export class ClaudePermissions {
   private readonly id: string
   private readonly emit: (event: LiveDriverEvent) => void
   private readonly approvals: ClaudeApprovalObserver | undefined
-  constructor(id: string, emit: (event: LiveDriverEvent) => void, approvals?: ClaudeApprovalObserver) {
+  private readonly toolApprovals: ClaudePermissionObserver | undefined
+  constructor(id: string, emit: (event: LiveDriverEvent) => void, approvals?: ClaudeApprovalObserver, toolApprovals?: ClaudePermissionObserver) {
     this.approvals = approvals
+    this.toolApprovals = toolApprovals
     this.id = id
     this.emit = emit
   }
@@ -134,6 +137,7 @@ export class ClaudePermissions {
     const response = await this.ask(
       {
         id: options.requestId,
+        native: !options.agentID && !options.signal.aborted ? this.toolApprovals?.identify(options.toolUseID) : undefined,
         title,
         kind: name,
         options: [

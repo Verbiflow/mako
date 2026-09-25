@@ -25,6 +25,7 @@ import { ClaudeProjection } from "./sdk-projection.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
+import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS } from "../../provider-startup.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
@@ -65,6 +66,7 @@ interface Live {
   projection: ClaudeProjection
   permissions: ClaudePermissions
   approvals: ClaudeApprovalObserver
+  disposeApprovals(): Promise<void>
   authDiagnostics: ReturnType<typeof claudeAuthDiagnostics>
   transcript: ClaudeTranscript
   emit: NonNullable<ProviderStartOptions["emit"]>
@@ -84,6 +86,7 @@ export interface ClaudeSdkDependencies {
   }): ClaudeQuery
   interruptTimeoutMs?: number
   receiptTimeoutMs?: number
+  prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root">) => Promise<ClaudePermissionObserver | undefined>
 }
 
 type Engine = LiveEngineApi<Live>
@@ -93,6 +96,7 @@ function stop(live: Live): void {
   live.input.close()
   live.permissions.close()
   live.query.close()
+  void live.disposeApprovals()
   for (const receipt of live.receipts.values()) {
     clearTimeout(receipt.timer)
     receipt.reject(
@@ -256,7 +260,7 @@ export function createClaudeSdkDriver(
   }
   return {
     provider: "claude",
-    approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question"], coverage: "Parent AskUserQuestion results, correlated by native session and tool-use ID, live and in the saved branch. Other tool permissions and MCP elicitation retain callback/request-end evidence only." },
+    approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question", ...(dependencies.prepareApprovals ? ["tool-permission" as const] : [])], coverage: "Parent AskUserQuestion results in the saved branch; parent tool decisions from the bundled runtime's local native event exporter, retained before delivery. Existing telemetry configuration, custom runtimes, child tools and MCP elicitation retain submission evidence unless a matching observer is available. Missing native events never confirm an answer." },
     approvalAnswerDigest: claudeApprovalAnswerDigest,
     observesNativeAgents: true,
     canResume: true,
@@ -280,8 +284,18 @@ export function createClaudeSdkDriver(
       const publishDecision = (decision: import("../../contracts/approval-response.js").NativeApprovalDecision) => options.emit!({ type: "live-approval-decision", id: options.conversationId, decision })
       const approvals = new ClaudeApprovalObserver(nativeId, options.observedApprovals ?? [], publishDecision)
       let config: Options
+      let toolApprovals: ClaudePermissionObserver | undefined
       try {
         config = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
+        toolApprovals = await trace.step("observation", async () => {
+          try {
+            return await dependencies.prepareApprovals?.({ config, sessionId: nativeId,
+              previous: options.fork ? [] : options.observedApprovals ?? [], publish: publishDecision })
+          } catch {
+            hostWarn("claude-sdk", "Native tool decisions remain unconfirmed: observation unavailable", { conversation: conversationId })
+            return undefined
+          }
+        })
         if (!options.fork && options.resume && options.threadPath) {
           try {
             for (const decision of await readClaudeApprovalDecisions(options.threadPath, nativeId, options.observedApprovals ?? [])) publishDecision(decision)
@@ -289,6 +303,9 @@ export function createClaudeSdkDriver(
         }
         if (starting.get(options.conversationId) !== generation)
           throw new Error("Claude was closed while configuring")
+      } catch (error) {
+        await toolApprovals?.dispose()
+        throw error
       } finally {
         if (starting.get(options.conversationId) === generation)
           starting.delete(options.conversationId)
@@ -298,9 +315,14 @@ export function createClaudeSdkDriver(
       const permissions = new ClaudePermissions(
         options.conversationId,
         options.emit,
-        approvals
+        approvals,
+        toolApprovals
       )
       let exited = Promise.resolve()
+      let disposedApprovals: Promise<void> | undefined
+      const disposeApprovals = () => disposedApprovals ??= exited.then(() => toolApprovals?.dispose()).then(() => {}, () => {
+        hostWarn("claude-sdk", "Approval observation cleanup failed", { conversation: conversationId })
+      })
       const startedAt = Date.now()
       let startupFinished = false
       let startupWatch: ProviderStartupWatch | undefined
@@ -311,7 +333,8 @@ export function createClaudeSdkDriver(
       hostLog("claude-sdk", "initializing", { conversation: conversationId })
       const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
         hostWarn("claude-auth", "Native authentication failure", { conversation: conversationId, ...fields }))
-      const query = dependencies.query({
+      let query: ClaudeQuery
+      try { query = dependencies.query({
         prompt: input,
         options: {
           ...config,
@@ -342,18 +365,20 @@ export function createClaudeSdkDriver(
               })
               child.once("error", () => resolve())
             })
+            void exited.then(disposeApprovals)
             return child
           },
           canUseTool: permissions.tool,
           onElicitation: permissions.elicitation,
         },
-      })
+      }) } catch (error) { await disposeApprovals(); throw error }
       const live: Live = {
         query,
         exited: () => exited,
         input,
         permissions,
         approvals,
+        disposeApprovals,
         authDiagnostics,
         transcript,
         emit: options.emit,
@@ -572,6 +597,7 @@ export function createClaudeSdkDriver(
       stop(live)
       sessions.delete(id)
       await live.exited()
+      await live.disposeApprovals()
     },
   }
 }
