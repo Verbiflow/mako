@@ -20,8 +20,24 @@ export const LiveInputQuestionSchema = z.object({
     })
   ),
   defaultValues: z.array(z.string()).optional(),
+  when: z.array(z.object({ key: z.string(), op: z.enum(["eq", "neq"]), value: z.union([z.string(), z.number(), z.boolean()]) })).optional(),
 })
 export type LiveInputQuestion = z.infer<typeof LiveInputQuestionSchema>
+
+/** Only answered, visible predecessors participate in dependent questions. */
+export function activeInputQuestions(questions: readonly LiveInputQuestion[], answers: Record<string, string[]>): LiveInputQuestion[] {
+  const visible: LiveInputQuestion[] = []
+  const available: Record<string, string[]> = {}
+  for (const question of questions) {
+    if (question.when?.some(condition => {
+      const values = available[condition.key]
+      return !values?.length || (condition.op === "eq" ? !values.includes(String(condition.value)) : values.includes(String(condition.value)))
+    })) continue
+    visible.push(question)
+    available[question.id] = answers[question.id] ?? []
+  }
+  return visible
+}
 
 /** Session-lived questions use native message identity, not a callback lifetime. */
 export const NativeQuestionSchema = z.object({
