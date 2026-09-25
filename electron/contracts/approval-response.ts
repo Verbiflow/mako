@@ -45,6 +45,8 @@ export const ApprovalResponseSchema = z.object({
   id: z.string().uuid(),
   origin: ApprovalOriginSchema,
   digest: z.string(),
+  /** Provider's encoded answer, frozen before dispatch; original digest still deduplicates UI intent. */
+  nativeAnswerDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   createdAt: z.number(),
   ended: z.object({ source: ApprovalEndSourceSchema, observedAt: z.number() }).optional(),
   nativeDecision: NativeApprovalDecisionSchema.optional(),
@@ -61,8 +63,12 @@ export const ApprovalResponseSchema = z.object({
 })
 export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>
 
+export function nativeApprovalMatchesAnswer(receipt: ApprovalResponse): boolean {
+  return receipt.nativeDecision?.answerDigest === (receipt.nativeAnswerDigest ?? receipt.digest)
+}
+
 export function describeApprovalResponse(receipt: ApprovalResponse, questionAvailable = false) {
-  if (receipt.nativeDecision) return receipt.nativeDecision.answerDigest === receipt.digest
+  if (receipt.nativeDecision) return nativeApprovalMatchesAnswer(receipt)
     ? { title: "Agent recorded your answer", guidance: "The agent confirmed this decision for this approval. This does not confirm that the operation finished.", tone: "info" as const }
     : { title: "Agent recorded a different decision", guidance: "This approval was resolved with a different decision. Mako won’t resend your answer. Check the conversation before continuing.", tone: "caution" as const }
   switch (receipt.state.kind) {

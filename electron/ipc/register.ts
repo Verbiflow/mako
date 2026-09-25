@@ -4,7 +4,7 @@ import { withHostClient, hostHistoryPaging } from "../host-client.js"
 import { breadcrumb } from "../crash.js"
 import { hostCallInputs } from "../contracts/host-call-inputs.js"
 import { HostCallLifetime } from "../host-call-lifetime.js"
-import { ControlPreviewSchema } from "@mako/control-runtime/contracts"
+import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 
 type HostChannel = keyof typeof hostCallInputs
 type HostArguments<Channel extends HostChannel> =
@@ -20,7 +20,8 @@ export function installConversationRouting(route: NonNullable<typeof routeConver
   routeConversation = route
 }
 
-const calls = new Map<string, (args: unknown[]) => Promise<unknown>>()
+const calls = new Map<string, (args: unknown[]) => Promise<string>>()
+let previewCall: ((args: unknown[]) => Promise<ControlPreview | null>) | undefined
 const lifetime = new HostCallLifetime()
 export const stopHostCalls = () => lifetime.close()
 
@@ -29,14 +30,14 @@ export async function invokeHost(channel: string, args: unknown[], client = "web
   if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
   const call = calls.get(channel)
   if (!call) throw new Error("Unknown Mako host method")
-  return JSON.stringify({ ok: true, value: await withHostClient(client, () => call(args), history) })
+  return withHostClient(client, () => call(args), history)
 }
 
 /** The same validated handler and client authority, without serializing pixels. */
 export async function invokeHostPreview(args: unknown[], client = "web") {
-  const call = calls.get("mako:control-preview")
+  const call = previewCall
   if (!call) throw new Error("Preview delivery is unavailable")
-  return ControlPreviewSchema.nullable().parse(await withHostClient(client, () => call(args), false))
+  return withHostClient(client, () => call(args), false)
 }
 
 /** Both transports validate arguments against the generated handler contract. */
@@ -55,6 +56,8 @@ export function registerIpc<Channel extends HostChannel, Result>(
     const value = routed?.handled ? routed.value : await listener(undefined, ...parsed)
     return hostHistoryPaging() && presentHistory ? presentHistory(value) : value
   })
-  calls.set(channel, call)
+  calls.set(channel, async (args) => JSON.stringify({ ok: true, value: await call(args) }))
+  if (channel === "mako:control-preview")
+    previewCall = async (args) => ControlPreviewSchema.nullable().parse(await call(args))
   ipcMain.handle(channel, (event, ...args) => withHostClient(`renderer:${event.sender.id}`, () => call(args), true))
 }
