@@ -77,7 +77,7 @@
     "test:control-cli": "npm run build:electron && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node --import tsx scripts/test-control-input-errors.mjs && node scripts/test-control-cli.mjs && node scripts/test-control-cli-output-faults.mjs && tsx scripts/test-browser-modal.ts && node scripts/test-control-desktop-session.mjs && tsx scripts/test-control-owner.ts",
     "test:control-preview": "tsx scripts/test-runtime-response.ts && tsx scripts/test-control-preview-media.ts && tsx scripts/test-control-previews.ts && tsx --tsconfig tsconfig.app.json scripts/test-control-preview-state.ts && tsx --tsconfig tsconfig.app.json scripts/test-control-preview-painter.ts",
     "audit:control-preview": "npm run build:electron && node scripts/audit-control-preview.mjs",
-    "test:control-recording": "tsx scripts/test-browser-focus.ts && tsx scripts/test-browser-capture.ts && tsx scripts/test-native-capture.ts && tsx scripts/test-control-recording.ts && tsx scripts/test-control-recording-stream.ts && tsx scripts/test-control-recording-failures.ts && tsx scripts/test-browser-recording.ts && tsx scripts/test-native-recording.ts",
+    "test:control-recording": "tsx scripts/test-browser-focus.ts && tsx scripts/test-browser-capture.ts && tsx scripts/test-native-capture.ts && tsx scripts/test-recording-render.ts && tsx scripts/test-control-recording.ts && tsx scripts/test-control-recording-stream.ts && tsx scripts/test-control-recording-failures.ts && tsx scripts/test-browser-recording.ts && tsx scripts/test-native-recording.ts",
     "test:control-recording-continuous": "tsx scripts/test-control-recording-continuous.ts",
     "preview": "vite preview",
     "package": "npm run package:mac",
