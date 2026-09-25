@@ -3,6 +3,23 @@ import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveExecutable } from "./executable.js"
 
+/** Encoding policy is shared by continuous browser capture and native overlays.
+ * On Mac, never turn hardware unavailability into an unbounded software workload.
+ * Other platforms retain their existing encoder until their runtime is defined. */
+export function recordingVideoEncoding(platform = process.platform) {
+  return platform === "darwin"
+    ? {
+        codec: "h264_videotoolbox" as const,
+        hardwareRequired: true,
+        args: ["-c:v", "h264_videotoolbox", "-allow_sw", "0", "-realtime", "1", "-bf", "0", "-q:v", "80"],
+      }
+    : {
+        codec: "libx264" as const,
+        hardwareRequired: false,
+        args: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
+      }
+}
+
 /** Packaged recording always uses its reviewed binary, independent of shell PATH. */
 export function mediaExecutable(name: "ffmpeg" | "ffprobe") {
   const platform = `${process.platform}-${process.arch}`

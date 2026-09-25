@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { mediaExecutable } from "./control-media.js"
+import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
 import { RecordingEncoder } from "./recording-encoder.js"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -79,6 +79,7 @@ export class ControlRecording {
   private readonly frames: Frame[] = []
   private readonly pointers: Pointer[] = []
   private encoder?: RecordingEncoder
+  private videoEncoding?: ReturnType<typeof recordingVideoEncoding>
   private journal?: FileHandle
   private live?: Promise<void>
   private firstWrite?: {
@@ -160,15 +161,19 @@ export class ControlRecording {
     if (!isAbsolute(root))
       throw new Error("Recording directory must be absolute")
     // Preflight before the capture stream starts; no silent screenshots-only fallback.
-    await execute(mediaExecutable("ffmpeg"), ["-version"], {
+    const encoding = recordingVideoEncoding()
+    const encoders = await execute(mediaExecutable("ffmpeg"), ["-hide_banner", "-encoders"], {
       timeout: 5000,
-      maxBuffer: 16_384,
+      maxBuffer: 131_072,
     })
+    if (!encoders.stdout.split("\n").some((line) => line.trim().split(/\s+/)[1] === encoding.codec))
+      throw new Error(`Recording requires ${encoding.codec}, which is missing from this FFmpeg build. Install the current Mako recording tools. No software fallback was started.`)
     mediaExecutable("ffprobe")
     await mkdir(root, { recursive: true, mode: 0o700 })
     const directory = await mkdtemp(join(await realpath(root), "recording-"))
     const recording = new ControlRecording(target, directory, options, onStop)
     if (target.kind === "page") {
+      recording.videoEncoding = encoding
       recording.encoder = new RecordingEncoder(directory, (reason) => {
         void recording.stop(reason)
       })
@@ -593,6 +598,7 @@ export class ControlRecording {
             encodedFrames: this.encodedFrames ?? this.sourceFrames,
             submittedFrames: this.encoder ? this.outputFrames : undefined,
             encodingTiming: this.encoder ? this.encodingTiming : undefined,
+            videoEncoding: this.videoEncoding,
             encodedDurationMs: this.encodedDurationMs,
             pointer: this.pointers,
             droppedFrames: this.dropped,
@@ -821,6 +827,7 @@ export class ControlRecording {
     )
     this.dimensions = { width, height }
     const output = join(this.directory, "recording.mp4")
+    this.videoEncoding = recordingVideoEncoding()
     const child = spawn(
       mediaExecutable("ffmpeg"),
       [
@@ -828,6 +835,10 @@ export class ControlRecording {
         "-loglevel",
         "error",
         "-n",
+        "-filter_threads",
+        "1",
+        "-filter_complex_threads",
+        "1",
         ...(this.sourceVideo ? ["-i", this.sourceVideo] : []),
         "-f",
         "rawvideo",
@@ -845,12 +856,7 @@ export class ControlRecording {
               `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
             ]
           : []),
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "18",
+        ...this.videoEncoding.args,
         "-pix_fmt",
         "yuv420p",
         "-movflags",

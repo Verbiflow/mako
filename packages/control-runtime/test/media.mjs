@@ -3,7 +3,10 @@ import { mkdtemp, mkdir, copyFile, writeFile, rm, realpath } from "node:fs/promi
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { mediaExecutable } from "../dist/control-media.js"
+import { mediaExecutable, recordingVideoEncoding } from "../dist/control-media.js"
+assert.equal(recordingVideoEncoding("darwin").hardwareRequired, true)
+assert.deepEqual(recordingVideoEncoding("darwin").args.slice(0, 4), ["-c:v", "h264_videotoolbox", "-allow_sw", "0"])
+assert.equal(recordingVideoEncoding("linux").codec, "libx264")
 const directory = await realpath(await mkdtemp(join(tmpdir(), "mako-media-paths-")))
 const original = process.env.MAKO_CONTROL_MEDIA_ROOT
 try {

@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import { rename, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import { mediaExecutable } from "./control-media.js"
+import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
 
 const execute = promisify(execFile)
 
@@ -41,7 +41,7 @@ export class RecordingEncoderProcess {
         "error",
         "-n",
         // One conversion pipeline per recording; bound its pool independently
-        // of x264's parallel frame encoding.
+        // of the codec's internal encoding work.
         "-filter_threads",
         "1",
         "-f",
@@ -55,12 +55,7 @@ export class RecordingEncoderProcess {
         "-i",
         "pipe:0",
         "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "18",
+        ...recordingVideoEncoding().args,
         "-pix_fmt",
         "yuv420p",
         "-g",
