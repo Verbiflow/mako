@@ -61,7 +61,7 @@ const probe = JSON.parse(
   ).stdout
 )
 assert.equal(probe.streams[0].codec_name, "h264")
-assert.equal(probe.streams[0].r_frame_rate, "60/1", "Browser recording defaults to 60 fps")
+assert.equal(result.frameRate?.requestedFps, 60, "Browser recording targets 60 fps")
 assert.equal(probe.streams[0].width, 1600)
 assert.equal(probe.streams[0].height, 1000)
 if (process.platform === "darwin") assert.equal(probe.streams[0].has_b_frames, 0)
@@ -85,7 +85,7 @@ assert.equal(timeline.pointer.length, 2)
 // not be painted retroactively into earlier output frames.
 const snapshot = async (at: number) => {
   const { stdout } = await promisify(execFile)("ffmpeg", [
-    "-v", "error", "-ss", String(at / 1000), "-i", result.video!,
+    "-v", "error", "-i", result.video!, "-vf", "fps=60", "-ss", String(at / 1000),
     "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
   ], { encoding: "buffer", maxBuffer: 8 * 1024 * 1024 })
   assert.equal(stdout.length, 1600 * 1000 * 3)
@@ -218,6 +218,6 @@ assert.equal(sampledResult.frames, 2)
 assert.equal(sampledResult.sampledFrames, 1)
 const sampledTimeline = JSON.parse(await readFile(sampledResult.timeline!, "utf8"))
 assert.equal(sampledTimeline.frames.at(-1).height, 478, "Stop admits the latest source, not the older queued frame")
-assert.equal(sampledTimeline.version, 3)
+assert.equal(sampledTimeline.version, 4)
 assert.ok(sampledTimeline.frames.every((entry: { file?: string }) => !entry.file), "Browser recording does not stage source files")
 console.log("Recording sampling: bounded latest frame and final-frame flush passed")

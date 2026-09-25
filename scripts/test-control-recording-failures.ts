@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdtemp, mkdir, readFile, writeFile, symlink } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, readdir, writeFile, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -136,7 +136,7 @@ exec ${quote(ffmpeg)} "$@"
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line))
-    assert.equal(journal[0].version, 3)
+    assert.equal(journal[0].version, 4)
     assert.ok(journal.some((entry) => entry.frame))
     assert.ok(
       !journal.some((entry) => entry.end),
@@ -161,7 +161,7 @@ exec ${quote(ffmpeg)} "$@"
   let pausedPid: number | undefined
   const shortStall = await ControlRecording.create(
     target,
-    { directory: root, fps: 60, cursor: false },
+    { directory: root, fps: 60, cursor: true },
     async () => {}
   )
   try {
@@ -183,6 +183,11 @@ exec ${quote(ffmpeg)} "$@"
       await delay(120)
       await shortStall.frame(bytes, 640, 480)
     }
+    // Cursor-only transitions during a stalled pipe must keep their original
+    // presentation times even without another browser screenshot.
+    shortStall.pointer({ x: 100, y: 100, pressed: true })
+    await delay(120)
+    shortStall.pointer({ x: 300, y: 100, pressed: false })
     await delay(120)
     process.kill(pausedPid, "SIGCONT")
     pausedPid = undefined
@@ -194,43 +199,44 @@ exec ${quote(ffmpeg)} "$@"
       .object({
         frames: z.array(z.object({ at: z.number() })),
         encodingTiming: z.object({ maxQueuedFrames: z.number() }),
+        pointer: z.array(z.object({ at: z.number(), x: z.number(), y: z.number() })),
       })
       .parse(JSON.parse(await readFile(shortStallResult.timeline!, "utf8")))
     assert.equal(timeline.frames.length, 4)
-    assert.ok(
-      timeline.encodingTiming.maxQueuedFrames >= 2,
-      "Test must exercise source backlog"
-    )
+    // Fast seeking into a held VFR frame can return the next sample. Decode
+    // every actual sample and inspect its presentation interval instead.
+    const decoded = join(root, "short-stall-decoded")
+    await mkdir(decoded)
+    await execute(ffmpeg, ["-v", "error", "-i", shortStallResult.video!,
+      "-fps_mode", "passthrough", join(decoded, "%03d.png")])
+    const files = (await readdir(decoded)).sort()
+    const packets = z.array(z.object({ pts_time: z.string(), duration_time: z.string() }))
+      .parse(JSON.parse((await execute(ffprobe, ["-v", "error", "-show_packets",
+        "-show_entries", "packet=pts_time,duration_time", "-of", "json",
+        shortStallResult.video!])).stdout).packets)
+    assert.equal(files.length, packets.length)
     for (let index = 0; index < colors.length; index++) {
       const seconds = (timeline.frames[index + 1]!.at + 60) / 1000
-      const { stdout } = await execute(
-        "ffmpeg",
-        [
-          "-v",
-          "error",
-          "-ss",
-          String(seconds),
-          "-i",
-          shortStallResult.video!,
-          "-frames:v",
-          "1",
-          "-vf",
-          "crop=2:2:10:10",
-          "-f",
-          "rawvideo",
-          "-pix_fmt",
-          "rgb24",
-          "pipe:1",
-        ],
-        { encoding: "buffer" }
-      )
-      assert.equal(stdout.length, 12)
-      assert.ok(
-        stdout[index]! > 180 &&
-          stdout[(index + 1) % 3]! < 80 &&
-          stdout[(index + 2) % 3]! < 80,
-        `Source state ${colors[index]} must survive the encoder stall at ${seconds}s`
-      )
+      const sample = packets.findIndex(packet => Number(packet.pts_time) <= seconds &&
+        Number(packet.pts_time) + Number(packet.duration_time) > seconds)
+      assert.ok(sample >= 0, "Each transient state has a presentation interval")
+      const pixel = await sharp(join(decoded, files[sample]!))
+        .extract({ left: 10, top: 10, width: 1, height: 1 }).removeAlpha().raw().toBuffer()
+      assert.ok(pixel[index]! > 180 && pixel[(index + 1) % 3]! < 80 && pixel[(index + 2) % 3]! < 80,
+        `Source state ${colors[index]} must survive the encoder stall at ${seconds}s`)
+    }
+    for (const point of timeline.pointer) {
+      const seconds = (point.at + 60) / 1000
+      const sample = packets.findIndex(packet => Number(packet.pts_time) <= seconds &&
+        Number(packet.pts_time) + Number(packet.duration_time) > seconds)
+      assert.ok(sample >= 0)
+      const pixels = await sharp(join(decoded, files[sample]!))
+        .extract({ left: point.x - 6, top: point.y - 5, width: 32, height: 36 })
+        .removeAlpha().raw().toBuffer()
+      let bright = 0
+      for (let offset = 0; offset < pixels.length; offset += 3)
+        if (pixels[offset]! > 180 && pixels[offset + 1]! > 180 && pixels[offset + 2]! > 180) bright++
+      assert.ok(bright > 10, `Cursor transition at ${point.at}ms must survive encoder suspension`)
     }
   } finally {
     if (pausedPid !== undefined) process.kill(pausedPid, "SIGCONT")
@@ -240,7 +246,8 @@ exec ${quote(ffmpeg)} "$@"
     else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
   }
 
-  // A stalled encoder must not turn bursty source frames into unbounded memory.
+  // A stalled encoder reduces temporal sampling within a bounded source queue.
+  // Resume the actual process and require complete, correctly timed output.
   process.env.MAKO_CONTROL_MEDIA_ROOT = tools
   let backlogResult
   const backlog = await ControlRecording.create(
@@ -272,23 +279,49 @@ exec ${quote(ffmpeg)} "$@"
       await delay(18)
       await backlog.frame(i % 2 ? dense : different, 640, 480)
     }
-    assert.notEqual(
-      backlog.receipt().status,
-      "recording",
-      "Source byte budget must interrupt capture"
-    )
+    assert.equal(backlog.receipt().status, "recording",
+      "Source pressure must reduce frame rate rather than interrupt capture")
+    assert.ok(backlog.receipt().droppedFrames > 0,
+      "This test must exercise the bounded source-byte queue")
     process.kill(pausedPid, "SIGCONT")
     pausedPid = undefined
+    const finalImage = await sharp({ create: { width: 640, height: 480,
+      channels: 3, background: "#20e020" } }).png().toBuffer()
+    await backlog.frame(finalImage, 640, 480)
+    await delay(600)
+    await backlog.stop()
     backlogResult = await backlog.settled()
-    assert.equal(backlogResult.status, "interrupted", backlogResult.error)
-    assert.match(backlogResult.error!, /backlog exceeded/)
+    assert.equal(backlogResult.status, "finished", backlogResult.error)
+    assert.ok(backlogResult.frameRate!.skippedFrameSlots > 60,
+      "The reduced temporal sampling must be reported")
+    assert.ok(backlogResult.frameRate!.encodedFps < 40)
+    assert.ok(Math.abs(backlogResult.encodedDurationMs! - backlogResult.durationMs) < 18,
+      "Backpressure must not speed up or shorten the recording")
     assert.ok(
       backlogResult.video,
-      "Completed video prefix survives source overflow"
+      "The entire recording survives source overflow"
     )
     const timeline = JSON.parse(await readFile(backlogResult.timeline!, "utf8"))
     assert.ok(timeline.encodingTiming.maxQueuedBytes <= 32 * 1024 * 1024)
     assert.ok(timeline.encodingTiming.maxQueuedBytes > 24 * 1024 * 1024)
+    const probe = JSON.parse((await execute(ffprobe, ["-v", "error",
+      "-show_packets", "-show_entries", "packet=pts_time,duration_time",
+      "-of", "json", backlogResult.video!])).stdout)
+    const packets = z.array(z.object({ pts_time: z.string(), duration_time: z.string() }))
+      .parse(probe.packets)
+    assert.ok(packets.some(packet => Number(packet.duration_time) > 0.5),
+      "The video must hold an image during the actual encoder stall")
+    assert.ok(packets.every((packet, index) => index === 0 ||
+      Number(packet.pts_time) > Number(packets[index - 1]!.pts_time)),
+      "Presentation timestamps must remain ordered")
+    const backlogPixels = join(root, "backlog-decoded")
+    await mkdir(backlogPixels)
+    await execute(ffmpeg, ["-v", "error", "-i", backlogResult.video!,
+      "-vf", "scale=1:1", "-fps_mode", "passthrough", join(backlogPixels, "%04d.png")])
+    const lastPixel = (await readdir(backlogPixels)).sort().at(-1)!
+    const pixel = await sharp(join(backlogPixels, lastPixel)).removeAlpha().raw().toBuffer()
+    assert.ok(pixel[1]! > 180 && pixel[0]! < 80 && pixel[2]! < 80,
+      "The final exact source state must survive pressure")
     const encoderPid = Number(await readFile(pidFile, "utf8"))
     assert.throws(() => process.kill(encoderPid, 0), { code: "ESRCH" })
   } finally {

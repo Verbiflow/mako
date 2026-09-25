@@ -48,7 +48,7 @@ if (process.versions.electron) {
   const identityPaths = [
     ...(runtimeApp ? [join(runtimeApp, "Contents/Resources/app.asar"),
       ...["ffmpeg", "ffprobe"].map(name => join(runtimeApp, "Contents/Resources/control-media/darwin-arm64", name))] : []),
-    ...["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"].flatMap(name => [
+    ...["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process", "recording-video-input"].flatMap(name => [
       `packages/control-runtime/src/${name}.ts`, `packages/control-runtime/dist/${name}.js`,
     ]),
     ...(process.env.MAKO_CONTROL_MEDIA_ROOT ? [join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffmpeg"), join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffprobe")] : []),
@@ -894,6 +894,7 @@ async function audit() {
         sampledFrames: recording.sampledFrames,
         encodedFrames: recording.encodedFrames,
         encodedDurationMs: recording.encodedDurationMs,
+        frameRate: recording.frameRate,
         dimensions: recording.dimensions,
         video: recording.video,
         timeline: recording.timeline,

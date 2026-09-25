@@ -16,7 +16,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
-import { mediaExecutable } from "../packages/control-runtime/src/control-media.js"
+import { mediaExecutable, recordingVideoEncoding } from "../packages/control-runtime/src/control-media.js"
 
 const execute = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-continuous-recording-"))
@@ -102,10 +102,11 @@ assert.ok(
   result.frames * frame.length > 512 * 1024 * 1024,
   "accepted source data exceeds former staging cap"
 )
-assert.equal(result.encodedFrames, Math.ceil((result.durationMs * 60) / 1000))
+assert.ok(result.encodedFrames! <= Math.ceil(result.durationMs / 1000) + 2)
+assert.ok(result.frameRate!.unchangedFrameSlots > seconds * 50)
 assert.ok(Math.abs(result.encodedDurationMs! - result.durationMs) < 17)
 const timeline = JSON.parse(await readFile(result.timeline!, "utf8"))
-assert.equal(timeline.version, 3)
+assert.equal(timeline.version, 4)
 assert.equal(timeline.frames.length, result.frames)
 assert.ok(
   timeline.frames.every((value: { file?: string }) => value.file === undefined)
@@ -187,7 +188,7 @@ try {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line))
-  assert.equal(journal[0].version, 3)
+  assert.equal(journal[0].version, 4)
   assert.equal(journal.at(-1).end.status, "interrupted")
 } finally {
   if (previousRoot === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
@@ -202,9 +203,9 @@ const native = await ControlRecording.create(
     await native.attachVideo(join(native.directory, "recording.mp4"))
   }
 )
-// Use the finished browser fixture as a real H.264 source; this test exercises
-// import/retention rather than the native capture backend.
-// Fragmented MP4 does not supply nb_frames, so remux to an ordinary MP4 first.
+// Generate the fixed-rate H.264 produced by native capture. The browser fixture
+// now holds static images with timestamps; copying that VFR stream would exercise
+// conversion instead of the native no-transform path this check is about.
 await execute(ffmpeg, [
   "-v",
   "error",
@@ -212,8 +213,11 @@ await execute(ffmpeg, [
   result.video!,
   "-t",
   "0.5",
-  "-c:v",
-  "copy",
+  "-vf",
+  "fps=60",
+  ...recordingVideoEncoding().args,
+  "-pix_fmt",
+  "yuv420p",
   join(native.directory, "recording.mp4"),
 ])
 const digest = async (path: string) =>

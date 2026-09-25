@@ -76,11 +76,13 @@ try {
   const receipt = await staticRecording.settled()
   assert.equal(receipt.status, "finished", receipt.error)
   const probe = await inspect(receipt.video!)
-  const expectedFrames = Math.ceil(receipt.durationMs / 100)
-  assert.equal(Number(probe.streams[0]!.nb_read_frames), expectedFrames)
+  assert.equal(Number(probe.streams[0]!.nb_read_frames), receipt.encodedFrames)
+  assert.ok(receipt.encodedFrames! <= Math.ceil(receipt.durationMs / 1000) + 2,
+    "Static pixels should be held, not encoded at the requested maximum rate")
+  assert.ok(receipt.frameRate!.unchangedFrameSlots > 5)
   assert.ok(
     Math.abs(Number(probe.format.duration) * 1000 - receipt.durationMs) < 101,
-    "a single static source must cover the recording duration once, within one CFR frame"
+    "a single static source must cover the recording duration once, within one requested frame interval"
   )
   const timeline = JSON.parse(await readFile(receipt.timeline!, "utf8"))
   assert.equal(timeline.frames.length, 1)
@@ -109,14 +111,14 @@ try {
       if (pending.length === 2) await pending.shift()
       const color = Math.floor(index / 3) % colors.length
       expected.push(colors[color]!)
-      pending.push(ordered.write(index % 3 === 0 ? {
-        bytes: images[color]!, frame: { width: 1920, height: 1080 }, at: index * 1000 / 60,
+      pending.push(ordered.write(index * 1000 / 60, index % 3 === 0 ? {
+        bytes: images[color]!, frame: { width: 1920, height: 1080 },
       } : undefined))
     }
     await Promise.all(pending)
     const result = await ordered.finish()
     await execute(mediaExecutable("ffmpeg"), [
-      "-v", "error", "-i", result.path, "-vf", "scale=1:1", "-f", "image2",
+      "-v", "error", "-i", result.path, "-vf", "scale=1:1", "-fps_mode", "passthrough", "-f", "image2",
       join(orderedDirectory, "frame-%03d.png"),
     ])
     const decoded = (await readdir(orderedDirectory)).filter(name => name.endsWith(".png")).sort()
@@ -176,8 +178,10 @@ try {
   assert.equal(denseProbe.streams[0]!.height, height)
   assert.equal(
     Number(denseProbe.streams[0]!.nb_read_frames),
-    Math.ceil((denseReceipt.durationMs * 60) / 1000)
+    denseReceipt.encodedFrames
   )
+  assert.ok(denseReceipt.encodedFrames! <= Math.ceil(denseReceipt.durationMs / 1000) + 2)
+  assert.ok(Math.abs(Number(denseProbe.format.duration) * 1000 - denseReceipt.durationMs) < 18)
   // Header-only dimensions must retain the previous decoder's pixel limit.
   // Deliberately malformed PNG dimensions are refused before decoder allocation.
   const oversized = await sharp({ create: { width: 2, height: 2, channels: 3,
