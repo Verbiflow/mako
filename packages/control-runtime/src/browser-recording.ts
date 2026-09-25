@@ -99,11 +99,10 @@ export class BrowserRecordings {
               capturedAt: value.capturedAt,
             })
             .then(() => {
-              if (recording.receipt().frames > 0) frameReceived()
-              else if (recording.receipt().status !== "recording")
-                frameFailed(
-                  new Error("The first recording frame could not be stored")
-                )
+              const receipt = recording.receipt()
+              if (receipt.status !== "recording")
+                frameFailed(new Error(receipt.error ?? "The recording encoder could not accept its first frame"))
+              else if (receipt.frames > 0) frameReceived()
             })
         },
         ended: (reason) => {
@@ -131,6 +130,8 @@ export class BrowserRecordings {
       )
       try {
         await firstFrame
+        if (recording.receipt().status !== "recording")
+          throw new Error(recording.receipt().error ?? "Recording ended during startup")
       } finally {
         clearTimeout(timeout)
         signal.removeEventListener("abort", onAbort)

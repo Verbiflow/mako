@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { mediaExecutable } from "./control-media.js"
+import { RecordingEncoder } from "./recording-encoder.js"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { Readable } from "node:stream"
@@ -13,12 +14,15 @@ import {
   rename,
   readdir,
   realpath,
+  open,
+  type FileHandle,
 } from "node:fs/promises"
 import { join, isAbsolute } from "node:path"
 import { tmpdir } from "node:os"
 import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
-import sharp, { type OverlayOptions } from "sharp"
+import sharp from "sharp"
+import { renderRecordingImage } from "./recording-render.js"
 import {
   RecordingOptionsSchema,
   type RecordingOptions,
@@ -28,7 +32,8 @@ import {
 
 const execute = promisify(execFile)
 interface Frame {
-  file: string
+  file?: string
+  firstOutputFrame?: number
   at: number
   width: number
   height: number
@@ -48,11 +53,12 @@ interface IncomingFrame {
   data: string
   width: number
   height: number
-  metadata: { pageScaleFactor?: number; offsetTop?: number; capturedAt?: number }
+  metadata: {
+    pageScaleFactor?: number
+    offsetTop?: number
+    capturedAt?: number
+  }
 }
-const pointerArtwork = Buffer.from(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32" viewBox="0 0 28 32"><path d="M5 4v21l6-6 4 9 4-2-4-9h8L5 4Z" fill="#302c27" stroke="#fffaf3" stroke-width="1.7" stroke-linejoin="round"/></svg>'
-)
 
 /** Explicit recording only. Frames and action evidence never enter model context. */
 export class ControlRecording {
@@ -64,7 +70,32 @@ export class ControlRecording {
   private error: string | undefined
   private readonly frames: Frame[] = []
   private readonly pointers: Pointer[] = []
-  private bytes = 0
+  private encoder?: RecordingEncoder
+  private journal?: FileHandle
+  private live?: Promise<void>
+  private firstWrite?: {
+    promise: Promise<void>
+    resolve: () => void
+    reject: (error: Error) => void
+  }
+  private readonly videoQueue: { bytes: Buffer; frame: Frame }[] = []
+  private queuedVideoBytes = 0
+  private videoWake?: () => void
+  private outputFrames = 0
+  private sourceEnded = false
+  private encodedDurationMs?: number
+  private encodedFrames?: number
+  private journalPointers = 0
+  private readonly encodingTiming = {
+    frames: 0,
+    waitsOverFrameBudget: 0,
+    maxScheduleLagMs: 0,
+    maxWorkerWaitMs: 0,
+    maxRenderMs: 0,
+    maxPipeMs: 0,
+    maxQueuedFrames: 0,
+    maxQueuedBytes: 0,
+  }
   private dropped = 0
   private writing: Promise<void> | undefined
   private pendingFrame: IncomingFrame | undefined
@@ -81,7 +112,9 @@ export class ControlRecording {
   private dimensions: RecordingReceipt["dimensions"]
   readonly target: ControlTarget
   readonly directory: string
-  private readonly options: ReturnType<typeof RecordingOptionsSchema.parse> & { fps: number }
+  private readonly options: ReturnType<typeof RecordingOptionsSchema.parse> & {
+    fps: number
+  }
   private readonly onStop: () => Promise<void | string>
   private constructor(
     target: ControlTarget,
@@ -101,10 +134,15 @@ export class ControlRecording {
     onStop: () => Promise<void | string>
   ) {
     const parsed = RecordingOptionsSchema.parse(input)
-    const options = { ...parsed, fps: parsed.fps ?? (target.kind === "page" ? 60 : 30) }
-    const root = options.directory ?? (process.env.MAKO_CONTROL_ARTIFACTS
-      ? join(process.env.MAKO_CONTROL_ARTIFACTS, "recordings")
-      : join(tmpdir(), "mako-recordings"))
+    const options = {
+      ...parsed,
+      fps: parsed.fps ?? (target.kind === "page" ? 60 : 30),
+    }
+    const root =
+      options.directory ??
+      (process.env.MAKO_CONTROL_ARTIFACTS
+        ? join(process.env.MAKO_CONTROL_ARTIFACTS, "recordings")
+        : join(tmpdir(), "mako-recordings"))
     if (!isAbsolute(root))
       throw new Error("Recording directory must be absolute")
     // Preflight before the capture stream starts; no silent screenshots-only fallback.
@@ -116,6 +154,22 @@ export class ControlRecording {
     await mkdir(root, { recursive: true, mode: 0o700 })
     const directory = await mkdtemp(join(await realpath(root), "recording-"))
     const recording = new ControlRecording(target, directory, options, onStop)
+    if (target.kind === "page") {
+      recording.encoder = new RecordingEncoder(directory, (reason) => {
+        void recording.stop(reason)
+      })
+      try {
+        await recording.encoder.ready
+      } catch (error) {
+        await recording.stop("Recording worker could not start")
+        await recording.settled()
+        throw error
+      }
+      // Loading the worker is startup work, not captured time. Complete it
+      // before subscribing so capture does not begin with a frozen first frame.
+      recording.start = performance.now()
+      recording.startedAt = Date.now()
+    }
     recording.timer = setTimeout(() => {
       void recording.stop("Recording reached its duration limit")
     }, options.maxDurationMs)
@@ -137,6 +191,10 @@ export class ControlRecording {
     if (this.video) receipt.video = this.video
     if (this.timeline) receipt.timeline = this.timeline
     if (this.dimensions) receipt.dimensions = this.dimensions
+    if (this.encodedDurationMs !== undefined)
+      receipt.encodedDurationMs = this.encodedDurationMs
+    if (this.encodedFrames !== undefined)
+      receipt.encodedFrames = this.encodedFrames
     if (this.error) receipt.error = this.error
     return receipt
   }
@@ -152,6 +210,8 @@ export class ControlRecording {
         streams: z.array(
           z.object({
             codec_type: z.string(),
+            codec_name: z.string().optional(),
+            r_frame_rate: z.string().optional(),
             width: z.number().optional(),
             height: z.number().optional(),
             nb_frames: z.string().optional(),
@@ -191,6 +251,20 @@ export class ControlRecording {
       .int()
       .nonnegative()
       .parse(Number(stream?.nb_frames))
+    const [rateNumerator, rateDenominator] = (stream?.r_frame_rate ?? "")
+      .split("/")
+      .map(Number)
+    if (
+      !this.options.cursor &&
+      Math.max(width, height) <= this.options.maxSide &&
+      stream?.codec_name === "h264" &&
+      rateDenominator > 0 &&
+      rateNumerator / rateDenominator === this.options.fps
+    ) {
+      this.dimensions = { width, height }
+      this.video = path
+      return
+    }
     this.sourceVideo = join(this.directory, "source.mp4")
     await rename(path, this.sourceVideo)
     // These points are emitted at the native event-posting boundary, independent
@@ -282,18 +356,25 @@ export class ControlRecording {
   ): Promise<void> {
     if (this.state !== "recording") return Promise.resolve()
     if (this.pendingFrame) this.sampled++
-    this.pendingFrame = { data, width, height, metadata: { ...metadata, capturedAt: metadata.capturedAt ?? Date.now() } }
+    this.pendingFrame = {
+      data,
+      width,
+      height,
+      metadata: { ...metadata, capturedAt: metadata.capturedAt ?? Date.now() },
+    }
     return this.flushFrame()
   }
   private flushFrame(): Promise<void> {
     if (this.writing) return this.writing
-    if (this.state !== "recording" || !this.pendingFrame) return Promise.resolve()
+    if (this.state !== "recording" || !this.pendingFrame)
+      return Promise.resolve()
     const remaining = this.nextWriteAt - performance.now()
     if (remaining > 0) {
-      if (!this.frameTimer) this.frameTimer = setTimeout(() => {
-        this.frameTimer = undefined
-        void this.flushFrame()
-      }, Math.ceil(remaining))
+      if (!this.frameTimer)
+        this.frameTimer = setTimeout(() => {
+          this.frameTimer = undefined
+          void this.flushFrame()
+        }, Math.ceil(remaining))
       return Promise.resolve()
     }
     const pending = this.pendingFrame
@@ -302,17 +383,23 @@ export class ControlRecording {
     this.frameTimer = undefined
     return this.storeFrame(pending)
   }
-  private storeFrame({ data, width, height, metadata }: IncomingFrame): Promise<void> {
+  private storeFrame({
+    data,
+    width,
+    height,
+    metadata,
+  }: IncomingFrame): Promise<void> {
     const interval = 1000 / this.options.fps
     // Keep cadence when a timer fires late; never queue old frames to catch up.
     const now = performance.now()
-    this.nextWriteAt = this.nextWriteAt === -Infinity
-      ? now + interval
-      : Math.max(this.nextWriteAt + interval, now)
+    this.nextWriteAt =
+      this.nextWriteAt === -Infinity
+        ? now + interval
+        : Math.max(this.nextWriteAt + interval, now)
     if (
       data.length > 12_000_000 ||
-      this.bytes > 512 * 1024 * 1024 ||
-      this.frames.length >= 12_000
+      this.frames.length >=
+        Math.ceil((this.options.maxDurationMs * this.options.fps) / 1000) + 2
     ) {
       void this.stop("Recording reached its frame or storage limit")
       return Promise.resolve()
@@ -331,7 +418,6 @@ export class ControlRecording {
       return Promise.resolve()
     }
     const bytes = Buffer.from(data, "base64")
-    const file = `frame-${this.frames.length}.jpg`
     this.writing = (async () => {
       const imageMetadata = await sharp(bytes, {
         limitInputPixels: 16_000_000,
@@ -340,15 +426,98 @@ export class ControlRecording {
         !imageMetadata.width ||
         !imageMetadata.height ||
         width <= 0 ||
-        height <= 0
+        height <= 0 ||
+        !Number.isFinite(width) ||
+        !Number.isFinite(height)
       )
         throw new Error("Invalid recording frame geometry")
-      await writeFile(join(this.directory, file), bytes, {
-        flag: "wx",
-        mode: 0o600,
+      const frame: Frame = {
+        at,
+        width: imageMetadata.width,
+        height: imageMetadata.height,
+        viewportWidth: width,
+        viewportHeight: height,
+        ...metadata,
+      }
+      if (!this.dimensions) {
+        let resolve!: () => void, reject!: (error: Error) => void
+        const promise = new Promise<void>((yes, no) => {
+          resolve = yes
+          reject = no
+        })
+        this.firstWrite = { promise, resolve, reject }
+        void promise.catch(() => {})
+        const scale = Math.min(
+          1,
+          this.options.maxSide / Math.max(width, height)
+        )
+        this.dimensions = {
+          width: Math.max(2, Math.floor((width * scale) / 2) * 2),
+          height: Math.max(2, Math.floor((height * scale) / 2) * 2),
+        }
+        this.journal = await open(
+          join(this.directory, "timeline.jsonl"),
+          "wx",
+          0o600
+        )
+        this.timeline = join(this.directory, "timeline.jsonl")
+        await this.journal.writeFile(
+          JSON.stringify({
+            version: 3,
+            target: this.target,
+            startedAt: this.startedAt,
+            fps: this.options.fps,
+            dimensions: this.dimensions,
+          }) + "\n"
+        )
+        await this.encoder!.initialize(
+          this.dimensions.width,
+          this.dimensions.height,
+          this.options.fps
+        )
+      }
+      const index = this.frames.length
+      // Recording needs source history while encoding catches up. A preview's
+      // latest-only policy would repeat old pixels until its clock caught up,
+      // even though valid intermediate source frames had arrived.
+      if (
+        this.videoQueue.length >= Math.ceil(this.options.fps * 2) + 2 ||
+        this.queuedVideoBytes + bytes.length > 32 * 1024 * 1024
+      ) {
+        this.dropped++
+        void this.stop(
+          "Recording encoder backlog exceeded its frame or byte budget"
+        )
+        return
+      }
+      const pointerEnd = this.pointers.length
+      await this.journal!.writeFile(
+        JSON.stringify({
+          frame: { ...frame, index },
+          pointer: this.pointers.slice(this.journalPointers, pointerEnd),
+        }) + "\n"
+      )
+      this.journalPointers = pointerEnd
+      this.frames.push(frame)
+      this.videoQueue.push({ bytes, frame })
+      this.queuedVideoBytes += bytes.length
+      this.encodingTiming.maxQueuedFrames = Math.max(
+        this.encodingTiming.maxQueuedFrames,
+        this.videoQueue.length
+      )
+      this.encodingTiming.maxQueuedBytes = Math.max(
+        this.encodingTiming.maxQueuedBytes,
+        this.queuedVideoBytes
+      )
+      this.videoWake?.()
+      this.live ??= this.encodeLive().catch((error) => {
+        const reason =
+          error instanceof Error ? error.message : "Live video encoding failed"
+        this.firstWrite?.reject(new Error(reason))
+        this.encoder?.abort(reason)
+        void this.stop(reason)
       })
-      this.frames.push({ file, at, width: imageMetadata.width, height: imageMetadata.height, viewportWidth: width, viewportHeight: height, ...metadata })
-      this.bytes += bytes.length
+      if (index === 0) await this.firstWrite!.promise
     })()
       .catch((error) => {
         void this.stop(
@@ -376,20 +545,35 @@ export class ControlRecording {
       const pending = this.pendingFrame
       this.pendingFrame = undefined
       if (pending) await this.storeFrame(pending)
+      this.sourceEnded = true
+      this.videoWake?.()
+      await this.live
+      if (this.encoder) {
+        const result = await this.encoder.finish()
+        this.video = result.path
+        this.encodedDurationMs = result.durationMs
+        this.encodedFrames = result.retainedFrames ?? this.outputFrames
+        if (result.error) this.error ??= result.error
+      } else if (!this.video) await this.encode()
       this.timeline = join(this.directory, "timeline.json")
       await writeFile(
         this.timeline,
         JSON.stringify(
           {
-            version: 2,
+            version: 3,
             name: this.options.name,
             target: this.target,
-            pointerTiming: this.sourceVideo
-              ? "native-event-post; dispatch does not confirm application acceptance"
-              : "host-dispatch; acknowledged input only",
+            pointerTiming:
+              this.target.kind === "window"
+                ? "native-event-post; dispatch does not confirm application acceptance"
+                : "host-dispatch; dispatch does not confirm application acceptance",
             startedAt: this.startedAt,
             durationMs: this.endedAt,
             frames: this.frames,
+            encodedFrames: this.encodedFrames ?? this.sourceFrames,
+            submittedFrames: this.encoder ? this.outputFrames : undefined,
+            encodingTiming: this.encoder ? this.encodingTiming : undefined,
+            encodedDurationMs: this.encodedDurationMs,
             pointer: this.pointers,
             droppedFrames: this.dropped,
             sampledFrames: this.sampled,
@@ -401,13 +585,34 @@ export class ControlRecording {
         ),
         { mode: 0o600 }
       )
-      await this.encode()
       this.state = this.error ? "interrupted" : "finished"
-    })().catch((error) => {
-      this.state = "failed"
-      this.error =
-        error instanceof Error ? error.message : "Recording finalization failed"
-    })
+    })()
+      .catch((error) => {
+        this.state = "failed"
+        this.error ??=
+          error instanceof Error
+            ? error.message
+            : "Recording finalization failed"
+      })
+      .finally(async () => {
+        this.sourceEnded = true
+        this.videoWake?.()
+        if (this.state === "failed")
+          this.encoder?.abort(this.error ?? "Recording cleanup")
+        await this.live
+        await this.encoder?.finish().catch(() => {})
+        await this.journal
+          ?.writeFile(
+            JSON.stringify({
+              end: this.receipt(),
+              pointer: this.pointers.slice(this.journalPointers),
+            }) + "\n"
+          )
+          .catch(() => {})
+        await this.journal?.close().catch(() => {})
+        this.videoQueue.length = 0
+        this.queuedVideoBytes = 0
+      })
     return this.receipt()
   }
   async release(reason: string) {
@@ -418,12 +623,135 @@ export class ControlRecording {
     await this.finishing
     return this.receipt()
   }
+  /** CFR has an explicit clock. Source gaps hold the last image; irregular input
+   * must not shorten the video. Source samples and output frames stay separate. */
+  private async encodeLive() {
+    const encoder = this.encoder!
+    const interval = 1000 / this.options.fps
+    let current: (typeof this.videoQueue)[number] | undefined
+    let previousState = "",
+      imageRevision = 0
+    let pointerIndex = -1,
+      pressIndex = -1
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const wake = () => {
+          clearTimeout(timer)
+          if (this.videoWake === wake) this.videoWake = undefined
+          resolve()
+        }
+        const timer = setTimeout(wake, Math.max(1, ms))
+        this.videoWake = wake
+      })
+    for (;;) {
+      const finalCount = Math.max(1, Math.ceil((this.endedAt ?? 0) / interval))
+      if (this.sourceEnded && this.outputFrames >= finalCount) return
+      const at = this.outputFrames * interval
+      if (
+        !this.sourceEnded &&
+        this.endedAt !== undefined &&
+        at >= this.endedAt
+      ) {
+        await wait(interval)
+        continue
+      }
+      const remaining = this.start + at - performance.now()
+      if (!this.sourceEnded && remaining > 0) {
+        await wait(remaining)
+        continue
+      }
+      if (!this.sourceEnded && remaining < -2000)
+        throw new Error(
+          "Recording encoder fell more than two seconds behind; capture was interrupted"
+        )
+      this.encodingTiming.maxScheduleLagMs = Math.max(
+        this.encodingTiming.maxScheduleLagMs,
+        -remaining
+      )
+      let next: typeof current
+      while (
+        this.videoQueue[0] &&
+        (!current ||
+          this.videoQueue[0].frame.at <= at ||
+          (this.sourceEnded && this.outputFrames === finalCount - 1))
+      ) {
+        if (next) this.sampled++
+        next = this.videoQueue.shift()!
+        this.queuedVideoBytes -= next.bytes.length
+        // The first output may precede the first source timestamp by a fraction
+        // of one frame. Do not pull later future samples into that first output.
+        if (!current) break
+      }
+      if (next) {
+        if (
+          !current ||
+          !current.bytes.equals(next.bytes) ||
+          current.frame.viewportWidth !== next.frame.viewportWidth ||
+          current.frame.viewportHeight !== next.frame.viewportHeight ||
+          current.frame.pageScaleFactor !== next.frame.pageScaleFactor ||
+          current.frame.offsetTop !== next.frame.offsetTop
+        )
+          imageRevision++
+        current = next
+      }
+      if (!current) throw new Error("No video frame was available")
+      while (
+        pointerIndex + 1 < this.pointers.length &&
+        this.pointers[pointerIndex + 1]!.at <= at
+      ) {
+        pointerIndex++
+        if (this.pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
+      }
+      const press = this.pointers[pressIndex]
+      const state = `${imageRevision}:${pointerIndex}:${!!press && at - press.at < 400}`
+      const changed = state !== previousState
+      const workerStart = performance.now()
+      const timing = await encoder.write(
+        changed
+          ? {
+              bytes: current.bytes,
+              frame: current.frame,
+              at,
+              pointer: this.pointers[pointerIndex],
+              press,
+            }
+          : undefined
+      )
+      const workerWait = performance.now() - workerStart
+      this.encodingTiming.frames++
+      if (workerWait > interval) this.encodingTiming.waitsOverFrameBudget++
+      this.encodingTiming.maxWorkerWaitMs = Math.max(
+        this.encodingTiming.maxWorkerWaitMs,
+        workerWait
+      )
+      this.encodingTiming.maxRenderMs = Math.max(
+        this.encodingTiming.maxRenderMs,
+        timing.renderMs
+      )
+      this.encodingTiming.maxPipeMs = Math.max(
+        this.encodingTiming.maxPipeMs,
+        timing.pipeMs
+      )
+      previousState = state
+      this.firstWrite?.resolve()
+      current.frame.firstOutputFrame ??= this.outputFrames
+      this.outputFrames++
+      if (
+        this.outputFrames % this.options.fps === 0 &&
+        (await stat(join(this.directory, "recording.partial.mp4"))).size >
+          512 * 1024 * 1024
+      )
+        void this.stop("Recording reached its encoded-video storage limit")
+    }
+  }
   private async encode() {
     const first = this.frames[0]
     if (!first)
       throw new Error("No video frames were received; no video was produced")
-    const best = this.frames.reduce((a, b) => a.width * a.height >= b.width * b.height ? a : b)
-    const metadata = await sharp(join(this.directory, best.file)).metadata()
+    const best = this.frames.reduce((a, b) =>
+      a.width * a.height >= b.width * b.height ? a : b
+    )
+    const metadata = await sharp(join(this.directory, best.file!)).metadata()
     const sizeScale = Math.min(
       1,
       this.options.maxSide /
@@ -507,7 +835,9 @@ export class ControlRecording {
     try {
       await Promise.all([streaming, encoding])
     } catch (error) {
-      const failure = controller.signal.aborted ? controller.signal.reason : error
+      const failure = controller.signal.aborted
+        ? controller.signal.reason
+        : error
       controller.abort()
       child.kill("SIGKILL")
       await Promise.allSettled([streaming, encoding])
@@ -520,8 +850,14 @@ export class ControlRecording {
     this.video = output
   }
 
-  private async *renderFrames(width: number, height: number): AsyncGenerator<Buffer> {
-    const count = Math.max(1, Math.ceil((this.endedAt ?? 0) * this.options.fps / 1000))
+  private async *renderFrames(
+    width: number,
+    height: number
+  ): AsyncGenerator<Buffer> {
+    const count = Math.max(
+      1,
+      Math.ceil(((this.endedAt ?? 0) * this.options.fps) / 1000)
+    )
     let frameIndex = 0,
       pointerIndex = -1,
       pressIndex = -1
@@ -530,10 +866,16 @@ export class ControlRecording {
     for (let index = 0; index < count; index++) {
       // Use the recording clock directly. Repeating a static image through concat
       // can double its last duration; CFR has exactly one duration per output frame.
-      const at = index * 1000 / this.options.fps
-      while (frameIndex + 1 < this.frames.length && this.frames[frameIndex + 1]!.at <= at)
+      const at = (index * 1000) / this.options.fps
+      while (
+        frameIndex + 1 < this.frames.length &&
+        this.frames[frameIndex + 1]!.at <= at
+      )
         frameIndex++
-      while (pointerIndex + 1 < this.pointers.length && this.pointers[pointerIndex + 1]!.at <= at) {
+      while (
+        pointerIndex + 1 < this.pointers.length &&
+        this.pointers[pointerIndex + 1]!.at <= at
+      ) {
         pointerIndex++
         if (this.pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
       }
@@ -546,77 +888,16 @@ export class ControlRecording {
       }
       const frame = this.frames[frameIndex]!
       const pointer = this.pointers[pointerIndex]
-      const image = sharp(
-        await readFile(join(this.directory, frame.file))
-      ).resize(width, height, {
-        fit: "contain",
-        background: this.sourceVideo
-          ? { r: 0, g: 0, b: 0, alpha: 0 }
-          : "#171614",
-      })
-      const overlays: OverlayOptions[] = []
-      if (pointer) {
-        const viewportWidth = frame.viewportWidth ?? frame.width
-        const viewportHeight = frame.viewportHeight ?? frame.height
-        const scale = Math.min(width / viewportWidth, height / viewportHeight)
-        const x = Math.round(
-          pointer.x * (frame.pageScaleFactor ?? 1) * scale +
-            (width - viewportWidth * scale) / 2
-        )
-        const y = Math.round(
-          (pointer.y * (frame.pageScaleFactor ?? 1) +
-            (frame.offsetTop ?? 0)) *
-            scale +
-            (height - viewportHeight * scale) / 2
-        )
-        if (x >= 0 && y >= 0 && x < width && y < height) {
-          const addOverlay = async (
-            input: Buffer,
-            left: number,
-            top: number
-          ) => {
-            const offsetX = Math.max(0, -left)
-            const offsetY = Math.max(0, -top)
-            const visibleWidth = Math.min(
-              28 - offsetX,
-              width - Math.max(0, left)
-            )
-            const visibleHeight = Math.min(
-              32 - offsetY,
-              height - Math.max(0, top)
-            )
-            if (visibleWidth <= 0 || visibleHeight <= 0) return
-            const clipped = await sharp(input)
-              .extract({
-                left: offsetX,
-                top: offsetY,
-                width: visibleWidth,
-                height: visibleHeight,
-              })
-              .png()
-              .toBuffer()
-            overlays.push({
-              input: clipped,
-              left: Math.max(0, left),
-              top: Math.max(0, top),
-            })
-          }
-          const press = this.pointers[pressIndex]
-          if (
-            press &&
-            at - press.at < 400 &&
-            press.x === pointer.x &&
-            press.y === pointer.y
-          ) {
-            const ring = Buffer.from(
-              '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32"><circle cx="8" cy="8" r="6" fill="none" stroke="#efaa59" stroke-width="2"/></svg>'
-            )
-            await addOverlay(ring, x - 3, y - 4)
-          }
-          await addOverlay(pointerArtwork, x - 5, y - 4)
-        }
-      }
-      rendered = await image.ensureAlpha().composite(overlays).raw().toBuffer()
+      rendered = await renderRecordingImage(
+        await readFile(join(this.directory, frame.file!)),
+        frame,
+        at,
+        pointer,
+        press,
+        width,
+        height,
+        Boolean(this.sourceVideo)
+      )
       previousState = state
       yield rendered
     }

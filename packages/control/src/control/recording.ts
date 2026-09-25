@@ -29,6 +29,9 @@ export const RecordingReceiptSchema = z.object({
   frames: z.number().int().nonnegative(),
   droppedFrames: z.number().int().nonnegative(),
   sampledFrames: z.number().int().nonnegative().optional(),
+  /** Retained video, which may be shorter than capture after interruption. */
+  encodedFrames: z.number().int().nonnegative().optional(),
+  encodedDurationMs: z.number().nonnegative().optional(),
   video: z.string().optional(),
   timeline: z.string().optional(),
   dimensions: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).optional(),

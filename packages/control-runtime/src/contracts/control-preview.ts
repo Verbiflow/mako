@@ -15,16 +15,28 @@ export const ComputerObservationSchema = z
   })
   .strict()
 export type ControlImage = z.infer<typeof ControlImageSchema>
-export interface ControlActivity {
-  conversationId: string
-  kind: "browser" | "computer"
-  operation: string
-  target: string
-  status: "running" | "observed" | "error"
-  updatedAt: number
-}
-export interface ControlPreview {
-  activity: ControlActivity
-  window?: import("./appshots.js").AppshotTarget
-  frame: { id: string; image: ControlImage; capturedAt: number } | null
-}
+export const ControlActivitySchema = z.object({
+  conversationId: z.string().max(1024),
+  kind: z.enum(["browser", "computer"]),
+  operation: z.string().max(1024),
+  target: z.string().max(4096),
+  status: z.enum(["running", "observed", "error"]),
+  updatedAt: z.number(),
+})
+export type ControlActivity = z.infer<typeof ControlActivitySchema>
+export const ControlPreviewSchema = z.object({
+  activity: ControlActivitySchema,
+  window: AppshotTargetSchema.optional(),
+  frame: z.object({
+    id: z.string().max(128),
+    image: z.object({
+      bytes: z.custom<Uint8Array<ArrayBuffer>>(bytes => bytes instanceof Uint8Array &&
+        bytes.buffer instanceof ArrayBuffer && bytes.byteLength > 0 && bytes.byteLength <= 2 * 1024 * 1024),
+      mimeType: z.enum(["image/png", "image/jpeg"]),
+    }),
+    capturedAt: z.number(),
+    /** Host publication is separate from the source's epoch timestamp. */
+    publishedAt: z.number().optional(),
+  }).nullable(),
+})
+export type ControlPreview = z.infer<typeof ControlPreviewSchema>
