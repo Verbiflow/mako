@@ -30,8 +30,8 @@ const replySchema = z.discriminatedUnion("kind", [
 ])
 type Reply = z.infer<typeof replySchema>
 
-/** Keep pipe callbacks away from browser/preview RPC. Transfer one frame at a
- * time; repeated output reuses pixels already held by the worker. */
+/** Two bounded frame requests let rendering overlap pipe consumption. Repeats
+ * reuse immutable pixels in the worker; acknowledgments still mean pipe admission. */
 export class RecordingEncoder {
   private readonly worker: Worker
   private startupResolve!: () => void
@@ -40,11 +40,14 @@ export class RecordingEncoder {
     this.startupResolve = resolve
     this.startupReject = reject
   })
-  private pending?: {
-    id: number
-    resolve: (reply: Reply) => void
-    reject: (error: Error) => void
-  }
+  private readonly pending = new Map<
+    number,
+    {
+      kind: "frame" | "initialize" | "finish"
+      resolve: (reply: Reply) => void
+      reject: (error: Error) => void
+    }
+  >()
   private nextId = 0
   private failure?: string
   private finishing?: Promise<z.infer<typeof resultSchema>>
@@ -91,8 +94,9 @@ export class RecordingEncoder {
     }
     const fail = (reason: string) => {
       this.startupReject(new Error(reason))
-      this.pending?.reject(new Error(reason))
-      this.pending = undefined
+      for (const request of this.pending.values())
+        request.reject(new Error(reason))
+      this.pending.clear()
       notify(reason)
     }
     this.worker.on("message", (input) => {
@@ -106,23 +110,26 @@ export class RecordingEncoder {
         return
       }
       if (reply.data.kind === "failed") {
-        if (reply.data.id !== undefined && reply.data.id === this.pending?.id) {
-          this.pending.reject(new Error(reply.data.reason))
-          this.pending = undefined
+        for (const [id, request] of this.pending) {
+          if (request.kind === "frame" || id === reply.data.id) {
+            request.reject(new Error(reply.data.reason))
+            this.pending.delete(id)
+          }
         }
+        // Finalization must still receive the verified playable-prefix result
+        // after an asynchronous encoder exit. A failed finish reply has its ID.
         notify(reply.data.reason)
         return
       }
-      if (reply.data.id !== this.pending?.id) return
-      this.pending?.resolve(reply.data)
-      this.pending = undefined
+      this.pending.get(reply.data.id)?.resolve(reply.data)
+      this.pending.delete(reply.data.id)
     })
     this.worker.on("error", (error) =>
       fail(`Video worker failed: ${error.message}`)
     )
     this.worker.once("exit", (code) => {
       this.ended = true
-      if ((!this.terminating && code !== 0) || this.pending)
+      if ((!this.terminating && code !== 0) || this.pending.size)
         fail(`Video worker exited: ${code}`)
     })
   }
@@ -132,10 +139,13 @@ export class RecordingEncoder {
       | { kind: "finish" }
       | { kind: "initialize"; width: number; height: number; fps: number }
   ) {
-    if (this.pending)
-      return Promise.reject(
-        new Error("Video worker already has an outstanding request")
-      )
+    if (
+      this.pending.size &&
+      (message.kind !== "frame" ||
+        this.pending.size >= 2 ||
+        [...this.pending.values()].some((request) => request.kind !== "frame"))
+    )
+      return Promise.reject(new Error("Video worker request capacity exceeded"))
     if (this.ended)
       return Promise.reject(new Error(this.failure ?? "Video worker ended"))
     return new Promise<Reply>((resolve, reject) => {
@@ -143,13 +153,13 @@ export class RecordingEncoder {
       const timeout = setTimeout(
         () => {
           this.abort("Video worker response timed out")
-          this.pending = undefined
+          this.pending.delete(id)
           reject(new Error("Video worker response timed out"))
         },
         message.kind === "finish" ? 35_000 : 10_000
       )
-      this.pending = {
-        id,
+      this.pending.set(id, {
+        kind: message.kind,
         resolve: (reply) => {
           clearTimeout(timeout)
           resolve(reply)
@@ -158,7 +168,7 @@ export class RecordingEncoder {
           clearTimeout(timeout)
           reject(error)
         },
-      }
+      })
       try {
         this.worker.postMessage(
           { ...message, id },
@@ -166,7 +176,7 @@ export class RecordingEncoder {
         )
       } catch (error) {
         clearTimeout(timeout)
-        this.pending = undefined
+        this.pending.delete(id)
         reject(error)
       }
     })

@@ -22,6 +22,7 @@ import { tmpdir } from "node:os"
 import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
 import sharp from "sharp"
+import { imageSize } from "image-size"
 import { renderRecordingImage } from "./recording-render.js"
 import {
   RecordingOptionsSchema,
@@ -31,6 +32,13 @@ import {
 } from "@mako/control/control"
 
 const execute = promisify(execFile)
+function recordingImageSize(bytes: Buffer) {
+  try {
+    return imageSize(bytes)
+  } catch (cause) {
+    throw new Error("Invalid recording frame: unsupported or corrupt image", { cause })
+  }
+}
 interface Frame {
   file?: string
   firstOutputFrame?: number
@@ -95,6 +103,12 @@ export class ControlRecording {
     maxPipeMs: 0,
     maxQueuedFrames: 0,
     maxQueuedBytes: 0,
+    workerWaitMs: 0,
+    renderMs: 0,
+    pipeMs: 0,
+    changedFrames: 0,
+    sourceMetadataMs: 0,
+    journalWriteMs: 0,
   }
   private dropped = 0
   private writing: Promise<void> | undefined
@@ -419,12 +433,16 @@ export class ControlRecording {
     }
     const bytes = data
     this.writing = (async () => {
-      const imageMetadata = await sharp(bytes, {
-        limitInputPixels: 16_000_000,
-      }).metadata()
+      const metadataStart = performance.now()
+      // Capture already uses this bounded header reader. Do not dispatch a
+      // second libvips job just for dimensions on every received frame; the
+      // encoder still decodes and validates pixels before acknowledging them.
+      const imageMetadata = recordingImageSize(bytes)
+      this.encodingTiming.sourceMetadataMs += performance.now() - metadataStart
       if (
         !imageMetadata.width ||
         !imageMetadata.height ||
+        imageMetadata.width * imageMetadata.height > 16_000_000 ||
         width <= 0 ||
         height <= 0 ||
         !Number.isFinite(width) ||
@@ -491,12 +509,14 @@ export class ControlRecording {
         return
       }
       const pointerEnd = this.pointers.length
+      const journalStart = performance.now()
       await this.journal!.writeFile(
         JSON.stringify({
           frame: { ...frame, index },
           pointer: this.pointers.slice(this.journalPointers, pointerEnd),
         }) + "\n"
       )
+      this.encodingTiming.journalWriteMs += performance.now() - journalStart
       this.journalPointers = pointerEnd
       this.frames.push(frame)
       this.videoQueue.push({ bytes, frame })
@@ -643,105 +663,137 @@ export class ControlRecording {
         const timer = setTimeout(wake, Math.max(1, ms))
         this.videoWake = wake
       })
-    for (;;) {
-      const finalCount = Math.max(1, Math.ceil((this.endedAt ?? 0) / interval))
-      if (this.sourceEnded && this.outputFrames >= finalCount) return
-      const at = this.outputFrames * interval
-      if (
-        !this.sourceEnded &&
-        this.endedAt !== undefined &&
-        at >= this.endedAt
-      ) {
-        await wait(interval)
-        continue
-      }
-      const remaining = this.start + at - performance.now()
-      if (!this.sourceEnded && remaining > 0) {
-        await wait(remaining)
-        continue
-      }
-      if (!this.sourceEnded && remaining < -2000)
-        throw new Error(
-          "Recording encoder fell more than two seconds behind; capture was interrupted"
+    let submittedFrames = 0
+    const pending: Promise<void>[] = []
+    try {
+      for (;;) {
+        if (pending.length === 2) await pending.shift()
+        const finalCount = Math.max(
+          1,
+          Math.ceil((this.endedAt ?? 0) / interval)
         )
-      this.encodingTiming.maxScheduleLagMs = Math.max(
-        this.encodingTiming.maxScheduleLagMs,
-        -remaining
-      )
-      let next: typeof current
-      while (
-        this.videoQueue[0] &&
-        (!current ||
-          this.videoQueue[0].frame.at <= at ||
-          (this.sourceEnded && this.outputFrames === finalCount - 1))
-      ) {
-        if (next) this.sampled++
-        next = this.videoQueue.shift()!
-        this.queuedVideoBytes -= next.bytes.length
-        // The first output may precede the first source timestamp by a fraction
-        // of one frame. Do not pull later future samples into that first output.
-        if (!current) break
-      }
-      if (next) {
+        if (this.sourceEnded && submittedFrames >= finalCount) break
+        const ordinal = submittedFrames
+        const at = ordinal * interval
         if (
-          !current ||
-          !current.bytes.equals(next.bytes) ||
-          current.frame.viewportWidth !== next.frame.viewportWidth ||
-          current.frame.viewportHeight !== next.frame.viewportHeight ||
-          current.frame.pageScaleFactor !== next.frame.pageScaleFactor ||
-          current.frame.offsetTop !== next.frame.offsetTop
+          !this.sourceEnded &&
+          this.endedAt !== undefined &&
+          at >= this.endedAt
+        ) {
+          await wait(interval)
+          continue
+        }
+        const remaining = this.start + at - performance.now()
+        if (!this.sourceEnded && remaining > 0) {
+          await wait(remaining)
+          continue
+        }
+        if (!this.sourceEnded && remaining < -2000)
+          throw new Error(
+            "Recording encoder fell more than two seconds behind; capture was interrupted"
+          )
+        this.encodingTiming.maxScheduleLagMs = Math.max(
+          this.encodingTiming.maxScheduleLagMs,
+          -remaining
         )
-          imageRevision++
-        current = next
+        let next: typeof current
+        while (
+          this.videoQueue[0] &&
+          (!current ||
+            this.videoQueue[0].frame.at <= at ||
+            (this.sourceEnded && ordinal === finalCount - 1))
+        ) {
+          if (next) this.sampled++
+          next = this.videoQueue.shift()!
+          this.queuedVideoBytes -= next.bytes.length
+          // The first output may precede the first source timestamp by a fraction
+          // of one frame. Do not pull later future samples into that first output.
+          if (!current) break
+        }
+        if (next) {
+          if (
+            !current ||
+            !current.bytes.equals(next.bytes) ||
+            current.frame.viewportWidth !== next.frame.viewportWidth ||
+            current.frame.viewportHeight !== next.frame.viewportHeight ||
+            current.frame.pageScaleFactor !== next.frame.pageScaleFactor ||
+            current.frame.offsetTop !== next.frame.offsetTop
+          )
+            imageRevision++
+          current = next
+        }
+        if (!current) throw new Error("No video frame was available")
+        while (
+          pointerIndex + 1 < this.pointers.length &&
+          this.pointers[pointerIndex + 1]!.at <= at
+        ) {
+          pointerIndex++
+          if (this.pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
+        }
+        const press = this.pointers[pressIndex]
+        const state = `${imageRevision}:${pointerIndex}:${!!press && at - press.at < 400}`
+        const changed = state !== previousState
+        const workerStart = performance.now()
+        const recordedFrame = current.frame
+        const write = encoder
+          .write(
+            changed
+              ? {
+                  bytes: current.bytes,
+                  frame: current.frame,
+                  at,
+                  pointer: this.pointers[pointerIndex],
+                  press,
+                }
+              : undefined
+          )
+          .then(async (timing) => {
+            const workerWait = performance.now() - workerStart
+            this.encodingTiming.frames++
+            this.encodingTiming.workerWaitMs += workerWait
+            this.encodingTiming.renderMs += timing.renderMs
+            this.encodingTiming.pipeMs += timing.pipeMs
+            if (changed) this.encodingTiming.changedFrames++
+            if (workerWait > interval)
+              this.encodingTiming.waitsOverFrameBudget++
+            this.encodingTiming.maxWorkerWaitMs = Math.max(
+              this.encodingTiming.maxWorkerWaitMs,
+              workerWait
+            )
+            this.encodingTiming.maxRenderMs = Math.max(
+              this.encodingTiming.maxRenderMs,
+              timing.renderMs
+            )
+            this.encodingTiming.maxPipeMs = Math.max(
+              this.encodingTiming.maxPipeMs,
+              timing.pipeMs
+            )
+            this.firstWrite?.resolve()
+            recordedFrame.firstOutputFrame ??= ordinal
+            this.outputFrames++
+            if (
+              this.outputFrames % this.options.fps === 0 &&
+              (await stat(join(this.directory, "recording.partial.mp4"))).size >
+                512 * 1024 * 1024
+            )
+              void this.stop(
+                "Recording reached its encoded-video storage limit"
+              )
+          })
+        // Observe rejection immediately even while the older frame is pending.
+        // Awaiting it below still propagates the original failure.
+        void write.catch(() => {})
+        pending.push(write)
+        submittedFrames++
+        previousState = state
       }
-      if (!current) throw new Error("No video frame was available")
-      while (
-        pointerIndex + 1 < this.pointers.length &&
-        this.pointers[pointerIndex + 1]!.at <= at
-      ) {
-        pointerIndex++
-        if (this.pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
-      }
-      const press = this.pointers[pressIndex]
-      const state = `${imageRevision}:${pointerIndex}:${!!press && at - press.at < 400}`
-      const changed = state !== previousState
-      const workerStart = performance.now()
-      const timing = await encoder.write(
-        changed
-          ? {
-              bytes: current.bytes,
-              frame: current.frame,
-              at,
-              pointer: this.pointers[pointerIndex],
-              press,
-            }
-          : undefined
+      await Promise.all(pending)
+    } catch (error) {
+      encoder.abort(
+        error instanceof Error ? error.message : "Video pipeline failed"
       )
-      const workerWait = performance.now() - workerStart
-      this.encodingTiming.frames++
-      if (workerWait > interval) this.encodingTiming.waitsOverFrameBudget++
-      this.encodingTiming.maxWorkerWaitMs = Math.max(
-        this.encodingTiming.maxWorkerWaitMs,
-        workerWait
-      )
-      this.encodingTiming.maxRenderMs = Math.max(
-        this.encodingTiming.maxRenderMs,
-        timing.renderMs
-      )
-      this.encodingTiming.maxPipeMs = Math.max(
-        this.encodingTiming.maxPipeMs,
-        timing.pipeMs
-      )
-      previousState = state
-      this.firstWrite?.resolve()
-      current.frame.firstOutputFrame ??= this.outputFrames
-      this.outputFrames++
-      if (
-        this.outputFrames % this.options.fps === 0 &&
-        (await stat(join(this.directory, "recording.partial.mp4"))).size >
-          512 * 1024 * 1024
-      )
-        void this.stop("Recording reached its encoded-video storage limit")
+      await Promise.allSettled(pending)
+      throw error
     }
   }
   private async encode() {

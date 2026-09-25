@@ -40,6 +40,10 @@ export class RecordingEncoderProcess {
         "-loglevel",
         "error",
         "-n",
+        // One conversion pipeline per recording; bound its pool independently
+        // of x264's parallel frame encoding.
+        "-filter_threads",
+        "1",
         "-f",
         "rawvideo",
         "-pixel_format",

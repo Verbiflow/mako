@@ -32,7 +32,10 @@ let frameBytes = 0
 let width = 0,
   height = 0
 let pixels: Buffer | undefined
-let busy = false
+let queuedFrames = 0
+let rendering: Promise<void> = Promise.resolve()
+let writing: Promise<void> = Promise.resolve()
+let finishing = false
 port.on("message", (input) => {
   const parsed = command.safeParse(input)
   if (!parsed.success) {
@@ -44,11 +47,66 @@ port.on("message", (input) => {
     encoder?.abort(value.reason)
     return
   }
-  if (busy) {
-    encoder?.abort("Concurrent video worker commands")
+  const fail = (error) => {
+    const reason =
+      error instanceof Error ? error.message : "Video encoder failed"
+    encoder?.abort(reason)
+    port.postMessage({ kind: "failed", id: value.id, reason })
+  }
+  if (value.kind === "frame") {
+    if (!encoder || finishing || queuedFrames >= 2) {
+      fail(
+        new Error("Video worker frame capacity exceeded or encoder unavailable")
+      )
+      return
+    }
+    queuedFrames++
+    // Render the next immutable image while the pipe consumes its predecessor.
+    // At most two commands/images are retained, and pipe writes remain ordered.
+    rendering = rendering
+      .then(async () => {
+        const renderStart = performance.now()
+        if (value.image) {
+          const { bytes, frame, at, pointer, press } = value.image
+          pixels = await renderRecordingImage(
+            Buffer.from(bytes),
+            frame,
+            at,
+            pointer,
+            press,
+            width,
+            height
+          )
+        }
+        if (!pixels || pixels.length !== frameBytes)
+          throw new Error("Video worker received invalid frame dimensions")
+        const image = pixels
+        const renderMs = performance.now() - renderStart
+        await writing
+        const pipeStart = performance.now()
+        writing = encoder!.write(image)
+        void writing.then(
+          () => {
+            queuedFrames--
+            port.postMessage({
+              kind: "written",
+              id: value.id,
+              renderMs,
+              pipeMs: performance.now() - pipeStart,
+            })
+          },
+          (error) => {
+            queuedFrames--
+            fail(error instanceof Error ? error.message : "Video encoder failed")
+          }
+        )
+      })
+      .catch((error) => {
+        queuedFrames--
+        fail(error instanceof Error ? error.message : "Video encoder failed")
+      })
     return
   }
-  busy = true
   void (async () => {
     if (value.kind === "initialize") {
       if (encoder) throw new Error("Video encoder is already initialized")
@@ -68,44 +126,21 @@ port.on("message", (input) => {
     if (!encoder)
       throw new Error("No video frames were received; no video was produced")
     if (value.kind === "finish") {
+      if (finishing) throw new Error("Video worker is already finalizing")
+      finishing = true
+      await rendering
+      await writing.catch(() => {})
       const result = await encoder.finish()
       port.postMessage({ kind: "finished", id: value.id, result })
       port.close()
-    } else {
-      const renderStart = performance.now()
-      if (value.image) {
-        const { bytes, frame, at, pointer, press } = value.image
-        pixels = await renderRecordingImage(
-          Buffer.from(bytes),
-          frame,
-          at,
-          pointer,
-          press,
-          width,
-          height
-        )
-      }
-      if (!pixels || pixels.length !== frameBytes)
-        throw new Error("Video worker received invalid frame dimensions")
-      const pipeStart = performance.now()
-      await encoder.write(pixels)
-      port.postMessage({ kind: "written", id: value.id,
-        renderMs: pipeStart - renderStart, pipeMs: performance.now() - pipeStart })
     }
-  })()
-    .catch(async (error) => {
-      const reason =
-        error instanceof Error ? error.message : "Video encoder failed"
-      encoder?.abort(reason)
-      port.postMessage({ kind: "failed", id: value.id, reason })
-      if (value.kind === "finish") {
-        await encoder?.finish().catch(() => {})
-        port.close()
-      }
-    })
-    .finally(() => {
-      busy = false
-    })
+  })().catch(async (error) => {
+    fail(error instanceof Error ? error.message : "Video encoder failed")
+    if (value.kind === "finish") {
+      await encoder?.finish().catch(() => {})
+      port.close()
+    }
+  })
 })
 port.once("close", () => {
   encoder?.abort("Video worker owner closed")
