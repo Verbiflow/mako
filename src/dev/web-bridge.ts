@@ -65,12 +65,14 @@ export async function installWebBridge(): Promise<void> {
   // in `createMakoBridge`, the same way Electron's `ipcRenderer.invoke` is.
   const post = async (channel: string, args: unknown[], attempt: number) => {
     if (!connected) throw new RuntimeDisconnectedError(false)
+    const headers = new Headers({ "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" })
+    if (channel === "mako:control-preview") headers.set("accept", PREVIEW_MEDIA_TYPE)
     let reply: Response
     try {
       reply = await fetch("/__mako/rpc", {
         method: "POST",
         signal: AbortSignal.timeout(5 * 60_000),
-        headers: { "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1", ...(channel === "mako:control-preview" ? { accept: PREVIEW_MEDIA_TYPE } : {}) },
+        headers,
         body: JSON.stringify({
           channel,
           args: args.map((value) =>

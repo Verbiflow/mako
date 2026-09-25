@@ -1,9 +1,10 @@
+import { decodeControlPreview } from "./control-preview-decoder"
 import type { ControlPreview } from "@/lib/types"
 
 type Frame = NonNullable<ControlPreview["frame"]>
 
-/** Complete one decode before accepting the newest waiting frame. Replacing an
- * async <img> src at capture speed can cancel every decode and paint blank. */
+/** One decode, one completed image awaiting paint, and the newest source frame.
+ * Decoding can proceed while a paint waits for rAF; neither queue can grow. */
 export function createControlPreviewPainter(canvas: {
   width: number
   height: number
@@ -12,12 +13,29 @@ export function createControlPreviewPainter(canvas: {
   const context = canvas.getContext("2d")
   let latest: Frame | undefined
   let lastId: string | undefined
-  let decoding: HTMLImageElement | undefined
-  let activeUrl: string | undefined
+  let decoding: ReturnType<typeof decodeControlPreview> | undefined
+  let ready: { image: Awaited<ReturnType<typeof decodeControlPreview>["ready"]>; release: () => void } | undefined
   let painting: number | undefined
-  let finishPaint: (() => void) | undefined
   let running = false
   let closed = false
+
+  function paint() {
+    painting = undefined
+    const value = ready
+    ready = undefined
+    if (!value) return
+    try {
+      if (!closed && context) {
+        if (canvas.width !== value.image.width)
+          canvas.width = value.image.width
+        if (canvas.height !== value.image.height)
+          canvas.height = value.image.height
+        context.drawImage(value.image.source, 0, 0)
+      }
+    } finally {
+      value.release()
+    }
+  }
 
   async function drain() {
     running = true
@@ -25,42 +43,27 @@ export function createControlPreviewPainter(canvas: {
       while (latest && !closed) {
         const frame = latest
         latest = undefined
-        const image = new Image()
-        decoding = image
-        const url = URL.createObjectURL(new Blob([frame.image.bytes], { type: frame.image.mimeType }))
-        activeUrl = url
-        image.src = url
+        const value = decodeControlPreview(frame)
+        decoding = value
+        let retained = false
         try {
-          await image.decode()
+          const image = await value.ready
           if (closed) return
-          // The source validates dimensions too. Bound this DOM allocation at its boundary.
           if (
-            !image.naturalWidth ||
-            !image.naturalHeight ||
-            image.naturalWidth * image.naturalHeight > 16_000_000
+            !image.width ||
+            !image.height ||
+            image.width * image.height > 16_000_000
           )
             continue
-          await new Promise<void>((resolve) => {
-            finishPaint = resolve
-            painting = requestAnimationFrame(() => {
-              painting = undefined
-              finishPaint = undefined
-              if (!closed && context) {
-                if (canvas.width !== image.naturalWidth)
-                  canvas.width = image.naturalWidth
-                if (canvas.height !== image.naturalHeight)
-                  canvas.height = image.naturalHeight
-                context.drawImage(image, 0, 0)
-              }
-              resolve()
-            })
-          })
+          ready?.release()
+          ready = { image, release: value.release }
+          retained = true
+          if (painting === undefined) painting = requestAnimationFrame(paint)
         } catch {
-          // Retain the last complete frame on malformed pixels or cancellation.
+          // Keep the last complete canvas on malformed pixels or cancellation.
         } finally {
-          URL.revokeObjectURL(url)
-          if (activeUrl === url) activeUrl = undefined
-          if (decoding === image) decoding = undefined
+          if (!retained) value.release()
+          if (decoding === value) decoding = undefined
         }
       }
     } finally {
@@ -80,10 +83,10 @@ export function createControlPreviewPainter(canvas: {
       closed = true
       latest = undefined
       if (painting !== undefined) cancelAnimationFrame(painting)
-      finishPaint?.()
-      if (decoding) decoding.src = ""
-      if (activeUrl) URL.revokeObjectURL(activeUrl)
-      activeUrl = undefined
+      ready?.release()
+      ready = undefined
+      decoding?.release()
+      decoding = undefined
     },
   }
 }
