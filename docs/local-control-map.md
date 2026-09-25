@@ -84,7 +84,17 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 **Current milestone:** Mac hardware recording is implemented and packaged. Signed candidate `b5ec839840ea7ab0` uses recipe-3 VideoToolbox and quality 85, selected after quality 80 failed the broader sampled colored-text gate. Final ordinary and two-worker loaded Aside jobs pass at **58.72/58.79 preview fps** and **58.85/58.63 recorded fps**, with exact inputs and unchanged screenshot pixels. The loaded recording finishes 127 seconds at **460 MB peak summed RSS / 1.28 CPU cores** for host plus encoder; the visible OS encoder service adds about 22 MB / 0.018 cores. Exact-repeat coalescing also passes the minute-long static stress, crash recovery and unchanged native pass-through checks. [Hardware implementation and full evidence](local-control-mac-hardware-recording.md). Earlier software and quality-80 failures remain recorded; this is scoped acceptance, not proof under arbitrary load or a whole-machine resource budget.
 
-**Next:** rebuild/sign with the LC-26 streaming cleanup, then validate installed media. The existing signed candidate passes bundled browser/native recording, package/import/signature/size/startup checks, but predates the cleanup and recipe 4. **Not installed:** readiness reported running Mako/shared-host processes. Preserve the current installed MCP acceptance; do not interrupt active work to replace it. Further Mac native-buffer/idle/shared-encoding optimization remains separate from this passing workload. The cleanup's latest full lint and typecheck pass (five existing React warnings); earlier provider lint failures remain historical evidence. [Hardware validation](local-control-mac-hardware-recording.md#acceptance), [cleanup validation](local-control-streaming-cleanup.md).
+**In progress September 25:** installed media acceptance. Build `9b696b0d9525e7e9`
+is now installed and running (host identity matches); its strict certificate-backed
+signature passes. The recording modules match the reviewed local build and media
+recipe 4 includes LC-26's cleanup. No redundant rebuild is needed for those changes.
+The acceptance fixture now borrows the existing task session and reads previews
+from the running installed host. Sustained measurements, native jobs and recovery
+checks are in progress; do not count the earlier source-host results as installed
+acceptance. Preserve the current installed MCP acceptance and active tasks.
+Further Mac native-buffer/idle/shared-encoding optimization remains separate.
+[Hardware validation](local-control-mac-hardware-recording.md#acceptance),
+[cleanup validation](local-control-streaming-cleanup.md).
 
 **Cloud ordering:** define the Linux cloud-agent environment first (display/compositor, CPU/GPU availability, isolation, network and lifecycle), then choose and validate its capture/encoding/transport backend. Preserve the current Linux implementation and prototype evidence; defer further cloud streaming implementation and Moonlight/Selkies adoption until that prerequisite. Mac and cloud retain the same typed session, ownership and recording API.
 

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { DatabaseSync } from "node:sqlite"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "../electron/providers/claude/approval-observer.js"
 import { DevinApprovalObserver, readDevinApprovalDecisions } from "../electron/providers/devin/approval-observer.js"
+import { devinAcpSource } from "../electron/providers/devin/acp.js"
 import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
 import { describeApprovalResponse, type NativeApprovalDecision } from "../electron/contracts/approval-response.js"
 import type { LivePermissionRequest } from "../electron/shared.js"
@@ -51,7 +52,7 @@ try {
   await assert.rejects(readClaudeApprovalDecisions(path, "session", [identity]), /repeats/)
 
   decisions.length = 0
-  const devin = new DevinApprovalObserver(d => decisions.push(d))
+  const devin = new DevinApprovalObserver(d => decisions.push(d), [])
   const question = { question: "Pick", header: "Choice", options: ["Alpha", "Beta"] }
   const notification: SessionNotification = { sessionId: "session", update: { sessionUpdate: "tool_call", toolCallId: "call-1", title: "Question", _meta: { "cognition.ai/inferenceToolName": "ask_user_question", "cognition.ai/questions": [question] } } }
   const elicitation: CreateElicitationRequest = { mode: "form", sessionId: "session", message: "Pick", requestedSchema: { type: "object", properties: { q0: { type: "string", title: "Choice", description: "Pick", enum: ["Alpha", "Beta"] } }, required: ["q0"] } }
@@ -68,6 +69,34 @@ try {
   assert.equal(decisions[0].answerDigest, approvalAnswerDigest({ kind: "answers", answers: { q0: ["Beta"] } }))
   devin.observe(update)
   assert.equal(decisions.length, 1)
+  const reconnected = new DevinApprovalObserver(d => decisions.push(d), [native])
+  reconnected.observe(notification)
+  assert.deepEqual(reconnected.identifyElicitation(elicitation), native, "reconnect must preserve an answered or uncertain native occurrence, not mint a fresh scope")
+  reconnected.observe(update)
+  assert.deepEqual(decisions.at(-1)?.identity, native, "recovered evidence addresses the original receipt")
+  const reused = new DevinApprovalObserver(d => decisions.push(d), [native, { ...native, scope: randomUUID() }])
+  reused.observe(notification)
+  assert.equal(reused.identifyElicitation(elicitation), undefined, "ambiguous saved occurrences cannot be renamed as a fresh question")
+  const beforeAmbiguousResult = decisions.length
+  reused.observe(update)
+  assert.equal(decisions.length, beforeAmbiguousResult, "ambiguous saved occurrences cannot confirm either receipt")
+  const fresh = new DevinApprovalObserver(d => decisions.push(d), [native])
+  fresh.observe({ ...notification, update: { ...notification.update, toolCallId: "newer-call" } })
+  const freshIdentity = fresh.identifyElicitation(elicitation)
+  assert.ok(freshIdentity)
+  assert.notEqual(freshIdentity.scope, native.scope, "same question text with a new native tool ID is a new question")
+  const otherSession = new DevinApprovalObserver(d => decisions.push(d), [native])
+  otherSession.observe(notification)
+  otherSession.observe({ ...notification, sessionId: "other" })
+  assert.deepEqual(otherSession.identifyElicitation(elicitation), native, "another session's identical tool ID cannot displace the saved question")
+  const otherIdentity = otherSession.identifyElicitation({ ...elicitation, sessionId: "other" })
+  assert.ok(otherIdentity)
+  assert.notEqual(otherIdentity.scope, native.scope, "native tool IDs are session scoped")
+  const launch = await devinAcpSource.launch({ appPath: root, execPath: process.execPath, resume: "session" })
+  const prepared = await launch!.prepareApprovals!({ root, env: {}, previous: [native], publish: d => decisions.push(d) })
+  prepared.observe!(notification)
+  assert.deepEqual(prepared.identifyElicitation!(elicitation), native, "production ACP preparation forwards saved identities to its live observer")
+  await prepared.dispose()
   devin.observe({ ...notification, update: { ...notification.update, toolCallId: "call-2" } })
   devin.observe({ ...notification, update: { ...notification.update, toolCallId: "call-3" } })
   assert.equal(devin.identifyElicitation(elicitation), undefined, "parallel identical forms cannot be guessed")

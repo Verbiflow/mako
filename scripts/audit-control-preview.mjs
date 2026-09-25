@@ -96,6 +96,8 @@ if (process.versions.electron) {
     MAKO_PREVIEW_BASELINE: baseline ? "1" : "0",
     MAKO_PREVIEW_RECORDING: process.argv.includes("--recording") ? "1" : "0",
     MAKO_PREVIEW_SHARED: process.argv.includes("--shared-host") ? "1" : "0",
+    MAKO_PREVIEW_INSTALLED_SESSION: process.argv.find(value => value.startsWith("--installed-session="))?.split("=")[1] ?? "",
+    MAKO_PREVIEW_CONVERSATION: process.argv.find(value => value.startsWith("--conversation="))?.split("=")[1] ?? "",
     MAKO_PREVIEW_EXTENSION:
       process.argv
         .find((value) => value.startsWith("--extension="))
@@ -144,9 +146,14 @@ async function audit() {
     await import("@mako/control-runtime/contracts")
   const { invokeRuntime, invokeRuntimePreview, subscribeRuntime } =
     await import("../dist-electron/runtime-connection.js")
-  const shared = process.env.MAKO_PREVIEW_SHARED === "1"
+  const installedSession = process.env.MAKO_PREVIEW_INSTALLED_SESSION
+  const installed = installedSession
+    ? await (await import("./lib/installed-control-audit.mjs")).installedControlAudit(installedSession)
+    : undefined
+  const shared = !!installed || process.env.MAKO_PREVIEW_SHARED === "1"
   const extension = process.env.MAKO_PREVIEW_EXTENSION
   assert.ok(!extension || shared, "Extension acceptance requires --shared-host")
+  assert.ok(!installed || (extension && process.env.MAKO_PREVIEW_CONVERSATION), "Installed acceptance requires exact browser and conversation IDs")
   const root = process.env.MAKO_PREVIEW_AUDIT_ROOT
   assert.ok(root)
   app.setPath("userData", join(root, "profile"))
@@ -201,8 +208,8 @@ async function audit() {
   const browser = shared
     ? undefined
     : new BrowserService(() => [desk.definition])
-  const socket = join(root, "preview.sock"),
-    client = randomUUID()
+  const socket = installed?.socket ?? join(root, "preview.sock"),
+    client = installed?.client ?? randomUUID()
   let worker,
     unsubscribe = () => {},
     fixtureServer,
@@ -216,38 +223,40 @@ async function audit() {
     let wireBytes = 0,
       decodedBytes = 0
     if (shared) {
-      worker = fork(
-        fileURLToPath(
-          new URL("./lib/control-preview-audit-host.mjs", import.meta.url)
-        ),
-        [],
-        {
-          execPath: process.env.MAKO_PREVIEW_NODE,
-          stdio: ["ignore", "inherit", "inherit", "ipc"],
-        }
-      )
-      const ready = new Promise((resolve, reject) => {
-        worker.once("message", (message) =>
-          message.ready
-            ? resolve()
-            : reject(new Error("Unexpected host startup response"))
+      if (!installed) {
+        worker = fork(
+          fileURLToPath(
+            new URL("./lib/control-preview-audit-host.mjs", import.meta.url)
+          ),
+          [],
+          {
+            execPath: process.env.MAKO_PREVIEW_NODE,
+            stdio: ["ignore", "inherit", "inherit", "ipc"],
+          }
         )
-        worker.once("exit", (code) =>
-          reject(new Error(`Fixture host exited before readiness: ${code}`))
-        )
-        worker.once("error", reject)
-      })
-      worker.send({
-        socket,
-        extension,
-        preferencePath: join(root, "preferences.json"),
-        focusPolicy:
-          process.env.MAKO_PREVIEW_LEASE_FOCUS === "1" ? "lease" : "action",
-        definition: extension
-          ? undefined
-          : { ...desk.definition, endpoint: await desk.definition.endpoint() },
-      })
-      await ready
+        const ready = new Promise((resolve, reject) => {
+          worker.once("message", (message) =>
+            message.ready
+              ? resolve()
+              : reject(new Error("Unexpected host startup response"))
+          )
+          worker.once("exit", (code) =>
+            reject(new Error(`Fixture host exited before readiness: ${code}`))
+          )
+          worker.once("error", reject)
+        })
+        worker.send({
+          socket,
+          extension,
+          preferencePath: join(root, "preferences.json"),
+          focusPolicy:
+            process.env.MAKO_PREVIEW_LEASE_FOCUS === "1" ? "lease" : "action",
+          definition: extension
+            ? undefined
+            : { ...desk.definition, endpoint: await desk.definition.endpoint() },
+        })
+        await ready
+      } else await writeFile(join(root, "installed-identity.json"), JSON.stringify(installed.identity, null, 2))
       await new Promise((resolve) => {
         unsubscribe = subscribeRuntime(
           socket,
@@ -259,7 +268,8 @@ async function audit() {
               packet.payload.type === "control-activity"
             ) {
               notifications++
-              viewer.webContents.send("mako:event", packet.payload)
+              if (!installed || packet.payload.activity.conversationId === process.env.MAKO_PREVIEW_CONVERSATION)
+                viewer.webContents.send("mako:event", installed ? { ...packet.payload, activity: { ...packet.payload.activity, conversationId: "preview-audit" } } : packet.payload)
             }
           },
           () => {},
@@ -277,7 +287,7 @@ async function audit() {
       }
     }
     const run = (command) =>
-      shared
+      installed ? installed.run(command) : shared
         ? invokeRuntime(socket, client, "mako:audit-browser", [command])
         : browser.execute(
             "preview-audit",
@@ -307,7 +317,7 @@ async function audit() {
         const value = shared
           ? process.env.MAKO_PREVIEW_IDENTITY === "1"
             ? await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher], 1, { onTransfer: countTransfer })
-            : await invokeRuntimePreview(socket, client, [id, watching, watcher], countTransfer)
+            : await invokeRuntimePreview(socket, client, [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher], countTransfer)
           : previews.read(id, watching, watcher)
         if (value?.frame?.image.data) {
           value.frame.image = { mimeType: value.frame.image.mimeType, bytes: Buffer.from(value.frame.image.data, "base64") }
@@ -494,7 +504,7 @@ async function audit() {
     notifications = 0
     wireBytes = 0
     decodedBytes = 0
-    const hostCpuBefore = shared
+    const hostCpuBefore = shared && !installed
       ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
       : undefined
     const cpuBefore = new Map(
@@ -507,9 +517,13 @@ async function audit() {
     const resourceSamples = []
     const resourceRoots = { fixtureIncludingHost: process.pid }
     if (worker) resourceRoots.hostAndEncoder = worker.pid
+    if (installed) {
+      resourceRoots.installedHostTree = installed.hostPid
+      resourceRoots.taskSessionTree = installed.sessionPid
+    }
     if (Number(process.env.MAKO_PREVIEW_BROWSER_PID)) resourceRoots.wholeBrowser = Number(process.env.MAKO_PREVIEW_BROWSER_PID)
     const sampleMemory = async () => {
-      const host = shared
+      const host = shared && !installed
         ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
         : undefined
       memory.push({
@@ -526,7 +540,8 @@ async function audit() {
         hostEventLoopMs: host?.eventLoopMs,
       })
       const resources = await processResources(resourceRoots)
-      resources.encoder = (resources.hostAndEncoder ?? resources.fixtureIncludingHost).filter((row) => row.executable.endsWith("/ffmpeg"))
+      resources.encoder = (resources.installedHostTree ?? resources.hostAndEncoder ?? resources.fixtureIncludingHost).filter((row) => row.executable.endsWith("/ffmpeg"))
+      if (installed) resources.installedHostAndEncoder = resources.installedHostTree.filter(row => row.pid === installed.hostPid || row.executable.endsWith("/ffmpeg"))
       resourceSamples.push(resources)
     }
     await sampleMemory()
@@ -539,12 +554,52 @@ async function audit() {
       `], { stdio: ["pipe", "ignore", "inherit"] })
       loadProcesses.push(child)
     }
+    // Exercise input while both recording and synthetic load are active.
+    // The old audit waited until after load ended, which understated loaded latency.
+    const inputPhase = {}
+    const inputWork = (async () => {
+      await delay(Math.min(10000, durationMs / 2))
+      inputPhase.startedAtMs = performance.now() - started
+      if (recording) {
+        const receipt = await run({ action: "recording", target, operation: "status", id: recording.id })
+        inputPhase.recordingAtStart = receipt.status
+      }
+      for (const kind of ["click", "type", "scroll"]) {
+        if (kind === "type")
+          await run({ action: "click", target, at: { x: 400, y: 50 } })
+        for (let i = 0; i < 12; i++) {
+          // Arming changes no pixels: the trusted input's DOM event paints the acknowledgment.
+          const ack = await source.webContents.executeJavaScript(
+            "++window.fixture.nextAck"
+          )
+          pendingInput = { kind, ack, at: performance.now() }
+          if (kind === "click")
+            await run({ action: "click", target, at: { x: 100, y: 50 } })
+          else if (kind === "type")
+            await run({ action: "type", target, text: "a" })
+          else
+            await run({
+              action: "scroll",
+              target,
+              at: { x: 1000, y: 800 },
+              deltaY: 70,
+            })
+          await until(
+            () => !pendingInput,
+            `${kind} visible acknowledgment ${ack}, last ${lastAck}`
+          )
+        }
+      }
+      inputPhase.endedAtMs = performance.now() - started
+    })()
+    void inputWork.catch(() => {})
     while (performance.now() - started < durationMs) {
       await delay(
         Math.min(1000, Math.max(0, durationMs - (performance.now() - started)))
       )
       await sampleMemory()
     }
+    await inputWork
     const elapsed = performance.now() - started
     for (const child of loadProcesses) child.stdin.end()
     const animated = samples.splice(0)
@@ -560,7 +615,7 @@ async function audit() {
           ),
         0
       )
-    const hostCpuAfter = shared
+    const hostCpuAfter = shared && !installed
       ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
       : undefined
     const hostCpuCoreEquivalent = hostCpuAfter
@@ -593,7 +648,7 @@ async function audit() {
       ...transfer,
       cpuCoreEquivalent: (cpuSeconds * 1000) / elapsed,
       hostCpuCoreEquivalent,
-      cpuBoundary:
+      cpuBoundary: installed ? "Installed host/session trees include concurrent Mako tasks; encoder includes every FFmpeg descendant. Fixture viewer, whole browser and OS encoder services are separate. Summed RSS may double-count shared pages; no physical-scanout or isolated-host cost claim." :
         "Electron counters and host counters retain their prior scope. resources includes host descendants/FFmpeg; wholeBrowser includes ALL installed browser tabs, not target-only CPU. fixtureIncludingHost also includes requested synthetic load workers. videoToolboxServices covers all visible VTEncoderXPCService processes, including other applications; GPU/media-engine power is not measured. RSS sums can double-count shared pages.",
       paints,
       invalidPixelSamples: invalid,
@@ -617,32 +672,6 @@ async function audit() {
       0,
       "Every sampled image contains valid fixture pixels"
     )
-    for (const kind of ["click", "type", "scroll"]) {
-      if (kind === "type")
-        await run({ action: "click", target, at: { x: 400, y: 50 } })
-      for (let i = 0; i < 12; i++) {
-        // Arming changes no pixels: the trusted input's DOM event paints the acknowledgment.
-        const ack = await source.webContents.executeJavaScript(
-          "++window.fixture.nextAck"
-        )
-        pendingInput = { kind, ack, at: performance.now() }
-        if (kind === "click")
-          await run({ action: "click", target, at: { x: 100, y: 50 } })
-        else if (kind === "type")
-          await run({ action: "type", target, text: "a" })
-        else
-          await run({
-            action: "scroll",
-            target,
-            at: { x: 1000, y: 800 },
-            deltaY: 70,
-          })
-        await until(
-          () => !pendingInput,
-          `${kind} visible acknowledgment ${ack}, last ${lastAck}`
-        )
-      }
-    }
     const oracle = await source.webContents.executeJavaScript(
       "({clicks:fixture.clicks,text:document.querySelector('input').value,scroll:document.querySelector('main').scrollTop})"
     )
@@ -755,9 +784,18 @@ async function audit() {
           restoredPage = await source.webContents.executeJavaScript(
             "({visibility:document.visibilityState,focus:document.hasFocus()})"
           )
-          return restoredPage.visibility === initialPage.visibility
+          // Installed activity may start the preview before the initial probe.
+          // This fixture explicitly opened a background tab; capture must release
+          // its emulated visibility after the fixture consumers stop. hasFocus
+          // is reported separately; it is not an internal ownership receipt.
+          return installed
+            ? restoredPage.visibility === "hidden"
+            : restoredPage.visibility === initialPage.visibility
         }, "last consumer restores hidden page visibility")
       } finally {
+        if (installed) {
+          await writeFile(join(root, "restoration.json"), JSON.stringify({ initialPage, restoredPage, internalOwnership: "Not exposed by the installed API; no inference from private fixture counters" }, null, 2))
+        } else {
         const ownership = await invokeRuntime(
           socket,
           client,
@@ -784,6 +822,7 @@ async function audit() {
           join(root, "restoration.json"),
           JSON.stringify({ initialPage, restoredPage, ownership }, null, 2)
         )
+        }
       }
     }
     if (extension) await run({ action: "close", target })
@@ -791,7 +830,8 @@ async function audit() {
       machine: { ...machine, loadAverageAtEnd: loadavg() },
       decoder: "shared JPEG ImageDecoder when supported; HTMLImage fallback",
       mediaTransport: process.env.MAKO_PREVIEW_IDENTITY === "1" ? "test-only JSON identity bridge to binary painter" : "bounded binary preview v1",
-      boundary: `production ${extension ? "installed extension" : "desk"} capture → ControlPreviews → ${shared ? "separate Node host / private Unix socket → " : ""}Electron IPC/preload → production React overlay → offscreen compositor pixels`,
+      boundary: `production ${extension ? "installed extension" : "desk"} capture → ControlPreviews → ${installed ? "running installed host and existing task / private Unix socket → " : shared ? "separate Node fixture host / private Unix socket → " : ""}Electron IPC/preload → production React overlay fixture → offscreen compositor pixels`,
+      installed: installed?.identity,
       clock:
         "input dispatch and compositor delivery use the same main-process performance.now; excludes physical display scanout",
       dimensions: { sourceCss: [1920, 1080], preview: rectangle },
@@ -801,6 +841,7 @@ async function audit() {
       disposition: process.env.MAKO_PREVIEW_WINDOW === "1" ? "window" : "tab",
       electron: process.versions.electron,
       animated: animation,
+      inputPhase,
       inputToVisibleMs: Object.fromEntries(
         Object.entries(latencies).map(([key, values]) => [key, stats(values)])
       ),
@@ -852,6 +893,7 @@ async function audit() {
     previews?.close()
     browser?.close()
     unsubscribe()
+    await installed?.close().catch(error => console.error("Installed fixture cleanup failed:", error.message))
     if (worker?.connected) worker.send({ close: true })
     if (worker)
       await new Promise((resolve) => {

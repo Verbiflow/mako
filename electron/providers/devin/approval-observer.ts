@@ -22,6 +22,7 @@ const messageSchema = z.object({
   metadata: z.object({ extensions: z.record(z.string(), z.unknown()).optional() }).optional(),
 })
 const nodeSchema = z.object({ node_id: z.number().int(), parent_node_id: z.number().int().nullable(), chat_message: z.string() })
+const occurrenceKey = (sessionId: string, requestId: string) => JSON.stringify([sessionId, requestId])
 
 function answerDigest(answers: z.infer<typeof answersSchema>): string | undefined {
   // An incomplete/skipped or duplicate answer is not evidence of the submitted form.
@@ -75,10 +76,17 @@ export function readDevinApprovalDecisions(path: string, previous: readonly Nati
 
 export class DevinApprovalObserver implements AcpApprovalObserver {
   private readonly scope = randomUUID()
-  private readonly pending = new Map<string, { sessionId: string; questions: z.infer<typeof questionsSchema>; identity?: NativeApprovalIdentity }>()
+  private readonly pending = new Map<string, { sessionId: string; requestId: string; questions: z.infer<typeof questionsSchema>; identity?: NativeApprovalIdentity }>()
+  private readonly previous = new Map<string, NativeApprovalIdentity | null>()
   private readonly seen = new Set<string>()
   private readonly publish: (decision: NativeApprovalDecision) => void
-  constructor(publish: (decision: NativeApprovalDecision) => void) { this.publish = publish }
+  constructor(publish: (decision: NativeApprovalDecision) => void, previous: readonly NativeApprovalIdentity[]) {
+    this.publish = publish
+    for (const identity of previous) {
+      const key = occurrenceKey(identity.sessionId, identity.requestId)
+      this.previous.set(key, this.previous.has(key) ? null : identity)
+    }
+  }
   async identify(): Promise<undefined> { return undefined }
   identifyElicitation(request: CreateElicitationRequest): NativeApprovalIdentity | undefined {
     if (!ElicitationRequest.isForm(request) || !("sessionId" in request)) return
@@ -91,8 +99,11 @@ export class DevinApprovalObserver implements AcpApprovalObserver {
     const matches = [...this.pending.entries()].filter(([, p]) => p.sessionId === request.sessionId && isDeepStrictEqual(p.questions, questions))
     // ACP omits the tool ID from elicitation. Identical concurrent forms cannot be joined safely.
     if (matches.length !== 1 || matches[0][1].identity) return
-    const [requestId, pending] = matches[0]
-    pending.identity = { scope: this.scope, sessionId: pending.sessionId, requestId }
+    const [key, pending] = matches[0]
+    // A replacement callback is still the saved occurrence. Retain ambiguity
+    // instead of manufacturing a new identity that bypasses answer-once checks.
+    if (this.previous.has(key)) pending.identity = this.previous.get(key) ?? undefined
+    else pending.identity = { scope: this.scope, sessionId: pending.sessionId, requestId: pending.requestId }
     return pending.identity
   }
   observe({ sessionId, update }: SessionNotification): void {
@@ -100,20 +111,21 @@ export class DevinApprovalObserver implements AcpApprovalObserver {
     const parsed = metaSchema.safeParse(update._meta)
     if (!parsed.success) return
     const meta = parsed.data
+    const key = occurrenceKey(sessionId, update.toolCallId)
     if (update.sessionUpdate === "tool_call" && meta["cognition.ai/questions"]) {
-      if (this.seen.has(update.toolCallId)) { this.pending.delete(update.toolCallId); return }
+      if (this.seen.has(key)) { this.pending.delete(key); return }
       if (this.seen.size >= 2000) return
-      this.seen.add(update.toolCallId)
-      this.pending.set(update.toolCallId, { sessionId, questions: meta["cognition.ai/questions"] })
+      this.seen.add(key)
+      this.pending.set(key, { sessionId, requestId: update.toolCallId, questions: meta["cognition.ai/questions"] })
     }
-    const pending = this.pending.get(update.toolCallId)
+    const pending = this.pending.get(key)
     const answers = meta["cognition.ai/answers"]
     if (pending?.sessionId !== sessionId) return
     if (answers && pending.identity) {
       const digest = answers.length === pending.questions.length ? answerDigest(answers) : undefined
       if (digest) this.publish({ identity: pending.identity, answerDigest: digest, observedAt: Date.now() })
-      this.pending.delete(update.toolCallId)
-    } else if (update.status === "completed" || update.status === "failed") this.pending.delete(update.toolCallId)
+      this.pending.delete(key)
+    } else if (update.status === "completed" || update.status === "failed") this.pending.delete(key)
   }
-  async dispose(): Promise<void> { this.pending.clear(); this.seen.clear() }
+  async dispose(): Promise<void> { this.pending.clear(); this.seen.clear(); this.previous.clear() }
 }

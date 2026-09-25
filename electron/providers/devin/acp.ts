@@ -45,7 +45,7 @@ export const devinAcpSource: ProviderAcpSource = {
             for (const decision of readDevinApprovalDecisions(options.nativePath, previous.filter(p => p.sessionId === options.resume))) publish(decision)
           } catch { hostWarn("devin", "Native answer history could not be reconciled") }
         }
-        return new DevinApprovalObserver(publish)
+        return new DevinApprovalObserver(publish, previous)
       },
     }
   },
