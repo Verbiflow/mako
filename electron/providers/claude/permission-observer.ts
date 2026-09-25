@@ -26,6 +26,13 @@ export interface ClaudePermissionObserver {
   dispose(): Promise<void>
 }
 
+function previousPermissions(sessionId: string, identities: readonly NativeApprovalIdentity[]) {
+  const previous = new Map<string, NativeApprovalIdentity | null>()
+  for (const identity of identities) if (identity.sessionId === sessionId)
+    previous.set(identity.requestId, previous.has(identity.requestId) ? null : identity)
+  return previous
+}
+
 /** Native events are parsed here; durable evidence and the UI receipt contract
  * are shared with every provider. A callback return is never an event. */
 export async function listenClaudePermissionDecisions(input: {
@@ -36,9 +43,7 @@ export async function listenClaudePermissionDecisions(input: {
 }): Promise<ClaudePermissionObserver & { env: NodeJS.ProcessEnv }> {
   const retained = new RetainedApprovalDecisions(input.root)
   const identities = new Map<string, NativeApprovalIdentity | null>()
-  const previous = new Map<string, NativeApprovalIdentity | null>()
-  for (const identity of input.previous ?? []) if (identity.sessionId === input.sessionId)
-    previous.set(identity.requestId, previous.has(identity.requestId) ? null : identity)
+  const previous = previousPermissions(input.sessionId, input.previous ?? [])
   const published = new Set<string>()
   const path = `/${randomBytes(32).toString("hex")}/v1/logs`
   let active = 0
@@ -154,7 +159,12 @@ export async function prepareClaudePermissionObserver(input: {
 }): Promise<ClaudePermissionObserver | undefined> {
   const root = join(input.root, "claude")
   for (const decision of await readRetainedApprovalDecisions(root, input.previous.filter(identity => identity.sessionId === input.sessionId))) input.publish(decision)
-  if (!await compatibleNativeSettings(input.config)) return
+  if (!await compatibleNativeSettings(input.config)) {
+    const previous = previousPermissions(input.sessionId, input.previous)
+    // Changing monitoring configuration must not make an old answered callback
+    // look new. This observes known identity only, never native consumption.
+    return { identify: toolUseId => previous.get(toolUseId) ?? undefined, async dispose() { previous.clear() } }
+  }
   const observer = await listenClaudePermissionDecisions({ ...input, root })
   input.config.env = { ...input.config.env ?? process.env, ...observer.env }
   return observer
