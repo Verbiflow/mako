@@ -1,8 +1,29 @@
 {
-  "state": "installed-validation-failed",
-  "updatedAt": "2026-09-24T22:39:05.809Z",
+  "state": "installed-validated",
+  "updatedAt": "2026-09-24T23:25:02.165989Z",
   "candidateBuild": "3c1d563e25a9bd78",
   "previousBuild": "345bfd91c64009c6",
   "candidate": "/Users/kashyab/makomono/mako/release/control-mcp-reviewed-20260924/mac-arm64/Mako.app",
-  "message": "Unexpected non-whitespace character after JSON at position 2 (line 1 column 3)"
+  "installedBuild": "3c1d563e25a9bd78",
+  "previousFailure": {
+    "state": "installed-validation-failed",
+    "updatedAt": "2026-09-24T22:39:05.809Z",
+    "message": "Unexpected non-whitespace character after JSON at position 2 (line 1 column 3)"
+  },
+  "resolution": "Invalidate the selected ASAR header cache before reading metadata after bundle replacement; regression passes. No reinstall required.",
+  "checks": [
+    "Installed signature/package and running shared-host build",
+    "Installed CLI/SDK/MCP shared state and worker cleanup",
+    "Installed Aside: scoped exact Unicode, one trusted save, dialog recovery, screenshots, reset/idle worker fault",
+    "MCP reconnect, documentation/checkpoint restoration, cancellation after acknowledged action without delayed replay",
+    "Browser disconnect: old generation rejected, explicit reconnect, original temporary tab confirmed absent without save replay",
+    "Default installed host: fresh Codex gpt-6-astra native UI task, real confirmed compaction, documentation restoration, exact follow-up",
+    "Default installed host: cancellation after text delivery, delayed verification prevented, resumed exact value, 1006 foreground samples without target activation"
+  ],
+  "evidence": "docs/audits/2026-09-24/local-control-installed-acceptance/",
+  "limits": [
+    "Model compaction/interruption acceptance is Codex on macOS; other providers and Linux remain separate coverage",
+    "Browser reconnect can remove temporary task tabs; no automatic action replay or replacement",
+    "Japanese physical IME deferred; proactive native focus prevention and streaming/compositor work remain outside this milestone"
+  ]
 }

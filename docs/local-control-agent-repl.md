@@ -107,18 +107,18 @@ No new third-party dependency was added. Signed candidate `3c1d563e25a9bd78`
 contains the MCP implementation and the review's discovery/scope guidance fixes.
 It also includes the ACP negotiation and idle-worker crash fixes below. Its
 control code matches the tested source. It replaces the older `0d02dc53d0a315ff`
-candidate for this rollout. The first queue aborted when the shared host changed.
-A fresh retry was queued at 2026-09-24 22:37 UTC; only this conversation was active.
-The retry cleans up verified leftover bundle browser helpers and orphaned crash
-reporters after host exit, using the existing installer helpers. It will verify
-the expected host/build and run the same MCP acceptance against the installed
-app. The [live receipt](local-control-mcp-deployment.json) distinguishes waiting
-from installed-and-validated; the current installed app is still `345bfd91c64009c6`.
+candidate for this rollout. Build `3c1d563e25a9bd78` is installed. The initial
+post-install check failed because the deployment process reused cached ASAR
+headers after replacing the bundle. The installation itself succeeded. The
+metadata reader now invalidates that archive's cache before reading; an atomic
+replacement regression test reproduces the old failure and passes the fix.
+[Installed acceptance](#september-24-installed-acceptance-and-recovery) records
+current checks. The [live receipt](local-control-mcp-deployment.json) retains the
+historical failure and now records `installed-validated`.
 
-Remaining: broader discovery/adherence and complete jobs, interrupted/resumed
-provider sessions, installed shared-host acceptance and current Linux MCP execution. Existing
-native focus/input/compositor gaps remain in LC-24/25. This checkpoint does not
-establish overall ChatGPT parity or complete usability superiority over the old MCP.
+Remaining platform/provider cells are owned by Wayfinder LC-29. Native
+focus/input/compositor gaps remain in LC-24/25. This checkpoint does not establish
+overall ChatGPT parity or complete usability superiority over the old MCP.
 
 ## September 24 re-review and fresh-agent acceptance
 
@@ -194,3 +194,66 @@ entry points are `test-provider-e2e.mjs <provider> --control --browser` and
 `test-packaged-control-mcp.mjs <Mako.app>`. Logs and sanitized summaries are in
 `docs/audits/2026-09-24/local-control-mcp-review/` (ignored); no credentials or
 raw user browser content belong in tracked evidence.
+
+## September 24 installed acceptance and recovery
+
+All checks here target installed build `3c1d563e25a9bd78`, engine
+`0d964cac9bc5b939d3ce8e7e2adcbb6732c4fc409dfcbc0f0331d8cf713c748c`.
+The fix is in deployment tooling; no desktop reinstall or input-engine change is
+needed. `@electron/asar` caches file headers by archive pathname. A long-lived
+installer first read the old `/Applications/Mako.app` archive, replaced that
+bundle, then read the new manifest with the old header offsets. A fresh process
+passed because it had no stale cache. `scripts/local-app-metadata.mjs` now clears
+only the selected archive's cache before extracting the manifest; signer
+selection and startup verification share that reader. The original temporary
+deployment script uses it too. Signature verification and expected-build checks
+remain mandatory. No parse error is swallowed or treated as success.
+
+Completed checks:
+
+- `node scripts/test-update-local.mjs`: atomic archive replacement with changed
+  file offsets, plus existing signer, install ordering and failure checks.
+- `node scripts/test-local-package.mjs /Applications/Mako.app`: installed package
+  and signer; `verifyStarted('/Applications/Mako.app')`: actual shared host build.
+- `node scripts/test-packaged-control-cli.mjs /Applications/Mako.app`: installed
+  SDK/MCP/CLI state, engine identity and cleanup.
+- `node scripts/test-packaged-control-mcp.mjs /Applications/Mako.app`: real
+  installed ASAR → HTTP MCP → worker → Aside regular-profile extension and native
+  AppKit. Exact spaced Unicode, scoped form targeting, unchanged Billing field,
+  one trusted save, confirmation interruption, screenshots, reset and idle-worker
+  fault recovery all pass. Closing/reconnecting MCP preserves task state. A
+  cancelled call reaches the independently acknowledged fixture action exactly
+  once, clears bindings and preserves the target; its delayed second action never
+  runs. Documentation restoration preserves checkpointed facts and the target.
+- The same MCP check drops its browser connection explicitly. The old generation
+  is rejected. Reconnection returns a new generation and confirms that the
+  temporary tab was removed; it does not reopen the tab or replay its save.
+- `node scripts/test-installed-control-agent.mjs codex gpt-6-astra`: a new task
+  through the default installed host discovers MCP without the prompt naming a
+  tool. A completed real Codex compaction retains its native session; the next
+  turn restores SDK documentation and verifies another exact native value.
+  The initial two-turn run used 5 then 7 MCP calls and 691 foreground samples,
+  none showing the fixture. Exact native tool input independently confirms
+  `control.rewriteDocumentation()`. The runner now counts returned documentation,
+  since Mako's saved tool blocks omit inputs; missing input is not zero refreshes.
+
+The extended default-host run also passed: three completed exact-value turns,
+one deliberately interrupted turn, confirmed provider compaction, documentation
+restoration, and the same native provider session throughout. Cancelling after
+the field changed prevented the delayed Verify action for more than 30 seconds.
+The resumed task observed the state and verified a new exact value. There were
+1,006 foreground samples, none showing the fixture. Completed turns took
+28.3 / 22.1 / 15.9 seconds including model time; those are single-run measurements,
+not latency benchmarks. The first
+runner attempt used an invalid hard-coded Codex mode (`full-access`) and failed
+before any model turn; the runner now selects the provider's declared full-access
+mode and reports startup failures immediately. Keep that failure as runner
+evidence, not a product failure or a successful trial.
+
+These are scoped acceptance results, not a performance superiority claim. Model
+compaction coverage is Codex/macOS; other providers and Linux still need their own
+runs. SDK recovery checks do not imply arbitrary service-worker/browser restart
+retention. Japanese IME remains deferred by the user. Source lint and targeted
+checks accompany the change; unrelated concurrent edits are outside this review.
+
+Evidence and preserved runner failures: `docs/audits/2026-09-24/local-control-installed-acceptance/` (ignored). The [deployment receipt](local-control-mcp-deployment.json) is now `installed-validated`. This closes the Mac/Aside + Codex installed-acceptance milestone; streaming/recording is next, with other provider/platform cells still tracked.

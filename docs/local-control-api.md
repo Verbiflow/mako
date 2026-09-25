@@ -348,9 +348,11 @@ reason. A failed receipt can leave partial source files in `directory` without
 claiming they form a usable video. Task end and target loss stop capture.
 
 The default duration limit is two minutes, configurable from one second to ten
-minutes. `maxSide` defaults to 1600 pixels and accepts 320–2560. Source-frame disk usage is bounded; dropped browser frames are counted. Final
-rendering streams RGBA frames to FFmpeg with backpressure rather than staging
-another full set of PNGs. Static output lasts the recording duration rounded up
+minutes. `maxSide` defaults to 1920 pixels and accepts 320–2560. Browser encoding
+runs during capture without staging source images. Timestamped compressed source
+history is bounded by 32 MiB and two seconds of frame slots; an overloaded encoder
+interrupts explicitly. Dropped browser frames are counted. Native transformations
+stream RGBA frames to FFmpeg without staging another full set of PNGs. Static output lasts the recording duration rounded up
 to one output frame; encoded 60 fps does not imply 60 distinct source frames. Recording currently
 uses bundled `ffmpeg` and `ffprobe` in the new macOS arm64 package;
 development and Linux hosts require their runtime encoder dependencies. Native capture requires the updated
@@ -400,11 +402,16 @@ state.recording = await state.tab.record({name:'Save workflow',fps:60,maxSide:19
 await state.recording.stop()
 ```
 
-Recording start requires a real persisted frame. No-frame startup refuses without
+Recording start requires a real source frame admitted to the encoder. No-frame startup refuses without
 activating or moving the tab. `stop()` begins finalization; poll `status()` until
 finished/interrupted/failed, then use its file paths and encoded `dimensions`.
-`sampledFrames` counts intentional fps sampling separately from `droppedFrames`.
-Timeline v2 records actual pixel dimensions separately from viewport geometry.
+`sampledFrames` counts fps sampling and replacement of pending samples separately
+from invalid/out-of-order `droppedFrames`. Timeline v3 keeps actual pixel dimensions
+separate from viewport geometry, with `firstOutputFrame` for source samples used in
+the video. It replaces browser per-frame file paths with sample metadata. A small
+`timeline.jsonl` journal is written during capture; finalization writes `timeline.json`.
+`encodedFrames` and `encodedDurationMs`, when present, describe retained video;
+an interrupted prefix may be shorter than the recording's capture duration.
 `maxSide` is a cap, not a source-resolution or devicePixelRatio override. Browser
 sampling/output supports 1–60 fps and defaults to 60; native recording negotiates the installed driver/backend ceiling (up to 60), with older drivers fixed at 30. GNOME PNG capture remains limited to 5 until continuous capture is implemented. The shared browser video source fits within 1920×1080; this changes neither the page viewport nor explicit screenshot detail. Preview delivery also targets 60 fps. Actual source cadence and renderer presentation can be lower; output fps alone does not prove distinct captured frames.
 

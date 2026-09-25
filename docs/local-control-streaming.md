@@ -37,9 +37,16 @@ window-grant boundary described in the [capture backend review](local-control-ca
 These are backend choices under the same session engine. No candidate has been
 adopted or benchmarked inside Mako by this review.
 
-Fast desktop streaming has mature implementations. Mako's source-image storage,
-JSON/base64 delivery and PNG capture loops are implementation debt, not unavoidable
-properties of computer use. A transport replacement alone still cannot provide
+The [continuous-media investigation](local-control-media-investigation.md) adds
+the shared-runtime continuous recorder, packaged FFmpeg crash evidence and the
+remaining implementation sequence. Browser recording no longer accumulates
+source JPEGs; preview JSON and Linux capture loops remain. The investigation also
+corrects the distinction between pixelflux's two recording
+paths below. No streaming stack has been adopted.
+
+Fast desktop streaming has mature implementations. Continuous browser encoding
+now removes source-image staging. JSON/base64 preview delivery and Linux PNG
+capture loops remain implementation debt, not unavoidable properties of computer use. A transport replacement alone still cannot provide
 frames from a stalled source, identify the correct window, or make unknown input
 safe to repeat.
 
@@ -51,8 +58,13 @@ safe to repeat.
 | [KasmVNC](https://github.com/kasmtech/KasmVNC/tree/e9d297b4defd50d6a46d4ef1d04d443125350b72) | Web desktop stack; current source includes software/hardware video encoding alongside rectangle encoders. Upstream explicitly says it is not standard RFB-compatible. | Second integrated cloud candidate if Selkies fails the measured quality, cost or lifecycle gates. Do not claim ordinary VNC clients work because VNC is in its name. |
 | [TigerVNC](https://github.com/TigerVNC/tigervnc/tree/dd416cbfa2023ffcdd3bd23d90ce8254b3faf627) + [noVNC](https://github.com/novnc/noVNC/tree/acca57b997f206683d27796829ee1f72da37002a) | Standard VNC server/client family and browser RFB client. noVNC needs a WebSocket endpoint or a WebSocket-to-TCP proxy. | Compatibility route if ordinary VNC access is required. Benchmark separately; neither universal 60 fps nor poor performance follows from the VNC label alone. |
 
-The strongest reusable recording idea is already in pixelflux: consume encoded
-frames as they arrive, rather than save thousands of JPEGs and encode them later.
+Pixelflux demonstrates continuous encoded recording, but its two sinks have
+different limits. The Unix socket tap disconnects slow recorders; the built-in
+H.264 MP4 recorder counts queue drops and continues without a post-loss keyframe
+gate. The latter uses delivery timestamps, writes one initial codec configuration
+and starts a separate X11 capture. Add explicit readiness, discontinuity handling,
+geometry/configuration boundaries and interruption status before reuse.
+[Pinned findings and required tests](local-control-media-investigation.md#corrections-from-the-upstream-review).
 Reuse an encode only when dimensions, quality, timestamps and cursor composition
 match. After encoded-frame loss, recover at a decodable boundary/keyframe; dropping
 arbitrary dependent video packets is not equivalent to dropping independent JPEGs.
@@ -132,8 +144,9 @@ or codec dependency was added to the shipped package during this review.
   completed pixels. Local 1080p capture reaches ~59–60 distinct viewer frames/s;
   a separate-host socket comparison cuts response bodies by 32.86% with unchanged
   decoded pixels. Later CPU-instrumented results include a slower run; see the report.
-  Installed Aside capture exposed a hidden-tab no-frame limitation. Actual updated
-  installed-host, physical display and remote-network acceptance remain open.
+  Installed Aside capture exposed a hidden-tab no-frame limitation. Installed
+  runtime/MCP acceptance now passes; sustained installed-media, physical display
+  and remote-network acceptance remain open.
 
 Keep those existing ownership and bounded-work mechanisms. The experiments below
 must show an improvement over them, not replace them with a second session engine.

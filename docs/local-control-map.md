@@ -11,11 +11,12 @@ parity has not been established.
 - **Every complaint from the agent:** [issue ledger](local-control-agent-issues.md),
   including findings that were corrected, not reproduced, or remain open.
 - **Architecture:** [ownership boundaries, diagnostics and change tests](local-control-architecture.md).
-- **Agent discovery and MCP integration:** [LC-29](#lc-29--agent-discovery-and-mcp-integration) is active: implement and validate the unified MCP integration, including ordinary agent discovery.
+- **Agent discovery and MCP integration:** [LC-29](#lc-29--agent-discovery-and-mcp-integration) records passing installed Mac/Aside + Codex acceptance and remaining provider/platform coverage.
 - **CLI refactor:** [shared engine and shell contract](local-control-cli.md).
   Prior CLI-only acceptance is historical; MCP-first integration supersedes that delivery choice.
 - **Native capture reuse:** [source-reviewed open-source candidates and backend acceptance](local-control-capture-backends.md).
 - **Interactive streaming:** [reference findings, transport experiments and local/remote scope](local-control-streaming.md).
+- **Current media investigation:** [continuous recording, encoder-crash evidence and ordered implementation gates](local-control-media-investigation.md).
 - **Streaming choice and VNC:** [Selkies/pixelflux prototype, Moonlight comparison and compatibility boundary](local-control-streaming.md#september-24-selection-browser-streaming-moonlight-and-vnc).
 - **Using the existing API:** [API reference](local-control-api.md).
 - **Reusable packages:** [Node package ownership and consumer checks](package-boundaries.md); [LC-28](#lc-28--reusable-packages-and-public-entrypoints).
@@ -38,7 +39,7 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.21 selected for new launches; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | +mako.21 installed for new Mac driver launches. Latest signed candidate `3c1d563e25a9bd78` includes persistent-JS MCP, the ACP negotiation fix and idle-worker crash containment. Packaged HTTP MCP → private worker → regular Aside/native acceptance, explicit images, dialog recovery, reset/worker-fault retention, CLI/state/cleanup and both startup routes pass. | Build `3c1d563e25a9bd78` is installed. This resumed conversation successfully used its MCP for Aside background page observation/cleanup and native Ghostty observation. The automatic rollout stopped after replacement with a JSON parsing error, before installed packaged acceptance ran. [Live deployment receipt](local-control-mcp-deployment.json). Candidate acceptance and this access check do not complete installed workflow acceptance. |
+| Installed components | Build `3c1d563e25a9bd78` is installed; +mako.21 is selected for new Mac driver launches. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -80,13 +81,15 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Active priority (September 24, revised): SDK + composable CLI + persistent JS MCP.**
+**Current milestone:** LC-21 continuous browser recording is implemented locally: bounded pixels replace accumulated source JPEGs, the existing encoder writes during capture, worker startup precedes capture, and failures retain verified playable prefixes. Exact cursor/pixel tests, process-death cleanup and an isolated packaged SDK check pass. Native video bypasses re-encoding when no transform is needed. The final Aside minute reached 56.53 distinct preview fps and 56.82 recorded fps, below the 57 fps floor; all 36 exact input checks passed. Evidence is in the [media investigation](local-control-media-investigation.md#implementation-and-acceptance--september-24). These media changes are not installed. Binary preview delivery is now being implemented and validated: exact image bytes over a bounded, versioned media response, using the same task authorization and capture owner. Its tests and sustained results are pending. Then come the isolated Linux Selkies/pixelflux and Moonlight comparisons. The installed Mac/Aside + Codex **MCP** acceptance remains a separate completed milestone. [Installed acceptance evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
+
+**Preserved integration decision (September 24): SDK + composable CLI + persistent JS MCP.**
 After reviewing the current unified cua_repl evidence, the user explicitly replaced
 the CLI-only Mako integration decision. Mako agents should discover browser and
 computer use through one persistent JavaScript MCP adapter, calling the shared
 SDK/session directly, never spawning CLI commands. The basic CLI remains available
-for external users and file pipelines. Streaming work stays behind this
-integration’s correctness, discovery, lifecycle and packaging acceptance. Preserve the existing browser/native functionality, lossless values,
+for external users and file pipelines. Streaming work follows this integration’s scoped correctness, discovery, lifecycle
+and packaging acceptance, now passed for installed Mac/Aside + Codex. Preserve the existing browser/native functionality, lossless values,
 exact target checks, background policy and recording cleanup. Agent discovery, focused runtime documentation and minimal startup/context cost
 are primary acceptance criteria. Keep the CLI’s existing file/stdin composition.
 
@@ -188,9 +191,20 @@ These source changes still require desktop rollout.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: scoped short-run source and packaged Aside acceptance passed; sustained 1080p runs still fail. Idle rollout and native rates remain open.**
+**Status: installed runtime/MCP acceptance passes; sustained 1080p media acceptance remains open. Continuous encoding, verified crash prefixes, worker-owned rendering and native no-transform retention are implemented locally. Media rollout remains pending.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
+
+The [current investigation](local-control-media-investigation.md) records the
+implementation, failed experiments and acceptance gates. Continuous encoding
+removes source-JPEG staging; clocks/cursor timing and native no-transform output
+have focused tests. Next move exact preview bytes out of JSON, then compare
+isolated Selkies/pixelflux and Sunshine/Moonlight. Packaged
+FFmpeg's fragmented and hybrid modes retain 120 decoded frames after a synthetic
+encoder kill, whereas `+faststart` output is unreadable; clean runs retain all
+180. This is container evidence, not a new capture-rate result. Hybrid needs no
+new encoder dependency. Upstream pixelflux's built-in recorder requires changes
+for encoded loss, timing and resize; its socket tap is a different implementation.
 
 The production image renderer repeatedly replaced an unfinished async decode.
 The new pixel-reading audit reproduced only 10 readable frames in four seconds
@@ -220,18 +234,30 @@ a click can leave Chromium's `hasFocus()` true after detachment while the tab st
 hidden. This limitation is recorded, not replaced by forced blur or tab activation.
 [Measurements and limits](local-control-preview-evidence.md#september-24-capture-ownership-and-long-recording).
 
-Next: validate the new signed candidate and roll out only at host idle. The sustained
-1080p run still sends **11.87 MB/s** compressed / **17.67 MB/s** expanded preview data.
+The current signed build's runtime acceptance is complete; sustained media checks
+remain separate. An earlier sustained 1080p run sent **11.87 MB/s** compressed /
+**17.67 MB/s** expanded preview data.
 Electron working set rose from 867 MB to 1.20 GB; Node RSS stayed around 214–221 MB.
 Those include the offscreen fixture and exclude installed browser/encoder CPU.
 The 60-second runs at mixed capture sizes were slower and remain in the evidence.
-The latest 60-second run with the explicit 1920×1080 source budget reached
+The pre-continuous-encoding 60-second run with the explicit 1920×1080 source budget reached
 **52.02 distinct fps** and stopped recording after **41.33 seconds** when retained
 source JPEGs reached 512 MiB. The earlier fix removed decoded-PNG staging during
-finalization; it did not remove source-JPEG accumulation during capture. Encode
-continuously with bounded buffering and playable interrupted output before claiming
-sustained recording acceptance. Do not solve this by raising the storage cap.
+finalization; it did not remove source-JPEG accumulation during capture.
 [Failure and measurements](local-control-preview-evidence.md#september-24-sustained-1080p-failure).
+Continuous encoding now removes that source accumulation without raising the cap.
+A later worker-rendered two-viewer Aside run completed 68.57 seconds with
+53.76 distinct viewer fps and unchanged foreground samples. Its decoded video
+reached only 48.58 distinct fps; it does not close the smoothness gate. Startup
+prewarming fixes the initial encoder freeze. A bounded timestamped source queue
+now preserves intermediate states during encoder catch-up, verified by pausing
+and resuming real FFmpeg; decoded-marker tests also cover screenshot interference.
+The subsequent timestamped-queue run completed 67 seconds: preview 56.53 fps,
+recorded motion 56.82 fps, longest recorded hold 116.7 ms, all 36 exact input
+checks and both pixel comparisons passing with unchanged foreground samples.
+The 57 fps floor is still unmet. Recorder-only stress (including a ten-minute
+run), bounded-backlog and encoder/host-death tests are separate from viewer-rate
+acceptance. [Current implementation and limits](local-control-media-investigation.md#implementation-and-acceptance--september-24).
 The next transport experiment is binary media delivery outside preview JSON,
 with bounded queues, unchanged image bytes, shared task ownership and measured
 one/two-viewer cost; keep the selected 1080p video budget and report actual pixels; do not degrade
@@ -248,9 +274,11 @@ constraint does not upgrade native recording.
 
 The next isolated Linux streaming prototype is **Selkies/pixelflux**, comparing
 WebRTC with binary WebSocket delivery; **Sunshine/Moonlight** supplies the native
-viewer comparison. pixelflux's encoded recording sink is a specific reuse candidate
-for R18, but its published Python extension and monitor-scoped portal capture are
-not a drop-in Node dependency or exact-window backend. KasmVNC is a second cloud
+viewer comparison. pixelflux's encoded socket tap is a reuse candidate, but its
+built-in recorder continues after encoded queue loss, uses delivery timestamps
+and starts a second X11 encode. Both require explicit readiness/recovery checks.
+Its Python extension and monitor-scoped portal capture are not a drop-in Node
+dependency or exact-window backend. KasmVNC is a second cloud
 candidate, not standard VNC compatibility. Ordinary VNC would use a separate
 adapter (for example TigerVNC/noVNC) to the same job desktop, with input ownership
 enforced and no second automation API. The need for standard-client interoperability
@@ -389,18 +417,14 @@ state. This also closes the older LC-14 contention/invalidation work.
 
 ## LC-23 — Preview isolation and installed browser rollout
 
-**Latest installed check (2026-09-24):** `/Applications/Mako.app` now contains build `3c1d563e25a9bd78`. This resumed conversation received and successfully called the actual `mako-control` MCP tools: first-use SDK docs, readiness, extension connection to Aside Work, disposable background tab creation/observation/close (absence verified), and native Ghostty window observation. The native read intentionally used depth 2 and reported incomplete coverage. The automatic rollout stopped after installation with a JSON parsing error, before its packaged acceptance commands ran; those checks remain pending. This live access check supersedes the older queued-install status below, but does not establish full workflow parity.
-
-**Status: current MCP candidate `3c1d563e25a9bd78` passes packaged Aside/native
-acceptance; installation is waiting for idle.** [Live receipt](local-control-mcp-deployment.json).
-The first MCP attempt aborted at 15:10 UTC when the shared host changed; no app
-was replaced. The user-requested retry was queued at 22:37 UTC against the current
-host. Only this conversation was active at that check. After the host exits, the
-retry uses the existing installer cleanup for verified bundle browser helpers and
-orphaned crash reporters, then rechecks the host, candidate and installed build
-before replacement. It reruns packaged CLI and MCP acceptance after the installed
-host starts. The live receipt is authoritative; queueing is not installation.
-Earlier attempts below are historical.
+**Status: build `3c1d563e25a9bd78` is installed; package/host identity and
+installed CLI/MCP browser/native acceptance pass.** The post-install JSON failure
+was cached ASAR metadata after bundle replacement, fixed in the shared deployment
+metadata reader with a regression test. Reconnect, cancellation, exact-value,
+image and cleanup checks pass. Real Codex compaction through the default installed
+host passes, including task interruption/resume and 1,006 foreground samples without fixture activation.
+[Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
+The [live receipt](local-control-mcp-deployment.json) is `installed-validated`. This closes the scoped Mac/Aside + Codex installed milestone. Earlier rollout attempts below are historical.
 
 Candidate `1e3322212fc98974` passed both packaged startup routes. Its idle-only
 installer subsequently aborted because the shared host changed, without replacing
@@ -664,7 +688,7 @@ runs; symbols, marketing fps and synthetic transport timings are not substitutes
 
 ## LC-29 — Agent discovery and MCP integration
 
-**Status: provider trials and signed candidate checks pass; build `3c1d563e25a9bd78` is installed and live MCP access works. Automated installed acceptance stopped on a JSON parsing error. Direct historical session evidence is recorded; broader comparative usability remains open.**
+**Status: Mac/Aside installed acceptance is complete, including MCP/browser reconnect, cancellation, and default-host Codex compaction/interruption/resume. Broader provider/platform and comparative usability coverage remains open.**
 [Discovery audit and accepted design](local-control-cli-discovery.md).
 [Implementation, retired-MCP comparison and test evidence](local-control-agent-repl.md).
 This supplements LC-20 and LC-27. MCP is the primary Mako agent interface; the CLI
@@ -677,7 +701,7 @@ Local implementation now exposes `js` and `js_reset`, with persistent bindings,
 first-use/focused docs, explicit images and shared ownership. Tests pass for real
 MCP-over-HTTP cancellation, revoked grants, package consumers, stale refs across
 interfaces and reset without target cleanup. No new dependency or CLI subprocess
-was added. Candidate `3c1d563e25a9bd78` includes the re-review fixes and passes packaged HTTP MCP acceptance; it is installed, with live browser/native MCP access verified and automated installed acceptance still pending.
+was added. Candidate `3c1d563e25a9bd78` includes the re-review fixes and passes packaged HTTP MCP acceptance; it is installed, with installed browser/native MCP and default-host Codex compaction verified. See the installed acceptance section for scope and remaining cells.
 
 Separate whether the agent discovers the available tool from whether it follows
 its targeting, observation, verification and recovery rules. Current startup
@@ -707,9 +731,7 @@ migration or count source-search keyword matches as control use.
 
 Next:
 
-1. Resolve the post-install JSON parsing failure and run the installed MCP checks.
-   Then verify an ordinary task launched by the new default desktop host; invoking
-   installed ASAR modules alone does not prove that host's provider bootstrap.
+1. The installed Mac/Aside + Codex milestone is closed. LC-21 continuous encoding is locally implemented; complete its final sustained/rollout gates, then replace preview JSON with bounded binary media delivery and run the Selkies/pixelflux prototype. Preserve current exact-value and recovery acceptance while changing capture. The latest 56.53 fps preview and 56.82 fps recorded motion still miss the 57 fps floor for the 1080p60 target.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
    interruption/resume, compaction, fresh bindings and child-agent discovery.
    Preserve exact source/candidate/installed identities for every result.
