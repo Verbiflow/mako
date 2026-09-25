@@ -81,7 +81,7 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. The latest recorder overlaps at most two frames, caches cursor artwork and avoids duplicate asynchronous image-header work. A two-minute loaded Aside job completed **127.35 seconds of video at 55.11 distinct recorded fps**, with all 36 exact inputs and both pixel comparisons passing. Maximum schedule lag was 759 ms and queued source bytes peaked at 9.92 MB. Preview was **53.26 fps under that load**, below the normal 55 fps floor. Host plus encoder still used about 2.07 cores / 1.03 GB peak summed RSS; efficiency is improved but software encoding remains expensive. A lower-memory two-thread x264 experiment was rejected after real-workload interruption. The isolated Linux prototype now measures about **58.4 distinct capture fps**, **54.6 WebSocket viewer fps** and **53.3 WebRTC viewer fps**; it has upstream permission/backpressure issues and is not adopted. [Recorder evidence](local-control-recording-efficiency.md), [Linux measurements and remaining adoption gates](local-control-streaming.md#september-24-isolated-prototype-measurements). The final source-identity-checked ordinary run passes at **55.84 preview / 56.15 recorded fps**. The user accepts roughly 56 fps; 60 remains the target. **These media changes are not installed.** Final source build, types, lint, crash/recovery, packed consumer and Linux ARM64 worker checks pass. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
+**Current milestone:** LC-21 continuous recording and bounded binary preview delivery are implemented locally. The latest recorder overlaps at most two frames, caches cursor artwork and avoids duplicate asynchronous image-header work. A two-minute loaded Aside job completed **127.35 seconds of video at 55.11 distinct recorded fps**, with all 36 exact inputs and both pixel comparisons passing. Maximum schedule lag was 759 ms and queued source bytes peaked at 9.92 MB. Preview was **53.26 fps under that load**, below the normal 55 fps floor. A final-source repeat under higher ambient contention interrupted after **56.44 seconds**, retaining **53 seconds of verified playable video**; input and exact pixels still passed. **Heavy-load reliability remains open.** Host plus encoder in the successful run used about 2.07 cores / 1.03 GB peak summed RSS; efficiency is improved but software encoding remains expensive. A lower-memory two-thread x264 experiment was rejected after real-workload interruption. The isolated Linux prototype now measures about **58.4 distinct capture fps**, **54.6 WebSocket viewer fps** and **53.3 WebRTC viewer fps**; it has upstream permission/backpressure issues and is not adopted. [Recorder evidence](local-control-recording-efficiency.md), [Linux measurements and remaining adoption gates](local-control-streaming.md#september-24-isolated-prototype-measurements). The final source-identity-checked ordinary run passes at **55.84 preview / 56.15 recorded fps**. The user accepts roughly 56 fps; 60 remains the target. **These media changes are not installed.** Final source build, types, lint, crash/recovery, packed consumer and Linux ARM64 worker checks pass. Installed Mac/Aside + Codex **MCP** acceptance is a separate completed milestone. [Installed acceptance](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery).
 
 **Preserved integration decision (September 24): SDK + composable CLI + persistent JS MCP.**
 After reviewing the current unified cua_repl evidence, the user explicitly replaced
@@ -732,14 +732,15 @@ migration or count source-search keyword matches as control use.
 Next:
 
 Current LC-21 investigation: [recording efficiency](local-control-recording-efficiency.md)
-now includes browser/encoder CPU and memory, a successful loaded recording,
+now includes browser/encoder CPU and memory, both a successful loaded recording and an exact-source interruption,
 rejected threading experiments and exact pixel checks. [Linux streaming](local-control-streaming.md#september-24-isolated-prototype-measurements)
 has sustained component/viewer measurements and a measured colored-text quality
 tradeoff. No media rollout or upstream dependency adoption is implied.
 
-1. Finish exact-candidate source/installed media acceptance. Preserve the failed
-   overload attempts and the successful 127-second loaded recording; the loaded
-   preview remains below the ordinary rate floor. Before adopting Linux media,
+1. Finish exact-candidate source/installed media acceptance. Preserve the exact-source 56-second interruption and the successful 127-second
+   loaded recording. Heavy-load reliability remains open. Investigate a continuous
+   encoded/hardware producer and explicit CPU-only capacity; do not increase the
+   queue or silently lower quality to turn the measurement green. Before adopting Linux media,
    isolate capture/encoding from upstream input, fix view-only acknowledgments,
    verify reconnect/backpressure, decoder quality, idle cost and lifecycle, and
    measure GPU/native Sunshine/Moonlight and remote-network behavior. The user

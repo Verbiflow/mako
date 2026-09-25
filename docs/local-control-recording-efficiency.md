@@ -83,8 +83,8 @@ rejected 11 out-of-order frames; intentional sampling is reported separately.
 
 Preview averaged **53.26 fps**, with p95/max gaps 33/227 ms. The ordinary 55 fps
 preview gate still fails under this load. Do not describe this as sustained 60 fps
-or a complete performance pass. Recording interruption acceptance passes for this
-covered workload; arbitrary machine overload can still trigger the explicit bound.
+or a complete performance pass. That individual workload completes, but the final-source repeat below interrupts.
+Heavy-load acceptance remains open; this successful run is not a reliability claim.
 
 Maximum encoder schedule lag fell to 759 ms and queued source data peaked at
 44 frames / 9.92 MB. Header reads took 137.5 ms across 7,413 source frames, about
@@ -124,6 +124,38 @@ The packed runtime archive is approximately 151 kB / 619 kB unpacked and the typ
 control package 63 kB / 255 kB. Those figures exclude dependencies and native/media
 binaries; they are not a desktop installation size. No upstream streaming stack,
 Python bytecode, fixture recordings or prototype binaries enter these packages.
+
+## Final-source heavy-load counterexample
+
+The identity-checked repeat with the same two synthetic workloads **interrupted
+after 56.44 seconds**, retaining a verified 53.00-second playable prefix. It
+reports the two-second encoder-backlog error and preserves 3,180 decodable frames,
+zero invalid markers and 54.34 distinct recorded fps over that prefix. Preview
+continues for the full two-minute measurement at 48.29 fps, p95/max gap 47/383 ms.
+All 36 input checks and both exact pixel comparisons still pass. Click/type/scroll
+p95 is 135/130/265 ms. Source and compiled-media hashes remain unchanged.
+
+The machine had 14 logical CPUs and a one-minute load average rising from 18.9 to
+26.6 near the interruption (versus 13.0–16.3 in the earlier successful loaded run).
+That is uncontrolled ambient contention, not a matched A/B proof of causation.
+The host event-loop peak around the failure was 75 ms; maximum worker/render/pipe
+waits were 310/162/177 ms. Encoder backlog accumulated to 1.995 seconds before the
+next check crossed the existing limit; queued source data peaked at 20.08 MB.
+Whole-run CPU averages are misleading here because the encoder exits halfway
+through the measured interval. Keep its resource samples and lifetime visible.
+
+**Do not close heavy-load reliability.** The retained changes improve ordinary
+performance and one loaded run, but do not guarantee sustained recording under
+this heavier contention. Failure behavior passes: explicit interruption, correct
+partial duration, independent preview/input and cleanup. Increasing the backlog
+or silently changing resolution/CRF would conceal the limitation. The next design
+work is a continuous encoded producer with verified hardware acceleration where
+available, plus measured CPU-only capacity and an explicit overload policy. The
+Linux component measurements inform that work; they do not fix the Mac path.
+
+No further rate-chasing reruns or speculative encoder presets were applied. The
+failed exact-source run is retained alongside the successful normal and loaded
+runs in `docs/audits/2026-09-24/recording-efficiency/`.
 
 ## Linux prototype status
 

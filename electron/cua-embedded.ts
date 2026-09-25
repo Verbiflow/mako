@@ -4,7 +4,7 @@ import { createConnection } from "node:net"
 import { homedir } from "node:os"
 import { delimiter, isAbsolute, join } from "node:path"
 import { hostLog } from "./host-log.js"
-import { trackProviderPid, untrackProviderPid } from "./provider-children.js"
+import { trackProviderChild, untrackProviderPid } from "./provider-children.js"
 import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
 
 /**
@@ -146,7 +146,10 @@ async function start(
   await mkdir(stateDir, { recursive: true, mode: 0o700 })
   await chmod(stateDir, 0o700)
   await sweepStaleSockets(stateDir)
-  const endpoint = await createPrivateControlSocket(stateDir, `embedded-${process.pid}.sock`)
+  const endpoint = await createPrivateControlSocket(
+    stateDir,
+    `embedded-${process.pid}.sock`
+  )
   const socket = endpoint.path
   await unlink(socket).catch(() => undefined)
   const driverEnv = {
@@ -170,12 +173,6 @@ async function start(
     ...driverEnv,
   })
   daemon = started
-  trackProviderPid({
-    pid: started.pid,
-    executable: started.executable,
-    kind: "cua-driver",
-    owner: "embedded",
-  })
   hostLog("computer", "driver started", {
     pid: started.pid,
     route: "spawn",
@@ -197,11 +194,14 @@ async function spawnDirect(
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   })
+  trackProviderChild(child, { kind: "cua-driver", owner: "embedded" })
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString("utf8")).slice(-8_000)
   })
   let spawnFailure: string | null = null
-  child.once("error", (error) => { spawnFailure = error.message })
+  child.once("error", (error) => {
+    spawnFailure = error.message
+  })
   const current: Daemon = {
     pid: child.pid ?? 0,
     socket,
@@ -213,10 +213,14 @@ async function spawnDirect(
     if (daemon === current) forget(current)
   })
   try {
-    await waitForSocket(socket, () =>
-      spawnFailure ?? (child.exitCode === null
-        ? null
-        : stderr.trim() || `Embedded CUA Driver exited with ${child.exitCode}`)
+    await waitForSocket(
+      socket,
+      () =>
+        spawnFailure ??
+        (child.exitCode === null
+          ? null
+          : stderr.trim() ||
+            `Embedded CUA Driver exited with ${child.exitCode}`)
     )
   } catch (error) {
     child.kill("SIGTERM")

@@ -162,3 +162,8 @@ Full resource costs and rejected encoder experiments are retained. The
 [isolated Linux comparison](local-control-streaming.md#september-24-isolated-prototype-measurements)
 now includes decoded capture, WebSocket and WebRTC measurements. None of these
 results is an installed-media or universal 60 fps claim.
+
+The final-source loaded repeat interrupted after 56.44 seconds under higher
+ambient contention, retaining 53 seconds of verified playable video. Inputs and
+pixels remain correct. Heavy-load reliability is still open; the successful
+ordinary and earlier loaded runs must not hide that counterexample.

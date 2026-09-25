@@ -1,18 +1,15 @@
-import { execFileSync, type ChildProcess } from "node:child_process"
-import {
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs"
+import { type ChildProcess } from "node:child_process"
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { open } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
+import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { hostLog, hostWarn } from "./host-log.js"
 import {
   processExecutableMatches,
   processIdentityMatches,
+  observeProcessIdentity,
+  processStartMatches,
 } from "./providers/process-liveness.js"
 
 /**
@@ -44,17 +41,25 @@ export class ProviderChildren {
   readonly path: string
   private records: ProviderChildRecord[] = []
   private readonly hostPid: number
+  private readonly observeIdentity: typeof observeProcessIdentity
   private reaped = false
+  private readonly observations = new Map<number, AbortController>()
 
-  constructor(dataRoot: string, hostPid = process.pid) {
+  constructor(
+    dataRoot: string,
+    hostPid = process.pid,
+    observeIdentity = observeProcessIdentity
+  ) {
     this.path = join(dataRoot, "runtime", "provider-children.json")
     this.hostPid = hostPid
+    this.observeIdentity = observeIdentity
   }
 
   /** What an earlier host left behind: every record not written by this host. */
   private read(): ProviderChildRecord[] {
     try {
-      return RegistrySchema.parse(JSON.parse(readFileSync(this.path, "utf8"))).children
+      return RegistrySchema.parse(JSON.parse(readFileSync(this.path, "utf8")))
+        .children
     } catch {
       return []
     }
@@ -64,12 +69,20 @@ export class ProviderChildren {
   private write(): void {
     try {
       mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-      const foreign = this.reaped ? [] : this.read().filter((entry) => entry.host !== this.hostPid)
+      const foreign = this.reaped
+        ? []
+        : this.read().filter((entry) => entry.host !== this.hostPid)
       const draft = `${this.path}.${this.hostPid}.tmp`
-      writeFileSync(draft, JSON.stringify({ children: [...foreign, ...this.records] }), { mode: 0o600 })
+      writeFileSync(
+        draft,
+        JSON.stringify({ children: [...foreign, ...this.records] }),
+        { mode: 0o600 }
+      )
       renameSync(draft, this.path)
     } catch (error) {
-      hostWarn("children", "registry write failed", { error: error instanceof Error ? error.message : String(error) })
+      hostWarn("children", "registry write failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
@@ -82,49 +95,83 @@ export class ProviderChildren {
   }
 
   /**
-   * Record a process the host did not spawn itself but is responsible for:
-   * the native driver started through LaunchServices, whose pid is found
-   * after the fact. The caller removes it when it stops the process.
+   * Record a newly spawned PID immediately. Identity observation checks its
+   * birth against this timestamp; callers cannot adopt an arbitrary older PID.
+   * Prefer track(child), which also removes the record on exit.
    */
-  trackPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
+  trackPid(info: {
+    pid: number
+    executable: string
+    kind: string
+    owner: string
+  }): void {
     const record: ProviderChildRecord = {
       pid: info.pid,
       startedAt: Date.now(),
-      processStartedAt: processStartedAt(info.pid),
       executable: info.executable,
-      executableIdentity: processExecutableIdentity(
-        info.pid,
-        info.executable
-      ),
       kind: info.kind,
       owner: info.owner,
       host: this.hostPid,
     }
-    this.records = [...this.records.filter((entry) => entry.pid !== info.pid), record]
+    this.records = [
+      ...this.records.filter((entry) => entry.pid !== info.pid),
+      record,
+    ]
     this.write()
-    for (const delay of [250, 1_000, 5_000]) {
-      const timer = setTimeout(() => {
-        const current = this.records.find(
-          (entry) => entry.pid === info.pid
+    this.observations.get(info.pid)?.abort()
+    const controller = new AbortController()
+    this.observations.set(info.pid, controller)
+    void this.observe(record, controller).finally(() => {
+      if (this.observations.get(info.pid) === controller)
+        this.observations.delete(info.pid)
+    })
+  }
+
+  private async observe(
+    record: ProviderChildRecord,
+    controller: AbortController
+  ): Promise<void> {
+    // One observation at a time per child; slow lsof must never block host IPC.
+    // Later observations follow exec wrappers without granting a recycled PID ownership.
+    for (const wait of [0, 250, 1_000, 5_000]) {
+      try {
+        if (wait)
+          await delay(wait, undefined, {
+            signal: controller.signal,
+            ref: false,
+          })
+        if (controller.signal.aborted || !this.records.includes(record)) return
+        const identity = await this.observeIdentity(
+          record.pid,
+          AbortSignal.any([controller.signal, AbortSignal.timeout(4_500)])
         )
+        if (controller.signal.aborted || !this.records.includes(record)) return
         if (
-          !current ||
-          current.processStartedAt !== processStartedAt(info.pid)
+          !processStartMatches(
+            record.processStartedAt ?? record.startedAt,
+            identity.startedAt,
+            record.processStartedAt === undefined ? 1_500 : 0
+          )
         )
           return
-        const executableIdentity = processExecutableIdentity(
-          info.pid,
-          info.executable
+        if (
+          record.processStartedAt === identity.startedAt &&
+          record.executableIdentity === identity.executable
         )
-        if (current.executableIdentity === executableIdentity) return
-        current.executableIdentity = executableIdentity
+          continue
+        record.processStartedAt = identity.startedAt
+        record.executableIdentity = identity.executable
         this.write()
-      }, delay)
-      timer.unref()
+      } catch {
+        // An unavailable OS observation cannot authorize cleanup or an identity change.
+        if (controller.signal.aborted) return
+      }
     }
   }
 
   untrackPid(pid: number): void {
+    this.observations.get(pid)?.abort()
+    this.observations.delete(pid)
     if (!this.records.some((entry) => entry.pid === pid)) return
     this.records = this.records.filter((entry) => entry.pid !== pid)
     this.write()
@@ -135,7 +182,9 @@ export class ProviderChildren {
    * recorded executable and started within the record's tolerance is
    * signalled; anything else is dropped from the registry as already gone.
    */
-  async reap(signal: AbortSignal = AbortSignal.timeout(10_000)): Promise<ProviderChildRecord[]> {
+  async reap(
+    signal: AbortSignal = AbortSignal.timeout(10_000)
+  ): Promise<ProviderChildRecord[]> {
     const leftovers = this.read().filter((entry) => entry.host !== this.hostPid)
     const killed: ProviderChildRecord[] = []
     for (const entry of leftovers) {
@@ -153,7 +202,10 @@ export class ProviderChildren {
           ageMinutes: Math.round((Date.now() - entry.startedAt) / 60_000),
         })
       } catch (error) {
-        hostWarn("children", "orphan not terminated", { pid: entry.pid, error: error instanceof Error ? error.message : String(error) })
+        hostWarn("children", "orphan not terminated", {
+          pid: entry.pid,
+          error: error instanceof Error ? error.message : String(error),
+        })
       }
     }
     this.reaped = true
@@ -161,7 +213,10 @@ export class ProviderChildren {
     return killed
   }
 
-  private async identityHolds(entry: ProviderChildRecord, signal: AbortSignal): Promise<boolean> {
+  private async identityHolds(
+    entry: ProviderChildRecord,
+    signal: AbortSignal
+  ): Promise<boolean> {
     try {
       if (
         !(await processIdentityMatches({
@@ -169,8 +224,7 @@ export class ProviderChildren {
           startedAt: entry.processStartedAt ?? entry.startedAt,
           signal,
           exact: entry.processStartedAt !== undefined,
-          toleranceMs:
-            entry.processStartedAt === undefined ? 1_500 : undefined,
+          toleranceMs: entry.processStartedAt === undefined ? 1_500 : undefined,
         }))
       )
         return false
@@ -178,7 +232,7 @@ export class ProviderChildren {
         pid: entry.pid,
         executable:
           entry.executableIdentity ??
-          legacyShebangExecutable(entry.executable) ??
+          (await legacyShebangExecutable(entry.executable)) ??
           entry.executable,
         signal,
       })
@@ -188,88 +242,24 @@ export class ProviderChildren {
   }
 }
 
-function legacyShebangExecutable(executable: string): string | undefined {
+async function legacyShebangExecutable(
+  executable: string
+): Promise<string | undefined> {
+  let file: Awaited<ReturnType<typeof open>> | undefined
   try {
-    const line = readFileSync(executable, {
-      encoding: "utf8",
-    }).split("\n", 1)[0]
+    file = await open(executable, "r")
+    const { buffer, bytesRead } = await file.read(Buffer.alloc(512), 0, 512, 0)
+    const line = buffer.toString("utf8", 0, bytesRead).split("\n", 1)[0]
     if (!line?.startsWith("#!")) return undefined
     const command = line.slice(2).trim().split(/\s+/)
     if (basename(command[0] ?? "") !== "env") return command[0]
     return command
       .slice(1)
-      .find(
-        (argument) =>
-          !argument.startsWith("-") && !argument.includes("=")
-      )
+      .find((argument) => !argument.startsWith("-") && !argument.includes("="))
   } catch {
     return undefined
-  }
-}
-
-function canonicalExecutable(executable: string): string {
-  try {
-    return realpathSync(executable)
-  } catch {
-    return executable
-  }
-}
-
-function processExecutableIdentity(pid: number, fallback: string): string {
-  let observed: string | undefined
-  for (let attempt = 0; attempt < 20; attempt++) {
-    observed = currentProcessExecutable(pid)
-    if (observed && basename(observed) !== "env")
-      return canonicalExecutable(observed)
-    Atomics.wait(
-      new Int32Array(new SharedArrayBuffer(4)),
-      0,
-      0,
-      5
-    )
-  }
-  return canonicalExecutable(observed ?? fallback)
-}
-
-function currentProcessExecutable(pid: number): string | undefined {
-  try {
-    if (process.platform === "linux")
-      return readlinkSync(`/proc/${pid}/exe`)
-    if (process.platform === "darwin") {
-      const output = execFileSync(
-        "/usr/sbin/lsof",
-        ["-nP", "-a", "-p", String(pid), "-d", "txt", "-Fn"],
-        {
-          encoding: "utf8",
-          timeout: 1_500,
-          maxBuffer: 64_000,
-        }
-      )
-      const executable = output
-        .split("\n")
-        .find((line) => line.startsWith("n"))
-        ?.slice(1)
-      return executable
-    }
-  } catch {
-    return undefined
-  }
-  return undefined
-}
-
-function processStartedAt(pid: number): number | undefined {
-  if (process.platform === "win32") return undefined
-  try {
-    const value = Date.parse(
-      execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
-        encoding: "utf8",
-        timeout: 1_500,
-        maxBuffer: 4_096,
-      }).trim()
-    )
-    return Number.isFinite(value) ? value : undefined
-  } catch {
-    return undefined
+  } finally {
+    await file?.close()
   }
 }
 
@@ -280,12 +270,11 @@ export function installProviderChildren(dataRoot: string): ProviderChildren {
   return active
 }
 
-export function trackProviderChild(child: ChildProcess, info: { kind: string; owner: string }): void {
+export function trackProviderChild(
+  child: ChildProcess,
+  info: { kind: string; owner: string }
+): void {
   active?.track(child, info)
-}
-
-export function trackProviderPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
-  active?.trackPid(info)
 }
 
 export function untrackProviderPid(pid: number): void {
