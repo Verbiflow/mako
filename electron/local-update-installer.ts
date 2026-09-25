@@ -227,6 +227,26 @@ export async function stopOrphanedBundleCrashReporters(
   }
 }
 
+/** Only an exited, authorized host permits retiring its installation helpers. */
+export async function stopExitedHostHelpers(
+  bundle: string,
+  hostPid: number,
+  probe: (pid: number) => void = (pid) => { process.kill(pid, 0) },
+  run: Run = defaultRun,
+  signal: (pid: number) => void = (pid) => { process.kill(pid, "SIGTERM") }
+): Promise<boolean> {
+  try {
+    probe(hostPid)
+    return false
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH"))
+      throw error
+  }
+  await stopBundleBrowserHosts(bundle, run, signal)
+  await stopOrphanedBundleCrashReporters(bundle, run, signal)
+  return true
+}
+
 const RETAINED_STAGING = /^\.mako-(update|local-install)-[A-Za-z0-9]+$/
 const RETAINED_CONTENTS = new Set(["Previous Mako.app", "installer.mjs", "local-update-startup.mjs"])
 
@@ -464,18 +484,7 @@ async function runInstaller(): Promise<void> {
     process.disconnect?.()
     const deadline = Date.now() + 60_000
     for (;;) {
-      let hostAlive = true
-      try {
-        process.kill(hostPid, 0)
-      } catch (error) {
-        if (error instanceof Error && "code" in error && error.code === "ESRCH")
-          hostAlive = false
-        else throw error
-      }
-      if (!hostAlive) {
-        await stopBundleBrowserHosts(target)
-        await stopOrphanedBundleCrashReporters(target)
-      }
+      const hostAlive = !(await stopExitedHostHelpers(target, hostPid))
       const pids = await runningBundleProcesses(target)
       if (!hostAlive && !pids.length) break
       if (Date.now() >= deadline)

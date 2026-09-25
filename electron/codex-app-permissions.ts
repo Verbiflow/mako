@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
-import type { ApprovalSubmission } from "./contracts/approval-response.js"
+import type { ApprovalSubmission, NativeApprovalIdentity } from "./contracts/approval-response.js"
+import type { CodexApprovalCall, CodexApprovalChoice } from "./providers/codex/permission-observer.js"
 import {
   booleanValue,
   boundedText,
@@ -107,6 +108,7 @@ export type PendingServerRequest<
 > = {
   method: M
   observationId: string
+  native?: NativeApprovalIdentity
   answered?: boolean
   rpcId: JsonRpcId
   turnId: string | null
@@ -121,6 +123,8 @@ export interface PermissionContext {
 }
 
 export interface PermissionCallbacks<C extends PermissionContext> {
+  identify?(context: C, call: CodexApprovalCall, choices: readonly CodexApprovalChoice[]): NativeApprovalIdentity | undefined
+  submitted?(context: C, identity: NativeApprovalIdentity | undefined, response: LivePermissionResponse): void
   emit(context: C, event: LiveDriverEvent): void
   sendResult(context: C, id: JsonRpcId, result: ServerRequestResult): boolean
   sendError(context: C, id: JsonRpcId, code: number, message: string): void
@@ -192,6 +196,7 @@ export function resolvePermission<C extends PermissionContext>(
   // Validation has not written anything. Keep the native question answerable.
   if (result === undefined) return { kind: "not-submitted", pending: true, reason: "invalid-answer" }
   pending.answered = true
+  callbacks.submitted?.(context, pending.native, response)
   return callbacks.sendResult(context, pending.rpcId, result)
     ? { kind: "submitted", source: "transport-write" }
     : { kind: "uncertain", reason: "The answer could not be confirmed as written to the agent connection." }
@@ -279,7 +284,9 @@ function requestCommandApproval<C extends PermissionContext>(
     title,
     "execute",
     choices,
-    { decision: "cancel" }
+    { decision: "cancel" },
+    undefined,
+    () => callbacks.identify?.(context, params, choices)
   )
 }
 
@@ -331,7 +338,9 @@ function requestFileApproval<C extends PermissionContext>(
     title,
     "edit",
     choices,
-    { decision: "cancel" }
+    { decision: "cancel" },
+    undefined,
+    () => callbacks.identify?.(context, params, choices)
   )
 }
 
@@ -457,7 +466,8 @@ function registerServerRequest<
   kind: string,
   choices: Array<PermissionChoice<ServerRequestResults[M]>>,
   cancel: ServerRequestResults[M],
-  questions?: UserInputQuestion[]
+  questions?: UserInputQuestion[],
+  identify?: () => NativeApprovalIdentity | undefined
 ): void {
   const requestId = String(rpcId)
   if (context.serverRequests.has(requestId)) {
@@ -467,6 +477,7 @@ function registerServerRequest<
   const pending: PendingServerRequest<M> = {
     method,
     observationId: randomUUID(),
+    native: identify?.(),
     rpcId,
     turnId,
     choices: new Map(choices.map((choice) => [choice.optionId, choice.result])),
@@ -479,6 +490,7 @@ function registerServerRequest<
   const request: LivePermissionRequest = {
     id: requestId,
     observationId: pending.observationId,
+    native: pending.native,
     sessionId: context.id,
     title: boundedText(title, 1000),
     kind,

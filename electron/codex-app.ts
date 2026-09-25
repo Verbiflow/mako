@@ -1,4 +1,7 @@
 import { applyControlEnvironment } from "./control-launch.js"
+import { app } from "electron"
+import { join } from "node:path"
+import { CodexPermissionObserver, codexApprovalEnvironment } from "./providers/codex/permission-observer.js"
 import type { ApprovalSubmission } from "./contracts/approval-response.js"
 import { preparePrompt, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
@@ -67,6 +70,7 @@ type Live = {
   cwd: string
   emit(event: LiveDriverEvent): void
   child: ChildProcessWithoutNullStreams
+  processClosed: Promise<void>
   threadId: string | null
   promptSequence: number
   currentTurnId: string | null
@@ -83,6 +87,7 @@ type Live = {
   items: Map<string, ItemTracker>
   stdoutLines: LineAssembler
   stderrBuffer: string
+  approvals: CodexPermissionObserver
   agents: CodexAgents
   protocol: ProtocolCallbacks
   startupWatch: ProviderStartupWatch | null
@@ -97,6 +102,8 @@ const sessions = engine.sessions
 let sendEvent: (event: LiveDriverEvent) => void = () => {}
 
 const permissionCallbacks: PermissionCallbacks<Live> = {
+  identify: (live, call, choices) => live.approvals.identify(call, choices),
+  submitted: (live, identity, response) => live.approvals.submitted(identity, response),
   emit: (_live, event) => emit(event),
   sendResult: (live, id, result) => sendRpcResult(live, id, result),
   sendError: (live, id, code, message) => sendRpcError(live, id, code, message),
@@ -133,7 +140,7 @@ async function startCodex(
   if (!executable) throw new Error("Codex is not installed")
   const child = trace.sync("spawn", () => spawn(executable, ["app-server"], {
     cwd: workingDir,
-    env: environmentForExecutable(executable, env),
+    env: environmentForExecutable(executable, codexApprovalEnvironment(env)),
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
@@ -143,6 +150,7 @@ async function startCodex(
     id,
     cwd: workingDir,
     child,
+    processClosed: new Promise(resolve => child.once("close", () => resolve())),
     threadId: null,
     promptSequence: 0,
     currentTurnId: null,
@@ -172,6 +180,7 @@ async function startCodex(
     items: new Map(),
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
+    approvals: new CodexPermissionObserver(join(app.getPath("userData"), "approval-evidence", "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
     agents: new CodexAgents({
       read: async (threadId) => {
         const result = await rpcRequest(live, "thread/turns/list", {
@@ -404,10 +413,8 @@ export async function codexAppClose(id: string): Promise<void> {
     updateState(live, { status: "closed" })
     disposeLive(live, new Error("Codex session closed"))
     if (!live.child.killed) live.child.kill()
-    if (live.child.exitCode === null && live.child.signalCode === null)
-      await new Promise<void>((resolve) => {
-        live.child.once("exit", () => resolve())
-      })
+    await live.processClosed
+    await live.approvals.close()
     if (sessions.get(id) === live) sessions.delete(id)
   })()
   closingSessions.set(id, operation)
@@ -479,11 +486,12 @@ function bindProcess(live: Live): void {
   live.child.stdout.on("data", (chunk: Buffer) => consumeStdout(live, chunk))
   live.child.stderr.on("data", (chunk: Buffer) => {
     live.stderrBuffer = tail(
-      live.stderrBuffer + chunk.toString("utf8"),
+      live.stderrBuffer + live.approvals.stderr(chunk),
       MAX_STDERR_BUFFER
     )
   })
   live.child.on("error", (error) => handleProcessEnd(live, error.message))
+  live.child.once("close", () => { void live.approvals.close() })
   live.child.on("exit", (code, signal) => {
     const detail = lastLine(live.stderrBuffer)
     const suffix = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
