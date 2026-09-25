@@ -20,8 +20,9 @@ const command = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("frame"),
+    at: z.number().finite().nonnegative(),
     id: z.number().int(),
-    image: RecordingRenderSchema.extend({
+    image: RecordingRenderSchema.omit({ at: true }).extend({
       bytes: z.instanceof(ArrayBuffer),
     }).optional(),
   }),
@@ -80,11 +81,11 @@ port.on("message", (input) => {
         const renderStart = performance.now()
         let image = pixels
         if (value.image) {
-          const { bytes, frame, at, pointer, press } = value.image
+          const { bytes, frame, pointer, press } = value.image
           image = await renderRecordingImage(
             Buffer.from(bytes),
             frame,
-            at,
+            value.at,
             pointer,
             press,
             width,
@@ -99,7 +100,7 @@ port.on("message", (input) => {
         if (image !== pixels) releasePixels()
         pixels = image
         const pipeStart = performance.now()
-        writing = encoder!.write(image)
+        writing = encoder!.write(image, value.at)
         void writing.then(
           () => {
             queuedFrames--

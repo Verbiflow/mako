@@ -111,7 +111,7 @@ export class RecordingEncoder {
       }
       if (reply.data.kind === "failed") {
         for (const [id, request] of this.pending) {
-          if (request.kind === "frame" || id === reply.data.id) {
+          if (request.kind !== "finish" || id === reply.data.id) {
             request.reject(new Error(reply.data.reason))
             this.pending.delete(id)
           }
@@ -135,7 +135,7 @@ export class RecordingEncoder {
   }
   private request(
     message:
-      | { kind: "frame"; image?: RecordingRender & { bytes: ArrayBuffer } }
+      | { kind: "frame"; at: number; image?: Omit<RecordingRender, "at"> & { bytes: ArrayBuffer } }
       | { kind: "finish" }
       | { kind: "initialize"; width: number; height: number; fps: number }
   ) {
@@ -187,15 +187,15 @@ export class RecordingEncoder {
     if (reply.kind !== "initialized")
       throw new Error("Video worker did not initialize its encoder")
   }
-  async write(frame?: RecordingRender & { bytes: Buffer }) {
+  async write(at: number, frame?: Omit<RecordingRender, "at"> & { bytes: Buffer }) {
     if (this.failure) throw new Error(this.failure)
     // Transfer compressed source pixels, never full RGBA frames through the host.
-    // Make an owned copy: the recorder still retains the source for CFR repeats.
+    // Make an owned copy: the recorder still retains the source for unchanged-image repeats.
     const image =
       frame === undefined
         ? undefined
         : { ...frame, bytes: Uint8Array.from(frame.bytes).buffer }
-    const reply = await this.request({ kind: "frame", image })
+    const reply = await this.request({ kind: "frame", at, image })
     if (reply.kind !== "written")
       throw new Error("Video worker did not acknowledge its frame")
     return { renderMs: reply.renderMs, pipeMs: reply.pipeMs }

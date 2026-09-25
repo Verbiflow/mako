@@ -99,6 +99,8 @@ export class ControlRecording {
   private queuedVideoBytes = 0
   private videoWake?: () => void
   private outputFrames = 0
+  private skippedFrameSlots = 0
+  private unchangedFrameSlots = 0
   private sourceEnded = false
   private encodedDurationMs?: number
   private encodedFrames?: number
@@ -192,6 +194,7 @@ export class ControlRecording {
     if (target.kind === "page") {
       recording.videoEncoding = encoding
       recording.encoder = new RecordingEncoder(directory, (reason) => {
+        recording.firstWrite?.reject(new Error(reason))
         void recording.stop(reason)
       })
       try {
@@ -223,6 +226,13 @@ export class ControlRecording {
       frames: this.sourceFrames ?? this.frames.length,
       droppedFrames: this.dropped,
       sampledFrames: this.sampled,
+    }
+    if (this.encoder) receipt.frameRate = {
+      requestedFps: this.options.fps,
+      encodedFps: (this.encodedFrames ?? this.outputFrames) * 1000 /
+        Math.max(1, this.encodedDurationMs ?? receipt.durationMs),
+      skippedFrameSlots: this.skippedFrameSlots,
+      unchangedFrameSlots: this.unchangedFrameSlots,
     }
     if (this.video) receipt.video = this.video
     if (this.timeline) receipt.timeline = this.timeline
@@ -503,10 +513,11 @@ export class ControlRecording {
         this.timeline = join(this.directory, "timeline.jsonl")
         await this.journal.writeFile(
           JSON.stringify({
-            version: 3,
+            version: 4,
             target: this.target,
             startedAt: this.startedAt,
             fps: this.options.fps,
+            outputTiming: "presentation-timestamps",
             dimensions: this.dimensions,
           }) + "\n"
         )
@@ -523,18 +534,15 @@ export class ControlRecording {
       // still journal every source observation and pointer event. Never merge
       // across a different intervening image or geometry.
       const repeated = tail !== undefined && sameVideoImage(tail, queued)
-      // Recording needs source history while encoding catches up. A preview's
-      // latest-only policy would repeat old pixels until its clock caught up,
-      // even though valid intermediate source frames had arrived.
-      if (!repeated && (
+      // Keep source history within a strict budget. When the encoder cannot
+      // keep up, retain the newest samples and report evictions. Timestamps hold
+      // the last encoded image across the gap; neither speed nor sharpness changes.
+      while (!repeated && this.videoQueue.length && (
         this.videoQueue.length >= Math.ceil(this.options.fps * 2) + 2 ||
         this.queuedVideoBytes + bytes.length > 32 * 1024 * 1024
       )) {
+        this.queuedVideoBytes -= this.videoQueue.shift()!.bytes.length
         this.dropped++
-        void this.stop(
-          "Recording encoder backlog exceeded its frame or byte budget"
-        )
-        return
       }
       const pointerEnd = this.pointers.length
       const journalStart = performance.now()
@@ -610,7 +618,7 @@ export class ControlRecording {
         this.timeline,
         JSON.stringify(
           {
-            version: 3,
+            version: 4,
             name: this.options.name,
             target: this.target,
             pointerTiming:
@@ -623,6 +631,8 @@ export class ControlRecording {
             encodedFrames: this.encodedFrames ?? this.sourceFrames,
             submittedFrames: this.encoder ? this.outputFrames : undefined,
             encodingTiming: this.encoder ? this.encodingTiming : undefined,
+            frameRate: this.receipt().frameRate,
+            outputTiming: this.encoder ? "presentation-timestamps" : "native-capture",
             videoEncoding: this.videoEncoding,
             encodedDurationMs: this.encodedDurationMs,
             pointer: this.pointers,
@@ -674,8 +684,8 @@ export class ControlRecording {
     await this.finishing
     return this.receipt()
   }
-  /** CFR has an explicit clock. Source gaps hold the last image; irregular input
-   * must not shorten the video. Source samples and output frames stay separate. */
+  /** Presentation time follows capture time, independently of encoding rate.
+   * Source gaps hold the last image; catching up never speeds up the video. */
   private async encodeLive() {
     const encoder = this.encoder!
     const interval = 1000 / this.options.fps
@@ -695,6 +705,9 @@ export class ControlRecording {
         this.videoWake = wake
       })
     let submittedFrames = 0
+    let nextOrdinal = 0
+    let lastSubmittedAt = -Infinity
+    let nextProgressAt = 1000
     const pending: Promise<void>[] = []
     try {
       for (;;) {
@@ -703,8 +716,29 @@ export class ControlRecording {
           1,
           Math.ceil((this.endedAt ?? 0) / interval)
         )
-        if (this.sourceEnded && submittedFrames >= finalCount) break
-        const ordinal = submittedFrames
+        if (this.sourceEnded && lastSubmittedAt >= (finalCount - 1) * interval) break
+        const elapsed = this.endedAt ?? performance.now() - this.start
+        const due = Math.max(0, Math.floor(elapsed / interval))
+        // Start at zero even when initial capture/encoder startup is slow. Later
+        // backpressure skips old opportunities rather than building a catch-up
+        // loop. Preserve a final sample so the retained duration matches capture.
+        let ordinal = submittedFrames === 0 ? 0 : Math.max(nextOrdinal, due)
+        if (this.sourceEnded) ordinal = Math.min(ordinal, finalCount - 1)
+        // Retain transient states during a short stall when history still fits.
+        // Only sustained pressure discards that history; do not lose a popup
+        // merely because several identical frame opportunities were skipped.
+        const pressExpiry = this.pointers[pressIndex]?.at !== undefined
+          ? this.pointers[pressIndex]!.at + 400 : Infinity
+        const nextChangeAt = Math.min(
+          this.videoQueue[0]?.frame.at ?? Infinity,
+          this.pointers[pointerIndex + 1]?.at ?? Infinity,
+          pressExpiry > lastSubmittedAt ? pressExpiry : Infinity
+        )
+        if (current && Number.isFinite(nextChangeAt)) {
+          const changeOrdinal = Math.max(nextOrdinal, Math.ceil(nextChangeAt / interval))
+          if (changeOrdinal < ordinal && elapsed - changeOrdinal * interval <= 2000)
+            ordinal = changeOrdinal
+        }
         const at = ordinal * interval
         if (
           !this.sourceEnded &&
@@ -719,10 +753,10 @@ export class ControlRecording {
           await wait(remaining)
           continue
         }
-        if (!this.sourceEnded && remaining < -2000)
-          throw new Error(
-            "Recording encoder fell more than two seconds behind; capture was interrupted"
-          )
+        this.skippedFrameSlots += Math.max(0, ordinal - nextOrdinal)
+        // Stop can revisit the last coalesced slot to close the exact duration.
+        if (ordinal < nextOrdinal) this.unchangedFrameSlots--
+        nextOrdinal = ordinal + 1
         this.encodingTiming.maxScheduleLagMs = Math.max(
           this.encodingTiming.maxScheduleLagMs,
           -remaining
@@ -760,15 +794,25 @@ export class ControlRecording {
         const press = this.pointers[pressIndex]
         const state = `${imageRevision}:${pointerIndex}:${!!press && at - press.at < 400}`
         const changed = state !== previousState
+        const finalFrame = this.sourceEnded && ordinal === finalCount - 1
+        // A one-second heartbeat publishes playable fragments during still
+        // scenes. Cursor transitions and the final sample are never coalesced.
+        if (!changed && !finalFrame && at - lastSubmittedAt < 1000) {
+          this.unchangedFrameSlots++
+          continue
+        }
+        const outputIndex = submittedFrames
+        const reportProgress = at >= nextProgressAt
+        if (reportProgress) nextProgressAt = at + 1000
         const workerStart = performance.now()
         const recordedFrame = current.frame
         const write = encoder
           .write(
+            at,
             changed
               ? {
                   bytes: current.bytes,
                   frame: current.frame,
-                  at,
                   pointer: this.pointers[pointerIndex],
                   press,
                 }
@@ -796,9 +840,9 @@ export class ControlRecording {
               timing.pipeMs
             )
             this.firstWrite?.resolve()
-            recordedFrame.firstOutputFrame ??= ordinal
+            recordedFrame.firstOutputFrame ??= outputIndex
             this.outputFrames++
-            if (this.outputFrames % this.options.fps === 0)
+            if (reportProgress)
               this.encodingTiming.progress.push({
                 atMs: performance.now() - this.start,
                 frames: this.outputFrames,
@@ -811,7 +855,7 @@ export class ControlRecording {
                 ),
               })
             if (
-              this.outputFrames % this.options.fps === 0 &&
+              reportProgress &&
               (await stat(join(this.directory, "recording.partial.mp4"))).size >
                 512 * 1024 * 1024
             )
@@ -824,6 +868,7 @@ export class ControlRecording {
         void write.catch(() => {})
         pending.push(write)
         submittedFrames++
+        lastSubmittedAt = at
         previousState = state
       }
       await Promise.all(pending)

@@ -5,12 +5,14 @@ import { rename, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
+import { RecordingVideoInput } from "./recording-video-input.js"
 
 const execute = promisify(execFile)
 
 /** One encoder process per recording. A write is complete only after pipe admission;
  * the worker submits one raw frame at a time and the owner bounds source history. */
 export class RecordingEncoderProcess {
+  private readonly input: RecordingVideoInput
   private readonly child
   private readonly closed: Promise<void>
   private failure?: string
@@ -31,6 +33,7 @@ export class RecordingEncoderProcess {
     fps: number,
     failed: (reason: string) => void
   ) {
+    this.input = new RecordingVideoInput(width, height, fps)
     this.partial = join(directory, "recording.partial.mp4")
     this.output = join(directory, "recording.mp4")
     this.child = spawn(
@@ -44,22 +47,30 @@ export class RecordingEncoderProcess {
         // of the codec's internal encoding work.
         "-filter_threads",
         "1",
+        "-analyzeduration",
+        "0",
+        "-probesize",
+        "32",
         "-f",
-        "rawvideo",
-        "-pixel_format",
-        "rgb24",
-        "-video_size",
-        `${width}x${height}`,
-        "-framerate",
-        String(fps),
+        "mov",
         "-i",
         "pipe:0",
         "-an",
         ...recordingVideoEncoding().args,
+        // Held images make B-frame reorder delay span real time, shifting the
+        // first presentation time and shortening the reported duration.
+        "-bf",
+        "0",
+        "-enc_time_base",
+        this.input.timeBase,
+        "-fps_mode",
+        "vfr",
         "-pix_fmt",
         "yuv420p",
         "-g",
         String(fps),
+        "-force_key_frames",
+        "expr:gte(t,n_forced)",
         "-movflags",
         "+frag_keyframe+empty_moov+default_base_moof",
         "-flush_packets",
@@ -90,21 +101,26 @@ export class RecordingEncoderProcess {
         resolve()
       })
     })
+    this.child.stdin.write(this.input.header)
   }
 
-  async write(frame: Buffer) {
+  async write(frame: Buffer, atMs: number) {
     if (this.failure) throw new Error(this.failure)
     if (this.closing) throw new Error("Video encoder is closed")
+    const header = this.input.frame(atMs, frame.length)
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.abort("Video encoder stopped consuming frames")
         reject(new Error(this.failure))
       }, 5000)
+      this.child.stdin.cork()
+      this.child.stdin.write(header)
       this.child.stdin.write(frame, (error) => {
         clearTimeout(timeout)
         if (error) reject(error)
         else resolve()
       })
+      this.child.stdin.uncork()
     })
   }
 
