@@ -12,7 +12,26 @@ final class Handler: NSObject {
   init(field: NSTextField, output: NSTextField) { self.field = field; self.output = output }
   @objc func verify(_ sender: Any?) { output.stringValue = field.stringValue }
 }
+var events: [[String: Any]] = []
+var eventsDropped = 0
+func note(_ kind: String, source: Int64 = 0) {
+  if events.count >= 64 { eventsDropped += 1; return }
+  events.append(["kind": kind, "atMs": Date().timeIntervalSince1970 * 1000,
+    "foreground": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
+    "sourcePid": source])
+}
 let app = NSApplication.shared
+let activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: app, queue: .main) { _ in note("active") }
+let workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { notification in
+  if let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+     activated.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+    note("workspaceActivatedFixture")
+  }
+}
+let mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { event in
+  note("mouseDown", source: event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) ?? 0)
+  return event
+}
 app.setActivationPolicy(.accessory)
 let window = NSWindow(contentRect: NSRect(x: 240, y: 240, width: 480, height: 200), styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "Mako cocoa fixture"
@@ -29,11 +48,13 @@ button.action = #selector(Handler.verify(_:))
 window.contentView?.addSubview(field)
 window.contentView?.addSubview(button)
 window.contentView?.addSubview(output)
-window.orderFrontRegardless()
+// Make the fixture visible behind existing windows; never cover the user's work.
+window.orderBack(nil)
+note("windowShown")
 let statusPath = CommandLine.arguments[1]
 Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
   let selection = field.currentEditor()?.selectedRange.length ?? 0
-  let state: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "input": field.stringValue, "selection": selection, "value": output.stringValue]
+  let state: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "input": field.stringValue, "selection": selection, "value": output.stringValue, "events": events, "eventsDropped": eventsDropped]
   if let data = try? JSONSerialization.data(withJSONObject: state) {
     try? data.write(to: URL(fileURLWithPath: statusPath + ".next"))
     rename(statusPath + ".next", statusPath)

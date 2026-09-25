@@ -1,12 +1,18 @@
 // Private acceptance process; test-only commands never enter the app registry.
 import assert from "node:assert/strict"
 import { monitorEventLoopDelay } from "node:perf_hooks"
-import { BrowserService } from "@mako/control-runtime/browser"
-import { BrowserCommandSchema } from "@mako/control-runtime/contracts"
-import { extensionBrowsers } from "../../packages/control-runtime/dist/browser-extension-registration.js"
-import { ControlPreviews } from "../../dist-electron/control-previews.js"
-import { startWebHost } from "../../dist-electron/web-host.js"
-import { hostCallInputs } from "../../dist-electron/contracts/host-call-inputs.js"
+import { join } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
+
+const packaged = process.env.MAKO_PREVIEW_RUNTIME_APP
+const root = packaged ? join(packaged, "Contents/Resources/app.asar") : fileURLToPath(new URL("../../", import.meta.url))
+const runtime = join(root, packaged ? "node_modules/@mako/control-runtime/dist" : "packages/control-runtime/dist")
+const { BrowserService } = await import(pathToFileURL(join(runtime, "browser-service.js")).href)
+const { BrowserCommandSchema } = await import(pathToFileURL(join(runtime, "contracts.js")).href)
+const { extensionBrowsers } = await import(pathToFileURL(join(runtime, "browser-extension-registration.js")).href)
+const { ControlPreviews } = await import(pathToFileURL(join(root, "dist-electron/control-previews.js")).href)
+const { startWebHost } = await import(pathToFileURL(join(root, "dist-electron/web-host.js")).href)
+const { hostCallInputs } = await import(pathToFileURL(join(root, "dist-electron/contracts/host-call-inputs.js")).href)
 
 let close = () => {}
 const eventLoop = monitorEventLoopDelay({ resolution: 20 })
