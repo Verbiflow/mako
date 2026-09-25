@@ -37,10 +37,10 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Area | What is established | What is not established |
 | --- | --- | --- |
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
-| Browser capture | Local fixes for stream ownership, clipped screenshots, actual pixel metadata and timer drift. Browser recording defaults to 60 fps. A reproduced viewer decode failure is fixed: local compositor tests reach ~59–60 distinct frames/s from 1920×1080 capture, including two viewers plus recording, with unchanged decoded pixels. | Installed-host presentation/input latency, remote delivery, sustained 1080p efficiency and native rates. Source-host Aside acceptance is scoped below; focus-off hidden tabs may produce no frames. |
+| Browser capture | Installed ordinary Aside preview/recording reaches 56.84/57.73 distinct fps at 1920×1080 with two viewers, exact inputs and unchanged screenshot pixels. Corrected loaded input-to-visible p95 is 121/73/82 ms for click/type/scroll through a production offscreen viewer. | Both installed loaded recordings interrupt at the two-second backlog guard. Sustained efficiency, physical-screen latency, remote delivery and broader native rates remain open. Focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.21 selected for new launches; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
 | Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | Build `3c1d563e25a9bd78` is installed; +mako.21 is selected for new Mac driver launches. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
+| Installed components | Current build `9b696b0d9525e7e9` passes installed signature/host/module identity; recipe-4 media is deployed. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.21 remains selected for new Mac driver launches. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -82,19 +82,32 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone:** Mac hardware recording is implemented and packaged. Signed candidate `b5ec839840ea7ab0` uses recipe-3 VideoToolbox and quality 85, selected after quality 80 failed the broader sampled colored-text gate. Final ordinary and two-worker loaded Aside jobs pass at **58.72/58.79 preview fps** and **58.85/58.63 recorded fps**, with exact inputs and unchanged screenshot pixels. The loaded recording finishes 127 seconds at **460 MB peak summed RSS / 1.28 CPU cores** for host plus encoder; the visible OS encoder service adds about 22 MB / 0.018 cores. Exact-repeat coalescing also passes the minute-long static stress, crash recovery and unchanged native pass-through checks. [Hardware implementation and full evidence](local-control-mac-hardware-recording.md). Earlier software and quality-80 failures remain recorded; this is scoped acceptance, not proof under arbitrary load or a whole-machine resource budget.
+**Current milestone (September 25): cleanup is installed; media acceptance exposed two failures.**
+Build `9b696b0d9525e7e9` is installed and running with a valid certificate-backed
+signature, matching reviewed recording modules and media recipe 4. No redundant
+rebuild or installation is needed for the cleanup. Installed ordinary Aside
+recording passes at **56.84 distinct preview / 57.73 distinct recorded fps**.
+Two loaded runs interrupt when the encoder falls more than two seconds behind,
+retaining playable 69- and 117-second prefixes. The corrected loaded run performs
+all 36 exact input checks during recording/load: click/type/scroll input-to-visible
+p95 is **121/73/82 ms**. It is not a sustained-recording pass.
 
-**In progress September 25:** installed media acceptance. Build `9b696b0d9525e7e9`
-is now installed and running (host identity matches); its strict certificate-backed
-signature passes. The recording modules match the reviewed local build and media
-recipe 4 includes LC-26's cleanup. No redundant rebuild is needed for those changes.
-The acceptance fixture now borrows the existing task session and reads previews
-from the running installed host. Sustained measurements, native jobs and recovery
-checks are in progress; do not count the earlier source-host results as installed
-acceptance. Preserve the current installed MCP acceptance and active tasks.
-Further Mac native-buffer/idle/shared-encoding optimization remains separate.
-[Hardware validation](local-control-mac-hardware-recording.md#acceptance),
-[cleanup validation](local-control-streaming-cleanup.md).
+Installed browser debugger release/reclaim recovery and six native exact-value
+jobs pass. Two native preview viewers deliver **57.26 fps** at 480×232; this is
+neither distinct-motion nor 1080p native acceptance. A real native right-click is
+delivered but missing from the recording cursor timeline. The likely source is
+recording-scope loss at the right-click route's plain blocking-task boundary.
+
+**Next:** fix the loaded recording backlog and native pointer recording scope,
+then repeat these installed gates. Preserve exact input, quality 85, bounded queues
+and honest interruption receipts. First-60-second host-plus-encoder samples are
+**769 MB / 1.37 CPU cores** ordinary and **863 MB / 1.67 cores** in the corrected
+loaded run; the live host includes other Mako work, so these are not isolated
+recording costs. The viewer is a production React fixture reading the actual
+installed host, not the installed application's physical screen.
+[Installed identity, results, limits and reproduction](local-control-installed-media.md).
+Earlier [source-host hardware evidence](local-control-mac-hardware-recording.md)
+and [cleanup validation](local-control-streaming-cleanup.md) remain separately scoped.
 
 **Cloud ordering:** define the Linux cloud-agent environment first (display/compositor, CPU/GPU availability, isolation, network and lifecycle), then choose and validate its capture/encoding/transport backend. Preserve the current Linux implementation and prototype evidence; defer further cloud streaming implementation and Moonlight/Selkies adoption until that prerequisite. Mac and cloud retain the same typed session, ownership and recording API.
 
@@ -206,14 +219,14 @@ These source changes still require desktop rollout.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: final Mac hardware candidate passes ordinary and two-worker loaded source-host Aside jobs at roughly 58.6–58.9 fps, exact inputs/pixels and lower resources. See [current evidence](local-control-mac-hardware-recording.md). Installed media rollout/acceptance remains open; existing installed MCP acceptance is separate. The user accepts roughly 56 fps; 60 remains the target.**
+**Status: hardware recording and cleanup are installed in `9b696b0d9525e7e9`. Ordinary Aside recording and scoped debugger reconnect pass. Sustained loaded recording interrupts; native right-click cursor events are missing. [Installed evidence and next fixes](local-control-installed-media.md) supersede source-host success as the current release gate. The user accepts roughly 56 fps; 60 remains the target.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 
 The [current investigation](local-control-media-investigation.md) records the
 implementation, failed experiments and acceptance gates. Continuous encoding
 removes source-JPEG staging; clocks/cursor timing and native no-transform output
-have focused tests. [Binary delivery and shared JPEG decoding](local-control-preview-binary.md) now keep preview pixels out of JSON. The final source runs complete with exact pixels; the revised recorder also finishes the covered two-minute loaded job. Linux component/viewer measurements are documented; native Sunshine/Moonlight and installed media acceptance remain. Packaged
+have focused tests. [Binary delivery and shared JPEG decoding](local-control-preview-binary.md) now keep preview pixels out of JSON. The final source runs complete with exact pixels; the revised recorder also finishes the covered two-minute loaded job. Linux component/viewer measurements are documented; native Sunshine/Moonlight is deferred. Installed media acceptance remains open on the two failures above. Packaged
 FFmpeg's fragmented and hybrid modes retain 120 decoded frames after a synthetic
 encoder kill, whereas `+faststart` output is unreadable; clean runs retain all
 180. This is container evidence, not a new capture-rate result. Hybrid needs no
@@ -625,7 +638,7 @@ separate from the locally prepared workflow and completed EC2 acceptance.
 **Status: initial cleanup and target packages tested; further reduction open.**
 [Architecture, sizes and target matrix](local-control-packaging.md).
 
-**September 25 streaming cleanup — source/build validation passed; rollout pending.**
+**September 25 streaming cleanup — deployed in signed build `9b696b0d9525e7e9`; installed packaged checks pass.**
 Traced LC-21's current callers and removed unnegotiated Brotli response decoding, staged-browser post-stop
 encoding branches, an obsolete Electron media-resolver test and FFmpeg's unused
 concat demuxer (recipe 4). The container-recovery audit now uses the shared encoder
@@ -634,7 +647,10 @@ fallbacks have live callers and remain. Preview/recording/recovery suites, build
 typecheck and full lint pass (five existing React warnings). Recipe 4 is validated
 and promoted to the standard local media directory; 71.16 MB of obsolete temporary
 build copies were pruned with provenance preserved. This cleanup postdates signed
-candidate `b5ec839840ea7ab0`; a fresh signed build and installed checks remain.
+candidate `b5ec839840ea7ab0` and is included in installed build `9b696b0d9525e7e9`.
+Strict signature, running-host identity, matching media modules and packaged
+browser/native codec checks pass. LC-21 retains the loaded-recording and native
+cursor failures from [installed acceptance](local-control-installed-media.md).
 [Caller inventory, retained paths and evidence](local-control-streaming-cleanup.md).
 
 September 23: the signed ARM64 candidate is 662,787,567 installed bytes; 1,077
@@ -759,19 +775,20 @@ migration or count source-search keyword matches as control use.
 
 Next:
 
-Current LC-21 evidence: [Mac hardware recording](local-control-mac-hardware-recording.md)
-contains the final quality/resource/loaded acceptance and signed candidate. Earlier
-[recording efficiency](local-control-recording-efficiency.md) retains the software
-runs and failures. [Linux streaming](local-control-streaming.md#september-24-isolated-prototype-measurements)
-retains prototype results pending the cloud-environment definition. No installed
-media rollout or Linux dependency adoption is implied.
+Current LC-21 evidence: [installed media acceptance](local-control-installed-media.md)
+records build `9b696b0d9525e7e9`, ordinary success and two remaining failures.
+[Mac hardware recording](local-control-mac-hardware-recording.md) retains earlier
+source-host quality/resource measurements; [recording efficiency](local-control-recording-efficiency.md)
+retains software failures. [Linux streaming](local-control-streaming.md#september-24-isolated-prototype-measurements)
+retains prototype results pending the cloud-environment definition.
 
-1. Complete installed Mac hardware media acceptance under LC-21; the reviewed
-   VideoToolbox-enabled package, explicit hardware admission, exact dimensions,
-   text/cursor quality, bounded recovery and sustained source-host measurements
-   pass. Retain failed and successful runs; do not raise queues or silently lower
-   image quality. Measure native-buffer/idle work as further optimization. Define the
-   cloud-agent environment before resuming Linux streaming backend adoption,
+1. Repair sustained loaded recording and preserve native recording scope across
+   pointer dispatch workers, then repeat installed preview/recording/recovery jobs.
+   Keep failed runs, queue bounds, exact dimensions and image quality. Profile the
+   decode/composition/pipe path before choosing a performance change; measure
+   incremental costs against a matched idle host. Do not count delivered native
+   video frames as distinct motion or small-window proof as 1080p acceptance.
+   Define the cloud-agent environment before resuming Linux backend adoption,
    Selkies/Moonlight comparisons and remote-network tests.
 2. Extend the completed matrix with Grok browser and Linux MCP, plus provider
    interruption/resume, compaction, fresh bindings and child-agent discovery.

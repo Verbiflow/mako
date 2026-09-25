@@ -37,4 +37,11 @@ The validated recipe-4 binaries now occupy the standard ignored `vendor/control-
 
 Evidence: `docs/audits/2026-09-25/streaming-cleanup/` (ignored logs, container report, active and retired build provenance). Existing compiler-output pruning still runs in the build; no obsolete source module was retained as a compiled compatibility shim.
 
-**Deployment boundary:** these changes postdate signed candidate `b5ec839840ea7ab0` and are not installed. A new signed desktop build and installed acceptance remain necessary. Earlier 1080p performance/quality measurements apply to the prior hardware implementation; the cleanup's focused checks do not substitute for new installed measurements. Cloud/Linux streaming work remains deferred until the cloud-agent environment is defined.
+**Deployment boundary (updated September 25):** installed build `9b696b0d9525e7e9`
+includes this cleanup and recipe 4. The running host matches the installed bundle;
+strict certificate-backed signature, reviewed media-module equality and installed
+packaged browser/native encoding checks pass. A redundant rebuild is unnecessary.
+[Installed media acceptance](local-control-installed-media.md) records ordinary
+Aside success, loaded recording interruptions and missing native right-click cursor
+events. Cleanup deployment is complete; those LC-21 acceptance failures remain.
+Cloud/Linux streaming work stays deferred until the cloud-agent environment is defined.

@@ -1,6 +1,10 @@
 # Mac hardware recording
 
-September 25, 2026. Source implementation and candidate validation; not installed.
+September 25, 2026. Historical source implementation/candidate measurements below.
+The newer recipe-4 build `9b696b0d9525e7e9` is now installed and signed; see
+[installed media acceptance](local-control-installed-media.md). Ordinary installed
+recording passes, but two loaded runs interrupt and a native right-click is absent
+from the cursor timeline. Earlier candidate success does not close these gates.
 Current status belongs to [Wayfinder](local-control-map.md#delivery-order).
 
 ## Implementation
