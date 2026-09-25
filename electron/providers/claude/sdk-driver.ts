@@ -24,6 +24,7 @@ import {
 import { ClaudeProjection } from "./sdk-projection.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
+import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS } from "../../provider-startup.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
@@ -62,6 +63,7 @@ interface Live {
   agents: ClaudeAgents
   projection: ClaudeProjection
   permissions: ClaudePermissions
+  approvals: ClaudeApprovalObserver
   transcript: ClaudeTranscript
   emit: NonNullable<ProviderStartOptions["emit"]>
   promptReceipt?: { id: string; dispatch: PromptDispatch }
@@ -133,6 +135,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         })
       acknowledge(live, message)
       live.transcript.observe(message)
+      live.approvals.observe(message)
       if (message.type === "system" && message.subtype === "compact_boundary" &&
         message.compact_metadata.trigger === "manual" && live.compaction)
         live.compaction.confirmed = true
@@ -248,7 +251,8 @@ export function createClaudeSdkDriver(
   }
   return {
     provider: "claude",
-    approvalEvidence: { kind: "request-lifecycle", reason: "The SDK exposes callback submission and request abort. Neither confirms the consumed answer; automatic permission denials do not acknowledge an interactive reply." },
+    approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Parent AskUserQuestion results, correlated by native session and tool-use ID, live and in the saved branch. Other tool permissions and MCP elicitation retain callback/request-end evidence only." },
+    approvalAnswerDigest: claudeApprovalAnswerDigest,
     observesNativeAgents: true,
     canResume: true,
     forkPoint: "checkpoint",
@@ -267,9 +271,17 @@ export function createClaudeSdkDriver(
         throw new Error("This Claude binding is already connected")
       const generation = Symbol()
       starting.set(options.conversationId, generation)
+      const nativeId = options.fork ? options.conversationId : (options.resume ?? options.conversationId)
+      const publishDecision = (decision: import("../../contracts/approval-response.js").NativeApprovalDecision) => options.emit!({ type: "live-approval-decision", id: options.conversationId, decision })
+      const approvals = new ClaudeApprovalObserver(nativeId, options.observedApprovals ?? [], publishDecision)
       let config: Options
       try {
         config = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
+        if (!options.fork && options.resume && options.threadPath) {
+          try {
+            for (const decision of await readClaudeApprovalDecisions(options.threadPath, nativeId, options.observedApprovals ?? [])) publishDecision(decision)
+          } catch { hostWarn("claude-sdk", "Native answer history could not be reconciled", { conversation: options.conversationId }) }
+        }
         if (starting.get(options.conversationId) !== generation)
           throw new Error("Claude was closed while configuring")
       } finally {
@@ -280,7 +292,8 @@ export function createClaudeSdkDriver(
       const transcript = new ClaudeTranscript()
       const permissions = new ClaudePermissions(
         options.conversationId,
-        options.emit
+        options.emit,
+        approvals
       )
       let exited = Promise.resolve()
       const startedAt = Date.now()
@@ -333,6 +346,7 @@ export function createClaudeSdkDriver(
         exited: () => exited,
         input,
         permissions,
+        approvals,
         transcript,
         emit: options.emit,
         projection: new ClaudeProjection(),

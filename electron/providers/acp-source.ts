@@ -1,4 +1,4 @@
-import type { McpServer, ClientCapabilities, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk"
+import type { McpServer, ClientCapabilities, SessionNotification, SessionUpdate, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
@@ -44,11 +44,13 @@ export interface AcpLaunch {
 
 export interface AcpApprovalObserver {
   identify(request: RequestPermissionRequest): Promise<NativeApprovalIdentity | undefined>
+  identifyElicitation?(request: CreateElicitationRequest): NativeApprovalIdentity | undefined
+  observe?(notification: SessionNotification): void
   dispose(): Promise<void>
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict" | "approvalEvidence"> {
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict" | "approvalEvidence" | "approvalAnswerDigest"> {
   /** Native tool identity supplied by provider extensions to ACP metadata. */
   toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
   /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */

@@ -62,6 +62,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
     history?(binding: ProviderBinding): Promise<import("../contracts/live-questions.js").NativeQuestionHistory>
   }
   approvalEvidence: ApprovalEvidenceCapability
+  /** Hash the exact provider encoding before sending, without retaining answer text. */
+  approvalAnswerDigest?(request: import("../shared.js").LivePermissionRequest, response: LivePermissionResponse): string | undefined
   observesNativeAgents?: true
   steer?(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult>
   /** Required with `steer`; says what the provider does with the message. */

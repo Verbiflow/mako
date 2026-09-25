@@ -378,7 +378,7 @@ async function accountUsage(name: string): Promise<AccountUsage> {
   )
   const captured = accountDir("claude", name)
   const dir = existsSync(captured) ? captured : routed?.dir ?? captured
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: dir }
+  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CONFIG_DIR: dir }
   delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
   return usageForEnv(env)
 }

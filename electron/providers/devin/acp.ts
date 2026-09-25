@@ -7,11 +7,13 @@ import { configureDevinEnvironment } from "./environment.js"
 import { devinCompaction } from "./compaction.js"
 import { devinToolName } from "./tool-name.js"
 import { DevinAgents } from "./agents.js"
+import { DevinApprovalObserver, readDevinApprovalDecisions } from "./approval-observer.js"
+import { hostWarn } from "../../host-log.js"
 
 export const devinAcpSource: ProviderAcpSource = {
   ...devinResumePolicy(),
   provider: "devin",
-  approvalEvidence: { kind: "submission-only", reason: "ACP forwards native permission choices, but this adapter has no exact native decision observer or reconnect receipt." },
+  approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", coverage: "Structured question selections from exact native tool events and the saved main branch. Tool permission choices remain submission-only." },
   toolName: devinToolName,
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
   observeAgents: input => new DevinAgents(input),
@@ -30,13 +32,21 @@ export const devinAcpSource: ProviderAcpSource = {
     { id: "bypass", name: "Bypass Permissions" },
   ],
   available: () => devinExecutable() !== null,
-  async launch() {
+  async launch(options) {
     return {
       command: devinExecutable() ?? "devin",
       args: ["acp"],
       configureEnvironment: configureDevinEnvironment,
       permissionTitle: devinPermissionTitle,
       prepareMcp: prepareDevinMcp,
+      async prepareApprovals({ previous, publish }) {
+        if (options.nativePath && options.resume) {
+          try {
+            for (const decision of readDevinApprovalDecisions(options.nativePath, previous.filter(p => p.sessionId === options.resume))) publish(decision)
+          } catch { hostWarn("devin", "Native answer history could not be reconciled") }
+        }
+        return new DevinApprovalObserver(publish)
+      },
     }
   },
 }
