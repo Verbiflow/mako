@@ -14,7 +14,7 @@ import {
 } from "../electron/runtime-connection.js"
 import type { RuntimeTransfer } from "../electron/runtime-response.js"
 
-const root = await mkdtemp(join(tmpdir(), "mako-compressed-response-"))
+const root = await mkdtemp(join(tmpdir(), "mako-runtime-response-"))
 const socket = join(root, "host.sock")
 const payload = {
   image: "0123456789-東京-🐟 ".repeat(10_000),
@@ -92,20 +92,19 @@ try {
     replies++
     const mode = req.headers["x-mako-window"]
     response.writeHead(200, {
-      "content-encoding": mode === "unsupported" ? "gzip" : "br",
+      "content-encoding": mode === "unsupported" ? "gzip" : ["valid", "bomb"].includes(String(mode)) ? "br" : "identity",
     })
     response.end(
-      mode === "bomb"
+      mode === "oversized" ? Buffer.alloc(33 * 1024 * 1024, 65) : mode === "bomb"
         ? bomb
         : mode === "valid" ? compressed.bytes : mode === "truncated"
-          ? compressed.bytes.subarray(0, -1)
+          ? Buffer.from(encoded.slice(0, -1))
           : Buffer.from("bad pixels")
     )
   })
   await new Promise<void>((resolve) => bad.listen(corruptSocket, resolve))
   try {
-    assert.deepEqual(await runtimeRequest({ socket: corruptSocket, path: "/rpc", client: "valid", schema: z.json() }), JSON.parse(encoded), "Legacy compressed host reply remains readable")
-    for (const mode of ["malformed", "truncated", "bomb", "unsupported"]) {
+    for (const mode of ["valid", "malformed", "truncated", "bomb", "unsupported", "oversized"]) {
       await assert.rejects(
         runtimeRequest({
           socket: corruptSocket,
@@ -117,13 +116,13 @@ try {
           error instanceof RuntimeDisconnectedError && error.unconfirmed
       )
     }
-    assert.equal(replies, 5, "Invalid accepted responses are never retried")
+    assert.equal(replies, 6, "Invalid accepted responses are never retried")
   } finally {
     bad.close()
     bad.closeAllConnections()
   }
   console.log(
-    "Runtime replies: exact ordinary JSON, bounded legacy decompression, byte diagnostics, malformed/truncated refusal and no replay passed"
+    "Runtime replies: exact ordinary JSON, unnegotiated compression refusal, byte diagnostics, malformed/truncated refusal and no replay passed"
   )
 } finally {
   host.close()

@@ -214,8 +214,7 @@ async function audit() {
     bytes = 0
   try {
     let wireBytes = 0,
-      decodedBytes = 0,
-      compressedReplies = 0
+      decodedBytes = 0
     if (shared) {
       worker = fork(
         fileURLToPath(
@@ -304,7 +303,6 @@ async function audit() {
         const countTransfer = (transfer) => {
           wireBytes += transfer.wireBytes
           decodedBytes += transfer.decodedBytes
-          if (transfer.encoding === "br") compressedReplies++
         }
         const value = shared
           ? process.env.MAKO_PREVIEW_IDENTITY === "1"
@@ -496,7 +494,6 @@ async function audit() {
     notifications = 0
     wireBytes = 0
     decodedBytes = 0
-    compressedReplies = 0
     const hostCpuBefore = shared
       ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
       : undefined
@@ -580,7 +577,6 @@ async function audit() {
       notifications,
       wireBytes,
       decodedBytes,
-      compressedReplies,
     }
     const gaps = animated
       .slice(1)

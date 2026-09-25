@@ -8,6 +8,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
+import { recordingVideoEncoding } from "../packages/control-runtime/dist/control-media.js"
 
 const execute = promisify(execFile)
 const root = resolve(process.argv[2] ?? `vendor/control-media/${process.platform}-${process.arch}`)
@@ -17,6 +18,7 @@ const directory = await mkdtemp(join(tmpdir(), "mako-media-continuity-"))
 const width = 1920, height = 1080, fps = 60, frames = 180
 const version = (await execute(ffmpeg, ["-version"])).stdout.split("\n")[0]
 const results = []
+const encoding = recordingVideoEncoding()
 
 async function inspect(path) {
   try {
@@ -61,10 +63,9 @@ for (const [mode, flags] of Object.entries(containers)) {
       "-hide_banner", "-loglevel", "error", "-n",
       "-f", "rawvideo", "-pixel_format", "yuv420p",
       "-video_size", `${width}x${height}`, "-framerate", String(fps),
-      "-i", "pipe:0", "-an", "-c:v", "libx264", "-preset", "fast",
-      "-crf", "18", "-pix_fmt", "yuv420p",
+      "-i", "pipe:0", "-an", ...encoding.args, "-pix_fmt", "yuv420p",
       // Match codec/GOP in both arms; isolate the output-container difference.
-      "-g", String(fps), "-keyint_min", String(fps), "-sc_threshold", "0", "-bf", "0",
+      "-g", String(fps), "-bf", "0",
       "-movflags", flags,
       "-flush_packets", "1", "-stats_period", "0.1", "-progress", "pipe:1", output,
     ]

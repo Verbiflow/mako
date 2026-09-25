@@ -17,6 +17,8 @@ const root = await mkdtemp(join(tmpdir(), "mako-hardware-quality-"))
 const ffmpeg = mediaExecutable("ffmpeg"), ffprobe = mediaExecutable("ffprobe")
 const width = 1920, height = 1080, frames = 240
 const imageArgument = process.argv.find((arg) => arg.startsWith("--image="))?.slice(8)
+const qualityArgument = process.argv.find((arg) => arg.startsWith("--quality="))?.slice(10)
+if (qualityArgument !== undefined) assert.ok(Number.isInteger(Number(qualityArgument)) && Number(qualityArgument) >= 1 && Number(qualityArgument) <= 100)
 const fixture = imageArgument ? await readFile(imageArgument) : Buffer.from(`<svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg"><rect width="1920" height="1080" fill="#191714"/>${Array.from({length: 45}, (_, i) => `<text x="30" y="${24 + i * 23}" font-family="monospace" font-size="16" fill="${i % 3 === 0 ? '#55bbdd' : '#eeeeee'}">Row ${i}: exact values 0123456789 | Save changes | 1lI O0 {} [] () &amp; @ #</text>`).join("")}</svg>`)
 const source = await sharp(fixture).resize(width, height, {fit: "contain"}).jpeg({quality: 92}).toBuffer()
 await writeFile(join(root, "source.jpg"), source)
@@ -27,6 +29,8 @@ const render = (index) => {
 const results = []
 for (const platform of ["linux", "darwin"]) {
   const encoding = recordingVideoEncoding(platform)
+  if (encoding.hardwareRequired && qualityArgument !== undefined)
+    encoding.args[encoding.args.indexOf("-q:v") + 1] = qualityArgument
   const output = join(root, `${encoding.codec}.mp4`)
   const child = spawn(ffmpeg, ["-hide_banner", "-loglevel", "error", "-n", "-filter_threads", "1", "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", `${width}x${height}`, "-framerate", "60", "-i", "pipe:0", "-an", ...encoding.args, "-pix_fmt", "yuv420p", "-g", "60", "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-flush_packets", "1", output], {stdio: ["pipe", "ignore", "pipe"]})
   let error = "", sampling = false

@@ -20,12 +20,14 @@ try {
     let settle = Promise.withResolvers<void>()
     let report = true
     let rejectAnswer = false
+    let recoveredIdentities: NativeApprovalIdentity[] = []
     const driver: ProviderLiveDriver = {
       approvalAnswerDigest: () => "a".repeat(64),
       approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission", "structured-question"], coverage: "Injected native evidence fixture" },
       provider, canResume: true, available: () => true,
       async start(cwd, options) {
         emit = options.emit!
+        recoveredIdentities = options.observedApprovals ?? []
         return { id, nativeId: "native-session", cwd, harness: provider, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] } satisfies LiveSessionState
       },
       async prompt() {}, async cancel() {}, close() {}, async setMode() {},
@@ -109,6 +111,8 @@ try {
       owner.transfer(id, { id: transferId, provider, text: "Continue", attachments: [] })
       for (let i = 0; i < 200 && owner.snapshot(id)?.control?.transfers.at(-1)?.state.kind !== "accepted"; i++) await delay(5)
       assert.equal(owner.snapshot(id)?.control?.transfers.at(-1)?.state.kind, "accepted", "fixture reconnect must complete")
+      assert.ok(recoveredIdentities.some(identity => identity.scope === native.scope), "reconnect supplies answered occurrences, so adapters cannot rename a replayed callback")
+      assert.ok(recoveredIdentities.some(identity => identity.scope === nextNative.scope), "reconnect retains uncertain occurrences too")
       ask(native); ask(nextNative)
       assert.equal(owner.snapshot(id)?.permissions.length, 0, "journal receipts suppress re-observation on a replacement connection")
       const unansweredNative = { ...native, requestId: "new-permission" }
