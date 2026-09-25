@@ -83,11 +83,7 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
           <NativeControlPreview
             key={`${id}:${nativeWindow.pid}:${nativeWindow.windowId}`}
             id={id}
-            poster={
-              frame
-                ? `data:${frame.image.mimeType};base64,${frame.image.data}`
-                : undefined
-            }
+            poster={frame?.image}
           />
         ) : (
           frame && (
