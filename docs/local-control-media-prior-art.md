@@ -129,18 +129,20 @@ microbenchmark: do not ship these settings from this probe alone.
 
 Evidence and reproduction scripts:
 `docs/audits/2026-09-25/media-prior-art/` (ignored, with hashes and fixture image).
-No source/dependency/installed-binary changes accompany these experiments.
+Those initial probes made no production changes. The subsequent Mac implementation
+is tracked in [hardware recording](local-control-mac-hardware-recording.md).
 
 ## Changes to investigate, in order
 
-1. **Test the low-delay software configuration on the full loaded fixture.**
-   Same pixels, dimensions, duration, failure semantics and input workload. Include
-   dense text, fast scroll and animation; measure quality/bitrate, not CRF alone.
-   Keep the old failure evidence. Probe platform/thread selection explicitly.
-2. **Prototype verified hardware encoding on Mac.** Add a reviewed target-specific
-   build or native VideoToolbox adapter, detect actual hardware use and bound its
-   buffers. Include OS/GPU costs. Prove crash, cancellation, reconnect and saved
-   output integrity before integrating. Do not merely swap the user's FFmpeg.
+1. **Implement and validate Mac hardware encoding now (user decision, September 25).**
+   Use a reviewed VideoToolbox-enabled package, require hardware admission and
+   preserve the shared recording API. Include saved text/cursor quality, sustained
+   resources, OS service cost and interruption cleanup. Native buffer capture can
+   follow; hardware encoding alone still leaves CPU image decode/composition.
+2. **Define the cloud-agent environment before its streaming implementation.**
+   Specify Linux display/compositor, CPU/GPU, isolation, network and lifecycle.
+   Then choose its backend using the preserved software, Selkies/pixelflux and
+   Moonlight evidence. Keep current Linux recording behavior until that decision.
 3. **Encode only new visual information.** Damage-driven capture where available;
    otherwise suppress exact repeats early. Preserve presentation timestamps and
    recording duration without resubmitting an unchanged full image 60 times/s.

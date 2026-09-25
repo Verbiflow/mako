@@ -256,13 +256,21 @@ exec ${quote(ffmpeg)} "$@"
         .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
         .toBuffer()
     )
+    const different = await sharp(dense).negate()
+      .jpeg({ quality: 100, chromaSubsampling: "4:4:4" }).toBuffer()
     await backlog.frame(image, 640, 480)
     await delay(1500)
     pausedPid = Number(await readFile(pidFile, "utf8"))
     process.kill(pausedPid, "SIGSTOP")
-    for (let i = 0; i < 90 && backlog.receipt().status === "recording"; i++) {
+    for (let i = 0; i < 30; i++) {
       await delay(18)
       await backlog.frame(dense, 640, 480)
+    }
+    assert.equal(backlog.receipt().status, "recording",
+      "Exact repeated pixels share queued storage without dropping source observations")
+    for (let i = 0; i < 90 && backlog.receipt().status === "recording"; i++) {
+      await delay(18)
+      await backlog.frame(i % 2 ? dense : different, 640, 480)
     }
     assert.notEqual(
       backlog.receipt().status,

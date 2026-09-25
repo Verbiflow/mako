@@ -84,7 +84,7 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 **Current milestone:** LC-21 continuous recording and bounded binary previews are local. Final ordinary Aside acceptance passes at **55.84 preview / 56.15 recorded fps**, with exact inputs and pixels. A loaded run completed 127 seconds, but the final-source loaded repeat interrupted after 56.44 seconds and retained a verified 53-second prefix. **Heavy-load reliability and lightweight resource usage remain open.** The successful loaded run cost about 2.07 cores / 1.03 GB summed host-plus-encoder RSS. Frame-rate success does not meet the efficiency requirement. [Recording evidence](local-control-recording-efficiency.md). Linux component/viewer measurements and upstream issues remain in the [streaming comparison](local-control-streaming.md#september-24-isolated-prototype-measurements). **These media changes are not installed.** Installed Mac/Aside + Codex MCP acceptance is a separate completed milestone.
 
-**Current work (September 25): Mac hardware recording.** The user selected Mac hardware encoding now. Build recipe 3 enables VideoToolbox; the shared engine requires hardware H.264 for browser recordings and native cursor overlays, with no silent software fallback. Validate the reviewed binary, saved text/cursor quality, loaded Aside jobs, interruption cleanup and host/encoder/OS-service resource cost before rollout. This still uses the existing RGBA composition pipe; native buffer capture remains a separate optimization. [Prior-art evidence](local-control-media-prior-art.md).
+**Current work (September 25): Mac hardware recording implemented locally.** Recipe 3 enables VideoToolbox; browser recordings and native cursor overlays require hardware H.264. The ordinary two-viewer Aside run reduced host-plus-encoder peak RSS to **547 MB** and CPU to **1.55 cores**, with 56.17 recorded fps and unchanged inputs/pixels; preview was **54.97 fps**, narrowly below the 55 fps gate. The loaded run still interrupted at 54 seconds with a verified 51-second prefix. Exact-repeat queue coalescing subsequently fixed the static noisy-screen stress failure, preserving all source observations and visual transitions. Hardware encoding alone does not resolve loaded frame processing or establish whole-job efficiency. [Implementation, quality and acceptance](local-control-mac-hardware-recording.md). **Not installed.**
 
 **Cloud ordering:** define the Linux cloud-agent environment first (display/compositor, CPU/GPU availability, isolation, network and lifecycle), then choose and validate its capture/encoding/transport backend. Preserve the current Linux implementation and prototype evidence; defer further cloud streaming implementation and Moonlight/Selkies adoption until that prerequisite. Mac and cloud retain the same typed session, ownership and recording API.
 
@@ -196,7 +196,7 @@ These source changes still require desktop rollout.
 
 ## LC-21 — Responsive capture, recordings and cursor
 
-**Status: installed runtime/MCP acceptance passes. Continuous recording and binary previews pass local correctness/package checks. Final one/two-viewer jobs complete at roughly 55–56 fps with exact inputs/pixels; heavier-load recording interruptions and rollout remain open. The user accepts roughly 56 fps; 60 remains the target.**
+**Status: Mac hardware encoding is implemented locally; see [current evidence](local-control-mac-hardware-recording.md). Moving-content overload remains open. Installed runtime/MCP acceptance passes. Continuous recording and binary previews pass local correctness/package checks. Final one/two-viewer jobs complete at roughly 55–56 fps with exact inputs/pixels; heavier-load recording interruptions and rollout remain open. The user accepts roughly 56 fps; 60 remains the target.**
 [Streaming experiment and acceptance plan](local-control-streaming.md),
 [Reported capture issues](local-control-agent-issues.md#capture-recording-and-preview).
 
@@ -743,7 +743,7 @@ rejected threading experiments and exact pixel checks. [Linux streaming](local-c
 has sustained component/viewer measurements and a measured colored-text quality
 tradeoff. No media rollout or upstream dependency adoption is implied.
 
-1. Ship and validate Mac hardware encoding under LC-21. Require the reviewed
+1. Finish Mac hardware package validation and the loaded frame-processing fix under LC-21. Require the reviewed
    VideoToolbox-enabled package, explicit hardware admission, exact dimensions,
    text/cursor quality, bounded recovery and sustained resource measurements.
    Retain the previous failed and successful loaded runs. Follow with installed

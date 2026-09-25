@@ -68,6 +68,14 @@ interface IncomingFrame {
   }
 }
 
+function sameVideoImage(a: { bytes: Buffer; frame: Frame }, b: { bytes: Buffer; frame: Frame }) {
+  return a.bytes.equals(b.bytes) &&
+    a.frame.viewportWidth === b.frame.viewportWidth &&
+    a.frame.viewportHeight === b.frame.viewportHeight &&
+    a.frame.pageScaleFactor === b.frame.pageScaleFactor &&
+    a.frame.offsetTop === b.frame.offsetTop
+}
+
 /** Explicit recording only. Frames and action evidence never enter model context. */
 export class ControlRecording {
   readonly id = randomUUID()
@@ -500,13 +508,19 @@ export class ControlRecording {
         )
       }
       const index = this.frames.length
+      const queued = { bytes, frame }
+      const tail = this.videoQueue.at(-1)
+      // Exact repeated pixels add no transition. Keep the first timestamp and
+      // still journal every source observation and pointer event. Never merge
+      // across a different intervening image or geometry.
+      const repeated = tail !== undefined && sameVideoImage(tail, queued)
       // Recording needs source history while encoding catches up. A preview's
       // latest-only policy would repeat old pixels until its clock caught up,
       // even though valid intermediate source frames had arrived.
-      if (
+      if (!repeated && (
         this.videoQueue.length >= Math.ceil(this.options.fps * 2) + 2 ||
         this.queuedVideoBytes + bytes.length > 32 * 1024 * 1024
-      ) {
+      )) {
         this.dropped++
         void this.stop(
           "Recording encoder backlog exceeded its frame or byte budget"
@@ -524,8 +538,10 @@ export class ControlRecording {
       this.encodingTiming.journalWriteMs += performance.now() - journalStart
       this.journalPointers = pointerEnd
       this.frames.push(frame)
-      this.videoQueue.push({ bytes, frame })
-      this.queuedVideoBytes += bytes.length
+      if (!repeated) {
+        this.videoQueue.push(queued)
+        this.queuedVideoBytes += bytes.length
+      }
       this.encodingTiming.maxQueuedFrames = Math.max(
         this.encodingTiming.maxQueuedFrames,
         this.videoQueue.length
@@ -719,11 +735,7 @@ export class ControlRecording {
         if (next) {
           if (
             !current ||
-            !current.bytes.equals(next.bytes) ||
-            current.frame.viewportWidth !== next.frame.viewportWidth ||
-            current.frame.viewportHeight !== next.frame.viewportHeight ||
-            current.frame.pageScaleFactor !== next.frame.pageScaleFactor ||
-            current.frame.offsetTop !== next.frame.offsetTop
+            !sameVideoImage(current, next)
           )
             imageRevision++
           current = next
