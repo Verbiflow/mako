@@ -7,7 +7,7 @@ import type { ProviderLiveDriver } from "../live-driver.js"
 export const codexLiveDriver: ProviderLiveDriver = {
   provider: "codex",
   sessionQuestions: { encodeAnswer: codexQuestionAnswer, history: readCodexQuestionHistory },
-  approvalEvidence: { kind: "request-lifecycle", reason: "App-server resolves a request before validating or applying its answer, including cancellation and error paths. It does not report the consumed decision." },
+  approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission"], coverage: "Native codex.tool_decision user events confirm once/session/decline/abort for a unique command or file approval. Repeated tool IDs, amendments and other request families remain unconfirmed. Normalized decisions survive reconnect; request-resolved alone is not confirmation." },
   observesNativeAgents: true,
   canResume: true,
   forkPoint: "run",
