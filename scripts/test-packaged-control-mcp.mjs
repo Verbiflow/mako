@@ -22,7 +22,7 @@ if (!worker) {
   const result = await promisify(execFile)(executable,
     [fileURLToPath(import.meta.url), "--worker", app], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-      timeout: 120_000, maxBuffer: 1024 * 1024,
+      timeout: 180_000, maxBuffer: 1024 * 1024,
     })
   process.stdout.write(result.stdout)
 } else {
@@ -40,7 +40,13 @@ if (!worker) {
   const root = await mkdtemp(join(tmpdir(), "mako-packaged-mcp-"))
   const evidence = { build: manifest.makoBuild, app, status: "running", root, calls: [] }
   const saves = []
+  const interruptions = []
   const page = createServer(async (request, response) => {
+    if (request.method === "POST" && request.url === "/interruption") {
+      interruptions.push(Date.now())
+      response.end("Marked")
+      return
+    }
     if (request.method === "POST" && request.url === "/save") {
       let body = ""
       for await (const bytes of request) {
@@ -55,6 +61,7 @@ if (!worker) {
     response.end(`<!doctype html><title>Mako packaged MCP fixture</title>
       <form aria-label="Shipping"><label>Recipient <input aria-label="Recipient" value="Old shipping"></label><button>Save</button><output aria-label="Result"></output></form>
       <form aria-label="Billing"><label>Recipient <input aria-label="Recipient" value="Keep billing unchanged"></label><button>Save</button></form>
+      <button type="button" onclick="fetch('/interruption',{method:'POST'})">Mark interruption</button>
       <script>document.forms[0].onsubmit=async e=>{e.preventDefault();if(!confirm('Save this Shipping recipient?'))return;const response=await fetch('/save',{method:'POST',body:JSON.stringify({value:document.forms[0].querySelector('input').value,trusted:e.isTrusted})});document.querySelector('output').textContent=await response.text()};document.forms[1].onsubmit=e=>e.preventDefault()</script>`)
   })
   await new Promise(done => page.listen(0, "127.0.0.1", done))
@@ -72,7 +79,7 @@ if (!worker) {
     },
     availableProviders: () => [], delegate: async () => {}, childTasks: () => [], cancelChild: () => {},
   }, (binding, operation, signal) => sessions.request(binding, operation, signal))
-  const client = new Client({ name: "packaged-acceptance", version: "1" })
+  let client = new Client({ name: "packaged-acceptance", version: "1" })
   let fixture, sampler
   const js = async (code, failed = false) => {
     const started = performance.now()
@@ -101,6 +108,51 @@ if (!worker) {
     await js(`await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}}); await tab.expect({within:[{role:'form',name:'Billing'}],role:'textbox',name:'Recipient',value:'Keep billing unchanged'}); await tab.observe()`)
     assert.deepEqual(saves, [{ value, trusted: true }])
     const target = last(await js("tab.target"))
+    await js(`await checkpoint({remember:{target:tab.target,expected:${JSON.stringify(value)}}})`)
+    const docs = await js("await control.rewriteDocumentation()")
+    assert.match(JSON.stringify(docs), /Mako browser and computer use/)
+    assert.match(JSON.stringify(docs), /observations/)
+    assert.deepEqual(last(await js("(await recall()).facts")), { target, expected: value })
+    assert.deepEqual(last(await js("tab.target")), target)
+    assert.equal(saves.length, 1, "Documentation restoration must not replay input")
+
+    // Closing an MCP connection releases its transport, not the task session.
+    await client.close()
+    client = new Client({ name: "packaged-reconnected", version: "1" })
+    await client.connect(new StreamableHTTPClientTransport(new URL(grant.controlUrl), {
+      requestInit: { headers: { Authorization: `Bearer ${grant.token}` } },
+    }))
+    assert.deepEqual(last(await js("tab.target")), target)
+    await js("await tab.observe()")
+
+    // The fixture independently acknowledges the action before cancellation.
+    // Never repeat the click to find out whether it happened.
+    const abort = new AbortController()
+    const pending = client.callTool({ name: "js", arguments: {
+      code: "await tab.locator({role:'button',name:'Mark interruption'}).click(); await new Promise(r=>setTimeout(r,2000)); await tab.locator({role:'button',name:'Mark interruption'}).click()",
+      timeout_ms: 40000,
+    } }, undefined, { signal: abort.signal }).then(
+      result => ({ result }), error => ({ error })
+    )
+    const deadline = Date.now() + 10000
+    while (!interruptions.length) {
+      assert.ok(Date.now() < deadline, "Interruption fixture was not reached")
+      await new Promise(done => setTimeout(done, 20))
+    }
+    abort.abort()
+    assert.ok((await pending).error, "Cancelled MCP request must reject")
+    const recovered = await js("typeof tab")
+    assert.equal(last(recovered), "undefined")
+    assert.match(JSON.stringify(recovered), /Mako browser and computer use/)
+    await js(`let tab=control.tab(${JSON.stringify(target)}); await tab.observe(); await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}})`)
+    await new Promise(done => setTimeout(done, 2100))
+    assert.equal(interruptions.length, 1)
+    assert.equal(saves.length, 1)
+    evidence.recovery = { transportReconnect: true, documentationRestore: true,
+      checkpointPreservedAcrossReconnect: true, cancelledAfterAcknowledgedAction: true,
+      cancellationClearedBindings: true, exactTargetRetained: true,
+      interruptedActionCount: interruptions.length, saveCount: saves.length,
+      compactionScope: "SDK documentation/state recovery; model compaction is a separate provider check" }
     const reset = await client.callTool({ name: "js_reset", arguments: {} })
     assert.ok(!reset.isError)
     assert.equal(last(await js("typeof tab")), "undefined")
@@ -110,7 +162,23 @@ if (!worker) {
     await new Promise(done => setTimeout(done, 300))
     assert.equal(last(await js("typeof tab")), "undefined")
     await js(`let tab=control.tab(${JSON.stringify(target)}); await tab.observe()`)
-    await js("await tab.close()")
+    // Drop this test's browser connection. Reconnect explicitly and reconcile
+    // the exact original tab; old generations must never remain usable.
+    browsers.disconnect(aside[0].id)
+    const stale = await js("await tab.observe()", true)
+    assert.match(JSON.stringify(stale), /stale|lease|connection|target|connect/i)
+    const connection = last(await js(`await control.connectBrowser(${JSON.stringify(aside[0].id)})`))
+    assert.notEqual(connection.generation, target.generation)
+    const pages = last(await js(`await control.tabs(${JSON.stringify(aside[0].id)})`))
+    const original = pages.pages.find(page => page.targetId === target.tab)
+    if (original) {
+      await js(`tab=await control.claimTab({browser:${JSON.stringify(aside[0].id)},tab:${JSON.stringify(target.tab)}}); await tab.observe(); await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}}); await tab.close()`)
+    }
+    evidence.recovery.browserReconnect = { generationChanged: true,
+      staleTargetRefused: true, originalTab: original ? "reclaimed-and-verified" : "confirmed-absent" }
+    assert.equal(saves.length, 1, "Reconnect must not replay the original save")
+    assert.equal(interruptions.length, 1, "Cancelled input must not resume later")
+    assert.ok(!last(await js(`await control.tabs(${JSON.stringify(aside[0].id)})`)).pages.some(page => page.targetId === target.tab))
     evidence.browser = { transport: "installed Aside extension", exactSaveCount: saves.length, resetPreservedTarget: true, idleWorkerFaultPreservedTarget: true, screenshot: true }
     fixture = await startCocoaFixture({ root, title: "Mako packaged MCP native proof" })
     const { pid } = await fixture.started()

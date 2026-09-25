@@ -54,6 +54,7 @@ try {
   )
     await delay(5)
   const session = fixture.sessionFor(target.tab)!
+  const sourceAt = Date.now() - 1500
   const emit = () =>
     fixture.emit(session, "Page.screencastFrame", {
       sessionId: 1,
@@ -63,12 +64,16 @@ try {
         deviceHeight: 1000,
         pageScaleFactor: 1,
         offsetTop: 0,
+        timestamp: sourceAt / 1000,
       },
     })
   emit()
   for (let i = 0; i < 100 && !previews.read("task", true)?.frame; i++)
     await delay(5)
   assert.ok(previews.read("task", true)?.frame)
+  assert.ok(Math.abs(previews.read("task", true)!.frame!.capturedAt - sourceAt) < 1)
+  assert.ok(previews.read("task", true)!.frame!.publishedAt! > sourceAt,
+    "Delayed source frames must not receive fresh capture timestamps")
   assert.equal(
     fixture.calls.filter((c) => c.method === "Page.captureScreenshot").length,
     0,

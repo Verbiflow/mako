@@ -97,6 +97,7 @@ async function run() {
     ...driver,
     async permission(id, requestId, response, dispatch) {
       answerDispatches++
+      if(process.env.MAKO_NATIVE_APPROVAL_QUESTIONS) events.push({type:"test-answer-dispatch",requestId,response})
       return driver.permission(id, requestId, response, process.env.MAKO_NATIVE_APPROVAL_DROP_SUBMISSION
         ? { ...dispatch, report() {} } : dispatch)
     },
@@ -233,7 +234,7 @@ async function run() {
       const request = randomUUID()
       const choices = process.env.MAKO_NATIVE_QUESTION_CHOICES ? Array.from({length:4},()=>`CHOICE_${randomUUID()}`) : null
       const prompt = choices
-        ? `Use your native structured question tool to ask exactly one question with these four exact choices: ${choices.join(', ')}. Wait for the selection, then reply with only the selected value. Do not ask in plain text, guess, use other tools, or pick an answer yourself.`
+        ? `Use your native structured question tool to ask exactly one question with these four exact choices: ${choices.join(', ')}. Use an empty description for each option. Wait for the selection, then reply with only the selected value. Do not ask in plain text, guess, use other tools, or pick an answer yourself.`
         : 'Use your native structured question or user-input tool to ask exactly one question: "What is the verification phrase?" Allow a free-text answer (an Other option is fine). Wait for the answer, then reply with exactly that phrase. Do not ask in plain text, guess the phrase, run commands, read files, or call any other tools.'
       owner.submit(id, request, prompt)
       const asked = await wait(s => s?.permissions.length || s?.requests.some(r => r.id === request && ['completed', 'failed', 'interrupted'].includes(r.status)))
@@ -243,14 +244,23 @@ async function run() {
       if (!choices && question.options.length && !question.allowOther) throw Error('Native question did not allow a verification phrase')
       // Generate after the native question arrived. The only path by which the
       // runtime can learn this value is the answer to this exact occurrence.
-      if (choices && (question.options.length!==choices.length || question.options.some(o=>!choices.includes(o.value??o.label)))) throw Error('Native choices differ from the requested values')
+      if (choices && (question.options.some(option=>!option.label.trim()) || question.options.length!==choices.length || question.options.some(o=>!choices.includes(o.value??o.label)))) throw Error('Native choices differ from the requested values')
       const selected = choices ? question.options[randomInt(question.options.length)] : null
       const phrase = selected ? selected.value ?? selected.label : `ANSWER_${randomUUID()}`
       if (prior) {
         const sent = answerDispatches
-        await owner.permission(id, prior.approvalId, {kind:'answers',answers:{[prior.questionId]:[prior.phrase]}})
+        const repeated = owner.permission(id, prior.approvalId, {kind:'answers',answers:{[prior.questionId]:[prior.phrase]}})
+        if (prior.receipt.state.kind === 'uncertain')
+          await repeated.then(() => { throw Error('Unconfirmed repeated answer unexpectedly succeeded') }, error => {
+            if (!error.message.includes('already saved')) throw error
+          })
+        else await repeated
         if (answerDispatches!==sent || !owner.snapshot(id).permissions.some(p=>p.id===permission.id)) throw Error('An old answer replayed or cleared the newer question')
       }
+      result.questionAttempts ??= []
+      const turnStart = asked.blocks.findIndex(block => block.type === 'user' && block.requestId === request)
+      const nativeTools = asked.blocks.slice(turnStart + 1).filter(block => block.type === 'tool').map(block => ({id:block.id,kind:block.toolKind,title:block.title}))
+      result.questionAttempts.push({label,approvalId:permission.id,question,phrase,nativeTools})
       const sentBefore = answerDispatches
       await capture(label+'-pending')
       if (page) {
@@ -289,10 +299,12 @@ async function run() {
     result.nativeId = owner.snapshot(id).session.nativeId
     if (process.env.MAKO_NATIVE_QUESTION_HISTORY) {
       if (!page) throw Error('Native question history proof requires --ui')
-      const {checkNativeQuestionHistory}=await import('./native-question-history-checks.mjs')
+      const checkNativeQuestionHistory = process.env.MAKO_NATIVE_QUESTION_RETIREMENT
+        ? (await import('./native-question-retirement-checks.mjs')).checkNativeQuestionRetirement
+        : (await import('./native-question-history-checks.mjs')).checkNativeQuestionHistory
       await checkNativeQuestionHistory({owner:()=>owner,reopen:async()=>{
         await owner.close(id)
-        owner.stop()
+        await owner.stop()
         owner=new LiveConversations(dependencies)
         renderedRevision=undefined
       },id,cwd,driver,mode,page,wait,render,capture,events,result})
@@ -303,7 +315,7 @@ async function run() {
       const {checkAsyncQuestions}=await import('./native-async-question-checks.mjs')
       await checkAsyncQuestions({owner:()=>owner,reopen:async()=>{
         await owner.close(id)
-        owner.stop()
+        await owner.stop()
         owner=new LiveConversations(dependencies)
         renderedRevision=undefined
       },id,page,wait,render,capture,events,result})
@@ -451,7 +463,7 @@ async function run() {
       } else if (before.session.connection !== 'disconnected' || before.session.status !== 'ready') {
         throw Error('Disposable session is not ready for owner reopen')
       }
-      owner.stop()
+      await owner.stop()
       dropDecisions = false
       owner = new LiveConversations(dependencies)
       const followup = randomUUID()
@@ -504,14 +516,31 @@ async function run() {
       : undefined
     result.nativeId ??= final?.session.nativeId
     await owner.close(id).catch(() => {})
-    owner.stop()
+    await owner.stop()
     stopAcp()
     stopCodexApps()
     if (result.nativeId && !result.importSource) {
       const catalog = defaultCatalog()
       for (const ref of await catalog.scan()) {
-        if (ref.harness === provider && ref.nativeId === result.nativeId)
+        if (ref.harness === provider && ref.nativeId === result.nativeId) {
+          // Evidence belongs only to this disposable native session, before cleanup.
+          if (process.env.MAKO_NATIVE_APPROVAL_QUESTIONS) {
+            const history = await catalog.open(ref.path)
+            await writeFile(join(root, "native-history.json"), JSON.stringify(history, null, 2))
+            if (provider === 'devin' && result.question && result.questionAfterReconnect) {
+              result.nativeQuestionConsumption = (result.questionAttempts ?? []).map(attempt => {
+                const tools = history.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : [])
+                  .filter(block => block.type === 'tool' && attempt.nativeTools.some(tool => tool.id === block.id))
+                const matches = tools.filter(tool => tool.name === 'ask_user_question' && tool.output?.startsWith('User answered your questions:\n'))
+                if(matches.length !== 1) throw Error('Native question occurrence could not be joined to its stored result')
+                const selected = Object.values(JSON.parse(matches[0].output.slice('User answered your questions:\n'.length))).flatMap(answer => answer.skipped ? [] : answer.selected)
+                if(selected.length !== 1 || selected[0] !== attempt.phrase) throw Error('Native stored selection differs from the submitted exact answer')
+                return {approvalId:attempt.approvalId,nativeToolId:matches[0].id,selected,nativeResultCount:1}
+              })
+            }
+          }
           result.nativeCleanup = await catalog.remove(ref.path)
+        }
       }
     }
     await writeFile(join(root, "result.json"), JSON.stringify(result, null, 2))

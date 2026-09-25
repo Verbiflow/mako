@@ -1,10 +1,11 @@
 // Private synthetic Electron window, never the user's Mako profile or renderer.
 import { app, BrowserWindow, nativeImage } from "electron"
 import assert from "node:assert/strict"
-import { createHash } from "node:crypto"
+import { spawn } from "node:child_process"
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { DeskBrowser } from "../dist-electron/desk-browser.js"
 import { deskPageForWindow } from "../dist-electron/desk-browser-window.js"
@@ -64,7 +65,7 @@ async function main() {
       else await run({ action: "cdp", target, method: "Page.captureScreenshot", params: { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: 300, height: 200, scale: 1 } } })
     }
     const frame = previews.read("conversation", true).frame
-    writeFileSync(join(output, "preview.jpg"), Buffer.from(frame.image.data, "base64"))
+    writeFileSync(join(output, "preview.jpg"), Buffer.from(frame.image.bytes))
     previews.read("conversation", false)
     const before = frames
     await delay(250)
@@ -82,10 +83,68 @@ async function main() {
     assert.ok(frames > 40, `Preview must stream: received ${frames}`)
     const timeline = JSON.parse(readFileSync(result.timeline, "utf8"))
     assert.ok(timeline.frames.every(frame => frame.width === 1600 && frame.height === 1000), "Close-up stills never replace video frames")
-    const distinctFrames = new Set(timeline.frames.map(frame => createHash("sha256").update(nativeImage.createFromBuffer(readFileSync(join(result.directory, frame.file))).toBitmap()).digest("hex"))).size
-    assert.ok(distinctFrames > frames * 0.7, "Video must contain distinct captured frames, not just a high output fps")
+    // Read the actual moving marker from decoded video. Encoded frame hashes
+    // can differ through compression noise even when source pixels repeat.
+    // The independent test decoder is full FFmpeg on PATH. The shipped minimal
+    // encoder deliberately has no rawvideo output muxer; do not bloat it for a test.
+    const decoder = spawn("ffmpeg", ["-v", "error", "-i", result.video,
+      "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], { stdio: ["ignore", "pipe", "pipe"] })
+    let errors = ""
+    decoder.stderr.on("data", chunk => { errors = (errors + chunk.toString()).slice(-4096) })
+    const exited = new Promise((done, reject) => { decoder.once("close", done); decoder.once("error", reject) })
+    const pixels = Buffer.allocUnsafe(1600 * 1000 * 3)
+    let filled = 0, previousMarker, distinctFrames = 0, decodedFrames = 0
+    for await (const chunk of decoder.stdout) {
+      let offset = 0
+      while (offset < chunk.length) {
+        const count = Math.min(pixels.length - filled, chunk.length - offset)
+        chunk.copy(pixels, filled, offset, offset + count)
+        filled += count; offset += count
+        if (filled !== pixels.length) continue
+        decodedFrames++
+        let sum = 0, matches = 0
+        for (let x = 250; x < 1500; x++) {
+          const at = (40 * 1600 + x) * 3
+          if (pixels[at + 1] > 190 && pixels[at + 1] > pixels[at] + 20 && pixels[at + 2] < 190) {
+            sum += x; matches++
+          }
+        }
+        if (matches > 3) {
+          const marker = Math.round(sum / matches)
+          if (marker !== previousMarker) distinctFrames++
+          previousMarker = marker
+        }
+        filled = 0
+      }
+    }
+    assert.equal(await exited, 0, errors)
+    assert.equal(filled, 0, "Decoded frames must be complete")
+    assert.equal(decodedFrames, result.encodedFrames)
+    assert.ok(distinctFrames > frames * 0.7, "Video must contain moving source pixels, not just a high output fps")
+    const player = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } })
+    let playback
+    try {
+      const document = join(root, "playback.html")
+      writeFileSync(document, '<video muted></video>')
+      await player.loadFile(document)
+      playback = await player.webContents.executeJavaScript(`new Promise((resolve,reject)=>{
+        const video=document.querySelector('video');
+        const timer=setTimeout(()=>reject(new Error('Recording playback timed out')),5000);
+        video.onerror=()=>{clearTimeout(timer);reject(new Error('Recording is not playable'))};
+        video.onloadeddata=()=>{video.currentTime=video.duration*0.8};
+        video.onseeked=()=>{clearTimeout(timer);resolve({width:video.videoWidth,height:video.videoHeight,duration:video.duration,currentTime:video.currentTime})};
+        video.src=${JSON.stringify(pathToFileURL(result.video).href)};
+      })`)
+      assert.equal(playback.width, 1600)
+      assert.equal(playback.height, 1000)
+      assert.ok(Math.abs(playback.duration * 1000 - result.encodedDurationMs) < 17)
+      assert.ok(playback.currentTime > 0)
+    } finally { player.destroy() }
     thumbnailTimes.sort((a, b) => a - b)
-    const report = { clippedScreenshots: clips ? 5 : 0, requestedFps: fps, distinctCapturedFrames: distinctFrames, captureElapsedMs, electronCpuCoreEquivalent: cpuSeconds * 1000 / captureElapsedMs, electron: process.versions.electron, chrome: process.versions.chrome, frames, deliveredFps: (frames - 1) * 1000 / (deliveryTimes.at(-1) - deliveryTimes[0]), thumbnailReencodes: thumbnailTimes.length, thumbnailMs: { median: thumbnailTimes[Math.floor(thumbnailTimes.length / 2)] ?? 0, p95: thumbnailTimes[Math.floor(thumbnailTimes.length * .95)] ?? 0 }, largestPreviewBytes: largestBytes, recording: result }
+    const report = { clippedScreenshots: clips ? 5 : 0, requestedFps: fps,
+      distinctVideoMarkerFrames: distinctFrames, decodedVideoFrames: decodedFrames,
+      videoMarkerFps: distinctFrames * 1000 / result.durationMs, playback,
+      captureElapsedMs, electronCpuCoreEquivalent: cpuSeconds * 1000 / captureElapsedMs, electron: process.versions.electron, chrome: process.versions.chrome, frames, deliveredFps: (frames - 1) * 1000 / (deliveryTimes.at(-1) - deliveryTimes[0]), thumbnailReencodes: thumbnailTimes.length, thumbnailMs: { median: thumbnailTimes[Math.floor(thumbnailTimes.length / 2)] ?? 0, p95: thumbnailTimes[Math.floor(thumbnailTimes.length * .95)] ?? 0 }, largestPreviewBytes: largestBytes, recording: result }
     writeFileSync(join(output, "preview-acceptance.json"), JSON.stringify(report, null, 2))
     console.log(JSON.stringify(report, null, 2))
   } finally { previews.close(); browser.close(); desk.close() }

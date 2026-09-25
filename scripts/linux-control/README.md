@@ -9,6 +9,25 @@ For a portable payload and a credential-free contributor workflow, use
 acceptance now passes on EC2; the shared control server runs under Node without
 Electron. The commands below also support local isolated development.
 
+## Recording worker without a desktop
+
+`continuous-recording-probe.mjs` tests the shared recording worker with a synthetic
+image and cursor. Run it from a directory whose installed dependencies include
+`@mako/control-runtime` and `sharp`. It requires FFmpeg/FFprobe, creates only
+temporary media, and needs no browser, display, driver or network. It checks
+continuous encoding, timeline v3, stop, output counts and absence of source JPEG
+files. It does not establish compositor capture rates or native x64 acceptance.
+
+The September 24 run reused the existing ARM64 Node acceptance image with
+read-only mounts of the current package `dist` directories and this probe. It
+used `--pull=never --network=none --read-only --cap-drop=ALL`, a 256 MiB `/tmp`,
+two CPUs and 1 GiB RAM. No image was built or downloaded. Keep this media-only
+check separate from the complete desktop jobs below. Launching through
+`node --input-type=module -e 'await import("./recording-probe.mjs")'` also checks
+that the encoder worker does not inherit a parent flag invalid for worker files.
+
+## Desktop jobs
+
 Build the repository's control package and shared host modules first, then:
 
 ```sh

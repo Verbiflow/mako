@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -105,6 +105,29 @@ for (const failStop of [false, true]) {
     failStop ? 1 : 0
   )
   assert.ok(result.video)
+}
+{
+  const tools = join(directory, "refused-encoder")
+  await mkdir(tools)
+  await writeFile(join(tools, "ffmpeg"), `#!${process.execPath}
+if (process.argv.includes('-version')) process.exit(0)
+process.stderr.write('Injected encoder startup failure')
+process.exit(1)
+`, { mode: 0o700 })
+  await writeFile(join(tools, "ffprobe"), "fixture")
+  const previous = process.env.MAKO_CONTROL_MEDIA_ROOT
+  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  try {
+    const manager = new BrowserRecordings(), source = fixture()
+    await assert.rejects(manager.start("owner", target, source.connection, "session",
+      { directory }, new AbortController().signal, new BrowserCapture(source.connection, "session")),
+    /encoder|EPIPE/)
+    assert.equal(source.calls.filter(method => method === "Page.stopScreencast").length, 1,
+      "A received JPEG alone cannot acknowledge recording startup after encoder failure")
+  } finally {
+    if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
+    else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
+  }
 }
 {
   const manager = new BrowserRecordings(),

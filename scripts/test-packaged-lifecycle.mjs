@@ -650,6 +650,14 @@ try {
       const { checkPackagedAsyncQuestions } = await import('./packaged-async-question-checks.mjs')
       await checkPackagedAsyncQuestions({bridge,command,evaluate,waitFor,conversationId,root,report,restart:async()=>{await stopPackage();await startPackage()}})
     }
+    if (process.env.MAKO_PACKAGE_QUESTION_RETIREMENT) {
+      const { checkPackagedQuestionRetirement } = await import('./packaged-question-retirement-checks.mjs')
+      await checkPackagedQuestionRetirement({bridge,command,evaluate,waitFor,conversationId,root,report,restart:async()=>{await stopPackage();await startPackage()}})
+    }
+    if (process.env.MAKO_PACKAGE_EXTERNAL_QUESTION) {
+      const {checkPackagedExternalQuestion}=await import('./packaged-external-question-checks.mjs')
+      await checkPackagedExternalQuestion({app,bridge,command,evaluate,waitFor,conversationId,root,report,restart:async()=>{await stopPackage();await startPackage()}})
+    }
     report.phases.push({
       phase: "provider-completion",
       submittedThrough: uiStart ? "composer" : "bridge",
@@ -718,7 +726,7 @@ try {
     await bridge("livePrompt", [
       conversationId,
       nextId,
-      process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1"
+      (process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1" || process.env.MAKO_PACKAGE_QUESTION_RETIREMENT === "1" || process.env.MAKO_PACKAGE_EXTERNAL_QUESTION === "1")
         ? "Reply only with the original PACKAGE_ marker I asked you to remember at the start of this session, before the async questions. Do not use tools or modify files."
         : "Reply only with the marker from my previous turn. Do not use tools or modify files.",
       [],

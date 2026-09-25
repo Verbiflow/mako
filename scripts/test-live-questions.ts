@@ -63,7 +63,11 @@ try {
       await assert.rejects(owner.permission(id,first.id,response),/disk full/)
       disk.mock.restore()
       assert.equal(prompts,0)
+      // Both callers begin catch-up before either owns the answer. The first
+      // answer's admission must not make the second lose its idempotent receipt.
+      driver.sessionQuestions!.history = async () => { await delay(5); return [{ question: native, answered: [] }] }
       await Promise.all([owner.permission(id,first.id,response),owner.permission(id,first.id,response)])
+      delete driver.sessionQuestions!.history
       for(let i=0;i<100&&!prompts;i++)await delay(5)
       assert.equal(prompts,1,"Concurrent clients send one answer")
       await assert.rejects(owner.permission(id,first.id,{kind:"answers",answers:{[native.questions[0]!.id]:["One"]}}),/different/)

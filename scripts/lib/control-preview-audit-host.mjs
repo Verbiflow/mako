@@ -68,7 +68,9 @@ process.once(
               hostCallInputs["mako:control-preview"].parse(args)
             assert.equal(id, "preview-audit")
             const value = previews.read(id, watching, watcher)
-            return JSON.stringify({ ok: true, value: watching ? value : null })
+            return JSON.stringify({ ok: true, value: watching && value ? { ...value,
+                frame: value.frame ? { ...value.frame, image: { mimeType: value.frame.image.mimeType,
+                  data: Buffer.from(value.frame.image.bytes).toString("base64") } } : null } : null })
           }
           if (channel === "mako:audit-capture")
             return JSON.stringify({
@@ -133,7 +135,14 @@ process.once(
           }
           return JSON.stringify({ ok: true, value })
         },
-        async () => new Response("Not found", { status: 404 })
+        async () => new Response("Not found", { status: 404 }),
+        undefined, undefined,
+        async (args) => {
+          const [id, watching, watcher] = hostCallInputs["mako:control-preview"].parse(args)
+          assert.equal(id, "preview-audit")
+          const value = previews.read(id, watching, watcher)
+          return watching ? value : null
+        }
       )
       let closing = false
       close = () => {

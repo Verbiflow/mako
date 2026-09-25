@@ -17,6 +17,7 @@ try {
   await put("packages/control-runtime/dist/dependency.js", "export const value = 1;")
   await put("packages/control-runtime/dist/cloud-control-worker.js", "export const worker = true;")
   await put("packages/control-runtime/dist/control-cli.js", "export const cli = true;")
+  await put("packages/control-runtime/dist/recording-encoder-worker.js", "export const encoder = true;")
   await put("packages/control/dist/program/worker.js", "export const dynamicWorker = true;")
   await put("packages/control/package.json", '{"name":"@mako/control","type":"module"}')
   await put("packages/control-runtime/package.json", '{"name":"@mako/control-runtime","type":"module"}')
@@ -32,6 +33,7 @@ try {
   const manifest = JSON.parse(await readFile(join(temporary,"release/manifest.json")))
   assert.ok(manifest.files.some(file => file.path === "packages/control-runtime/dist/cloud-control-worker.js"))
   assert.ok(manifest.files.some(file => file.path === "packages/control-runtime/dist/control-cli.js"))
+  assert.ok(manifest.files.some(file => file.path === "packages/control-runtime/dist/recording-encoder-worker.js"))
   assert.ok(manifest.files.some(file => file.path === "packages/control/dist/program/worker.js"))
   for (const file of manifest.files) {
     const bytes = await readFile(join(temporary,"release",file.path))

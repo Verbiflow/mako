@@ -10,6 +10,18 @@ import type {
 } from "../src/lib/types.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { elicitationQuestion, elicitationContent } from "../electron/acp-elicitation.ts"
+
+// Native enum titles may be blank. Display the value without changing its wire identity.
+for (const type of ["string", "array"] as const) {
+  const options = [{ const: "first", title: "" }, { const: "second", title: "  " }, { const: "third", title: "Third choice" }]
+  const question = elicitationQuestion("choice", type === "string"
+    ? { type, oneOf: options }
+    : { type, items: { anyOf: options } }, true)
+  assert.ok(question)
+  assert.deepEqual(question.options.map(option => option.label), ["first", "second", "Third choice"])
+  assert.deepEqual(elicitationContent([question], {choice: ["second"]}), {choice: type === "string" ? "second" : ["second"]})
+}
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-registry-"))
 const sent: Array<{ id: string; text: string }> = []

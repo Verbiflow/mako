@@ -1,8 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
-import { join } from "node:path"
 import { promisify } from "node:util"
-import { extractFile } from "@electron/asar"
+import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { z } from "zod"
 
 const run = promisify(execFile)
@@ -31,8 +30,7 @@ export async function resolveLocalIdentity(requested, installed = "/Applications
   if (requested !== undefined) return identitySchema.parse(requested)
   let identity
   try {
-    const contents = extractFile(join(installed, "Contents/Resources/app.asar"), "package.json")
-    identity = localMetadataSchema.parse(JSON.parse(contents.toString("utf8"))).makoLocalSigningIdentity
+    identity = localMetadataSchema.parse(readLocalAppMetadata(installed)).makoLocalSigningIdentity
   } catch {
     throw new Error("Set MAKO_LOCAL_SIGNING_IDENTITY to your local certificate's SHA-1 fingerprint for the first build. Later local builds reuse the verified installed app's signer.")
   }

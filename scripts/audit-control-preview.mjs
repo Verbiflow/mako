@@ -10,6 +10,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
+import { recordedMarkers } from "./lib/control-video-markers.mjs"
 
 if (process.versions.electron) {
   const { app } = await import("electron")
@@ -45,7 +46,7 @@ if (process.versions.electron) {
               )
                 return
               assert.ok(source.includes("createControlPreviewPainter"))
-              return `export function ControlPreviewImage({frame,label,className}) { return <img src={\`data:\${frame.image.mimeType};base64,\${frame.image.data}\`} alt={label} className={className} decoding="async" /> }`
+              return `import {useEffect,useState} from "react"; export function ControlPreviewImage({frame,label,className}) { const [url,setUrl]=useState(); useEffect(()=>{const value=URL.createObjectURL(new Blob([frame.image.bytes],{type:frame.image.mimeType}));setUrl(value);return ()=>URL.revokeObjectURL(value)},[frame]); return <img src={url} alt={label} className={className} decoding="async" /> }`
             },
           },
         ]
@@ -116,7 +117,7 @@ async function audit() {
     await import("../dist-electron/control-previews.js")
   const { BrowserCommandSchema } =
     await import("@mako/control-runtime/contracts")
-  const { invokeRuntime, subscribeRuntime } =
+  const { invokeRuntime, invokeRuntimePreview, subscribeRuntime } =
     await import("../dist-electron/runtime-connection.js")
   const shared = process.env.MAKO_PREVIEW_SHARED === "1"
   const extension = process.env.MAKO_PREVIEW_EXTENSION
@@ -274,27 +275,22 @@ async function audit() {
     ipcMain.handle(
       "mako:control-preview",
       async (_event, id, watching, watcher) => {
+        const countTransfer = (transfer) => {
+          wireBytes += transfer.wireBytes
+          decodedBytes += transfer.decodedBytes
+          if (transfer.encoding === "br") compressedReplies++
+        }
         const value = shared
-          ? await invokeRuntime(
-              socket,
-              client,
-              process.env.MAKO_PREVIEW_IDENTITY === "1"
-                ? "mako:audit-preview"
-                : "mako:control-preview",
-              [id, watching, watcher],
-              1,
-              {
-                onTransfer: (transfer) => {
-                  wireBytes += transfer.wireBytes
-                  decodedBytes += transfer.decodedBytes
-                  if (transfer.encoding === "br") compressedReplies++
-                },
-              }
-            )
+          ? process.env.MAKO_PREVIEW_IDENTITY === "1"
+            ? await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher], 1, { onTransfer: countTransfer })
+            : await invokeRuntimePreview(socket, client, [id, watching, watcher], countTransfer)
           : previews.read(id, watching, watcher)
+        if (value?.frame?.image.data) {
+          value.frame.image = { mimeType: value.frame.image.mimeType, bytes: Buffer.from(value.frame.image.data, "base64") }
+        }
         if (!watching) return null
         reads++
-        bytes += JSON.stringify(value).length
+        bytes += (value?.frame?.image.bytes.byteLength ?? 0) + JSON.stringify({ ...value, frame: value?.frame ? { ...value.frame, image: { mimeType: value.frame.image.mimeType } } : null }).length
         return value
       }
     )
@@ -750,6 +746,7 @@ async function audit() {
     }
     if (extension) await run({ action: "close", target })
     const report = {
+      mediaTransport: process.env.MAKO_PREVIEW_IDENTITY === "1" ? "test-only JSON identity bridge to binary painter" : "bounded binary preview v1",
       boundary: `production ${extension ? "installed extension" : "desk"} capture → ControlPreviews → ${shared ? "separate Node host / private Unix socket → " : ""}Electron IPC/preload → production React overlay → offscreen compositor pixels`,
       clock:
         "input dispatch and compositor delivery use the same main-process performance.now; excludes physical display scanout",
@@ -780,6 +777,8 @@ async function audit() {
         frames: recording.frames,
         droppedFrames: recording.droppedFrames,
         sampledFrames: recording.sampledFrames,
+        encodedFrames: recording.encodedFrames,
+        encodedDurationMs: recording.encodedDurationMs,
         dimensions: recording.dimensions,
         video: recording.video,
         timeline: recording.timeline,
@@ -787,10 +786,16 @@ async function audit() {
       paints,
       invalidPixelSamples: invalid,
     }
+    if (recording?.video) report.recordedMarkers = await recordedMarkers(recording.video, durationMs / 1000)
     await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2))
     console.log(JSON.stringify(report, null, 2))
     // Preserve input/restoration evidence even when sustained throughput misses its budget.
     assert.ok(animation.fps >= (durationMs >= 30_000 ? 57 : 45), `Composited unique fps: ${animation.fps}`)
+    if (report.recordedMarkers) {
+      assert.equal(report.recordedMarkers.invalidFrames, 0, "Recorded marker integrity")
+      assert.ok(report.recordedMarkers.distinctFps >= (durationMs >= 30_000 ? 57 : 45),
+        `Recorded unique fps: ${report.recordedMarkers.distinctFps}`)
+    }
   } finally {
     await focusSamples?.stop()
     previews?.close()

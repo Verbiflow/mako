@@ -3,9 +3,10 @@ import { execFile, spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { mkdtemp, mkdir, readFile, writeFile, rm, lstat } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
+import { setTimeout as delay } from "node:timers/promises"
 import { browserFixture } from "./browser-control-fixture.ts"
 import { controlSessionBuild } from "@mako/control-runtime/session"
 const run = promisify(execFile)
@@ -22,6 +23,8 @@ try {
     assert.ok(!pack.files.some(file => /computer-tools-main/.test(file.path)), "Removed public adapter cannot ship")
     assert.ok(pack.files.some(file => file.path === "README.md"))
     assert.ok(pack.files.some(file => file.path === "dist/index.d.ts"))
+    if (name === "control-runtime")
+      assert.ok(pack.files.some(file => file.path === "dist/recording-encoder-worker.js"), "Recording worker ships in the public package")
     assert.ok(!pack.files.some(file => /(?:\.map$|\.pyc$|\.env|\.tsbuildinfo|node_modules|^src\/|^test\/)/.test(file.path)))
     packs.push(pack)
   }
@@ -85,6 +88,38 @@ try {
   const shot = await command(["shot", "--target-file", "-", "--output", join(output, "proof.png")], JSON.stringify(target))
   assert.ok(shot.width > 0 && shot.height > 0)
   assert.ok((await readFile(shot.path)).length > 100)
+  // Exercise the installed worker through the public SDK. This catches an
+  // omitted sidecar or a worker URL that accidentally resolves into the repo.
+  const sharp = require("sharp")
+  fixture.setRecordingFrame((await sharp({ create: { width: 640, height: 480, channels: 3,
+    background: "#305070" } }).jpeg().toBuffer()).toString("base64"))
+  const { controlClient } = await load("@mako/control/control")
+  const client = controlClient((action, args) => runtime.call({ action, ...args }, AbortSignal.timeout(10_000)))
+  const recording = await client.tab(target).record({ directory: output, cursor: false, fps: 10 })
+  await delay(150)
+  let receipt = await recording.stop()
+  const finalizationDeadline = Date.now() + 10_000
+  while (receipt.status === "finalizing" && Date.now() < finalizationDeadline) {
+    await delay(20)
+    receipt = await recording.status()
+  }
+  assert.equal(receipt.status, "finished", receipt.error)
+  assert.ok(receipt.encodedFrames > 0)
+  assert.ok((await readFile(receipt.video)).length > 100)
+  const stdinRecording = join(output, "stdin-recording")
+  await mkdir(stdinRecording)
+  const encoderModule = pathToFileURL(join(dirname(require.resolve("@mako/control-runtime")), "recording-encoder.js")).href
+  await run(process.execPath, ["--input-type=module", "-e", `
+import {RecordingEncoder} from ${JSON.stringify(encoderModule)};
+import {readFile} from 'node:fs/promises';
+const encoder = new RecordingEncoder(${JSON.stringify(stdinRecording)}, () => {});
+await encoder.ready;
+await encoder.initialize(640,480,10);
+await encoder.write({bytes:await readFile(${JSON.stringify(shot.path)}),frame:{width:640,height:480},at:0});
+await encoder.finish();
+`], { cwd: directory })
+  assert.ok((await readFile(join(stdinRecording, "recording.mp4"))).length > 100,
+    "File-backed encoder worker does not inherit parent --input-type")
   const help = await command(["api", "--input", "-"], JSON.stringify({ domain: "Page", method: "navigate" }))
   assert.ok(JSON.stringify(help).includes("navigate"), "Pinned protocol JSON resolves from a declared dependency")
   const spilled = await command(["exec", "--source-file", "-"], "return 'x'.repeat(50000)")
@@ -123,7 +158,7 @@ await shell.close(); await runtime.close();
   await shell.close()
   await Promise.all([runtime.close(), runtime.close()])
   await assert.rejects(runtime.execute({ source: "return 1" }, AbortSignal.timeout(1000)))
-  console.log(JSON.stringify({ packages: packs.map(({ name, size, unpackedSize, files }) => ({ name, archiveBytes: size, unpackedBytes: unpackedSize, files: files.length })), passed: "Packed public API/types, relocated identity, shared worker state, invalid input, explicit screenshot, protocol help, artifact spill, idempotent close" }))
+  console.log(JSON.stringify({ packages: packs.map(({ name, size, unpackedSize, files }) => ({ name, archiveBytes: size, unpackedBytes: unpackedSize, files: files.length })), passed: "Packed public API/types, relocated identity, shared worker state, recording encoder worker, invalid input, explicit screenshot, protocol help, artifact spill, idempotent close" }))
 } finally {
   await shell?.close()
   await runtime?.close()

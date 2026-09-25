@@ -1,8 +1,9 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPackage } from "@electron/asar"
+import { createPackage, extractFile } from "@electron/asar"
+import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { selectLocalSigner, updateLocal } from "./update-local.mjs"
 
 const identity = "A".repeat(40)
@@ -151,6 +152,18 @@ async function app(path, distribution) {
   await createPackage(input, join(path, "Contents/Resources/app.asar"))
 }
 try {
+  // The same updater inspects the old bundle, installs a new archive at that
+  // path, then verifies it. ASAR's pathname cache must not survive replacement.
+  const swapped = join(root, "swapped.app")
+  await app(swapped, "unsigned")
+  const archive = join(swapped, "Contents/Resources/app.asar")
+  assert.equal(JSON.parse(extractFile(archive, "package.json")).makoDistribution, "unsigned")
+  const replacement = await mkdtemp(join(root, "replacement-"))
+  await writeFile(join(replacement, "a-padding.txt"), "x".repeat(1000))
+  await writeFile(join(replacement, "package.json"), JSON.stringify({ makoDistribution: "local", makoBuild: { id: "replacement" } }))
+  await createPackage(replacement, join(root, "replacement.asar"))
+  await rename(join(root, "replacement.asar"), archive)
+  assert.deepEqual(readLocalAppMetadata(swapped), { makoDistribution: "local", makoBuild: { id: "replacement" } })
   const installed = join(root, "installed.app")
   const local = join(root, "release/known/mac-arm64/Mako.app")
   await app(installed, "unsigned")
@@ -197,7 +210,7 @@ try {
     /different signing identities/
   )
   console.log(
-    "One-command update: verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
+    "One-command update: fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

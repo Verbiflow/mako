@@ -37,7 +37,7 @@ async function copy(source, destination, allowedRoot = root) {
 // Trace dependencies, then copy original modules unchanged. The worker entry is
 // explicit because fork() isn't part of an import graph. No source maps, profiles,
 // build caches, .git, environment files or provider code enter this package.
-const graph = await build({ entryPoints: ["packages/control-runtime/dist/cloud-control-main.js", "packages/control-runtime/dist/cloud-control-worker.js", "packages/control-runtime/dist/control-cli.js"], outdir: "/unused", platform: "node", format: "esm", bundle: true, packages: "external", metafile: true, write: false, logLevel: "silent" })
+const graph = await build({ entryPoints: ["packages/control-runtime/dist/cloud-control-main.js", "packages/control-runtime/dist/cloud-control-worker.js", "packages/control-runtime/dist/control-cli.js", "packages/control-runtime/dist/recording-encoder-worker.js"], outdir: "/unused", platform: "node", format: "esm", bundle: true, packages: "external", metafile: true, write: false, logLevel: "silent" })
 for (const [file, entry] of Object.entries(graph.metafile.inputs)) {
   assert.match(file, /^packages\/control-runtime\/dist\/[\w./-]+\.js$/)
   assert.ok(!entry.imports.some(item => item.path === "electron"), "Cloud release must not import Electron")

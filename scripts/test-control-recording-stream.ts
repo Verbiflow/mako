@@ -32,7 +32,7 @@ async function inspect(video: string) {
     .object({
       streams: z.array(
         z.object({
-          nb_frames: z.string(),
+          nb_read_frames: z.string(),
           width: z.number(),
           height: z.number(),
         })
@@ -45,6 +45,7 @@ async function inspect(video: string) {
           await execute(mediaExecutable("ffprobe"), [
             "-v",
             "error",
+            "-count_frames",
             "-show_streams",
             "-show_format",
             "-of",
@@ -75,7 +76,7 @@ try {
   assert.equal(receipt.status, "finished", receipt.error)
   const probe = await inspect(receipt.video!)
   const expectedFrames = Math.ceil(receipt.durationMs / 100)
-  assert.equal(Number(probe.streams[0]!.nb_frames), expectedFrames)
+  assert.equal(Number(probe.streams[0]!.nb_read_frames), expectedFrames)
   assert.ok(
     Math.abs(Number(probe.format.duration) * 1000 - receipt.durationMs) < 101,
     "a single static source must cover the recording duration once, within one CFR frame"
@@ -115,7 +116,7 @@ try {
   let renderedFiles = 0
   while (dense.receipt().status === "finalizing") {
     renderedFiles += (await readdir(dense.directory)).filter((name) =>
-      /^render-|\.ffconcat$/.test(name)
+      /^render-|^frame-|\.ffconcat$/.test(name)
     ).length
     await delay(10)
   }
@@ -131,7 +132,7 @@ try {
   assert.equal(denseProbe.streams[0]!.width, width)
   assert.equal(denseProbe.streams[0]!.height, height)
   assert.equal(
-    Number(denseProbe.streams[0]!.nb_frames),
+    Number(denseProbe.streams[0]!.nb_read_frames),
     Math.ceil((denseReceipt.durationMs * 60) / 1000)
   )
   // A rendering failure after FFmpeg starts must close its stdin and reap it.
@@ -144,7 +145,7 @@ try {
 if (process.argv.includes('-version')) process.exit(0)
 require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 process.stdin.resume()
-setInterval(() => {}, 1000)
+process.stdin.on('end', () => process.exit(0))
 `,
     { mode: 0o700 }
   )
@@ -161,7 +162,7 @@ setInterval(() => {}, 1000)
     await delay(120)
     await broken.frame(solid.toString("base64"), 160, 120)
     await delay(120)
-    await writeFile(join(broken.directory, "frame-1.jpg"), "invalid image")
+    await broken.frame(Buffer.from("invalid image").toString("base64"), 160, 120)
     await broken.stop()
     const failure = await broken.settled()
     assert.equal(failure.status, "failed")

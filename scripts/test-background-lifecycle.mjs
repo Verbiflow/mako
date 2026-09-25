@@ -23,7 +23,9 @@ if (!process.versions.electron) {
     stdio: "inherit",
     env,
   })
+  const deadline = setTimeout(() => child.kill("SIGTERM"), 30_000)
   const [code] = await once(child, "exit")
+  clearTimeout(deadline)
   process.exitCode = code ?? 1
 } else {
   void checkBackground().catch(async (error) => {
@@ -92,7 +94,7 @@ async function checkMcpStartup() {
 
 async function checkBackground() {
   const { app, BrowserWindow } = await import("electron")
-  const { handleQuit } =
+  const { backgroundLifecycle } =
     await import("../dist-electron/background-lifecycle.js")
   app.setPath("userData", join(process.env.MAKO_LIFECYCLE_ROOT, "profile"))
   await app.whenReady()
@@ -132,17 +134,21 @@ async function checkBackground() {
   const pid = worker.pid
   const rendererId = window.webContents.id
   app.on("activate", () => window.showInactive())
-  app.on("before-quit", (event) =>
-    handleQuit(event, {
+  const lifecycle = backgroundLifecycle({
       hasActiveWork: () => active,
       isRestarting: () => false,
       hide: () => window.hide(),
       cleanup: () => {
+        assert.equal(window.isDestroyed(), true, "Only committed quit may clean up")
         cleaned = true
         worker.kill()
+        console.log("PASS: will-quit tears down only after window closure")
       },
-    })
-  )
+      quit: () => app.quit(),
+      failed: error => {console.error(error); app.exit(1)},
+  })
+  app.on("before-quit", lifecycle.beforeQuit)
+  app.on("will-quit", lifecycle.willQuit)
   try {
     await once(worker.stdout, "data")
     app.quit()
@@ -163,9 +169,17 @@ async function checkBackground() {
       "PASS: real Electron quit backgrounds active work, the provider process continues, and activation reuses the same renderer"
     )
     active = false
+    const refuseClose = event => event.preventDefault()
+    window.on("close", refuseClose)
+    app.quit()
+    await once(worker.stdout, "data")
+    assert.equal(cleaned, false, "A cancelled window close must not tear down the host")
+    assert.equal(window.isDestroyed(), false)
+    window.removeListener("close", refuseClose)
+    console.log("PASS: a cancelled normal quit leaves the host and provider alive")
     clearTimeout(watchdog)
     app.quit()
-    assert.equal(cleaned, true)
+    // will-quit owns asynchronous cleanup after all windows close.
   } catch (error) {
     console.error(error)
     worker.kill()

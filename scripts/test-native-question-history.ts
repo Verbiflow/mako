@@ -57,6 +57,22 @@ try {
   await writeFile(path,meta+JSON.stringify(largeQuestion)+"\n")
   assert.equal((await history(binding))[0]!.question.questions[0]!.question.length,5*1024*1024,"Cache budgets do not reject valid question evidence")
 
+  // Ordinary committed input retires presentation; metadata and exact answers do not.
+  const committed = (text: string) => JSON.stringify({ type: "event_msg", payload: { type: "item_completed", thread_id: native, turn_id: "next-turn", item: { type: "UserMessage", id: randomUUID(), content: [{ type: "text", text }] } } }) + "\n"
+  await writeFile(path, meta + question("left-behind") + JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "<environment_context>injected context</environment_context>" }] } }) + "\n")
+  assert.equal((await history(binding))[0]!.retired, undefined, "Injected context is not user continuation evidence")
+  await appendFile(path, committed("Move on to the next task"))
+  source = await history(binding)
+  assert.equal(source[0]!.retired, true)
+  assert.equal(source[0]!.answered.length, 0, "Retirement does not invent a native answer")
+  await appendFile(path, question("current-a") + question("current-b") + committed(codexQuestionAnswer(codexAsyncQuestion(native, "current-b", "current-b", [{ title: "current-b" }, { title: "Second" }]), { [JSON.stringify(["request_user_input_async", "current-b", 0])]: ["One"], [JSON.stringify(["request_user_input_async", "current-b", 1])]: ["Two"] })))
+  source = await history(binding)
+  assert.equal(source[1]!.retired, undefined, "An exact answer preserves other questions")
+  assert.equal(source[2]!.answered.length, 2)
+  await appendFile(path, question("left-behind"))
+  assert.equal((await history(binding))[0]!.retired, true, "Native item replay cannot undo retirement")
+  assert.equal((await createCodexQuestionHistory()(binding))[0]!.retired, true, "Cold reconstruction preserves the same retirement")
+
   // The host consumes one capability, with no provider-name branches.
   for(const provider of ["claude","codex","cursor","grok","devin","opencode","future"]) {
     const id=randomUUID(), journals=join(root,provider)
@@ -92,6 +108,13 @@ try {
       snapshot=(await owner.refreshedSnapshot(id))!
       assert.ok(snapshot.control!.questions!.find(q=>q.id===next.id)?.dismissed,"Native reload preserves dismissal")
       assert.equal(latestPendingQuestion(snapshot.control!,snapshot.requests)?.native.itemId,"older")
+      evidence = evidence.map(entry => ({ ...entry, retired: true }))
+      snapshot = (await owner.refreshedSnapshot(id))!
+      assert.equal(latestPendingQuestion(snapshot.control!, snapshot.requests), undefined, "Native continuation retires imported historical prompts")
+      evidence = evidence.map(({ retired: _retired, ...entry }) => entry)
+      owner.stop(); owner = new LiveConversations(deps)
+      snapshot = (await owner.refreshedSnapshot(id))!
+      assert.equal(latestPendingQuestion(snapshot.control!, snapshot.requests), undefined, "Old evidence cannot reverse persisted retirement")
       evidence=[{question:{...newer,sessionId:"wrong"},answered:[]}]
       snapshot=(await owner.refreshedSnapshot(id))!
       assert.equal(snapshot.control!.questions!.length,3,"Mismatched session cannot import evidence")

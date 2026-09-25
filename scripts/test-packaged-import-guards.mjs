@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { finished } from "node:stream/promises"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -39,7 +40,8 @@ try {
     await mkdir(join(app, "Contents/Resources"), { recursive: true })
     await writeFile(join(source, "dist-electron/main.js"), importer)
     await writeFile(join(source, "dist-electron/values.js"), exports)
-    await createPackage(source, join(app, "Contents/Resources/app.asar"))
+    await finished(await createPackage(source, join(app, "Contents/Resources/app.asar")))
+    // This ASAR version resolves with the stream before its final writes finish.
     uncacheAll()
     if (valid) assert.ok(assertPackagedImports(app) > 0)
     else
@@ -57,7 +59,7 @@ try {
     await writeFile(join(source, "dist-electron/values.js"), "export const value = 1;")
     await writeFile(join(source, "dist-electron/providers/fixture/native-approval-plugin.bundle.mjs"),
       `import * as dependency from ${JSON.stringify(dependency)}; export default dependency;`)
-    await createPackage(source, join(app, "Contents/Resources/app.asar"))
+    await finished(await createPackage(source, join(app, "Contents/Resources/app.asar")))
     uncacheAll()
     if (dependency.startsWith("node:")) assert.doesNotThrow(() => assertPackagedImports(app))
     else assert.throws(() => assertPackagedImports(app), /Native plugin must be standalone/)
@@ -65,7 +67,7 @@ try {
   const nativeSource = join(root, "native", "source")
   const nativeApp = join(root, "native", "Mako.app")
   await rm(join(nativeSource, "dist-electron/providers/fixture/native-approval-plugin.bundle.mjs"))
-  await createPackage(nativeSource, join(nativeApp, "Contents/Resources/app.asar"))
+  await finished(await createPackage(nativeSource, join(nativeApp, "Contents/Resources/app.asar")))
   uncacheAll()
   assert.throws(() => assertPackagedImports(nativeApp), /Packaged import missing/)
   console.log("Native plugin imports cannot depend on Mako's package or module tree")

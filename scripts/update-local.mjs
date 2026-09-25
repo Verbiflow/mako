@@ -6,7 +6,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createInterface } from "node:readline/promises"
 import { setTimeout as delay } from "node:timers/promises"
-import { extractFile } from "@electron/asar"
+import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { z } from "zod"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
 import { localRuntime, runningProcesses } from "./install-local-mac.mjs"
@@ -20,14 +20,7 @@ async function localApp(path) {
     throw error
   })
   if (!info || !info.isDirectory() || info.isSymbolicLink()) return false
-  const metadata = distribution.parse(
-    JSON.parse(
-      extractFile(
-        join(path, "Contents/Resources/app.asar"),
-        "package.json"
-      ).toString("utf8")
-    )
-  )
+  const metadata = distribution.parse(readLocalAppMetadata(path))
   return metadata.makoDistribution === "local"
 }
 
@@ -243,14 +236,7 @@ export async function prepareToClose() {
 export async function verifyStarted(candidate) {
   const expected = z
     .object({ makoBuild: z.object({ id: z.string() }) })
-    .parse(
-      JSON.parse(
-        extractFile(
-          join(candidate, "Contents/Resources/app.asar"),
-          "package.json"
-        ).toString("utf8")
-      )
-    ).makoBuild.id
+    .parse(readLocalAppMetadata(candidate)).makoBuild.id
   const { invokeRuntime, RuntimeDisconnectedError } =
     await import("../dist-electron/runtime-connection.js")
   const deadline = Date.now() + 45_000

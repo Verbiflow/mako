@@ -52,7 +52,7 @@ const canvas = {
 }
 const frame = (id: number) => ({
   id: String(id),
-  image: { data: String(id), mimeType: "image/jpeg" as const },
+  image: { bytes: new TextEncoder().encode(String(id)), mimeType: "image/jpeg" as const },
   capturedAt: id,
 })
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -76,6 +76,7 @@ try {
   requests[0]!.ready()
   await flush()
   await paint()
+  await assert.rejects(fetch(requests[0]!.src), /fetch failed/, "Completed images release their Blob URL")
   assert.equal(
     painted.length,
     1,
@@ -85,7 +86,7 @@ try {
   assert.equal(canvas.height, 1080)
   assert.equal(requests.length, 2)
   assert.ok(
-    requests[1]!.src.endsWith(",100"),
+    (await (await fetch(requests[1]!.src)).text()) === "100",
     "Only the newest waiting frame survives"
   )
   requests[1]!.naturalWidth = 1200
@@ -133,6 +134,7 @@ try {
   const nextTarget = createControlPreviewPainter(canvas)
   nextTarget.update(frame(105))
   nextTarget.close()
+  await assert.rejects(fetch(requests[5]!.src), /fetch failed/, "Closing a painter immediately releases its Blob URL")
   requests[5]!.ready()
   await flush()
   await paint()

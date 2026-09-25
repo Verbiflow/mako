@@ -32,8 +32,9 @@ Object.assign(window, {
       const frame = controlPreviewStore.get().previews["preview-audit"]?.frame
       if (!frame) throw new Error("Missing retained frame")
       const image = new Image()
-      image.src = `data:${frame.image.mimeType};base64,${frame.image.data}`
-      await image.decode()
+      const url = URL.createObjectURL(new Blob([frame.image.bytes], { type: frame.image.mimeType }))
+      image.src = url
+      try { await image.decode() } finally { URL.revokeObjectURL(url) }
       const reference = document.createElement("canvas")
       reference.width = image.naturalWidth
       reference.height = image.naturalHeight

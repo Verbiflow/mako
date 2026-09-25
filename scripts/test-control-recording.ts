@@ -77,6 +77,38 @@ assert.deepEqual(timeline.target, target)
 assert.deepEqual(result.dimensions, { width: 1600, height: 1000 })
 assert.deepEqual(timeline.frames.map((f: {width:number;height:number;viewportWidth:number;viewportHeight:number}) => [f.width,f.height,f.viewportWidth,f.viewportHeight]), [[480,300,1600,1000],[1600,1000,1600,1000]])
 assert.equal(timeline.pointer.length, 2)
+// Inspect decoded video, not just the event journal. Pointer coordinates are in
+// the reported viewport even when the first JPEG has fewer pixels. Events must
+// not be painted retroactively into earlier output frames.
+const snapshot = async (at: number) => {
+  const { stdout } = await promisify(execFile)("ffmpeg", [
+    "-v", "error", "-ss", String(at / 1000), "-i", result.video!,
+    "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+  ], { encoding: "buffer", maxBuffer: 8 * 1024 * 1024 })
+  assert.equal(stdout.length, 1600 * 1000 * 3)
+  return stdout
+}
+const hasCursor = (pixels: Buffer, x: number, y: number) => {
+  let bright = 0
+  for (let row = y - 5; row < y + 30; row++)
+    for (let column = x - 6; column < x + 25; column++) {
+      const offset = (row * 1600 + column) * 3
+      if (pixels[offset]! > 180 && pixels[offset + 1]! > 180 && pixels[offset + 2]! > 180) bright++
+    }
+  return bright > 10
+}
+assert.equal(hasCursor(await snapshot(Math.max(0, timeline.pointer[0].at - 40)), 100, 100), false)
+const firstPointer = await snapshot(timeline.pointer[0].at + 40)
+assert.equal(hasCursor(firstPointer, 100, 100), true, "Cursor uses viewport coordinates, not small JPEG coordinates")
+assert.equal(hasCursor(firstPointer, 30, 30), false)
+const movedPointer = await snapshot(timeline.pointer[1].at + 40)
+assert.equal(hasCursor(movedPointer, 260, 180), true)
+assert.equal(hasCursor(movedPointer, 100, 100), false, "Cursor movement removes the old cursor")
+const beforeChange = await snapshot(timeline.frames[1].at - 40)
+const afterChange = await snapshot(timeline.frames[1].at + 40)
+const colorOffset = (500 * 1600 + 800) * 3
+assert.ok(beforeChange[colorOffset]! > beforeChange[colorOffset + 1]!, "Future green pixels cannot replace the earlier red source")
+assert.ok(afterChange[colorOffset + 1]! > afterChange[colorOffset]!, "New source pixels reach the video")
 assert.ok(
   timeline.pointer.every(
     (point: { at: number }) => point.at <= timeline.durationMs
@@ -175,13 +207,14 @@ console.log(JSON.stringify({ nativeVideo: nativeReceipt.video, decoded }))
 const sampled = await ControlRecording.create(target, { directory, fps: 10 }, async () => {})
 await sampled.frame(await frame("red"), 640, 480)
 await sampled.frame(await frame("green"), 640, 480)
-await sampled.frame(await frame("blue"), 640, 480)
+await sampled.frame(await frame("blue", 640, 478), 640, 480)
 await sampled.stop()
 const sampledResult = await sampled.settled()
 assert.equal(sampledResult.status, "finished", sampledResult.error)
 assert.equal(sampledResult.frames, 2)
 assert.equal(sampledResult.sampledFrames, 1)
 const sampledTimeline = JSON.parse(await readFile(sampledResult.timeline!, "utf8"))
-const lastPixel = await sharp(join(sampledResult.directory, sampledTimeline.frames.at(-1).file)).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer()
-assert.ok(lastPixel[2]! > 240 && lastPixel[0]! < 10, "Stop retains the last blue frame, not the older queued green frame")
+assert.equal(sampledTimeline.frames.at(-1).height, 478, "Stop admits the latest source, not the older queued frame")
+assert.equal(sampledTimeline.version, 3)
+assert.ok(sampledTimeline.frames.every((entry: { file?: string }) => !entry.file), "Browser recording does not stage source files")
 console.log("Recording sampling: bounded latest frame and final-frame flush passed")
