@@ -28,6 +28,7 @@ import type {
 } from "../../live-driver.js"
 import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from "./auth.js"
 import { CursorSdkClient, CursorSdkError } from "./client.js"
+import { createCursorModelCache, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
 import { CursorSdkProjection } from "./projection.js"
 import { CursorAgents } from "./agents.js"
@@ -43,9 +44,6 @@ import type {
   SdkRunResult,
 } from "./wire.js"
 
-/** The model list is one network call; a start reuses it for this long. */
-const MODELS_TTL_MS = 10 * 60_000
-
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
 
@@ -59,6 +57,7 @@ export interface CursorSdkDriverDependencies {
   /** Test hook: a model list without a child. */
   models?(client: CursorSdkLiveClient): Promise<SdkModelListItem[]>
   now?(): number
+  modelCache?: CursorModelCache
 }
 
 interface Live {
@@ -73,12 +72,6 @@ interface Live {
   agents: CursorAgents
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
   closed: boolean
-}
-
-interface ModelCache {
-  models: SessionModel[]
-  defaultModel: string | undefined
-  fetchedAt: number
 }
 
 /** The SDK's own error codes for a dropped or exhausted connection. */
@@ -280,7 +273,7 @@ function stop(engine: Engine, live: Live): void {
 export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies): ProviderLiveDriver {
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
-  let modelCache: ModelCache | null = null
+  const modelCache = dependencies.modelCache ?? createCursorModelCache(dependencies.now)
 
   const now = () => dependencies.now?.() ?? Date.now()
 
@@ -290,15 +283,13 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return live
   }
 
-  async function loadModels(client: CursorSdkLiveClient): Promise<ModelCache> {
-    if (modelCache && now() - modelCache.fetchedAt < MODELS_TTL_MS) return modelCache
-    const list = dependencies.models
-      ? await dependencies.models(client)
-      : (await client.request("models", undefined)).models
+  async function loadModels(client: CursorSdkLiveClient, env: NodeJS.ProcessEnv) {
+    const list = await modelCache(env, () => dependencies.models
+      ? dependencies.models(client)
+      : client.request("models", undefined).then(result => result.models))
     const catalog = normalizeCursorSdkModels(list)
     if (catalog.models.length === 0) throw new Error("Cursor's SDK listed no models for this account")
-    modelCache = { models: catalog.models, defaultModel: catalog.defaultModel, fetchedAt: now() }
-    return modelCache
+    return catalog
   }
 
   function selectionFor(live: Pick<Live, "models">, settings: SessionSettings | undefined, fallback: string | undefined): SdkModelSelection {
@@ -394,8 +385,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false)
         throw new Error("This Cursor binding is already connected")
-      const env = await trace.step("account", () => dependencies.auth.childEnv())
-  applyControlEnvironment(env, options.conversationTools?.control)
+      const accountEnvironment = await trace.step("account", () => dependencies.auth.childEnv())
+      const env = { ...accountEnvironment }
+      applyControlEnvironment(env, options.conversationTools?.control)
       const agentId = options.resume ?? options.conversationId
       const stateRoot = dependencies.stateRoot()
       const spawn: CursorSdkSpawnOptions = {
@@ -449,7 +441,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       try {
         await trace.step("handshake", () => live.client.hello())
         await trace.step("authentication", () => ensureSignedIn(live, trace))
-        const catalog = await trace.step("model-discovery", () => loadModels(live.client))
+        const catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment))
         live.models = catalog.models
         const selection = selectionFor(live, options.tuning, catalog.defaultModel)
         const importFrom = importSource(options, cwd)

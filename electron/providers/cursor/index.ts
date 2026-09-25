@@ -13,7 +13,7 @@ import {
   electronKeyEncryption,
 } from "./sdk/credentials.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
-import { listCursorSdkModels } from "./sdk/models.js"
+import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
 import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../executable.js"
 
@@ -36,10 +36,14 @@ export const installCursor: ProviderModule = (host) => {
   const credentials = new CursorCredentialStore(cursorCredentialPath(stateRoot()), electronKeyEncryption())
   const auth = new CursorSdkAuth({ env, openUrl: openExternal, credentials })
   host.artifactPreviews.register(cursorCanvasPreview)
-  host.liveDrivers.register(createCursorSdkDriver({ auth, stateRoot }))
+  const modelCache = createCursorModelCache()
+  host.liveDrivers.register(createCursorSdkDriver({ auth, stateRoot, modelCache }))
   host.profiles.register(
     createCursorProfileLoader({
-      sdkModels: async (_env, cwd) => listCursorSdkModels({ env: await auth.childEnv(), cwd }),
+      sdkModels: async (_env, cwd) => {
+        const env = await auth.childEnv()
+        return modelCache(env, () => listCursorSdkModels({ env, cwd }), true)
+      },
       accountKey: () => {
         const state = auth.current?.state
         return state?.status === "signed-in"

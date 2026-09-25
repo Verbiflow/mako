@@ -24,11 +24,13 @@ import {
 export class CursorSdkError extends Error {
   readonly kind: SdkWireError["kind"]
   readonly code: string | undefined
+  readonly networkCauses: SdkWireError["networkCauses"]
   readonly retryable: boolean
   constructor(error: SdkWireError) {
     super(error.message)
     this.name = "CursorSdkError"
     this.kind = error.kind
+    this.networkCauses = error.networkCauses
     this.code = error.code
     this.retryable = error.retryable ?? false
   }
@@ -257,7 +259,13 @@ export class CursorSdkClient {
       this.pending.delete(message.id)
       clearTimeout(entry.timer)
       if (message.ok) entry.resolve(message.result)
-      else entry.reject(new CursorSdkError(message.error))
+      else {
+        if (message.error.kind === "network") hostWarn("cursor-sdk", "native network request failed", {
+          owner: this.options.owner, method: entry.method,
+          networkCauses: message.error.networkCauses?.join(",") ?? "unavailable",
+        })
+        entry.reject(new CursorSdkError(message.error))
+      }
     }
   }
 

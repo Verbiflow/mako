@@ -215,11 +215,22 @@ export const SdkErrorKindSchema = z.enum([
 ])
 export type SdkErrorKind = z.infer<typeof SdkErrorKindSchema>
 
+/** Closed native error codes only; nested error text can contain endpoints or secrets. */
+export const CursorNetworkCauseSchema = z.enum([
+  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
+  "ENETUNREACH", "EHOSTUNREACH", "EPIPE", "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET",
+  "CERT_HAS_EXPIRED", "CERT_NOT_YET_VALID", "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "ERR_TLS_CERT_ALTNAME_INVALID",
+])
+
 export const SdkWireErrorSchema = z.object({
   message: z.string(),
   kind: SdkErrorKindSchema,
   code: z.string().optional(),
   retryable: z.boolean().optional(),
+  networkCauses: z.array(CursorNetworkCauseSchema).max(8).optional(),
 })
 export type SdkWireError = z.infer<typeof SdkWireErrorSchema>
 

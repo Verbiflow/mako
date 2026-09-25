@@ -9,6 +9,7 @@
  * protocol lines; anything the SDK prints goes to stderr, which the host
  * drains without logging because it can carry provider input.
  */
+import { cursorSdkWireError } from "./errors.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
 import { existsSync, readFileSync } from "node:fs"
@@ -16,13 +17,8 @@ import { dirname, join } from "node:path"
 import {
   Agent,
   AgentBusyError,
-  AgentNotFoundError,
-  AuthenticationError,
   ConfigurationError,
   Cursor,
-  CursorSdkError,
-  NetworkError,
-  RateLimitError,
   type AgentOptions,
   type McpServerConfig,
   type Run,
@@ -52,7 +48,6 @@ import {
   type SdkModelSelection,
   type SdkRequest,
   type SdkResult,
-  type SdkWireError,
 } from "./wire.js"
 
 const PackageSchema = z.object({ name: z.string(), version: z.string() })
@@ -85,24 +80,6 @@ function log(level: "info" | "warn", message: string): void {
   write({ event: "log", level, message })
 }
 
-function wireError(cause: unknown): SdkWireError {
-  if (cause instanceof AuthenticationError)
-    return { message: cause.message, kind: "authentication", code: cause.code, retryable: false }
-  if (cause instanceof RateLimitError)
-    return { message: cause.message, kind: "rate-limit", code: cause.code, retryable: true }
-  if (cause instanceof AgentBusyError)
-    return { message: cause.message, kind: "busy", code: cause.code, retryable: false }
-  if (cause instanceof AgentNotFoundError)
-    return { message: cause.message, kind: "not-found", code: cause.code, retryable: false }
-  if (cause instanceof ConfigurationError)
-    return { message: cause.message, kind: "configuration", code: cause.code, retryable: false }
-  if (cause instanceof NetworkError)
-    return { message: cause.message, kind: "network", code: cause.code, retryable: true }
-  if (cause instanceof CursorSdkError)
-    return { message: cause.message, kind: "unknown", code: cause.code, retryable: cause.isRetryable }
-  if (cause instanceof Error) return { message: cause.message, kind: "unknown" }
-  return { message: String(cause), kind: "unknown" }
-}
 
 function sdkVersion(): string {
   const require = createRequire(import.meta.url)
@@ -269,13 +246,13 @@ async function pump(turn: string, run: Run): Promise<void> {
   try {
     for await (const message of run.stream()) forwardMessage(turn, message)
   } catch (cause) {
-    if (!closing) log("warn", `run stream ended early: ${wireError(cause).message}`)
+    if (!closing) log("warn", `run stream ended early: ${cursorSdkWireError(cause).message}`)
   }
   let result
   try {
     result = await run.wait()
   } catch (cause) {
-    const error = wireError(cause)
+    const error = cursorSdkWireError(cause)
     write({ event: "result", turn, result: { runId: run.id, status: "error", error: { message: error.message, code: error.code } } })
     return
   } finally {
@@ -462,7 +439,7 @@ async function handle(line: string): Promise<void> {
     const result = await dispatch(request.data)
     write({ id: request.data.id, ok: true, result })
   } catch (cause) {
-    write({ id: request.data.id, ok: false, error: wireError(cause) })
+    write({ id: request.data.id, ok: false, error: cursorSdkWireError(cause) })
   }
   if (request.data.method === "close") process.exit(0)
 }
