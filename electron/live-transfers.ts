@@ -248,7 +248,13 @@ export class LiveTransfers {
         (reconnect
           ? source.session.settings ?? currentBinding?.tuning
           : undefined)
+      // A turn Mako sent after the last idle checkpoint moves the record by
+      // itself when its process dies mid-turn, and this transcript already has
+      // what streamed of it. Only a move with no such turn happened elsewhere.
       const moved = reconnect && verdict?.kind === "resumable" && verdict.record === "moved"
+      const movedByOwnTurn = moved && source.blocks
+        .slice(prior?.coveredBlocks ?? 0)
+        .some((block) => block.type === "user" && block.requestId !== undefined)
       const nativeFork =
         !bindings.length &&
         control.ancestry?.nativeFork?.provider === transfer.input.provider &&
@@ -536,11 +542,12 @@ export class LiveTransfers {
           conversation: source.session.id,
           harness: transfer.input.provider,
           nativeId: prior?.nativeId,
+          cause: movedByOwnTurn ? "interrupted turn" : "outside Mako",
         })
-        this.host.dependencies.emit({
+        if (!movedByOwnTurn) this.host.dependencies.emit({
           type: "notice",
           level: "info",
-          message: "This session's record moved while Mako was away: the interrupted turn finished, or the session was continued elsewhere. The saved transcript may not show that part; the session itself continues from where the provider left it.",
+          message: "This session was continued outside Mako since its last turn here. Those turns are not in this transcript; the session itself carries them.",
         })
       }
     } catch (error) {

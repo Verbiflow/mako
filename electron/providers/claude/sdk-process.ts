@@ -3,10 +3,10 @@ import type {
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
 import { trackProviderChild } from "../../provider-children.js"
+import { unpackedPath } from "../../asar-unpacked.js"
 
-/** Native executables cannot run from Electron's virtual archive. */
 export function claudeExecutablePath(command: string): string {
-  return command.replace(/([\\/])app\.asar([\\/])/, "$1app.asar.unpacked$2")
+  return unpackedPath(command)
 }
 
 export function spawnClaudeProcess(options: SpawnOptions, owner?: string) {

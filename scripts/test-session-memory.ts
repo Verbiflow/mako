@@ -145,7 +145,7 @@ async function reconnectAfterRestart() {
     const accepted = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === moved.id)
     assert.equal(accepted?.state.kind, "accepted", `a record that moved while the host was away still reconnects: ${JSON.stringify(accepted?.state)}`)
     assert.equal(starts.length, 2, "the provider was started once for the reconnect")
-    assert.ok(notices.some((message) => message.includes("moved while Mako was away")), "the transcript gap is said out loud")
+    assert.ok(notices.some((message) => message.includes("continued outside Mako")), "a move no turn here explains is said out loud")
     await until(() => dev.heldBy("cursor", "agent-restart")?.hostLabel === "the installed Mako app", "the reconnect to hold the session")
     await after.close(id)
     assert.equal(dev.heldBy("cursor", "agent-restart"), null)
@@ -174,6 +174,48 @@ async function reconnectAfterRestart() {
     await until(() => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === missing.id)?.state.kind === "failed", "the unavailable reconnect to fail")
     const unavailable = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === missing.id)
     assert.ok(unavailable?.state.kind === "failed" && unavailable.state.error.includes("The session store is missing or unreadable."), "the refusal carries the provider's own reason")
+  } finally {
+    after.stop()
+  }
+}
+
+/**
+ * The host died during a turn it had sent; the provider wrote that turn's
+ * progress before it was cut off. The move is Mako's own and the transcript
+ * already holds what streamed, so the reconnect says nothing about it.
+ */
+async function reconnectAfterOwnTurn() {
+  const starts: string[] = []
+  const notices: string[] = []
+  const dependencies = {
+    appPath: root,
+    driver: () => fixtureDriver("agent-own-turn", starts),
+    history: async () => null,
+    emit: (event: HostEvent) => {
+      if (event.type === "notice") notices.push(event.message)
+    },
+    resumeVerdict: async (): Promise<ResumeVerdict> => ({ kind: "resumable", record: "moved" }),
+    root: join(root, "own-turn"),
+    memory: installed,
+  }
+  const id = randomUUID()
+  const before = new LiveConversations(dependencies)
+  await before.start("cursor", "/repo", { conversationId: id })
+  await until(() => before.snapshot(id)?.session.status === "ready", "the first session")
+  const sent = randomUUID()
+  before.submit(id, sent, "Run the long task")
+  await until(() => before.snapshot(id)?.requests.some((request) => request.id === sent && request.status === "dispatching") === true, "the turn to dispatch")
+  before.stop()
+  await tick()
+
+  const after = new LiveConversations(dependencies)
+  try {
+    const input: TransferInput = { id: randomUUID(), provider: "cursor", text: "Go ahead", attachments: [] }
+    after.transfer(id, input)
+    await until(() => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === input.id)?.state.kind === "accepted", "the reconnect to be accepted")
+    assert.equal(starts.length, 2, "the provider was started once for the reconnect")
+    assert.deepEqual(notices, [], "a move the interrupted turn explains raises no notice")
+    await after.close(id)
   } finally {
     after.stop()
   }
@@ -366,8 +408,9 @@ try {
   // --- Live conversations write and read the ledger ----------------------------
   await liveConversationsRoundTrip()
   await reconnectAfterRestart()
+  await reconnectAfterOwnTurn()
   await backfillFromJournals()
-  console.log("Session memory: cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, journal backfill")
+  console.log("Session memory: cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, quiet reconnect after an interrupted turn, journal backfill")
 } finally {
   installed.close()
   dev.close()

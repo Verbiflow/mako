@@ -439,7 +439,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         })
       })
       try {
-        await trace.step("handshake", () => live.client.hello())
+        const hello = await trace.step("handshake", () => live.client.hello())
+        if (hello.ripgrep === false)
+          hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
         await trace.step("authentication", () => ensureSignedIn(live, trace))
         const catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment))
         live.models = catalog.models

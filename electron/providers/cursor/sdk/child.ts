@@ -9,7 +9,7 @@
  * protocol lines; anything the SDK prints goes to stderr, which the host
  * drains without logging because it can carry provider input.
  */
-import { cursorSdkWireError } from "./errors.js"
+import { crashSummary, cursorSdkWireError } from "./errors.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
 import { existsSync, readFileSync } from "node:fs"
@@ -26,6 +26,7 @@ import {
   type SDKMessage,
 } from "@cursor/sdk"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
+import { unpackedPath } from "../../../asar-unpacked.js"
 import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions"
 import { z } from "zod"
 import {
@@ -80,6 +81,39 @@ function log(level: "info" | "warn", message: string): void {
   write({ event: "log", level, message })
 }
 
+
+/**
+ * The SDK looks for its `rg` by walking up from this entry. In a package that
+ * walk stays inside `app.asar`, where the binary reads as non-executable, so
+ * Grep and Glob fail with "Ripgrep path not configured" unless the unpacked
+ * copy is named here before any agent opens.
+ */
+function configureRipgrep(): void {
+  if (process.env.CURSOR_RIPGREP_PATH) return
+  try {
+    const require = createRequire(import.meta.url)
+    const platform = dirname(require.resolve(`@cursor/sdk-${process.platform}-${process.arch}/package.json`))
+    const binary = unpackedPath(join(platform, "bin", process.platform === "win32" ? "rg.exe" : "rg"))
+    if (existsSync(binary)) process.env.CURSOR_RIPGREP_PATH = binary
+    else log("warn", "the platform package has no ripgrep binary")
+  } catch {
+    log("warn", "the platform package is not installed; the SDK looks for ripgrep on PATH")
+  }
+}
+
+let exiting = false
+
+function fatal(kind: string, cause: unknown): void {
+  if (exiting) return
+  exiting = true
+  const deadline = setTimeout(() => process.exit(1), 1_000)
+  deadline.unref()
+  try {
+    process.stdout.write(`${JSON.stringify({ event: "log", level: "warn", message: `fatal ${kind}: ${crashSummary(cause)}` } satisfies SdkChildLine)}\n`, () => process.exit(1))
+  } catch {
+    process.exit(1)
+  }
+}
 
 function sdkVersion(): string {
   const require = createRequire(import.meta.url)
@@ -385,7 +419,7 @@ async function me(): Promise<SdkResult<"me">> {
 async function dispatch(request: SdkRequest): Promise<SdkResult<SdkRequest["method"]>> {
   switch (request.method) {
     case "hello":
-      return { wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: sdkVersion(), node: process.versions.node }
+      return { wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: sdkVersion(), node: process.versions.node, ripgrep: Boolean(process.env.CURSOR_RIPGREP_PATH) }
     case "open":
       return openAgent(request.params)
     case "send":
@@ -463,12 +497,14 @@ function main(): void {
   })
   // Never report a broken protocol pipe through that same pipe: doing so from
   // uncaughtException produces an endless EPIPE/error/log loop after host exit.
-  // Request-level errors are handled above; an uncaught failure is fatal.
+  // Request-level errors are handled above; an uncaught failure is fatal and
+  // reported at most once, so a broken stdout cannot feed its own report.
   process.stdin.on("error", () => process.exit(1))
   process.stdout.on("error", () => process.exit(1))
   process.stderr.on("error", () => process.exit(1))
-  process.on("uncaughtException", () => process.exit(1))
-  process.on("unhandledRejection", () => process.exit(1))
+  process.on("uncaughtException", (cause) => fatal("exception", cause))
+  process.on("unhandledRejection", (cause) => fatal("rejection", cause))
+  configureRipgrep()
 }
 
 main()

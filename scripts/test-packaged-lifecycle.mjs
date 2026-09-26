@@ -30,6 +30,7 @@ const warmStart = process.argv.includes("--warm")
 const uiStart = process.argv.includes("--ui-start")
 const stopCheck = process.argv.includes("--stop")
 const terminalCheck = process.argv.includes("--terminal")
+const searchCheck = process.argv.includes("--search")
 const modelFlag = process.argv.find((arg) => arg.startsWith("--model="))
 const selectedModel = modelFlag?.slice(8)
 const args = process.argv
@@ -42,11 +43,12 @@ const args = process.argv
       arg !== "--ui-start" &&
       arg !== "--stop" &&
       arg !== "--terminal" &&
+      arg !== "--search" &&
       arg !== modelFlag
   )
 assert.ok(
   args.length <= 2,
-  "Use [Mako.app] [provider] [--renderer-only] [--warm] [--model=id] [--ui-start] [--stop] [--terminal]"
+  "Use [Mako.app] [provider] [--renderer-only] [--warm] [--model=id] [--ui-start] [--stop] [--terminal] [--search]"
 )
 const acceptanceBudget =
   process.env.MAKO_STARTUP_BUDGET_MS === undefined
@@ -516,7 +518,8 @@ async function completed(requestId, { startedAt, id = conversationId } = {}) {
     120_000
   )
 }
-function answer(snapshot, requestId) {
+/** The blocks after a turn's prompt, from the live window or, once covered, from native history. */
+function turnBlocks(snapshot, requestId) {
   const index = snapshot.blocks.findIndex(
     (block) => block.type === "user" && block.requestId === requestId
   )
@@ -533,10 +536,11 @@ function answer(snapshot, requestId) {
     const nextUser = following.findIndex(entry => entry.kind === 'user')
     return following.slice(0, nextUser < 0 ? undefined : nextUser)
       .filter(entry => entry.kind === 'assistant').flatMap(entry => entry.blocks)
-      .filter(block => block.type === 'text').map(block => block.text).join('\n')
   }
-  return snapshot.blocks
-    .slice(index + 1)
+  return snapshot.blocks.slice(index + 1)
+}
+function answer(snapshot, requestId) {
+  return turnBlocks(snapshot, requestId)
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n")
@@ -593,6 +597,22 @@ async function stopRunningTurn(nativeId) {
     coveredBlocks: binding(stopped).coveredBlocks,
   })
   return requestId
+}
+/** The harness's own search tools run from the package; a shell `grep` would not prove them. */
+async function searchWorkspace(when = "after-create") {
+  const token = `SEARCH_${randomUUID().replaceAll("-", "")}`
+  const file = `found-${token.slice(7, 15)}.txt`
+  await mkdir(join(workspace, "nested"), { recursive: true })
+  await writeFile(join(workspace, "nested", file), `${token}\n`)
+  const requestId = randomUUID()
+  await bridge("livePrompt", [conversationId, requestId, `Using your built-in file search tools, not a shell command, find the file in this workspace that contains the text ${token}. Reply with only that file's name. Do not modify files.`, []])
+  const snapshot = await completed(requestId)
+  const tools = turnBlocks(snapshot, requestId).filter((block) => block.type === "tool")
+  const broken = tools.filter((block) => /ripgrep|not configured/i.test(JSON.stringify(block)) || block.status === "failed")
+  assert.deepEqual(broken.map((block) => JSON.stringify(block).slice(0, 300)), [], "a search tool failed")
+  assert.ok(tools.length > 0, "the search turn used no tool")
+  assert.ok(answer(snapshot, requestId).includes(file), `the search found ${file}`)
+  report.phases.push({ phase: "workspace-search", when, tools: tools.map((block) => block.title ?? block.name ?? block.toolKind ?? Object.keys(block).join(",")) })
 }
 async function checkNoFalseBanner(requestId) {
   const selector = `[data-conversation-id="${conversationId}"]`
@@ -805,6 +825,7 @@ try {
       })
       await bridge("liveClose", [id])
     }
+    if (searchCheck) await searchWorkspace()
     const stoppedId = stopCheck ? await stopRunningTurn(nativeId) : undefined
     await stopPackage()
     // The same profile must recover its journal; the second prompt does not include the marker.
@@ -817,7 +838,7 @@ try {
     await bridge("livePrompt", [
       conversationId,
       nextId,
-      (stopCheck || approvalChecks || process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1" || process.env.MAKO_PACKAGE_QUESTION_RETIREMENT === "1" || process.env.MAKO_PACKAGE_EXTERNAL_QUESTION === "1")
+      (stopCheck || searchCheck || approvalChecks || process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1" || process.env.MAKO_PACKAGE_QUESTION_RETIREMENT === "1" || process.env.MAKO_PACKAGE_EXTERNAL_QUESTION === "1")
         ? "Reply only with the original PACKAGE_ marker I asked you to remember at the start of this session, before the intervening tests. Do not use tools or modify files."
         : "Reply only with the marker from my previous turn. Do not use tools or modify files.",
       [],
@@ -837,6 +858,7 @@ try {
       "Resumed provider must recall the original marker"
     )
     report.phases.push({ phase: "restart-native-resume-recall", passed: true })
+    if (searchCheck) await searchWorkspace("after-resume")
     await captureConversation("native-resume.png")
     await bridge("liveClose", [conversationId])
     console.log(

@@ -297,7 +297,7 @@ export type SdkMethod = SdkRequest["method"]
 // Results: child → host, one per request.
 
 export const SdkResultSchemas = {
-  hello: z.object({ wire: z.number(), sdkVersion: z.string(), node: z.string() }),
+  hello: z.object({ wire: z.number(), sdkVersion: z.string(), node: z.string(), ripgrep: z.boolean().optional() }),
   open: z.object({
     agentId: z.string(),
     model: SdkModelSelectionSchema.optional(),

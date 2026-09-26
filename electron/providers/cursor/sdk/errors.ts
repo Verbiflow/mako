@@ -25,6 +25,20 @@ function networkCauses(error: NetworkError): NonNullable<SdkWireError["networkCa
   return [...codes]
 }
 
+const STACK_FRAMES = 8
+
+/** Says where a fatal error was thrown, never what it said: a message can quote provider input. */
+export function crashSummary(cause: unknown): string {
+  if (!(cause instanceof Error)) return `a thrown ${cause === null ? "null" : typeof cause}`
+  const code = (cause as { code?: unknown }).code
+  const frames = (cause.stack ?? "")
+    .split("\n")
+    .filter((line) => line.trimStart().startsWith("at "))
+    .slice(0, STACK_FRAMES)
+    .map((line) => line.trim().slice(3).replace(/(?:file:\/\/)?\/[^\s()]*\/((?:node_modules|dist-electron)\/)/g, "$1"))
+  return [`${cause.name}${typeof code === "string" ? ` ${code}` : ""}`, ...frames].join(" | ")
+}
+
 export function cursorSdkWireError(cause: unknown): SdkWireError {
   if (cause instanceof AuthenticationError)
     return { message: cause.message, kind: "authentication", code: cause.code, retryable: false }
