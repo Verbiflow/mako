@@ -398,13 +398,15 @@ export function createMakoBridge(transport: BridgeTransport) {
     controlPreview: (
       conversationId: string,
       watching: boolean,
-      watcher = "panel"
+      watcher = "panel",
+      after?: string | null
     ) =>
       invokeTrustedHost<import("../shared.js").ControlPreview | null>(
         "mako:control-preview",
         conversationId,
         watching,
-        watcher
+        watcher,
+        after
       ),
     computerPermissions: () =>
       invokeTrustedHost<MakoComputerPermissions>("mako:computer-permissions"),
