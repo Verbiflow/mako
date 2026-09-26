@@ -172,11 +172,13 @@ Next:
    measured and reverted. At load 8–14.5 both arms held 58.3–59.7 fps. Under four
    load workers (load 16.5–24) fps followed load in both (original 47.97/26.68,
    parked 49.03/34.71), and parked reads still fell to 0.63 per frame. The loss is
-   CPU-starved per-frame work, not the notification hop. Decision needed: reduce
-   per-frame viewer work (each viewer decodes and paints full 1920×1080), or accept
-   a lower preview rate under contention and report it as recording does. Process
-   priority is weaker on macOS: without root Mako can only lower other work (for
-   example agent subprocesses), not raise itself.
+   CPU-starved per-frame work, not the notification hop. The user chose to cut
+   per-frame viewer work first; that is done (item 6) and lowers viewer CPU per
+   frame by about 8% without changing ordinary fps. The 55-fps gate under heavy
+   contention stays open. Remaining options: reduce main-process read/IPC cost per
+   frame, or accept a lower preview rate under contention and report it as
+   recording does. Process priority is weaker on macOS: without root Mako can only
+   lower other work (for example agent subprocesses), not raise itself.
    [Stage breakdown](local-control-media-fixes.md#candidate-6ac3f4fbd690b74d-and-preview-stage-breakdown),
    [parked-read A/B](local-control-media-fixes.md#parked-next-frame-preview-read-measured-reverted).
 3. Native fixture startup is fixed. The private-driver right/double-click
@@ -188,6 +190,15 @@ Next:
    [Fixture, receipt and wake evidence](local-control-media-fixes.md#fixture-startup-install-receipt-and-host-wake-local-follow-up).
 5. Restarting from a web client no longer opens a stray "Quit Mako?" dialog or
    asks the host to hide its desktop windows (local, verified in `npm run web`).
+6. **Resolved (local): viewers decode and paint at their displayed size.** Each
+   viewer holds exactly its device pixels (288×162 for the audit overlay instead
+   of 1920×1080), decoded at the smallest covering JPEG eighth and shared between
+   viewers. Checked in real Chromium at DPR 1 and 2 through `npm run web`, with
+   resize repaint and a pixel oracle (38.2 dB against a high-quality downscale).
+   A balanced six-run A/B: viewer renderer CPU per frame −22%, whole viewer −8%,
+   22 MB less working set, fps unchanged; every displayed-size run passes the
+   audit. Not installed yet; ships with the next build.
+   [Design, tests and A/B](local-control-media-fixes.md#displayed-size-viewer-decoding-local-september-26).
 
 [Media fixes and previous attempts](local-control-media-fixes.md) retain the
 source/candidate tests, failed installers and exact driver lifecycle evidence.
@@ -760,7 +771,12 @@ now decodes with `-fps_mode passthrough` and passes. Six media scripts are wired
 no suite or document: `test-control-preview-electron`, `test-browser-cursor-visual`
 (both pass), `test-control-preview-e2e` (needs a dev server on port 5174),
 `test-browser-capture-live`, `test-packaged-control-recording` and
-`audit-capture-projects`. Unwired tests rot, as the decoder case shows. Wire the two
+`audit-capture-projects`. `test-control-preview-e2e` also runs against
+`npm run web` with `MAKO_TEST_ORIGIN=http://127.0.0.1:5173/` and now checks
+displayed-size painting at DPR 1 and 2. Unwired tests rot, as the decoder case shows.
+Wired suites rot too: `test:mcp` had failed since September 22 on two stale
+expectations (optional `browser.open` browser; task-scoped `mako-control` absent
+from the global registry). Both were updated to the current contract on September 26. Wire the two
 passing ones into `test:control-recording` once the other contributor's
 `package.json` changes land. Retire the rest only after checking their owners.
 

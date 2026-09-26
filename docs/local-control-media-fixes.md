@@ -639,3 +639,68 @@ bridge forwarded `mako:quit-client` to the host, which hides the desktop windows
 and Dock icon; while the host was exiting the call failed and opened the quit
 dialog. The web bridge now answers quit itself, as the desktop client does;
 `test-web-delivery.mjs` fails without the fix.
+
+### Displayed-size viewer decoding (local, September 26)
+
+Each viewer used to decode and paint the full 1920×1080 frame, then let CSS
+shrink it. The viewer now paints exactly the device pixels it occupies:
+
+- `ControlPreviewImage` measures its canvas with a `device-pixel-content-box`
+  `ResizeObserver` (content box × `devicePixelRatio` where unsupported), so
+  display-scale changes also repaint.
+- The decoder reads the JPEG SOF / PNG IHDR size without decoding and asks
+  Chromium's `ImageDecoder` for the smallest eighth of the source that covers the
+  fitted box. Chromium decodes exactly `ceil(source × n/8)` for those sizes.
+  Both viewers still share one decode, sized for the larger live viewer; a viewer
+  not yet laid out forces a full decode, and a zero-sized one does no work.
+- The canvas keeps the source aspect ratio in CSS from the first frame header, so
+  layout never follows the bitmap. A resize repaints the newest held frame without
+  another read and never an older one.
+- Scaled decodes stay within 2× of the canvas and draw bilinearly. Full-size
+  fallbacks (PNG, browsers without `ImageDecoder`) switch to high-quality
+  smoothing when they shrink further.
+
+Explicit screenshots, recordings and the host's frames are unchanged; only the
+viewer's copy is smaller.
+
+Evidence:
+
+- Painter unit test covers header sizes, the eighths table, fit rounding
+  (852×479 in an 852×480 box), unchanged-box no-op, resize repaint, hidden
+  viewers, shared scaled decode, unmeasured viewers, ordering during resize, early
+  aspect ratio and fallback smoothing. Mutations of the held-frame choice, shared
+  demand, early aspect ratio and smoothing each fail it.
+- Real Chromium (`test-control-preview-e2e.mjs` against `npm run web`,
+  `MAKO_TEST_ORIGIN=http://127.0.0.1:5173/`): a 1920×1080 JPEG in the production
+  overlay holds 288×162 at DPR 1 and 576×324 at DPR 2; shrinking the canvas
+  repaints the held frame at 144×81 / 288×162 with no new read.
+- The audit now asserts each canvas equals its fitted displayed device pixels
+  (±1) and matches a high-quality downscale of the retained frame (PSNR ≥ 35 dB,
+  mean error ≤ 2 levels). Measured: 288×162 per viewer, 38.2 dB, mean 1.15.
+  Pixel memory per viewer falls from 8.3 MB to 187 KB. The audit also reports
+  viewer renderer/GPU/main CPU and fingerprints the decoder.
+
+Balanced A/B against the old painter (baseline worktree, same host code;
+`release/panel-20260926/repeat/`, `summary.mjs repeat` prints the table). Aside,
+two viewers, recording on, 90 s each, order N-B-B-N-N-B, load 9.5–13:
+
+| Per displayed frame | Displayed-size | Full-frame | Change |
+| --- | --- | --- | --- |
+| Viewer renderer CPU | 3.55 ms | 4.58 ms | −22% |
+| GPU process CPU | 2.89 ms | 3.00 ms | −4% |
+| Main process CPU | 4.11 ms | 3.92 ms | within noise |
+| All viewer processes | 10.56 ms (0.62 cores) | 11.51 ms (0.68 cores) | −8% |
+| Electron working set | 557 MB | 579 MB | −22 MB |
+| Preview fps | 58.47 | 58.93 | unchanged |
+
+All displayed-size runs pass every audit gate; one full-frame run failed the
+half-second freeze check. An earlier eight-run set ran at load 20–34 (another
+agent's work) and missed the fps gate in both arms; per displayed frame it showed
+the same direction (14.4 vs 16.2 ms). Its only invalid pixel samples came from a
+run whose audit host disconnected under that load (`host-disconnected`), not
+from the painter.
+
+Result: the viewer's own decode/paint work fell by about a fifth, the whole viewer
+by about 8%. That does not by itself close the 55-fps gate under heavy
+contention; the remaining per-frame cost is mostly the main process (IPC/media
+reads) and the GPU process.
