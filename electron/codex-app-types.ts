@@ -120,6 +120,7 @@ export type RpcParams = {
   "turn/steer": TurnSteerParams
   "thread/compact/start": ThreadCompactStartParams
   "turn/interrupt": TurnInterruptParams
+  "thread/backgroundTerminals/list": { threadId: string; cursor?: string }
 }
 
 export type RpcResults = {
@@ -132,6 +133,7 @@ export type RpcResults = {
   "turn/steer": { turnId: string }
   "thread/compact/start": JsonObject
   "turn/interrupt": JsonObject
+  "thread/backgroundTerminals/list": { data: { itemId: string }[]; nextCursor?: string | null }
 }
 
 export type RpcMethod = keyof RpcParams
@@ -185,6 +187,11 @@ export interface ProtocolContext {
   nextRequestId: number
   pending: Map<string, PendingRpc>
   items: Map<string, ItemTracker>
+  /**
+   * Command items whose terminal outlived their turn. `raced` collects
+   * completions that arrive while a terminal list is in flight.
+   */
+  background: { running: Set<string>; raced?: Set<string> }
   stdoutLines: LineAssembler
   exited: boolean
   protocol: ProtocolCallbacks

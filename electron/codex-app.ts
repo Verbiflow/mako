@@ -44,6 +44,7 @@ import {
   sendRpc,
   sendRpcError,
   sendRpcResult,
+  type ProtocolContext,
 } from "./codex-app-protocol.js"
 import type {
   ItemTracker,
@@ -85,6 +86,7 @@ type Live = {
   pending: Map<string, PendingRpc>
   serverRequests: Map<string, PendingServerRequest>
   items: Map<string, ItemTracker>
+  background: ProtocolContext["background"]
   stdoutLines: LineAssembler
   stderrBuffer: string
   approvals: CodexPermissionObserver
@@ -178,6 +180,7 @@ async function startCodex(
     pending: new Map(),
     serverRequests: new Map(),
     items: new Map(),
+    background: { running: new Set() },
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
     approvals: new CodexPermissionObserver(join(app.getPath("userData"), "approval-evidence", "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
@@ -513,6 +516,7 @@ function handleProcessEnd(live: Live, message: string): void {
       status: "failed",
       connection: "disconnected",
       error: message,
+      backgroundTasks: 0,
     })
 }
 
@@ -523,6 +527,7 @@ function failLive(live: Live, message: string): void {
       status: "failed",
       connection: "disconnected",
       error: message,
+      backgroundTasks: 0,
     })
 }
 

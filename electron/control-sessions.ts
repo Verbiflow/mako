@@ -78,6 +78,28 @@ export class ControlSessions {
       throw error
     }
   }
+  /**
+   * Local Control is a capability of a conversation, not a condition for it:
+   * when the worker cannot start, the provider starts without it and the
+   * reason is returned for the user.
+   */
+  async startOptional(
+    ...args: Parameters<ControlSessions["start"]>
+  ): Promise<{ launch: ControlLaunch } | { unavailable: string }> {
+    try {
+      return { launch: await this.start(...args) }
+    } catch (error) {
+      const stale = error instanceof ControlFault && error.code === "incompatible-session"
+      hostWarn("local-control", "Worker did not start; the conversation continues without it", {
+        bindingId: args[0], reason: stale ? "host-older-than-disk" : error instanceof Error ? error.message : String(error),
+      })
+      return {
+        unavailable: stale
+          ? "Local Control is off for new agent sessions: this Mako host is older than the Local Control code on disk. Restart Mako to load it."
+          : "Local Control could not start, so this agent session continues without computer and browser control.",
+      }
+    }
+  }
   get(bindingId: string): ControlLaunch | undefined {
     return this.launches.get(bindingId)
   }

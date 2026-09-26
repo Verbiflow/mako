@@ -235,6 +235,7 @@ export class LiveConversations {
             : session.connection === "disconnected"
               ? "disconnected"
               : session.status === "running" ||
+                  session.backgroundTasks ||
                   resident.snapshot.nativeAgents?.agents.some(isActiveNativeAgent) ||
                   resident.opening ||
                   resident.transferring ||
@@ -276,8 +277,9 @@ export class LiveConversations {
       const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
       const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
       const native = snapshot.nativeAgents?.agents.filter(isActiveNativeAgent) ?? []
-      if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !requests.length && !native.length && !snapshot.permissions.length))) return []
-      const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
+      const background = Boolean(snapshot.session.backgroundTasks)
+      if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return []
+      const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
       return [{ id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }]
     })
     for (const id of this.starts.keys()) if (!work.some((item) => item.id === id)) work.push({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
@@ -381,6 +383,7 @@ export class LiveConversations {
         if (!latest || latest.ref.nativeId !== nativeId || latest.ref.harness !== provider)
           return this.stamp(resident.snapshot)
         const sameRevision = base && (resident.snapshot.baseCoveredBlocks ?? 0) === covered && latest.checkpoint !== undefined && latest.checkpoint === base.checkpoint &&
+          latest.translator === base.translator &&
           latest.ref.bytes === base.ref.bytes && latest.ref.revision === base.ref.revision &&
           latest.ref.updatedAt === base.ref.updatedAt && latest.total === base.total
         if (sameRevision) return this.stamp(resident.snapshot)
@@ -853,6 +856,7 @@ export class LiveConversations {
         driver?.canResume &&
         resident.snapshot.session.connection === "connected" &&
         resident.snapshot.session.status === "ready" &&
+        !resident.snapshot.session.backgroundTasks &&
         binding?.nativeId &&
         binding.path &&
         !resident.opening &&

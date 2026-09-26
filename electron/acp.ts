@@ -69,7 +69,8 @@ import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { forward } from "./acp-notifications.js"
 import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
-import type { AcpTuning } from "./providers/acp-source.js"
+import type { AcpBackgroundReport, AcpTuning } from "./providers/acp-source.js"
+import type { JsonObject } from "./codex-app-json.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { acpMcpServers } from "./mcp-runtime.js"
@@ -334,6 +335,7 @@ async function startAcp(
     update(live, {
       status: "failed",
       connection: "disconnected",
+      backgroundTasks: 0,
       error:
         stderrDetail(stderr) ||
         `${spec.command} exited${signal ? ` on ${signal}` : code === null ? "" : ` with code ${code}`}`,
@@ -368,6 +370,7 @@ async function startAcp(
     },
     async sessionUpdate(params: SessionNotification) {
       if (live.sessionId && params.sessionId !== live.sessionId) return
+      reportBackground(background?.sessionUpdate?.(params))
       if (live.agents?.observe(params) === "child") return
       approvals?.observe?.(params)
       live.compaction?.observe(params.update)
@@ -406,6 +409,15 @@ async function startAcp(
       forward(live, params, emit, update, live.state.settings,
         params.update.sessionUpdate === "tool_call" ? source?.toolName?.(params.update) : undefined)
     },
+    async extNotification(method: string, params: JsonObject) {
+      reportBackground(background?.extension?.(method, params))
+    },
+  }
+  const background = source?.observeBackground?.()
+  function reportBackground(report: AcpBackgroundReport | undefined): void {
+    if (!report || !live.sessionId || report.sessionId !== live.sessionId) return
+    if (report.running !== (live.state.backgroundTasks ?? 0))
+      update(live, { backgroundTasks: report.running })
   }
 
   const connection = new ClientSideConnection(

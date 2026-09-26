@@ -143,6 +143,7 @@ const BaseSchema = z
     start: z.number(),
     total: z.number(),
     hasEarlier: z.boolean(),
+    translator: z.string().optional(),
   })
   .nullable()
 const RowSchema = z.object({ value: z.string() })

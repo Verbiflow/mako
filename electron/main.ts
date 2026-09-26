@@ -547,6 +547,8 @@ function terminal() {
   return terminalClients.forOwner(hostClient())
 }
 
+/** Each reason is told once per host; every failed start is still logged. */
+const controlUnavailableNotices = new Set<string>()
 const controlSessions = new ControlSessions(async () => {
   const driver = resolveExecutable("cua-driver")
   if (!driver) return undefined
@@ -1904,16 +1906,17 @@ app.whenReady().then(async () => {
       const tools = conversationMcp?.mint(bindingId, conversationId)
       if (!tools) return undefined
       const browser = controlService?.mint(conversationId, bindingId)
-      try {
-        return { ...tools, control: await controlSessions.start(bindingId, browser, async (reason) => {
-          await controlService?.revoke(conversationId, bindingId)
-          if (reason === "failed") emit({type:"notice",level:"error",message:"Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control."})
-        }) }
-      } catch (error) {
-        conversationMcp?.revoke(bindingId, conversationId)
+      const control = await controlSessions.startOptional(bindingId, browser, async (reason) => {
         await controlService?.revoke(conversationId, bindingId)
-        throw error
+        if (reason === "failed") emit({type:"notice",level:"error",message:"Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control."})
+      })
+      if ("launch" in control) return { ...tools, control: control.launch }
+      await controlService?.revoke(conversationId, bindingId)
+      if (!controlUnavailableNotices.has(control.unavailable)) {
+        controlUnavailableNotices.add(control.unavailable)
+        emit({ type: "notice", level: "error", message: control.unavailable })
       }
+      return tools
     },
     controlInstructions: bindingId => {
       const launch = controlSessions.get(bindingId)

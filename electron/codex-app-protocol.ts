@@ -1,6 +1,7 @@
 import { codexAsyncQuestion, codexAnsweredQuestions } from "./providers/codex/questions.js"
 import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
+import { z } from "zod"
 import {
   codexPresentation,
   codexPrompt,
@@ -66,6 +67,10 @@ const MAX_TOOL_OUTPUT = 32 * 1024
 const MAX_STREAM_COMPARE = 128 * 1024
 const MAX_TRACKED_ITEMS = 2048
 const MAX_REPLAY_ITEMS = 1000
+const BackgroundTerminalsSchema = z.object({
+  data: z.array(z.object({ itemId: z.string() })),
+  nextCursor: z.string().nullish(),
+})
 
 export function consumeStdout(context: ProtocolContext, chunk: Buffer): void {
   if (context.exited) return
@@ -230,12 +235,54 @@ function completeTurn(context: ProtocolContext, turn: Turn): void {
     lastStop: stop,
     error,
   })
+  void listBackground(context)
   if (compaction) context.protocol.actionResult?.(compaction.actionId,
     error || stop !== "completed"
       ? { kind: "failed", reason: error ?? "Compaction was interrupted" }
       : compaction.confirmed
         ? { kind: "completed" }
         : { kind: "uncertain", reason: "The provider ended the turn without confirming compaction." })
+}
+
+/**
+ * Terminals a turn left running die with this app-server. Codex marks a
+ * terminal exited before it completes the command's item, so the list minus
+ * completions that race the request is exact.
+ */
+async function listBackground(context: ProtocolContext): Promise<void> {
+  const threadId = context.threadId
+  if (!threadId) return
+  const raced = new Set<string>()
+  context.background.raced = raced
+  const running = new Set<string>()
+  try {
+    let cursor: string | undefined
+    do {
+      const page = await rpcRequest(context, "thread/backgroundTerminals/list", { threadId, cursor })
+      for (const terminal of page.data) running.add(terminal.itemId)
+      cursor = page.nextCursor ?? undefined
+    } while (cursor)
+  } catch {
+    if (context.background.raced === raced) context.background.raced = undefined
+    return
+  }
+  if (context.background.raced !== raced) return
+  context.background.raced = undefined
+  if (context.exited || context.threadId !== threadId) return
+  for (const id of raced) running.delete(id)
+  context.background.running = running
+  reportBackground(context)
+}
+
+function backgroundEnded(context: ProtocolContext, itemId: string): void {
+  context.background.raced?.add(itemId)
+  if (context.background.running.delete(itemId)) reportBackground(context)
+}
+
+function reportBackground(context: ProtocolContext): void {
+  const count = context.background.running.size
+  if ((context.state.backgroundTasks ?? 0) !== count)
+    context.protocol.updateState({ backgroundTasks: count })
 }
 
 function streamDelta(
@@ -353,6 +400,7 @@ function handleItem(
       if (completed) {
         const output = item.aggregatedOutput ?? tracker.output
         finishTool(context, tracker, item.status, output || undefined)
+        if (!replay) backgroundEnded(context, item.id)
       }
       return
     case "fileChange": {
@@ -549,6 +597,12 @@ export function rpcRequest(
     case "thread/compact/start":
     case "turn/interrupt":
       return beginRpcRequest(context, method, params, parseObjectResult)
+    case "thread/backgroundTerminals/list":
+      return beginRpcRequest(context, method, params, (value) => {
+        const parsed = BackgroundTerminalsSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid background terminal list" }
+      })
   }
 }
 

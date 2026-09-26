@@ -25,14 +25,20 @@ interface Daemon {
   executable: string
   child: ChildProcess
   endpoint: Awaited<ReturnType<typeof createPrivateControlSocket>>
+  args: string[]
+  env: NodeJS.ProcessEnv
 }
 
 let daemon: Daemon | null = null
 let starting: Promise<string | null> | null = null
 let stderr = ""
+const restarts: number[] = []
+let stops = 0
 
 const SOCKET_WAIT_MS = 10_000
 const SOCKET_POLL_MS = 50
+const RESTART_WINDOW_MS = 60_000
+const RESTARTS_PER_WINDOW = 3
 
 async function executable(
   command: string,
@@ -129,6 +135,60 @@ function daemonRuns(current: Daemon): boolean {
   return current.child.exitCode === null
 }
 
+/**
+ * Running task sessions were given this daemon's socket path and reconnect
+ * their driver process to it, so an unexpected exit is replaced on the same
+ * endpoint. A daemon that keeps exiting is left down until the next
+ * `ensureCuaEmbedded`.
+ */
+function restart(
+  current: Daemon,
+  code: number | null,
+  signal: NodeJS.Signals | null
+): void {
+  const now = Date.now()
+  while (restarts.length && now - restarts[0]! > RESTART_WINDOW_MS)
+    restarts.shift()
+  if (restarts.length >= RESTARTS_PER_WINDOW) {
+    hostLog("computer", "driver exited; restart budget spent", {
+      pid: current.pid,
+      code,
+      signal,
+    })
+    forget(current)
+    return
+  }
+  restarts.push(now)
+  daemon = null
+  untrackProviderPid(current.pid)
+  hostLog("computer", "driver exited; restarting", {
+    pid: current.pid,
+    code,
+    signal,
+  })
+  const generation = stops
+  starting ??= (async () => {
+    await unlink(current.socket).catch(() => undefined)
+    const next = await spawnDirect(
+      current.executable,
+      current.endpoint,
+      current.args,
+      current.env
+    )
+    if (generation !== stops) {
+      next.child.kill("SIGTERM")
+      void next.endpoint.close().catch(() => undefined)
+      return null
+    }
+    daemon = next
+    hostLog("computer", "driver restarted", { pid: next.pid })
+    return next.socket
+  })().finally(() => {
+    starting = null
+  })
+  void starting.catch(() => undefined)
+}
+
 function forget(current: Daemon): void {
   if (daemon !== current) return
   daemon = null
@@ -208,9 +268,11 @@ async function spawnDirect(
     executable: command,
     child,
     endpoint,
+    args,
+    env,
   }
-  child.once("exit", () => {
-    if (daemon === current) forget(current)
+  child.once("exit", (code, signal) => {
+    if (daemon === current) restart(current, code, signal)
   })
   try {
     await waitForSocket(
@@ -240,6 +302,7 @@ export function cuaEmbeddedPid(): number | null {
 }
 
 export function stopCuaEmbedded(): void {
+  stops++
   const running = daemon
   if (!running) return
   daemon = null
