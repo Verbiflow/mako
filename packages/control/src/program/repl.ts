@@ -26,6 +26,15 @@ interface ReplBindings {
   recall(): ReturnType<typeof recallTask>
 }
 
+/** A program that failed to compile never ran, so nothing was dispatched. */
+export function syntaxError(where: string): ControlFault {
+  return new ControlFault(
+    "syntax-error",
+    `The program did not run: ${where}. Nothing was dispatched; fix the source and run it again.`,
+    "not-dispatched"
+  )
+}
+
 /** V8 owns REPL syntax, lexical bindings and top-level await. No source rewriting,
  * inspector listener or network port. This is trusted code, not an OS sandbox. */
 export class ControlRepl {
@@ -122,6 +131,16 @@ export class ControlRepl {
         const message = parsed.success
           ? parsed.data.message
           : "Control REPL evaluation failed"
+        // A cell that failed to compile has no stack frame of its own; one
+        // that threw a SyntaxError while running (JSON.parse, eval) has.
+        const details = evaluated.exceptionDetails
+        if (
+          exception?.className === "SyntaxError" &&
+          !details.stackTrace?.callFrames.some(
+            (frame) => frame.scriptId === details.scriptId
+          )
+        )
+          throw syntaxError(`${message} (line ${details.lineNumber + 1})`)
         const fault = controlFaultData(detail)
         throw fault
           ? new ControlFault(fault.code, message, fault.outcome)

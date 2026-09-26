@@ -5,6 +5,7 @@ import {
 } from "../control/fault.js"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { Script } from "node:vm"
 import { parentPort } from "node:worker_threads"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../json.js"
@@ -12,7 +13,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { controlClient } from "../control/client.js"
 import { artifactFileName } from "./artifacts.js"
 import { computerHelpers, type ComputerHelpers } from "../computer/steps.js"
-import { ControlRepl } from "./repl.js"
+import { ControlRepl, syntaxError } from "./repl.js"
 import { checkpointTask, recallTask } from "./task-state.js"
 
 const identifier = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/)
@@ -71,6 +72,28 @@ function jsonSafe(value: JsonValue | undefined): JsonValue {
     )
   }
   return text === undefined ? null : z.json().parse(JSON.parse(text))
+}
+
+/**
+ * Where a script that failed to compile went wrong. It is parsed again, as an
+ * async function body with its own line numbers, only to locate the error.
+ */
+function syntaxFault(source: string): ControlFault | undefined {
+  try {
+    new Script(`(async function () {\n${source}\n})`, {
+      filename: "program.js",
+      lineOffset: -1,
+    })
+    return undefined
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    const line = Number(/^program\.js:(\d+)/.exec(error.stack ?? "")?.[1])
+    const where =
+      line > source.split("\n").length
+        ? `it ends before every bracket, string or statement is closed (${error.message} after the last line)`
+        : `${error.message}${line ? ` (line ${line})` : ""}`
+    return syntaxError(where)
+  }
 }
 
 /** Programs write what they choose to keep: JSON, or an image block. */
@@ -248,18 +271,25 @@ port.on("message", (raw) => {
           })
           return repl.evaluate(message.source)
         }
-        const run = new Function(
-          message.namespace,
-          ...extras.map(([name]) => name),
-          "state",
-          "console",
-          "emitImage",
-          "artifacts",
-          "checkpoint",
-          "recall",
-          ...Object.keys(helpers),
-          `return (async () => {${message.source}\n})()`
-        )
+        const run = (() => {
+          try {
+            return new Function(
+              message.namespace,
+              ...extras.map(([name]) => name),
+              "state",
+              "console",
+              "emitImage",
+              "artifacts",
+              "checkpoint",
+              "recall",
+              ...Object.keys(helpers),
+              `return (async () => {${message.source}\n})()`
+            )
+          } catch (error) {
+            if (!(error instanceof SyntaxError)) throw error
+            throw syntaxFault(message.source) ?? syntaxError(error.message)
+          }
+        })()
         return run(
           controlApi,
           ...extras.map(([name, actions]) => apiFor(name, actions)),

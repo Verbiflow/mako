@@ -11,6 +11,7 @@ const PageNodeSchema = z.looseObject({
   selected: z.union([z.string(), z.boolean()]).optional(),
   focused: z.union([z.string(), z.boolean()]).optional(),
   expanded: z.union([z.string(), z.boolean()]).optional(),
+  visibleText: z.string().optional(),
 })
 
 const VALUE_LENGTH = 80
@@ -28,6 +29,7 @@ export function pageElementLine(raw: JsonValue): string | undefined {
   if (node.ref) parts.push(node.ref)
   parts.push(node.role || "Node")
   if (node.name) parts.push(JSON.stringify(node.name))
+  if (node.visibleText) parts.push(`visibleText=${JSON.stringify(node.visibleText)}`)
   if (node.value !== undefined && node.value !== null) {
     const text = String(node.value)
     if (text !== node.name && text !== "")

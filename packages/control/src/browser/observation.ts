@@ -15,6 +15,8 @@ export const PageObservationNodeSchema = z
     role: z.string().nullable(),
     name: z.string().optional(),
     value: z.string().optional(),
+    /** A control's shown label, present only when it differs from `name`. */
+    visibleText: z.string().optional(),
   })
   .catchall(pageNodeValueSchema)
 export type PageObservationNode = z.infer<typeof PageObservationNodeSchema>
@@ -52,7 +54,7 @@ export interface PageNodeSelection {
 }
 
 function nodeText(node: PageObservationNode): string {
-  return [node.role ?? "", node.name ?? "", node.value ?? ""]
+  return [node.role ?? "", node.name ?? "", node.value ?? "", node.visibleText ?? ""]
     .join("\n")
     .toLocaleLowerCase()
 }
@@ -149,10 +151,11 @@ export function pageNodeLines(nodes: readonly PageObservationNode[]): string[] {
       `${"  ".repeat(Math.min(node.depth, 20))}${node.role ?? "node"}`,
       node.name ? JSON.stringify(node.name) : undefined,
       node.value ? `value=${JSON.stringify(node.value)}` : undefined,
+      node.visibleText ? `visibleText=${JSON.stringify(node.visibleText)}` : undefined,
       ...Object.entries(node)
         .filter(
           ([name, value]) =>
-            !["ref", "depth", "role", "name", "value"].includes(name) &&
+            !["ref", "depth", "role", "name", "value", "visibleText"].includes(name) &&
             value !== false &&
             value !== null &&
             value !== ""

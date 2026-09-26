@@ -63,9 +63,9 @@ const selectorSchema = ControlSelectorSchema.extend({
   within: ControlReadScopeSchema.shape.within.optional(),
 })
 const selectorHint =
-  'Use {role:"button",name:"Save"}; to scope it, add within:[{role:"form",name:"Profile"}]. Copy exact role/name from observe().'
+  'Use {role:"button",name:"Save"}; to scope it, add within:[{role:"form",name:"Profile"}]. Copy exact role/name from observe(). Both are required and exact; to search by text use observe({query}) or select({text}); CSS selectors are not supported.'
 const selectionHint =
-  'Use {role:"button",name:"Save",max:20}; optional keys: text, roles, states, refsOnly, includeAncestors. Strings only, no regular expressions.'
+  'Use {role:"button",name:"Save",max:20}; optional keys: text (substring of role, name, value or visibleText), roles, states, refsOnly, includeAncestors. Strings only, no regular expressions.'
 export type ElementSelector = z.infer<typeof selectorSchema>
 const expectationSchema = selectorSchema
   .extend({
@@ -102,6 +102,19 @@ export interface ControlSelection extends PageNodeSelection {
   toJSON(): Omit<ControlSelection, "nodes" | "toJSON">
 }
 
+const spaced = (text: string) => text.replace(/\s+/g, " ").trim().toLocaleLowerCase()
+
+/** Explains a miss where the requested name is only what the control shows;
+ * names stay exact, so the fix is to use the listed accessible name. */
+function visibleTextHint(nodes: readonly PageObservationNode[], role: string, name: string) {
+  const shown = nodes
+    .filter((node) => node.role === role && node.visibleText !== undefined && spaced(node.visibleText) === spaced(name))
+    .slice(0, 3)
+  if (!shown.length) return ""
+  const named = shown.map((node) => `${role} ${JSON.stringify(node.name ?? "")}${node.ref ? ` (${node.ref})` : ""}`).join(", ")
+  return `${JSON.stringify(name)} is the visible text of ${named}. Names match the accessible name exactly, so use locator({role:${JSON.stringify(role)},name:${JSON.stringify(shown[0]!.name ?? "")}}); nothing was dispatched.`
+}
+
 /** Structured evidence stays local; returning an observation emits its compact view once. */
 export class ControlObservation {
   readonly data: ControlObservationData
@@ -133,10 +146,11 @@ export class ControlObservation {
       within,
       match: { role, name },
     })
+    const shown = matches.length ? "" : visibleTextHint(this.nodes, role, name)
     if (matches.length !== 1)
       throw new ControlFault(
         matches.length ? "target-ambiguous" : "target-not-found",
-        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. Candidates: ${JSON.stringify(matches.slice(0, 5).map((node) => ({ ref: node.ref, role: node.role, name: node.name?.slice(0, 120), depth: node.depth })))}. Observe a narrower scope or use locator({role,name,within:[{role,name}]}); nothing was dispatched.`,
+        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. ${shown || `Candidates: ${JSON.stringify(matches.slice(0, 5).map((node) => ({ ref: node.ref, role: node.role, name: node.name?.slice(0, 120), depth: node.depth })))}. Observe a narrower scope or use locator({role,name,within:[{role,name}]}); nothing was dispatched.`}`,
         "not-dispatched"
       )
     return matches[0]!
@@ -526,10 +540,13 @@ export class ControlLocator {
         "Locator coverage is incomplete. Narrow its scope with within:[{role,name}]; nothing was dispatched.",
         "not-dispatched"
       )
-    const node = view.get({
-      role: this.selector.role,
-      name: this.selector.name,
-    })
+    const { role, name, within } = this.selector
+    if (!view.nodes.some((node) => node.role === role && (node.name ?? "") === name) && this.handle.target.kind === "page") {
+      const nearby = await this.handle.observe({ within, query: name, interactive: true, max: 20 })
+      const shown = visibleTextHint(nearby.nodes, role, name)
+      if (shown) throw new ControlFault("target-not-found", `No ${role} is named ${JSON.stringify(name)}. ${shown}`, "not-dispatched")
+    }
+    const node = view.get({ role, name })
     if (!node.ref)
       throw new ControlFault(
         "target-not-actionable",
