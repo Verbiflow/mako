@@ -107,8 +107,9 @@ try {
         )
       )
     )
-  assert.deepEqual(open.inputSchema.required, ["browser"])
-  assert.match(open.signature, /^browser\.open\(\{browser, url\?/)
+  // Every open argument is optional: no browser means the saved browser choice.
+  assert.deepEqual(open.inputSchema.required ?? [], [])
+  assert.match(open.signature, /^browser\.open\(\{name\?, browser\?, url\?/)
   for (const [property, definition] of Object.entries(
     open.inputSchema.properties
   ))
@@ -184,6 +185,11 @@ try {
   assert.match(
     String(invalid.structuredContent?.message),
     /Nothing was dispatched/
+  )
+  assert.deepEqual(
+    [invalid.structuredContent?.code, invalid.structuredContent?.outcome],
+    ["invalid-request", "not-dispatched"],
+    "A program's refused call keeps its fault, not protocol-error/unknown"
   )
   assert.equal(fixture.calls.length, 0)
 

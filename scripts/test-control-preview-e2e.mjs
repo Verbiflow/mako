@@ -82,6 +82,27 @@ async function run() {
       console.log(root)
     }
     assert.equal(outcome?.status, "passed")
+    // Browser frames only: the displayed-size viewer at 1× and 2× device pixels.
+    url.searchParams.delete("source")
+    for (const zoom of [1, 2]) {
+      viewer.webContents.setZoomFactor(zoom)
+      await viewer.loadURL(url.href)
+      let browserOutcome
+      const browserDeadline = Date.now() + 25_000
+      while (Date.now() < browserDeadline) {
+        browserOutcome = await viewer.webContents.executeJavaScript(
+          "({status:document.getElementById('result')?.dataset.status,text:document.getElementById('result')?.textContent})"
+        )
+        if (browserOutcome.status) break
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      console.log(browserOutcome?.text)
+      if (browserOutcome?.status !== "passed")
+        console.log(await viewer.webContents.executeJavaScript(
+          "JSON.stringify([...document.querySelectorAll('canvas')].map(c=>{const r=c.getBoundingClientRect();return {pixels:[c.width,c.height],css:[r.width,r.height],style:c.getAttribute('style'),dpr:devicePixelRatio}}))"
+        ))
+      assert.equal(browserOutcome?.status, "passed", `Browser preview at zoom ${zoom}`)
+    }
     assert.equal(
       await frontmost(),
       before,

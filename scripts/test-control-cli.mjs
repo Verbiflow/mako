@@ -51,7 +51,10 @@ async function command(args, { stdin, code = 0, partial = false } = {}) {
     assert.equal(stderr, "")
     return JSON.parse(stdout)
   }
-  if (partial) return { output: JSON.parse(stdout), fault: JSON.parse(stderr) }
+  if (partial) {
+    assert.ok(stdout, `A failed exec prints what its earlier steps emitted: ${stderr}`)
+    return { output: JSON.parse(stdout), fault: JSON.parse(stderr) }
+  }
   assert.equal(stdout, "")
   return JSON.parse(stderr)
 }

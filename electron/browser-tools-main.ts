@@ -26,6 +26,7 @@ import {
   INLINE_TEXT_BUDGET,
   PROGRAM_TIME_LIMIT_MS,
 } from "@mako/control/program"
+import { controlFaultData } from "@mako/control/control"
 import { isMainModule } from "./main-module.js"
 
 const descriptions = {
@@ -315,10 +316,14 @@ export function createBrowserToolsServer(
       // Output from statements that completed before the failure stays visible.
       const partial = thrown instanceof ControlProgramError ? thrown.output : []
       const error = thrown instanceof ControlProgramError ? thrown.cause : thrown
+      // Faults raised inside a program cross the worker as plain ControlFaults.
+      const data = controlFaultData(error)
       const fault =
         error instanceof BrowserFault
           ? error.detail
-          : {
+          : data && error instanceof Error
+            ? { code: data.code, message: error.message, outcome: data.outcome }
+            : {
               code: dispatched ? "protocol-error" : "invalid-request",
               message:
                 error instanceof z.ZodError
