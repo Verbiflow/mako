@@ -7,7 +7,8 @@ import type { LiveUpdate } from "../../shared.js"
 
 const Edit = z.object({ path: z.string().optional(), filePath: z.string().optional(), oldString: z.string().optional(), newString: z.string().optional(), content: z.string().optional() })
 const Todo = z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() })) })
-const Titled = z.object({ command: z.string().optional(), path: z.string().optional(), filePath: z.string().optional(), pattern: z.string().optional(), url: z.string().optional(), query: z.string().optional(), description: z.string().optional() })
+const Titled = z.object({ command: z.string().optional(), path: z.string().optional(), filePath: z.string().optional(), pattern: z.string().optional(), url: z.string().optional(), query: z.string().optional(), description: z.string().optional(),
+  questions: z.array(z.object({ question: z.string() })).optional() })
 const MAX_OPEN_TOOLS = 4096
 
 interface Tool { sessionID: string; name: string; title: string; input: Record<string, unknown> }
@@ -27,7 +28,7 @@ export function openCodeToolKind(name: string): string {
 function toolTitle(name: string, input: Record<string, unknown>): string {
   const value = Titled.safeParse(input)
   if (!value.success) return name
-  const { command, path, filePath, pattern, url, query, description } = value.data
+  const { command, path, filePath, pattern, url, query, description, questions } = value.data
   switch (name) {
     case "shell": case "bash": return command ?? name
     case "read": case "edit": case "write": case "patch": case "multiedit": return path ?? filePath ?? name
@@ -35,6 +36,7 @@ function toolTitle(name: string, input: Record<string, unknown>): string {
     case "webfetch": return url ?? name
     case "websearch": return query ?? name
     case "subagent": case "task": return description ?? name
+    case "question": return questions?.[0]?.question ?? name
     default: return name
   }
 }
@@ -100,7 +102,7 @@ export class OpenCodeContent {
     for (const [id, tool] of this.tools) {
       if (tool.sessionID !== sessionID) continue
       this.tools.delete(id)
-      if (tool.name !== "question") updates.push({ kind: "tool-update", id, status, output: note })
+      updates.push({ kind: "tool-update", id, status, output: note })
     }
     return updates
   }
@@ -118,7 +120,7 @@ export class OpenCodeContent {
   private start(sessionID: string, id: string, name: string): LiveUpdate[] {
     if (this.tools.size >= MAX_OPEN_TOOLS) this.tools.delete(this.tools.keys().next().value!)
     this.tools.set(id, { sessionID, name, title: name, input: {} })
-    return name === "question" ? [] : [{ kind: "tool", id, title: `${this.prefix(sessionID)}${name}`, toolKind: openCodeToolKind(name), status: "pending" }]
+    return [{ kind: "tool", id, title: `${this.prefix(sessionID)}${name}`, toolKind: openCodeToolKind(name), status: "pending" }]
   }
 
   private tool(event: Extract<ToolEvent, { type: "session.tool.input.started" | "session.tool.called" | "session.tool.progress" | "session.tool.success" | "session.tool.failed" }>): LiveUpdate[] {
@@ -131,10 +133,6 @@ export class OpenCodeContent {
       updates.push(...this.start(sessionID, id, event.type === "session.tool.input.started" ? event.data.name : "tool"))
     }
     const tool = this.tools.get(id)!
-    if (tool.name === "question") {
-      if (event.type === "session.tool.success" || event.type === "session.tool.failed") this.tools.delete(id)
-      return []
-    }
     switch (event.type) {
       case "session.tool.input.started":
         return updates

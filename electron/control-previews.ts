@@ -26,7 +26,6 @@ interface PreviewEntry {
   authorize?: () => void
   publish?: NodeJS.Timeout
   oversized?: boolean
-  waiters: Set<() => void>
 }
 
 /** One bounded image per task. Image bytes only cross IPC when its visible preview requests them. */
@@ -57,7 +56,6 @@ export class ControlPreviews {
         preview: { activity: next, frame: null },
         watchers: new Map(),
         generation: 0,
-        waiters: new Set(),
       }
       this.entries.set(activity.conversationId, entry)
     }
@@ -154,48 +152,7 @@ export class ControlPreviews {
       : entry.preview
   }
 
-  /** Reads like `read`. When the caller already holds the current frame (`after`,
-   * `null` for none) of a live browser stream, answers at the next frame instead,
-   * after at most `waitMs`. Parked reads replace notify-then-fetch round trips. */
-  async next(
-    conversationId: string,
-    watching: boolean,
-    watcher = "panel",
-    after?: string | null,
-    waitMs = 1000
-  ): Promise<ControlPreview | null> {
-    const preview = this.read(conversationId, watching, watcher)
-    const entry = this.entries.get(conversationId)
-    if (
-      !watching ||
-      after === undefined ||
-      !entry ||
-      (preview?.frame?.id ?? null) !== after ||
-      !(entry.stopStream || entry.starting) ||
-      entry.waiters.size >= 16
-    )
-      return preview
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        clearTimeout(timer)
-        entry.waiters.delete(done)
-        resolve()
-      }
-      const timer = setTimeout(done, waitMs)
-      entry.waiters.add(done)
-    })
-    return this.read(conversationId, watching, watcher)
-  }
-
-  private wake(entry: PreviewEntry) {
-    for (const done of [...entry.waiters]) done()
-  }
-
   private frame(entry: PreviewEntry, image: ControlImage | NonNullable<ControlPreview["frame"]>["image"], capturedAt = Date.now()) {
-    try { this.storeFrame(entry, image, capturedAt) } finally { this.wake(entry) }
-  }
-
-  private storeFrame(entry: PreviewEntry, image: ControlImage | NonNullable<ControlPreview["frame"]>["image"], capturedAt: number) {
     let pixels: NonNullable<ControlPreview["frame"]>["image"]
     if ("bytes" in image) pixels = image // BrowserCapture already validates encoded dimensions.
     else {
@@ -220,7 +177,6 @@ export class ControlPreviews {
     const stop = entry.stopStream
     entry.stopStream = undefined
     void stop?.().catch(() => {})
-    this.wake(entry)
   }
   private capture(entry: PreviewEntry) {
     clearTimeout(entry.expiry)

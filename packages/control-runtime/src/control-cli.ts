@@ -66,6 +66,32 @@ async function output(value: z.infer<ReturnType<typeof z.json>>) {
     })
   )
 }
+/** The service saves explicit images as artifacts; ordinary values stay lossless. */
+function execBlocks(value: z.infer<ReturnType<typeof z.json>>) {
+  return z
+    .array(z.record(z.string(), z.json()))
+    .parse(value)
+    .map((block) => {
+      if (block.type === "image")
+        throw new ControlFault(
+          "invalid-image-reply",
+          "Engine returned inline image data instead of a saved artifact. Do not replay the program.",
+          "unknown"
+        )
+      const text = z.string().safeParse(block.text)
+      if (block.type === "text" && text.success) {
+        try {
+          return {
+            type: "result",
+            value: z.json().parse(JSON.parse(text.data)),
+          }
+        } catch {
+          return block
+        }
+      }
+      return block
+    })
+}
 
 async function writeImage(
   output: string,
