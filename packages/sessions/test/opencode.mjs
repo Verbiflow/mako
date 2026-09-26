@@ -741,6 +741,17 @@ try {
         },
         time: { created: 5100, completed: 10_000 },
       },
+      {
+        type: "tool",
+        id: "tool_2",
+        name: "shell",
+        state: {
+          status: "error",
+          input: { command: "sleep 45" },
+          error: { type: "aborted", message: "Tool execution interrupted" },
+        },
+        time: { created: 5200, completed: 10_000 },
+      },
       { type: "text", id: "text_1", text: "revised answer" },
     ],
     finish: "stop",
@@ -765,10 +776,18 @@ try {
   currentIncremental = apply(currentIncremental, currentReplace)
   const currentFull = await provider.read(currentFile.path)
   assert.deepEqual(currentIncremental, currentFull.entries)
-  const replacedTool = currentFull.entries
+  const [replacedTool, stoppedTool] = currentFull.entries
     .filter((entry) => entry.kind === "assistant")
     .flatMap((entry) => entry.blocks)
-    .find((block) => block.type === "tool")
+    .filter((block) => block.type === "tool")
+  assert.deepEqual(stoppedTool, {
+    type: "tool",
+    name: "shell",
+    id: "tool_2",
+    input: '{"command":"sleep 45"}',
+    output: "Tool execution interrupted",
+    canceled: true,
+  }, "a call the user stopped reads as cancelled, not failed")
   assert.deepEqual(replacedTool, {
     type: "tool",
     name: "read",

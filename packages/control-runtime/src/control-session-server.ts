@@ -13,7 +13,7 @@ import {
   controlInput,
   RecordingReceiptSchema,
 } from "@mako/control/control"
-import { ControlProgramError, spillImage } from "@mako/control/program"
+import { ControlProgramError, spillImage, type ControlProgramOutput } from "@mako/control/program"
 import type { ControlSession } from "./control-session.js"
 import {
   CONTROL_SESSION_PROTOCOL,
@@ -80,7 +80,7 @@ export async function serveControlSession(
           blocks = error.output
           failure = error.cause
         }
-        const output = []
+        const output: ControlProgramOutput[] = []
         for (const block of blocks) {
           if (block.type !== "image") {
             output.push(block)

@@ -2,6 +2,7 @@ import {
   ControlFault,
   ControlFaultSchema,
   controlFaultData,
+  type ControlFaultData,
 } from "../control/fault.js"
 import { existsSync } from "node:fs"
 import { Worker } from "node:worker_threads"
@@ -79,11 +80,18 @@ export interface ControlProgramExecution {
 }
 
 /** Keep already-emitted evidence when a later statement fails, times out or
- * is cancelled. `cause` carries the fault; consumers report both. */
+ * is cancelled. It reads as its cause's fault, so fault-only callers are unchanged. */
 export class ControlProgramError extends Error {
+  readonly code?: string
+  readonly outcome?: ControlFaultData["outcome"]
   constructor(readonly output: ControlProgramOutput[], readonly cause: Error) {
     super(cause.message)
     this.name = "ControlProgramError"
+    const fault = controlFaultData(cause)
+    if (fault) {
+      this.code = fault.code
+      this.outcome = fault.outcome
+    }
   }
 }
 

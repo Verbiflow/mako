@@ -789,7 +789,8 @@ function toolBlock(data: JsonObject, kind: StoreKind): ToolBlock {
         ? jsonText(state.error)
         : contentText(state.content) || errorText(state.error)
     block.output = clip(normalizeToolOutput(error))
-    block.error = true
+    if (kind === "current" && isAborted(state.error)) block.canceled = true
+    else block.error = true
   }
   if (/cancel/i.test(status ?? "")) block.canceled = true
   return block
@@ -881,6 +882,11 @@ function isInterrupted(data: JsonObject): boolean {
     name.includes("interrupt") ||
     message.includes("interrupt")
   )
+}
+
+/** OpenCode 2 records a call the user stopped as an `aborted` error. */
+function isAborted(value: JsonValue | undefined): boolean {
+  return isJsonObject(value) && jsonText(value.type) === "aborted"
 }
 
 function errorText(value: JsonValue | undefined): string {
