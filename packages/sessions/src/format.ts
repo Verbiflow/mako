@@ -133,6 +133,13 @@ export interface ThreadRef {
    * is set.
    */
   heldBy?: string
+  /**
+   * The Thread and Session this native session belongs to, overlaid by the
+   * host from the per-user Thread store as it serves the ref. Opaque random
+   * IDs; a copy saved inside a journal is a snapshot, not a source of truth.
+   */
+  threadId?: string
+  sessionId?: string
 }
 
 /** The key two refs share when they present the same conversation. */

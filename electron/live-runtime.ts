@@ -22,6 +22,8 @@ import type {
 } from "./providers/live-driver.js"
 import type { LiveJournal } from "./live-journal.js"
 import type { SessionMemory } from "./session-memory.js"
+import type { ThreadStore } from "./thread-store.js"
+import type { Actor } from "./contracts/thread-identity.js"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
@@ -86,6 +88,12 @@ export interface Dependencies {
    * reports; consulted before a resume so two hosts never open one store.
    */
   memory?: SessionMemory
+  /**
+   * The per-user Thread store: every journal registers into a Session, and
+   * requests take their actor's principal from it. Without it conversations
+   * run as before and carry no Thread identity.
+   */
+  threads?: ThreadStore
   /** Test override for `AUTO_CONTINUE_DELAY_MS`, the wait before Mako continues a dropped turn itself. */
   autoContinueDelayMs?: number
   /** Test override for ready provider residency. */
@@ -119,8 +127,11 @@ export interface LiveAccess {
     provider: string,
     cwd: string,
     options: LiveStartOptions,
-    ancestry?: ConversationControl["ancestry"]
+    ancestry?: ConversationControl["ancestry"],
+    actor?: Actor
   ): Promise<LiveSessionState>
+  /** A conversation acting through Mako's tools, named by its Session. */
+  agentActor(conversationId: string): Actor | undefined
 }
 
 export interface FailureBoundary {

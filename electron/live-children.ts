@@ -122,7 +122,8 @@ export class LiveChildren {
           parentId: id,
           sourceRevision: parent.snapshot.revision,
           point: request.id,
-        }
+        },
+        this.host.agentActor(id)
       )
     } catch (error) {
       const current = this.host.control(parent)
@@ -318,6 +319,7 @@ export class LiveChildren {
         : [
             ...previous.requests,
             LiveRequestSchema.parse({
+              actor: this.host.agentActor(childId),
               id: child.deliveryId,
               text,
               displayText: label,

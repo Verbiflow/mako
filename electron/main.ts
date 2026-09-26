@@ -59,6 +59,7 @@ import type { RewindInput } from "./contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "./contracts/live-actions.js"
 import { LiveConversations } from "./live-conversations.js"
 import { SessionMemory, SessionHeldError, sessionMemoryPath } from "./session-memory.js"
+import { ThreadStore, threadStorePath } from "./thread-store.js"
 import { ThreadArchives } from "./thread-archives.js"
 import { ThreadLifecycle } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
@@ -136,6 +137,7 @@ import {
   followThread,
   threadsReady,
   threadActivitySnapshot,
+  installThreadStore,
   installSessionMemory,
   installThreads,
   listThreads,
@@ -327,6 +329,21 @@ function openSessionMemory(): SessionMemory | null {
   }
 }
 installSessionMemory(sessionMemory)
+/**
+ * Per-user like the ledger: which Session and Thread every journal and
+ * native session belongs to, so every host names a conversation alike. A
+ * fixture root keeps its own store.
+ */
+const threadStore = openThreadStore()
+function openThreadStore(): ThreadStore | null {
+  try {
+    return new ThreadStore(threadStorePath({ dataRoot: app.getPath("userData"), appData: app.getPath("appData") }))
+  } catch (error) {
+    hostWarn("threads", "Thread store unavailable", { error: error instanceof Error ? error.message : String(error) })
+    return null
+  }
+}
+installThreadStore(threadStore)
 hostLog("host", "starting", {
   pid: process.pid,
   version: app.getVersion(),
@@ -1895,6 +1912,7 @@ app.whenReady().then(async () => {
   powerMonitor.on("unlock-screen", emitTerminalWake)
   liveConversations = new LiveConversations({
     memory: sessionMemory ?? undefined,
+    threads: threadStore ?? undefined,
     mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
     workspaceSnapshots: new WorkspaceSnapshots(
       join(app.getPath("userData"), "workspace-snapshots")
@@ -2192,6 +2210,8 @@ const quitLifecycle = backgroundLifecycle({
       nativeRequests?.stop()
       conversationMcp?.close()
       sessionMemory?.close()
+      installThreadStore(null)
+      threadStore?.close()
       threadArchives?.close()
       void workspaceClients.dispose()
     },

@@ -18,6 +18,7 @@ import type {
 import type { LiveBlock } from "./live-content.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
+import type { Actor } from "./thread-identity.js"
 
 export interface LiveStartOptions {
   initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
@@ -77,6 +78,12 @@ export interface TurnContinuation {
 }
 
 export interface LiveRequest {
+  /**
+   * Who sent it, assigned by the host at admission. Absent in older journals:
+   * some of their requests came from the relay or an automatic continuation,
+   * and the journal cannot say which.
+   */
+  actor?: Actor
   /** Native send evidence, independent of execution outcome; absent in older journals. */
   nativeDelivery?: PromptDelivery
   targetBindingId?: string

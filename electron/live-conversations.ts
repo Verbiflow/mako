@@ -53,7 +53,7 @@ import { statSync } from "node:fs"
 import { join } from "node:path"
 import type { SessionFacts } from "./session-memory.js"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
-import type { ThreadPage } from "@mako/sessions"
+import { threadIdentity, type ThreadPage } from "@mako/sessions"
 import { z } from "zod"
 import type {
   LivePermissionResponse,
@@ -77,6 +77,8 @@ import {
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
+import type { JournalFacts, SourceRef } from "./thread-store.js"
+import type { Actor } from "./contracts/thread-identity.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
@@ -100,6 +102,8 @@ export class LiveConversations {
   private readonly refreshes = new Map<string, Promise<LiveSnapshot>>()
   private readonly starts = new Map<string, Promise<LiveSessionState>>()
   private readonly recovered = new Map<string, LiveSummary>()
+  /** What each journal last told the Thread store, so a flush registers only news. */
+  private readonly registeredThreads = new Map<string, string>()
   private readonly assets: LiveAssets
   private readonly dependencies: Dependencies
   /**
@@ -129,8 +133,9 @@ export class LiveConversations {
       residencyChanged: (resident) => this.scheduleHibernation(resident),
       driverEvents: (resident, bindingId) =>
         this.driverEvents(resident, bindingId),
-      open: (provider, cwd, options, ancestry) =>
-        this.open(provider, cwd, options, ancestry),
+      open: (provider, cwd, options, ancestry, actor) =>
+        this.open(provider, cwd, options, ancestry, actor),
+      agentActor: (conversationId) => this.agentActor(conversationId),
     }
     this.checkpoints = new LiveCheckpoints(access, (id, input) =>
       this.fork(id, input)
@@ -143,14 +148,24 @@ export class LiveConversations {
     this.actions = new LiveActions(access)
     this.transfers = new LiveTransfers(access)
     this.children = new LiveChildren(access)
+    const journals: JournalFacts[] = []
     for (const id of journalIds(dependencies.root)) {
       try {
         const journal = new LiveJournal(dependencies.root, id)
         try {
-          const summary = journal.summary()
-          if (summary) {
+          const found = journal.summary()
+          if (found) {
+            const { ancestry, ...summary } = found
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             this.backfillMemory(id, summary.session)
+            journals.push({
+              conversationId: id,
+              createdAt: summary.createdAt,
+              harness: summary.session.harness,
+              threadPath: summary.threadPath,
+              bindings: summary.nativeBindings,
+              ancestry,
+            })
             this.recovered.set(id, {
               ...summary,
               session: {
@@ -177,6 +192,80 @@ export class LiveConversations {
           message: `Saved conversation ${id} could not be opened. Its journal has been preserved for recovery. ${errorMessage({ error })}`,
         })
       }
+    }
+    this.registerJournals(journals)
+  }
+
+  /**
+   * Each host offers its journals to the Thread store at start, oldest
+   * first. A journal registered before keeps its Session, so a restart
+   * changes nothing; one written by a host without the store joins the
+   * Session its paths and native IDs name.
+   */
+  private registerJournals(journals: JournalFacts[]): void {
+    const threads = this.dependencies.threads
+    if (!threads || !journals.length) return
+    try {
+      threads.registerJournals(journals, { kind: "service", name: "migration" })
+      for (const facts of journals) this.registeredThreads.set(facts.conversationId, registrationKey(facts))
+    } catch (error) {
+      hostWarn("threads", "journal registration failed", { error: errorMessage({ error }) })
+    }
+  }
+
+  /** Register a journal when it is created or its bindings name something new. */
+  private registerThread(snapshot: LiveSnapshot, actor: Actor | undefined): void {
+    const threads = this.dependencies.threads
+    if (!threads) return
+    const facts: JournalFacts = {
+      conversationId: snapshot.session.id,
+      createdAt: snapshot.createdAt,
+      harness: snapshot.session.harness,
+      threadPath: snapshot.threadPath,
+      bindings: snapshot.control?.bindings ?? [{ provider: snapshot.session.harness, nativeId: snapshot.session.nativeId, path: snapshot.threadPath }],
+      ancestry: snapshot.control?.ancestry
+        ? { kind: snapshot.control.ancestry.kind, parentId: snapshot.control.ancestry.parentId }
+        : undefined,
+    }
+    const key = registrationKey(facts)
+    if (this.registeredThreads.get(facts.conversationId) === key) return
+    try {
+      threads.registerJournal(facts, actor ?? { kind: "service", name: "catalog" })
+      this.registeredThreads.set(facts.conversationId, key)
+    } catch (error) {
+      hostWarn("threads", "journal registration failed", { conversation: facts.conversationId, error: errorMessage({ error }) })
+    }
+  }
+
+  /** The initiator of an admitted request: the local person unless a caller inside the host says otherwise. */
+  private actor(explicit?: Actor): Actor | undefined {
+    return explicit ?? this.dependencies.threads?.person()
+  }
+
+  private agentActor(conversationId: string): Actor | undefined {
+    const session = this.dependencies.threads?.journalPlacement(conversationId)?.session
+    return session ? { kind: "agent", session } : undefined
+  }
+
+  /**
+   * Whether an existing journal is the same Session as the row being opened.
+   * Two stores can share a native ID (a Cursor agent and its `chats/` copy);
+   * the Thread store tells them apart. Without it, a journal captured from a
+   * catalog row still names that row's identity; one started here does not,
+   * and its native ID decides.
+   */
+  private sameSession(conversationId: string, ref: SourceRef): boolean {
+    const threads = this.dependencies.threads
+    if (!threads) {
+      const captured = this.load(conversationId)?.snapshot.base?.ref
+      return !captured || captured.harness !== ref.harness || threadIdentity(captured) === threadIdentity(ref)
+    }
+    try {
+      const placed = threads.place(ref, { kind: "service", name: "catalog" })
+      return threads.journalPlacement(conversationId)?.session === placed.session
+    } catch (error) {
+      hostWarn("threads", "capture ownership fell back to the native ID", { conversation: conversationId, error: errorMessage({ error }) })
+      return true
     }
   }
 
@@ -458,7 +547,8 @@ export class LiveConversations {
     if (!base) throw new Error("The source history could not be captured")
     const owned = this.summaries().find((summary) =>
       summary.session.harness === base.ref.harness &&
-      summary.session.nativeId === base.ref.nativeId
+      summary.session.nativeId === base.ref.nativeId &&
+      this.sameSession(summary.session.id, { harness: base.ref.harness, nativeId: base.ref.nativeId, identity: base.ref.identity, path })
     )
     if (owned) return this.require(owned.session.id).snapshot
     const after = await this.dependencies.checkpoint?.(path, base.ref.harness)
@@ -524,6 +614,7 @@ export class LiveConversations {
       updates: [],
       timer: null,
     })
+    this.registerThread(snapshot, this.actor())
     try { await this.questions.reconcile(this.require(id)) } catch (error) {
       hostLog("live", "native question import deferred", { conversation: id, error: errorMessage({ error }) })
     }
@@ -533,7 +624,8 @@ export class LiveConversations {
   start(
     provider: string,
     cwd: string,
-    options: LiveStartOptions
+    options: LiveStartOptions,
+    actor?: Actor
   ): Promise<LiveSessionState> {
     assertLifecycleAdmission()
     z.string().uuid().parse(options.conversationId)
@@ -552,7 +644,7 @@ export class LiveConversations {
         )
       return Promise.resolve(existing.snapshot.session)
     }
-    const start = this.open(provider, cwd, options)
+    const start = this.open(provider, cwd, options, undefined, actor)
     this.starts.set(options.conversationId, start)
     void start
       .finally(() => this.starts.delete(options.conversationId))
@@ -564,7 +656,8 @@ export class LiveConversations {
     provider: string,
     cwd: string,
     options: LiveStartOptions,
-    ancestry?: ConversationControl["ancestry"]
+    ancestry?: ConversationControl["ancestry"],
+    actor?: Actor
   ): Promise<LiveSessionState> {
     const driver = this.dependencies.driver(provider)
     if (!driver?.available(this.dependencies.appPath))
@@ -632,6 +725,7 @@ export class LiveConversations {
         ? [
             LiveRequestSchema.parse({
               ...options.initialRequest,
+              actor: this.actor(actor),
               targetBindingId: options.resume ? id : undefined,
               displayText: options.displayPrompt,
               tuning,
@@ -684,6 +778,7 @@ export class LiveConversations {
     }
     this.records.set(id, resident)
     this.bindingOwners.set(id, id)
+    this.registerThread(snapshot, this.actor(actor))
     const generation = resident.generation
     const openingOperation = Promise.resolve()
       .then(async () =>
@@ -1483,7 +1578,7 @@ export class LiveConversations {
   }
 
   continueBinding(id: string, bindingId: string, requestId: string, text: string,
-    attachments: PromptAttachment[] = [], tuning?: SessionSettings, displayText?: string): LiveSnapshot {
+    attachments: PromptAttachment[] = [], tuning?: SessionSettings, displayText?: string, actor?: Actor): LiveSnapshot {
     const resident = this.require(id)
     const control = this.control(resident)
     const binding = control.bindings.find((item) => item.id === bindingId)
@@ -1491,8 +1586,8 @@ export class LiveConversations {
     const existing = resident.snapshot.requests.find((item) => item.id === requestId)
     const transfer = control.transfers.find((item) => item.input.id === requestId)
     if (transfer || (!existing && (control.activeBindingId !== bindingId || (!resident.driver && !resident.hibernating && resident.snapshot.session.connection !== "hibernated"))))
-      return this.transfer(id, { id: requestId, bindingId, provider: binding.provider, text, attachments, tuning, displayText })
-    this.submit(id, requestId, text, attachments, tuning, bindingId, displayText)
+      return this.transfer(id, { id: requestId, bindingId, provider: binding.provider, text, attachments, tuning, displayText }, actor)
+    this.submit(id, requestId, text, attachments, tuning, bindingId, displayText, actor)
     return resident.snapshot
   }
 
@@ -1503,7 +1598,8 @@ export class LiveConversations {
     attachments: PromptAttachment[] = [],
     tuning?: SessionSettings,
     targetBindingId?: string,
-    displayText?: string
+    displayText?: string,
+    actor?: Actor
   ): LiveRequest {
     assertLifecycleAdmission()
     const resident = this.require(id)
@@ -1511,6 +1607,7 @@ export class LiveConversations {
       throw new Error("Wait for the workspace rewind to finish before sending")
     this.flush(resident)
     const request = LiveRequestSchema.parse({
+      actor: this.actor(actor),
       id: requestId,
       text,
       attachments,
@@ -1651,6 +1748,7 @@ export class LiveConversations {
     }
     const reason = source.interruption.reason
     const request = LiveRequestSchema.parse({
+      actor: { kind: "service", name: "auto-continue" },
       id: randomUUID(),
       text: continueTurnPrompt(reason),
       attachments: [],
@@ -1982,6 +2080,7 @@ export class LiveConversations {
       updates: [],
       timer: null,
     })
+    this.registerThread(snapshot, this.actor())
     return snapshot
   }
 
@@ -2015,13 +2114,13 @@ export class LiveConversations {
     return this.checkpoints.recover()
   }
 
-  transfer(id: string, input: TransferInput): LiveSnapshot {
+  transfer(id: string, input: TransferInput, actor?: Actor): LiveSnapshot {
     assertLifecycleAdmission()
     if (this.require(id).rewinding)
       throw new Error(
         "Wait for the workspace rewind to finish before switching providers"
       )
-    return this.transfers.accept(id, input)
+    return this.transfers.accept(id, input, this.actor(actor))
   }
 
   private control(resident: Resident): ConversationControl {
@@ -2959,6 +3058,8 @@ export class LiveConversations {
     resident.snapshot = snapshot
     resident.journalSnapshot = snapshot
     this.syncMemory(previous.session, snapshot.session)
+    if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
+      this.registerThread(snapshot, undefined)
     this.dependencies.emit({
       type: "live-batch",
       batch: {
@@ -3215,4 +3316,12 @@ function interruptRequests(
         }
       : request
   )
+}
+
+function registrationKey(facts: JournalFacts): string {
+  return JSON.stringify([
+    facts.threadPath ?? null,
+    facts.ancestry?.parentId ?? null,
+    facts.bindings.map((binding) => [binding.provider, binding.nativeId ?? null, binding.path ?? null]),
+  ])
 }

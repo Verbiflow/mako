@@ -11,8 +11,10 @@ import type {
 } from "@mako/relay"
 import type { PromptAttachment, LiveSnapshot } from "./shared.js"
 import { LiveConversations } from "./live-conversations.js"
+import type { Actor } from "./contracts/thread-identity.js"
 
 const prefix = "mako-conversation:"
+const RELAY: Actor = { kind: "service", name: "relay" }
 
 /** Remote jobs submit to the same durable conversations and provider connections as the desk. */
 export class RelayConversations {
@@ -101,7 +103,7 @@ export class RelayConversations {
         conversationId: id,
         tuning: input.tuning,
         initialRequest: { id: jobId, text: input.text, attachments },
-      })
+      }, RELAY)
     } else if (!prior) {
       this.owner.transfer(id, {
         id: jobId,
@@ -109,7 +111,7 @@ export class RelayConversations {
         tuning: input.tuning,
         text: input.text,
         attachments,
-      })
+      }, RELAY)
     }
     this.running.set(jobId, id)
     const textSizes = new Map<number, number>()

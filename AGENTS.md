@@ -1219,6 +1219,36 @@ after the ledger existed offers its own journals to it once (`backfill`,
 stamped with the journal's write time, never over a newer observation), so
 sessions from before the ledger are not "Model not recorded" forever.
 
+Which Thread and Session a conversation belongs to is per user too.
+`electron/thread-store.ts` keeps `~/.mako/threads.sqlite`; a fixture data
+root outside Application Support keeps its own. A Session is one logical
+conversation and may own several journals; a Thread groups Sessions, has an
+owner, and starts with one. Both IDs are random UUIDs the store mints, never
+derived from a cwd, native ID or journal ID: one native session reached
+through a symlinked provider root, a Claude account alias or a reopen journal
+stays one Session, and two journals in one directory stay two. On start
+`LiveConversations` registers every journal in creation order as the
+`migration` service, so journals an older host wrote join on the next start;
+after that it registers a journal when it is created or its bindings change.
+A registered journal keeps its Session, an explicit Session (a + tab) is
+joined, a fork or delegation child gets its own Session linked to its
+parent's, and anything else matches binding paths and the thread path, then
+pathless native claims. The catalog places every row once it is ready
+(`resolveRefs`, by catalog identity, path and native claim), and `annotate`
+overlays `threadId` and `sessionId` onto each `ThreadRef`. When two Sessions
+turn out to be one conversation, the loser is merged only if it is alone in
+an untitled Thread and neither descends from the other; otherwise the host
+logs a conflict and keeps both. Paths are compared through `realNativePath`.
+`captureNative` adopts a native session only when the store places it in the
+journal's own Session. `createSession` and `renameThread` take a
+caller-minted operation ID: a replay returns the first result and the same
+ID with different content is refused. Every journaled request records its
+`actor` (a person for the desk and socket, the parent agent for delegation,
+the child for its delivery, or the `relay` or `auto-continue` service); the
+host assigns it and never reads it from caller input. A store with a newer
+schema is refused without writing. `npm run test:thread-store` covers the
+rules, six-harness migration across a restart and actors.
+
 A ready provider process is a warm cache, not active work. `LiveConversations`
 keeps at most two warm bindings per host and hibernates either the oldest excess
 or any one idle for ten minutes. Hibernation closes the provider and its MCP

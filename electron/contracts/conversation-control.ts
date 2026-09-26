@@ -6,6 +6,7 @@ import { LiveActionSchema } from "./live-actions.js"
 import { PromptAttachmentSchema } from "./prompt-attachments.js"
 import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
 import { MessageAnchorSchema } from "./message-anchor.js"
+import { ActorSchema } from "./thread-identity.js"
 export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
@@ -85,6 +86,8 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
 export const ContextTransferSchema = z.object({
   inputDigest: z.string().optional(),
   input: TransferInputSchema,
+  /** Who asked for the handoff; kept beside the caller's input, never read from it. */
+  actor: ActorSchema.optional(),
   createdAt: z.number(),
   state: TransferStateSchema,
 })

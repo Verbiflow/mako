@@ -23,6 +23,7 @@ import {
 import { RunSnapshotsSchema } from "./contracts/workspace-snapshots.js"
 import { INTERRUPTION_REASONS, type LiveSnapshot } from "./contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "./contracts/provider-failure.js"
+import { ActorSchema } from "./contracts/thread-identity.js"
 import { ACCESS_TIER_NAMES } from "./contracts/access.js"
 import type { LiveSessionMode } from "./contracts/providers-acp.js"
 
@@ -38,6 +39,7 @@ const LegacyHostModeSchema = z.object({ enforcement: z.literal("host") })
 
 
 export const LiveRequestSchema = z.object({
+  actor: ActorSchema.optional(),
   nativeDelivery: PromptDeliverySchema.optional(),
   targetBindingId: z.string().optional(),
   snapshots: RunSnapshotsSchema.optional(),
@@ -156,6 +158,26 @@ const AppendCountSchema = z.object({
   count: z.number().int().nonnegative(),
 })
 
+/** What a journal's metadata row says about the conversation, without its content. */
+export function journalSummary(metadata: string) {
+  const { session, revision, threadPath, createdAt, control } =
+    MetadataSchema.parse(JSON.parse(metadata))
+  return {
+    session,
+    revision,
+    threadPath,
+    createdAt,
+    ancestry: control?.ancestry
+      ? { kind: control.ancestry.kind, parentId: control.ancestry.parentId }
+      : undefined,
+    hasSessionQuestions: Boolean(control?.questions?.length),
+    nativeBindings: control?.bindings ?? [{ provider: session.harness, nativeId: session.nativeId }],
+    nativePaths: control?.bindings.flatMap((binding) =>
+      binding.path ? [binding.path] : []
+    ),
+  }
+}
+
 /**
  * One independent journal per conversation. Only changed blocks and requests
  * are written.
@@ -200,20 +222,7 @@ export class LiveJournal {
 
   summary() {
     const row = this.db.prepare("SELECT value FROM metadata WHERE id=1").get()
-    if (!row) return null
-    const { session, revision, threadPath, createdAt, control } =
-      MetadataSchema.parse(JSON.parse(RowSchema.parse(row).value))
-    return {
-      session,
-      revision,
-      threadPath,
-      createdAt,
-      hasSessionQuestions: Boolean(control?.questions?.length),
-      nativeBindings: control?.bindings ?? [{ provider: session.harness, nativeId: session.nativeId }],
-      nativePaths: control?.bindings.flatMap((binding) =>
-        binding.path ? [binding.path] : []
-      ),
-    }
+    return row ? journalSummary(RowSchema.parse(row).value) : null
   }
 
   read(): LiveSnapshot | null {

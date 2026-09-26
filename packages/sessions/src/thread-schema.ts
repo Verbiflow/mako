@@ -91,6 +91,8 @@ export const ThreadRefSchema = z.object({
   workspaceMissing: z.boolean().optional(),
   accessMode: z.string().optional(),
   heldBy: z.string().optional(),
+  threadId: z.string().optional(),
+  sessionId: z.string().optional(),
 })
 export const ThreadSchema = z.object({
   ref: ThreadRefSchema,

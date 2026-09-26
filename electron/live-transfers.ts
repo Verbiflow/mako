@@ -10,6 +10,7 @@ import type {
   ResumeVerdict,
 } from "./contracts/conversation-control.js"
 import { heldReason } from "./contracts/session-hold.js"
+import type { Actor } from "./contracts/thread-identity.js"
 import { classifyStartFailure } from "./contracts/provider-failure.js"
 import type { LiveSnapshot } from "./shared.js"
 import { hostLog } from "./host-log.js"
@@ -49,7 +50,7 @@ export class LiveTransfers {
       })
     }
   }
-  accept(id: string, input: TransferInput): LiveSnapshot {
+  accept(id: string, input: TransferInput, actor?: Actor): LiveSnapshot {
     const command = TransferInputSchema.parse(input)
     const inputDigest = createHash("sha256")
       .update(JSON.stringify(command))
@@ -97,6 +98,7 @@ export class LiveTransfers {
           ...control.transfers,
           {
             input: command,
+            actor,
             inputDigest,
             createdAt: Date.now(),
             state: { kind: "queued" },
@@ -440,6 +442,7 @@ export class LiveTransfers {
         requests: [
           ...previous.requests,
           LiveRequestSchema.parse({
+            actor: transfer.actor,
             id: transfer.input.id,
             targetBindingId: transfer.input.bindingId,
             text: transfer.input.text,

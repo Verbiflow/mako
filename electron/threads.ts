@@ -57,6 +57,8 @@ import { WorkspaceGit } from "./host-git.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { annotate as annotateLineage, loadLineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
+import type { ThreadStore } from "./thread-store.js"
+import type { Actor } from "./contracts/thread-identity.js"
 import {
   resolveAnchor,
   type MessageAnchor,
@@ -97,9 +99,48 @@ export function installSessionMemory(memory: SessionMemory | null): void {
   sessionMemory = memory
 }
 
+let threadStore: ThreadStore | null = null
+let placementFailed = false
+const CATALOG_ACTOR: Actor = { kind: "service", name: "catalog" }
+
+/** The per-user Thread store every served ref is placed through. */
+export function installThreadStore(store: ThreadStore | null): void {
+  threadStore = store
+}
+
+function withThreadPlacement(ref: ThreadRef): ThreadRef {
+  if (!threadStore) return ref
+  try {
+    const placed = threadStore.place(ref, CATALOG_ACTOR)
+    return { ...ref, threadId: placed.thread, sessionId: placed.session }
+  } catch (error) {
+    if (!placementFailed)
+      hostWarn("threads", "Thread store placement failed; refs are served without Thread IDs", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    placementFailed = true
+    return ref
+  }
+}
+
+/**
+ * Every catalogued native session gets its Session and Thread when the first
+ * full catalog is in, not only the rows the rail shows.
+ */
+function placeCatalog(refs: readonly ThreadRef[]): void {
+  if (!threadStore) return
+  const started = performance.now()
+  try {
+    threadStore.resolveRefs(refs, CATALOG_ACTOR)
+    hostLog("threads", "catalog placed in Threads", { rows: refs.length, ms: Math.round(performance.now() - started) })
+  } catch (error) {
+    hostWarn("threads", "catalog placement failed", { error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
 function annotate(ref: ThreadRef): ThreadRef {
   const known = sessionMemory ? sessionMemory.annotate(ref) : ref
-  return withWorkspacePresence(annotateLineage(known))
+  return withThreadPlacement(withWorkspacePresence(annotateLineage(known)))
 }
 
 /**
@@ -546,6 +587,7 @@ async function adoptClient(
       }
       hydrated = true
       discoveredSource = client
+      placeCatalog(refs)
       push()
       reconcileProviderActivity()
     })
@@ -803,6 +845,7 @@ async function runInProcessCatalog(signal: AbortSignal): Promise<void> {
       if (catalog !== source) return
       discoveredSource = source
       for (const ref of source.list()) noteStoreWrite(ref, undefined)
+      placeCatalog(source.list())
       push()
       reconcileProviderActivity()
       source.startWatching()
