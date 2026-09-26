@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./host-connection.js"
+import { FIXTURE_REFUSED_CODE } from "./fixture-desk-policy.js"
 
 export const RuntimeCallSchema = z.object({
   channel: z.string().regex(/^mako:[a-z0-9-]+$/),
@@ -21,6 +22,8 @@ export const RuntimeInfoSchema = z.object({
   version: z.string(),
   /** Executable content loaded by a development host; absent on older/packaged hosts. */
   devBuild: z.string().optional(),
+  /** A fixture desk host: every client is limited to the fixture allowlist. */
+  fixture: z.literal(true).optional(),
   methods: z.array(z.string()),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
@@ -31,5 +34,5 @@ export const RuntimePacketSchema = z.discriminatedUnion("channel", [
 ])
 export const RuntimeReplySchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), value: z.json().optional() }),
-  z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable"]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() }),
+  z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable", FIXTURE_REFUSED_CODE]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() }),
 ])
