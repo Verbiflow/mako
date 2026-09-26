@@ -87,6 +87,12 @@ export interface LiveRequest {
   id: string
   text: string
   attachments: PromptAttachment[]
+  /**
+   * `dispatching` is committed in the same batch as the request's user turn
+   * (unless it has no text and no attachments). Renderers rely on this: a
+   * dispatched request's prompt is in the transcript even when no loaded
+   * history page holds it.
+   */
   status:
     | "queued"
     | "held"

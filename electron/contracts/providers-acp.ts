@@ -130,6 +130,12 @@ export interface LiveSessionState {
    */
   lastStop?: string
   error?: string
+  /**
+   * Background commands the provider's process still runs after its turn
+   * ended, as the provider reports them. They die with that process, so
+   * while this is above zero the session is busy and is never hibernated.
+   */
+  backgroundTasks?: number
 }
 
 /**
