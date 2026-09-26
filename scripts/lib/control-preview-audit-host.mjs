@@ -73,10 +73,10 @@ process.once(
             channel === "mako:control-preview" ||
             channel === "mako:audit-preview"
           ) {
-            const [id, watching, watcher] =
+            const [id, watching, watcher, after] =
               hostCallInputs["mako:control-preview"].parse(args)
             assert.equal(id, "preview-audit")
-            const value = previews.read(id, watching, watcher)
+            const value = previews.next ? await previews.next(id, watching, watcher, after) : previews.read(id, watching, watcher)
             return JSON.stringify({ ok: true, value: watching && value ? { ...value,
                 frame: value.frame ? { ...value.frame, image: { mimeType: value.frame.image.mimeType,
                   data: Buffer.from(value.frame.image.bytes).toString("base64") } } : null } : null })

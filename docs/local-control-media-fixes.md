@@ -508,3 +508,94 @@ then `.accessory`) was reverted: with Aside foreground, the window was discovera
 without activation but its subsequent observation failed before input. It does
 not close the original Mako-focused startup failure or establish driver focus
 protection. That acceptance item remains separate from browser media work.
+
+### Matched encoding A/B and the two-second recorder freeze (local follow-up)
+
+Question: did timestamped encoding lower preview fps (56.97 before, 54.40 after)?
+Four interleaved two-minute runs of the same shared-host, two-viewer, recording
+audit compared the constant-rate recorder (A, `99bb48c^`, separate worktree with
+its own built runtime) with timestamped HEAD (B), 20 seconds apart, against the
+same Aside tab and installed media. All four decoded pixel comparisons and every
+recording finished.
+
+| Run | Arm | Preview fps | Recorded fps | Longest hold | Mean 1-min load |
+| --- | --- | --- | --- | --- | --- |
+| 1 | A | 51.30 | 52.52 | 350 ms | 16.5 |
+| 2 | B | 55.36 | 55.57 | 300 ms | 15.3 |
+| 3 | A | 58.25 | 58.67 | 83 ms | 10.0 |
+| 4 | B | 47.97 | 51.03 | 2,033 ms | 19.2 |
+
+Preview rate follows machine load (14 logical CPUs, shared with other work), not the
+encoding method. Timestamped encoding did not measurably regress preview. The
+55-fps preview gate is therefore a contention problem that this A/B cannot separate
+from other processes; it remains open.
+
+Run 4 exposed a real recorder defect. Its preview never paused longer than 301 ms and
+source frames never gapped more than 166 ms, yet the video held one image for
+2.03 s at 24.2 s and 29.2 s. The encoder's schedule lag reached 1,992 ms. Once lag
+passed its two-second history limit, the scheduler jumped to the present and
+discarded the whole backlog, freezing the video for that backlog. It now trails
+capture by at most two seconds and skips the oldest history evenly, so sustained
+pressure lowers the reported rate instead of freezing. A new real-encoder test
+throttles FFmpeg with SIGSTOP/SIGCONT for six seconds: the previous scheduler fails
+it with a 2.02 s packet; the fix passes three consecutive runs (for example 44.8
+encoded fps, 76 reported skipped slots, no evictions, no packet ≥ 0.5 s). The full
+recording suite passes. No installed or repeated two-minute claim yet.
+Evidence: `release/media-ab-20260925/` (runner, per-run logs, progress).
+
+### Fixture startup, install receipt and host wake (local follow-up)
+
+The native fixture was a directly executed binary, which AppKit activates when it
+finishes launching. It is now a minimal `LSUIElement` bundle launched with
+`open -g`. A startup probe sampled Aside frontmost 100 of 100 times with no fixture
+activation events. The private-driver right/double-click recording acceptance then
+passed: 65 of 65 foreground samples on Aside, every mouse-down sourced from the
+driver process. The Mako-focused repeat still requires Mako frontmost and was not
+forced.
+
+Settings showed a stale failed `updates/install-result.json` after a verified CLI
+install. The CLI installer now writes a success receipt, and Settings ignores any
+receipt older than the running build. An installer, CLI or in-app, now reserves
+the host directory while it replaces the app; another profile's automatic wake
+refuses that host while the reservation's process is alive. Build-source, update
+ordering and shared-conversation tests cover superseded receipts, reserve/release
+ordering on success and cancellation, and wake refusal and recovery against a real
+host process. Not yet installed.
+
+### Candidate 6ac3f4fbd690b74d and preview stage breakdown
+
+The installed build at 01:24 UTC Sep 26 was `c291bf2845c02eec` (built 22:21:43 UTC),
+not `1fb3bfb7b3d14e96`; it lacks the fixes above. Candidate `6ac3f4fbd690b74d`
+(`release/rollout-20260925b/mac-arm64/Mako.app`) includes them plus the landed
+OpenCode work. Build evidence: `build.json`, source manifests, `package.log`.
+Its own signed modules in isolated hosts passed:
+
+| Check | Result |
+| --- | --- |
+| Packaged browser + native recording | pass |
+| Packaged MCP | pass, reports the candidate build |
+| Two-minute ordinary preview/recording (load ~11) | 58.05 preview / 57.20 recorded fps, 250 ms hold, inputs and pixels exact |
+| Two-minute, two load workers (load ~14.5) | recording complete 121.6 s at 51.12 fps, 217 ms hold; preview 53.38 fps fails 55 |
+
+Where preview frames go missing (per second, two-minute runs):
+
+| Run | Load | Host notifications | Viewer reads | Painted distinct |
+| --- | --- | --- | --- | --- |
+| A/B 3 | 10.0 | 59.8 | 58.9 | 58.3 |
+| A/B 2 | 15.3 | 59.2 | 56.6 | 55.4 |
+| A/B 1 | 16.5 | 58.2 | 53.5 | 51.3 |
+| A/B 4 | 19.2 | 59.0 | 50.9 | 48.0 |
+| candidate loaded | 14.5 | 59.0 | 55.3 | 53.4 |
+
+Chromium and the host keep up; the loss is the viewer's pull loop.
+`src/state/control-preview.ts` reads only after a notification, keeps one read in
+flight and coalesces notifications that arrive meanwhile. Each frame therefore
+costs a host → main → renderer notification plus a renderer → main → host → main →
+renderer read. Contention stretches each hop, and frames beyond one in flight are
+merged away. A parked next-frame read would cut this to one delivery hop without
+changing pixels or transport encoding. Not implemented; awaiting a decision.
+
+Installation: the default host's only work was this Mako-hosted task, so a
+one-shot launchd job (`install-after-idle.mjs`, plist alongside) reserved the host,
+requested quit after work and waits without force-stopping. `install-state.json`
+records the actual outcome; the installed acceptance jobs are still to run.

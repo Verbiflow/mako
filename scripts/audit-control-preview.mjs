@@ -337,11 +337,13 @@ async function audit() {
           wireBytes += transfer.wireBytes
           decodedBytes += transfer.decodedBytes
         }
+        // MAKO_PREVIEW_PARKED=0 measures the unparked baseline with the same renderer.
+        const held = process.env.MAKO_PREVIEW_PARKED === "0" ? undefined : after
         const value = shared
           ? process.env.MAKO_PREVIEW_IDENTITY === "1"
-            ? await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher], 1, { onTransfer: countTransfer })
-            : await invokeRuntimePreview(socket, client, [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher], countTransfer)
-          : previews.read(id, watching, watcher)
+            ? await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher, held], 1, { onTransfer: countTransfer })
+            : await invokeRuntimePreview(socket, client, [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher, held], countTransfer)
+          : previews.next ? await previews.next(id, watching, watcher, held) : previews.read(id, watching, watcher)
         if (value?.frame?.image.data) {
           value.frame.image = { mimeType: value.frame.image.mimeType, bytes: Buffer.from(value.frame.image.data, "base64") }
         }
