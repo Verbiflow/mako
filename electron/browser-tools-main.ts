@@ -19,6 +19,7 @@ import {
   browserProtocolHelp,
 } from "@mako/control-runtime/host"
 import {
+  ControlProgramError,
   ControlProgramRequestSchema,
   ControlProgramInputSchema,
   INLINE_IMAGE_COUNT,
@@ -310,7 +311,10 @@ export function createBrowserToolsServer(
             outcome: "not-dispatched",
           })
       }
-    } catch (error) {
+    } catch (thrown) {
+      // Output from statements that completed before the failure stays visible.
+      const partial = thrown instanceof ControlProgramError ? thrown.output : []
+      const error = thrown instanceof ControlProgramError ? thrown.cause : thrown
       const fault =
         error instanceof BrowserFault
           ? error.detail
@@ -326,7 +330,7 @@ export function createBrowserToolsServer(
             }
       return {
         isError: true,
-        content: [{ type: "text", text: JSON.stringify(fault) }],
+        content: [...partial, { type: "text", text: JSON.stringify(fault) }],
         structuredContent: fault,
       }
     }
