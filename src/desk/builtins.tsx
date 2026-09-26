@@ -28,6 +28,7 @@ import {
   argAt,
   countLines,
   editsOf,
+  firstQuestion,
   primaryArgument,
   SUBAGENT_TOOLS,
 } from "@/lib/tools"
@@ -164,9 +165,10 @@ export function installBuiltins(): () => void {
           "Plan",
       })
     ),
-    ...["AskQuestion", "AskUserQuestion"].map((name) =>
+    ...["AskQuestion", "AskUserQuestion", "question"].map((name) =>
       registerToolView(name, {
         summary: (call: ToolCall) =>
+          firstQuestion(call.arguments) ??
           argAt(call.arguments, "question") ??
           argAt(call.arguments, "prompt") ??
           "Question",

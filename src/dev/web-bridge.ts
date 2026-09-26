@@ -213,6 +213,9 @@ export async function installWebBridge(): Promise<void> {
         notifications.badge(hostCallInputs["mako:set-badge-count"].parse(args)[0])
         return
       }
+      // A tab cannot close itself, and the host's quit-client hides the desktop
+      // windows. After a host restart this page reconnects on its own.
+      if (channel === "mako:quit-client") return
       if (channel === "mako:notification-permission") return notifications.permission()
       if (channel === "mako:request-notification-permission")
         return notifications.requestPermission()
