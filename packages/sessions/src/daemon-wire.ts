@@ -402,6 +402,8 @@ function parseThreadPage(value: JsonValue | undefined): ThreadPage | null {
   const result: ThreadPage = { ref, entries, start, total, hasEarlier }
   const checkpoint = readNumber(value, "checkpoint")
   if (checkpoint !== undefined) result.checkpoint = checkpoint
+  const translator = readString(value, "translator")
+  if (translator !== undefined) result.translator = translator
   if (readBoolean(value, "preview")) result.preview = true
   return result
 }

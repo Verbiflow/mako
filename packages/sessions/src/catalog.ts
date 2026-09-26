@@ -25,6 +25,7 @@ import {
   CATALOG_CACHE_VERSION,
   type CacheEntry,
 } from "./catalog-cache.js"
+import { translatorBuild } from "./translator.js"
 import {
   entryChars,
   threadIdentity,
@@ -538,6 +539,7 @@ export class SessionCatalog {
       start: slice.start,
       total,
       hasEarlier: slice.start > 0,
+      translator: translatorBuild(),
     }
   }
 
@@ -575,6 +577,7 @@ export class SessionCatalog {
         total: aligned.length,
         hasEarlier: true,
         preview: true,
+        translator: translatorBuild(),
       }
     }
     return null

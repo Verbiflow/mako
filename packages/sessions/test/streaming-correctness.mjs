@@ -534,7 +534,15 @@ async function codexLifecycleMarkersSurvive() {
       }) +
       line({
         type: "event_msg",
-        payload: { type: "turn_aborted", reason: "user" },
+        payload: { type: "turn_aborted", reason: "interrupted" },
+      }) +
+      line({
+        type: "event_msg",
+        payload: { type: "turn_aborted", reason: "replaced" },
+      }) +
+      line({
+        type: "event_msg",
+        payload: { type: "turn_aborted", reason: "future_reason" },
       })
   )
   const thread = await new CodexProvider(home).read(path)
@@ -542,7 +550,9 @@ async function codexLifecycleMarkersSurvive() {
     thread?.entries.filter((entry) => entry.kind === "event"),
     [
       { kind: "event", label: "Context compacted" },
-      { kind: "event", label: "Interrupted", detail: "user" },
+      { kind: "event", label: "Interrupted" },
+      { kind: "event", label: "Interrupted", detail: "replaced by a newer message" },
+      { kind: "event", label: "Interrupted", detail: "future reason" },
     ]
   )
 }

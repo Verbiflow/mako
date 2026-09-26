@@ -155,6 +155,8 @@ export interface ThreadPage {
   start: number
   total: number
   hasEarlier: boolean
+  /** `translatorBuild()` of the code that produced these entries. */
+  translator?: string
   /**
    * Read from the record's tail alone and cut at its first prompt, so a
    * cold whale paints before the whole record is translated. `start` and
