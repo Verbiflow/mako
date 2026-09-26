@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..4ee2f65 100644
+index a91f724..23db1a7 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..4ee2f65 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..b5e7cc9 100644
+index 351b086..de5c4c6 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..b5e7cc9 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.23"
++version = "0.28.2+mako.24"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -1654,10 +1654,40 @@ index a26a6bf..c5c9af3 100644
      async fn public_observation_mirror_revives_an_implicit_transport_session() {
          let _runtime_guard = crate::test_runtime_lock().lock().await;
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123b..fe2a2ec 100644
+index 67e123b..fbafd6c 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-@@ -1050,6 +1050,7 @@ pub async fn run_serve(
+@@ -987,6 +987,29 @@ pub async fn run_serve(
+         UnixListener::bind(socket_path).map_err(|e| anyhow::anyhow!("bind {socket_path}: {e}"))?;
+     secure_local_socket(socket_path)?;
+     let bound_socket = socket_identity(socket_path)?;
++    // Before serving, release any key or button a previous daemon on this
++    // endpoint pressed and died before releasing.
++    #[cfg(target_os = "macos")]
++    {
++        let journal = std::path::PathBuf::from(format!("{socket_path}.held-input"));
++        let released = platform_macos::input::held_input::recover(&journal);
++        if released > 0 {
++            eprintln!("Released {released} input(s) a previous daemon left held");
++        }
++        // Hosts stop the daemon with SIGTERM. Termination stays immediate, as
++        // with no handler, once held input is released and the journal removed.
++        let mut terminate =
++            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
++        tokio::spawn(async move {
++            if terminate.recv().await.is_some() {
++                platform_macos::input::held_input::close();
++                unsafe {
++                    libc::signal(libc::SIGTERM, libc::SIG_DFL);
++                    libc::raise(libc::SIGTERM);
++                }
++            }
++        });
++    }
+ 
+     eprintln!("Cua Driver daemon listening on {socket_path}");
+ 
+@@ -1050,6 +1073,7 @@ pub async fn run_serve(
                      // connection EOFs (graceful proxy exit OR kill -9, both
                      // kernel-guaranteed), the post-loop block reaps the session.
                      let mut control_session_id: Option<String> = None;
@@ -1665,7 +1695,7 @@ index 67e123b..fe2a2ec 100644
                      let mut trusted_session: Option<TrustedConnectionSession> = None;
  
                      while let Ok(Some(line)) = lines.next_line().await {
-@@ -1334,7 +1335,7 @@ pub async fn run_serve(
+@@ -1334,7 +1358,7 @@ pub async fn run_serve(
                                      (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                  ).await;
                              }
@@ -1674,7 +1704,7 @@ index 67e123b..fe2a2ec 100644
                                  // The proxy's persistent control connection.
                                  // Record the session_id so this connection's EOF
                                  // (graceful proxy exit OR kill -9) reaps the
-@@ -1342,6 +1343,7 @@ pub async fn run_serve(
+@@ -1342,6 +1366,7 @@ pub async fn run_serve(
                                  // the ONLY place a connection is marked control;
                                  // per-call connections never send this. ACK ok.
                                  if let Some(sid) = req.session_id.as_deref() {
@@ -1682,7 +1712,7 @@ index 67e123b..fe2a2ec 100644
                                      control_session_id = Some(sid.to_owned());
                                      active_proxy_sessions()
                                          .lock()
-@@ -1401,6 +1403,7 @@ pub async fn run_serve(
+@@ -1401,6 +1426,7 @@ pub async fn run_serve(
                      if let Some(sid) = control_session_id {
                          active_proxy_sessions().lock().unwrap().remove(&sid);
                          reg.end_transport_sessions(&sid);
@@ -1690,7 +1720,17 @@ index 67e123b..fe2a2ec 100644
                      }
                      if let Some(connection) = trusted_session {
                          detach_trusted_connection(&trusted_resume_registry, connection).await;
-@@ -1811,6 +1814,7 @@ pub async fn run_serve(
+@@ -1422,6 +1448,9 @@ pub async fn run_serve(
+     // stops. Abort and join them before tearing down the SDK runtime.
+     connection_tasks.shutdown().await;
+     release_active_proxy_sessions();
++    // Before unlinking the socket, so no replacement can recover this journal.
++    #[cfg(target_os = "macos")]
++    platform_macos::input::held_input::close();
+ 
+     // Do not unlink a replacement socket created after this listener was bound.
+     remove_owned_socket(socket_path, bound_socket);
+@@ -1811,6 +1840,7 @@ pub async fn run_serve(
                      // ERROR_BROKEN_PIPE on the next read, ending the while-let
                      // loop equally reliably.
                      let mut control_session_id: Option<String> = None;
@@ -1698,7 +1738,7 @@ index 67e123b..fe2a2ec 100644
                      let mut trusted_session: Option<TrustedConnectionSession> = None;
  
                      while let Ok(Some(line)) = lines.next_line().await {
-@@ -2074,12 +2078,13 @@ pub async fn run_serve(
+@@ -2074,12 +2104,13 @@ pub async fn run_serve(
                                      (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                  ).await;
                              }
@@ -1713,7 +1753,7 @@ index 67e123b..fe2a2ec 100644
                                      control_session_id = Some(sid.to_owned());
                                      active_proxy_sessions()
                                          .lock()
-@@ -2128,6 +2133,7 @@ pub async fn run_serve(
+@@ -2128,6 +2159,7 @@ pub async fn run_serve(
                      if let Some(sid) = control_session_id {
                          active_proxy_sessions().lock().unwrap().remove(&sid);
                          reg.end_transport_sessions(&sid);
@@ -6723,8 +6763,431 @@ index 7596841..09c3ef0 100644
                  },
              );
          }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/held_input.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/held_input.rs
+new file mode 100644
+index 0000000..df84d22
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/held_input.rs
+@@ -0,0 +1,391 @@
++//! Keys and mouse buttons this process has pressed but not yet released.
++//!
++//! A daemon killed between a press and its release leaves that input held in
++//! the target app, or system-wide for the global HID queue. With a journal
++//! configured, every press is recorded durably *before* it is posted and
++//! cleared only *after* its release is posted, so a crash can at worst cause a
++//! redundant release, never an unrecorded held input. The next daemon on the
++//! same endpoint calls [`recover`] before serving: it posts the missing
++//! releases, then takes over the journal.
++
++use std::path::{Path, PathBuf};
++use std::sync::Mutex;
++
++use base64::Engine as _;
++use core_foundation::base::TCFType;
++use core_foundation::data::{CFData, CFDataRef};
++use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, EventField};
++use foreign_types::ForeignType;
++use serde::{Deserialize, Serialize};
++
++/// Where an event is posted, recorded so its release takes the same route.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum Route {
++    /// Posted to one process; `auth` selects the SkyLight envelope.
++    Pid { pid: i32, auth: bool },
++    /// Posted to the global HID queue.
++    Hid,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
++enum Input {
++    Key(u16),
++    Button(i64),
++}
++
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
++struct Held {
++    /// `None` for the global HID queue.
++    pid: Option<i32>,
++    /// The target's start time, so a reused pid never receives the release.
++    started: Option<(i64, i64)>,
++    auth: bool,
++    input: Input,
++    /// `CGEventCreateData` of the press; its release is rebuilt from it.
++    event: String,
++}
++
++struct Journal {
++    path: Option<PathBuf>,
++    held: Vec<Held>,
++    /// Set by [`close`]; the process is exiting and posts no new press.
++    closed: bool,
++}
++
++static JOURNAL: Mutex<Journal> = Mutex::new(Journal {
++    path: None,
++    held: Vec::new(),
++    closed: false,
++});
++
++#[link(name = "CoreGraphics", kind = "framework")]
++extern "C" {
++    fn CGEventCreateData(
++        allocator: *const std::ffi::c_void,
++        event: *mut std::ffi::c_void,
++    ) -> CFDataRef;
++    fn CGEventCreateFromData(
++        allocator: *const std::ffi::c_void,
++        data: CFDataRef,
++    ) -> *mut std::ffi::c_void;
++}
++
++/// The modifier flag a modifier key code controls. A flags-changed event
++/// presses the key when its flag is set and releases it when clear.
++fn modifier_flag(key_code: u16) -> Option<CGEventFlags> {
++    match key_code {
++        54 | 55 => Some(CGEventFlags::CGEventFlagCommand),
++        56 | 60 => Some(CGEventFlags::CGEventFlagShift),
++        58 | 61 => Some(CGEventFlags::CGEventFlagAlternate),
++        59 | 62 => Some(CGEventFlags::CGEventFlagControl),
++        63 => Some(CGEventFlags::CGEventFlagSecondaryFn),
++        _ => None,
++    }
++}
++
++/// Classify a press or release. Everything else (moves, drags, scrolls) holds
++/// nothing and is `None`.
++fn transition(event: &CGEvent) -> Option<(Input, bool)> {
++    let key = || event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
++    let button = || event.get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER);
++    match event.get_type() {
++        CGEventType::KeyDown => Some((Input::Key(key()), true)),
++        CGEventType::KeyUp => Some((Input::Key(key()), false)),
++        CGEventType::FlagsChanged => {
++            let code = key();
++            let flag = modifier_flag(code)?;
++            Some((Input::Key(code), event.get_flags().contains(flag)))
++        }
++        CGEventType::LeftMouseDown => Some((Input::Button(0), true)),
++        CGEventType::LeftMouseUp => Some((Input::Button(0), false)),
++        CGEventType::RightMouseDown => Some((Input::Button(1), true)),
++        CGEventType::RightMouseUp => Some((Input::Button(1), false)),
++        CGEventType::OtherMouseDown => Some((Input::Button(button()), true)),
++        CGEventType::OtherMouseUp => Some((Input::Button(button()), false)),
++        _ => None,
++    }
++}
++
++fn process_started(pid: i32) -> Option<(i64, i64)> {
++    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
++    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
++    let read = unsafe {
++        libc::proc_pidinfo(
++            pid,
++            libc::PROC_PIDTBSDINFO,
++            0,
++            &mut info as *mut _ as *mut libc::c_void,
++            size,
++        )
++    };
++    (read == size).then(|| (info.pbi_start_tvsec as i64, info.pbi_start_tvusec as i64))
++}
++
++fn encode(event: &CGEvent) -> Option<String> {
++    let data = unsafe { CGEventCreateData(std::ptr::null(), event.as_ptr() as *mut _) };
++    if data.is_null() {
++        return None;
++    }
++    let data = unsafe { CFData::wrap_under_create_rule(data) };
++    Some(base64::engine::general_purpose::STANDARD.encode(data.bytes()))
++}
++
++/// Rebuild the release for a recorded press.
++fn release_event(held: &Held) -> Option<CGEvent> {
++    let bytes = base64::engine::general_purpose::STANDARD
++        .decode(&held.event)
++        .ok()?;
++    let data = CFData::from_buffer(&bytes);
++    let event = unsafe { CGEventCreateFromData(std::ptr::null(), data.as_concrete_TypeRef()) };
++    if event.is_null() {
++        return None;
++    }
++    let event = unsafe { CGEvent::from_ptr(event as *mut _) };
++    match (event.get_type(), held.input) {
++        (CGEventType::KeyDown, _) => event.set_type(CGEventType::KeyUp),
++        (CGEventType::FlagsChanged, Input::Key(code)) => {
++            let mut flags = event.get_flags();
++            flags.remove(modifier_flag(code)?);
++            event.set_flags(flags);
++        }
++        (CGEventType::LeftMouseDown, _) => event.set_type(CGEventType::LeftMouseUp),
++        (CGEventType::RightMouseDown, _) => event.set_type(CGEventType::RightMouseUp),
++        (CGEventType::OtherMouseDown, _) => event.set_type(CGEventType::OtherMouseUp),
++        _ => return None,
++    }
++    Some(event)
++}
++
++fn deliver(route: Route, event: &CGEvent) {
++    match route {
++        Route::Pid { pid, auth } => {
++            let ptr = event.as_ptr() as *mut std::ffi::c_void;
++            if !super::skylight::post_to_pid(pid as libc::pid_t, ptr, auth) {
++                event.post_to_pid(pid as libc::pid_t);
++            }
++        }
++        Route::Hid => event.post(CGEventTapLocation::HID),
++    }
++}
++
++fn persist(journal: &Journal) {
++    let Some(path) = &journal.path else { return };
++    let mut temporary = path.as_os_str().to_owned();
++    temporary.push(".next");
++    let Ok(body) = serde_json::to_vec(&journal.held) else {
++        return;
++    };
++    if std::fs::write(&temporary, body).is_ok() {
++        let _ = std::fs::rename(&temporary, path);
++    }
++}
++
++fn matches(held: &Held, route: Route, input: Input) -> bool {
++    held.input == input
++        && match route {
++            Route::Pid { pid, .. } => held.pid == Some(pid),
++            Route::Hid => held.pid.is_none(),
++        }
++}
++
++/// Post `event` through `post`, keeping the journal of held input exact.
++/// A press is posted under the journal lock, so [`close`] cannot run between
++/// recording it and posting it.
++pub(crate) fn post(route: Route, event: &CGEvent, post: impl FnOnce()) {
++    post_in(&JOURNAL, route, event, post)
++}
++
++fn lock(journal: &Mutex<Journal>) -> std::sync::MutexGuard<'_, Journal> {
++    journal
++        .lock()
++        .unwrap_or_else(|poisoned| poisoned.into_inner())
++}
++
++fn post_in(journal: &Mutex<Journal>, route: Route, event: &CGEvent, post: impl FnOnce()) {
++    let Some((input, down)) = transition(event) else {
++        post();
++        return;
++    };
++    if down {
++        let (pid, auth) = match route {
++            Route::Pid { pid, auth } => (Some(pid), auth),
++            Route::Hid => (None, false),
++        };
++        let mut journal = lock(journal);
++        if journal.closed {
++            return;
++        }
++        if let Some(encoded) = encode(event) {
++            journal.held.push(Held {
++                pid,
++                started: pid.and_then(process_started),
++                auth,
++                input,
++                event: encoded,
++            });
++            persist(&journal);
++        }
++        post();
++    } else {
++        post();
++        let mut journal = lock(journal);
++        if let Some(index) = journal
++            .held
++            .iter()
++            .rposition(|held| matches(held, route, input))
++        {
++            journal.held.remove(index);
++            persist(&journal);
++        }
++    }
++}
++
++/// Post releases for `held`, newest first. A pid target that is gone, or whose
++/// pid now names another process, is skipped.
++fn release_all(held: &[Held]) -> usize {
++    let mut released = 0;
++    for held in held.iter().rev() {
++        let route = match held.pid {
++            Some(pid) if held.started.is_some() && process_started(pid) == held.started => {
++                Route::Pid {
++                    pid,
++                    auth: held.auth,
++                }
++            }
++            Some(_) => continue,
++            None => Route::Hid,
++        };
++        if let Some(event) = release_event(held) {
++            deliver(route, &event);
++            released += 1;
++        }
++    }
++    released
++}
++
++/// Release what a previous process on this journal left held, then record
++/// this process's input there. Returns how many releases were posted.
++pub fn recover(path: &Path) -> usize {
++    recover_in(&JOURNAL, path)
++}
++
++fn recover_in(journal: &Mutex<Journal>, path: &Path) -> usize {
++    let left: Vec<Held> = std::fs::read(path)
++        .ok()
++        .and_then(|body| serde_json::from_slice(&body).ok())
++        .unwrap_or_default();
++    let released = release_all(&left);
++    let mut journal = lock(journal);
++    journal.path = Some(path.to_owned());
++    persist(&journal);
++    released
++}
++
++/// On shutdown: release anything still held, delete the journal, and post no
++/// further press. Returns how many releases were posted.
++pub fn close() -> usize {
++    close_in(&JOURNAL)
++}
++
++fn close_in(journal: &Mutex<Journal>) -> usize {
++    let mut journal = lock(journal);
++    let released = release_all(&journal.held);
++    journal.held.clear();
++    journal.closed = true;
++    if let Some(path) = journal.path.take() {
++        let _ = std::fs::remove_file(path);
++    }
++    released
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
++
++    fn key(code: u16, down: bool) -> CGEvent {
++        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();
++        CGEvent::new_keyboard_event(source, code, down).unwrap()
++    }
++
++    #[test]
++    fn key_and_modifier_transitions_are_classified() {
++        assert_eq!(transition(&key(0, true)), Some((Input::Key(0), true)));
++        assert_eq!(transition(&key(0, false)), Some((Input::Key(0), false)));
++        let command = key(55, true);
++        command.set_flags(CGEventFlags::CGEventFlagCommand);
++        assert_eq!(transition(&command), Some((Input::Key(55), true)));
++        let released = key(55, false);
++        released.set_flags(CGEventFlags::CGEventFlagNull);
++        assert_eq!(transition(&released), Some((Input::Key(55), false)));
++    }
++
++    #[test]
++    fn a_recorded_press_rebuilds_its_exact_release() {
++        let press = key(0, true);
++        press.set_string("é");
++        let held = Held {
++            pid: Some(1),
++            started: None,
++            auth: true,
++            input: Input::Key(0),
++            event: encode(&press).unwrap(),
++        };
++        let release = release_event(&held).unwrap();
++        assert_eq!(transition(&release), Some((Input::Key(0), false)));
++
++        let command = key(55, true);
++        command.set_flags(CGEventFlags::CGEventFlagCommand | CGEventFlags::CGEventFlagShift);
++        let held = Held {
++            input: Input::Key(55),
++            event: encode(&command).unwrap(),
++            ..held
++        };
++        let release = release_event(&held).unwrap();
++        assert_eq!(transition(&release), Some((Input::Key(55), false)));
++        assert!(release.get_flags().contains(CGEventFlags::CGEventFlagShift));
++    }
++
++    #[test]
++    fn journal_holds_exactly_the_unreleased_presses_and_survives_restart() {
++        let directory = std::env::temp_dir().join(format!("held-input-{}", std::process::id()));
++        std::fs::create_dir_all(&directory).unwrap();
++        let path = directory.join("journal");
++        let journal = Mutex::new(Journal {
++            path: None,
++            held: Vec::new(),
++            closed: false,
++        });
++        let posted = std::cell::Cell::new(0);
++        let post = |route, event: &CGEvent| {
++            post_in(&journal, route, event, || posted.set(posted.get() + 1))
++        };
++        // No process has this pid, so recovery skips posting its releases.
++        let route = Route::Pid {
++            pid: i32::MAX,
++            auth: false,
++        };
++        assert_eq!(recover_in(&journal, &path), 0);
++        post(route, &key(0, true));
++        post(route, &key(0, false));
++        post(route, &key(1, true));
++        let on_disk: Vec<Held> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
++        assert_eq!(on_disk.len(), 1);
++        assert_eq!(on_disk[0].input, Input::Key(1));
++        assert_eq!(
++            recover_in(&journal, &path),
++            0,
++            "a vanished target receives no release"
++        );
++        post(route, &key(2, true));
++        assert_eq!(close_in(&journal), 0);
++        assert!(!path.exists(), "a clean shutdown deletes the journal");
++        let before = posted.get();
++        post(route, &key(3, true));
++        assert_eq!(posted.get(), before, "no press is posted after close");
++        post(route, &key(2, false));
++        assert_eq!(posted.get(), before + 1, "releases are still posted");
++        assert!(!path.exists(), "no journal is written after close");
++        std::fs::remove_dir_all(directory).unwrap();
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/interactive.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/interactive.rs
+index 38c8404..9b5147a 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/interactive.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/interactive.rs
+@@ -602,7 +602,9 @@ impl NativeInputState {
+ 
+     fn post_keyboard(&self, event: &CGEvent) {
+         if self.is_foreground() {
+-            event.post(CGEventTapLocation::HID);
++            super::held_input::post(super::held_input::Route::Hid, event, || {
++                event.post(CGEventTapLocation::HID)
++            });
+         } else {
+             super::keyboard::post_keyboard_event(self.config.pid, event);
+         }
+@@ -616,7 +618,9 @@ impl NativeInputState {
+         click: bool,
+     ) {
+         if self.is_foreground() {
+-            event.post(CGEventTapLocation::HID);
++            super::held_input::post(super::held_input::Route::Hid, event, || {
++                event.post(CGEventTapLocation::HID)
++            });
+         } else {
+             super::mouse::post_mouse_event(
+                 self.config.pid,
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
-index 2b9baf8..c1e83f1 100644
+index 2b9baf8..fcd289f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
 @@ -30,6 +30,27 @@ pub fn is_screen_sharing_pid(pid: i32) -> bool {
@@ -6755,8 +7218,126 @@ index 2b9baf8..c1e83f1 100644
  /// Press and release a single key, delivered to `pid` without stealing focus.
  pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
      // Handle "+" / "plus" → Shift+= (US keyboard layout).
+@@ -273,7 +294,7 @@ fn post_global_key(
+     let event = CGEvent::new_keyboard_event(source.clone(), key_code, key_down)
+         .map_err(|_| anyhow::anyhow!("CGEvent keyboard event creation failed"))?;
+     event.set_flags(flags);
+-    event.post(tap);
++    super::held_input::post(super::held_input::Route::Hid, &event, || event.post(tap));
+     Ok(())
+ }
+ 
+@@ -287,7 +308,7 @@ fn release_global_modifiers(
+         active_flags.remove(flag);
+         if let Ok(event) = CGEvent::new_keyboard_event(source.clone(), key_code, false) {
+             event.set_flags(active_flags);
+-            event.post(tap);
++            super::held_input::post(super::held_input::Route::Hid, &event, || event.post(tap));
+         }
+         std::thread::sleep(std::time::Duration::from_millis(8));
+     }
+@@ -369,13 +390,17 @@ pub fn type_text_global(text: &str, inter_char_delay_ms: u64) -> anyhow::Result<
+             .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
+         down.set_string(&value);
+         down.set_flags(CGEventFlags::CGEventFlagNull);
+-        down.post(CGEventTapLocation::HID);
++        super::held_input::post(super::held_input::Route::Hid, &down, || {
++            down.post(CGEventTapLocation::HID)
++        });
+         std::thread::sleep(std::time::Duration::from_millis(8));
+         let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
+             .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
+         up.set_string(&value);
+         up.set_flags(CGEventFlags::CGEventFlagNull);
+-        up.post(CGEventTapLocation::HID);
++        super::held_input::post(super::held_input::Route::Hid, &up, || {
++            up.post(CGEventTapLocation::HID)
++        });
+         std::thread::sleep(std::time::Duration::from_millis(inter_char_delay_ms.max(8)));
+     }
+     Ok(())
+@@ -404,7 +429,9 @@ pub fn type_text_physical_global(text: &str, inter_char_delay_ms: u64) -> anyhow
+             .map(|event| create_bare_keyboard_event(event.key_code, event.key_down))
+             .collect::<anyhow::Result<Vec<_>>>()?;
+         for cg_event in native_events {
+-            cg_event.post(CGEventTapLocation::HID);
++            super::held_input::post(super::held_input::Route::Hid, &cg_event, || {
++                cg_event.post(CGEventTapLocation::HID)
++            });
+             std::thread::sleep(std::time::Duration::from_millis(8));
+         }
+         if inter_char_delay_ms > 8 {
+@@ -438,7 +465,9 @@ pub fn press_key_bare_global(key: &str, modifiers: &[&str]) -> anyhow::Result<()
+         .map(|(code, down)| create_bare_keyboard_event(code, down))
+         .collect::<anyhow::Result<Vec<_>>>()?;
+     for event in events {
+-        event.post(CGEventTapLocation::HID);
++        super::held_input::post(super::held_input::Route::Hid, &event, || {
++            event.post(CGEventTapLocation::HID)
++        });
+         std::thread::sleep(std::time::Duration::from_millis(8));
+     }
+     Ok(())
+@@ -591,11 +620,17 @@ fn physical_key_for_char(ch: char) -> Option<(u16, bool)> {
+ /// Post a keyboard event to `pid` via SLEventPostToPid (with auth message for
+ /// Chromium/Electron support) or fall back to CGEvent::post_to_pid.
+ pub(super) fn post_keyboard_event(pid: i32, event: &CGEvent) {
+-    let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
+-    // attachAuthMessage = true: required for Chromium keyboard on macOS 14+.
+-    if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, true) {
+-        event.post_to_pid(pid as libc::pid_t);
+-    }
++    super::held_input::post(
++        super::held_input::Route::Pid { pid, auth: true },
++        event,
++        || {
++            let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
++            // attachAuthMessage = true: required for Chromium keyboard on macOS 14+.
++            if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, true) {
++                event.post_to_pid(pid as libc::pid_t);
++            }
++        },
++    );
+ }
+ 
+ fn post_key(pid: i32, key_code: u16, key_down: bool, flags: CGEventFlags) -> anyhow::Result<()> {
+@@ -622,11 +657,17 @@ fn post_key_no_auth(
+     let event = CGEvent::new_keyboard_event(source, key_code, key_down)
+         .map_err(|_| anyhow::anyhow!("CGEvent::new_keyboard_event failed"))?;
+     event.set_flags(flags);
+-    let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
+-    // attach_auth_message = false → IOHIDPostEvent path → NSMenu fires
+-    if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false) {
+-        event.post_to_pid(pid as libc::pid_t);
+-    }
++    super::held_input::post(
++        super::held_input::Route::Pid { pid, auth: false },
++        &event,
++        || {
++            let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
++            // attach_auth_message = false → IOHIDPostEvent path → NSMenu fires
++            if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false) {
++                event.post_to_pid(pid as libc::pid_t);
++            }
++        },
++    );
+     Ok(())
+ }
+ 
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
+index 7411233..24f86b1 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
+@@ -9,6 +9,7 @@
+ //!    the activity-monitor tickle required for live-input detection.
+ 
+ pub mod ax_actions;
++pub mod held_input;
+ pub mod interactive;
+ pub mod keyboard;
+ pub mod mouse;
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
-index 8ace326..022b7f1 100644
+index 8ace326..5681988 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 @@ -19,8 +19,9 @@ use foreign_types::ForeignType;
@@ -6788,7 +7369,29 @@ index 8ace326..022b7f1 100644
  }
  
  /// Screen-absolute click posted to the GLOBAL HID tap (`CGEventTapLocation::HID`),
-@@ -392,22 +402,11 @@ fn click_at_xy_inner(
+@@ -150,7 +160,9 @@ fn click_at_xy_desktop_inner(
+                 core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE,
+                 (pair_index + 1) as i64,
+             );
+-            down.post(CGEventTapLocation::HID);
++            super::held_input::post(super::held_input::Route::Hid, &down, || {
++                down.post(CGEventTapLocation::HID)
++            });
+             std::thread::sleep(std::time::Duration::from_millis(28));
+             let up = CGEvent::new_mouse_event(source.clone(), up_ty, point, btn)
+                 .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(up) failed"))?;
+@@ -159,7 +171,9 @@ fn click_at_xy_desktop_inner(
+                 core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE,
+                 (pair_index + 1) as i64,
+             );
+-            up.post(CGEventTapLocation::HID);
++            super::held_input::post(super::held_input::Route::Hid, &up, || {
++                up.post(CGEventTapLocation::HID)
++            });
+             if count > 1 {
+                 std::thread::sleep(std::time::Duration::from_millis(80));
+             }
+@@ -392,22 +406,11 @@ fn click_at_xy_inner(
      })
  }
  
@@ -6816,21 +7419,31 @@ index 8ace326..022b7f1 100644
  }
  
  /// Post the stamped event half of the Chromium-compatible left-click recipe
-@@ -488,11 +487,12 @@ pub fn click_at_xy_chromium(
+@@ -488,11 +491,18 @@ pub fn click_at_xy_chromium(
          }
      };
  
 -    let post = |event: &CGEvent| {
+-        let ptr = event.as_ptr() as *mut std::ffi::c_void;
+-        if !crate::input::skylight::post_to_pid(pid as libc::pid_t, ptr, false) {
+-            event.post_to_pid(pid as libc::pid_t);
+-        }
 +    let post = |event: &CGEvent, local: (f64, f64)| {
-         let ptr = event.as_ptr() as *mut std::ffi::c_void;
-         if !crate::input::skylight::post_to_pid(pid as libc::pid_t, ptr, false) {
-             event.post_to_pid(pid as libc::pid_t);
-         }
++        super::held_input::post(
++            super::held_input::Route::Pid { pid, auth: false },
++            event,
++            || {
++                let ptr = event.as_ptr() as *mut std::ffi::c_void;
++                if !crate::input::skylight::post_to_pid(pid as libc::pid_t, ptr, false) {
++                    event.post_to_pid(pid as libc::pid_t);
++                }
++            },
++        );
 +        record_window_pointer(pid, wid, local, event.get_type());
      };
  
      // Step 1: mouseMoved at target (phase=2, clickState=0).
-@@ -504,7 +504,7 @@ pub fn click_at_xy_chromium(
+@@ -504,7 +514,7 @@ pub fn click_at_xy_chromium(
      )
      .map_err(|_| anyhow::anyhow!("mouseMoved event creation failed"))?;
      stamp(&move_event, win_local, 0, 2);
@@ -6839,7 +7452,7 @@ index 8ace326..022b7f1 100644
      std::thread::sleep(std::time::Duration::from_millis(15));
  
      // Step 2: off-screen primer click — opens Chromium user-activation gate
-@@ -517,7 +517,7 @@ pub fn click_at_xy_chromium(
+@@ -517,7 +527,7 @@ pub fn click_at_xy_chromium(
      )
      .map_err(|_| anyhow::anyhow!("primer down event creation failed"))?;
      stamp(&primer_down, off_local, 1, 1);
@@ -6848,7 +7461,7 @@ index 8ace326..022b7f1 100644
      std::thread::sleep(std::time::Duration::from_millis(1));
  
      let primer_up = CGEvent::new_mouse_event(
-@@ -528,7 +528,7 @@ pub fn click_at_xy_chromium(
+@@ -528,7 +538,7 @@ pub fn click_at_xy_chromium(
      )
      .map_err(|_| anyhow::anyhow!("primer up event creation failed"))?;
      stamp(&primer_up, off_local, 1, 2);
@@ -6857,7 +7470,7 @@ index 8ace326..022b7f1 100644
      // ≥1 frame so Chromium sees primer + target as separate gestures, not run-on.
      std::thread::sleep(std::time::Duration::from_millis(100));
  
-@@ -545,7 +545,7 @@ pub fn click_at_xy_chromium(
+@@ -545,7 +555,7 @@ pub fn click_at_xy_chromium(
          )
          .map_err(|_| anyhow::anyhow!("target down event creation failed"))?;
          stamp(&down, win_local, click_state, 3);
@@ -6866,7 +7479,7 @@ index 8ace326..022b7f1 100644
          std::thread::sleep(std::time::Duration::from_millis(1));
  
          let up = CGEvent::new_mouse_event(
-@@ -556,7 +556,7 @@ pub fn click_at_xy_chromium(
+@@ -556,7 +566,7 @@ pub fn click_at_xy_chromium(
          )
          .map_err(|_| anyhow::anyhow!("target up event creation failed"))?;
          stamp(&up, win_local, click_state, 3);
@@ -6875,19 +7488,21 @@ index 8ace326..022b7f1 100644
  
          if pair_index < click_pairs {
              // ~80 ms between pairs — under the system double-click threshold,
-@@ -836,7 +836,10 @@ where
+@@ -836,7 +846,12 @@ where
          duration_ms
      };
  
 -    let post = |event: &CGEvent| event.post(CGEventTapLocation::HID);
 +    let post = |event: &CGEvent| {
-+        event.post(CGEventTapLocation::HID);
++        super::held_input::post(super::held_input::Route::Hid, event, || {
++            event.post(CGEventTapLocation::HID)
++        });
 +        record_screen_pointer(event);
 +    };
  
      // Keep WindowServer's hardware cursor and event stream coupled. AppKit
      // hit-tests some pointer-capture surfaces against the actual cursor even
-@@ -868,7 +871,7 @@ where
+@@ -868,7 +883,7 @@ where
          down.set_flags(flags);
      }
      down.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
@@ -6896,7 +7511,7 @@ index 8ace326..022b7f1 100644
      std::thread::sleep(std::time::Duration::from_millis(16));
  
      for i in 1..=steps {
-@@ -911,82 +914,36 @@ pub enum DragButton {
+@@ -911,82 +926,36 @@ pub enum DragButton {
      Middle,
  }
  
@@ -6991,7 +7606,7 @@ index 8ace326..022b7f1 100644
  pub fn right_click_at_xy_with_window_local(
      pid: i32,
      x: f64,
-@@ -996,33 +953,42 @@ pub fn right_click_at_xy_with_window_local(
+@@ -996,33 +965,42 @@ pub fn right_click_at_xy_with_window_local(
      wid: u32,
      modifiers: &[&str],
  ) -> anyhow::Result<()> {
@@ -7042,7 +7657,7 @@ index 8ace326..022b7f1 100644
      post_mouse_moved_primer(
          pid,
          &source,
-@@ -1030,48 +996,27 @@ fn right_click_at_xy_inner(
+@@ -1030,48 +1008,27 @@ fn right_click_at_xy_inner(
          window_local,
          wid,
          click_group_id,
@@ -7104,7 +7719,7 @@ index 8ace326..022b7f1 100644
  ///
  /// Field stamps applied (always):
  /// - f40 = `pid`  (Chromium's synthetic-event filter)
-@@ -1110,7 +1055,7 @@ pub(super) fn post_mouse_event(
+@@ -1110,7 +1067,7 @@ pub(super) fn post_mouse_event(
          click_state,
          button_number,
          subtype,
@@ -7113,27 +7728,38 @@ index 8ace326..022b7f1 100644
      );
  }
  
-@@ -1152,15 +1097,67 @@ fn post_mouse_event_with_mode(
+@@ -1151,16 +1108,74 @@ fn post_mouse_event_with_mode(
+     // Always stamp f40 = target pid (Chromium synthetic-event filter).
      crate::input::skylight::set_integer_field(event_ptr, 40, pid as i64);
  
-     match mode {
+-    match mode {
 -        MousePostMode::Both => {
 -            // Preserve the established transport for non-left-click callers.
-+        MousePostMode::TargetedPreferred => {
-+            // One dispatch only. Posting both transports duplicates events on
-+            // AppKit. Fall back only when the private entry point is absent.
-+            if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false) {
-+                event.post_to_pid(pid as libc::pid_t);
-+            }
-+        }
-+        MousePostMode::PublicOnly => event.post_to_pid(pid as libc::pid_t),
-+        MousePostMode::TrackingBoth => {
-+            // Wheel tracking primers preserve both idempotent mouse-move routes.
-             crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false);
-             event.post_to_pid(pid as libc::pid_t);
-         }
+-            crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false);
+-            event.post_to_pid(pid as libc::pid_t);
+-        }
 -        MousePostMode::PublicOnly => event.post_to_pid(pid as libc::pid_t),
-+    }
++    super::held_input::post(
++        super::held_input::Route::Pid { pid, auth: false },
++        event,
++        || {
++            match mode {
++                MousePostMode::TargetedPreferred => {
++                    // One dispatch only. Posting both transports duplicates events on
++                    // AppKit. Fall back only when the private entry point is absent.
++                    if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false) {
++                        event.post_to_pid(pid as libc::pid_t);
++                    }
++                }
++                MousePostMode::PublicOnly => event.post_to_pid(pid as libc::pid_t),
++                MousePostMode::TrackingBoth => {
++                    // Wheel tracking primers preserve both idempotent mouse-move routes.
++                    crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false);
++                    event.post_to_pid(pid as libc::pid_t);
++                }
++            }
++        },
++    );
 +    if let (Some(wid), Some(local)) = (wid, window_local) {
 +        record_window_pointer(pid, wid, local, event.get_type());
      }
@@ -7184,7 +7810,7 @@ index 8ace326..022b7f1 100644
  /// Post a stamped `mouseMoved` to `pid` at `point` before a down/up pair.
  ///
  /// AppKit hit-tests a button/`NSView` against the cursor-tracking state the
-@@ -1253,7 +1250,7 @@ pub fn scroll_wheel_at_xy(
+@@ -1253,7 +1268,7 @@ pub fn scroll_wheel_at_xy(
                  .unwrap_or_default()
                  .subsec_nanos() as i64,
          ),
@@ -7193,7 +7819,7 @@ index 8ace326..022b7f1 100644
      );
      std::thread::sleep(std::time::Duration::from_millis(12));
  
-@@ -1292,11 +1289,15 @@ pub fn scroll_wheel_at_xy(
+@@ -1292,11 +1307,15 @@ pub fn scroll_wheel_at_xy(
          // f40 = target pid (Chromium synthetic-event filter).
          crate::input::skylight::set_integer_field(event_ptr, 40, pid as i64);
  
@@ -8315,6 +8941,341 @@ index 0000000..14c7931
 +        result
 +    }
 +}
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+index 94c332a..4114ce3 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+@@ -846,7 +846,7 @@ fn foreground_settle_ms(pid: i32, frontmost_pid: Option<i32>) -> u64 {
+ /// the keystrokes. Returns whether we can *positively confirm* the text landed:
+ /// - unreadable `after` (`None`) → unverifiable → `false` (Catalyst case; the
+ ///   agent must confirm via screenshot).
+-/// - `after` contains the complete text → `true`.
++/// - `after` shows the text newly inserted → `true`.
+ /// - empty input text → trivially `true`.
+ ///
+ /// Apps that normalize input (smart quotes, autocomplete) may fail the
+@@ -854,25 +854,63 @@ fn foreground_settle_ms(pid: i32, frontmost_pid: Option<i32>) -> u64 {
+ /// (unverified) rather than erroring, so the agent can still confirm.
+ #[cfg(test)]
+ fn verify_typed(before: Option<&str>, after: Option<&str>, text: &str) -> bool {
+-    matches!(typed_progress(before, after, text), TypedProgress::Complete)
++    matches!(
++        typed_progress(before, after, text, None),
++        TypedProgress::Complete
++    )
++}
++
++/// `after` is `before` with `text` inserted at one position, replacing the
++/// selection (possibly empty) there.
++fn inserted_into(before: &str, after: &str, text: &str) -> bool {
++    after.match_indices(text).any(|(start, _)| {
++        let (head, tail) = (&after[..start], &after[start + text.len()..]);
++        head.len() + tail.len() <= before.len()
++            && before.starts_with(head)
++            && before.ends_with(tail)
++    })
+ }
+ 
+ /// Classify an observable insertion without mistaking a prefix for complete
+ /// delivery. A positive length delta is an exact delivered-character count for
+ /// insert-at-cursor typing; it is capped at the request size defensively.
+-fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> TypedProgress {
++///
++/// Text already present in `before` is not evidence: a target that accepts an
++/// insert and ignores it would otherwise "confirm" any repeated text. The value
++/// must change as an insertion would, or gain an occurrence of the text. An
++/// unchanged value confirms only when `selected`, the selection before typing,
++/// was exactly the text it was replaced with.
++fn typed_progress(
++    before: Option<&str>,
++    after: Option<&str>,
++    text: &str,
++    selected: Option<&str>,
++) -> TypedProgress {
+     if text.is_empty() {
+         return TypedProgress::Complete;
+     }
+     let Some(after) = after else {
+         return TypedProgress::Unverifiable;
+     };
+-    if after.contains(text) {
+-        return TypedProgress::Complete;
+-    }
+     let Some(before) = before else {
+-        return TypedProgress::Unverifiable;
++        return if after.contains(text) {
++            TypedProgress::Complete
++        } else {
++            TypedProgress::Unverifiable
++        };
+     };
++    if after == before {
++        return if selected == Some(text) {
++            TypedProgress::Complete
++        } else {
++            TypedProgress::Unchanged
++        };
++    }
++    if inserted_into(before, after, text)
++        || after.matches(text).count() > before.matches(text).count()
++    {
++        return TypedProgress::Complete;
++    }
+     let delivered = after
+         .chars()
+         .count()
+@@ -885,14 +923,18 @@ fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> Type
+     }
+ }
+ 
+-/// Read the focused/target field's `AXValue`, for before/after read-back.
+-/// Re-fetches the focused element each call when no explicit element is given
+-/// (cheap, and focus is stable across our own keystrokes).
+-fn read_axvalue(pid: i32, element_ptr_and_idx: Option<(usize, Option<usize>)>) -> Option<String> {
++/// Read a string attribute of the focused/target field, for before/after
++/// read-back. Re-fetches the focused element each call when no explicit
++/// element is given (cheap, and focus is stable across our own keystrokes).
++fn read_string(
++    pid: i32,
++    element_ptr_and_idx: Option<(usize, Option<usize>)>,
++    attribute: &str,
++) -> Option<String> {
+     if let Some((ptr, _)) = element_ptr_and_idx {
+-        unsafe { copy_string_attr(ptr as AXUIElementRef, "AXValue") }
++        unsafe { copy_string_attr(ptr as AXUIElementRef, attribute) }
+     } else if let Some(el) = unsafe { focused_element_of_pid(pid) } {
+-        let v = unsafe { copy_string_attr(el, "AXValue") };
++        let v = unsafe { copy_string_attr(el, attribute) };
+         unsafe {
+             CFRelease(el as _);
+         }
+@@ -902,7 +944,7 @@ fn read_axvalue(pid: i32, element_ptr_and_idx: Option<(usize, Option<usize>)>) -
+     }
+ }
+ 
+-/// Window-bound variant of [`read_axvalue`]: when no explicit element is
++/// Window-bound variant of [`read_string`] for `AXValue`: when no explicit element is
+ /// addressed and a `window_id` is known, the focused element is used ONLY when
+ /// its ancestry provably resolves to that exact window. A sibling window's
+ /// focused field must never supply before/after evidence for the requested
+@@ -912,18 +954,27 @@ fn read_axvalue_bound(
+     pid: i32,
+     element_ptr_and_idx: Option<(usize, Option<usize>)>,
+     window_id: Option<u32>,
++) -> Option<String> {
++    read_string_bound(pid, element_ptr_and_idx, window_id, "AXValue")
++}
++
++fn read_string_bound(
++    pid: i32,
++    element_ptr_and_idx: Option<(usize, Option<usize>)>,
++    window_id: Option<u32>,
++    attribute: &str,
+ ) -> Option<String> {
+     if element_ptr_and_idx.is_some() {
+-        return read_axvalue(pid, element_ptr_and_idx);
++        return read_string(pid, element_ptr_and_idx, attribute);
+     }
+     match window_id {
+         Some(wid) => unsafe {
+             let el = crate::ax::exact_target::focused_element_in_window(pid, wid)?;
+-            let v = copy_string_attr(el, "AXValue");
++            let v = copy_string_attr(el, attribute);
+             CFRelease(el as _);
+             v
+         },
+-        None => read_axvalue(pid, None),
++        None => read_string(pid, None, attribute),
+     }
+ }
+ 
+@@ -1007,6 +1058,7 @@ fn cgevent_type_verified(
+     text: &str,
+     delay_ms: u64,
+     before: Option<&str>,
++    selected: Option<&str>,
+     element_ptr_and_idx: Option<(usize, Option<usize>)>,
+     settle_ms: u64,
+     window_id: Option<u32>,
+@@ -1045,13 +1097,18 @@ fn cgevent_type_verified(
+     // visible instead of treating any growth as success. If the deadline
+     // expires after observable growth, surface the exact partial count.
+     let deadline = std::time::Instant::now() + DELIVERY_DRAIN_TIMEOUT;
+-    Ok(await_typed_delivery(before, text, deadline, || {
+-        read_axvalue_bound(pid, element_ptr_and_idx, window_id)
+-    }))
++    Ok(await_typed_delivery(
++        before,
++        selected,
++        text,
++        deadline,
++        || read_axvalue_bound(pid, element_ptr_and_idx, window_id),
++    ))
+ }
+ 
+ fn await_typed_delivery(
+     before: Option<&str>,
++    selected: Option<&str>,
+     text: &str,
+     deadline: std::time::Instant,
+     mut read_value: impl FnMut() -> Option<String>,
+@@ -1059,7 +1116,7 @@ fn await_typed_delivery(
+     let mut best_partial = None;
+     loop {
+         let after = read_value();
+-        match typed_progress(before, after.as_deref(), text) {
++        match typed_progress(before, after.as_deref(), text, selected) {
+             TypedProgress::Complete => return (true, Some(text.chars().count())),
+             TypedProgress::Partial(delivered) => {
+                 best_partial =
+@@ -1104,6 +1161,7 @@ fn type_text_blocking(
+     // window-addressed request it must come from the exact target window,
+     // never a same-process sibling.
+     let before = read_axvalue_bound(pid, element_ptr_and_idx, window_id);
++    let selected = read_string_bound(pid, element_ptr_and_idx, window_id, "AXSelectedText");
+ 
+     // --- Foreground rung: explicit agent request (skip AX/background ladder). ---
+     if delivery_mode.is_foreground() {
+@@ -1142,6 +1200,7 @@ fn type_text_blocking(
+                 text,
+                 delay_ms,
+                 before.as_deref(),
++                selected.as_deref(),
+                 element_ptr_and_idx,
+                 foreground_settle_ms,
+                 window_id,
+@@ -1231,6 +1290,7 @@ fn type_text_blocking(
+             text,
+             delay_ms,
+             before.as_deref(),
++            selected.as_deref(),
+             element_ptr_and_idx,
+             /*settle_ms=*/ 0,
+             window_id,
+@@ -1269,7 +1329,12 @@ fn type_text_blocking(
+         // safely and unreadable AX state is reported as indeterminate.
+         let after = unsafe { copy_string_attr(element, "AXValue") };
+         let ax_progress = if err == kAXErrorSuccess {
+-            Some(typed_progress(before.as_deref(), after.as_deref(), text))
++            Some(typed_progress(
++                before.as_deref(),
++                after.as_deref(),
++                text,
++                selected.as_deref(),
++            ))
+         } else {
+             None
+         };
+@@ -1343,6 +1408,7 @@ fn type_text_blocking(
+         text,
+         delay_ms,
+         before.as_deref(),
++        selected.as_deref(),
+         element_ptr_and_idx,
+         /*settle_ms=*/ 0,
+         window_id,
+@@ -1458,7 +1524,12 @@ mod tests {
+     fn large_atomic_ax_payloads_are_not_subject_to_the_synthesis_budget() {
+         assert!(synthesis_preflight(TextDeliveryRoute::AtomicAx, 100_000, 200).is_none());
+         assert_eq!(
+-            typed_progress(None, Some(&"x".repeat(11_500)), &"x".repeat(11_500)),
++            typed_progress(
++                Some(""),
++                Some(&"x".repeat(11_500)),
++                &"x".repeat(11_500),
++                None
++            ),
+             TypedProgress::Complete,
+             "a successful one-call AX insertion remains eligible regardless of size"
+         );
+@@ -1505,7 +1576,7 @@ mod tests {
+     #[test]
+     fn observable_prefix_is_partial_not_verified() {
+         assert_eq!(
+-            typed_progress(Some(""), Some("BEGINpayload"), "BEGINpayloadEND"),
++            typed_progress(Some(""), Some("BEGINpayload"), "BEGINpayloadEND", None),
+             TypedProgress::Partial(12)
+         );
+         assert!(!verify_typed(
+@@ -1525,6 +1596,7 @@ mod tests {
+         let mut reads = 0;
+         let delivery = await_typed_delivery(
+             Some(""),
++            None,
+             text,
+             std::time::Instant::now() + std::time::Duration::from_secs(1),
+             || {
+@@ -1540,6 +1612,7 @@ mod tests {
+     fn drained_prefix_reports_the_delivered_character_count() {
+         let delivery = await_typed_delivery(
+             Some(""),
++            None,
+             "BEGIN-payload-END",
+             std::time::Instant::now(),
+             || Some("BEGIN".to_owned()),
+@@ -1547,6 +1620,62 @@ mod tests {
+         assert_eq!(delivery, (false, Some(5)));
+     }
+ 
++    #[test]
++    fn text_already_in_the_field_is_not_evidence_of_delivery() {
++        // A target that accepts the insert and ignores it leaves the value
++        // as it was; the earlier contains-check confirmed these.
++        assert_eq!(
++            typed_progress(Some("q"), Some("q"), "q", None),
++            TypedProgress::Unchanged
++        );
++        assert_eq!(
++            typed_progress(Some("qw"), Some("qw"), "qw", Some("")),
++            TypedProgress::Unchanged
++        );
++        assert_ne!(
++            typed_progress(Some("q"), Some("qx"), "q", None),
++            TypedProgress::Complete
++        );
++        let delivery =
++            await_typed_delivery(Some("q"), None, "q", std::time::Instant::now(), || {
++                Some("q".to_owned())
++            });
++        assert_eq!(delivery, (false, Some(0)));
++    }
++
++    #[test]
++    fn genuine_insertions_confirm_even_when_the_text_repeats() {
++        assert_eq!(
++            typed_progress(Some("q"), Some("qq"), "q", None),
++            TypedProgress::Complete
++        );
++        // "ab" inserted in the middle of "ab" leaves one occurrence.
++        assert_eq!(
++            typed_progress(Some("ab"), Some("aabb"), "ab", Some("")),
++            TypedProgress::Complete
++        );
++        // Replacing a selection: "hello world" with "world" selected → "hello there".
++        assert_eq!(
++            typed_progress(
++                Some("hello world"),
++                Some("hello there"),
++                "there",
++                Some("world")
++            ),
++            TypedProgress::Complete
++        );
++        // Replacing a selection with identical text leaves the value unchanged.
++        assert_eq!(
++            typed_progress(Some("q"), Some("q"), "q", Some("q")),
++            TypedProgress::Complete
++        );
++        // An app completion that adds text after the insert still gained an occurrence.
++        assert_eq!(
++            typed_progress(Some(""), Some("hello"), "hel", None),
++            TypedProgress::Complete
++        );
++    }
++
+     #[test]
+     fn verify_typed_unchanged_is_unverified() {
+         // Readable but the field didn't change and doesn't contain the text.
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/zoom.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/zoom.rs
 index f389448..9387a9f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/zoom.rs

@@ -3,7 +3,14 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.23`. +22 retains recording context through right/double-click
+`0.28.2+mako.24`. +24 releases input a dead daemon left held on macOS: each
+key or button press is journaled beside the socket before it is posted, the
+next daemon on that socket posts the missing releases to the same process (pid
+and start time), and SIGTERM or clean shutdown releases held input and deletes
+the journal. +24 also stops confirming typed text merely because the field
+already contained it. See the
+[driver-death evidence](../../docs/local-control-map.md#lc-08--lc-14--uncertainty-ownership-and-independent-targets).
++22 retains recording context through right/double-click
 blocking workers. +23 retains connected implicit sessions across SDK idle cleanup;
 named TTL, explicit end and transport-close cleanup remain enforced. See
 [media and lifecycle evidence](../../docs/local-control-media-fixes.md).
@@ -59,7 +66,10 @@ package. Sway hidden capture/video and other compositors remain unverified. Linu
 passes complete jobs and X11 recording under OrbStack translation.
 Native AMD +19 acceptance covers X11 jobs/gestures/recording, Sway scale and
 rotation and standalone lifecycle; see [platform validation](../../docs/local-control-native-validation.md).
-Linux remains at +19 until current target packaging and acceptance complete.
+Linux +24 is packaged for ARM64 and x64 and passes the same suites on ARM64 (plus
+labwc/Weston/KWin, GNOME 46 and the CLI/lifecycle jobs) and on translated x64
+([evidence](../../docs/audits/2026-09-26/linux24/README.md)). Native x64 has not
+rerun on +24. The held-input journal is macOS-only.
 
 `node scripts/package-control-driver.mjs <checkout>` signs the Mac build and checks
 its binary/version. `node scripts/install-control-driver.mjs` installs the manifest's
