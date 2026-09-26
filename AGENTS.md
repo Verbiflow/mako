@@ -975,6 +975,16 @@ Opening a thread does not start an agent; sending a prompt does. `MAKO_PROFILE`
 or `--sandbox` explicitly selects another separate host. Never silently create a
 second host when attachment fails.
 
+To look at the interface without being able to change anything, run
+`npm run desk:fixture`. It serves a web page on a `fixture-<checkout>` profile,
+starts no desktop window, and its host refuses every host call outside
+`electron/contracts/fixture-desk-policy.ts` from every client: the page proxy,
+Electron windows on its socket, and its own hidden desk windows that agents
+drive. Writes, provider calls, git, terminals and unknown calls fail with
+`fixture-refused` before their arguments are parsed. It still reads the real
+conversation catalog, so real titles and transcripts appear. A plain `--sandbox`
+or `dev` desk changes real conversations and settings.
+
 The host keeps its own log at `<data root>/logs/host.log` (`electron/host-log.ts`,
 rotated to `.1` at 4 MiB) because it is spawned detached with its stdio ignored.
 Every provider spawn, startup step, refused setting, failed prompt and exit is one

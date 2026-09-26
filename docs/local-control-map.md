@@ -40,8 +40,8 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
 | Browser capture | Installed ordinary Aside preview/recording reaches 56.84/57.73 distinct fps at 1920×1080 with two viewers, exact inputs and unchanged screenshot pixels. Corrected loaded input-to-visible p95 is 121/73/82 ms for click/type/scroll through a production offscreen viewer. | Earlier installed loaded recordings and the combined-build 120-second isolated-host run interrupt at the two-second backlog guard; the uninstalled timestamped source completes them. A matched A/B shows preview rate follows machine load (47.97–58.25 fps), not encoding method; the 55-fps preview gate under contention stays open. Sustained efficiency, physical-screen latency, remote delivery and broader native rates remain open. Focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.24 selected for new launches (September 26): a daemon killed or stopped mid-key no longer leaves the key held, and typing text already in a field is no longer falsely confirmed; running daemons keep +23 until their host starts a new one. Connected implicit-session idle lifetime and right/double-click cursor acceptance pass; fresh isolated right/double-click recording passes; the current default-host daemon loads +23 and installed right-click timeline propagation passes; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux accepts 60 fps requests (+19, repeated on +24), but its native CLI clip is under a second; GNOME capture polls at ~5 fps. |
-| Standalone Linux | +mako.24 with the current engine (September 26) passes ARM64 X11 jobs/recording, three Sway scale/rotation configurations, labwc/Weston/KWin, GNOME 46, both CLI workflows and eleven lifecycle cases, and the five acceptance suites on translated x64. Native AMD x64 last passed with +mako.19 (September 24). Acceptance containers now run as any calling UID. [+24 evidence](audits/2026-09-26/linux24/README.md). | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | Queued: candidate `26b4f06bc693a102` (built 09:16 UTC Sep 26) installs when the default host is idle; see [delivery order](#delivery-order). Installed and running: `6ac3f4fbd690b74d` (built 01:15:34 UTC Sep 26; default host PID 34870), installed 01:25 UTC after the host went idle, startup verified, Settings receipt `ok:true` and installation state `idle`. Installed recording, MCP, native cursor-idle and both two-minute preview/recording jobs pass. It replaced `c291bf2845c02eec` (built 22:21:43 UTC, installed outside this workstream), which is retained as the backup. Earlier combined build `1fb3bfb7b3d14e96` (21:51:28 UTC) passed fresh default-host browser/native recovery. Sustained recording still interrupts. Previous builds `3c865f5347d339c7` and `48bf10dc948aa13c` are historical. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.24 is now selected for new Mac driver launches (September 26); the current installed daemon still runs +mako.23 until its host starts a new one. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
+| Standalone Linux | +mako.24 with the current engine (September 26) passes ARM64 X11 jobs/recording, three Sway scale/rotation configurations, labwc/Weston/KWin, GNOME 46, both CLI workflows and eleven lifecycle cases. Native AMD x64 (EC2, AMD EPYC 9R14) passes the five acceptance suites, both CLI workflows and eleven lifecycle cases on +mako.24 (September 26). Acceptance containers now run as any calling UID. [+24 evidence](audits/2026-09-26/linux24/README.md). | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
+| Installed components | Installed and running: `26b4f06bc693a102` (built 09:16 UTC Sep 26; default host PID 12099), installed after the host went idle, startup verified 09:32 UTC, Settings receipt `ok:true`; the previous app is kept as the backup. Installed driver death, ordinary preview and fresh-agent LC-22 pass; the loaded preview's freeze gate fails; see [delivery order](#delivery-order). Local fixes made after it (not installed): the fixture desk (A09), named native sessions that ended after five idle minutes, window-state errors that hid the driver's message, and a preview meter that counted a viewer stall as an idle source. Previous: `6ac3f4fbd690b74d` (built 01:15:34 UTC Sep 26), installed 01:25 UTC, startup verified, Settings receipt `ok:true`. Installed recording, MCP, native cursor-idle and both two-minute preview/recording jobs pass. It replaced `c291bf2845c02eec` (built 22:21:43 UTC, installed outside this workstream), which is retained as the backup. Earlier combined build `1fb3bfb7b3d14e96` (21:51:28 UTC) passed fresh default-host browser/native recovery. Sustained recording still interrupts. Previous builds `3c865f5347d339c7` and `48bf10dc948aa13c` are historical. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.24 is now selected for new Mac driver launches (September 26); the current installed daemon still runs +mako.23 until its host starts a new one. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -78,12 +78,46 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
   focus effects; a regular desktop cannot claim universal background popup behavior.
 - Retain the patched Cua native executable. Browser control is Mako-owned. Remove
   proven unused dependencies, not verified native functionality or license files.
-- A live Mako desk is a real app client. Artificial loading states belong in an
-  isolated fixture until a properly enforced preview mode exists.
+- A live Mako desk is a real app client. Looking at the interface without
+  changing anything uses the fixture desk (`npm run desk:fixture`), whose host
+  refuses every call outside `electron/contracts/fixture-desk-policy.ts`. Add a
+  channel to that allowlist only after reading its handler; a renderer stub or
+  label is not a boundary.
 
 ## Delivery order
 
-**Queued (September 26, 09:18 UTC): candidate `26b4f06bc693a102` installs when the default host is idle.**
+**Next (September 26, local, not installed):** build and queue one candidate with
+the fixture desk (A09, [LC-23](#lc-23--preview-isolation-and-installed-browser-rollout)),
+the native session expiry fix, the window-state error fix and the preview meter
+stall fix, using the install job's own lifecycle and cancel path once the default
+host is idle. Then run the installed fixture desk test and native `get_window_state`
+after more than five idle minutes. Open after that: the loaded preview freeze
+(item 2), the restoration visibility failure (item 2), and the LC-22 usability
+findings.
+
+**Milestone (September 26, 09:32 UTC): build `26b4f06bc693a102` is installed; startup verified.**
+Installed checks run from a Mako task against the default host (PID 12099):
+
+- **Driver death (LC-08), passed.** Through the default host's task session and
+  its embedded daemon: killing the stdio driver mid-typing reports `driver-exited` /
+  `unknown`, blocks the target until it is observed again, and replays nothing; a
+  daemon killed with SIGKILL mid-key has its key released by the replacement
+  daemon; one stopped with SIGTERM releases its own key. Typing "y" into "zzyy"
+  gives "zzyyy". Neither fixture was ever activated. Script:
+  [installed-driver-death.mjs](audits/2026-09-26/installed-3ba69b6e251ab7e7/installed-driver-death.mjs).
+- **Preview, ordinary load: passed; heavy load: labelled, but the freeze gate
+  fails.** Numbers are in item 2.
+- **Fresh-agent LC-22, passed (browser).** The fixture's own record shows the
+  intended Shipping and Billing values and exactly one generate; the agent needed
+  12 help lookups. Usability findings are in [LC-22](#lc-22--agent-facing-contract-and-discovery).
+- **Found while checking:** native `get_window_state` failed with a bare error.
+  The driver ends a named session after five idle minutes and then refuses calls
+  that name it, and Mako's window-state compaction discarded the driver's
+  message. Fixed locally (`control-session.ts`: one retry under a new session
+  name, which is safe because the driver refuses before running the tool; errors
+  keep the driver's text). `test-native-session-expiry.ts` fails without the fix.
+
+**Previous queue record (September 26, 09:18 UTC): candidate `26b4f06bc693a102` installs when the default host is idle.**
 It contains native driver-death handling (LC-08), program syntax errors as
 `not-dispatched` (ledger A21), the preview shown rate (item 2 below), LC-22
 discovery guidance and visible text, and viewer displayed-size decoding (item 6).
@@ -212,7 +246,11 @@ Next:
    during which the source kept producing now counts
    (`test-control-preview-painter.ts`); not installed. Both foreground changes
    during these audits were physical clicks into Aside (WindowServer button events
-   11 ms before activation), not the audit.
+   11 ms before activation), not the audit. Separately, the two-worker run and the
+   30 s ordinary recheck failed the restoration check: after the last viewer
+   closed, the page stayed visible and focused instead of returning to hidden.
+   Not diagnosed yet; Mako's own preview consumer is one suspect. Logs:
+   [installed audits](audits/2026-09-26/installed-3ba69b6e251ab7e7/).
    [Shown-rate evidence](local-control-media-fixes.md#preview-shown-rate-under-load-local-september-26).
    Process priority is weaker on macOS: without root Mako can
    only lower other work (for example agent subprocesses), not raise itself.
@@ -541,7 +579,8 @@ September 26 (local, in candidate `26b4f06bc693a102`), the remaining discovery i
   headless hosts, including Mako's own `--web` desk, are reached through the desk
   entry in `control.browsers()`. A PID with no process says so.
 - **Live desk (A09 wording).** The desk's discovery guidance says it is a live
-  client of the real app, not a sandbox. Isolation itself is still open.
+  client of the real app, not a sandbox. A fixture desk now says it only reads
+  (see [LC-23](#lc-23--preview-isolation-and-installed-browser-rollout); local).
 - **Visible text vs accessible name (A07).** Page controls report
   `visibleText` when their shown label differs from their name; `query`/`text`
   search it; exact matching is unchanged. A miss for a name that is only visible
@@ -556,8 +595,26 @@ September 26 (local, in candidate `26b4f06bc693a102`), the remaining discovery i
 `test-control-repl`, `test-control-input-errors`, `test-desk-browser`, typecheck
 and lint pass; real Chrome confirms visible text on labelled buttons and links.
 
-Next: the fresh-agent acceptance below on the installed build. Capability/result
-typing and long-running start/resume/cancel without guessing a ticket shape remain.
+**Installed fresh-agent run (build `26b4f06bc693a102`, September 26): passed.**
+A fresh agent with only the public CLI and help edited a local fixture with two
+identical forms, set Shipping to "Ada Lovelace" and Billing to "Grace Hopper",
+pressed Generate once, took an element screenshot (528×37) and made a 24.28 s
+H.264 recording. The fixture's own server record confirms both values and exactly
+one generate. It needed 12 help lookups. What slowed it down:
+
+- `open` returns no URL or title, so the agent could not confirm which page it had.
+- CLI `act` has no scoped locator, expectation or close, which forced a program
+  for work the CLI should do in one command.
+- `api --topic` does not list its valid topics.
+- CSS-selector refusals print generic placeholders rather than the offending
+  selector.
+- The element screenshot came back scaled by 0.974 without `--max-side` having
+  been asked for.
+- The recording directory holds both `timeline.json` and `timeline.jsonl`, and
+  help does not say which to read.
+
+Next: fix these, then repeat with a new fresh agent. Capability/result typing and
+long-running start/resume/cancel without guessing a ticket shape remain.
 
 Done when a fresh agent can discover/connect, scope duplicate controls, capture an
 element, handle an invalid request and finish/recover a recording from public help,
@@ -566,7 +623,7 @@ Use the [ledger](local-control-agent-issues.md) for exact bug closure criteria.
 
 ## LC-08 / LC-14 — Uncertainty, ownership and independent targets
 
-**Status: target recovery, cancellation and native driver death implemented and fault-tested locally; driver death also passes against the real driver. Driver +mako.24 (held-input release, no false typing confirmation) is installed for new driver launches; the Mako host changes are in candidate `26b4f06bc693a102`, queued to install when the default host is idle.** Program syntax errors now report `syntax-error` / `not-dispatched` instead of `unknown` ([A21](local-control-agent-issues.md#discovery-targeting-and-api)).
+**Status: target recovery, cancellation and native driver death implemented and fault-tested; installed acceptance passed on build `26b4f06bc693a102` (September 26) through the default host with driver +mako.24: stdio driver killed mid-typing, daemon killed and daemon stopped mid-key, no replay, no false confirmation, keys released ([delivery order](#delivery-order)).** Found during that run and fixed locally: named native sessions end after five idle minutes, and window-state calls then failed without the driver's message. Program syntax errors now report `syntax-error` / `not-dispatched` instead of `unknown` ([A21](local-control-agent-issues.md#discovery-targeting-and-api)).
 The shared host and BrowserService now classify browser commands by effect.
 Read-only helpers preserve refs; raw mutations retire only their target's refs.
 Lost raw browser replies block that target until a successful observation/capture.
@@ -733,10 +790,44 @@ with 326 unchanged foreground samples. Its actual packaged CLI and worker pass
 state/cleanup checks. See [CLI candidate evidence](local-control-cli-evidence.md).
 It has not replaced the default installed host.
 
-Next: define the supported fixture/preview boundary and enforce it at the host
-bridge before offering side-effect-free previews. Merely describing a live desk
-as read-only, hiding controls or stubbing renderer modules is insufficient. Then
-verify/install the latest exact host/extension builds after active work safely ends.
+**Fixture desk (A09), September 26: enforced and tested locally; not installed.**
+`npm run desk:fixture` (`electron/start.mjs --fixture`) starts a host on a
+`fixture-<checkout>` profile with `MAKO_FIXTURE_DESK=1` and serves only the web
+page; it refuses `--shared` and non-fixture profiles, and refuses to serve if the
+host does not report `fixture: true`. The boundary is in the host, not the page:
+
+- Every host call, from every transport, passes one function in
+  `electron/ipc/register.ts`. That covers the host's own hidden desk windows,
+  which agents drive and which call the host over in-process IPC (they never
+  touch the socket or the dev proxy), plus Electron windows and pages on the
+  socket. A fixture host refuses anything outside the 19 reads in
+  `electron/contracts/fixture-desk-policy.ts` with `fixture-refused`, before
+  the arguments are parsed. The only socket-only exception is
+  `lifecycle-command`, which the launcher uses to replace an outdated fixture
+  host; it stops only that host.
+- The Vite proxy refuses the same channels a second time, plus bodies that name
+  no call, and forwards exactly the bytes it checked.
+- The host turns off relay work, public version readers and automation runs, and
+  a checkout never owns the catalog login job. It still reads the real
+  conversation catalog through the shared read-only indexer, so real titles and
+  transcripts are visible.
+- The desk registration and `control.browsers()` mark it `fixture: true`, with
+  guidance that it only reads. The installed build's older runtime rejects the
+  new registration field and does not list fixture desks, so it fails closed.
+
+`scripts/test-fixture-desk.mjs` (`npm run test:fixture-desk`) runs a real
+Electron fixture host. Provider, write, git, terminal, relaunch, archive and
+unknown calls with garbage arguments are refused on the socket, the page proxy
+and a hidden desk window driven over the desk protocol; terminals and automations
+are unchanged afterwards; reads and `boot` still run; the host quits through its
+lifecycle. Disabling host enforcement fails it at the socket; removing only the
+in-process check fails it at the hidden desk window. The real launcher was also
+checked: it served a fixture page (live-start and list-models refused, threads
+served), registered a fixture desk, and the interface rendered. Remaining: install,
+then an agent previewing a UI change through the fixture desk. Seeded fixture
+conversations in place of the real catalog are not built.
+
+Next: verify/install the latest exact host/extension builds after active work safely ends.
 Keep ordinary regular profiles and saved-browser routing; explicitly exercise
 worker restart, extension reload, detach, foreign frames and unavailable profiles.
 
@@ -874,7 +965,7 @@ is not native x64 evidence. The first run exposed a runner bug: containers run a
 the calling UID, which the image usually lacks (GitHub-hosted runners use 1001),
 so D-Bus refused to start and every suite failed. The September 24 EC2 pass
 worked only because its user was UID 1000. The start scripts now give an unknown
-UID a passwd entry through `nss_wrapper`; both +24 runs used UID 501.
+UID a passwd entry through `nss_wrapper`; both local +24 runs used UID 501.
 [Evidence](audits/2026-09-26/linux24/README.md).
 
 Current-version continuation: KWin 6.3.6, labwc 0.8.3 and Weston 14.0.2 pass
@@ -886,9 +977,19 @@ September 24 bounded-read checks: current shared engine + Linux +19 passes
 then completes all sixty background form jobs. This adds read-contract coverage;
 it does not enable unverified gestures or capture.
 
-Next: rerun native x64 with +mako.24 (EC2 per [CI](local-control-ci.md), or the
-contributor workflow once published, which now exercises the calling-UID fix), then
-extend compositor/version and real display/GPU coverage. AMD x64 Sway now
+September 26, native x64: +mako.24 with the current engine passes on a
+disposable EC2 instance (8 vCPU AMD EPYC 9R14, Ubuntu 24.04, kernel 7.0 aws):
+the five acceptance suites (X11 jobs and recording, Sway normal, 150% and 150%
+rotated), the runtime image build, the native GTK and Chromium CLI jobs, and all
+eleven lifecycle scenarios. The instance ran in an isolated VPC with no IAM
+profile, with instance metadata disabled and checked before any code was copied,
+and SSH open only to the operator's address; only prepared payloads were copied.
+The instance, key, security group and VPC were deleted afterwards and the
+deletion was confirmed.
+[Evidence](audits/2026-09-26/linux24/x64-native-ec2/).
+
+Next: run the contributor workflow once published (it exercises the calling-UID
+fix on GitHub's UID), then extend compositor/version and real display/GPU coverage. AMD x64 Sway now
 has scale/rotation and hidden-job evidence. ARM64 Sway additionally has load
 evidence; GNOME 46 has
 scoped capture/input evidence; Weston/labwc have semantic hidden-job evidence,

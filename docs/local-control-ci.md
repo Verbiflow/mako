@@ -15,7 +15,11 @@ CLI/+mako.19 passed X11, Sway scale/rotation, both CLI jobs and eleven
 lifecycle scenarios on AMD EPYC on September 24; see [evidence](local-control-native-validation.md).
 +mako.24 passes the same five suites on ARM64 and translated x64, the three
 compositors, GNOME 46 and the CLI/lifecycle jobs on ARM64 (September 26,
-[evidence](audits/2026-09-26/linux24/README.md)); native x64 has not rerun.
+[evidence](audits/2026-09-26/linux24/README.md)). Native x64 with +mako.24 passed
+the five suites, both CLI jobs and eleven lifecycle scenarios on a disposable EC2
+instance (AMD EPYC 9R14) on September 26, following the EC2 rules below; the
+instance and its network were deleted afterwards
+([evidence](audits/2026-09-26/linux24/x64-native-ec2/)).
 The GitHub workflow is prepared locally; that is not a published workflow run.
 The [runtime design](local-control-runtime.md) distinguishes this test package
 from the standalone cloud-service launcher, which now has its own lifecycle suite.
