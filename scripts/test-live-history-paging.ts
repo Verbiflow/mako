@@ -222,6 +222,54 @@ try {
   const expected = (await import("../src/lib/exchanges")).responseText(fullProjection.exchanges[0]!)
   assert.equal(await completeLiveAnswer(id, exchange), expected)
   assert.equal(acpStore.get().conversations[id], copyView, "Copy leaves the reading position and state intact")
+  // A running turn longer than one page, then a steer, on every harness and
+  // for hosts that do and do not name earlier prompts. The first page starts
+  // after the running prompt: that prompt is not redrawn at the end, and once
+  // its page loads it appears once, with the steer inside its answer.
+  for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+    for (const namesEarlier of [true, false]) {
+      const label = `${harness}${namesEarlier ? "" : " (no earlierRequests)"}`
+      const prompt = `${harness}-running`
+      const steer = `${harness}-steer`
+      const long: LiveSnapshot = { ...source, epoch: `steer-${label}`, revision: 30, base: null, baseCoveredBlocks: 0,
+        session: { ...source.session, harness, status: "running" },
+        requests: [
+          { id: `${harness}-earlier`, text: "Earlier question", attachments: [], status: "completed" },
+          { id: prompt, text: "Running prompt", attachments: [], status: "dispatching" },
+        ],
+        blocks: [
+          { type: "user", requestId: `${harness}-earlier`, text: "Earlier question" },
+          { type: "text", id: "earlier-answer", text: "Earlier answer." },
+          { type: "user", requestId: prompt, text: "Running prompt" },
+          ...Array.from({ length: 300 }, (_, n) => n % 3 === 0
+            ? { type: "tool" as const, id: `tool-${n}`, title: "Read", toolKind: "read", status: "completed", input: "{}", output: `Output ${n}` }
+            : { type: "text" as const, id: `work-${n}`, text: `Work ${n}.` }),
+          { type: "user", requestId: steer, steeringFor: prompt, text: "Steer" },
+          ...Array.from({ length: 20 }, (_, n) => ({ type: "text" as const, id: `after-${n}`, text: `After ${n}.` })),
+        ] }
+      const view = await read<LiveSnapshot>(reader, long, { kind: "snapshot" })
+      assert.ok(view.history!.blockStart > 2, `${label}: the first page starts after the running prompt`)
+      applyLiveSnapshot(namesEarlier ? view : { ...view, history: { ...view.history!, earlierRequests: [] } })
+      const tail = acpStore.get().conversations[id]!.projection!
+      assert.ok(!tail.messages.some((message) => message.id === `acp-request-${prompt}`),
+        `${label}: the unloaded running prompt is not redrawn`)
+      assert.equal(tail.exchanges.length, 1, `${label}: the steer stays in the answer, not a new question`)
+      assert.equal(tail.exchanges[0]!.prompt, undefined)
+      assert.ok(tail.exchanges[0]!.response.some((message) => message.id === `acp-request-${steer}`))
+      for (let pages = 0; acpStore.get().conversations[id]!.history!.blockStart > 2; pages++) {
+        assert.ok(pages < 20, `${label}: every earlier page makes progress`)
+        await loadEarlierLive(id)
+      }
+      const full = acpStore.get().conversations[id]!.projection!
+      assert.equal(full.messages.filter((message) => message.id === `acp-request-${prompt}`).length, 1,
+        `${label}: the running prompt appears exactly once`)
+      const last = full.exchanges.at(-1)!
+      assert.equal(last.id, `acp-request-${prompt}`, `${label}: the running prompt heads the last exchange`)
+      assert.ok(last.response.some((message) => message.id === `acp-request-${steer}`), `${label}: the steer is inside its answer`)
+      assert.deepEqual(full.exchanges.map((exchange) => exchange.id), [`acp-request-${harness}-earlier`, `acp-request-${prompt}`])
+    }
+  }
+  console.log("PASS: long turn then steer shows the running prompt once on every harness, with or without earlierRequests")
   source.blocks = []
   source.revision = 20
   source.base = { ref: { harness: "claude", nativeId: "cache", path: "fixture" }, start: 0, hasEarlier: false, total: 1,

@@ -7,6 +7,7 @@ import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
 import { autoContinueCandidate } from "../electron/contracts/turn-continuation"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
+import { projectLive } from "../src/state/live-projection"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
 
 const id = "11111111-1111-4111-8111-111111111111"
@@ -214,6 +215,34 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   // block carries its id; the retained window still names it.
   const restored = recoverableRequests({ requests: [crashed, quit], blocks: [], history: { earlierRequests: [crashed.id] } }).map((item) => item.id)
   assert.deepEqual(restored, [quit.id], "a turn the native history shows is on screen; one that never reached the transcript stays reviewable")
+}
+// A dispatched request's prompt is the host's to show. A long turn leaves it
+// on an unloaded page; nothing stands in for it, with or without a window
+// that names earlier prompts, and later messages wait behind it.
+{
+  const running: LiveRequest = { ...request, status: "dispatching" }
+  const next: LiveRequest = { ...request, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Next message", status: "queued" }
+  const retry = { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", text: "Retry", attachments: [] }
+  const work = [{ type: "text" as const, text: "Tool output far below the prompt" }]
+  for (const history of [undefined, { earlierRequests: [] }]) {
+    for (const status of ["running", "ready", "starting"] as const) {
+      const delivery = promptDelivery({ session: { status }, blocks: work, history, requests: [running, next] })
+      assert.equal(delivery.starting, null, `a dispatched prompt off the loaded page is not redrawn (${status})`)
+      assert.deepEqual(delivery.queued.map((item) => item.id), [next.id], `a queued message waits behind the dispatched one (${status})`)
+    }
+    const failed = promptDelivery({ session: { status: "failed" }, blocks: work, history, requests: [running], pendingPrompts: [retry] })
+    assert.equal(failed.starting, null, "a retry waits while a request is still dispatching")
+    assert.deepEqual(failed.queued.map((item) => item.id), [retry.id])
+  }
+  const empty = promptDelivery({ session: { status: "running" }, blocks: [], requests: [{ ...running, text: "" }] })
+  assert.equal(empty.starting, null, "an empty dispatched prompt the host did not transcribe is not drawn either")
+  const idle = promptDelivery({ session: { status: "ready" }, blocks: work, requests: [{ ...running, status: "completed" }, next] })
+  assert.equal(idle.starting?.id, next.id, "once nothing is dispatching, the next message is drawn ahead of its turn")
+  const projected = projectLive({ session: { status: "running", harness: "cursor" }, blocks: [
+    ...work, { type: "user", requestId: "steer", steeringFor: running.id, text: "Steer" },
+  ], base: null, requests: [running, next] })
+  assert.ok(!projected.messages.some((message) => message.id === `acp-request-${running.id}`),
+    "a steer after an unloaded prompt does not redraw that prompt")
 }
 
 console.log(

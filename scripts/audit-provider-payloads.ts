@@ -103,6 +103,7 @@ const context: ProtocolContext = {
   nextRequestId: 0,
   pending: new Map(),
   items: new Map(),
+  background: { running: new Set() },
   stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
   exited: false,
   protocol: {

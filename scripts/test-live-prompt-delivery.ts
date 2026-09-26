@@ -15,6 +15,7 @@ import {
   type PromptDispatch,
 } from "../electron/providers/prompt-dispatch.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import type { LiveBatch } from "../electron/contracts/live-conversations.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 // Shared-policy conformance labels; real native adapter evidence is tested separately.
@@ -81,12 +82,15 @@ for (const provider of [
     close() {},
     async setMode() {},
   }
+  const batches: LiveBatch[] = []
   const deps = {
     root,
     appPath: root,
     driver: () => driver,
     history: async () => null,
-    emit() {},
+    emit(event: { type: string; batch?: LiveBatch }) {
+      if (event.type === "live-batch" && event.batch) batches.push(event.batch)
+    },
   }
   const owner = new LiveConversations(deps)
   try {
@@ -189,6 +193,20 @@ for (const provider of [
       "verified startup refusal records not sent for every harness")
     assert.equal(calls.length, 3, "startup refusal cannot reach native prompt dispatch")
     await owner.close(refusedId)
+    // Renderers draw no stand-in for a dispatched prompt; the batch that
+    // dispatches it must carry its user turn.
+    const dispatched = new Set<string>()
+    for (const batch of batches) {
+      for (const request of batch.requests ?? []) {
+        if (request.status !== "dispatching" || dispatched.has(request.id)) continue
+        dispatched.add(request.id)
+        assert.ok(
+          batch.updates.some((update) => update.kind === "user" && update.requestId === request.id && !update.steeringFor),
+          `${provider}: dispatching ${request.text} ships with its user turn`
+        )
+      }
+    }
+    assert.equal(dispatched.size, 3, `${provider}: every dispatched prompt was checked`)
     if (provider === "seventh-fixture") {
       owner.stop()
       const legacyJournal = new LiveJournal(root, id)

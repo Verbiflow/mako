@@ -314,6 +314,31 @@ for (const confirmed of [true, false]) {
   compactDriver.close("compact-fixture")
 }
 console.log("PASS: Claude compaction requires a manual boundary and the matching SDK result")
+{
+  const messages = new Messages()
+  const backgroundEvents: LiveDriverEvent[] = []
+  const backgroundDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  } })
+  await backgroundDriver.start("/disposable", { conversationId: "background-fixture", emit: (event) => backgroundEvents.push(event) })
+  const reported = () => backgroundEvents.findLast((event) => event.type === "live-session")?.session.backgroundTasks
+  const changed = (tasks: { task_id: string; task_type: string; description: string; ambient?: boolean }[]) =>
+    messages.send({ type: "system", subtype: "background_tasks_changed", tasks, uuid: randomUUID(), session_id: "background-fixture" })
+  changed([
+    { task_id: "sleep", task_type: "local_bash", description: "sleep 45" },
+    { task_id: "watcher", task_type: "monitor", description: "live update watcher", ambient: true },
+  ])
+  await delay(0)
+  assert.equal(reported(), 1, "ambient watchers are not background work")
+  changed([{ task_id: "watcher", task_type: "monitor", description: "live update watcher", ambient: true }])
+  await delay(0)
+  assert.equal(reported(), 0, "the latest task list replaces the previous one")
+  changed([{ task_id: "build", task_type: "local_bash", description: "npm run build" }])
+  await delay(0)
+  assert.equal(reported(), 1)
+  backgroundDriver.close("background-fixture")
+}
+console.log("PASS: Claude background tasks follow the SDK's replace-semantics task list")
 const assistant: SDKAssistantMessage = {
   type: "assistant",
   parent_tool_use_id: null,

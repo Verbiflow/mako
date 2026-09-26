@@ -408,6 +408,85 @@ async function boundsWarmProviders() {
   }
 }
 
+async function backgroundWorkKeepsProviderResident() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-background-"))
+  const ids = [randomUUID(), randomUUID()]
+  const closed: string[] = []
+  let owner: LiveConversations
+  const report = (id: string, backgroundTasks: number) => {
+    const current = owner.snapshot(id)?.session
+    assert.ok(current)
+    owner.observe({ type: "live-session", session: { ...current, backgroundTasks } })
+  }
+  const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    canResume: true,
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => ({
+      id: options.conversationId,
+      nativeId: options.conversationId,
+      nativePath: join(root, options.conversationId),
+      harness: "test-provider",
+      cwd: root,
+      status: "ready",
+      connection: "connected",
+      modes: [],
+      currentMode: null,
+      configOptions: [],
+    }),
+    prompt: async (id) => {
+      const current = owner.snapshot(id)?.session
+      assert.ok(current)
+      owner.observe({ type: "live-session", session: { ...current, status: "running" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "ready", backgroundTasks: id === ids[0] ? 1 : 0 } })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: (id) => {
+      closed.push(id)
+    },
+    setMode: async () => {},
+  }
+  owner = new LiveConversations({
+    appPath: root,
+    root: join(root, "journals"),
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    providerIdleMs: 15,
+    providerWarmLimit: 1,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  try {
+    for (const id of ids) {
+      await owner.start("test-provider", root, { conversationId: id })
+      const requestId = randomUUID()
+      owner.submit(id, requestId, "seed")
+      await waitFor(
+        () => owner.snapshot(id)?.requests.some((request) => request.id === requestId && request.status === "completed") === true,
+        "a background seed turn did not complete"
+      )
+    }
+    await waitFor(() => closed.includes(ids[1]), "the idle provider without background work did not hibernate")
+    await new Promise<void>((resolve) => setTimeout(resolve, 60))
+    assert.deepEqual(closed, [ids[1]], "neither the idle timer nor warm-pool pressure retires a provider running background work")
+    assert.equal(owner.snapshot(ids[0])?.session.connection, "connected")
+    assert.equal(owner.residency().active, 1, "background work counts as active residency")
+    assert.deepEqual(
+      owner.lifecycleWork().map((work) => [work.id, work.status]),
+      [[ids[0], "running"]],
+      "an update waits for background work like a running turn"
+    )
+    report(ids[0], 0)
+    await waitFor(() => closed.includes(ids[0]), "the provider did not hibernate once its background work ended")
+    assert.deepEqual(owner.lifecycleWork(), [])
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 async function failedCloseKeepsOwnership() {
   const root = mkdtempSync(join(tmpdir(), "mako-close-ownership-"))
   const memoryPath = join(root, "session-memory.sqlite")
@@ -1105,6 +1184,7 @@ await acceptanceAndRaces()
 await closeDuringStartup()
 await durabilityAndBatching()
 await hibernatesAndWakesExactlyOnce()
+await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()
 await failedCloseKeepsOwnership()
 identityAndToolLifecycle()

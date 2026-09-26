@@ -16,12 +16,30 @@ const app = join(root, "app.json")
 const holdRead = join(root, "hold-read")
 await writeFile(app, JSON.stringify({ "42:7": "", "43:9": "", "44:1": "" }))
 
+// Types `text` one character per 150 ms; "*" repeats forever.
+const typist = `
+const [app, log, key, text] = process.argv.slice(1);
+const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+let index = 0;
+const step = () => {
+  const forever = text === '*';
+  if (!forever && index >= text.length) return;
+  const state = JSON.parse(readFileSync(app, 'utf8'));
+  state[key] = forever ? String(index) : text.slice(0, index + 1);
+  writeFileSync(app, JSON.stringify(state));
+  appendFileSync(log, JSON.stringify({ pid: process.pid, event: 'char', key, index }) + '\\n');
+  index++;
+  setTimeout(step, 150);
+};
+step();
+`
 const driver = `
+import { spawn } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-const LOG=${JSON.stringify(log)}, APP=${JSON.stringify(app)}, HOLD=${JSON.stringify(holdRead)};
+const LOG=${JSON.stringify(log)}, APP=${JSON.stringify(app)}, HOLD=${JSON.stringify(holdRead)}, TYPIST=${JSON.stringify(typist)};
 const note=(entry)=>appendFileSync(LOG, JSON.stringify({pid:process.pid,...entry})+'\\n');
 const read=()=>JSON.parse(readFileSync(APP,'utf8'));
 const change=(key,update)=>{const state=read(); state[key]=update(state[key]??''); writeFileSync(APP, JSON.stringify(state));};
@@ -60,6 +78,15 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
     note({event:'up',key,value:args.key});
     return reply({route:'background',effect:'unverifiable'});
   }
+  if(name==='set_value' && args.value.startsWith('~')){
+    // Like the driver's daemon: the typing runs in another process that
+    // outlives this one. The reply never comes.
+    const key=tokens.get(args.element_token);
+    const typist=spawn(process.execPath,['-e',TYPIST,APP,LOG,key,args.value.slice(1)],{detached:true,stdio:'ignore'});
+    typist.unref();
+    note({event:'typist',key,typist:typist.pid});
+    await new Promise(()=>{});
+  }
   if(name==='set_value'){
     const key=tokens.get(args.element_token);
     for(let index=0;index<args.value.length;index++){
@@ -81,6 +108,7 @@ const Entry = z.object({
   key: z.string().optional(),
   value: z.string().optional(),
   index: z.number().optional(),
+  typist: z.number().optional(),
 })
 type Entry = z.infer<typeof Entry>
 const entries = async (): Promise<Entry[]> =>
@@ -101,7 +129,7 @@ async function killWhen(from: number, ready: (fresh: Entry[]) => boolean) {
     const all = await entries()
     const fresh = all.slice(from)
     if (ready(fresh)) {
-      const pid = fresh.at(-1)!.pid
+      const pid = all.findLast((entry) => entry.event === "start")!.pid
       process.kill(pid, "SIGKILL")
       return { pid, fresh }
     }
@@ -118,10 +146,15 @@ const pageTarget = {
 }
 let pageValue = ""
 let spawns = 0
+let failNextStart = false
 const server = controlSessionProbe(
   { command: process.execPath, args: ["--input-type=module", "--eval", driver] },
   "driver-death",
   async (process) => {
+    if (failNextStart) {
+      failNextStart = false
+      throw new Error("fixture driver failed to start")
+    }
     spawns++
     return connectMcpComputerDriver(process)
   },
@@ -142,7 +175,7 @@ const server = controlSessionProbe(
           truncatedTextFields: 0,
         }
       if (command.action === "type" || command.action === "setValue") {
-        pageValue = "text" in command ? String(command.text) : String((command as { value?: unknown }).value)
+        pageValue = "text" in command ? String(command.text) : String(z.object({ value: z.unknown() }).parse(command).value)
         return { typed: true }
       }
       throw new Error(`Unexpected browser call ${command.action}`)
@@ -295,8 +328,109 @@ return {blocked};`)
   assert.equal(downs(all, "unscoped", "q").length, 1)
   assert.equal(downs(all, "44:1", "h").length, 1)
   assert.equal(spawns, 7, "Each kill led to exactly one reconnect")
+
+  // 6. The replacement driver fails to start: the queued input was never sent,
+  // so it is not-dispatched and leaves its window usable.
+  from = (await entries()).length
+  const [restart] = await Promise.all([
+    run(`${handles}
+await w.observe(); await neighbour.observe();
+const results=await Promise.allSettled([w.pressKey('m'), neighbour.pressKey('n')]);
+return results.map((result)=>result.status==='rejected'?{code:result.reason.code,outcome:result.reason.outcome,message:result.reason.message}:'fulfilled');`),
+    killWhen(from, (fresh) => {
+      const ready = fresh.some((entry) => entry.event === "down" && entry.value === "m")
+      if (ready) failNextStart = true
+      return ready
+    }),
+  ])
+  assert.deepEqual(restart.map((fault: { code: string; outcome: string }) => [fault.code, fault.outcome]), [
+    ["driver-exited", "unknown"],
+    ["driver-unavailable", "not-dispatched"],
+  ])
+  assert.match(restart[1].message, /could not start \(fixture driver failed to start\)\. Nothing was dispatched/)
+  const afterRestart = await run(`${handles}
+await neighbour.pressKey('n');
+return {sent:true};`)
+  assert.deepEqual(afterRestart, { sent: true }, "A start failure does not block the window")
+  all = await entries()
+  assert.equal(downs(all, "43:9", "n").length, 1)
+
+  // 7. A native refusal before any driver call is not-dispatched and leaves the
+  // window usable, like a start failure.
+  const refused = await run(`${handles}
+const ref=(await w.observe()).get({role:'TextField',name:'Name'}).ref;
+let refusal; try { await w.click(ref,{count:3}) } catch(e) { refusal=[e.code,e.outcome] }
+await w.pressKey('p');
+return {refusal};`)
+  assert.deepEqual(refused.refusal, ["native-preflight-failed", "not-dispatched"])
+  assert.equal(downs(await entries(), "42:7", "p").length, 1)
+
+  // 8. The input outlives the driver process, as the real daemon's typing
+  // did. Recovery must wait for it to finish, not return a half-typed view.
+  const typists: number[] = []
+  const typistOf = (fresh: Entry[]) => {
+    const started = fresh.find((entry) => entry.event === "typist")?.typist
+    if (started && !typists.includes(started)) typists.push(started)
+  }
+  from = (await entries()).length
+  const orphanText = "orphaned input"
+  const [orphan] = await Promise.all([
+    run(`${handles}
+const ref=(await w.observe()).get({role:'TextField',name:'Name'}).ref;
+try { await w.setValue(ref,${JSON.stringify("~" + orphanText)}); return {fault:null} } catch(e) { return {fault:fault(e)} }`),
+    killWhen(from, (fresh) => {
+      typistOf(fresh)
+      return fresh.filter((entry) => entry.event === "char").length === 3
+    }),
+  ])
+  assert.deepEqual([orphan.fault?.code, orphan.fault?.outcome], ["driver-exited", "unknown"])
+  const settleStart = Date.now()
+  const settled = await run(`${handles}
+let blocked; try { await w.pressKey('x') } catch(e) { blocked=e.code }
+const view=await w.observe();
+await w.pressKey('s');
+return {blocked,field:view.get({role:'TextField',name:'Name'}).value};`)
+  assert.equal(settled.blocked, "observation-required")
+  assert.equal(settled.field, orphanText, "The recovering observation waits for input still landing")
+  assert.ok(Date.now() - settleStart >= 600, "Settling took at least two reads")
+  assert.equal(downs(await entries(), "42:7", "s").length, 1, "A settled window accepts input")
+
+  // 9. Input that never settles: observation refuses rather than handing back
+  // a view of a window that is still changing.
+  from = (await entries()).length
+  const [endless] = await Promise.all([
+    run(`${handles}
+const ref=(await w.observe()).get({role:'TextField',name:'Name'}).ref;
+try { await w.setValue(ref,'~*'); return {fault:null} } catch(e) { return {fault:fault(e)} }`),
+    killWhen(from, (fresh) => {
+      typistOf(fresh)
+      return fresh.some((entry) => entry.event === "char")
+    }),
+  ])
+  assert.equal(endless.fault?.code, "driver-exited")
+  const unsettled = await run(`${handles}
+let observed; try { await w.observe(); observed='settled' } catch(e) { observed=[e.code,e.outcome] }
+let blocked; try { await w.pressKey('y') } catch(e) { blocked=e.code }
+return {observed,blocked};`)
+  assert.deepEqual(unsettled, { observed: ["target-unsettled", "rejected"], blocked: "observation-required" })
+  for (const pid of typists)
+    try {
+      process.kill(pid, "SIGKILL")
+    } catch {}
+  typists.length = 0
+  const recoveredLater = await run(`${handles}
+await new Promise((resolve)=>setTimeout(resolve,300));
+await w.observe(); await w.pressKey('t');
+return {ok:true};`)
+  assert.deepEqual(recoveredLater, { ok: true })
+  assert.equal(downs(await entries(), "42:7", "y").length, 0)
   console.log(`PASS native driver death: ${spawns - 1} kills mid-action, no replay, unrelated targets usable`)
 } finally {
+  for (const { typist } of await entries())
+    if (typist)
+      try {
+        process.kill(typist, "SIGKILL")
+      } catch {}
   await server.close()
   await rm(root, { recursive: true, force: true })
 }

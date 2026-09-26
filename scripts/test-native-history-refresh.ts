@@ -11,6 +11,7 @@ const id = randomUUID()
 let revision = 1
 let missing = false
 let reads = 0
+let translator = "first-parser"
 const entries: ThreadPage["entries"] = [{ kind: "user", id: "u1", text: "Original question" }]
 const owner = new LiveConversations({
   root, appPath: root, driver: () => undefined, emit: () => {},
@@ -21,7 +22,7 @@ const owner = new LiveConversations({
     return {
       ref: { harness: "codex", nativeId: "fixture", path: "fixture.jsonl", bytes: revision },
       entries: entries.slice(start, before), start, total: entries.length,
-      hasEarlier: start > 0, checkpoint: revision,
+      hasEarlier: start > 0, checkpoint: revision, translator,
     }
   },
 })
@@ -36,6 +37,14 @@ try {
   const previousReads = reads
   await owner.refreshedSnapshot(id)
   assert.equal(reads - previousReads, 1, "unchanged history only reads its latest page")
+  translator = "fixed-parser"
+  entries[1] = { kind: "assistant", id: "a1", blocks: [{ type: "text", text: "External answer, parsed correctly" }] }
+  const retranslated = await owner.refreshedSnapshot(id)
+  assert.deepEqual(retranslated?.base?.entries, entries, "a new translator re-reads an unchanged native record")
+  assert.equal(retranslated?.base?.translator, "fixed-parser")
+  const settledReads = reads
+  await owner.refreshedSnapshot(id)
+  assert.equal(reads - settledReads, 1, "the re-translated history is current again")
   missing = true
   const retained = await owner.refreshedSnapshot(id)
   assert.deepEqual(retained?.base?.entries, entries, "native deletion retains captured history")

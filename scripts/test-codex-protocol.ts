@@ -215,6 +215,8 @@ const child = spawn(process.execPath, ["-e", `
   const readline = require("node:readline");
   readline.createInterface({ input: process.stdin }).on("line", line => {
     const request = JSON.parse(line);
+    if (request.method === "thread/backgroundTerminals/list")
+      return process.stdout.write(JSON.stringify({ id: request.id, result: { data: [], nextCursor: null } }) + "\\n");
     const turns = request.params.excludeTurns === true ? [] : [{
       id: "old-turn", status: "completed", items: [{
         id: "old-answer", type: "agentMessage", text: "x".repeat(9 * 1024 * 1024)
@@ -250,6 +252,7 @@ const context: ProtocolContext = {
   nextRequestId: 0,
   pending: new Map(),
   items: new Map(),
+  background: { running: new Set() },
   stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
   exited: false,
   protocol: {
@@ -460,3 +463,54 @@ assert.equal(resolvePermission(permissionContext, { ...permissionCallbacks, send
   kind: "answers", answers: { environment: ["Staging"] },
 }).kind, "uncertain", "a failed pipe write is never a submitted receipt")
 console.log("PASS: Codex approval missing request, validation refusal and unconfirmed write evidence")
+
+// A terminal a turn left running keeps the session busy until Codex completes
+// its item. A completion that races the list must not be counted again.
+{
+  const terminals = spawn(process.execPath, ["-e", `
+    const readline = require("node:readline");
+    const held = [];
+    readline.createInterface({ input: process.stdin }).on("line", line => {
+      const message = JSON.parse(line);
+      if (message.release) {
+        for (const id of held.splice(0)) process.stdout.write(JSON.stringify({ id, result: {
+          data: [{ itemId: "bg-1", processId: "1", command: "sleep 60", cwd: "/tmp" }, { itemId: "bg-2", processId: "2", command: "sleep 1", cwd: "/tmp" }],
+          nextCursor: null,
+        }}) + "\\n");
+      } else if (message.method === "thread/backgroundTerminals/list") held.push(message.id);
+    });
+  `], { stdio: ["pipe", "pipe", "pipe"] })
+  const backgroundState: LiveSessionState = { ...state, id: "background", status: "running" }
+  const background: ProtocolContext = {
+    ...context,
+    child: terminals,
+    state: backgroundState,
+    threadId: "thread-bg",
+    pending: new Map(),
+    items: new Map(),
+    background: { running: new Set() },
+    stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
+    protocol: { ...context.protocol, updateState: (patch) => Object.assign(backgroundState, patch) },
+  }
+  terminals.stdout.on("data", (chunk: Buffer) => consumeStdout(background, chunk))
+  const notify = (method: string, params: JsonObject) =>
+    consumeStdout(background, Buffer.from(`${JSON.stringify({ method, params })}\n`))
+  const settled = async (count: number) => {
+    for (let attempt = 0; attempt < 200 && (backgroundState.backgroundTasks ?? 0) !== count; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.equal(backgroundState.backgroundTasks ?? 0, count)
+  }
+  const ended = (id: string) => notify("item/completed", { threadId: "thread-bg", turnId: "turn-bg", item: {
+    type: "commandExecution", id, command: "sleep", cwd: "/tmp", status: "completed", aggregatedOutput: "", exitCode: 0,
+  } })
+  notify("turn/completed", { threadId: "thread-bg", turn: { id: "turn-bg", status: "completed", error: null, items: [] } })
+  assert.equal(backgroundState.status, "ready")
+  ended("bg-2")
+  terminals.stdin.write(`${JSON.stringify({ release: true })}\n`)
+  await settled(1)
+  assert.deepEqual([...background.background.running], ["bg-1"], "a completion that raced the list is not counted")
+  ended("bg-1")
+  await settled(0)
+  terminals.kill("SIGTERM")
+  console.log("PASS: Codex background terminals keep the session busy until their items complete")
+}
