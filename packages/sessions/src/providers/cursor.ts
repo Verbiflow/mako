@@ -74,10 +74,11 @@ interface ExchangeStart {
  */
 type RunStops = Map<number, string | undefined>
 
-/** What a fold reads: the root, its hash list and its stopped runs. */
+/** What a fold reads: the root, its whole hash list, its summaries and its stopped runs. */
 interface FoldInput {
   rootId: string
   hashes: string[]
+  compactions: Set<number>
   stops: RunStops
 }
 
@@ -143,6 +144,17 @@ interface CursorSidecar {
 interface CursorRoot {
   hashes: string[]
   cwd?: string
+}
+
+/** A root with its summarized-away windows restored ahead of the live one. */
+interface CursorConversation extends CursorRoot {
+  /** Indices in `hashes` where a summary replaced everything before them. */
+  compactions: Set<number>
+}
+
+interface ParsedRoot extends CursorRoot {
+  /** Blob ids of the archived windows, oldest first. */
+  windows: string[]
 }
 
 interface CursorTextPart {
@@ -289,9 +301,19 @@ function isoOf(value: string | number | undefined): string | undefined {
   return value
 }
 
-/** The two protobuf reads the root blob needs: hash list and workspace URI. */
-function parseRoot(data: Uint8Array): CursorRoot {
+/**
+ * The protobuf reads the root blob needs: hash list, workspace URI and
+ * archived windows. When Cursor summarizes a long conversation, the root's
+ * hash list restarts with the system prompt, workspace context and the
+ * summary, and field 13 keeps one blob per summarized window, oldest first.
+ * A window's field 1 is the hash list it replaced, so windows plus the live
+ * list are the whole conversation. Verified 2026-09-26 against 223 local
+ * stores: 61 had windows (123 in all), none overlapping, with every message
+ * blob present.
+ */
+function parseRoot(data: Uint8Array): ParsedRoot {
   const hashes: string[] = []
+  const windows: string[] = []
   let cwd: string | undefined
   let index = 0
   const varint = (): number | undefined => {
@@ -322,6 +344,9 @@ function parseRoot(data: Uint8Array): CursorRoot {
       if (field === 1 && length === 32) {
         hashes.push(Buffer.from(bytes).toString("hex"))
       }
+      if (field === 13 && length === 32) {
+        windows.push(Buffer.from(bytes).toString("hex"))
+      }
       if (field === 9) {
         const uri = Buffer.from(bytes).toString("utf8")
         if (uri.startsWith("file://")) cwd = decodeURIComponent(uri.slice(7))
@@ -336,7 +361,7 @@ function parseRoot(data: Uint8Array): CursorRoot {
       break // An unknown wire type means we are lost; stop rather than misread.
     }
   }
-  return { hashes, cwd }
+  return { hashes, cwd, windows }
 }
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
@@ -547,7 +572,7 @@ export class CursorProvider implements SessionProvider {
       if (!at?.length || at.length > root.hashes.length || at.some((hash, index) => hash !== root.hashes[index])) continue
       stops.set(at.length, run.cancelledAt)
     }
-    return { rootId, hashes: root.hashes, stops }
+    return { rootId, hashes: root.hashes, compactions: root.compactions, stops }
   }
 
   /**
@@ -833,7 +858,7 @@ export class CursorProvider implements SessionProvider {
   /** Translate the whole hash list into entries. */
   private foldStore(database: DatabaseSync, input: FoldInput): FoldStep {
     const { rootId, hashes, stops } = input
-    const folded = this.foldHashes(database, hashes, 0, stops)
+    const folded = this.foldHashes(database, input, 0)
     return {
       fold: {
         rootId,
@@ -874,7 +899,7 @@ export class CursorProvider implements SessionProvider {
       // own, nothing before it can merge with it and the previous entries
       // stand; a tool result or assistant chunk first belongs to the last
       // exchange and takes the path below.
-      const appended = this.foldHashes(database, hashes, shared, stops)
+      const appended = this.foldHashes(database, input, shared)
       const total = previous.entries.length + appended.entries.length
       if (
         appended.exchanges[0]?.hash === shared &&
@@ -903,7 +928,7 @@ export class CursorProvider implements SessionProvider {
       if (candidate.hash > shared) break
       exchange = candidate
     }
-    const tail = this.foldHashes(database, hashes, exchange.hash, stops)
+    const tail = this.foldHashes(database, input, exchange.hash)
     const total = exchange.entry + tail.entries.length
     if (tail.dropped || total > FOLD_INCREMENTAL_LIMIT)
       return this.foldStore(database, input)
@@ -934,10 +959,10 @@ export class CursorProvider implements SessionProvider {
    */
   private foldHashes(
     database: DatabaseSync,
-    hashes: string[],
-    start: number,
-    stops: RunStops
+    input: FoldInput,
+    start: number
   ): FoldedHashes {
+    const { hashes, compactions, stops } = input
     const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
     const sink = new EntrySink()
     const exchanges: ExchangeStart[] = []
@@ -955,9 +980,16 @@ export class CursorProvider implements SessionProvider {
       const at = stops.get(index)
       sink.push(at ? { kind: "event", at, label: "Interrupted" } : { kind: "event", label: "Interrupted" })
     }
+    // Like a stop, a summary at `start` is already in the continued entries.
+    const compact = (index: number) => {
+      if (index === start || !compactions.has(index)) return
+      assistant = null
+      sink.push({ kind: "event", label: "Context compacted" })
+    }
 
     for (let index = start; index < hashes.length; index++) {
       stop(index)
+      compact(index)
       const hash = hashes[index]
       if (hash === undefined) continue
       const message = this.readMessage(statement, hash)
@@ -1132,17 +1164,27 @@ export class CursorProvider implements SessionProvider {
     }
   }
 
+  /** The root's whole conversation: archived windows, then the live list. */
   private readRoot(
     database: DatabaseSync,
     rootId: string | undefined
-  ): CursorRoot | null {
+  ): CursorConversation | null {
     if (!rootId) return null
     try {
-      const result = database
-        .prepare("SELECT data FROM blobs WHERE id = ?")
-        .get(rootId)
-      const row = parseBlobDataRow(result)
-      return row ? parseRoot(row.data) : null
+      const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
+      const row = parseBlobDataRow(statement.get(rootId))
+      if (!row) return null
+      const root = parseRoot(row.data)
+      const hashes: string[] = []
+      const compactions = new Set<number>()
+      for (const id of root.windows) {
+        const window = parseBlobDataRow(statement.get(id))
+        if (!window) continue
+        hashes.push(...parseRoot(window.data).hashes)
+        compactions.add(hashes.length)
+      }
+      hashes.push(...root.hashes)
+      return { hashes, cwd: root.cwd, compactions }
     } catch {
       return null
     }
