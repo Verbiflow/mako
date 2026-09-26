@@ -34,6 +34,7 @@ export function encodePreviewMedia(input: ControlPreview | null) {
               id: frame.id,
               capturedAt: frame.capturedAt,
               publishedAt: frame.publishedAt,
+              sequence: frame.sequence,
               mimeType: frame.image.mimeType,
             }
           : null,

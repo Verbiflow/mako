@@ -39,6 +39,9 @@ export const ControlPreviewFrameSchema = z.object({
   capturedAt: z.number(),
   /** Host publication is separate from the source's epoch timestamp. */
   publishedAt: z.number().optional(),
+  /** Count of source-clock 60 fps slots in which the live source produced a
+   * frame; gaps a viewer sees between painted frames are frames it missed. */
+  sequence: z.number().int().nonnegative().optional(),
 })
 export const ControlPreviewSchema = z.object({
   activity: ControlActivitySchema,
