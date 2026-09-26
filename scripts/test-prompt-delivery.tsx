@@ -210,6 +210,10 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.ok(!listed.includes(crashed.id), "a crash-interrupted turn on screen is the footer's, not the panel's")
   assert.ok(listed.includes(quit.id) && listed.includes(legacy.id), "stopped turns with no turn on screen stay reviewable")
   assert.ok(listed.includes(unconfirmed.id), "an unconfirmed delivery is always reviewable")
+  // After a host restart the native base shows the turn and no delivered
+  // block carries its id; the retained window still names it.
+  const restored = recoverableRequests({ requests: [crashed, quit], blocks: [], history: { earlierRequests: [crashed.id] } }).map((item) => item.id)
+  assert.deepEqual(restored, [quit.id], "a turn the native history shows is on screen; one that never reached the transcript stays reviewable")
 }
 
 console.log(
@@ -217,6 +221,16 @@ console.log(
 )
 
 // Exercise the production send path with settings discovery deliberately unresolved.
+// The outbox refuses to send a message it cannot store first.
+const stored = new Map<string, string>()
+Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+  get length() { return stored.size },
+  key: (index: number) => [...stored.keys()][index] ?? null,
+  getItem: (key: string) => stored.get(key) ?? null,
+  setItem: (key: string, value: string) => { stored.set(key, value) },
+  removeItem: (key: string) => { stored.delete(key) },
+  clear: () => stored.clear(),
+} satisfies Storage })
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { providers } = await import("../src/state/providers")

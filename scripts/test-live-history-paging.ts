@@ -63,6 +63,9 @@ for (const [index, provider] of ["claude", "codex", "cursor", "grok", "devin", "
   assert.ok(Buffer.byteLength(JSON.stringify(source)) > 32 * 1024 * 1024)
   assert.ok(Buffer.byteLength(JSON.stringify(first)) < 512 * 1024)
   assert.deepEqual(first.requests, source.requests, "Receipts remain complete")
+  const held = source.blocks.slice(0, first.history!.blockStart).flatMap(block => block.type === "user" && block.requestId ? [block.requestId] : [])
+  assert.ok(source.blocks.slice(0, 6).some(block => block.type === "user" && block.requestId), "The fixture covers a prompt with the native base")
+  assert.deepEqual(first.history!.earlierRequests, held, "Covered and unloaded prompts stay on screen by request id")
   const blocks = [...first.blocks]
   const entries = [...first.base!.entries]
   let page: LiveHistoryPage = { ...first, history: first.history! }

@@ -247,9 +247,12 @@ export class LiveHistoryReader {
       }
     }
     let turnStart = 0
-    for (let index = covered; index < blockStart; index++) {
+    const earlierRequests: string[] = []
+    for (let index = 0; index < blockStart; index++) {
       const block = source.blocks[index]
-      if (block?.type === "user" && !block.steeringFor) turnStart++
+      if (block?.type !== "user") continue
+      if (block.requestId) earlierRequests.push(block.requestId)
+      if (index >= covered && !block.steeringFor) turnStart++
     }
     const base: ThreadPage | null = source.base ? {
       ...source.base, entries: entries.reverse(), start: baseStart,
@@ -257,7 +260,7 @@ export class LiveHistoryReader {
     } : null
     return {
       blocks: blocks.reverse(), base,
-      history: { token, blockStart, blockEnd: before.blocks, turnStart,
+      history: { token, blockStart, blockEnd: before.blocks, turnStart, earlierRequests,
         before: blockStart > covered || baseStart > baseOrigin || source.base?.hasEarlier ? { blocks: blockStart, base: baseStart } : null },
     }
   }
