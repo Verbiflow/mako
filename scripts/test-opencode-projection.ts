@@ -6,7 +6,7 @@ import { join } from "node:path"
 import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { OpenCodeContent } from "../electron/providers/opencode/content.ts"
-import { OpenCodeInteractions } from "../electron/providers/opencode/interactions.ts"
+import { OpenCodeInteractions, openCodePermissionReply } from "../electron/providers/opencode/interactions.ts"
 import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
 import { openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
 import type { LiveDriverEvent, LiveUpdate } from "../electron/shared.ts"
@@ -71,6 +71,9 @@ const message = "msg_assistant"
   const [failed] = content.observe(event("session.tool.failed", { sessionID: root, assistantMessageID: message, id: "e", error: { type: "tool", message: "no match" }, content: [{ type: "text", text: "detail" }] }))
   assert.equal(failed.kind === "tool-update" && failed.status, "failed")
   assert.equal(failed.kind === "tool-update" && failed.output, "no match\ndetail")
+  content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "stopped", name: "bash" }))
+  const [stopped] = content.observe(event("session.tool.failed", { sessionID: root, assistantMessageID: message, id: "stopped", error: { type: "aborted", message: "Tool execution interrupted" } }))
+  assert.equal(stopped.kind === "tool-update" && stopped.status, "cancelled", "a call the user stopped reads as cancelled, not failed")
 
   // A resubscribed stream first sees a call at its result; the driver opens it under its native name.
   assert.deepEqual(content.open(root, "late", "grep"), [{ kind: "tool", id: `${root}:late`, title: "grep", toolKind: "grep", status: "pending" }])
@@ -147,6 +150,9 @@ try {
   const again = dispatch()
   await interactions.respond(request.id, { kind: "choice", optionId: "once" }, again)
   assert.deepEqual(again.reports, [{ kind: "uncertain", reason: "This answer was already dispatched" }], "an answer in flight is never sent twice")
+  assert.deepEqual(openCodePermissionReply(root, "per_1", "reject"), { sessionID: root, requestID: "per_1", reply: "reject", message: "The user declined this tool request" },
+    "a decline returns to the model, as in every other harness")
+  assert.deepEqual(openCodePermissionReply(root, "per_1", null), { sessionID: root, requestID: "per_1", reply: "reject" }, "only a dismissed request stops the turn")
 
   await interactions.observe(event("permission.replied", { sessionID: root, requestID: "per_1", reply: "once" }))
   assert.ok(emitted.some(item => item.type === "live-permission-ended" && item.requestId === request.id && item.source === "native-resolution"))

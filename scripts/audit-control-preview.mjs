@@ -53,7 +53,7 @@ if (process.versions.electron) {
     ]),
     ...(process.env.MAKO_CONTROL_MEDIA_ROOT ? [join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffmpeg"), join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffprobe")] : []),
     "src/components/inspector/control-preview-image.tsx",
-    "src/lib/control-preview-painter.ts",
+    "src/lib/control-preview-painter.ts", "src/lib/control-preview-decoder.ts",
     "dist-electron/control-previews.js", "dist-electron/runtime-connection.js",
   ]
   const identity = async () => Object.fromEntries(await Promise.all(identityPaths.map(async path =>
@@ -642,6 +642,14 @@ async function audit() {
           ),
         0
       )
+    const metrics = app.getAppMetrics()
+    const coresOf = (metric) => metric &&
+      (Math.max(0, (metric.cpu.cumulativeCPUUsage ?? 0) - (cpuBefore.get(metric.pid) ?? 0)) * 1000) / elapsed
+    const viewerCores = {
+      renderer: coresOf(metrics.find((metric) => metric.pid === viewer.webContents.getOSProcessId())),
+      gpu: coresOf(metrics.find((metric) => metric.type === "GPU")),
+      browser: coresOf(metrics.find((metric) => metric.type === "Browser")),
+    }
     const hostCpuAfter = shared && !installed
       ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
       : undefined
@@ -674,6 +682,7 @@ async function audit() {
       gapsMs: stats(gaps),
       ...transfer,
       cpuCoreEquivalent: (cpuSeconds * 1000) / elapsed,
+      viewerCores,
       hostCpuCoreEquivalent,
       cpuBoundary: installed ? "Installed host/session trees include concurrent Mako tasks; encoder includes every FFmpeg descendant. Fixture viewer, whole browser and OS encoder services are separate. Summed RSS may double-count shared pages; no physical-scanout or isolated-host cost claim." :
         "Electron counters and host counters retain their prior scope. resources includes host descendants/FFmpeg; wholeBrowser includes ALL installed browser tabs, not target-only CPU. fixtureIncludingHost also includes requested synthetic load workers. videoToolboxServices covers all visible VTEncoderXPCService processes, including other applications; GPU/media-engine power is not measured. RSS sums can double-count shared pages.",

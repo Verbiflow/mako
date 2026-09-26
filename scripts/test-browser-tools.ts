@@ -214,6 +214,22 @@ try {
   })
   assert.ok(!persisted.isError, JSON.stringify(persisted))
 
+  // A later failure keeps what earlier statements emitted, before the fault.
+  const failedLate = await client.callTool({
+    name: "mako_browser_exec",
+    arguments: {
+      source:
+        "console.log('before'); emitImage(await browser.screenshot({target:state.tab,format:'png'})); await browser.click({target:state.tab, at:'{\"ref\":\"not-an-object\"}'})",
+    },
+  })
+  assert.equal(failedLate.isError, true)
+  const lateBlocks = z.array(z.object({ type: z.string(), text: z.string().optional() })).parse(failedLate.content)
+  assert.deepEqual(lateBlocks[0], { type: "text", text: '"before"' })
+  assert.ok(lateBlocks.some((block) => block.type === "image"), "Earlier images survive a later failure")
+  assert.match(String(lateBlocks.at(-1)!.text), /browser\.click/)
+  assert.match(String(failedLate.structuredContent?.message), /browser\.click/)
+  assert.equal(failedLate.structuredContent?.outcome, "not-dispatched")
+
   // Oversized output is written whole to a file and described, never cut.
   const oversized = await client.callTool({
     name: "mako_browser_exec",

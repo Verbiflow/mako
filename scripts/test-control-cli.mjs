@@ -25,7 +25,7 @@ const server = await serveControlSession(session)
 const started = performance.now()
 const timings = []
 let sessionFile = server.file
-async function command(args, { stdin, code = 0 } = {}) {
+async function command(args, { stdin, code = 0, partial = false } = {}) {
   const before = performance.now()
   const child = spawn(
     process.execPath,
@@ -51,6 +51,7 @@ async function command(args, { stdin, code = 0 } = {}) {
     assert.equal(stderr, "")
     return JSON.parse(stdout)
   }
+  if (partial) return { output: JSON.parse(stdout), fault: JSON.parse(stderr) }
   assert.equal(stdout, "")
   return JSON.parse(stderr)
 }
@@ -153,6 +154,19 @@ try {
   const artifact = imageResult.find((block) => block.value?.path)?.value
   assert.ok(artifact, JSON.stringify(imageResult))
   assert.ok((await stat(artifact.path)).size > 0)
+  const failedLate = await command(["exec", "--source-file", "-"], {
+    stdin: `const tab = control.tab(${JSON.stringify(target)}); console.log("before"); emitImage(await tab.screenshot()); await tab.observe({max:'ten'})`,
+    code: 2,
+    partial: true,
+  })
+  assert.equal(failedLate.fault.code, "invalid-request")
+  assert.equal(failedLate.fault.outcome, "not-dispatched")
+  assert.match(failedLate.fault.message, /observe[\s\S]*Output emitted before the failure is on stdout/)
+  assert.deepEqual(failedLate.output[0], { type: "result", value: "before" },
+    "A later failure keeps earlier console output")
+  const lateImage = failedLate.output.find((block) => block.value?.path)?.value
+  assert.ok(lateImage && (await stat(lateImage.path)).size > 0, "and saves its earlier image")
+  assert.ok(!JSON.stringify(failedLate.output).includes("base64"))
   const staleImage = await command(
     ["act", "--target-file", targetFile, "--input", "-"],
     {
