@@ -68,9 +68,27 @@ interface ExchangeStart {
   entry: number
 }
 
-/** One translated store, keyed by the root blob that produced it. */
+/**
+ * Where stopped runs ended: the hash-list length at the run's last
+ * checkpoint, and when it was cancelled.
+ */
+type RunStops = Map<number, string | undefined>
+
+/** What a fold reads: the root, its hash list and its stopped runs. */
+interface FoldInput {
+  rootId: string
+  hashes: string[]
+  stops: RunStops
+}
+
+function stopKey(stops: RunStops): string {
+  return JSON.stringify([...stops].sort(([a], [b]) => a - b))
+}
+
+/** One translated store, keyed by the root blob and stops that produced it. */
 interface StoreFold {
   rootId: string
+  stopKey: string
   hashes: string[]
   entries: ThreadEntry[]
   exchanges: ExchangeStart[]
@@ -512,6 +530,27 @@ export class CursorProvider implements SessionProvider {
   }
 
   /**
+   * The root to fold and, for an SDK agent, where each stopped run ended.
+   * A run's own checkpoint marks its end only while that checkpoint is a
+   * prefix of the current conversation; a rewritten history marks nothing.
+   */
+  private foldInput(database: DatabaseSync, path: string): FoldInput | null {
+    const meta = this.readMeta(database)
+    if (!meta) return null
+    const agent = this.isSdkStore(path) ? this.sdkAgentOf(path, meta) : null
+    const rootId = this.isSdkStore(path) ? agent?.rootId : meta.latestRootBlobId
+    const root = this.readRoot(database, rootId)
+    if (!rootId || !root) return null
+    const stops: RunStops = new Map()
+    for (const run of agent?.cancelled ?? []) {
+      const at = this.readRoot(database, run.rootId)?.hashes
+      if (!at?.length || at.length > root.hashes.length || at.some((hash, index) => hash !== root.hashes[index])) continue
+      stops.set(at.length, run.cancelledAt)
+    }
+    return { rootId, hashes: root.hashes, stops }
+  }
+
+  /**
    * The index row of the agent an SDK store belongs to. The directory names
    * the agent, not the store's meta row: a store Mako imported from a
    * `cursor-agent` session keeps that session's meta, and when the same
@@ -741,15 +780,13 @@ export class CursorProvider implements SessionProvider {
         const database = await openDatabase(path)
         if (!database) return unchanged()
         try {
-          const rootId = this.rootIdOf(path, this.readMeta(database))
+          const input = this.foldInput(database, path)
           offset = file.bytes
-          if (!rootId) return unchanged()
-          if (fold && fold.rootId === rootId) return unchanged()
-          const root = this.readRoot(database, rootId)
-          if (!root) return unchanged()
+          if (!input) return unchanged()
+          if (fold && fold.rootId === input.rootId && fold.stopKey === stopKey(input.stops)) return unchanged()
           const next = fold
-            ? this.foldFrom(database, fold, root.hashes, rootId)
-            : this.foldStore(database, root.hashes, rootId)
+            ? this.foldFrom(database, fold, input)
+            : this.foldStore(database, input)
           const from = fold ? next.replaceFrom : 0
           fold = next.fold
           this.lastFold = { ...next.fold, path }
@@ -780,13 +817,12 @@ export class CursorProvider implements SessionProvider {
     const database = await openDatabase(path)
     if (!database) return null
     try {
-      const rootId = this.rootIdOf(path, this.readMeta(database))
+      const input = this.foldInput(database, path)
+      if (!input) return { ref, entries: [] }
       const held = this.lastFold
-      if (held && held.path === path && rootId && held.rootId === rootId)
+      if (held && held.path === path && held.rootId === input.rootId && held.stopKey === stopKey(input.stops))
         return { ref, entries: held.entries }
-      const root = rootId ? this.readRoot(database, rootId) : null
-      if (!root || !rootId) return { ref, entries: [] }
-      const { fold } = this.foldStore(database, root.hashes, rootId)
+      const { fold } = this.foldStore(database, input)
       this.lastFold = { ...fold, path }
       return { ref, entries: fold.entries }
     } finally {
@@ -795,15 +831,13 @@ export class CursorProvider implements SessionProvider {
   }
 
   /** Translate the whole hash list into entries. */
-  private foldStore(
-    database: DatabaseSync,
-    hashes: string[],
-    rootId: string
-  ): FoldStep {
-    const folded = this.foldHashes(database, hashes, 0)
+  private foldStore(database: DatabaseSync, input: FoldInput): FoldStep {
+    const { rootId, hashes, stops } = input
+    const folded = this.foldHashes(database, hashes, 0, stops)
     return {
       fold: {
         rootId,
+        stopKey: stopKey(stops),
         hashes,
         entries: folded.entries,
         // Dropped history shifts every index; no exchange is a safe restart.
@@ -823,9 +857,11 @@ export class CursorProvider implements SessionProvider {
   private foldFrom(
     database: DatabaseSync,
     previous: StoreFold,
-    hashes: string[],
-    rootId: string
+    input: FoldInput
   ): FoldStep {
+    const { rootId, hashes, stops } = input
+    // A stop recorded after its messages lands inside entries already kept.
+    if (previous.stopKey !== stopKey(stops)) return this.foldStore(database, input)
     let shared = 0
     while (
       shared < previous.hashes.length &&
@@ -838,7 +874,7 @@ export class CursorProvider implements SessionProvider {
       // own, nothing before it can merge with it and the previous entries
       // stand; a tool result or assistant chunk first belongs to the last
       // exchange and takes the path below.
-      const appended = this.foldHashes(database, hashes, shared)
+      const appended = this.foldHashes(database, hashes, shared, stops)
       const total = previous.entries.length + appended.entries.length
       if (
         appended.exchanges[0]?.hash === shared &&
@@ -848,6 +884,7 @@ export class CursorProvider implements SessionProvider {
         return {
           fold: {
             rootId,
+            stopKey: previous.stopKey,
             hashes,
             entries: [...previous.entries, ...appended.entries],
             exchanges: [
@@ -866,14 +903,15 @@ export class CursorProvider implements SessionProvider {
       if (candidate.hash > shared) break
       exchange = candidate
     }
-    const tail = this.foldHashes(database, hashes, exchange.hash)
+    const tail = this.foldHashes(database, hashes, exchange.hash, stops)
     const total = exchange.entry + tail.entries.length
     if (tail.dropped || total > FOLD_INCREMENTAL_LIMIT)
-      return this.foldStore(database, hashes, rootId)
+      return this.foldStore(database, input)
     const kept = previous.exchanges.filter((item) => item.hash < exchange.hash)
     return {
       fold: {
         rootId,
+        stopKey: previous.stopKey,
         hashes,
         entries: [...previous.entries.slice(0, exchange.entry), ...tail.entries],
         exchanges: [
@@ -897,7 +935,8 @@ export class CursorProvider implements SessionProvider {
   private foldHashes(
     database: DatabaseSync,
     hashes: string[],
-    start: number
+    start: number,
+    stops: RunStops
   ): FoldedHashes {
     const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
     const sink = new EntrySink()
@@ -905,8 +944,20 @@ export class CursorProvider implements SessionProvider {
     type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
     let assistant: AssistantEntry | null = null
     const toolsById = new Map<string, ToolBlock>()
+    // Calls of the current exchange; a stopped run leaves unanswered ones.
+    let calls: ToolBlock[] = []
+    // A stop at `start` is already in the entries this fold continues.
+    const stop = (index: number) => {
+      if (index === start || !stops.has(index)) return
+      for (const call of calls) if (call.output === undefined && !call.error) call.canceled = true
+      calls = []
+      assistant = null
+      const at = stops.get(index)
+      sink.push(at ? { kind: "event", at, label: "Interrupted" } : { kind: "event", label: "Interrupted" })
+    }
 
     for (let index = start; index < hashes.length; index++) {
+      stop(index)
       const hash = hashes[index]
       if (hash === undefined) continue
       const message = this.readMessage(statement, hash)
@@ -916,6 +967,7 @@ export class CursorProvider implements SessionProvider {
           const spoken = spokenText(message.content)
           if (!spoken && !message.attachments.length) continue
           assistant = null
+          calls = []
           exchanges.push({ hash: index, entry: sink.entries.length })
           sink.push({
             kind: "user",
@@ -983,6 +1035,7 @@ export class CursorProvider implements SessionProvider {
                   if (details) block.details = details
                 }
                 if (part.toolCallId) toolsById.set(part.toolCallId, block)
+                calls.push(block)
                 assistant.blocks.push(block)
                 break
               }
@@ -995,6 +1048,7 @@ export class CursorProvider implements SessionProvider {
           continue
       }
     }
+    stop(hashes.length)
     const entries = sink.done()
     // The sink prepends one event when it dropped history; indices past it
     // no longer match the hash list, so the caller re-folds from the start.

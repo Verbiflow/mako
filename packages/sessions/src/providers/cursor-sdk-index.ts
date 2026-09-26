@@ -30,6 +30,8 @@ export interface CursorSdkAgentRecord {
   turns: number
   /** Whether the newest run is still non-terminal. */
   running: boolean
+  /** Runs the user stopped after they wrote to the conversation, oldest first. */
+  cancelled: CursorSdkCancelledRun[]
   /**
    * Set when Mako created this agent from a `cursor-agent` store (an
    * `acp-sessions` or `chats` session) so the conversation could go on
@@ -46,6 +48,12 @@ export interface CursorSdkImport {
   identity: string
   /** The agent id the legacy store's own meta row names. */
   agentId: string
+}
+
+export interface CursorSdkCancelledRun {
+  /** Blob id of the root the run last checkpointed: the conversation as it stopped. */
+  rootId: string
+  cancelledAt?: string
 }
 
 /** The key under which the import record sits in the agent's `metadata_json`. */
@@ -169,6 +177,29 @@ function modelParams(raw: string | undefined): CursorSdkModelSelection["params"]
   }
 }
 
+/** An index without run checkpoints records no stops, not an unreadable agent. */
+function cancelledRuns(database: DatabaseSync, agentId: string): CursorSdkCancelledRun[] {
+  let rows: ReturnType<ReturnType<DatabaseSync["prepare"]>["all"]>
+  try {
+    rows = database
+      .prepare(
+        "SELECT start_checkpoint_ref_json, latest_checkpoint_ref_json, cancelled_at FROM runs WHERE agent_id = ? AND status = 'CANCELLED' ORDER BY turn_number"
+      )
+      .all(agentId)
+  } catch {
+    return []
+  }
+  const cancelled: CursorSdkCancelledRun[] = []
+  for (const row of rows) {
+    const rootId = checkpointBlobId(text(row["latest_checkpoint_ref_json"]))
+    // A run stopped before it checkpointed anything left no turn to mark.
+    if (!rootId || rootId === checkpointBlobId(text(row["start_checkpoint_ref_json"]))) continue
+    const cancelledAt = text(row["cancelled_at"])
+    cancelled.push(cancelledAt ? { rootId, cancelledAt } : { rootId })
+  }
+  return cancelled
+}
+
 /** One agent's index row plus its newest run, or null when the index has none. */
 export function readCursorSdkAgent(
   indexPath: string,
@@ -190,12 +221,14 @@ export function readCursorSdkAgent(
       .get(agentId, agentId)
     const modelId = text(run?.["model"])
     const runStatus = text(run?.["status"])
+    const cancelled = cancelledRuns(database, agentId)
     const record: CursorSdkAgentRecord = {
       agentId,
       cwd: text(agent["workspace_ref"]) ?? "",
       status: statusOf(text(agent["status"])),
       turns: count(run?.["turns"]),
       running: runStatus !== undefined && !TERMINAL.has(runStatus),
+      cancelled,
     }
     const name = text(agent["name"])
     if (name) record.name = name

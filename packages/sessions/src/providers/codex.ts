@@ -207,6 +207,19 @@ function stringValue(value: JsonValue | undefined): string | undefined {
   return isString(value) ? value : undefined
 }
 
+/** Codex's `TurnAbortReason`. A plain Stop is the label alone. */
+const ABORT_DETAILS: Record<string, string | undefined> = {
+  interrupted: undefined,
+  replaced: "replaced by a newer message",
+  review_ended: "review ended",
+  budget_limited: "budget limit reached",
+}
+
+function abortDetail(reason: string | undefined): string | undefined {
+  if (reason === undefined) return undefined
+  return Object.hasOwn(ABORT_DETAILS, reason) ? ABORT_DETAILS[reason] : reason.replaceAll("_", " ")
+}
+
 function objectValue(value: JsonValue | undefined): JsonObject | undefined {
   return isJsonObject(value) ? value : undefined
 }
@@ -443,7 +456,7 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
             kind: "event",
             at,
             label: "Interrupted",
-            detail: stringValue(payload["reason"]),
+            detail: abortDetail(stringValue(payload["reason"])),
           }
         case "context_compacted":
           return { kind: "event", at, label: "Context compacted" }
