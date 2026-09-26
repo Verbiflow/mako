@@ -12,7 +12,7 @@ Read-only evaluation, 7 September 2026. No Mako source edits. External clones, d
 | [Fonttrio](https://github.com/KapishDima/fonttrio/tree/8af7098ada0b90f076fbfe260244d11b05dd2403) | `8af7098ada0b90f076fbfe260244d11b05dd2403` | `fonttrio/registry/fonts/`, `fonttrio/registry/pairings/` |
 | [Spell UI](https://github.com/xxtomm/spell-ui/tree/fffe96db7b67b44243bf35815916fdfc58fe5014) | `fffe96db7b67b44243bf35815916fdfc58fe5014` | `spell-ui/registry/spell-ui/` |
 
-Pins match the user's `docs/audits/2026-09-07/ui-library-pilot/sources.json`. Mako HEAD at inspection was `a5bde7b76cdc0eb30fa1abf42eacb15456ab73f1`; local edits mean its current source is not fully described by that commit.
+Pins match the user's `docs/public-audits/2026-09-07/ui-library-pilot/sources.json`. Mako HEAD at inspection was `a5bde7b76cdc0eb30fa1abf42eacb15456ab73f1`; local edits mean its current source is not fully described by that commit.
 
 - Runnable comparison: http://127.0.0.1:8767/visual/index.html
 - Offline entry: `visual/index.html`, with sibling `visual/assets/`.

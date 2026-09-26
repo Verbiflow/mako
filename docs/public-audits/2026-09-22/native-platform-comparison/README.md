@@ -112,7 +112,7 @@ replacement, exactly-once Save and modal/minimized/hidden/closed refusals. The
 995/995 foreground typing result applies to that native suite. The separate
 regular-profile browser typing run failed after 28 tagged keys when Aside became
 foreground. Do not combine those results into a claim of uninterrupted browser
-background control. See the existing [release evidence](../background-control-release/README.md)
+background control. See the existing [release evidence](../../../audits/2026-09-22/background-control-release/README.md)
 and [wayfinder](../../../local-control-map.md).
 
 The driver source uses targeted SkyLight/CGEvent delivery and prepares the exact
@@ -251,7 +251,7 @@ Keep full evidence accessible when output is compacted.
 ## Reproduction and provenance
 
 Run `npm run build:electron` then
-`node docs/audits/2026-09-22/native-platform-comparison/probe.mjs`.
+`node docs/public-audits/2026-09-22/native-platform-comparison/probe.mjs`.
 `MAKO_AUDIT_BUILD_ROOT` may name an already-built equivalent checkout. This audit
 used `/Users/kashyab/mako-control-rollout`, whose tested implementation is integrated
 in main. The probe deliberately supplies Linux-shaped fixtures; it does not

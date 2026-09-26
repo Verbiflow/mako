@@ -592,7 +592,7 @@ dependencies because Cursor canvas previews bundle a canvas in the host.
 
 Mako's hosted service is developed in a separate private repository, checked out beside this one as `../mako-backend`. The dependency runs one way: that repository consumes this one's packages as pinned artifacts, and nothing here imports from it, even behind a flag. Clients and the runtime reach hosted features only over the network, through open protocol packages (`@mako/relay` today) and their tests. Everything committed here is public, so hosted design, pricing and planning notes don't belong in this repository's files, commit messages or pull requests.
 
-Planning and audit docs under `docs/` that are gitignored (`docs/meta-harness/`, `docs/meta-harness*.md`, `docs/audits/2026*` and the other ignored pages) are symlinks into the private checkout. Read and write them at their usual paths. Never `git add -f` them. After creating a new ignored folder there, such as `docs/audits/<date>/`, run `npm run wayfinder:link` in `../mako-backend`, which moves it and links it back.
+Planning and audit docs under `docs/` that are gitignored (`docs/audits/`, `docs/meta-harness/`, `docs/meta-harness*.md` and the other ignored pages) are symlinks into the private checkout. Read and write them at their usual paths; a new audit in `docs/audits/<date>/<topic>/` lands in the private checkout directly. Never `git add -f` them. Audits meant to be public go in `docs/public-audits/<date>/<topic>/`, which is committed here. On a fresh checkout, run `npm run wayfinder:link` in `../mako-backend` to create the symlinks.
 
 ## Remote control plane
 

@@ -61,7 +61,7 @@ T3 source anchors: [switching selection](https://github.com/pingdotgg/t3code/blo
 
 ## Failures executed against Mako functions
 
-`node docs/audits/2026-09-06/compare-transfer-paths.cjs` transpiles the actual repository modules and substitutes only their boundary dependencies. It is a historical defect reproducer, not a desired-behavior regression suite.
+`node docs/public-audits/2026-09-06/compare-transfer-paths.cjs` transpiles the actual repository modules and substitutes only their boundary dependencies. It is a historical defect reproducer, not a desired-behavior regression suite.
 
 1. Two transfers to Claude in the same workspace are pending. Destination B appears first. `bindLineage` assigns it transfer A's provenance. No process correlation participates in matching.
 2. A busy native thread receives a prompt with a structured image attachment. `reply` returns true; `queueReply` persists only the text in renderer state. A textual staged-file appendix can survive, so this proves loss of structured delivery rather than deletion of every attachment byte.

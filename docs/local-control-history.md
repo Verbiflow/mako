@@ -663,7 +663,7 @@ prove better end-to-end model performance or universal background support.
 
 Historical audit; the implementation and current release status are recorded above.
 
-2026-09-22: [comparison and implementation order](audits/2026-09-22/native-platform-comparison/README.md)
+2026-09-22: [comparison and implementation order](public-audits/2026-09-22/native-platform-comparison/README.md)
 checks the supplied Layers 3–4 report against installed reference SDK/docs and
 Mako's pinned native source. Keep accuracy as a release constraint and measure
 performance per independently verified complete job.
@@ -721,7 +721,7 @@ is `~/.mako/browser-host-releases/5e421f03704df6b1/workflow-install-handoff.json
 The installed app/regular Aside extension are still older.
 Installation waits for active work to finish. Positive unpacked-reload proof and
 controlled browser concurrent typing remain open. See the
-[workflow evidence](audits/2026-09-22/extension-workflows/README.md) for the exact
+[workflow evidence](public-audits/2026-09-22/extension-workflows/README.md) for the exact
 measurements, permission changes and limitations.
 
 ## Broader extension design audit

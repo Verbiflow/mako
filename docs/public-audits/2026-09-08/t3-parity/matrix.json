@@ -27,7 +27,7 @@
         },
         {
           "repo": "mako",
-          "path": "docs/audits/2026-09-08/sdk-controls/claude-result.json",
+          "path": "docs/public-audits/2026-09-08/sdk-controls/claude-result.json",
           "anchor": "\"compaction\": true"
         }
       ]
@@ -52,7 +52,7 @@
         },
         {
           "repo": "mako",
-          "path": "docs/audits/2026-09-08/sdk-controls/codex-compaction-failure.json",
+          "path": "docs/public-audits/2026-09-08/sdk-controls/codex-compaction-failure.json",
           "anchor": "{"
         }
       ]
@@ -97,7 +97,7 @@
         },
         {
           "repo": "mako",
-          "path": "docs/audits/2026-09-07/browser-extension-evidence.json",
+          "path": "docs/public-audits/2026-09-07/browser-extension-evidence.json",
           "anchor": "{"
         }
       ]
@@ -492,7 +492,7 @@
         },
         {
           "repo": "mako",
-          "path": "docs/audits/2026-09-07/computer-control-evidence.json",
+          "path": "docs/public-audits/2026-09-07/computer-control-evidence.json",
           "anchor": "{"
         }
       ]

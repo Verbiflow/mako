@@ -86,9 +86,9 @@ Mako already preserves structured attachments, has audio/video elements for supp
 
 ## Reproduce
 
-`node docs/audits/2026-09-08/transcript-presentation/reproduce.mjs` bundles and server-renders the real React components, then writes `render-evidence-fixed.json`. It reads no native conversations and launches no agent. This proves generated markup, not successful browser media loading or click behavior.
+`node docs/public-audits/2026-09-08/transcript-presentation/reproduce.mjs` bundles and server-renders the real React components, then writes `render-evidence-fixed.json`. It reads no native conversations and launches no agent. This proves generated markup, not successful browser media loading or click behavior.
 
-`node docs/audits/2026-09-08/transcript-presentation/native-inventory.mjs /path/to/manifest.json` reads explicit native session paths and writes only counts, provider IDs, tool names, and media-source kinds to `native-evidence.json`. The manifest is a JSON array of `{ "provider": "cursor", "path": "/absolute/native/store.db" }` objects. It does not print transcript text, media bytes, credentials, or scan the full catalog. The committed evidence uses the successful September 7 browser fixtures and reflects the two fixes above.
+`node docs/public-audits/2026-09-08/transcript-presentation/native-inventory.mjs /path/to/manifest.json` reads explicit native session paths and writes only counts, provider IDs, tool names, and media-source kinds to `native-evidence.json`. The manifest is a JSON array of `{ "provider": "cursor", "path": "/absolute/native/store.db" }` objects. It does not print transcript text, media bytes, credentials, or scan the full catalog. The committed evidence uses the successful September 7 browser fixtures and reflects the two fixes above.
 
 Run the focused regressions with `npm run -s build --workspace @mako/sessions`, `node packages/sessions/test/cursor-tool-images.mjs`, `node packages/sessions/test/opencode.mjs`, and `npx tsx scripts/test-content-contract.ts`.
 
@@ -132,7 +132,7 @@ After the user reported excessive load, the temporary OpenCode and Mako browser 
 The five matched Claude native records contain 546 parsed entries and 253 tool calls. Two retain an inline JPEG. `claude-rich-manifest.json` identifies those exact records and their desktop titles; `claude-rich-evidence.json` contains counts and attachment kinds without transcript bodies. Reproduce with:
 
 ```sh
-node docs/audits/2026-09-08/transcript-presentation/native-inventory.mjs docs/audits/2026-09-08/transcript-presentation/claude-rich-manifest.json docs/audits/2026-09-08/transcript-presentation/claude-rich-evidence.json
+node docs/public-audits/2026-09-08/transcript-presentation/native-inventory.mjs docs/public-audits/2026-09-08/transcript-presentation/claude-rich-manifest.json docs/public-audits/2026-09-08/transcript-presentation/claude-rich-evidence.json
 ```
 
 Further direct image check: in Claude's Cleanshot session, expanding **Read CleanShot 2026-09-01 at 2.00.17 PM@2x.png, ran 3 commands**, then its Read row, displays the retained screenshot inline and a clickable source path. The image is visible even though the session is archived. This is confirmed historical media rendering, separate from opening a current file in an unreachable remote session.

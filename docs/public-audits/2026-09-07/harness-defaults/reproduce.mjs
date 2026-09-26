@@ -1,4 +1,4 @@
-// Run from the repository root with node --import tsx docs/audits/2026-09-07/harness-defaults/reproduce.mjs
+// Run from the repository root with node --import tsx docs/public-audits/2026-09-07/harness-defaults/reproduce.mjs
 // Desired-behavior regressions for the original audit findings.
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'

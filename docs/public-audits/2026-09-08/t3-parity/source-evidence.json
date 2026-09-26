@@ -68,7 +68,7 @@
     {
       "row": "claude",
       "repo": "mako",
-      "path": "docs/audits/2026-09-08/sdk-controls/claude-result.json",
+      "path": "docs/public-audits/2026-09-08/sdk-controls/claude-result.json",
       "anchor": "\"compaction\": true",
       "line": 13,
       "sha256": "9b6f0aaf97215562643e1ae062affce2d2d57d4f36b727f5b0597326cec5cc0a"
@@ -92,7 +92,7 @@
     {
       "row": "codex",
       "repo": "mako",
-      "path": "docs/audits/2026-09-08/sdk-controls/codex-compaction-failure.json",
+      "path": "docs/public-audits/2026-09-08/sdk-controls/codex-compaction-failure.json",
       "anchor": "{",
       "line": 1,
       "sha256": "d1cc62e40741d0e34a205040dd61bcb2c5785a6fb65a16d81d14a43c3a770867"
@@ -132,7 +132,7 @@
     {
       "row": "other-providers",
       "repo": "mako",
-      "path": "docs/audits/2026-09-07/browser-extension-evidence.json",
+      "path": "docs/public-audits/2026-09-07/browser-extension-evidence.json",
       "anchor": "{",
       "line": 1,
       "sha256": "4f153d45c2f8250a913f8366856bea069c46679858e5cf7d48c4028e811952f0"
@@ -508,7 +508,7 @@
     {
       "row": "computer",
       "repo": "mako",
-      "path": "docs/audits/2026-09-07/computer-control-evidence.json",
+      "path": "docs/public-audits/2026-09-07/computer-control-evidence.json",
       "anchor": "{",
       "line": 1,
       "sha256": "21e55b8b25152f131ff245b67bb4ae501bd7054274e3f68beed462ed6da5e221"

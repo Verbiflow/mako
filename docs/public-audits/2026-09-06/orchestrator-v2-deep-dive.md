@@ -60,4 +60,4 @@ All source links below are pinned to the reviewed commit:
 - [Capability contract](https://github.com/pingdotgg/t3code/blob/415ed0f73b97f1655b6282492f81d0b2bba3a9cc/packages/contracts/src/orchestrationV2.ts)
 - [Scheduled tasks](https://github.com/pingdotgg/t3code/blob/415ed0f73b97f1655b6282492f81d0b2bba3a9cc/apps/server/src/scheduledTasks/ScheduledTaskService.ts)
 
-Rerun `python3 docs/audits/2026-09-06/index-orchestrator-evidence.py /path/to/t3code` to regenerate the accompanying `orchestrator-v2-evidence.json`. The script reads the exact git revision, indexes source documents and named effect/live/skipped tests, and explicitly records that tests were not executed. It is an evidence index, not a behavioral test or an exhaustive test parser.
+Rerun `python3 docs/public-audits/2026-09-06/index-orchestrator-evidence.py /path/to/t3code` to regenerate the accompanying `orchestrator-v2-evidence.json`. The script reads the exact git revision, indexes source documents and named effect/live/skipped tests, and explicitly records that tests were not executed. It is an evidence index, not a behavioral test or an exhaustive test parser.

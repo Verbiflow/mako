@@ -15,10 +15,10 @@ The first assessment was too conservative for a product with no users. This pass
 The HTML artifacts can be opened locally. To browse the complete collection, run from the repository root:
 
 ```sh
-python3 -m http.server 4190 --bind 127.0.0.1 --directory docs/audits/2026-09-07/ui-library-pilot
+python3 -m http.server 4190 --bind 127.0.0.1 --directory docs/public-audits/2026-09-07/ui-library-pilot
 ```
 
-Open `/visual/studies/`, `/motion/labels.html`, or `/pretext/standalone.html`. The generic static server does not persist benchmark results, but the benchmark displays JSON and provides a download. `node docs/audits/2026-09-07/ui-library-pilot/pretext/serve.mjs` instead serves the benchmark at port 43917 and saves results. Stop any earlier benchmark server before reusing that port. Embedded library/font licenses accompany the experiments.
+Open `/visual/studies/`, `/motion/labels.html`, or `/pretext/standalone.html`. The generic static server does not persist benchmark results, but the benchmark displays JSON and provides a download. `node docs/public-audits/2026-09-07/ui-library-pilot/pretext/serve.mjs` instead serves the benchmark at port 43917 and saves results. Stop any earlier benchmark server before reusing that port. Embedded library/font licenses accompany the experiments.
 
 ## What I would build
 

@@ -1,10 +1,10 @@
 # Mako session fidelity and streaming audit
 
-> Historical baseline. The implementation and current verification are documented in [repairs.md](/Users/kashyab/pi-ui/docs/audits/2026-09-06/repairs.md).
+> Historical baseline. The implementation and current verification are documented in [repairs.md](repairs.md).
 
 Mako has demonstrable session correctness problems beneath the UI. The main cause is that native history and live activity use different, lossy representations and become separate sources for the same displayed conversation. Storage revisions, message identity, attachment ownership, and run outcomes need explicit contracts before further transcript polish.
 
-This review covers the current working tree, including the existing uncommitted session-reader, tool-output, and file-citation work. No application source was changed. Fresh Codex, MonoCode, and T3 Code references were fetched into `/tmp/mako-audit-2026-09-06`. The project's existing `ignore/` checkouts were preserved. There is no `repo_ignore` directory here; I interpreted that as the reference-clone request. Exact revisions are in [references.json](/Users/kashyab/pi-ui/docs/audits/2026-09-06/references.json).
+This review covers the current working tree, including the existing uncommitted session-reader, tool-output, and file-citation work. No application source was changed. Fresh Codex, MonoCode, and T3 Code references were fetched into `/tmp/mako-audit-2026-09-06`. The project's existing `ignore/` checkouts were preserved. There is no `repo_ignore` directory here; I interpreted that as the reference-clone request. Exact revisions are in [references.json](/Users/kashyab/pi-ui/docs/public-audits/2026-09-06/references.json).
 
 The findings below combine code inspection, synthetic native stores, and actual renderer state actions against a mocked host. They establish specific failures. They do not constitute a real-provider compatibility certification or an Electron rendering benchmark.
 
@@ -141,12 +141,12 @@ Acceptance criteria should include: one visible item for a live/native duplicate
 Run the diagnostic bundle from the repository root:
 
 ```sh
-node docs/audits/2026-09-06/run.mjs
+node docs/public-audits/2026-09-06/run.mjs
 ```
 
 These assertions deliberately confirm the defects described above. They are diagnostic evidence, not passing acceptance tests. After repairs, replace their assertions with the expected behavior in the owning test suites. The archive and Cursor checks invoke the existing runtime-private write/rescan methods to exercise settled commits and watcher reconciliation deterministically. Other checks use provider readers, pure transforms, or actual state actions with a mocked host. No test reads private transcripts or calls a live coding provider.
 
-All seven diagnostic files reproduced their cases. [Captured output](/Users/kashyab/pi-ui/docs/audits/2026-09-06/results.txt) includes the performance sample and actual resume/follow routing.
+All seven diagnostic files reproduced their cases. [Captured output](results.txt) includes the performance sample and actual resume/follow routing.
 
 Existing checks also passed: the full `@mako/sessions` suite, `test:stage`, `test:codex-protocol`, and `test:performance`. The resume matrix validates Mako's emitted sessions with Mako's readers; it does not establish current vendor-CLI resume compatibility. That requires separate provider-owned integration fixtures and controlled real-provider smoke tests.
 

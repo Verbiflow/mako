@@ -1,6 +1,6 @@
 # Extension workflows and agent API
 
-Implementation follows the [reference audit](../chatgpt-extension-design/README.md).
+Implementation follows the [reference audit](../../../audits/2026-09-22/chatgpt-extension-design/README.md).
 The reference inspired behavior and boundaries; no OpenAI runtime dependency was
 introduced. All changes live in the shared control client, host and extension.
 Default-browser discovery, regular profiles and explicit browser selection are

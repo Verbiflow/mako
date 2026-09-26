@@ -90,7 +90,7 @@ A dedicated automation profile is also supported. Since Chrome 136, debugging co
 `probe-browser-dependency.py` imports the actual installed dependency and uses fake CDP responses. It changes no installed source, connects to no browser, and targets no personal tabs. Run it with the Python interpreter belonging to the Browser Use installation. On this machine:
 
 ```sh
-/Users/kashyab/.local/share/uv/tools/browser-use/bin/python docs/audits/2026-09-07/probe-browser-dependency.py
+/Users/kashyab/.local/share/uv/tools/browser-use/bin/python docs/public-audits/2026-09-07/probe-browser-dependency.py
 ```
 
 The saved `browser-dependency-evidence.json` includes package versions, source hashes, and both confirmed reproduction traces. Its successful assertions mean the defects reproduced, not that the product passed acceptance.

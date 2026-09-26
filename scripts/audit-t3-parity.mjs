@@ -11,7 +11,7 @@ if (!mainPath || !v2Path) {
     "Usage: node scripts/audit-t3-parity.mjs /path/to/t3-main /path/to/t3-v2"
   )
 }
-const directory = resolve(workspace, "docs/audits/2026-09-08/t3-parity")
+const directory = resolve(workspace, "docs/public-audits/2026-09-08/t3-parity")
 const matrix = JSON.parse(
   readFileSync(resolve(directory, "matrix.json"), "utf8")
 )
