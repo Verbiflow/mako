@@ -53,7 +53,7 @@ const server = createServer((request, response) => {
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
 const { port } = z.object({ port: z.number() }).parse(server.address())
 try {
-  const probe = openCodeProcessProbeFor(root, join(root, "activity"))
+  const probe = openCodeProcessProbeFor(root)
   const poll = () => probe.probe(AbortSignal.timeout(1000))
   assert.deepEqual(await poll(), { kind: "available", sessions: [] })
   await writeFile(

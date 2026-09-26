@@ -332,7 +332,7 @@ async function audit() {
         )
     ipcMain.handle(
       "mako:control-preview",
-      async (_event, id, watching, watcher) => {
+      async (_event, id, watching, watcher, after) => {
         const countTransfer = (transfer) => {
           wireBytes += transfer.wireBytes
           decodedBytes += transfer.decodedBytes

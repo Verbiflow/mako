@@ -11,6 +11,7 @@ import { SharedConversations } from "../electron/shared-conversations.js"
 import { startWebHost } from "../electron/web-host.js"
 import { invokeRuntime, subscribeRuntime, probeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection.js"
 import { runtimeLocation } from "../electron/runtime-service.js"
+import { reserveHostReplacement } from "../electron/local-update-installer.js"
 import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import type { HostEvent, LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
@@ -294,6 +295,12 @@ try {
   registration.close()
   let restartedPid: number | undefined
   try {
+    // An installer that quit this host to replace its app must not see it reopened.
+    mkdirSync(restartLocation.directory, { recursive: true, mode: 0o700 })
+    const releaseReplacement = await reserveHostReplacement(restartLocation.socket)
+    assert.equal((await router.resolve("fixture", "restart-native")).kind, "unavailable")
+    assert.equal((await probeRuntime(restartLocation.socket)).state, "absent", "a live installer reservation blocks automatic wake")
+    await releaseReplacement()
     assert.equal(wireSnapshot.parse(await attach(router, "fixture", "restart-native")).session.id, restartId)
     const probe = await probeRuntime(restartLocation.socket)
     assert.equal(probe.state, "ready")
@@ -322,7 +329,7 @@ try {
   ownerHost = await startWebHost(ownerSocket, ownerCall, absentFile, undefined, info(101))
   await until(() => events.some((event) => JSON.stringify(event).includes('"connected":true')), "peer reconnect reported")
   assert.equal(prompts.length, before, "a reconnect itself never resends prompts")
-  console.log("Shared conversations: six providers, same owner, concurrent attach, duplicate sends, queued replies, approvals, stop, close, hibernation, old-host discovery, real-process host wake, event forwarding and reconnect")
+  console.log("Shared conversations: six providers, same owner, concurrent attach, duplicate sends, queued replies, approvals, stop, close, hibernation, old-host discovery, installer-reserved wake refusal, real-process host wake, event forwarding and reconnect")
 } finally {
   closeClient?.()
   router.dispose()

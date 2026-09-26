@@ -1,17 +1,12 @@
 import assert from "node:assert/strict"
-import {
-  ClientSideConnection,
-  ndJsonStream,
-  PROTOCOL_VERSION,
-} from "@agentclientprotocol/sdk"
+import { randomUUID } from "node:crypto"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { resolveSessionSettings } from "@mako/sessions/settings"
-import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
-import { acpObservedSettings } from "../electron/acp-config.ts"
-import { withDiscoveryProcess } from "../electron/providers/discovery-process.ts"
-import { runDiscovery } from "../electron/providers/profile-transport.ts"
 import { openCodeProfileLoader } from "../electron/providers/opencode/profile.ts"
-import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
+import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
 
 const variants = { low: {}, medium: {}, high: {} }
 for (const defaultVariant of ["low", "high"]) {
@@ -39,61 +34,29 @@ console.log(
 )
 
 if (process.argv.includes("--live")) {
-  const installation = await resolveOpenCodeInstallation()
-  assert.ok(installation)
-  const profile = await openCodeProfileLoader.load(process.env, process.cwd())
-  const expected = resolveSessionSettings({
-    models: profile.models,
-    context: "new",
-    phase: "launch",
-    defaults: profile.settings,
-  })
-  let created: string | undefined
+  // A fresh, disposable OpenCode home: discovery must work before any cache
+  // exists, and a session must open on the defaults discovery reported.
+  const root = await mkdtemp(join(tmpdir(), "mako-opencode-settings-"))
+  const env: NodeJS.ProcessEnv = { ...process.env, OPENCODE_CONFIG_CONTENT: "{}" }
+  for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "OPENCODE_CONFIG_DIR"]) {
+    env[name] = join(root, name)
+    await mkdir(env[name]!, { recursive: true })
+  }
+  const driver = createOpenCodeDriver({ env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
+  const conversationId = randomUUID()
   try {
-    const observed = await withDiscoveryProcess(
-      {
-        command: installation.command,
-        args: ["acp"],
-        env: process.env,
-        cwd: process.cwd(),
-      },
-      async ({ child, phase }) => {
-        const connection = new ClientSideConnection(
-          () => ({
-            sessionUpdate: async () => {},
-            requestPermission: async () => ({
-              outcome: { outcome: "cancelled" },
-            }),
-          }),
-          ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout))
-        )
-        phase("initialize")
-        await connection.initialize({
-          protocolVersion: PROTOCOL_VERSION,
-          clientCapabilities: { session: { configOptions: { boolean: {} } } },
-        })
-        phase("OpenCode default session")
-        const session = await connection.newSession({
-          cwd: process.cwd(),
-          mcpServers: [],
-        })
-        created = session.sessionId
-        return acpObservedSettings(session.configOptions ?? [])
-      }
-    )
-    console.log(
-      `OpenCode discovery: ${JSON.stringify(expected.settings)}; ACP session: ${JSON.stringify(observed)}`
-    )
-    assert.equal(observed.model, expected.settings.model)
-    assert.equal(observed.options?.effort, expected.settings.options?.effort)
+    const started = Date.now()
+    const profile = await openCodeProfileLoader.load(env, root)
+    const discoveryMs = Date.now() - started
+    assert.ok(profile.models.length > 0, "a fresh OpenCode home reports its models")
+    assert.ok(profile.settings?.model, profile.configurationError)
+    const expected = resolveSessionSettings({ models: profile.models, context: "new", phase: "launch", defaults: profile.settings })
+    const session = await driver.start(root, { conversationId, emit() {}, tuning: expected.settings })
+    console.log(`OpenCode discovery (${discoveryMs} ms, ${profile.models.length} models): ${JSON.stringify(expected.settings)}; native session: ${JSON.stringify(session.settings)}`)
+    assert.equal(session.settings?.model, expected.settings.model)
+    assert.equal(session.settings?.options?.effort, expected.settings.options?.effort)
   } finally {
-    if (created)
-      await runDiscovery(
-        installation.command,
-        ["api", "v2.session.remove", "--param", `sessionID=${created}`],
-        process.env,
-        undefined,
-        process.cwd()
-      )
+    await driver.close(conversationId)
+    await rm(root, { recursive: true, force: true })
   }
 }

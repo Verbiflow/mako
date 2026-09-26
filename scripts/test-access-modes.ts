@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { ApprovalEvidenceCapabilitySchema } from "../electron/providers/approval-capability.js"
-import { acpDefaultMode, acpInitialSelection, acpModeChange, acpObservedMode, acpNativeModes, acpSessionModes } from "../electron/acp-access.ts"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "../electron/acp-access.ts"
 import { accessModeId } from "../electron/contracts/access.ts"
 import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
 import { CURSOR_SDK_MODES } from "../electron/providers/cursor/sdk/modes.ts"
@@ -9,7 +9,8 @@ import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credenti
 import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { openCodeAcpSource } from "../electron/providers/opencode/acp.ts"
+import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { openCodeAgentForMode, openCodeModeForAgent, openCodeModes, openCodeSessionModes } from "../electron/providers/opencode/access.ts"
 import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "../electron/providers/codex/access.ts"
 import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
 import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
@@ -102,56 +103,51 @@ assert.deepEqual(
   "an unchosen Grok session opens under its declared default, reported as such"
 )
 
-// OpenCode: plan is native, build is the base and hidden, ask/edits/full are launch rulesets; all policies are provider-enforced.
-const openCodeNative = {
-  currentModeId: "build",
-  availableModes: [
-    { id: "build", name: "build" },
-    { id: "plan", name: "plan" },
-  ],
-}
-const openCodeModes = acpSessionModes(openCodeAcpSource.access, openCodeNative)
-assert.deepEqual(openCodeModes.map((mode) => [mode.id, mode.access, mode.enforcement]), [
+// OpenCode: Plan and custom primary agents are native; Build is hidden behind
+// the ask/edits/full rulesets its session launches with.
+const openCodeDriver = createOpenCodeDriver({ env: async () => ({}), approvalRoot: async () => "/nonexistent" })
+const openCodeLadder = openCodeSessionModes([
+  { id: "build", name: "build" },
+  { id: "plan", name: "plan" },
+  { id: "review", name: "Review", description: "Reads and comments only" },
+])
+assert.deepEqual(openCodeLadder.map((mode) => [mode.id, mode.access, mode.enforcement]), [
   ["plan", "plan", "provider"],
+  ["review", undefined, undefined],
   [accessModeId("ask"), "ask", "launch"],
   [accessModeId("edits"), "edits", "launch"],
   [accessModeId("full"), "full", "launch"],
 ])
-assert.deepEqual(acpModeChange(openCodeAcpSource.access, openCodeModes, accessModeId("full"), "full", "opencode"), { kind: "native", modeId: accessModeId("full"), nativeModeId: "build" }, "returning from Plan must switch the native agent back to Build")
-assert.equal(acpObservedMode(openCodeAcpSource.access, "build", "edits"), accessModeId("edits"))
-assert.equal(acpObservedMode(openCodeAcpSource.access, "plan", "full"), "plan")
-assert.equal(acpObservedMode(openCodeAcpSource.access, "custom", "full"), "custom")
-const openCodeSelection = acpInitialSelection(openCodeAcpSource.access, openCodeModes, openCodeNative, accessModeId("full"))
-assert.deepEqual(openCodeSelection, { currentMode: accessModeId("full") })
-assert.throws(() => acpModeChange(openCodeAcpSource.access, openCodeModes, accessModeId("ask"), "full", "opencode"), /when its session starts/)
-// OpenCode v2 sends no session.modes; the "mode" config option carries the
-// same fact, so the running session's ladder and current level still derive.
-const openCodeOption = acpNativeModes([
+assert.deepEqual(openCodeSessionModes([{ id: "build", name: "build" }, { id: "plan", name: "plan" }]), [...openCodeModes],
+  "a session with only the built-in agents shows the ladder declared before launch")
+assert.equal(openCodeAgentForMode(accessModeId("full"), "full"), "build", "returning from Plan must switch the native agent back to Build")
+assert.equal(openCodeAgentForMode("plan", "full"), "plan")
+assert.equal(openCodeAgentForMode("review", "ask"), "review")
+assert.throws(() => openCodeAgentForMode(accessModeId("ask"), "full"), /when its session starts/)
+assert.equal(openCodeModeForAgent("build", "edits"), accessModeId("edits"))
+assert.equal(openCodeModeForAgent("plan", "full"), "plan")
+assert.equal(openCodeModeForAgent("review", "full"), "review")
+// ACP agents may report modes as a `mode` config option instead of session.modes.
+const modeOption = acpNativeModes([
   {
     id: "mode",
     name: "Session Mode",
     category: "mode",
     type: "select",
-    currentValue: "build",
+    currentValue: "accept-edits",
     options: [
-      { value: "build", name: "build", description: "The default agent." },
-      { value: "plan", name: "plan", description: "Plan mode." },
+      { value: "accept-edits", name: "Code", description: "Edits without asking." },
+      { value: "plan", name: "Plan", description: "Plan mode." },
     ],
   },
 ])
-assert.equal(openCodeOption?.currentModeId, "build")
-assert.deepEqual(openCodeOption?.availableModes.map((mode) => mode.id), ["build", "plan"])
+assert.equal(modeOption?.currentModeId, "accept-edits")
 assert.deepEqual(
-  acpSessionModes(openCodeAcpSource.access, openCodeOption).map((mode) => [mode.id, mode.access, mode.enforcement]),
-  openCodeModes.map((mode) => [mode.id, mode.access, mode.enforcement]),
-  "the mode config option rebuilds the same ladder session.modes did"
+  acpSessionModes(devinAcpSource.access, modeOption).map((mode) => [mode.id, mode.access]),
+  [["accept-edits", "edits"], ["plan", "plan"]],
+  "the mode config option builds the same ladder session.modes does"
 )
 assert.equal(acpNativeModes([]), null)
-assert.equal(
-  acpInitialSelection(openCodeAcpSource.access, openCodeModes, openCodeOption, acpDefaultMode(openCodeAcpSource.access)).currentMode,
-  accessModeId("ask"),
-  "an unchosen OpenCode session opens under the ask overlay it launched with"
-)
 // Codex: four tiers become the per-turn approval policy, sandbox, and reviewer.
 assert.deepEqual(codexAccessModes().map((mode) => mode.access), ["ask", "edits", "auto", "full"])
 assert.deepEqual(codexTurnAccess("full"), { approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, approvalsReviewer: "user" })
@@ -176,18 +172,18 @@ assert.equal(codexObservedTier({ sandbox: { type: "externalSandbox", networkAcce
 assert.ok(ClaudeModeSchema.safeParse("bypassPermissions").success)
 
 console.log(
-  "Access modes: native policy ownership, Cursor SDK tiers, Devin native tiers, Grok launch tiers without steering, OpenCode rulesets, Codex per-turn policy, and Claude bypass verified"
+  "Access modes: native policy ownership, Cursor SDK tiers, Devin native tiers, Grok launch tiers without steering, OpenCode native agents and rulesets, Codex per-turn policy, and Claude bypass verified"
 )
 
 // Before launch, every driver declares the same ladder its live session will show,
 // so the composer can take the choice with the first prompt.
 assert.deepEqual(acpLiveDriver(devinAcpSource).modes, devinModes, "Devin's ladder is known before launch")
 assert.deepEqual(acpLiveDriver(grokAcpSource).modes, grokModes, "Grok's ladder is known before launch")
-assert.deepEqual(acpLiveDriver(openCodeAcpSource).modes, openCodeModes, "OpenCode's ladder is known before launch")
+assert.deepEqual(openCodeDriver.modes, openCodeModes, "OpenCode's ladder is known before launch")
 assert.deepEqual(codexLiveDriver.modes, codexAccessModes())
 assert.ok(claudeLiveDriver.modes?.length, "Claude declares its modes before launch")
 for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
-const accessDrivers = [cursorDriver, acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), acpLiveDriver(openCodeAcpSource), codexLiveDriver, claudeLiveDriver]
+const accessDrivers = [cursorDriver, acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), openCodeDriver, codexLiveDriver, claudeLiveDriver]
 for (const driver of accessDrivers) validateLiveDriver(driver)
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.approvalEvidence.kind])), {
   cursor: "no-interactive-requests", devin: "native-decisions", grok: "submission-only",
@@ -196,7 +192,7 @@ assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider,
   driver.approvalEvidence.kind === "native-decisions" ? driver.approvalEvidence.nativeRequests : [],
 ])), {
-  cursor: [], devin: ["structured-question"], grok: [], opencode: ["tool-permission"],
+  cursor: [], devin: ["structured-question"], grok: [], opencode: ["tool-permission", "structured-question"],
   codex: ["tool-permission"], claude: ["structured-question", "tool-permission"],
 }, "native question evidence must not certify generic tool permissions")
 assert.throws(() => ApprovalEvidenceCapabilitySchema.parse({
@@ -216,7 +212,7 @@ for (const driver of accessDrivers)
     `${driver.provider}: the declared default is on the ladder`
   )
 assert.equal(acpLiveDriver(devinAcpSource).defaultMode, "accept-edits", "Devin opens in its Code mode")
-assert.equal(acpLiveDriver(openCodeAcpSource).defaultMode, accessModeId("ask"))
+assert.equal(openCodeDriver.defaultMode, accessModeId("ask"))
 assert.equal(codexLiveDriver.defaultMode, accessModeId("ask"))
 assert.equal(claudeLiveDriver.defaultMode, "default")
 assert.equal(cursorDriver.defaultMode, "full-access")

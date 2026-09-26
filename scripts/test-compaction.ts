@@ -1,10 +1,7 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { COMPACTION_CONFIRMATION_MS } from "../electron/contracts/recovery.ts"
-import {
-  AcpCompaction,
-  type AcpCompactionSpec,
-} from "../electron/acp-compaction.ts"
+import { AcpCompaction } from "../electron/acp-compaction.ts"
 import { devinCompaction } from "../electron/providers/devin/compaction.ts"
 import type { LiveActionResult } from "../electron/contracts/live-actions.ts"
 import { recoveryCapabilities } from "../electron/providers/live-driver.ts"
@@ -58,29 +55,23 @@ for (const [text, kind] of [
   await tick()
   assert.equal(results[0]?.kind, kind)
 }
-const responseSpec: AcpCompactionSpec = {
-  kind: "supported",
-  command: "/fixture",
-  completion: { kind: "response" },
-}
-for (const spec of [devinCompaction, responseSpec]) {
+{
   const results: LiveActionResult[] = []
-  const operation = new AcpCompaction(spec, (result) => results.push(result))
+  const operation = new AcpCompaction(devinCompaction, (result) => results.push(result))
   operation.start(async () => {
     throw new Error("transport lost")
   })
   await tick()
   assert.deepEqual(results, [{ kind: "uncertain", reason: "transport lost" }])
 }
-const completed: LiveActionResult[] = []
-const response = Promise.withResolvers<{ stopReason: "end_turn" }>()
-new AcpCompaction(responseSpec, (result) => completed.push(result)).start(
-  () => response.promise
-)
-assert.deepEqual(completed, [])
-response.resolve({ stopReason: "end_turn" })
-await tick()
-assert.deepEqual(completed, [{ kind: "completed" }])
+{
+  const completed: LiveActionResult[] = []
+  const response = Promise.withResolvers<{ stopReason: "end_turn" }>()
+  new AcpCompaction(devinCompaction, (result) => completed.push(result)).start(() => response.promise)
+  response.resolve({ stopReason: "end_turn" })
+  await tick()
+  assert.deepEqual(completed, [], "a command reply alone never confirms compaction")
+}
 assert.equal(recoveryCapabilities(undefined).compaction.kind, "unavailable")
 mock.timers.enable({ apis: ["setTimeout"] })
 try {

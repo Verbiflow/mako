@@ -34,6 +34,12 @@ function fixture(overrides = {}) {
         },
       }
     },
+    reserveReplacement: async () => {
+      calls.push({ command: "reserve" })
+      return async () => {
+        calls.push({ command: "release" })
+      }
+    },
     running: async () => (checks++ < 2 ? [123] : []),
     wait: async () => {
       calls.push({ command: "wait" })
@@ -46,7 +52,7 @@ const success = fixture()
 await updateLocal(options, success.dependencies)
 assert.deepEqual(
   success.calls.map((call) => call.command),
-  ["npm", "prepare", "wait", "wait", process.execPath, "open", "verify-startup"]
+  ["npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release"]
 )
 assert.deepEqual(success.calls[0].args, [
   "run",
@@ -55,7 +61,7 @@ assert.deepEqual(success.calls[0].args, [
   `--output=${options.output}`,
 ])
 assert.equal(success.calls[0].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
-assert.deepEqual(success.calls.at(-3).args, [
+assert.deepEqual(success.calls.at(-4).args, [
   join(options.project, "scripts/install-local-mac.mjs"),
   join(options.output, "mac-arm64/Mako.app"),
   "--install",
@@ -86,7 +92,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   interrupted.calls.map((call) => call.command),
-  ["npm", "prepare", "cancel"]
+  ["npm", "reserve", "prepare", "cancel", "release"]
 )
 const masked = fixture({
   running: async () => [],

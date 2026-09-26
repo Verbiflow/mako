@@ -88,7 +88,7 @@ async function main() {
     // The independent test decoder is full FFmpeg on PATH. The shipped minimal
     // encoder deliberately has no rawvideo output muxer; do not bloat it for a test.
     const decoder = spawn("ffmpeg", ["-v", "error", "-i", result.video,
-      "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], { stdio: ["ignore", "pipe", "pipe"] })
+      "-an", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], { stdio: ["ignore", "pipe", "pipe"] })
     let errors = ""
     decoder.stderr.on("data", chunk => { errors = (errors + chunk.toString()).slice(-4096) })
     const exited = new Promise((done, reject) => { decoder.once("close", done); decoder.once("error", reject) })

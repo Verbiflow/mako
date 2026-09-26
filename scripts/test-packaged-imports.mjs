@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { posix, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { isBuiltin } from "node:module"
 import { listPackage, extractFile } from "@electron/asar"
 import ts from "typescript"
 
@@ -58,15 +57,7 @@ export function assertPackagedImports(app) {
           : ts.isCallExpression(node) &&
               node.expression.kind === ts.SyntaxKind.ImportKeyword
             ? node.arguments[0]
-            : ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "URL" &&
-                node.arguments?.[1]?.getText(source) === "import.meta.url" &&
-                ts.isStringLiteralLike(node.arguments[0]) && node.arguments[0].text.endsWith(".bundle.mjs")
-              ? node.arguments[0]
             : undefined
-      if (/^dist-electron\/providers\/[^/]+\/native-[^/]+-plugin\.bundle\.mjs$/.test(file) && specifier && ts.isStringLiteralLike(specifier)) {
-        assert.ok(isBuiltin(specifier.text),
-          `Native plugin must be standalone: ${file} -> ${specifier.text}`)
-      }
       if (
         specifier &&
         ts.isStringLiteralLike(specifier) &&

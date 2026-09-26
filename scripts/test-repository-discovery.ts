@@ -74,6 +74,53 @@ try {
     assert.equal(host.workspace, root)
   } finally { await host.dispose() }
 
+  const changes = (status: Awaited<ReturnType<WorkspaceGit["status"]>>) => Object.fromEntries(status.repositories!.map(repo => [repo.label, repo.changes]))
+  const tracked = new WorkspaceGit(root)
+  assert.equal(tracked.noteChange("notes.txt"), true, "Before the first status every change counts")
+  tracked.trackChanges(true)
+  assert.deepEqual(changes(await tracked.status()), { "group/backend": 1, mako: 1 })
+  assert.equal(tracked.noteChange("notes.txt"), false, "A file outside every discovered repository cannot move Git status")
+  assert.equal(tracked.noteChange("group/notes.txt"), false)
+  await writeFile(join(first, "second.txt"), "fixture")
+  assert.deepEqual(changes(await tracked.status()), { "group/backend": 1, mako: 1 }, "An unchanged child summary is reused while the watcher is live")
+  assert.equal(tracked.noteChange("mako/second.txt"), true)
+  assert.deepEqual(changes(await tracked.status()), { "group/backend": 1, mako: 2 }, "A change inside a child re-reads that child")
+  await writeFile(join(second, "selected.txt"), "fixture")
+  assert.deepEqual(changes(await tracked.status()), { "group/backend": 2, mako: 2 }, "The selected repository's summary follows its fresh status")
+  const added = join(root, "added")
+  await mkdir(added)
+  execFileSync("git", ["init", "-q", added])
+  assert.equal(tracked.noteChange("added/.git/HEAD"), true, "A new repository re-runs discovery")
+  assert.deepEqual(changes(await tracked.status()), { added: 0, "group/backend": 2, mako: 2 })
+  await writeFile(join(first, "third.txt"), "fixture")
+  assert.equal(tracked.noteChange(undefined), true, "An unnamed change forgets every summary")
+  assert.equal(changes(await tracked.status()).mako, 3)
+  tracked.trackChanges(false)
+  await writeFile(join(first, "fourth.txt"), "fixture")
+  await new Promise(resolve => setTimeout(resolve, 300))
+  assert.equal(changes(await tracked.status()).mako, 4, "Without a watcher every refresh re-reads every child")
+
+  const pushes: string[] = []
+  const watching = new AgentHost("repository-watch-test", (event) => { if (event.type === "git") pushes.push(event.git.cwd) })
+  try {
+    await watching.start(root)
+    await watching.gitStatus()
+    const settle = async (predicate: () => boolean, label: string) => {
+      const deadline = Date.now() + 5000
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(label)
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 600))
+    pushes.length = 0
+    for (let index = 0; index < 5; index++) await writeFile(join(root, `noise-${index}.log`), String(index))
+    await new Promise(resolve => setTimeout(resolve, 800))
+    assert.deepEqual(pushes, [], "Writes outside every repository must not refresh Git")
+    await writeFile(join(first, "watched.txt"), "fixture")
+    await settle(() => pushes.length > 0, "A write inside a repository must refresh Git")
+  } finally { await watching.dispose() }
+
   const worktree = join(root, "worktree")
   await mkdir(worktree)
   await writeFile(join(worktree, ".git"), "gitdir: /fixture")

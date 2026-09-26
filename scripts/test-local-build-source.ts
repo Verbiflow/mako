@@ -6,6 +6,7 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -116,7 +117,22 @@ try {
     assert.match(checkFailure.message, /APPLICATION_FIXTURE_FAILURE: cancel button remained blocked/)
     assert.ok(checkFailure.message.length < 1800, "Build diagnostics remain bounded")
   }
-  console.log("Local build copies preserve workspace links and security configuration, isolate writes, exclude generated data, reject escaping links, prune earlier build directories and report the real preparation error")
+
+  // A failed in-app install followed by a newer build installed elsewhere
+  // (the CLI never writes this receipt) must not keep reporting the old failure.
+  const receipts = join(root, "receipt-updates")
+  await mkdir(receipts)
+  await writeFile(join(receipts, "install-result.json"), JSON.stringify({ ok: false, message: "Mako processes are still running" }))
+  const failedAt = new Date(Date.now() - 60_000)
+  await utimes(join(receipts, "install-result.json"), failedAt, failedAt)
+  const build = (builtAt: Date) => ({ id: "a".repeat(16), builtAt: builtAt.toISOString(), revision: null, dirty: false })
+  const newer = new LocalUpdates(receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() + 1000)))
+  await newer.load()
+  assert.equal(newer.snapshot().local.kind, "idle", "A receipt older than the running build is superseded")
+  const same = new LocalUpdates(receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() - 1000)))
+  await same.load()
+  assert.equal(same.snapshot().local.kind, "error", "A failure after the running build was built still applies")
+  console.log("Local build copies preserve workspace links and security configuration, isolate writes, exclude generated data, reject escaping links, prune earlier build directories, report the real preparation error and ignore superseded install receipts")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

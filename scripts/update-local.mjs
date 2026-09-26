@@ -80,9 +80,13 @@ export async function updateLocal(options, dependencies) {
     )
     return
   }
-  const closing = await dependencies.prepareToClose()
+  // Reserve before asking the host to quit: another profile's host must not
+  // reopen the app being replaced once its socket disappears.
+  const release = await dependencies.reserveReplacement()
+  let closing
   let installed = false
   try {
+    closing = await dependencies.prepareToClose()
     let waiting = false
     for (;;) {
       const running = await dependencies.running()
@@ -119,6 +123,8 @@ export async function updateLocal(options, dependencies) {
       }
     }
     throw error
+  } finally {
+    await release()
   }
 }
 
@@ -348,6 +354,11 @@ async function main() {
         prepareToClose: () => {
           abort.signal.throwIfAborted()
           return prepareToClose()
+        },
+        reserveReplacement: async () => {
+          const { reserveHostReplacement } =
+            await import("../dist-electron/local-update-installer.js")
+          return reserveHostReplacement((await localRuntime()).socket)
         },
         running: runningProcesses,
         wait: () => delay(2000, undefined, { signal: abort.signal }),

@@ -338,8 +338,10 @@ assert.deepEqual(
 )
 assert.deepEqual(
   providerHost.acpSources.list().map((source) => source.provider),
-  ["grok", "devin", "opencode"]
+  ["grok", "devin"]
 )
+assert.equal(providerHost.liveDrivers.get("opencode")?.canResume, true)
+assert.equal(providerHost.liveDrivers.get("opencode")?.observesNativeAgents, true)
 assert.deepEqual(
   providerHost.sessionEmitters.list().map((emitter) => emitter.provider),
   ["claude", "codex", "cursor", "grok"]
@@ -471,15 +473,7 @@ grokAcp?.configureEnvironment(grokEnv)
 assert.equal(grokEnv.GROK_DISABLE_AUTOUPDATER, "1")
 
 assert.equal(providerHost.acpSources.get("claude"), undefined)
-
-const openCodeSource = providerHost.acpSources.get("opencode")!
-if (openCodeSource.available(process.cwd())) {
-  const openCodeAcp = await openCodeSource.launch({
-    appPath: process.cwd(),
-    execPath: process.execPath,
-  })
-  assert.deepEqual(openCodeAcp?.args, ["acp"])
-}
+assert.equal(providerHost.acpSources.get("opencode"), undefined)
 
 const registry = new ProviderRegistry<NativeRunner>()
 const runner: NativeRunner = {

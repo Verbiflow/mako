@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { cp, lstat, mkdtemp, realpath } from "node:fs/promises"
+import { cp, lstat, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -10,6 +10,11 @@ import {
 
 const target = "/Applications/Mako.app"
 
+async function dataRoot() {
+  const { runtimeDataRoot } = await import("../dist-electron/runtime-service.js")
+  return runtimeDataRoot(join(homedir(), "Library/Application Support"), {})
+}
+
 /**
  * The default profile's shared host: `host` when one answers, `null` when
  * none listens. A host that is quitting drops connections and answers 503
@@ -19,13 +24,8 @@ const target = "/Applications/Mako.app"
 export async function localRuntime() {
   const { settleRuntime } =
     await import("../dist-electron/runtime-connection.js")
-  const { runtimeDataRoot, runtimeLocation } =
-    await import("../dist-electron/runtime-service.js")
-  const dataRoot = runtimeDataRoot(
-    join(homedir(), "Library/Application Support"),
-    {}
-  )
-  const { socket } = runtimeLocation(dataRoot)
+  const { runtimeLocation } = await import("../dist-electron/runtime-service.js")
+  const { socket } = runtimeLocation(await dataRoot())
   const probe = await settleRuntime(socket)
   return {
     socket,
@@ -85,50 +85,66 @@ async function main() {
       2
     )
   )
-  if (args.includes("--install")) {
-    assert.equal(
-      running.length,
-      0,
-      "Mako or its shared host is still running. Finish active work and shut down the host and its MCP clients before installing. Nothing was stopped or replaced."
-    )
-    const staging = await mkdtemp(join(dirname(target), ".mako-local-install-"))
-    const candidate = join(staging, "Mako.app")
-    await cp(source, candidate, {
-      recursive: true,
-      verbatimSymlinks: true,
-      errorOnExist: true,
-      force: false,
-    })
-    await verifyLocalSignature(candidate, identity)
-    assert.equal(
-      (await runningProcesses()).length,
-      0,
-      `Mako started during preparation. The installed app was not changed; the candidate remains at ${candidate}`
-    )
-    const {
-      GRANTS_RESET_MESSAGE,
-      pruneRetainedApplications,
-      reconcileGrantIdentity,
-      replacePreparedApplication,
-    } = await import("../dist-electron/local-update-installer.js")
-    const backup = await replacePreparedApplication({
-      staging,
-      target,
-      verify: (app) => verifyLocalSignature(app, identity),
-      ready: async () =>
-        assert.equal(
-          (await runningProcesses()).length,
-          0,
-          "Mako started during verification. Nothing was replaced."
-        ),
-    })
-    const reset = await reconcileGrantIdentity(target, backup).catch(() => false)
-    const pruned = await pruneRetainedApplications(target, backup).catch(() => [])
-    console.log(
-      `Installed ${target}. Previous app retained at ${backup ?? "none"}.${pruned.length ? ` Removed ${pruned.length} older retained ${pruned.length === 1 ? "copy" : "copies"}.` : ""} Open the installed app before starting a development host.`
-    )
-    if (reset) console.log(GRANTS_RESET_MESSAGE)
+  if (!args.includes("--install")) return
+  assert.equal(
+    running.length,
+    0,
+    "Mako or its shared host is still running. Finish active work and shut down the host and its MCP clients before installing. Nothing was stopped or replaced."
+  )
+  const { reserveHostReplacement } =
+    await import("../dist-electron/local-update-installer.js")
+  const release = await reserveHostReplacement((await localRuntime()).socket)
+  try {
+    await install(source, identity)
+  } finally {
+    await release()
   }
+}
+
+async function install(source, identity) {
+  const staging = await mkdtemp(join(dirname(target), ".mako-local-install-"))
+  const candidate = join(staging, "Mako.app")
+  await cp(source, candidate, {
+    recursive: true,
+    verbatimSymlinks: true,
+    errorOnExist: true,
+    force: false,
+  })
+  await verifyLocalSignature(candidate, identity)
+  assert.equal(
+    (await runningProcesses()).length,
+    0,
+    `Mako started during preparation. The installed app was not changed; the candidate remains at ${candidate}`
+  )
+  const {
+    GRANTS_RESET_MESSAGE,
+    pruneRetainedApplications,
+    reconcileGrantIdentity,
+    replacePreparedApplication,
+  } = await import("../dist-electron/local-update-installer.js")
+  const backup = await replacePreparedApplication({
+    staging,
+    target,
+    verify: (app) => verifyLocalSignature(app, identity),
+    ready: async () =>
+      assert.equal(
+        (await runningProcesses()).length,
+        0,
+        "Mako started during verification. Nothing was replaced."
+      ),
+  })
+  const reset = await reconcileGrantIdentity(target, backup).catch(() => false)
+  // Settings reads this receipt; write the same shape its own installer writes.
+  const receipt = join(await dataRoot(), "updates/install-result.json")
+  await mkdir(dirname(receipt), { recursive: true, mode: 0o700 })
+  const installed = { ok: true, backup }
+  if (reset) installed.message = GRANTS_RESET_MESSAGE
+  await writeFile(receipt, JSON.stringify(installed), { mode: 0o600 })
+  const pruned = await pruneRetainedApplications(target, backup).catch(() => [])
+  console.log(
+    `Installed ${target}. Previous app retained at ${backup ?? "none"}.${pruned.length ? ` Removed ${pruned.length} older retained ${pruned.length === 1 ? "copy" : "copies"}.` : ""} Open the installed app before starting a development host.`
+  )
+  if (reset) console.log(GRANTS_RESET_MESSAGE)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

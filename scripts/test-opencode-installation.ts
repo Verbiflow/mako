@@ -1,5 +1,6 @@
 import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
-import { openCodeAcpSource } from "../electron/providers/opencode/acp.ts"
+import { openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
+import { accessModeId } from "../electron/contracts/access.ts"
 import assert from "node:assert/strict"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -17,10 +18,8 @@ try {
   assert.equal((await resolveOpenCodeInstallation(env)).command, renamed)
   await assert.rejects(resolveOpenCodeInstallation({ ...env, OPENCODE_BIN_PATH: misleading }), /v2 only/)
   for (const access of [undefined, "ask", "edits", "full"] as const) {
-    const launch = await openCodeAcpSource.launch({ appPath: root, execPath: process.execPath, env, access })
-    assert.ok(launch)
     const nativeEnv = { OPENCODE_CONFIG_CONTENT: '{"model":"keep/model","agents":{"plan":{"system":"keep plan"},"build":{"system":"keep build","permissions":[{"action":"bash","resource":"*","effect":"allow"}]}},}' }
-    launch.configureEnvironment(nativeEnv)
+    configureOpenCodePermissions(nativeEnv, openCodeLaunchAccess(access && accessModeId(access)))
     const config = JSON.parse(nativeEnv.OPENCODE_CONFIG_CONTENT)
     assert.equal(config.model, "keep/model")
     assert.equal(config.agents.plan.system, "keep plan")
@@ -42,5 +41,5 @@ try {
   assert.deepEqual(openCodeDatabasePaths({ XDG_DATA_HOME: root, OPENCODE_DB: "custom.db" }), [join(root, "opencode", "custom.db")])
   assert.deepEqual(openCodeDatabasePaths({ OPENCODE_DB: join(root, "exact.db") }), [join(root, "exact.db")])
   assert.deepEqual(openCodeDatabasePaths({ OPENCODE_DB: ":memory:" }), [])
-  console.log("OpenCode runtime: actual version beats filename, explicit mismatch/unknown refused, configured database roots preserved")
+  console.log("OpenCode runtime: actual version beats filename, explicit mismatch/unknown refused, launch rulesets merge into user configuration, configured database roots preserved")
 } finally { await rm(root, { recursive: true, force: true }) }

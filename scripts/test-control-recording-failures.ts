@@ -332,6 +332,63 @@ exec ${quote(ffmpeg)} "$@"
     else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
   }
 
+  // Throttle the actual encoder below capture rate for longer than the retained
+  // history. The video must lose temporal samples evenly, never freeze.
+  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  let sustainedResult
+  let throttling = false
+  let throttled: Promise<void> | undefined
+  const sustained = await ControlRecording.create(
+    target,
+    { directory: root, fps: 60, cursor: false },
+    async () => {}
+  )
+  try {
+    const shades = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+      sharp({ create: { width: 640, height: 480, channels: 3,
+        background: { r: index * 20, g: 64, b: 255 - index * 20 } } }).jpeg().toBuffer()))
+    await sustained.frame(shades[0]!, 640, 480)
+    await delay(300)
+    const encoderPid = Number(await readFile(pidFile, "utf8"))
+    throttling = true
+    throttled = (async () => {
+      while (throttling) {
+        process.kill(encoderPid, "SIGSTOP")
+        await delay(80)
+        process.kill(encoderPid, "SIGCONT")
+        await delay(5)
+      }
+    })()
+    const started = performance.now()
+    for (let index = 1; performance.now() - started < 6000; index++) {
+      await delay(16)
+      await sustained.frame(shades[index % shades.length]!, 640, 480)
+    }
+    throttling = false
+    await throttled
+    await sustained.stop()
+    sustainedResult = await sustained.settled()
+    assert.equal(sustainedResult.status, "finished", sustainedResult.error)
+    const timeline = JSON.parse(await readFile(sustainedResult.timeline!, "utf8"))
+    assert.ok(timeline.encodingTiming.maxScheduleLagMs > 1900,
+      "This test must fill the retained encoder history")
+    const packets = z.array(z.object({ pts_time: z.string(), duration_time: z.string() }))
+      .parse(JSON.parse((await execute(ffprobe, ["-v", "error", "-show_packets",
+        "-show_entries", "packet=pts_time,duration_time", "-of", "json",
+        sustainedResult.video!])).stdout).packets)
+    const longest = Math.max(...packets.map(packet => Number(packet.duration_time)))
+    assert.ok(longest < 0.5, `Sustained pressure froze the video for ${longest}s`)
+    assert.ok(sustainedResult.frameRate!.skippedFrameSlots > 0 &&
+      sustainedResult.frameRate!.encodedFps < 55, "The reduced sampling must be reported")
+  } finally {
+    throttling = false
+    await throttled
+    await sustained.stop()
+    await sustained.settled()
+    if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
+    else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
+  }
+
   // Accept part of a raw frame, then stop reading. The worker must detect lack
   // of pipe progress, kill/reap this child and preserve an explicit failure.
   await writeFile(
@@ -373,6 +430,7 @@ setInterval(() => {}, 1000)
     ownerDeath: ownerResult,
     shortStall: shortStallResult,
     backlog: backlogResult,
+    sustained: sustainedResult,
     stalledPipe: stalledResult,
   }
   await writeFile(join(root, "result.json"), JSON.stringify(result, null, 2))
