@@ -724,9 +724,11 @@ export class ControlRecording {
         // loop. Preserve a final sample so the retained duration matches capture.
         let ordinal = submittedFrames === 0 ? 0 : Math.max(nextOrdinal, due)
         if (this.sourceEnded) ordinal = Math.min(ordinal, finalCount - 1)
-        // Retain transient states during a short stall when history still fits.
-        // Only sustained pressure discards that history; do not lose a popup
-        // merely because several identical frame opportunities were skipped.
+        // Retain transient states during a short stall when history still fits;
+        // do not lose a popup merely because identical opportunities were skipped.
+        // Sustained pressure trails capture by at most two seconds and skips the
+        // oldest history evenly. Jumping to the present would freeze the video
+        // for the whole backlog.
         const pressExpiry = this.pointers[pressIndex]?.at !== undefined
           ? this.pointers[pressIndex]!.at + 400 : Infinity
         const nextChangeAt = Math.min(
@@ -736,8 +738,8 @@ export class ControlRecording {
         )
         if (current && Number.isFinite(nextChangeAt)) {
           const changeOrdinal = Math.max(nextOrdinal, Math.ceil(nextChangeAt / interval))
-          if (changeOrdinal < ordinal && elapsed - changeOrdinal * interval <= 2000)
-            ordinal = changeOrdinal
+          const oldestOrdinal = Math.ceil((elapsed - 2000) / interval)
+          ordinal = Math.min(ordinal, Math.max(changeOrdinal, oldestOrdinal))
         }
         const at = ordinal * interval
         if (
