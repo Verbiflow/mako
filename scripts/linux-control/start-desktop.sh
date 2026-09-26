@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 mkdir -p "$HOME"
+. /repo/scripts/linux-control/identity.sh
 export DISPLAY=:91
 export NODE_PATH=/opt/mako-test/node_modules
 # Native image dependencies are installed at image build time. Desktop tests

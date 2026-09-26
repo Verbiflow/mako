@@ -57,7 +57,7 @@ await copy("packages/control-runtime/package.json", "packages/control-runtime/pa
 await copy("scripts/linux-control/runtime/package.json", "package.json")
 await copy("scripts/linux-control/runtime/package-lock.json", "package-lock.json")
 await copy("scripts/lib/control-cli-probe.mjs", "scripts/lib/control-cli-probe.mjs")
-for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh", "start-wayland.sh", "wayland-probe.mjs", "wayland-gestures.mjs"]) {
+for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh", "start-wayland.sh", "wayland-probe.mjs", "wayland-gestures.mjs", "identity.sh"]) {
   await copy(join("scripts/linux-control", name), join("scripts/linux-control", name))
 }
 assert.equal(provenance.version, manifest.version)

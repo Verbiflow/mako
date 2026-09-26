@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 mkdir -p "$HOME"
+. /repo/scripts/linux-control/identity.sh
 export DISPLAY=:92
 export MAKO_RECORDING_DRIVER=${MAKO_RECORDING_DRIVER:-/target/debug/cua-driver}
 export NODE_PATH=/opt/mako-test/node_modules

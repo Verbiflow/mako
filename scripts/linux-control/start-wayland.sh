@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+. /repo/scripts/linux-control/identity.sh
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 export CUA_DRIVER_REQUIRE_FOCUSED_TARGET=1 CUA_DRIVER_PERMISSION_MODE=unrestricted

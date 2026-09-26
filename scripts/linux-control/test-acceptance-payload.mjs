@@ -41,7 +41,7 @@ try {
   await put("dist-electron/unrelated-session.json", canary)
   await put("driver/extra-private-file", canary)
   await cp("scripts/linux-control/runtime", join(root, "scripts/linux-control/runtime"), { recursive: true })
-  for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh", "start-wayland.sh", "wayland-probe.mjs", "wayland-gestures.mjs"]) {
+  for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh", "start-wayland.sh", "wayland-probe.mjs", "wayland-gestures.mjs", "identity.sh"]) {
     await put(`scripts/linux-control/${name}`, "test fixture")
   }
   await prepare("payload")
