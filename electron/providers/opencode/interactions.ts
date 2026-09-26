@@ -156,7 +156,7 @@ export class OpenCodeInteractions {
     dispatch.assertCurrent()
     pending.sending = true
     try {
-      if (pending.kind === "permission") await this.input.client.permission.reply({ sessionID: pending.sessionID, requestID: pending.id, reply: response.kind === "choice" && response.optionId === "once" ? "once" : response.kind === "choice" && response.optionId === "always" ? "always" : "reject" })
+      if (pending.kind === "permission") await this.input.client.permission.reply(openCodePermissionReply(pending.sessionID, pending.id, response.kind === "choice" ? response.optionId : null))
       else if (answer) await this.input.client.form.reply({ sessionID: pending.sessionID, formID: pending.id, answer })
       else await this.input.client.form.cancel({ sessionID: pending.sessionID, formID: pending.id })
       dispatch.report({ kind: "submitted", source: "transport-write" })
@@ -172,6 +172,18 @@ export class OpenCodeInteractions {
     for (const [key, pending] of this.pending) this.end(key, pending, "connection-close")
     await this.store.close()
   }
+}
+
+/**
+ * A bare native reject ends the turn. Declining with a message hands the
+ * refusal back to the model, which is what a decline does in every other
+ * harness; only a dismissed request (no choice) stops it.
+ */
+export function openCodePermissionReply(sessionID: string, requestID: string, optionId: string | null) {
+  if (optionId === "once" || optionId === "always") return { sessionID, requestID, reply: optionId }
+  return optionId === "reject"
+    ? { sessionID, requestID, reply: "reject" as const, message: "The user declined this tool request" }
+    : { sessionID, requestID, reply: "reject" as const }
 }
 
 export function openCodeApprovalDigest(request: LivePermissionRequest, response: LivePermissionResponse): string | undefined {

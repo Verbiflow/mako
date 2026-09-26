@@ -159,7 +159,8 @@ export class OpenCodeContent {
           : text
         const attachments: AttachmentContent[] = content.flatMap(part =>
           part.type === "file" ? [attachmentFromUrl(part.name ?? "Attachment", part.mime, part.uri)] : [])
-        updates.push({ kind: "tool-update", id, status: event.type === "session.tool.success" ? "completed" : "failed",
+        const status = event.type === "session.tool.success" ? "completed" : event.data.error.type === "aborted" ? "cancelled" : "failed"
+        updates.push({ kind: "tool-update", id, status,
           output: clip(normalizeToolOutput(output)), attachments: attachments.length ? attachments : undefined })
         return updates
       }
