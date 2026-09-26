@@ -7,6 +7,7 @@ import {
   readdir,
   readFile,
   realpath,
+  stat,
   writeFile,
 } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
@@ -16,6 +17,7 @@ import { z } from "zod"
 import { createHash } from "node:crypto"
 import {
   BuildIdentitySchema,
+  type BuildIdentity,
   type LocalBuildState,
 } from "./contracts/app-lifecycle.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
@@ -86,10 +88,12 @@ export class LocalUpdates {
   private readonly root: string
   private readonly identity: string
   private readonly changed: () => void
-  constructor(root: string, identity: string, changed: () => void) {
+  private readonly running: BuildIdentity | null
+  constructor(root: string, identity: string, changed: () => void, running: BuildIdentity | null = null) {
     this.root = root
     this.identity = identity
     this.changed = changed
+    this.running = running
   }
 
   async load(): Promise<void> {
@@ -112,14 +116,16 @@ export class LocalUpdates {
             "The saved source selection could not be read. Choose the checkout again.",
         }
     }
-    const receipt = await readFile(
-      join(this.root, "install-result.json"),
-      "utf8"
-    ).catch((error: NodeJS.ErrnoException) => {
+    const receiptPath = join(this.root, "install-result.json")
+    const receipt = await readFile(receiptPath, "utf8").catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null
       throw error
     })
-    if (receipt) {
+    // Other installers (the CLI, a manual copy) never write this receipt. One
+    // older than the running build therefore describes an earlier installation.
+    const superseded = receipt !== null && this.running !== null &&
+      (await stat(receiptPath)).mtimeMs < Date.parse(this.running.builtAt)
+    if (receipt && !superseded) {
       const result = z
         .object({ ok: z.boolean(), message: z.string().optional() })
         .parse(JSON.parse(receipt))

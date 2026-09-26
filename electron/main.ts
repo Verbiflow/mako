@@ -1250,8 +1250,8 @@ function bindIpc() {
   )
   handle(
     "mako:control-preview",
-    (_event, conversationId: string, watching: boolean, watcher: string) => {
-      const preview = controlPreviews.read(conversationId, watching, watcher)
+    async (_event, conversationId: string, watching: boolean, watcher: string, after?: string | null) => {
+      const preview = await controlPreviews.next(conversationId, watching, watcher, after)
       return watching ? preview : null
     }
   )

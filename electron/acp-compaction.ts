@@ -11,35 +11,27 @@ export type AcpCompactionSpec =
   | {
       kind: "supported"
       command: string
-      completion:
-        | { kind: "response" }
-        | {
-            kind: "notification"
-            observe(): (
-              update: SessionNotification["update"]
-            ) => LiveActionResult | undefined
-          }
+      /** A command reply can precede the work it starts; the provider's own notifications confirm it. */
+      completion: {
+        kind: "notification"
+        observe(): (
+          update: SessionNotification["update"]
+        ) => LiveActionResult | undefined
+      }
     }
 
 /** One explicitly requested operation; notifications can precede the RPC reply. */
 export class AcpCompaction {
-  private readonly spec: Extract<AcpCompactionSpec, { kind: "supported" }>
   private readonly settled: (result: LiveActionResult) => void
   private finished = false
   private timer: ReturnType<typeof setTimeout> | undefined
-  private readonly observeUpdate:
-    | ((update: SessionNotification["update"]) => LiveActionResult | undefined)
-    | undefined
+  private readonly observeUpdate: (update: SessionNotification["update"]) => LiveActionResult | undefined
   constructor(
     spec: Extract<AcpCompactionSpec, { kind: "supported" }>,
     settled: (result: LiveActionResult) => void
   ) {
-    this.spec = spec
     this.settled = settled
-    this.observeUpdate =
-      spec.completion.kind === "notification"
-        ? spec.completion.observe()
-        : undefined
+    this.observeUpdate = spec.completion.observe()
   }
 
   start(send: () => Promise<PromptResponse>): void {
@@ -62,8 +54,6 @@ export class AcpCompaction {
               kind: "failed",
               reason: `Compaction stopped: ${response.stopReason}`,
             })
-          else if (this.spec.completion.kind === "response")
-            this.finish({ kind: "completed" })
         },
         (error) =>
           this.finish({
@@ -75,7 +65,7 @@ export class AcpCompaction {
 
   observe(update: SessionNotification["update"]): void {
     if (this.finished) return
-    const result = this.observeUpdate?.(update)
+    const result = this.observeUpdate(update)
     if (result) this.finish(result)
   }
 

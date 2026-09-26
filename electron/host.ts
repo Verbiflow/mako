@@ -96,13 +96,15 @@ export class AgentHost {
         { recursive: true },
         (_event, filename) => {
           if (this.workspaceWatcherGeneration !== generation) return
-          const path = filename?.toString() ?? ""
+          const path = filename?.toString()
           if (
+            path &&
             /(^|\/)(node_modules|dist|dist-electron|release|build|out|\.next|coverage|\.turbo)(\/|$)/.test(
               path
             )
           )
             return
+          if (!this.workspaceGit.noteChange(path)) return
           if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer)
           this.gitRefreshTimer = setTimeout(() => {
             this.gitRefreshTimer = null
@@ -111,6 +113,10 @@ export class AgentHost {
           }, 180)
         }
       )
+      this.workspaceWatcher.on("error", () => {
+        if (this.workspaceWatcherGeneration === generation) this.stopWorkspaceWatcher()
+      })
+      this.workspaceGit.trackChanges(true)
     } catch {
       this.workspaceWatcher = null
     }
@@ -118,6 +124,7 @@ export class AgentHost {
 
   private stopWorkspaceWatcher(): void {
     this.workspaceWatcherGeneration += 1
+    this.workspaceGit.trackChanges(false)
     this.workspaceWatcher?.close()
     this.workspaceWatcher = null
     if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer)

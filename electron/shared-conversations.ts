@@ -7,6 +7,7 @@ import { z } from "zod"
 import type { OwnerResolution } from "./contracts/thread-continuation.js"
 import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "./session-memory.js"
 import { ensureRuntime, runtimeLocation } from "./runtime-service.js"
+import { hostReplacementPending } from "./local-update-installer.js"
 import { invokeRuntime, probeRuntime, subscribeRuntime, RuntimeDisconnectedError } from "./runtime-connection.js"
 import { hostHistoryPaging } from "./host-client.js"
 
@@ -215,6 +216,7 @@ export class SharedConversations {
     if (runtimeLocation(launch.dataRoot).socket !== route.socket)
       throw new Error("The saved conversation host does not match its data directory")
     let waking = this.waking.get(route.socket)
+    if (!waking && await hostReplacementPending(route.socket)) return false
     if (!waking) {
       const env = { ...process.env, MAKO_PROFILE: launch.profile, ELECTRON_RUN_AS_NODE: undefined, MAKO_STANDALONE: undefined }
       // Only an absent socket permits a restart. ensureRuntime retains the

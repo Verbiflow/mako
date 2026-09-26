@@ -1,5 +1,5 @@
 import { KiriError } from "@kiri/client"
-import { relative } from "node:path"
+import { join, relative, sep } from "node:path"
 import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
 import type { Comparison, RepoPath, KiriRepository, KiriClient, ResultValue } from "@kiri/client"
 import type { GitRemoteInput, GitRemoteResult, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "./shared.js"
@@ -29,6 +29,7 @@ function expected<T extends ResultValue["kind"]>(result: ResultValue, tag: T): E
   if (!matches(result)) throw new Error(`Kiri returned ${result.kind} instead of ${tag}`)
   return result
 }
+type RepositorySummary = NonNullable<GitStatus["repositories"]>[number]
 
 export class WorkspaceGit {
   private cwdValue: string
@@ -38,9 +39,25 @@ export class WorkspaceGit {
   private version = 0
   private statusRead: Promise<GitStatus> | null = null
   private readonly paths = new Map<string, RepoPath>()
+  // Cached child summaries are sound only while a live watcher reports every change.
+  private tracking = false
+  private summaries: Map<string, RepositorySummary> | null = null
   constructor(cwd: string) { this.cwdValue = cwd }
   get cwd(): string { return this.cwdValue }
-  setCwd(cwd: string): void { if (cwd !== this.cwdValue) { this.cwdValue = cwd; this.version += 1; this.paths.clear(); this.selectedRoot = undefined; this.repositoryRoots = [] } }
+  setCwd(cwd: string): void { if (cwd !== this.cwdValue) { this.cwdValue = cwd; this.version += 1; this.paths.clear(); this.selectedRoot = undefined; this.repositoryRoots = []; this.summaries = null } }
+  trackChanges(enabled: boolean): void { this.tracking = enabled; this.summaries = null }
+  /** Whether a watched change, relative to the workspace, can move Git status. Forgets the summary it invalidates. */
+  noteChange(path: string | undefined): boolean {
+    const summaries = this.summaries
+    if (!summaries) return true
+    if (path === undefined) { summaries.clear(); return true }
+    const absolute = join(this.cwdValue, path)
+    const root = this.repositoryRoots.find((candidate) => absolute === candidate || absolute.startsWith(candidate + sep))
+    if (root) { summaries.delete(root); return true }
+    if (!path.split(sep).includes(".git")) return false
+    this.discovery = undefined
+    return true
+  }
   get target(): string { return this.selectedRoot ?? this.cwdValue }
   async selectRepository(cwd: string, root: string): Promise<GitStatus> {
     if (cwd !== this.cwdValue) throw new Error("The workspace changed. Refresh Changes and select the repository again.")
@@ -107,29 +124,41 @@ export class WorkspaceGit {
           this.discovery = { cwd, expires: Date.now() + 5000, value: discoverRepositories(cwd) }
         }
         const discovery = await this.discovery.value
-        const repositories: NonNullable<GitStatus["repositories"]> = []
+        const summaries = this.tracking ? (this.summaries ??= new Map()) : null
+        const repositories: RepositorySummary[] = []
         // Bound sidecar admission and avoid hydrating patches for child repos.
         for (let offset = 0; offset < discovery.roots.length; offset += 4) {
-          repositories.push(...await Promise.all(discovery.roots.slice(offset, offset + 4).map(async (root) => {
+          repositories.push(...await Promise.all(discovery.roots.slice(offset, offset + 4).map(async (root): Promise<RepositorySummary> => {
+            const known = summaries?.get(root)
+            if (known) return known
+            let summary: RepositorySummary
             try {
-              return await withKiriRepository(root, async (child) => {
+              summary = await withKiriRepository(root, async (child) => {
                 if (!child) return { root, label: relative(cwd, root), unavailable: true }
-                const { status } = await child.status()
+                const { status } = await child.status(summaries !== null)
                 return { root: child.root, label: relative(cwd, root), branch: status.branch, changes: status.files.length }
               })
-            } catch { return { root, label: relative(cwd, root), unavailable: true } }
+            } catch { summary = { root, label: relative(cwd, root), unavailable: true } }
+            summaries?.set(root, summary)
+            return summary
           })))
         }
         if (cwd !== this.cwdValue) return { cwd, ahead: 0, behind: 0, files: [] }
         this.repositoryRoots = repositories.map(repository => repository.root)
+        for (const root of summaries?.keys() ?? []) if (!this.repositoryRoots.includes(root)) summaries?.delete(root)
         if (!this.selectedRoot || !this.repositoryRoots.includes(this.selectedRoot)) this.selectedRoot = repositories.find(repository => !repository.unavailable)?.root
         const selected = this.selectedRoot
         const status = selected
           ? await withKiriRepository(selected, async (child, engine) => child ? this.readRepositoryStatus(cwd, child, engine) : undefined)
           : undefined
+        const index = repositories.findIndex(repository => repository.root === selected)
+        if (status && index >= 0) {
+          repositories[index] = { ...repositories[index]!, branch: status.branch, changes: status.files.length }
+          summaries?.set(repositories[index]!.root, repositories[index]!)
+        }
         return { cwd, ahead: 0, behind: 0, files: [], ...status, repositories, discoveryLimited: discovery.limited }
       }
-      if (cwd === this.cwdValue) this.selectedRoot = repo.root
+      if (cwd === this.cwdValue) { this.selectedRoot = repo.root; this.summaries = null }
       return this.readRepositoryStatus(cwd, repo, client)
     })
     return result

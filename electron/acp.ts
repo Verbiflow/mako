@@ -10,7 +10,7 @@ import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction } from "./acp-compaction.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
-import { acpDefaultMode, acpInitialSelection, acpModeChange, acpObservedMode, acpNativeModes, acpSessionModes } from "./acp-access.js"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "./acp-access.js"
 import type { AcpLaunchOptions, AcpAgentObserver } from "./providers/acp-source.js"
 import { accessTierOfModeId, type AccessTier } from "./contracts/access.js"
 /**
@@ -791,7 +791,7 @@ export async function liveSetMode(id: string, modeId: string): Promise<void> {
 export function acpObserveNativeMode(id: string, nativeMode: string): void {
   const live = sessions.get(id)
   if (!live) return
-  update(live, { currentMode: acpObservedMode(providerHost.acpSources.get(live.harness)?.access, nativeMode, live.launchAccess) })
+  update(live, { currentMode: nativeMode })
 }
 
 export async function liveCancel(id: string): Promise<void> {

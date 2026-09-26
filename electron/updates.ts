@@ -175,7 +175,7 @@ function isString(
 export function installUpdates(send: (event: HostEvent) => void) {
   emit = send
   if (app.isPackaged && process.platform === "darwin" && packagedDistribution(app.getAppPath()) === "local" && metadata.makoLocalSigningIdentity) {
-    local = new LocalUpdates(join(app.getPath("userData"), "updates"), metadata.makoLocalSigningIdentity, () => emit({ type: "installation", installation: installationState() }))
+    local = new LocalUpdates(join(app.getPath("userData"), "updates"), metadata.makoLocalSigningIdentity, () => emit({ type: "installation", installation: installationState() }), metadata.makoBuild ?? null)
     void local.load().then(() => emit({ type: "installation", installation: installationState() })).catch(() => emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
   }
   if (!updatesSupported()) {

@@ -4,6 +4,7 @@ import {
   mkdtemp,
   open,
   readdir,
+  readFile,
   realpath,
   rename,
   rm,
@@ -15,6 +16,44 @@ import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 
 const execute = promisify(execFile)
+
+const replacementFile = (socket: string) => join(dirname(socket), "replacing")
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+const replacementOwner = (socket: string) =>
+  readFile(replacementFile(socket), "utf8").then((text) => Number(text), () => NaN)
+
+/** An installer quits the host at `socket` to replace the app. While the
+ * installer lives, automatic wakes from other profiles must not reopen the app
+ * being replaced. A crashed installer's marker lapses with its process, and an
+ * ordinary launch never consults it. */
+export async function reserveHostReplacement(socket: string, pid = process.pid) {
+  // No host directory means no host has run there, so nothing can be woken.
+  const written = await writeFile(replacementFile(socket), String(pid), { mode: 0o600 }).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false
+      throw error
+    }
+  )
+  return async () => {
+    if (!written) return
+    if ((await replacementOwner(socket)) === pid)
+      await rm(replacementFile(socket), { force: true })
+  }
+}
+
+export async function hostReplacementPending(socket: string): Promise<boolean> {
+  const pid = await replacementOwner(socket)
+  return Number.isSafeInteger(pid) && pid > 0 && alive(pid)
+}
+
 interface PreparedApplication {
   staging: string
   target: string
@@ -438,6 +477,7 @@ async function runInstaller(): Promise<void> {
   const target = "/Applications/Mako.app"
   const hostPid = Number(pidText)
   let authorized = false
+  let release: (() => Promise<void>) | undefined
   const verify = async (path: string) => {
     await execute(
       "codesign",
@@ -481,6 +521,7 @@ async function runInstaller(): Promise<void> {
       })
     })
     authorized = true
+    release = await reserveHostReplacement(socket)
     process.disconnect?.()
     const deadline = Date.now() + 60_000
     for (;;) {
@@ -512,6 +553,7 @@ async function runInstaller(): Promise<void> {
         env: desktopLaunchEnvironment(process.env),
       }).catch(() => {})
     }
+    await release?.()
     process.exitCode = 1
     if (process.connected) process.disconnect()
     return
@@ -552,7 +594,7 @@ async function runInstaller(): Promise<void> {
     prune: async (backup) => {
       await pruneRetainedApplications(target, backup)
     },
-  })
+  }).finally(() => release?.())
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

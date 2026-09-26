@@ -18,7 +18,6 @@ import type { LiveSessionMode } from "./shared.js"
 export interface AcpAccessPolicy {
   native?: Partial<Record<AccessTier, string>>
   launch?: readonly AccessTier[]
-  base?: string
   /**
    * The tier a session runs under when the user has not chosen one. A
    * launch-listed default is passed to the process so the level the desk
@@ -35,10 +34,9 @@ export function acpDefaultMode(policy: AcpAccessPolicy | undefined): string | un
 }
 
 /**
- * Providers that moved their mode vocabulary to a config option (OpenCode
- * v2 reports `mode` there and sends no `session.modes`) still say what a
- * session runs under — read it back so the ladder and the current mode stay
- * true on those agents.
+ * ACP lets an agent report its modes as a config option in the `mode`
+ * category instead of `session.modes`. It is the same fact in another field,
+ * so the ladder and the current mode are read from whichever the agent sends.
  */
 export function acpNativeModes(
   options: readonly SessionConfigOption[]
@@ -78,7 +76,6 @@ export function acpSessionModes(
   const modes: LiveSessionMode[] = []
   for (const mode of native?.availableModes ?? []) {
     const access = tierOf.get(mode.id)
-    if (!access && policy?.base === mode.id) continue
     const entry: LiveSessionMode = { id: mode.id, name: mode.name }
     if (mode.description) entry.description = mode.description
     if (access) {
@@ -139,16 +136,8 @@ export function acpModeChange(
   const mode = modes.find((item) => item.id === modeId)
   if (!mode) throw new Error(`${harness} does not offer that access level`)
   if (policy?.launch?.includes(tier) && tier === launchedTier)
-    return policy.base
-      ? { kind: "native", modeId, nativeModeId: policy.base }
-      : { kind: "unchanged", modeId }
+    return { kind: "unchanged", modeId }
   throw new Error(
     `${harness} reads ${accessTierInfo(tier).label} when its session starts. It will apply to the next conversation you start with ${harness}; this session keeps ${launchedTier ? accessTierInfo(launchedTier).label : "its current level"}.`
   )
-}
-
-/** Native base-mode observations retain the preset supplied at launch. */
-export function acpObservedMode(policy: AcpAccessPolicy | undefined, nativeMode: string, launchedTier: AccessTier | null): string {
-  return policy?.base === nativeMode && launchedTier && policy.launch?.includes(launchedTier)
-    ? accessModeId(launchedTier) : nativeMode
 }
