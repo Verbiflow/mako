@@ -25,20 +25,35 @@ let image: NonNullable<ControlPreview["frame"]>["image"] = {
 }
 const bridge = getMako()
 let frame = 0
+// Once set, each read advances the host's source sequence by `step` frames at 60 fps.
+let sequence: number | undefined
+let step = 1
+let sourceAt = 0
 bridge.nativeWindowVideo = Boolean(source)
 bridge.controlPreviewSource = async () => source
-bridge.controlPreview = async (id) => ({
-  activity: {
-    conversationId: id,
-    kind: source && id === "one" ? "computer" : "browser",
-    operation: "observe",
-    status: "running",
-    target: id,
-    updatedAt: 1,
-  },
-  frame: { id: `${id}:${frame++}`, image, capturedAt: Date.now() },
-  window: source && id === "one" ? { pid: 1, windowId: 1 } : undefined,
-})
+bridge.controlPreview = async (id) => {
+  if (sequence !== undefined) {
+    sequence += step
+    sourceAt += (step * 1000) / 60
+  }
+  return {
+    activity: {
+      conversationId: id,
+      kind: source && id === "one" ? "computer" : "browser",
+      operation: "observe",
+      status: "running",
+      target: id,
+      updatedAt: 1,
+    },
+    frame: {
+      id: `${id}:${frame++}`,
+      image,
+      capturedAt: sequence === undefined ? Date.now() : sourceAt,
+      sequence,
+    },
+    window: source && id === "one" ? { pid: 1, windowId: 1 } : undefined,
+  }
+}
 const container = document.getElementById("root")!
 container.className = "p-8"
 const output = document.createElement("pre")
@@ -46,7 +61,8 @@ output.id = "result"
 output.textContent = "Running"
 const panes = document.createElement("div")
 panes.className = "flex gap-4"
-container.append(output, panes)
+// Panes first: a growing log must not scroll the overlay out of view.
+container.append(panes, output)
 const root = createRoot(panes)
 function render(second: boolean) {
   flushSync(() =>
@@ -182,6 +198,37 @@ async function run() {
     viewer.style.width = "50%"
     await until(() => holds() && viewer.width < width)
     check(frame === reads, `Resizing repaints the held frame at ${displayed()!.viewer.width}×${displayed()!.viewer.height} without another read`)
+
+    const label = () => panes.querySelector<HTMLElement>("[data-control-preview-rate]")
+    let updatedAt = 2
+    const pulse = setInterval(() => receiveControlActivity({
+      conversationId: "one",
+      kind: "browser",
+      operation: "observe",
+      status: "running",
+      target: "one",
+      updatedAt: updatedAt++,
+    }), 40)
+    try {
+      check(!label(), "A viewer at the full rate shows no rate")
+      sequence = 0
+      step = 2
+      await until(() => label()?.textContent === "30 of 60 fps").catch((error) => {
+        throw new Error(`${String(error)}; label ${label()?.textContent ?? "absent"}`)
+      })
+      const card = panes.querySelector("section")!.getBoundingClientRect()
+      const mark = panes.querySelector('[role="status"]')!.getBoundingClientRect()
+      const shown = label()!.getBoundingClientRect()
+      check(
+        shown.left >= card.left && shown.right <= card.right && shown.bottom <= card.bottom && shown.top >= mark.bottom,
+        "A viewer painting every other source frame shows 30 of 60 fps inside the card"
+      )
+      step = 1
+      await until(() => !label())
+      check(true, "Returning to the full rate removes the label")
+    } finally {
+      clearInterval(pulse)
+    }
   }
   output.dataset.status = "passed"
 }
