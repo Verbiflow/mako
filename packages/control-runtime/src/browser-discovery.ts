@@ -20,6 +20,8 @@ export interface LocalBrowser {
   profile?: string
   origin?: string
   sourceRoot?: string
+  /** A desk whose host refuses every call outside the fixture allowlist. */
+  fixture?: true
 }
 
 export async function localBrowsers(

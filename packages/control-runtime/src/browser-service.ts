@@ -344,8 +344,11 @@ function browserStatus(
   if (definition.transport === "extension" && definition.product === "Aside")
     status.guidance = asideSelectionGuidance
   if (definition.kind === "desk")
-    status.guidance = "A live client of the real Mako app, not a sandbox: its clicks and edits change real conversations and settings. It refuses URLs outside its own origin."
+    status.guidance = definition.fixture
+      ? "A fixture desk on its own profile: its host refuses every write, provider call and process before it runs, so pages here only read. It refuses URLs outside its own origin."
+      : "A live client of the real Mako app, not a sandbox: its clicks and edits change real conversations and settings. It refuses URLs outside its own origin."
   if (definition.kind) status.kind = definition.kind
+  if (definition.fixture) status.fixture = true
   if (definition.profile) status.profile = definition.profile
   if (definition.origin) status.origin = definition.origin
   if (definition.sourceRoot) status.sourceRoot = definition.sourceRoot

@@ -31,6 +31,7 @@ const DeskBrowserRegistrationSchema = z
     profile: z.string().min(1).max(100),
     origin: z.string().url(),
     sourceRoot: z.string().min(1).max(4_096),
+    fixture: z.literal(true).optional(),
   })
   .strict()
 
@@ -98,23 +99,26 @@ export function publishDeskBrowserRegistration(
     pid?: number
     profile: string
     sourceRoot: string
+    fixture?: boolean
   },
   root = deskBrowserRegistrationRoot()
 ): () => void {
   const sourceRoot = resolve(input.sourceRoot)
   const id = registrationId(sourceRoot, input.profile)
+  const fields: DeskBrowserRegistration = {
+    version: 1,
+    id,
+    name: `Mako dev · ${basename(sourceRoot)} · ${input.profile}`,
+    endpoint: input.endpoint,
+    pid: input.pid ?? process.pid,
+    startedAt: processRegistrationStartedAt(input.pid ?? process.pid),
+    profile: input.profile,
+    origin: new URL(input.origin).origin,
+    sourceRoot,
+  }
+  if (input.fixture) fields.fixture = true
   const registration = validateRegistration(
-    DeskBrowserRegistrationSchema.parse({
-      version: 1,
-      id,
-      name: `Mako dev · ${basename(sourceRoot)} · ${input.profile}`,
-      endpoint: input.endpoint,
-      pid: input.pid ?? process.pid,
-      startedAt: processRegistrationStartedAt(input.pid ?? process.pid),
-      profile: input.profile,
-      origin: new URL(input.origin).origin,
-      sourceRoot,
-    })
+    DeskBrowserRegistrationSchema.parse(fields)
   )
   mkdirSync(root, { recursive: true, mode: 0o700 })
   chmodSync(root, 0o700)
@@ -160,7 +164,7 @@ export function registeredDeskBrowsers(
     const path = join(root, name)
     try {
       const registration = readRegistration(path)
-      browsers.push({
+      const browser: LocalBrowser = {
         id: registration.id,
         name: registration.name,
         requiresApproval: false,
@@ -180,7 +184,9 @@ export function registeredDeskBrowsers(
             throw new Error("The registered Mako host is no longer running")
           return current.endpoint
         },
-      })
+      }
+      if (registration.fixture) browser.fixture = true
+      browsers.push(browser)
     } catch {
       // A dead host or malformed same-user registration is unavailable.
     }
