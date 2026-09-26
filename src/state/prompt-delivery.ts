@@ -139,7 +139,15 @@ export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "histo
   )
 }
 
-/** Delivery receipts may precede provider startup. Only work behind a turn is a queue. */
+/**
+ * Delivery receipts may precede provider startup. Only work behind a turn is a queue.
+ *
+ * `starting` is the one message drawn ahead of its turn: the host has not
+ * written it into the transcript yet. The host writes a request's user turn
+ * in the same commit that marks it dispatching, so a dispatched request is
+ * never drawn here, even when the loaded history page does not reach back to
+ * its prompt. While one is dispatching, every other message waits behind it.
+ */
 export function promptDelivery(input: DeliveryInput): PromptDelivery {
   const requests = input.requests ?? []
   const accepted = new Set(requests.map((request) => request.id))
@@ -151,17 +159,19 @@ export function promptDelivery(input: DeliveryInput): PromptDelivery {
       (prompt) => !accepted.has(prompt.id)
     ),
   ]
-  const dispatched = requests.find(
+  const delivering = requests.some(
     (request) => request.status === "dispatching"
   )
   const canStart =
     input.session.status === "ready" || input.session.status === "starting"
-  const first = canStart
-    ? waiting[0]
-    : input.session.status === "failed"
-      ? input.pendingPrompts?.[0]
-      : undefined
-  const starting = dispatched ?? (first?.status === "held" ? undefined : first)
+  const first = delivering
+    ? undefined
+    : canStart
+      ? waiting[0]
+      : input.session.status === "failed"
+        ? input.pendingPrompts?.[0]
+        : undefined
+  const starting = first?.status === "held" ? undefined : first
   const visible = transcribedRequests(input)
   return {
     starting: starting && !visible.has(starting.id) ? starting : null,
