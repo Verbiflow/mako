@@ -1,6 +1,6 @@
 # Local Control wayfinder
 
-Updated 2026-09-25. This is the current plan for browser and computer control across
+Updated 2026-09-26. This is the current plan for browser and computer control across
 all harnesses, desktop Mac and isolated Linux cloud jobs. The goal is accurate,
 responsive complete workflows through a typed engine, agent MCP and composable CLI. Full ChatGPT/Codex
 parity has not been established.
@@ -197,7 +197,12 @@ Next:
    resize repaint and a pixel oracle (38.2 dB against a high-quality downscale).
    A balanced six-run A/B: viewer renderer CPU per frame −22%, whole viewer −8%,
    22 MB less working set, fps unchanged; every displayed-size run passes the
-   audit. Not installed yet; ships with the next build.
+   audit. Larger views get more pixels: a resize or pinch zoom re-decodes the held
+   frame up to the full captured frame without another read (pinch checked in
+   Chromium: 144×81 → 288×162 at 2×), so a future expanded view needs no viewer
+   change. Browser screencasts stay capped at 1920×1080 (`browser-capture.ts`);
+   the user accepted that as enough detail (September 26).
+   Not installed yet; ships with the next build.
    [Design, tests and A/B](local-control-media-fixes.md#displayed-size-viewer-decoding-local-september-26).
 
 [Media fixes and previous attempts](local-control-media-fixes.md) retain the

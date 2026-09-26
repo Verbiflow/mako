@@ -647,7 +647,14 @@ shrink it. The viewer now paints exactly the device pixels it occupies:
 
 - `ControlPreviewImage` measures its canvas with a `device-pixel-content-box`
   `ResizeObserver` (content box × `devicePixelRatio` where unsupported), so
-  display-scale changes also repaint.
+  display-scale changes also repaint. Pinch zoom changes neither layout nor
+  `devicePixelRatio`, so the box is also multiplied by `visualViewport.scale`
+  and repaints on its `resize` event. `test-control-preview-e2e` pinches 2× through
+  `Emulation.setPageScaleFactor` and requires the canvas to follow (144×81 → 288×162).
+- Every frame still arrives at full capture size; only its decode is scaled, so a
+  larger view (resize, pinch, a future expanded view) regains full detail from the
+  frame already held. Browser screencasts request at most 1920×1080, which the
+  user accepted as enough for an expanded view.
 - The decoder reads the JPEG SOF / PNG IHDR size without decoding and asks
   Chromium's `ImageDecoder` for the smallest eighth of the source that covers the
   fitted box. Chromium decodes exactly `ceil(source × n/8)` for those sizes.
