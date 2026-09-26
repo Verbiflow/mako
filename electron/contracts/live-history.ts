@@ -32,6 +32,10 @@ export interface LiveHistoryWindow {
   blockStart: number
   blockEnd: number
   turnStart: number
+  /** Requests whose user turn is retained before `blockStart`, whether the
+   * native base now shows it or its page is not loaded. They are on screen
+   * even though no delivered block carries their id. */
+  earlierRequests: string[]
   before: LiveHistoryCursor | null
 }
 
