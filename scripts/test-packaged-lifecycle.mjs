@@ -598,14 +598,14 @@ async function stopRunningTurn(nativeId) {
   })
   return requestId
 }
-/** The harness's own search tools run from the package; a shell `grep` would not prove them. */
+/** The harness's own search tools run from the package. Codex has none and searches through its shell. */
 async function searchWorkspace(when = "after-create") {
   const token = `SEARCH_${randomUUID().replaceAll("-", "")}`
   const file = `found-${token.slice(7, 15)}.txt`
   await mkdir(join(workspace, "nested"), { recursive: true })
   await writeFile(join(workspace, "nested", file), `${token}\n`)
   const requestId = randomUUID()
-  await bridge("livePrompt", [conversationId, requestId, `Using your built-in file search tools, not a shell command, find the file in this workspace that contains the text ${token}. Reply with only that file's name. Do not modify files.`, []])
+  await bridge("livePrompt", [conversationId, requestId, `Find the file in this workspace that contains the text ${token}. Use your own file search tool if you have one; only if you have none, use one read-only shell command. Reply with only that file's name. Do not modify files.`, []])
   const snapshot = await completed(requestId)
   const tools = turnBlocks(snapshot, requestId).filter((block) => block.type === "tool")
   const broken = tools.filter((block) => /ripgrep|not configured/i.test(JSON.stringify(block)) || block.status === "failed")

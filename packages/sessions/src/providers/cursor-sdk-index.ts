@@ -50,11 +50,35 @@ export interface CursorSdkImport {
   agentId: string
 }
 
-export interface CursorSdkCancelledRun {
-  /** Blob id of the root the run last checkpointed: the conversation as it stopped. */
-  rootId: string
-  cancelledAt?: string
-}
+/** A run the user stopped, oldest first. */
+export type CursorSdkCancelledRun =
+  | {
+      recorded: true
+      runId: string
+      /** Blob id of the root the run last checkpointed: the conversation as it stopped. */
+      rootId: string
+      cancelledAt?: string
+    }
+  | {
+      /**
+       * Stopped before its first checkpoint: the conversation never took its
+       * prompt or output. The prompt record and the run's event log still
+       * hold them.
+       */
+      recorded: false
+      runId: string
+      /** The conversation the run started from; absent for an agent's first run. */
+      startRootId?: string
+      startedAt?: string
+      cancelledAt?: string
+    }
+
+/** What a run streamed, in order: text and thinking deltas joined, each tool call at its latest state. */
+export type CursorSdkStreamPart =
+  | { type: "text" | "thinking"; text: string }
+  | { type: "tool"; callId: string; name: string; status?: string; args?: CursorSdkJson; result?: CursorSdkJson }
+
+export type CursorSdkJson = string | number | boolean | null | CursorSdkJson[] | { [key: string]: CursorSdkJson | undefined }
 
 /** The key under which the import record sits in the agent's `metadata_json`. */
 export const CURSOR_SDK_IMPORT_METADATA_KEY = "makoImport"
@@ -182,22 +206,111 @@ function cancelledRuns(database: DatabaseSync, agentId: string): CursorSdkCancel
   let rows: ReturnType<ReturnType<DatabaseSync["prepare"]>["all"]>
   try {
     rows = database
-      .prepare(
-        "SELECT start_checkpoint_ref_json, latest_checkpoint_ref_json, cancelled_at FROM runs WHERE agent_id = ? AND status = 'CANCELLED' ORDER BY turn_number"
-      )
+      .prepare("SELECT * FROM runs WHERE agent_id = ? AND status = 'CANCELLED' ORDER BY turn_number")
       .all(agentId)
   } catch {
     return []
   }
   const cancelled: CursorSdkCancelledRun[] = []
   for (const row of rows) {
+    if (!("latest_checkpoint_ref_json" in row)) return []
+    const runId = text(row["run_id"])
+    if (!runId) continue
     const rootId = checkpointBlobId(text(row["latest_checkpoint_ref_json"]))
-    // A run stopped before it checkpointed anything left no turn to mark.
-    if (!rootId || rootId === checkpointBlobId(text(row["start_checkpoint_ref_json"]))) continue
+    const startRootId = checkpointBlobId(text(row["start_checkpoint_ref_json"]))
     const cancelledAt = text(row["cancelled_at"])
-    cancelled.push(cancelledAt ? { rootId, cancelledAt } : { rootId })
+    if (rootId && rootId !== startRootId) {
+      cancelled.push({ recorded: true, runId, rootId, ...(cancelledAt ? { cancelledAt } : {}) })
+      continue
+    }
+    const startedAt = text(row["started_at"])
+    cancelled.push({
+      recorded: false,
+      runId,
+      ...(startRootId ? { startRootId } : {}),
+      ...(startedAt ? { startedAt } : {}),
+      ...(cancelledAt ? { cancelledAt } : {}),
+    })
   }
   return cancelled
+}
+
+type JsonRecord = { [key: string]: CursorSdkJson | undefined }
+
+function isRecord(value: CursorSdkJson | undefined): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined
+}
+
+/**
+ * The run's own event log: what the SDK streamed while it ran. An index
+ * without `run_events` records none.
+ */
+export function readCursorSdkRunStream(indexPath: string, runId: string): CursorSdkStreamPart[] {
+  const database = openReadOnly(indexPath)
+  if (!database) return []
+  const parts: CursorSdkStreamPart[] = []
+  const tools = new Map<string, Extract<CursorSdkStreamPart, { type: "tool" }>>()
+  const append = (type: "text" | "thinking", delta: string) => {
+    const last = parts.at(-1)
+    if (last?.type === type) last.text += delta
+    else parts.push({ type, text: delta })
+  }
+  try {
+    const rows = database
+      .prepare("SELECT payload_json FROM run_events WHERE run_id = ? ORDER BY seq")
+      .all(runId)
+    for (const row of rows) {
+      let payload: CursorSdkJson
+      try {
+        payload = JSON.parse(text(row["payload_json"]) ?? "")
+      } catch {
+        continue
+      }
+      const message = isRecord(payload) ? payload["message"] : undefined
+      if (!isRecord(message)) continue
+      switch (message["type"]) {
+        case "thinking": {
+          const delta = str(message["text"])
+          if (delta) append("thinking", delta)
+          break
+        }
+        case "assistant": {
+          const content = isRecord(message["message"]) ? message["message"]["content"] : undefined
+          if (!Array.isArray(content)) break
+          for (const part of content) {
+            const delta = isRecord(part) && part["type"] === "text" ? str(part["text"]) : undefined
+            if (delta) append("text", delta)
+          }
+          break
+        }
+        case "tool_call": {
+          const callId = str(message["call_id"])
+          const name = str(message["name"])
+          if (!callId || !name) break
+          const status = str(message["status"])
+          const known = tools.get(callId)
+          const tool = known ?? { type: "tool" as const, callId, name }
+          if (status) tool.status = status
+          if (message["args"] !== undefined) tool.args = message["args"]
+          if (message["result"] !== undefined) tool.result = message["result"]
+          if (!known) {
+            tools.set(callId, tool)
+            parts.push(tool)
+          }
+          break
+        }
+      }
+    }
+    return parts
+  } catch {
+    return []
+  } finally {
+    database.close()
+  }
 }
 
 /** One agent's index row plus its newest run, or null when the index has none. */

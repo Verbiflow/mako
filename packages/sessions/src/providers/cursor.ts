@@ -32,9 +32,11 @@ import {
   newestCursorSdkAgentId,
   cursorSdkAgentIdForDirectory,
   readCursorSdkAgent,
+  readCursorSdkRunStream,
   removeCursorSdkAgent,
   type CursorSdkAgentMatch,
   type CursorSdkAgentRecord,
+  type CursorSdkCancelledRun,
 } from "./cursor-sdk-index.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
 import {
@@ -69,10 +71,11 @@ interface ExchangeStart {
 }
 
 /**
- * Where stopped runs ended: the hash-list length at the run's last
- * checkpoint, and when it was cancelled.
+ * Stopped runs by where they sit in the hash list: a recorded run where its
+ * last checkpoint ended, an unrecorded one where the conversation stood when
+ * it started.
  */
-type RunStops = Map<number, string | undefined>
+type RunStops = Map<number, CursorSdkCancelledRun[]>
 
 /** What a fold reads: the root, its whole hash list, its summaries and its stopped runs. */
 interface FoldInput {
@@ -80,10 +83,16 @@ interface FoldInput {
   hashes: string[]
   compactions: Set<number>
   stops: RunStops
+  /** Where each unrecorded run's prompt and output are read from. */
+  indexPath: string
 }
 
 function stopKey(stops: RunStops): string {
-  return JSON.stringify([...stops].sort(([a], [b]) => a - b))
+  return JSON.stringify(
+    [...stops]
+      .sort(([a], [b]) => a - b)
+      .map(([at, runs]) => [at, runs.map((run) => [run.runId, run.cancelledAt])])
+  )
 }
 
 /** One translated store, keyed by the root blob and stops that produced it. */
@@ -311,10 +320,11 @@ function isoOf(value: string | number | undefined): string | undefined {
  * stores: 61 had windows (123 in all), none overlapping, with every message
  * blob present.
  */
-function parseRoot(data: Uint8Array): ParsedRoot {
-  const hashes: string[] = []
-  const windows: string[] = []
-  let cwd: string | undefined
+/** Visit a protobuf message's top-level varint and length-delimited fields. */
+function eachField(
+  data: Uint8Array,
+  visit: (field: number, value: number | Uint8Array) => void
+): void {
   let index = 0
   const varint = (): number | undefined => {
     let value = 0
@@ -335,22 +345,15 @@ function parseRoot(data: Uint8Array): ParsedRoot {
     const field = Math.floor(tag / 8)
     const wire = tag % 8
     if (wire === 0) {
-      if (varint() === undefined) break
+      const value = varint()
+      if (value === undefined) break
+      visit(field, value)
     } else if (wire === 2) {
       const length = varint()
       if (length === undefined || length > data.length - index) break
       const bytes = data.subarray(index, index + length)
       index += length
-      if (field === 1 && length === 32) {
-        hashes.push(Buffer.from(bytes).toString("hex"))
-      }
-      if (field === 13 && length === 32) {
-        windows.push(Buffer.from(bytes).toString("hex"))
-      }
-      if (field === 9) {
-        const uri = Buffer.from(bytes).toString("utf8")
-        if (uri.startsWith("file://")) cwd = decodeURIComponent(uri.slice(7))
-      }
+      visit(field, bytes)
     } else if (wire === 5) {
       if (data.length - index < 4) break
       index += 4
@@ -361,7 +364,39 @@ function parseRoot(data: Uint8Array): ParsedRoot {
       break // An unknown wire type means we are lost; stop rather than misread.
     }
   }
+}
+
+function parseRoot(data: Uint8Array): ParsedRoot {
+  const hashes: string[] = []
+  const windows: string[] = []
+  let cwd: string | undefined
+  eachField(data, (field, value) => {
+    if (typeof value === "number") return
+    if (field === 1 && value.length === 32) hashes.push(Buffer.from(value).toString("hex"))
+    if (field === 13 && value.length === 32) windows.push(Buffer.from(value).toString("hex"))
+    if (field === 9) {
+      const uri = Buffer.from(value).toString("utf8")
+      if (uri.startsWith("file://")) cwd = decodeURIComponent(uri.slice(7))
+    }
+  })
   return { hashes, cwd, windows }
+}
+
+/**
+ * The SDK's record of one prompt as sent: its text (field 1), the state it
+ * was sent against (field 10) and when (field 25, epoch millis). A turn
+ * record in the root points at it once the turn checkpoints.
+ */
+function parsePromptRecord(data: Uint8Array): { text: string; at: number } | null {
+  let text: string | undefined
+  let state = false
+  let at: number | undefined
+  eachField(data, (field, value) => {
+    if (field === 1 && typeof value !== "number") text = Buffer.from(value).toString("utf8")
+    if (field === 10 && typeof value !== "number" && value.length === 32) state = true
+    if (field === 25 && typeof value === "number") at = value
+  })
+  return text?.trim() && state && at !== undefined ? { text: text.trim(), at } : null
 }
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
@@ -555,24 +590,50 @@ export class CursorProvider implements SessionProvider {
   }
 
   /**
-   * The root to fold and, for an SDK agent, where each stopped run ended.
-   * A run's own checkpoint marks its end only while that checkpoint is a
-   * prefix of the current conversation; a rewritten history marks nothing.
+   * The root to fold and, for an SDK agent, where each stopped run sits. A
+   * run's checkpoint places it only while that checkpoint is a prefix of the
+   * current conversation from its first spoken turn on: the SDK rewrites the
+   * leading system prompt and context whenever the model changes, and a
+   * rewritten history places nothing.
    */
   private foldInput(database: DatabaseSync, path: string): FoldInput | null {
     const meta = this.readMeta(database)
     if (!meta) return null
     const agent = this.isSdkStore(path) ? this.sdkAgentOf(path, meta) : null
     const rootId = this.isSdkStore(path) ? agent?.rootId : meta.latestRootBlobId
-    const root = this.readRoot(database, rootId)
-    if (!rootId || !root) return null
+    const root = rootId ? this.readRoot(database, rootId) : null
+    if (rootId && !root) return null
+    const hashes = root?.hashes ?? []
     const stops: RunStops = new Map()
+    let spoken: number | undefined
     for (const run of agent?.cancelled ?? []) {
-      const at = this.readRoot(database, run.rootId)?.hashes
-      if (!at?.length || at.length > root.hashes.length || at.some((hash, index) => hash !== root.hashes[index])) continue
-      stops.set(at.length, run.cancelledAt)
+      const checkpoint = run.recorded ? run.rootId : run.startRootId
+      const at = checkpoint ? this.readRoot(database, checkpoint)?.hashes : []
+      if (!at || (run.recorded && !at.length) || at.length > hashes.length) continue
+      spoken ??= this.firstSpokenIndex(database, hashes)
+      const from = spoken
+      if (at.some((hash, index) => index >= from && hash !== hashes[index])) continue
+      stops.set(at.length, [...(stops.get(at.length) ?? []), run])
     }
-    return { rootId, hashes: root.hashes, compactions: root.compactions, stops }
+    if (!rootId && !stops.size) return null
+    return {
+      rootId: rootId ?? "",
+      hashes,
+      compactions: root?.compactions ?? new Set(),
+      stops,
+      indexPath: cursorSdkIndexPath(this.sdkStateRoot),
+    }
+  }
+
+  /** Index of the first message the user typed; everything before it is injected preamble. */
+  private firstSpokenIndex(database: DatabaseSync, hashes: string[]): number {
+    const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
+    for (let index = 0; index < hashes.length; index++) {
+      const hash = hashes[index]
+      const message = hash === undefined ? null : this.readMessage(statement, hash)
+      if (message?.role === "user" && spokenText(message.content)) return index
+    }
+    return hashes.length
   }
 
   /**
@@ -973,12 +1034,24 @@ export class CursorProvider implements SessionProvider {
     let calls: ToolBlock[] = []
     // A stop at `start` is already in the entries this fold continues.
     const stop = (index: number) => {
-      if (index === start || !stops.has(index)) return
-      for (const call of calls) if (call.output === undefined && !call.error) call.canceled = true
-      calls = []
-      assistant = null
-      const at = stops.get(index)
-      sink.push(at ? { kind: "event", at, label: "Interrupted" } : { kind: "event", label: "Interrupted" })
+      if (index === start) return
+      for (const run of stops.get(index) ?? []) {
+        if (!run.recorded) {
+          const turn = this.unrecordedTurn(database, input.indexPath, run)
+          if (!turn.length) continue
+          assistant = null
+          calls = []
+          for (const entry of turn) {
+            sink.push(entry)
+            if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool") calls.push(block)
+          }
+        }
+        for (const call of calls) if (call.output === undefined && !call.error) call.canceled = true
+        calls = []
+        assistant = null
+        const at = run.cancelledAt
+        sink.push(at ? { kind: "event", at, label: "Interrupted" } : { kind: "event", label: "Interrupted" })
+      }
     }
     // Like a stop, a summary at `start` is already in the continued entries.
     const compact = (index: number) => {
@@ -1202,6 +1275,73 @@ export class CursorProvider implements SessionProvider {
     } catch {
       return null
     }
+  }
+
+  /** The turn a run stopped before its first checkpoint: its prompt, then what it streamed. */
+  private unrecordedTurn(
+    database: DatabaseSync,
+    indexPath: string,
+    run: Extract<CursorSdkCancelledRun, { recorded: false }>
+  ): ThreadEntry[] {
+    const entries: ThreadEntry[] = []
+    const prompt = this.promptBetween(database, run)
+    if (prompt) entries.push({ kind: "user", id: prompt.id, text: prompt.text })
+    const blocks: EntryBlock[] = []
+    for (const part of readCursorSdkRunStream(indexPath, run.runId)) {
+      if (part.type !== "tool") {
+        if (part.text.trim()) blocks.push({ type: part.type, text: part.text })
+        continue
+      }
+      const block: ToolBlock = {
+        type: "tool",
+        id: part.callId,
+        name: part.name,
+        input: clip(JSON.stringify(part.args ?? {})),
+      }
+      const result = isJsonObject(part.result) ? part.result : undefined
+      if (part.status === "completed" && result) {
+        block.output = clip(formatToolResult(result["value"] ?? result))
+        if (result["status"] === "error") block.error = true
+      } else if (part.status === "error") {
+        block.error = true
+      }
+      blocks.push(block)
+    }
+    if (blocks.length) entries.push({ kind: "assistant", id: run.runId, blocks })
+    return entries
+  }
+
+  /**
+   * The prompt record written between the run's start and its stop. Prompt
+   * records name no run, but one agent's runs never overlap, so the window
+   * does. Blobs are appended, so the search starts at the run's starting
+   * checkpoint and ends at the first record past the stop.
+   */
+  private promptBetween(
+    database: DatabaseSync,
+    run: Extract<CursorSdkCancelledRun, { recorded: false }>
+  ): { id: string; text: string } | null {
+    const from = run.startedAt ? Date.parse(run.startedAt) : -Infinity
+    const to = run.cancelledAt ? Date.parse(run.cancelledAt) : Infinity
+    try {
+      const start = run.startRootId
+        ? database.prepare("SELECT rowid FROM blobs WHERE id = ?").get(run.startRootId)?.["rowid"]
+        : 0
+      const rows = database
+        .prepare("SELECT id, data FROM blobs WHERE rowid > ? AND substr(data, 1, 1) = x'0a' ORDER BY rowid")
+        .iterate(typeof start === "number" ? start : 0)
+      for (const row of rows) {
+        const id = row["id"]
+        const data = row["data"]
+        if (!isStringValue(id) || !isBytesValue(data)) continue
+        const record = parsePromptRecord(data)
+        if (!record || record.at < from) continue
+        return record.at > to ? null : { id, text: record.text }
+      }
+    } catch {
+      return null
+    }
+    return null
   }
 }
 
