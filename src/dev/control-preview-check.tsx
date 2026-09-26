@@ -19,7 +19,7 @@ canvas.width = 640
 canvas.height = 360
 const painter = canvas.getContext("2d")!
 painter.fillRect(0, 0, 640, 360)
-const image: NonNullable<ControlPreview["frame"]>["image"] = {
+let image: NonNullable<ControlPreview["frame"]>["image"] = {
   mimeType: "image/png",
   bytes: Uint8Array.from(atob(canvas.toDataURL().split(",")[1]!), char => char.charCodeAt(0)),
 }
@@ -150,6 +150,39 @@ async function run() {
     Boolean(panes.querySelector("button")),
     "Dismissed preview can be reopened inside the same task"
   )
+  if (!source) {
+    const large = document.createElement("canvas")
+    large.width = 1920
+    large.height = 1080
+    const draw = large.getContext("2d")!
+    draw.fillStyle = "#2a6"
+    draw.fillRect(0, 0, 1920, 1080)
+    draw.fillStyle = "#fff"
+    draw.font = "96px sans-serif"
+    draw.fillText("1920 × 1080 source", 120, 540)
+    const blob = await new Promise<Blob>((resolve) => large.toBlob((value) => resolve(value!), "image/jpeg", 0.9))
+    image = { mimeType: "image/jpeg", bytes: new Uint8Array(await blob.arrayBuffer()) }
+    const displayed = () => {
+      const viewer = panes.querySelector<HTMLCanvasElement>('canvas[role="img"]')
+      if (!viewer?.style.aspectRatio) return undefined
+      const box = viewer.getBoundingClientRect()
+      const scale = Math.min((box.width * devicePixelRatio) / 1920, (box.height * devicePixelRatio) / 1080, 1)
+      return { viewer, width: Math.round(1920 * scale), height: Math.round(1080 * scale) }
+    }
+    const holds = () => {
+      const value = displayed()
+      return Boolean(value && Math.abs(value.viewer.width - value.width) <= 1 && Math.abs(value.viewer.height - value.height) <= 1)
+    }
+    panes.querySelector<HTMLButtonElement>("button")!.click()
+    await until(holds)
+    const { viewer } = displayed()!
+    const width = viewer.width
+    check(width < 1920, `Viewer holds its displayed device pixels (${width}×${viewer.height} at DPR ${devicePixelRatio})`)
+    const reads = frame
+    viewer.style.width = "50%"
+    await until(() => holds() && viewer.width < width)
+    check(frame === reads, `Resizing repaints the held frame at ${displayed()!.viewer.width}×${displayed()!.viewer.height} without another read`)
+  }
   output.dataset.status = "passed"
 }
 void run().catch((error) => {

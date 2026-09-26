@@ -472,9 +472,15 @@ attachment loss are fixed and regression-tested. Six result-publication failure
 cases and both Linux startup signals preserve post-dispatch uncertainty.
 [Modal and learning-cost evidence](local-control-cli-modal.md).
 
-New recovery gap: a later exec failure hides earlier console/image output. Keep
-outcome uncertainty and no-replay behavior; design bounded partial-result receipts
-so agents can recover useful evidence without repeating completed actions.
+September 26 (local): a later program failure no longer hides earlier output
+(ledger A18). Every failed run, including timeout and cancellation, keeps the
+blocks it had emitted. CLI `exec` prints them on stdout in the success shape,
+images already saved to files, while the fault keeps stderr and the exit code.
+The browser program server returns them before its fault. Refused calls inside a
+browser program also kept `protocol-error`/`unknown` while saying nothing was
+dispatched (A19); they now report their real fault. Outcome uncertainty and
+no-replay behavior are unchanged. CLI, browser-tools, REPL, runtime, input-error,
+computer-tools and `test:mcp` suites pass, and mutations of each new path fail them.
 
 Next: finish capability/result typing, understandable validation and recovery,
 consistent role/name/text semantics, and consolidated executable help examples.
