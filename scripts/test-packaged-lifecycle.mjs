@@ -561,10 +561,16 @@ async function stopRunningTurn(nativeId) {
         !request || request.status === "dispatching",
         `The long turn ended as ${request?.status} before Stop`
       )
+      // A model at high effort can think for minutes before it writes; a
+      // stop mid-thought is as much a stop mid-stream as one mid-answer.
+      const streamed = turnBlocks(snapshot, requestId)
+        .filter((block) => block.type === "text" || block.type === "thinking")
+        .map((block) => block.text)
+        .join("")
       return Boolean(
         snapshot.blocks.some(
           (block) => block.type === "user" && block.requestId === requestId
-        ) && answer(snapshot, requestId).length > 40
+        ) && streamed.length > 40
       )
     },
     "streamed output before Stop",
