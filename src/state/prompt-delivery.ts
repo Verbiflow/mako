@@ -7,6 +7,7 @@ import type {
   TurnContinuation,
 } from "@/lib/types"
 import type { AcpBlock } from "@/lib/acp-blocks"
+import type { LiveHistoryWindow } from "../../electron/contracts/live-history"
 import { continueTurnPrompt } from "../../electron/contracts/turn-continuation"
 
 export { continueTurnPrompt }
@@ -110,6 +111,7 @@ export interface PendingPrompt {
 interface DeliveryInput {
   session: Pick<LiveSessionState, "status">
   blocks: AcpBlock[]
+  history?: Pick<LiveHistoryWindow, "earlierRequests">
   requests?: LiveRequest[]
   pendingPrompts?: PendingPrompt[]
 }
@@ -118,8 +120,15 @@ interface PromptDelivery {
   queued: PendingPrompt[]
 }
 
-export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "requests">): LiveRequest[] {
-  const visible = new Set(input.blocks.flatMap((block) => block.type === "user" && block.requestId ? [block.requestId] : []))
+/** The requests whose user turn the transcript holds, loaded or not. */
+function transcribedRequests(input: Pick<DeliveryInput, "blocks" | "history">): Set<string> {
+  const ids = new Set(input.history?.earlierRequests)
+  for (const block of input.blocks) if (block.type === "user" && block.requestId) ids.add(block.requestId)
+  return ids
+}
+
+export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "history" | "requests">): LiveRequest[] {
+  const visible = transcribedRequests(input)
   // A turn the transcript shows carries its own stopped marker (`turnStops`);
   // only a stopped or unconfirmed message with no turn on screen needs a panel.
   return (input.requests ?? []).filter(
@@ -153,11 +162,7 @@ export function promptDelivery(input: DeliveryInput): PromptDelivery {
       ? input.pendingPrompts?.[0]
       : undefined
   const starting = dispatched ?? (first?.status === "held" ? undefined : first)
-  const visible = new Set(
-    input.blocks.flatMap((block) =>
-      block.type === "user" && block.requestId ? [block.requestId] : []
-    )
-  )
+  const visible = transcribedRequests(input)
   return {
     starting: starting && !visible.has(starting.id) ? starting : null,
     queued: waiting.filter((prompt) => prompt.id !== starting?.id),
