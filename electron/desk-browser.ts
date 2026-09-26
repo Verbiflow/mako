@@ -26,6 +26,8 @@ export interface DeskBrowserOptions {
   /** Close a window nobody has driven for this long. Default 30 minutes. */
   idleMs?: number
   name?: string
+  /** The host refuses every call outside the fixture allowlist. */
+  fixture?: boolean
 }
 
 const commandSchema = z.object({
@@ -71,7 +73,7 @@ export class DeskBrowser {
 
   constructor(options: DeskBrowserOptions) {
     this.options = options
-    this.definition = {
+    const definition: LocalBrowser = {
       id: this.id,
       name: options.name ?? "Mako (this app)",
       kind: "desk",
@@ -83,6 +85,8 @@ export class DeskBrowser {
         return this.endpoint
       },
     }
+    if (options.fixture) definition.fixture = true
+    this.definition = definition
   }
 
   async start(): Promise<string> {

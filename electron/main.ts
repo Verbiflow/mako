@@ -4,7 +4,7 @@ import { recoveryCapabilities } from "./providers/live-driver.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
 import { backgroundLifecycle } from "./background-lifecycle.js"
 import { devHostBuild } from "./dev-host-build.js"
-import { RUNTIME_PROTOCOL } from "./contracts/runtime.js"
+import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo, RuntimeDisconnectedError } from "./runtime-connection.js"
 import { lstat, mkdir, stat, unlink } from "node:fs/promises"
@@ -230,7 +230,7 @@ import { installGitIpc } from "./ipc/git.js"
 import { fileResponse } from "./file-response.js"
 import { startWebHost } from "./web-host.js"
 import { SharedConversations } from "./shared-conversations.js"
-import { registerIpc as handle, invokeHost, invokeHostPreview, installConversationRouting, installHistoryPresentation, stopHostCalls } from "./ipc/register.js"
+import { registerIpc as handle, enforceFixtureDesk, invokeHost, invokeHostPreview, installConversationRouting, installHistoryPresentation, stopHostCalls } from "./ipc/register.js"
 import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "./contracts/live-history.js"
 import { installSessionIpc } from "./ipc/session.js"
@@ -277,6 +277,19 @@ if (process.env.MAKO_DATA_ROOT)
   app.setPath("userData", process.env.MAKO_DATA_ROOT)
 else if (instanceProfile)
   app.setPath("userData", `${app.getPath("userData")}-${instanceProfile}`)
+/**
+ * A fixture desk host serves agents a look at the interface. It keeps its own
+ * profile and refuses every host call outside the fixture allowlist, from
+ * every client, for its whole life.
+ */
+const fixtureDesk = process.env.MAKO_FIXTURE_DESK === "1"
+if (fixtureDesk) {
+  enforceFixtureDesk()
+  if (!/(^|-)fixture-/.test(basename(app.getPath("userData")))) {
+    process.stderr.write("A fixture desk host needs a fixture profile of its own\n")
+    app.exit(78)
+  }
+}
 installHostLog(join(app.getPath("userData"), "logs", "host.log"))
 const providerChildren = installProviderChildren(app.getPath("userData"))
 /** How another host's refusal names this one. */
@@ -367,6 +380,7 @@ const appshots = new Appshots(async () => {
 /** Hidden windows agents drive; they never count as a client keeping the host alive. */
 const deskWindows = new Set<BrowserWindow>()
 const deskBrowser = new DeskBrowser({
+  fixture: fixtureDesk,
   allowsUrl: (url) => isDeskUrl(url),
   createPage: async (previewId) => {
     const hidden = new BrowserWindow({
@@ -469,6 +483,7 @@ async function configureDevRenderer(
       origin: new URL(registration.url).origin,
       profile: registration.profile,
       sourceRoot: registration.sourceRoot,
+      fixture: fixtureDesk,
     })
   } catch (error) {
     hostWarn("browser", "dev desk registration failed", {
@@ -709,6 +724,7 @@ async function ready(): Promise<HostPool> {
  * profile serves remote work unless `MAKO_RELAY=1` says otherwise.
  */
 function relayDisabledReason(): string | null {
+  if (fixtureDesk) return "the fixture desk"
   if (process.env.MAKO_RELAY === "0") return "MAKO_RELAY=0"
   if (process.env.MAKO_RELAY === "1") return null
   if (instanceProfile)
@@ -2053,6 +2069,16 @@ app.whenReady().then(async () => {
         await unlink(webSocket)
       }
     }
+    const runtime: RuntimeInfo = {
+      protocol: RUNTIME_PROTOCOL,
+      instanceId: crypto.randomUUID(),
+      storageScope: basename(dirname(webSocket)),
+      pid: process.pid,
+      version: app.getVersion(),
+      devBuild: loadedDevBuild,
+      methods: Object.keys(hostCallInputs),
+    }
+    if (fixtureDesk) runtime.fixture = true
     webHost = await startWebHost(
       webSocket,
       invokeHost,
@@ -2062,15 +2088,7 @@ app.whenReady().then(async () => {
         terminalClients?.release(client)
         void workspaceClients.release(client)
       },
-      {
-        protocol: RUNTIME_PROTOCOL,
-        instanceId: crypto.randomUUID(),
-        storageScope: basename(dirname(webSocket)),
-        pid: process.pid,
-        version: app.getVersion(),
-        devBuild: loadedDevBuild,
-        methods: Object.keys(hostCallInputs),
-      },
+      runtime,
       invokeHostPreview
     )
   }
@@ -2092,8 +2110,9 @@ app.whenReady().then(async () => {
   // The last host's readings paint first; this host's own run a few seconds
   // behind startup, and hourly for the public versions.
   await runtimeUpdates.load()
-  runtimeUpdates.start()
+  if (!fixtureDesk) runtimeUpdates.start()
   bindAutomations(emit, async (cwd, prompt) => {
+    if (fixtureDesk) throw new Error("The fixture desk runs no automations")
     const resumable = new Set(resumableHarnesses())
     const profile = (await harnessProfiles()).find(
       (candidate) => candidate.available && resumable.has(candidate.id)

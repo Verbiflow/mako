@@ -1,4 +1,5 @@
 import { request as hostRequest } from "node:http"
+import { z } from "zod"
 
 /** The names a browser may give the loopback interface Vite listens on. */
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
@@ -21,8 +22,27 @@ export function trustedLocalOrigins(urls) {
   return origins
 }
 
-/** Same-origin browser access; the host itself is reachable only over a private socket. */
-export function webHostProxy(socket) {
+const MAX_CALL_BYTES = 32 * 1024 * 1024
+
+const CallChannelSchema = z.object({ channel: z.string().regex(/^mako:[a-z0-9-]+$/) })
+
+/** The channel a call names, or undefined when the body is not a call. */
+function callChannel(body) {
+  try {
+    return CallChannelSchema.safeParse(JSON.parse(body.toString("utf8"))).data?.channel
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Same-origin browser access; the host itself is reachable only over a private socket.
+ *
+ * `refuse`, when given, names why a call may not be forwarded. The body is read
+ * whole, checked, and the same bytes are forwarded, so the host parses exactly
+ * what was checked. A fixture host refuses the same calls again itself.
+ */
+export function webHostProxy(socket, { refuse } = {}) {
   const configure = (server) => {
       server.middlewares.use((request, response, next) => {
         if (!request.url?.startsWith("/__mako/")) return next()
@@ -61,28 +81,59 @@ export function webHostProxy(socket) {
         if (request.headers["x-mako-history"] === "1") headers["x-mako-history"] = "1"
         if (preview && request.headers.range)
           headers.range = request.headers.range
-        const upstream = hostRequest(
-          {
-            socketPath: socket,
-            path,
-            method: request.method,
-            headers,
-          },
-          (result) => {
-            response.writeHead(result.statusCode ?? 502, {
-              ...result.headers,
-              "cache-control": "no-store",
-            })
-            result.on("error", () => response.destroy())
-            result.pipe(response)
+        const open = () => {
+          const upstream = hostRequest(
+            {
+              socketPath: socket,
+              path,
+              method: request.method,
+              headers,
+            },
+            (result) => {
+              response.writeHead(result.statusCode ?? 502, {
+                ...result.headers,
+                "cache-control": "no-store",
+              })
+              result.on("error", () => response.destroy())
+              result.pipe(response)
+            }
+          )
+          upstream.on("error", () => {
+            if (!response.headersSent) response.writeHead(503)
+            response.end("The Mako host connection was interrupted; delivery is unconfirmed")
+          })
+          response.once("close", () => upstream.destroy())
+          return upstream
+        }
+        if (!refuse || path !== "/rpc") {
+          request.pipe(open())
+          return
+        }
+        const chunks = []
+        let bytes = 0
+        request.on("data", (chunk) => {
+          bytes += chunk.length
+          if (bytes > MAX_CALL_BYTES) {
+            if (!response.headersSent) response.writeHead(413, { connection: "close" }).end()
+            request.destroy()
+            return
           }
-        )
-        upstream.on("error", () => {
-          if (!response.headersSent) response.writeHead(503)
-          response.end("The Mako host connection was interrupted; delivery is unconfirmed")
+          chunks.push(chunk)
         })
-        response.once("close", () => upstream.destroy())
-        request.pipe(upstream)
+        request.on("error", () => response.destroy())
+        request.on("end", () => {
+          if (bytes > MAX_CALL_BYTES) return
+          const body = Buffer.concat(chunks)
+          const channel = callChannel(body)
+          const refusal = channel === undefined ? "The fixture desk refused a request that names no host call." : refuse(channel)
+          if (!refusal) {
+            open().end(body)
+            return
+          }
+          response
+            .writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+            .end(JSON.stringify({ ok: false, error: refusal, code: "fixture-refused" }))
+        })
       })
   }
   return { name: "mako-real-host", configureServer: configure, configurePreviewServer: configure }

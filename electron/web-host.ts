@@ -11,6 +11,7 @@ import type { HostEvent, TerminalEvent } from "./shared.js"
 import { RuntimeCallSchema, type RuntimeInfo, type RuntimeReplySchema } from "./contracts/runtime.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import { hostLog } from "./host-log.js"
+import { FIXTURE_REFUSED_CODE, FixtureDeskRefusedError } from "./contracts/fixture-desk-policy.js"
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
 
 /** Sent to every call still waiting when the host closes, so no client is left to infer a reset. */
@@ -171,6 +172,7 @@ export async function startWebHost(
           reply.unconfirmed = error.unconfirmed
           reply.conversationId = error.conversationId
         }
+        if (error instanceof FixtureDeskRefusedError) reply.code = FIXTURE_REFUSED_CODE
         if (!response.destroyed && !response.headersSent)
           response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(reply))
       })

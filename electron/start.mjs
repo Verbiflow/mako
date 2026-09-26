@@ -8,6 +8,7 @@ import { tmpdir, homedir } from "node:os"
 import { ensureRuntime, runtimeDataRoot } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
 import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
+import { fixtureDeskRefusal } from "../dist-electron/contracts/fixture-desk-policy.js"
 import { holdHostLease } from "../dist-electron/host-idle.js"
 import { join } from "node:path"
 import { devHostBuild } from "../dist-electron/dev-host-build.js"
@@ -34,18 +35,31 @@ const hot = process.argv.includes("--hot")
 // means every "Restart Mako" here drops the calls of the desk you actually use,
 // and every install there closes this one. `--shared` opts back in on purpose.
 const shared = process.argv.includes("--shared")
+// A fixture desk is a web page on a profile of its own whose host refuses every
+// write, provider call and process, for agents to look at the interface with.
+const fixture = process.argv.includes("--fixture")
+if (fixture && shared) throw new Error("A fixture desk never uses the installed app's host; drop --shared.")
 // Provider processes inside the installed app inherit these. If they leak into
 // this launcher, `npm run dev` attaches to that app instead of the `dev` profile.
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
+delete env.MAKO_FIXTURE_DESK
 if (!shared && env.MAKO_HOST_ONLY === "1") {
   for (const key of ["MAKO_DATA_ROOT", "MAKO_HOST_ONLY", "MAKO_STANDALONE", "MAKO_WEB_SOCKET", "MAKO_WEB_ONLY", "MAKO_CLIENT_ID", "VITE_DEV_SERVER_URL"])
     delete env[key]
 }
-const profile = env.MAKO_PROFILE || (process.argv.includes("--sandbox") ? `sandbox-${createHash("sha256").update(root).digest("hex").slice(0, 8)}` : shared ? undefined : "dev")
+const checkout = createHash("sha256").update(root).digest("hex").slice(0, 8)
+if (fixture) {
+  if (env.MAKO_PROFILE && !env.MAKO_PROFILE.startsWith("fixture-"))
+    throw new Error("A fixture desk runs on a fixture- profile; unset MAKO_PROFILE or name one that starts with fixture-.")
+  delete env.MAKO_DATA_ROOT
+}
+const profile = env.MAKO_PROFILE || (fixture ? `fixture-${checkout}` : process.argv.includes("--sandbox") ? `sandbox-${checkout}` : shared ? undefined : "dev")
 const appData = process.platform === "darwin" ? join(homedir(), "Library", "Application Support") : process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming") : process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
 const dataRoot = runtimeDataRoot(appData, { ...env, MAKO_PROFILE: profile })
-const startRuntime = () => ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: { ...env, MAKO_PROFILE: profile } })
+const runtimeEnv = { ...env, MAKO_PROFILE: profile }
+if (fixture) runtimeEnv.MAKO_FIXTURE_DESK = "1"
+const startRuntime = () => ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: runtimeEnv })
 let runtime = await startRuntime()
 const socket = runtime.socket
 // The host survives the launcher. Method names alone cannot detect a changed
@@ -54,7 +68,8 @@ const expectedBuild = shared ? undefined : devHostBuild(root)
 const missingOn = (info) =>
   Object.keys(hostCallInputs).filter((method) => !info.methods.includes(method))
 const needsRestart = (info) => missingOn(info).length > 0 ||
-  (expectedBuild !== undefined && info.devBuild !== expectedBuild)
+  (expectedBuild !== undefined && info.devBuild !== expectedBuild) ||
+  (fixture && info.fixture !== true)
 if (needsRestart(runtime.info)) {
   if (!shared) {
     console.warn(`[mako-client] Replacing host ${runtime.info.pid} with the build from ${root}. Running work is allowed to finish.`)
@@ -86,6 +101,8 @@ if (needsRestart(runtime.info)) {
     }
   }
 }
+if (fixture && runtime.info.fixture !== true)
+  throw new Error(`Host ${runtime.info.pid} is not a fixture desk host; no page was served.`)
 // A profile host stops itself once nothing has used it for a while. This
 // launcher is a user, even between page loads, so it holds a lease keyed by
 // its own pid; a crashed launcher's lease expires with it.
@@ -94,7 +111,7 @@ const cacheDirectory = await mkdtemp(join(tmpdir(), "mako-vite-"))
 const server = await createServer({
   cacheDir: cacheDirectory,
   define: { "import.meta.env.MAKO_MANUAL_RELOAD": JSON.stringify(!hot), "import.meta.env.MAKO_SHARED_RUNTIME": "true", "import.meta.env.MAKO_CLIENT_PROFILE": JSON.stringify(profile ?? ""), "import.meta.env.MAKO_SOURCE_ROOT": JSON.stringify(root) },
-  plugins: [webHostProxy(socket), ...(!hot ? [manualDevUpdates()] : [])],
+  plugins: [webHostProxy(socket, fixture ? { refuse: fixtureDeskRefusal } : {}), ...(!hot ? [manualDevUpdates()] : [])],
   root,
   server: {
     host: "127.0.0.1",
@@ -144,7 +161,7 @@ const hostEnvironment = {
   MAKO_WEB_SOCKET: socket,
   MAKO_WEB_ONLY: web ? "1" : "0",
 }
-console.log(`[mako-client] ${profile ? `Profile ${profile}` : "Installed app's shared host"} · host ${runtime.info.pid} · ${hot ? "automatic hot updates" : "manual reload"} · ${url}`)
+console.log(`[mako-client] ${fixture ? `Fixture desk ${profile}; writes, provider calls and processes are refused` : profile ? `Profile ${profile}` : "Installed app's shared host"} · host ${runtime.info.pid} · ${hot ? "automatic hot updates" : "manual reload"} · ${url}`)
 let child
 let stopping = false
 
@@ -180,6 +197,6 @@ async function stop(code, signal) {
   process.exitCode = code
 }
 
-if (!web) launch()
+if (!web && !fixture) launch()
 process.once("SIGINT", () => void stop(130, "SIGINT"))
 process.once("SIGTERM", () => void stop(143, "SIGTERM"))
