@@ -588,6 +588,12 @@ renderer's libraries (bundled by Vite), the CSS toolchain and the test tooling
 belong in `devDependencies`. React, `react-dom` and `esbuild` stay runtime
 dependencies because Cursor canvas previews bundle a canvas in the host.
 
+## Hosted service boundary
+
+Mako's hosted service is developed in a separate private repository, checked out beside this one as `../mako-backend`. The dependency runs one way: that repository consumes this one's packages as pinned artifacts, and nothing here imports from it, even behind a flag. Clients and the runtime reach hosted features only over the network, through open protocol packages (`@mako/relay` today) and their tests. Everything committed here is public, so hosted design, pricing and planning notes don't belong in this repository's files, commit messages or pull requests.
+
+Planning and audit docs under `docs/` that are gitignored (`docs/meta-harness/`, `docs/meta-harness*.md`, `docs/audits/2026*` and the other ignored pages) are symlinks into the private checkout. Read and write them at their usual paths. Never `git add -f` them. After creating a new ignored folder there, such as `docs/audits/<date>/`, run `npm run wayfinder:link` in `../mako-backend`, which moves it and links it back.
+
 ## Remote control plane
 
 `@mako/relay` is the pure provider-neutral protocol and headless worker core.
