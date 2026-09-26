@@ -390,6 +390,18 @@ before another unified mutation. Read the actual result before choosing what to
 do next; never repeat the previous input simply because focus changed. `guard`
 reports the bounded window-topology watcher, not focus isolation.
 
+Native driver faults (2026-09-26):
+
+| Code | Outcome | Meaning |
+| --- | --- | --- |
+| `driver-exited` | `unknown` for an action, `rejected` for a read | The driver stopped mid-call. An action may have partly happened, including a key left pressed. The next call starts a new driver; observe the target first. |
+| `driver-unavailable` | `not-dispatched` | The replacement driver could not start. The next call tries again. |
+| `target-unsettled` | `rejected` | After a driver death the window kept changing for 8 s, so interrupted input may still be landing. Observe again later. |
+| `native-<refusal code>` | `not-dispatched` | The driver refused before sending input, for example `native-input-busy` while earlier typing into that app finishes. Retrying is safe. |
+
+The observation after a driver death waits until the window's tree has been
+unchanged for 600 ms, because the daemon can keep typing after its client died.
+
 ## Capture and composable commands update (2026-09-23)
 
 `view.select({role,name})` uses the same exact semantic fields as `get` and

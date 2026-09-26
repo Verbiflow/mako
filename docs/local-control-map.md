@@ -175,10 +175,13 @@ Next:
    CPU-starved per-frame work, not the notification hop. The user chose to cut
    per-frame viewer work first; that is done (item 6) and lowers viewer CPU per
    frame by about 8% without changing ordinary fps. The 55-fps gate under heavy
-   contention stays open. Remaining options: reduce main-process read/IPC cost per
-   frame, or accept a lower preview rate under contention and report it as
-   recording does. Process priority is weaker on macOS: without root Mako can only
-   lower other work (for example agent subprocesses), not raise itself.
+   contention stays open. **Decision (user, September 26): under heavy load, accept
+   a lower preview rate and show it,** the way recording already reports skipped
+   frame slots. Not implemented yet. Next: count the frames the source announced
+   against the frames each viewer painted, and show the reduced rate in the
+   viewer while it is below the source rate. The 55-fps gate then applies to
+   ordinary load only. Process priority is weaker on macOS: without root Mako can
+   only lower other work (for example agent subprocesses), not raise itself.
    [Stage breakdown](local-control-media-fixes.md#candidate-6ac3f4fbd690b74d-and-preview-stage-breakdown),
    [parked-read A/B](local-control-media-fixes.md#parked-next-frame-preview-read-measured-reverted).
 3. Native fixture startup is fixed. The private-driver right/double-click
@@ -223,6 +226,8 @@ are primary acceptance criteria. Keep the CLI’s existing file/stdin compositio
 
 1. **Close correctness and misleading-result gaps** in LC-08 and LC-22, starting
    with raw-action uncertainty, capture geometry and precise recovery messages.
+   Native driver death during input is done locally (September 26); its
+   installed acceptance and the driver's false confirmation (ledger B04) remain.
    Keep the full [agent issue ledger](local-control-agent-issues.md) accounted for.
 2. **Finish LC-29 MCP discovery and LC-20 shared-engine release acceptance.**
    Run browser and native jobs through normal provider startup; preserve the basic
@@ -501,7 +506,7 @@ Use the [ledger](local-control-agent-issues.md) for exact bug closure criteria.
 
 ## LC-08 / LC-14 — Uncertainty, ownership and independent targets
 
-**Status: target recovery and cancellation gates implemented and fault-tested locally.**
+**Status: target recovery, cancellation and native driver death implemented and fault-tested locally; driver death also passes against the real driver. Not installed.**
 The shared host and BrowserService now classify browser commands by effect.
 Read-only helpers preserve refs; raw mutations retire only their target's refs.
 Lost raw browser replies block that target until a successful observation/capture.
@@ -537,9 +542,68 @@ cannot bypass managed operations. App attachments belong to one task, reject
 endpoint aliases and are released at teardown. This is cooperative ownership,
 not security isolation between websites sharing a regular profile.
 
-Next within this gate: real transport/process loss during native input and
-capture/recovery across installed extension replacement. The shared session
-extraction preserves the tested exact-target and profile-wide rules.
+**Native driver death during input (local, September 26).** Either native process
+can die mid-action: the session's stdio driver or the embedded daemon that posts
+the input. What happens now:
+
+- The call reports `driver-exited`. An interrupted action is `unknown` ("may have
+  partly happened … a key pressed without its release"); an interrupted read is
+  `rejected`. The program keeps running: control programs no longer cancel on
+  driver exit (driver-surface programs still do, since their tool list came
+  from that driver).
+- Refs from the dead driver are void the moment it exits, not on reconnect. The
+  next call starts a new driver; a failed start is `driver-unavailable` /
+  `not-dispatched`. Nothing is retried.
+- The affected window (every window, for unscoped input) needs a fresh
+  observation. Other apps stay usable, and queued calls run on the new driver.
+- **Orphaned input.** A killed stdio process does not stop the daemon: it keeps
+  typing the rest of the text. The recovering observation therefore waits until
+  the window's tree has been unchanged for 600 ms (longer than the driver's
+  slowest 200 ms keystroke spacing). If it is still changing after 8 s it
+  refuses with `target-unsettled` / `rejected`, and the window stays blocked.
+- **Daemon restart.** Electron main restarts a dead embedded daemon on the same
+  socket, at most three times a minute, so a session's driver can reconnect.
+- **Driver refusals are `not-dispatched`.** A structured driver refusal
+  (`status: "refused"`, no delivery) becomes `native-<code>` / `not-dispatched`
+  and no longer blocks the window. Previously every refusal was
+  `native-driver-error` / `unknown`. This covers the daemon's `input_busy`
+  refusal while it finishes orphaned typing.
+
+Evidence: `scripts/test-native-driver-death.ts` kills a fixture driver in nine
+places (mid-keystroke, partial typing, reads, queued calls, unscoped input,
+failed restart, pre-dispatch refusal, orphaned and endless typing). It passed
+20/20, and eight mutations each fail it or `test-computer-tools.ts`.
+`scripts/test-native-driver-death-live.ts` (`MAKO_TEST_DRIVER=<driver>`) kills
+the real +mako.23 stdio process and daemon while they type into a background
+Cocoa view that logs every key event and its posting process. It passed three
+of three runs with the final fixture (and two of three earlier runs, before the
+focus fix below). The observation waited 2.7–3.0 s for orphaned typing and
+0.9–1.2 s after a daemon kill. One key typed after it
+landed exactly once, with nothing replayed; the other app kept working and the
+replacement daemon kept the socket.
+
+Found and not fixed in Mako:
+
+- **Held key after daemon death.** A daemon killed between a key's down and up
+  events leaves that key pressed in the app (key code 0, two of five daemon
+  kills).
+  Nothing can send the release for a dead daemon; the fault message says it can
+  happen.
+- **Driver false confirmation.** Upstream `typed_progress` treats an
+  accessibility insert as complete when the field *contains* the text. On a
+  view that silently accepts `AXSelectedText`, typing text already in the field
+  does nothing yet reports `effect: confirmed` ("q" into "q" stays "q"). Needs
+  a driver patch comparing before and after values. Tracked as B04 in the
+  [ledger](local-control-agent-issues.md).
+- **Test-fixture focus theft (fixed).** The first live fixture was executed
+  directly, so AppKit activated it at launch. A person's typing landed in it
+  twice. It now launches with `open -g` as an `LSUIElement` bundle. The test
+  fails if a fixture ever becomes active or receives a key event posted by
+  anything other than the driver's daemons.
+
+Next within this gate: installed acceptance of the above, and capture/recovery
+across installed extension replacement. The shared session extraction preserves
+the tested exact-target and profile-wide rules.
 
 Done when injected failures across public/raw paths retain the same truthful
 outcome, require fresh evidence for the affected target and never replay input.
