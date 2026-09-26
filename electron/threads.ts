@@ -143,9 +143,10 @@ import type {
   ThreadFileContext,
   ThreadInlineContext,
 } from "./shared.js"
+import { THREAD_LIST_CAP, threadList } from "./contracts/thread-list.js"
 
-/** Refs sent to the renderer per push. Nobody scrolls ten years of history. */
-const LIST_CAP = 600
+/** Refs other host callers look through; the rail's own list is `threadList`. */
+const LIST_CAP = THREAD_LIST_CAP
 
 let catalog: SessionCatalog | null = null
 let daemon: DaemonClient | null = null
@@ -863,10 +864,8 @@ export function stopThreads(): void {
   transcriptArtifacts.clear()
 }
 
-export function listThreads(
-  filter: { cwd?: string; harness?: string } = {}
-): ThreadRef[] {
-  const refs = daemon
+function catalogRefs(filter: { cwd?: string; harness?: string }): ThreadRef[] {
+  return daemon
     ? [...mirror.values()]
         .filter(
           (ref) =>
@@ -875,7 +874,19 @@ export function listThreads(
         )
         .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
     : (catalog?.list(filter) ?? [])
-  return refs.slice(0, LIST_CAP).map(annotate)
+}
+
+export function listThreads(
+  filter: { cwd?: string; harness?: string } = {}
+): ThreadRef[] {
+  return catalogRefs(filter).slice(0, LIST_CAP).map(annotate)
+}
+
+/** The window's rail list, by the same rule the window applies to every push. */
+export function railThreads(
+  filter: { cwd?: string; harness?: string } = {}
+): ThreadRef[] {
+  return threadList(catalogRefs(filter)).map(annotate)
 }
 
 /** Recovery must not depend on the sidebar's ordering or visible result cap. */
@@ -1392,5 +1403,5 @@ export async function emitThreadAs(
 }
 
 function push(): void {
-  emit({ type: "threads", threads: listThreads() })
+  emit({ type: "threads", threads: railThreads() })
 }

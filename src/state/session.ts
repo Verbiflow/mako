@@ -553,7 +553,6 @@ function adoptBoot(boot: BootPayload) {
   void automations.load()
   void threads.load()
   if (!boot.archives) void threadLifecycle.load()
-  threads.watchFocus()
 }
 
 export const actions = {

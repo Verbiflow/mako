@@ -31,8 +31,8 @@ import {
   threadStatus,
   threadStatusPriority,
   threadsStore,
-  uniqueThreadRefs,
 } from "../src/state/threads.ts"
+import { threadList } from "../electron/contracts/thread-list.ts"
 import { cacheOf, dropCache, writeCache } from "../src/state/tabs.ts"
 import {
   appendOptimisticReply,
@@ -300,7 +300,7 @@ const duplicateThreadBase: ThreadRef = {
   updatedAt: "2026-08-25T01:00:00.000Z",
 }
 assert.deepEqual(
-  uniqueThreadRefs([
+  threadList([
     duplicateThreadBase,
     {
       ...duplicateThreadBase,
@@ -310,7 +310,6 @@ assert.deepEqual(
   ]).map((ref) => `${ref.harness}:${ref.nativeId}`),
   ["codex:parent-session"]
 )
-
 const terminalSession = (
   id: string,
   cwd: string,

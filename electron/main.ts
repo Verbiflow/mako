@@ -139,6 +139,7 @@ import {
   installSessionMemory,
   installThreads,
   listThreads,
+  railThreads,
   rememberThreadMode,
   openThread,
   pageThread,
@@ -1045,7 +1046,7 @@ function bindIpc() {
   /* Cross-harness threads: every agent's sessions on this machine. */
   handle("mako:threads", (_e, filter?: { cwd?: string; harness?: string }) => ({
     ready: threadsReady(),
-    threads: listThreads(filter),
+    threads: railThreads(filter),
     activity: threadActivitySnapshot(),
   }))
   handle("mako:thread-open", (_e, path: string) => openThread(path))

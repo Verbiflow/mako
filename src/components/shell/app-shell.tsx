@@ -49,8 +49,8 @@ export function AppShell() {
   }, [bootHost])
 
   // The working tree changes outside our process when a terminal switches a
-  // branch. Refresh on focus rather than polling; the thread catalog owns its
-  // separate native-store refresh.
+  // branch. Refresh on focus rather than polling. The thread catalog arrives
+  // by push and reloads on reconnect, never on focus.
   useEffect(() => {
     const refresh = () => {
       if (store.get().phase !== "ready") return

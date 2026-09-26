@@ -1,6 +1,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection.ts"
+import { threadList } from "../../electron/contracts/thread-list.ts"
 import { toast } from "sonner"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {
@@ -173,34 +174,12 @@ export function applyThreadRemoved(path: string) {
   )
 }
 
-export function uniqueThreadRefs(list: ThreadRef[]) {
-  const byIdentity = new Map<string, ThreadRef>()
-  for (const ref of list) {
-    // A provider may say one native id names two distinct stores (a Cursor
-    // session continued by the CLI into chats/); those stay separate rows.
-    const key = `${ref.harness}:${ref.identity ?? ref.nativeId}`
-    const held = byIdentity.get(key)
-    if (
-      !held ||
-      (held.archived && !ref.archived) ||
-      (Boolean(held.archived) === Boolean(ref.archived) &&
-        (ref.updatedAt ?? "") > (held.updatedAt ?? ""))
-    )
-      byIdentity.set(key, ref)
-  }
-  return [...byIdentity.values()].sort((left, right) =>
-    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")
-  )
-}
-
 export function applyThreads(list: ThreadRef[], loaded = true) {
   const initialHydration = loaded && !threadsStore.get().loaded
-  const unique = uniqueThreadRefs(list)
+  const unique = threadList(list)
   threadsStore.set({ threads: unique, loaded })
   if (initialHydration) seedRecentThreadActivity(unique)
 }
-
-let focusRefetch = false
 
 // A host older than this window fails the descriptor call like every other
 // channel it predates — and a silent `[]` then routes every send down the
@@ -227,13 +206,6 @@ async function harnessDescriptors(): Promise<HarnessDescriptor[]> {
 }
 
 const threadCatalogActions = {
-  /** Re-ask on window focus: cheap, and heals any missed push for good. */
-  watchFocus() {
-    if (focusRefetch || globalThis.window === undefined) return
-    focusRefetch = true
-    window.addEventListener("focus", () => void threadCatalogActions.load())
-  },
-
   /**
    * What each live driver offers a new session — its access ladder, its
    * steering kind, whether it resumes. A provider whose transport just
