@@ -2,8 +2,10 @@ import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { chmod, mkdir } from "node:fs/promises"
 import { createConnection, type Socket } from "node:net"
-import { join } from "node:path"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
 import { headlessNodeExecutable } from "./headless-node.js"
+import { ensurePrivateDirectory } from "./private-directory.js"
 import type {
   TerminalCreateOptions,
   TerminalEvent,
@@ -29,10 +31,19 @@ interface PendingRequest {
   timer: NodeJS.Timeout
 }
 
+/** macOS rejects Unix socket paths longer than 104 bytes with EINVAL. */
+const SOCKET_PATH_BYTES = 104
+
+/**
+ * The socket sits in the profile when its path fits; a longer profile path
+ * uses a private per-profile folder in the temp directory instead.
+ */
 export function terminalEndpoint(stateDir: string) {
-  if (process.platform !== "win32") return join(stateDir, "daemon.sock")
-  const owner = createHash("sha256").update(stateDir).digest("hex").slice(0, 20)
-  return `\\\\.\\pipe\\mako-terminal-${owner}`
+  const owner = createHash("sha256").update(stateDir).digest("hex")
+  if (process.platform === "win32") return `\\\\.\\pipe\\mako-terminal-${owner.slice(0, 20)}`
+  const local = join(stateDir, "daemon.sock")
+  if (Buffer.byteLength(local) <= SOCKET_PATH_BYTES) return local
+  return join(tmpdir(), `mako-terminal-${owner.slice(0, 16)}`, "daemon.sock")
 }
 
 export class TerminalDaemonClient {
@@ -175,6 +186,8 @@ export class TerminalDaemonClient {
     this.#emit({ type: "connection", state: "connecting" })
     await mkdir(this.#stateDir, { recursive: true, mode: 0o700 })
     if (process.platform !== "win32") await chmod(this.#stateDir, 0o700)
+    if (process.platform !== "win32" && dirname(this.#endpoint) !== this.#stateDir)
+      await ensurePrivateDirectory(dirname(this.#endpoint), "terminal socket")
     // One replacement per connection attempt: an outdated daemon is asked to
     // persist and leave, a fresh one is spawned from this executable, and the
     // same call then completes against it instead of failing the caller.

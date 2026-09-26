@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
-import { mkdir, lstat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { ensurePrivateDirectory } from "./private-directory.js"
 import { probeRuntime, settleRuntime } from "./runtime-connection.js"
 
 export function runtimeDataRoot(appData: string, env: NodeJS.ProcessEnv): string {
@@ -20,10 +20,7 @@ export function runtimeLocation(dataRoot: string) {
 
 export async function ensureRuntime(input: { dataRoot: string; executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }) {
   const location = runtimeLocation(input.dataRoot)
-  await mkdir(location.directory, { mode: 0o700, recursive: true })
-  const directory = await lstat(location.directory)
-  if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0 || (process.getuid && directory.uid !== process.getuid()))
-    throw new Error("The Mako host directory is not private to this user")
+  await ensurePrivateDirectory(location.directory, "Mako host")
   // A host that is quitting still holds the profile lock; wait for it to leave
   // rather than start a second host into it or report its farewell as a failure.
   const existing = await settleRuntime(location.socket)

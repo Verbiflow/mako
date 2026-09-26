@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { TerminalClients } from "../electron/terminal-clients.ts"
 import {
   TerminalDaemonClient,
@@ -405,6 +405,29 @@ if (process.platform !== "win32") {
   if (exitCode === "timeout") orphan.kill("SIGKILL")
   assert.equal(exitCode, 0, "an orphaned daemon exits by itself")
   assert.equal(await readFile(orphanEndpoint, "utf8"), "successor")
+}
+
+// A profile path too long for a Unix socket still gets a working terminal,
+// with its socket in a private temp folder.
+if (process.platform !== "win32") {
+  const longState = join(root, "p".repeat(120), "terminal")
+  const longEndpoint = terminalEndpoint(longState)
+  assert.ok(Buffer.byteLength(longEndpoint) <= 104)
+  assert.equal(dirname(dirname(longEndpoint)), tmpdir())
+  assert.equal(terminalEndpoint(stateDir), join(stateDir, "daemon.sock"))
+  const longEvents: TerminalEvent[] = []
+  const longClient = new TerminalDaemonClient(entry, longState, (event) => longEvents.push(event))
+  const longSession = await longClient.create({ cwd: root, cols: 80, rows: 24 })
+  await longClient.attach(longSession.id)
+  const longMarker = `mako-long-${Date.now()}`
+  const longSeen = outputContaining(longEvents, longMarker)
+  await longClient.write(longSession.id, `printf '${longMarker}\\n'\n`)
+  await longSeen
+  assert.equal((await stat(dirname(longEndpoint))).mode & 0o777, 0o700)
+  const longPid = longClient.daemonPid()
+  await longClient.kill(longSession.id)
+  longClient.dispose()
+  if (longPid) process.kill(longPid, "SIGTERM")
 }
 await rm(root, { recursive: true, force: true })
 

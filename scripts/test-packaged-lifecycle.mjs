@@ -28,6 +28,8 @@ const approvalChecks = process.argv.includes("--approvals")
 const rendererOnly = process.argv.includes("--renderer-only")
 const warmStart = process.argv.includes("--warm")
 const uiStart = process.argv.includes("--ui-start")
+const stopCheck = process.argv.includes("--stop")
+const terminalCheck = process.argv.includes("--terminal")
 const modelFlag = process.argv.find((arg) => arg.startsWith("--model="))
 const selectedModel = modelFlag?.slice(8)
 const args = process.argv
@@ -38,11 +40,13 @@ const args = process.argv
       arg !== "--approvals" &&
       arg !== "--warm" &&
       arg !== "--ui-start" &&
+      arg !== "--stop" &&
+      arg !== "--terminal" &&
       arg !== modelFlag
   )
 assert.ok(
   args.length <= 2,
-  "Use [Mako.app] [provider] [--renderer-only] [--warm] [--model=id] [--ui-start]"
+  "Use [Mako.app] [provider] [--renderer-only] [--warm] [--model=id] [--ui-start] [--stop] [--terminal]"
 )
 const acceptanceBudget =
   process.env.MAKO_STARTUP_BUDGET_MS === undefined
@@ -537,6 +541,74 @@ function answer(snapshot, requestId) {
     .map((block) => block.text)
     .join("\n")
 }
+const stopText =
+  "Write the whole numbers from 1 to 3000 in English words, one per line, with no other text. Do not use tools or modify files."
+async function stopRunningTurn(nativeId) {
+  const binding = (snapshot) =>
+    snapshot?.control.bindings.find((item) => item.nativeId === nativeId)
+  const before = binding(await bridge("liveSnapshot", [conversationId]))
+  const requestId = randomUUID()
+  await bridge("livePrompt", [conversationId, requestId, stopText, []])
+  await waitFor(
+    () => bridge("liveSnapshot", [conversationId]),
+    (snapshot) => {
+      const request = snapshot?.requests.find((item) => item.id === requestId)
+      assert.ok(
+        !request || request.status === "dispatching",
+        `The long turn ended as ${request?.status} before Stop`
+      )
+      return Boolean(
+        snapshot.blocks.some(
+          (block) => block.type === "user" && block.requestId === requestId
+        ) && answer(snapshot, requestId).length > 40
+      )
+    },
+    "streamed output before Stop",
+    120_000
+  )
+  const stoppedAt = Date.now()
+  await bridge("liveCancel", [conversationId])
+  const stopped = await waitFor(
+    () => bridge("liveSnapshot", [conversationId]),
+    (snapshot) => {
+      const status = snapshot?.requests.find(
+        (item) => item.id === requestId
+      )?.status
+      assert.ok(status !== "completed", "The long turn completed despite Stop")
+      const current = binding(snapshot)
+      return (
+        status === "interrupted" &&
+        snapshot.session.status === "ready" &&
+        Boolean(current?.checkpoint) &&
+        current.checkpoint !== before?.checkpoint &&
+        current.coveredBlocks > (before?.coveredBlocks ?? 0)
+      )
+    },
+    "stopped turn covered by a native checkpoint",
+    120_000
+  )
+  report.phases.push({
+    phase: "stop-running-turn",
+    stopMs: Date.now() - stoppedAt,
+    coveredBlocks: binding(stopped).coveredBlocks,
+  })
+  return requestId
+}
+async function checkNoFalseBanner(requestId) {
+  const selector = `[data-conversation-id="${conversationId}"]`
+  await waitFor(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), Boolean, "conversation rail row after restart")
+  await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
+  const snapshot = await bridge("liveSnapshot", [conversationId])
+  assert.equal(snapshot.requests.find((item) => item.id === requestId)?.status, "interrupted")
+  const prompt = stopText.slice(0, 60)
+  await waitFor(() => evaluate(`document.body.textContent.includes(${JSON.stringify(prompt)})`), Boolean, "stopped prompt visible after restart")
+  await evaluate("document.fonts.ready.then(() => new Promise(resolve => setTimeout(() => requestAnimationFrame(() => resolve(true)), 1500)))")
+  const banner = await evaluate(`document.body.textContent.includes("Message interrupted")`)
+  const shot = await command("Page.captureScreenshot", { format: "png" })
+  await writeFile(join(root, "stopped-after-restart.png"), Buffer.from(shot.data, "base64"))
+  assert.equal(banner, false, "A delivered, stopped message raised the Message interrupted banner after restart")
+  report.phases.push({ phase: "no-false-interrupted-banner", passed: true })
+}
 async function startFromComposer(text) {
   await waitFor(
     () =>
@@ -608,6 +680,7 @@ try {
   execFileSync("codesign", ["--verify", "--deep", "--strict", app], {
     stdio: "pipe",
   })
+  const launchedAt = Date.now()
   const launch = await startPackage()
   report.phases.push({ phase: "packaged-launch", ...launch })
   const permissions = await bridge("computerPermissions", [])
@@ -616,6 +689,11 @@ try {
   report.build = metadata.makoBuild
   report.phases.push({ phase: "permission-status", ...permissions })
   console.log("Packaged renderer, preload, and read-only permission status ready in an isolated profile")
+  if (terminalCheck) {
+    const { checkPackagedTerminal } = await import("./packaged-terminal-checks.mjs")
+    await checkPackagedTerminal({ app, bridge, waitFor, root, workspace, report, launchedAt })
+    console.log("Packaged terminal daemon started from this bundle, ran a live shell, and stayed idle")
+  }
   if (!rendererOnly) {
     if (process.env.MAKO_PACKAGE_QUESTION_SOURCE) {
       const {checkPackagedQuestionHistory}=await import('./packaged-question-history-checks.mjs')
@@ -727,17 +805,19 @@ try {
       })
       await bridge("liveClose", [id])
     }
+    const stoppedId = stopCheck ? await stopRunningTurn(nativeId) : undefined
     await stopPackage()
     // The same profile must recover its journal; the second prompt does not include the marker.
     await startPackage()
     const loaded = await bridge("liveSnapshot", [conversationId])
     assert.ok(loaded)
     assert.equal(loaded.session.nativeId, nativeId)
+    if (stoppedId) await checkNoFalseBanner(stoppedId)
     const nextId = randomUUID()
     await bridge("livePrompt", [
       conversationId,
       nextId,
-      (approvalChecks || process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1" || process.env.MAKO_PACKAGE_QUESTION_RETIREMENT === "1" || process.env.MAKO_PACKAGE_EXTERNAL_QUESTION === "1")
+      (stopCheck || approvalChecks || process.env.MAKO_PACKAGE_ASYNC_QUESTIONS === "1" || process.env.MAKO_PACKAGE_QUESTION_RETIREMENT === "1" || process.env.MAKO_PACKAGE_EXTERNAL_QUESTION === "1")
         ? "Reply only with the original PACKAGE_ marker I asked you to remember at the start of this session, before the intervening tests. Do not use tools or modify files."
         : "Reply only with the marker from my previous turn. Do not use tools or modify files.",
       [],
@@ -773,6 +853,7 @@ try {
   throw error
 } finally {
   await stopPackage()
+  if (terminalCheck) (await import("./packaged-terminal-checks.mjs")).stopPackagedTerminal(root)
   await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2))
   console.log(`Verification report: ${join(root, "result.json")}`)
 }

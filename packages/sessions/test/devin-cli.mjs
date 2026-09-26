@@ -202,6 +202,21 @@ try {
   assert.equal(subagentBlock?.name, "subagent")
   assert.equal(subagentBlock?.output, "Found the root cause.")
 
+  const stopped = new DatabaseSync(join(dir, "sessions.db"))
+  stopped
+    .prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(8, "session-1", 7, 6, JSON.stringify({ role: "system", content: "[Response interrupted by user]" }), 7)
+  stopped
+    .prepare("UPDATE sessions SET last_activity_at = ?, main_chain_id = ? WHERE id = ?")
+    .run(7, 7, "session-1")
+  stopped.close()
+  const stop = await follower.next()
+  assert.deepEqual(
+    stop.entries.map((entry) => [entry.kind, entry.label]),
+    [["event", "Interrupted"]],
+    "Devin's stop notice reads as the shared Interrupted event"
+  )
+
   const cachePath = join(home, "catalog-cache.json")
   await writeFile(
     cachePath,

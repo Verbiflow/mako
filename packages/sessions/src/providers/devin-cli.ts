@@ -431,6 +431,9 @@ async function lockedSessionIds(path: string, ids: string[]): Promise<Set<string
   return locked
 }
 
+/** The system message Devin appends to a turn the user stopped. */
+const DEVIN_STOP_NOTICE = "[Response interrupted by user]"
+
 function translator(): MessageTranslator {
   const sink = new EntrySink()
   const tools = new Map<string, ToolBlock>()
@@ -442,7 +445,12 @@ function translator(): MessageTranslator {
       if (!message) return
       const at = isoOf(row.createdAt)
       if (message.role === "system") {
-        const completion = parseSubagentCompletion(contentText(message.content))
+        const text = contentText(message.content)
+        if (text.trim() === DEVIN_STOP_NOTICE) {
+          sink.push({ kind: "event", at, label: "Interrupted" })
+          return
+        }
+        const completion = parseSubagentCompletion(text)
         if (!completion) return
         sink.push({
           kind: "assistant",
