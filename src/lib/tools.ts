@@ -65,6 +65,7 @@ const TOOL_LABELS = new Map([
   ["askQuestion", "Question"],
   ["AskQuestion", "Question"],
   ["AskUserQuestion", "Question"],
+  ["question", "Question"],
   ["generateImage", "Generate image"],
   ["TaskCreate", "Create task"],
   ["TaskUpdate", "Update task"],
@@ -403,6 +404,13 @@ export function argAt<Content>(
   key: string
 ): string | undefined {
   return stringContent(parseToolArguments(value)?.[key])
+}
+
+/** The first question of a structured ask, which Claude and OpenCode both send as `{ questions: [{ question }] }`. */
+export function firstQuestion<Content>(value: Content): string | undefined {
+  const questions = parseToolArguments(value)?.questions
+  const first = Array.isArray(questions) ? questions[0] : undefined
+  return isToolArguments(first) ? stringContent(first.question) : undefined
 }
 
 export function booleanArgAt<Content>(

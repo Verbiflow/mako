@@ -48,17 +48,12 @@ function startWatchingControlPreview(conversationId: string): () => void {
     if (closed || document.hidden) return
     if (pending) { refreshRequested = true; return }
     pending = true
-    let advanced = false
     try {
-      // The host holds this read until the frame after `held` while a stream is live.
-      const held = controlPreviewStore.get().previews[conversationId]?.frame?.id ?? null
       const preview = await getMako().controlPreview(
         conversationId,
         true,
-        watcher,
-        held
+        watcher
       )
-      advanced = (preview?.frame?.id ?? null) !== held
       if (!closed) {
         const previous = controlPreviewStore.get().previews[conversationId]
         if (
@@ -84,7 +79,7 @@ function startWatchingControlPreview(conversationId: string): () => void {
     } finally {
       pending = false
       if (closed || document.hidden) release()
-      else if (refreshRequested || advanced) { refreshRequested = false; void poll() }
+      else if (refreshRequested) { refreshRequested = false; void poll() }
       else {
         const activity = controlPreviewStore.get().previews[conversationId]?.activity
         if (!activity || activity.kind === "browser" || activity.status === "running" || Date.now() - activity.updatedAt < 5000)
