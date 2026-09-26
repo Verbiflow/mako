@@ -711,3 +711,46 @@ Result: the viewer's own decode/paint work fell by about a fifth, the whole view
 by about 8%. That does not by itself close the 55-fps gate under heavy
 contention; the remaining per-frame cost is mostly the main process (IPC/media
 reads) and the GPU process.
+
+### Preview shown rate under load (local, September 26)
+
+The user chose (September 26) to accept a lower preview rate under heavy load and
+show it, the way recording reports skipped frame slots. The 55-fps gate now
+applies to ordinary load only.
+
+How the rate is counted:
+
+- The host numbers each 60 fps slot of the source clock (`capturedAt`) that
+  contained a frame and sends that count as the frame's `sequence`. Chromium
+  can deliver about 90 frames/s in bursts 5–11 ms apart, so counting raw frames
+  would report more than the host publishes. Late delivery cannot bunch slots.
+- Each viewer counts distinct painted frames by frame id over a two-second
+  source-clock window. Full rate is the smaller of the source rate and 60.
+- The viewer shows "N of M fps" (panel footer, overlay pill) when it paints
+  below 90% of full rate and clears it at 95%. It resets on a source restart,
+  a clock step, a gap longer than a second, or when hidden, and clears one
+  second after the last paint so a still page never keeps a stale label.
+
+Meaning matches recording: the label measures what the viewer lost, not what
+the source never produced. Under very heavy load (load average ~41) Chromium's
+screencast itself slows to 41–51 frames/s. The label cannot count that loss;
+the preview fps is then low without a label.
+
+Evidence:
+
+- Painter tests cover full rate, 40 of 60, recovery, the 90% threshold,
+  hysteresis at 55 of 60, the 120 fps source cap, an idle source, restart,
+  repeated paints of one frame, distinct frames in one slot and the idle clear.
+  Host and media tests cover slot counting and the `sequence` round trip.
+  Mutations of each fail them.
+- Real Chromium (`test-control-preview-e2e.mjs`, DPR 1 and 2, pinch): a source
+  stepping every other slot shows "30 of 60 fps" inside the card; at full rate
+  the label is removed.
+- Audits: ordinary 20 s, 59.41 fps, 0 of 20 samples labelled, cleared once the
+  page went still. Load 19–26 for 30 s: 55.67 fps (93% of full), one label.
+  Load ~41: 40.87 fps, 4 of 27 samples labelled; the source itself ran at
+  41–51 fps. The loaded runs fail the 55-fps gate by design and are reported,
+  not hidden.
+
+Included in candidate `26b4f06bc693a102` (queued to install when the default
+host is idle); not installed yet.

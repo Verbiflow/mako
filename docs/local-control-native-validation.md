@@ -5,6 +5,10 @@ three Sway configurations, both standalone CLI workflows and all eleven
 standalone lifecycle scenarios. This extends the older Intel/+mako.17 evidence.
 It does not establish all-platform parity with ChatGPT.
 
+September 26: +mako.24 repeats the Linux suites on ARM64 (plus compositors,
+GNOME 46 and the CLI/lifecycle jobs) and on translated x64. Native x64 still
+rests on this +mako.19 run. [+24 evidence](audits/2026-09-26/linux24/README.md).
+
 [Machine-readable results](local-control-native-validation-results.json) retain
 the driver/patch hashes and measured checks. Raw synthetic fixtures and media
 are in `docs/audits/2026-09-24/local-control-native-parity/` (gitignored).

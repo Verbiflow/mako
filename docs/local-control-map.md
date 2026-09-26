@@ -39,9 +39,9 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | --- | --- | --- |
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
 | Browser capture | Installed ordinary Aside preview/recording reaches 56.84/57.73 distinct fps at 1920×1080 with two viewers, exact inputs and unchanged screenshot pixels. Corrected loaded input-to-visible p95 is 121/73/82 ms for click/type/scroll through a production offscreen viewer. | Earlier installed loaded recordings and the combined-build 120-second isolated-host run interrupt at the two-second backlog guard; the uninstalled timestamped source completes them. A matched A/B shows preview rate follows machine load (47.97–58.25 fps), not encoding method; the 55-fps preview gate under contention stays open. Sustained efficiency, physical-screen latency, remote delivery and broader native rates remain open. Focus-off hidden tabs may produce no frames. |
-| Native capture/input | Mac +mako.23 selected for new launches; connected implicit-session idle lifetime and right/double-click cursor acceptance pass; fresh isolated right/double-click recording passes; the current default-host daemon loads +23 and installed right-click timeline propagation passes; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux +19 accepts 60 fps, but its native CLI clip is only 0.62 seconds; GNOME capture polls at ~5 fps. |
-| Standalone Linux | Current CLI/+mako.19 passes native AMD X11 jobs, three Sway scale/rotation configurations, both CLI workflows and eleven lifecycle cases. Earlier ARM64/Intel evidence is retained. Temporary EC2 resources removed. | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | Installed and running: `6ac3f4fbd690b74d` (built 01:15:34 UTC Sep 26; default host PID 34870), installed 01:25 UTC after the host went idle, startup verified, Settings receipt `ok:true` and installation state `idle`. Installed recording, MCP, native cursor-idle and both two-minute preview/recording jobs pass. It replaced `c291bf2845c02eec` (built 22:21:43 UTC, installed outside this workstream), which is retained as the backup. Earlier combined build `1fb3bfb7b3d14e96` (21:51:28 UTC) passed fresh default-host browser/native recovery. Sustained recording still interrupts. Previous builds `3c865f5347d339c7` and `48bf10dc948aa13c` are historical. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.23 is now selected for new Mac driver launches, with the current installed daemon now verified as +mako.23. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
+| Native capture/input | Mac +mako.24 selected for new launches (September 26): a daemon killed or stopped mid-key no longer leaves the key held, and typing text already in a field is no longer falsely confirmed; running daemons keep +23 until their host starts a new one. Connected implicit-session idle lifetime and right/double-click cursor acceptance pass; fresh isolated right/double-click recording passes; the current default-host daemon loads +23 and installed right-click timeline propagation passes; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux accepts 60 fps requests (+19, repeated on +24), but its native CLI clip is under a second; GNOME capture polls at ~5 fps. |
+| Standalone Linux | +mako.24 with the current engine (September 26) passes ARM64 X11 jobs/recording, three Sway scale/rotation configurations, labwc/Weston/KWin, GNOME 46, both CLI workflows and eleven lifecycle cases, and the five acceptance suites on translated x64. Native AMD x64 last passed with +mako.19 (September 24). Acceptance containers now run as any calling UID. [+24 evidence](audits/2026-09-26/linux24/README.md). | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
+| Installed components | Queued: candidate `26b4f06bc693a102` (built 09:16 UTC Sep 26) installs when the default host is idle; see [delivery order](#delivery-order). Installed and running: `6ac3f4fbd690b74d` (built 01:15:34 UTC Sep 26; default host PID 34870), installed 01:25 UTC after the host went idle, startup verified, Settings receipt `ok:true` and installation state `idle`. Installed recording, MCP, native cursor-idle and both two-minute preview/recording jobs pass. It replaced `c291bf2845c02eec` (built 22:21:43 UTC, installed outside this workstream), which is retained as the backup. Earlier combined build `1fb3bfb7b3d14e96` (21:51:28 UTC) passed fresh default-host browser/native recovery. Sustained recording still interrupts. Previous builds `3c865f5347d339c7` and `48bf10dc948aa13c` are historical. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.24 is now selected for new Mac driver launches (September 26); the current installed daemon still runs +mako.23 until its host starts a new one. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -83,7 +83,23 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Current milestone (September 26, 01:25 UTC): build `6ac3f4fbd690b74d` is installed and passes installed acceptance.**
+**Queued (September 26, 09:18 UTC): candidate `26b4f06bc693a102` installs when the default host is idle.**
+It contains native driver-death handling (LC-08), program syntax errors as
+`not-dispatched` (ledger A21), the preview shown rate (item 2 below), LC-22
+discovery guidance and visible text, and viewer displayed-size decoding (item 6).
+Typecheck, packaging, both packaged startup routes and ten direct ASAR file checks
+passed; all 1,922 source hashes matched before and after the build
+(`release/rollout-20260926b/build.json`). The earlier candidate
+`5dae8d5ec1dd45ba` (driver death only) was withdrawn through its cancel path: the
+pending quit was cancelled in the host, and its job recorded `not-installed` and
+released its reservation. The new one-shot job (`dev.mako.rollout-20260926b`)
+reserved the host and asked it to quit after work; the only running work was the
+Mako task that queued it, so installation happens when that task ends. Read
+`release/rollout-20260926b/install-state.json`; it ends at
+`installed-startup-verified` or says why not. Then run the installed LC-08
+driver-death acceptance through the default host.
+
+**Previous milestone (September 26, 01:25 UTC): build `6ac3f4fbd690b74d` is installed and passes installed acceptance.**
 
 Installed jobs from a Mako task on the new default host: packaged browser/native
 recording, MCP (reports the installed build), native cursor idle check, and both
@@ -177,10 +193,28 @@ Next:
    frame by about 8% without changing ordinary fps. The 55-fps gate under heavy
    contention stays open. **Decision (user, September 26): under heavy load, accept
    a lower preview rate and show it,** the way recording already reports skipped
-   frame slots. Not implemented yet. Next: count the frames the source announced
-   against the frames each viewer painted, and show the reduced rate in the
-   viewer while it is below the source rate. The 55-fps gate then applies to
-   ordinary load only. Process priority is weaker on macOS: without root Mako can
+   frame slots. **Done locally, in the queued candidate:** the host counts
+   source-clock 60 fps slots that held a frame; each viewer compares its painted
+   frames and shows "N of M fps" below 90% of full rate (cleared at 95%, or a
+   second after the last paint). Ordinary audit 59.41 fps, never labelled; load
+   ~41 gives 40.87 fps, labelled in 4 of 27 samples, because Chromium itself fell
+   to 41–51 fps there, which the viewer cannot count. The 55-fps gate now applies
+   to ordinary load only. **Installed (build `26b4f06bc693a102`, September 26):**
+   ordinary 60 s passes at 58.28 fps, never labelled, 176 ms longest gap; a 30 s
+   recheck gives 59.54 fps, 67 ms. Loaded runs label the loss (two workers, load
+   11.7–20.2: 50.94 fps, 50 of 107 samples labelled "47–55 of 57–60 fps"; four
+   workers, load 6.6–25.9: 35.81 fps, 21 of 111 labelled) but fail the freeze gate
+   (521 ms and 1,349 ms longest gaps). Recording from the same stream never held
+   longer than 267 ms, so the freeze is on the viewer path. It is the only
+   installed gate that fails under load; no stage timing isolates it yet. The
+   1,349 ms freeze exposed a meter bug: a gap over a second reset the window as if
+   the source were idle, hiding exactly that stall. Fixed locally: a long gap
+   during which the source kept producing now counts
+   (`test-control-preview-painter.ts`); not installed. Both foreground changes
+   during these audits were physical clicks into Aside (WindowServer button events
+   11 ms before activation), not the audit.
+   [Shown-rate evidence](local-control-media-fixes.md#preview-shown-rate-under-load-local-september-26).
+   Process priority is weaker on macOS: without root Mako can
    only lower other work (for example agent subprocesses), not raise itself.
    [Stage breakdown](local-control-media-fixes.md#candidate-6ac3f4fbd690b74d-and-preview-stage-breakdown),
    [parked-read A/B](local-control-media-fixes.md#parked-next-frame-preview-read-measured-reverted).
@@ -205,7 +239,7 @@ Next:
    Chromium: 144×81 → 288×162 at 2×), so a future expanded view needs no viewer
    change. Browser screencasts stay capped at 1920×1080 (`browser-capture.ts`);
    the user accepted that as enough detail (September 26).
-   Not installed yet; ships with the next build.
+   Not installed yet; in the queued candidate `26b4f06bc693a102`.
    [Design, tests and A/B](local-control-media-fixes.md#displayed-size-viewer-decoding-local-september-26).
 
 [Media fixes and previous attempts](local-control-media-fixes.md) retain the
@@ -226,8 +260,12 @@ are primary acceptance criteria. Keep the CLI’s existing file/stdin compositio
 
 1. **Close correctness and misleading-result gaps** in LC-08 and LC-22, starting
    with raw-action uncertainty, capture geometry and precise recovery messages.
-   Native driver death during input is done locally (September 26); its
-   installed acceptance and the driver's false confirmation (ledger B04) remain.
+   Native driver death during input is done locally (September 26). Its two
+   driver findings, the held key after daemon death and the false typing
+   confirmation (ledger B05, B04), are fixed in driver +mako.24, which is
+   installed for new driver launches. The host side is in candidate
+   `26b4f06bc693a102`, queued to install when the default host is idle; installed
+   acceptance through the Mako app follows.
    Keep the full [agent issue ledger](local-control-agent-issues.md) accounted for.
 2. **Finish LC-29 MCP discovery and LC-20 shared-engine release acceptance.**
    Run browser and native jobs through normal provider startup; preserve the basic
@@ -492,12 +530,34 @@ dispatched (A19); they now report their real fault. Outcome uncertainty and
 no-replay behavior are unchanged. CLI, browser-tools, REPL, runtime, input-error,
 computer-tools and `test:mcp` suites pass, and mutations of each new path fail them.
 
-Next: finish capability/result typing, understandable validation and recovery,
-consistent role/name/text semantics, and consolidated executable help examples.
-Distinguish a disconnected browser, unsupported operation, no native windows and
-Mako's own live desk before mutation. Exercise long-running start/resume/cancel
-without requiring agents to guess a ticket shape. Track accessibility names and
-visible labels separately rather than silently changing selector semantics.
+September 26 (local, in candidate `26b4f06bc693a102`), the remaining discovery items:
+
+- **Next operation (A01).** Every `control.browsers()` row carries `next`: the
+  exact call its connection state allows (connect, open, claim) or the user
+  action it waits for (allow the prompt, add the extension), or why connecting
+  refuses.
+- **No native windows (A02).** An empty `control.windows(pid)` says the process
+  owns no native windows, that this is not a permission refusal, and that web and
+  headless hosts, including Mako's own `--web` desk, are reached through the desk
+  entry in `control.browsers()`. A PID with no process says so.
+- **Live desk (A09 wording).** The desk's discovery guidance says it is a live
+  client of the real app, not a sandbox. Isolation itself is still open.
+- **Visible text vs accessible name (A07).** Page controls report
+  `visibleText` when their shown label differs from their name; `query`/`text`
+  search it; exact matching is unchanged. A miss for a name that is only visible
+  text names the control's real accessible name.
+- **Validation and help (A06/A08).** Wrong query shapes say where text search
+  lives and that CSS is unsupported; every public help example compiles and calls
+  only defined SDK methods.
+- **Syntax errors (A21).** A program that fails to compile reports
+  `syntax-error` / `not-dispatched` with its line, not `unknown`.
+
+`test-computer-tools`, `test-browser-service`, `test-browser-tools`,
+`test-control-repl`, `test-control-input-errors`, `test-desk-browser`, typecheck
+and lint pass; real Chrome confirms visible text on labelled buttons and links.
+
+Next: the fresh-agent acceptance below on the installed build. Capability/result
+typing and long-running start/resume/cancel without guessing a ticket shape remain.
 
 Done when a fresh agent can discover/connect, scope duplicate controls, capture an
 element, handle an invalid request and finish/recover a recording from public help,
@@ -506,7 +566,7 @@ Use the [ledger](local-control-agent-issues.md) for exact bug closure criteria.
 
 ## LC-08 / LC-14 — Uncertainty, ownership and independent targets
 
-**Status: target recovery, cancellation and native driver death implemented and fault-tested locally; driver death also passes against the real driver. Not installed.**
+**Status: target recovery, cancellation and native driver death implemented and fault-tested locally; driver death also passes against the real driver. Driver +mako.24 (held-input release, no false typing confirmation) is installed for new driver launches; the Mako host changes are in candidate `26b4f06bc693a102`, queued to install when the default host is idle.** Program syntax errors now report `syntax-error` / `not-dispatched` instead of `unknown` ([A21](local-control-agent-issues.md#discovery-targeting-and-api)).
 The shared host and BrowserService now classify browser commands by effect.
 Read-only helpers preserve refs; raw mutations retire only their target's refs.
 Lost raw browser replies block that target until a successful observation/capture.
@@ -573,33 +633,47 @@ Evidence: `scripts/test-native-driver-death.ts` kills a fixture driver in nine
 places (mid-keystroke, partial typing, reads, queued calls, unscoped input,
 failed restart, pre-dispatch refusal, orphaned and endless typing). It passed
 20/20, and eight mutations each fail it or `test-computer-tools.ts`.
-`scripts/test-native-driver-death-live.ts` (`MAKO_TEST_DRIVER=<driver>`) kills
-the real +mako.23 stdio process and daemon while they type into a background
-Cocoa view that logs every key event and its posting process. It passed three
-of three runs with the final fixture (and two of three earlier runs, before the
-focus fix below). The observation waited 2.7–3.0 s for orphaned typing and
-0.9–1.2 s after a daemon kill. One key typed after it
-landed exactly once, with nothing replayed; the other app kept working and the
-replacement daemon kept the socket.
+`scripts/test-native-driver-death-live.ts` (`MAKO_TEST_DRIVER=<driver>`) runs
+the real driver against a background Cocoa view that logs every key event and
+its posting process. It kills the stdio process mid-typing, then has the view
+signal the daemon from inside a key-down handler, before the key up (8 ms
+behind) is posted: first SIGKILL, then SIGTERM, the signal Mako stops it with.
+On +mako.24 it passed six of six runs, one of them on the installed driver. The
+observation waited 0.9–3.0 s for orphaned typing to settle. One key typed after
+it landed exactly once, with nothing replayed; the other app kept working and
+each replacement daemon kept the socket. The person's frontmost app never
+changed.
 
-Found and not fixed in Mako:
+Fixed in driver +mako.24 (September 26):
 
-- **Held key after daemon death.** A daemon killed between a key's down and up
-  events leaves that key pressed in the app (key code 0, two of five daemon
-  kills).
-  Nothing can send the release for a dead daemon; the fault message says it can
-  happen.
-- **Driver false confirmation.** Upstream `typed_progress` treats an
-  accessibility insert as complete when the field *contains* the text. On a
-  view that silently accepts `AXSelectedText`, typing text already in the field
-  does nothing yet reports `effect: confirmed` ("q" into "q" stays "q"). Needs
-  a driver patch comparing before and after values. Tracked as B04 in the
-  [ledger](local-control-agent-issues.md).
-- **Test-fixture focus theft (fixed).** The first live fixture was executed
-  directly, so AppKit activated it at launch. A person's typing landed in it
-  twice. It now launches with `open -g` as an `LSUIElement` bundle. The test
-  fails if a fixture ever becomes active or receives a key event posted by
+- **Held key after daemon death** (ledger B05). The daemon journals every key
+  and mouse-button press beside its socket before posting it, and clears the
+  entry once the release is posted. A replacement daemon on the same socket
+  posts the missing releases before serving, and only to the same process
+  (pid and start time). On SIGTERM or clean shutdown the daemon releases
+  held input itself and deletes the journal. +mako.23 fails the live test with
+  the key held; on +24 the next event for that key is its key up, from the
+  replacement after SIGKILL and from the dying daemon after SIGTERM. Mako's
+  startup sweep also removes journals left by dead hosts. Not covered: Linux,
+  Windows, and a daemon that is not replaced because the restart budget is spent.
+- **Driver false confirmation** (ledger B04). The driver confirmed an insert
+  when the field *contained* the text, so typing text already present into a
+  view that ignores the insert reported `confirmed` ("q" into "q" stayed "q").
+  It now needs the value to change as an insertion would, or to gain an
+  occurrence. An unchanged value confirms only when the replaced selection was
+  the same text. Otherwise the driver falls back to key events. The live test
+  types "y" into "zzyy" and gets "zzyyy".
+- **Test-fixture focus theft (fixed earlier).** The first live fixture was
+  executed directly, so AppKit activated it at launch. A person's typing landed
+  in it twice. It now launches with `open -g` as an `LSUIElement` bundle. The
+  test fails if a fixture ever becomes active or receives a key event posted by
   anything other than the driver's daemons.
+
+Existing upstream test failures, unchanged by +24:
+`protocol_session_test`'s `concurrent_multi_driver_isolation` and
+`session_owned_cursor_state_is_independent` fail the same way on +23
+(`get_agent_cursor_state` output does not match its schema), and
+`protocol_proxy_recovery_test` leaves its daemon running after it passes.
 
 Next within this gate: installed acceptance of the above, and capture/recovery
 across installed extension replacement. The shared session extraction preserves
@@ -791,6 +865,18 @@ Both standalone CLI workflows and eleven lifecycle scenarios pass, with retained
 media decoded and selected images inspected. The VM and temporary network/key
 were removed. [Evidence and limits](local-control-native-validation.md).
 
+September 26: driver +mako.24 with the current engine repeats this locally.
+ARM64 passes X11 jobs, recording with gestures, Sway at 100%, 150% and 150%
+rotated, labwc/Weston/KWin (twenty jobs each), GNOME 46 (capture, gestures,
+recording, ten hidden jobs) and, in the runtime image, both CLI workflows and all
+eleven lifecycle scenarios. Translated x64 passes the five acceptance suites; that
+is not native x64 evidence. The first run exposed a runner bug: containers run as
+the calling UID, which the image usually lacks (GitHub-hosted runners use 1001),
+so D-Bus refused to start and every suite failed. The September 24 EC2 pass
+worked only because its user was UID 1000. The start scripts now give an unknown
+UID a passwd entry through `nss_wrapper`; both +24 runs used UID 501.
+[Evidence](audits/2026-09-26/linux24/README.md).
+
 Current-version continuation: KWin 6.3.6, labwc 0.8.3 and Weston 14.0.2 pass
 twenty ARM64 background jobs each after fixing current AT-SPI `button` role
 normalization. Capture/gesture support is not established by these form jobs.
@@ -800,7 +886,9 @@ September 24 bounded-read checks: current shared engine + Linux +19 passes
 then completes all sixty background form jobs. This adds read-contract coverage;
 it does not enable unverified gestures or capture.
 
-Next: extend compositor/version and real display/GPU coverage. AMD x64 Sway now
+Next: rerun native x64 with +mako.24 (EC2 per [CI](local-control-ci.md), or the
+contributor workflow once published, which now exercises the calling-UID fix), then
+extend compositor/version and real display/GPU coverage. AMD x64 Sway now
 has scale/rotation and hidden-job evidence. ARM64 Sway additionally has load
 evidence; GNOME 46 has
 scoped capture/input evidence; Weston/labwc have semantic hidden-job evidence,

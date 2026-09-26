@@ -11,8 +11,11 @@ It runs for relevant pull requests and manual dispatches once the workflow is
 published. Contributors do not need AWS or Vercel accounts.
 
 Native Intel Xeon acceptance passed on a disposable EC2 VM on 2026-09-23.
-The current CLI/+mako.19 passes X11, Sway scale/rotation, both CLI jobs and eleven
+CLI/+mako.19 passed X11, Sway scale/rotation, both CLI jobs and eleven
 lifecycle scenarios on AMD EPYC on September 24; see [evidence](local-control-native-validation.md).
++mako.24 passes the same five suites on ARM64 and translated x64, the three
+compositors, GNOME 46 and the CLI/lifecycle jobs on ARM64 (September 26,
+[evidence](audits/2026-09-26/linux24/README.md)); native x64 has not rerun.
 The GitHub workflow is prepared locally; that is not a published workflow run.
 The [runtime design](local-control-runtime.md) distinguishes this test package
 from the standalone cloud-service launcher, which now has its own lifecycle suite.
@@ -51,7 +54,10 @@ Build and dependency installation have internet access. Actual desktop tests run
 in containers with `--network none`, without a Docker socket, host display,
 private network mount or cloud credentials. The container receives only the
 prepared payload and an output directory, and runs as the calling user so
-recordings remain collectible without root. Each run requires a new evidence
+recordings remain collectible without root. That UID usually has no entry in the
+image (GitHub-hosted runners use 1001), and D-Bus will not start for such a user,
+so the start scripts give it one through `nss_wrapper` inside the container
+(`scripts/linux-control/identity.sh`). Each run requires a new evidence
 directory. The outer disposable VM is the
 isolation boundary for untrusted builds; Docker alone is not a promise that an
 arbitrary pull request is safe on a developer's daily-use machine.
@@ -76,7 +82,7 @@ repository root, create a new payload directory:
 
 ```sh
 node scripts/linux-control/prepare-acceptance.mjs \
-  release/control-driver/0.28.2+mako.19/linux-x64 \
+  release/control-driver/0.28.2+mako.24/linux-x64 \
   release/local-control-acceptance
 ```
 
