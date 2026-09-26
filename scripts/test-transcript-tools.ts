@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { pairTools, foldTools } from "../src/lib/tools.ts"
 import { threadToMessages } from "../src/lib/foreign-thread.ts"
-import { toExchanges } from "../src/lib/exchanges.ts"
+import { isInterruptedNote, responseSections, toExchanges } from "../src/lib/exchanges.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
 import type { AttachmentContent } from "@mako/sessions"
 
@@ -303,6 +303,38 @@ const portableSteering = toExchanges(
 )
 assert.equal(portableSteering.length, 1)
 assert.equal(portableSteering[0]?.response.filter((message) => message.role === "user").length, 1)
+
+// Markers keep their place in a long answer: a summary between two stretches
+// of work splits the log there rather than joining the notes under the prompt.
+const tool = (id: string) => ({ type: "tool" as const, id, name: "Shell", input: id, output: "ok" })
+const [compacted] = toExchanges(
+  threadToMessages([
+    { kind: "user", id: "ask", text: "Long task" },
+    { kind: "event", label: "Model changed", detail: "fast" },
+    { kind: "assistant", blocks: [tool("one"), tool("two")] },
+    { kind: "event", label: "Context compacted" },
+    { kind: "assistant", blocks: [tool("three")] },
+    { kind: "event", label: "Context compacted" },
+    { kind: "assistant", blocks: [{ type: "text", text: "Done" }] },
+  ])
+)
+assert.deepEqual(
+  compacted!.system.map((note) => note.after),
+  [0, 1, 2],
+  "Each note records how much of the answer came before it"
+)
+const sections = responseSections(compacted!.response, compacted!.system)
+assert.deepEqual(
+  sections.map((section) => section.kind),
+  ["work", "note", "work", "note", "prose"],
+  "Notes after the first reply sit between the stretches they separate; the leading note stays above"
+)
+assert.deepEqual(responseSections(compacted!.response).map((section) => section.kind), ["work", "prose"])
+assert.ok(
+  isInterruptedNote({ id: "n", role: "system", blocks: [{ type: "text", text: "Interrupted" }] }) &&
+    !isInterruptedNote({ id: "n", role: "system", blocks: [{ type: "text", text: "Context compacted" }] })
+)
+console.log("Compaction and other notes render where they happened in a long answer")
 
 const controlEnvelope = '<mako-local-control>\nBrowser and computer use: fixture setup\n</mako-local-control>\n\n'
 assert.equal(codexPrompt(controlEnvelope + '<send_user_message_question_reply>\n[{"question":"Which profile?","answer":"Existing"}]\n</send_user_message_question_reply>'), 'Which profile?\n\nExisting')

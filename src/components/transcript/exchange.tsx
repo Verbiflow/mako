@@ -35,6 +35,7 @@ import {
   restoreThreadReferences,
 } from "@/lib/thread-references"
 import {
+  isInterruptedNote,
   responseSections,
   responseText,
   type Exchange as ExchangeData,
@@ -90,10 +91,25 @@ export const Exchange = memo(function Exchange({
   continues?: TurnContinuation
   failed?: boolean
 }) {
-  const sections = useMemo(
-    () => responseSections(exchange.response),
-    [exchange.response]
+  // The footer says a turn stopped; the provider's own marker at the end of
+  // the same turn would say it twice.
+  const stopShown = Boolean(interrupted) && !streaming
+  const notes = useMemo(
+    () =>
+      stopShown
+        ? exchange.system.filter(
+            (note) =>
+              note.after < exchange.response.length ||
+              !isInterruptedNote(note.message)
+          )
+        : exchange.system,
+    [exchange.system, exchange.response.length, stopShown]
   )
+  const sections = useMemo(
+    () => responseSections(exchange.response, notes),
+    [exchange.response, notes]
+  )
+  const lastWork = sections.findLastIndex((section) => section.kind !== "note")
   const plan = exchange.response
     .flatMap((message) =>
       message.blocks.flatMap((block) =>
@@ -115,15 +131,19 @@ export const Exchange = memo(function Exchange({
           <Prompt message={exchange.prompt} />
         )
       ) : null}
-      {exchange.system.map((message) => (
-        <SystemNote key={message.id} message={message} />
-      ))}
+      {notes.map((note) =>
+        note.after === 0 ? (
+          <SystemNote key={note.message.id} message={note.message} />
+        ) : null
+      )}
 
       {sections.length > 0 ? (
         <div className={cn("flex flex-col gap-4", exchange.prompt && "mt-4")}>
           {provider ? <AgentByline provider={provider} /> : null}
           {sections.map((section, index) =>
-            section.kind === "steer" ? (
+            section.kind === "note" ? (
+              <SystemNote key={section.id} message={section.message} inline />
+            ) : section.kind === "steer" ? (
               <div key={section.id} className="mt-1">
                 <p className="mb-1 text-right text-label text-faint">
                   Steered mid-turn
@@ -137,9 +157,9 @@ export const Exchange = memo(function Exchange({
                 key={section.id}
                 messages={section.messages}
                 startedAt={index === 0 ? exchange.prompt?.timestamp : undefined}
-                live={Boolean(streaming && index === sections.length - 1)}
-                interrupted={Boolean(interrupted) && index === sections.length - 1}
-                failed={Boolean(failed && index === sections.length - 1)}
+                live={Boolean(streaming && index === lastWork)}
+                interrupted={Boolean(interrupted) && index === lastWork}
+                failed={Boolean(failed && index === lastWork)}
               />
             )
           )}
@@ -673,11 +693,12 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
   )
 }
 
-function SystemNote({ message }: { message: ChatMessage }) {
+/** `inline` sits inside the answer, whose gap already spaces it. */
+function SystemNote({ message, inline }: { message: ChatMessage; inline?: boolean }) {
   const text = textOf(message.blocks)
   if (!text) return null
   return (
-    <div className="my-3 flex items-center gap-2.5">
+    <div className={cn("flex items-center gap-2.5", inline ? "my-1" : "my-3")}>
       <span className="h-px flex-1 bg-hairline" />
       <span className="shrink-0 text-label text-faint">
         {text.slice(0, 140)}

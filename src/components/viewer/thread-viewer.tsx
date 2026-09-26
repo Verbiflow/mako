@@ -130,7 +130,7 @@ function createExchangeBuilder() {
               ? {
                   id: LEAD_EXCHANGE_ID,
                   response: [],
-                  system: [message],
+                  system: [{ message, after: 0 }],
                   timestamp: message.timestamp,
                 }
               : {
@@ -145,7 +145,13 @@ function createExchangeBuilder() {
 
         const grown =
           message.role === "system"
-            ? { ...last, system: [...last.system, message] }
+            ? {
+                ...last,
+                system: [
+                  ...last.system,
+                  { message, after: last.response.length },
+                ],
+              }
             : { ...last, response: [...last.response, message] }
         next = [...next.slice(0, -1), grown]
       }

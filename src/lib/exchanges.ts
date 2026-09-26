@@ -31,17 +31,39 @@ export interface Exchange {
    * work it redirected — never hoisted next to the prompt.
    */
   response: ChatMessage[]
-  /** Notes and separators that landed inside this exchange. */
-  system: ChatMessage[]
+  /** Notes and separators that landed inside this exchange, in order. */
+  system: ExchangeNote[]
   timestamp?: number
+}
+
+/**
+ * A note keeps its place in the answer: `after` counts the response messages
+ * before it. Zero sits under the prompt; anything later splits the answer
+ * where it happened, so a summary halfway through a long turn reads there.
+ */
+export interface ExchangeNote {
+  message: ChatMessage
+  after: number
 }
 
 export type ResponseSection =
   | { kind: "prose"; id: string; message: ChatMessage }
   | { kind: "work"; id: string; messages: ChatMessage[] }
   | { kind: "steer"; id: string; message: ChatMessage }
+  | { kind: "note"; id: string; message: ChatMessage }
 
-export function responseSections(messages: ChatMessage[]): ResponseSection[] {
+/** The provider's own marker for a turn that was stopped. */
+export function isInterruptedNote(message: ChatMessage): boolean {
+  return message.blocks.some((block) =>
+    block.type === "text" ? /^Interrupted(?:\s|$)/i.test(block.text.trim()) : false
+  )
+}
+
+/** `notes` must be ordered by `after`; notes at zero belong above the answer and are skipped. */
+export function responseSections(
+  messages: ChatMessage[],
+  notes: readonly ExchangeNote[] = []
+): ResponseSection[] {
   const sections: ResponseSection[] = []
   let work: ChatMessage[] = []
   let part = 0
@@ -58,8 +80,18 @@ export function responseSections(messages: ChatMessage[]): ResponseSection[] {
     blocks,
     error: undefined,
   })
+  let note = 0
+  while (notes[note]?.after === 0) note++
+  const placeNotes = (upTo: number) => {
+    while (note < notes.length && notes[note]!.after <= upTo) {
+      flushWork()
+      const { message } = notes[note++]!
+      sections.push({ kind: "note", id: message.id, message })
+    }
+  }
 
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
+    placeNotes(index)
     if (message.role === "user") {
       flushWork()
       sections.push({ kind: "steer", id: message.id, message })
@@ -101,6 +133,7 @@ export function responseSections(messages: ChatMessage[]): ResponseSection[] {
     const last = generated.at(-1)
     if (last && message.error) last.error = message.error
   }
+  placeNotes(messages.length)
   flushWork()
   return sections
 }
@@ -158,7 +191,8 @@ export function toExchanges(
       exchanges.push(current)
     }
 
-    if (message.role === "system") current.system.push(message)
+    if (message.role === "system")
+      current.system.push({ message, after: current.response.length })
     else current.response.push(message)
   }
 
@@ -172,7 +206,11 @@ export function toExchanges(
       old.response.every(
         (message, index) => message === exchange.response[index]
       ) &&
-      old.system.every((message, index) => message === exchange.system[index])
+      old.system.every(
+        (note, index) =>
+          note.message === exchange.system[index]!.message &&
+          note.after === exchange.system[index]!.after
+      )
       ? old
       : exchange
   })

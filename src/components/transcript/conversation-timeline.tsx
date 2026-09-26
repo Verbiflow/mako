@@ -19,7 +19,7 @@ import {
   NAVIGATOR_WIDTH,
   TurnNavigator,
 } from "@/components/transcript/turn-navigator"
-import { LEAD_EXCHANGE_ID, type Exchange as ExchangeData } from "@/lib/exchanges"
+import { LEAD_EXCHANGE_ID, isInterruptedNote, type Exchange as ExchangeData } from "@/lib/exchanges"
 import type { TurnStop } from "@/state/prompt-delivery"
 import type { TurnContinuation } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -739,10 +739,5 @@ export function ConversationTimeline({
 }
 
 function exchangeInterrupted(exchange: ExchangeData): boolean {
-  return exchange.system.some((message) =>
-    message.blocks.some((block) => {
-      const text = block.type === "text" ? block.text : undefined
-      return text ? /^Interrupted(?:\s|$)/i.test(text.trim()) : false
-    })
-  )
+  return exchange.system.some((note) => isInterruptedNote(note.message))
 }
