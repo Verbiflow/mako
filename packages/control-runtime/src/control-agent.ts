@@ -61,7 +61,9 @@ export function controlAgent(
                   ? cause.message
                   : "Control program failed",
               recovery:
-                "Earlier statements may have completed. Inspect the exact target; never replay the whole program after uncertainty.",
+                fault?.code === "syntax-error"
+                  ? "No statement ran. Fix the source and run it again."
+                  : "Earlier statements may have completed. Inspect the exact target; never replay the whole program after uncertainty.",
             }),
           },
         ],

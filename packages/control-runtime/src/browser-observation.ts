@@ -161,6 +161,11 @@ function propertyMap(node: AccessibilityNode): Map<string, string> {
   )
 }
 
+/** Controls whose visible label can differ from their accessible name; text
+ * entry is excluded because its visible text is its value or placeholder. */
+const LABELLED_ROLES = new Set([...INTERACTIVE_ROLES].filter((role) =>
+  !["textbox", "searchbox", "combobox", "listbox", "slider", "spinbutton", "ColorWell", "DateTime"].includes(role)))
+
 /** The document root is focusable but is never something to act on. */
 const DOCUMENT_ROLES = new Set(["RootWebArea", "WebArea", "document"])
 function isInteractive(role: string | null, properties: Map<string, string>) {
@@ -243,6 +248,20 @@ export function browserObservation(input: {
       children.set(node.parentId, siblings)
     } else roots.push(node)
   }
+  // The label a person reads, from the control's own text descendants; nested
+  // controls keep theirs. Differs from the accessible name only via ARIA/title.
+  const visibleText = (control: AccessibilityNode) => {
+    const parts: string[] = []
+    const stack = [...(children.get(control.nodeId) ?? [])].reverse()
+    for (let seen = 0; stack.length && seen < 200; seen++) {
+      const node = stack.pop()!
+      const role = node.role?.value ?? null
+      if (!node.ignored && role === "StaticText" && node.name?.value) parts.push(node.name.value)
+      if (!node.ignored && role !== null && LABELLED_ROLES.has(role)) continue
+      stack.push(...[...(children.get(node.nodeId) ?? [])].reverse())
+    }
+    return parts.join(" ").replace(/\s+/g, " ").trim()
+  }
   const pending = roots.reverse()
   const visited = new Set<string>()
   while (pending.length) {
@@ -269,9 +288,11 @@ export function browserObservation(input: {
     )
       continue
     if (input.interactiveOnly && !isInteractive(role, properties)) continue
+    const label = role !== null && LABELLED_ROLES.has(role) ? visibleText(node) : ""
+    const shown = label && label !== (name ?? "").replace(/\s+/g, " ").trim() ? label : undefined
     if (
       query &&
-      ![role ?? "", name ?? "", value ?? ""].some((field) =>
+      ![role ?? "", name ?? "", value ?? "", shown ?? ""].some((field) =>
         field.toLowerCase().includes(query)
       )
     )
@@ -279,6 +300,7 @@ export function browserObservation(input: {
     const row: JsonObject = { depth, role: text(role, 100) }
     const trimmedName = text(name, 500)
     if (trimmedName !== null && trimmedName !== "") row.name = trimmedName
+    if (shown) row.visibleText = text(shown, 200)
     const trimmedValue = text(
       value,
       input.exactValues ? OBSERVATION_BUDGET_BYTES : 1000

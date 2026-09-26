@@ -77,6 +77,7 @@ import { browserControlClient } from "./browser-control-client.js"
 import {
   BrowserCommandSchema,
   browserCommandEffect,
+  BrowserStateSchema,
   BrowserTargetSchema,
 } from "./contracts/browser-control.js"
 import {
@@ -304,6 +305,13 @@ function withStructured(
   }
 }
 
+function endedDriverSession(
+  result: z.infer<typeof toolResultSchema>,
+  session: string
+): boolean {
+  return (toolResultError(result) ?? "").includes(`${session}' has ended`)
+}
+
 /**
  * The driver answers a window-state call twice: a Markdown tree in the text
  * block and the structured elements (plus the same tree again) in
@@ -315,7 +323,7 @@ function compactWindowState(
   result: z.infer<typeof toolResultSchema>,
   keep: { includeMarkdown: boolean; includeMenuBar: boolean }
 ): z.infer<typeof toolResultSchema> {
-  if (!result.structuredContent) return result
+  if (!result.structuredContent || result.isError) return result
   const trimmed = keep.includeMarkdown
     ? result.structuredContent
     : withoutKeys(result.structuredContent, VERBOSE_WINDOW_STATE_KEYS)
@@ -452,6 +460,42 @@ const pageRouteLaunchSchema = z.object({
   urls: z.array(z.string()).default([]),
 })
 const versionSchema = z.object({ webSocketDebuggerUrl: z.string().url() })
+function processRunning(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // A process owned by another user exists but refuses the probe.
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
+
+const browserRowsSchema = z.array(
+  z.looseObject({ id: z.string(), name: z.string(), kind: z.string().optional(), connection: BrowserStateSchema })
+)
+
+/** The exact public call a discovered browser's state allows next, or the
+ * user action it waits for. Discovery itself never connects. */
+function browserNext({ id, name, kind, connection }: z.infer<typeof browserRowsSchema>[number]): string {
+  const browser = JSON.stringify(id)
+  switch (connection.status) {
+    case "connected":
+      return kind === "desk"
+        ? `await control.openTab({browser:${browser}})`
+        : `await control.openTab({browser:${browser},url:"https://example.com"}), or await control.tabs(${browser}) then control.claimTab({browser:${browser},tab}) for an open tab`
+    case "disconnected":
+      return `await control.connectBrowser(${browser})`
+    case "connecting":
+      return `await control.connectBrowser(${browser}) waits for the connection already starting`
+    case "awaiting-approval":
+      return `The user must allow Mako in ${name}'s prompt; await control.connectBrowser(${browser}) finishes once they do`
+    case "setup-required":
+      return `The user must add the Mako Browser extension to ${name}; connecting refuses until then`
+    case "unavailable":
+      return `${connection.reason} Connecting refuses until then`
+  }
+}
+
 const windowRowsSchema = z.looseObject({
   windows: z.array(
     z.looseObject({
@@ -1191,6 +1235,19 @@ export function createControlSession(
         signal,
         timeout: 60_000,
       })
+      // The driver ends a named session after five idle minutes and refuses
+      // calls that name it before running the tool, so one retry is safe.
+      if (
+        driverArgs.session === session &&
+        endedDriverSession(toolResultSchema.parse(reply), session)
+      ) {
+        session = `mako-${taskId}-${randomUUID().slice(0, 8)}`
+        if (hasCursor) await quietAgentCursor(signal)
+        reply = await connection.callTool(tool.name, { ...driverArgs, session }, {
+          signal,
+          timeout: 60_000,
+        })
+      }
     } catch (error) {
       if (!(error instanceof ComputerDriverExitedError) || closed) throw error
       throw NATIVE_READ_TOOLS.has(tool.name)
@@ -1518,14 +1575,22 @@ export function createControlSession(
     )
     if (request.kind === "browsers") {
       if (!browserCall)
-        return { kind: request.kind, available: false, browsers: [] }
+        return {
+          kind: request.kind,
+          available: false,
+          browsers: [],
+          next: "Browser control exists only inside a Mako task; nothing here can connect a browser.",
+        }
+      const browsers = browserRowsSchema.parse(
+        await browserCall(
+          BrowserCommandSchema.parse({ action: "status" }),
+          signal
+        )
+      )
       return {
         kind: request.kind,
         available: true,
-        browsers: await browserCall(
-          BrowserCommandSchema.parse({ action: "status" }),
-          signal
-        ),
+        browsers: browsers.map((browser) => ({ ...browser, next: browserNext(browser) })),
       }
     }
     if (request.kind === "pages") {
@@ -1545,10 +1610,15 @@ export function createControlSession(
     }
     if (request.kind === "apps")
       return controlData(await invokeTool("list_apps", {}, signal))
+    const windows = await nativeWindows(request.pid, signal)
+    if (windows.length) return { kind: request.kind, pid: request.pid, windows }
     return {
       kind: request.kind,
       pid: request.pid,
-      windows: await nativeWindows(request.pid, signal),
+      windows,
+      next: processRunning(request.pid)
+        ? `Process ${request.pid} owns no native windows right now, so there is nothing to bind; this is not a permission refusal. Web and headless hosts, including Mako's own --web desk, have none: use control.browsers() and its desk entry. An app still launching may add windows; call control.windows(${request.pid}) again.`
+        : `No process ${request.pid} is running. Use control.apps() for current PIDs.`,
     }
   }
   const controlObserve = async (
@@ -1559,7 +1629,7 @@ export function createControlSession(
     const request = controlInput(
       ControlObserveRequestSchema.safeParse(raw),
       "observation options",
-      'Use observe({max:50,match:{role:"button",name:"Save"}}); optional keys: within, query, interactive. Each within scope requires both exact observed role and name, for example within:[{role:"form",name:"Shipping"}]. Use observe() if no named scope was observed. Native windows also accept maxDepth:1..25 to bound traversal; browser pages do not.'
+      'Use observe({max:50,match:{role:"button",name:"Save"}}); optional keys: within, query (text search over role, name, value and visible text), interactive. Each within scope requires both exact observed role and name, for example within:[{role:"form",name:"Shipping"}]. Use observe() if no named scope was observed. Native windows also accept maxDepth:1..25 to bound traversal; browser pages do not.'
     )
     const scope: ComputerArguments = { within: request.within }
     if (request.match) scope.match = request.match
@@ -2620,7 +2690,7 @@ export function createControlSession(
         note: "Examples assume state.tab is your opened/claimed tab; substitute exact observed form/control names. Stop may return finalizing: collect status, never restart the recording. invalid-request and target-ambiguous are not-dispatched for that operation; earlier program steps may have completed. Correct just the failed step. Unknown outcomes require fresh target evidence before more input.",
       },
       discovery:
-        "control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,preferred,transport,guidance?,lastInterruption?,connection,...}]}; control.tabs(browser) -> {kind:'pages',browser,pages:[{targetId,title,url,selectable,...}]}. These methods return objects, not arrays. When a pid is already known, list only that process’s windows.",
+        "control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,preferred,transport,guidance?,lastInterruption?,connection,next,...}]}, where next is the exact call that browser's state allows or the user action it waits for; control.tabs(browser) -> {kind:'pages',browser,pages:[{targetId,title,url,selectable,...}]}. These methods return objects, not arrays. When a pid is already known, list only that process’s windows.",
       connection:
         `await control.connectBrowser(id) explicitly connects an exact discovered browser and returns its connection state. A disconnected desk is ready to connect without an extension or remote-debugging setup. Choose the dev desk by origin/sourceRoot; open a hidden task tab there to inspect or capture Mako. This is a separate view, not a screenshot of the user’s visible window. Chromium profiles still require their installed extension. Example: const {browsers} = await control.browsers(); await control.connectBrowser(browsers.find(b => b.id === chosenId).id); state.tab = await control.openTab({browser:chosenId}); ${result}await state.tab.observe(); No implicit reconnect or action replay.`,
       handles:
@@ -2628,7 +2698,7 @@ export function createControlSession(
       actions:
         "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); Native window.observe also accepts maxDepth:1..25 (e.g. 5 for outer dialog controls); depth-limited reads remain incomplete when descendants are omitted and cannot prove absence or uniqueness. handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?,focus_change?}; focus_change reports an observed native focus interruption (even if restored); reobserve before another action, never replay it. Missing focus_change is not proof of continuous focus isolation. native settling reports notification quiet/deadline/unavailable, never action success. Refs expire after mutation or observation.",
       observations:
-        "Observation has nodes, lines, coverage, get({role,name,within?}) returns one node object; pass node.ref (a string) to setValue/click/activate, not the node object. select({role?,name?,text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. role/name use the same exact names as get/locator; text searches role, accessibility name and value, not arbitrary visible DOM text. Each within scope requires both observed role and name, e.g. [{role:'form',name:'Shipping'}]; do not invent a form or omit its name. Use observe() when no named scope was observed. Strings only, not regular expressions. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. Use role names exactly as observed: native roles such as TextField/Button may differ from browser textbox/button. No app-specific instructions are assumed.",
+        "Observation has nodes, lines, coverage, get({role,name,within?}) returns one node object; pass node.ref (a string) to setValue/click/activate, not the node object. select({role?,name?,text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. role/name use the same exact names as get/locator; text searches role, accessibility name, value and visibleText, not arbitrary DOM text. Page controls report visibleText when their shown label differs from the accessible name (a button showing 'Generate' may be named 'Create image'); matching still uses the name, and a miss names the control whose visible text you asked for. Each within scope requires both observed role and name, e.g. [{role:'form',name:'Shipping'}]; do not invent a form or omit its name. Use observe() when no named scope was observed. Strings only, not regular expressions. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. Use role names exactly as observed: native roles such as TextField/Button may differ from browser textbox/button. No app-specific instructions are assumed.",
       assertions:
         "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial.",
       recording:

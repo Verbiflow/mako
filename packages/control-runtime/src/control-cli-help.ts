@@ -25,7 +25,7 @@ export const controlCommands = new Map<string, CommandHelp>(
       usage: "browsers",
       flags: [],
       output:
-        "JSON browser discovery result; use the exact browser ID for connect/tabs/open.",
+        "JSON browser discovery result; use the exact browser ID for connect/tabs/open. Each browser's next field names the SDK call its state allows or the user action it waits for.",
       examples: ["mako-control browsers | jq ."],
     },
     connect: {

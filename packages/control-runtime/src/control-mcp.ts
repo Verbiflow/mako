@@ -54,7 +54,9 @@ export function createControlMcpServer(
                   ? error.message
                   : "Control request failed",
               recovery:
-                "Inspect the exact target before deciding whether another action is needed. No action was replayed.",
+                fault?.code === "syntax-error"
+                  ? "No statement ran. Fix the source and run it again."
+                  : "Inspect the exact target before deciding whether another action is needed. No action was replayed.",
             }),
           },
         ],
