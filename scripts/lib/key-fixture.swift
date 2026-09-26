@@ -6,9 +6,15 @@ import AppKit
 // Launch it with `open -g`: AppKit activates a directly executed app when it
 // finishes launching, and the person's typing would then land here.
 // Only the test reads the state file.
+//
+// A test that writes "<pid> <signal>" to `kill-<index>` arms a kill: the next
+// key down signals that process while handling the event, before the sender's
+// key up (8 ms behind its key down) can be posted.
 final class KeyView: NSView {
     var text = ""
     var events: [[Any]] = []
+    var kills: [[String: Int]] = []
+    var killFile = ""
     override var acceptsFirstResponder: Bool { true }
     private func source(_ event: NSEvent) -> Int {
         Int(event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1)
@@ -16,6 +22,14 @@ final class KeyView: NSView {
     override func keyDown(with event: NSEvent) {
         events.append(["keydown", Int(event.keyCode), event.characters ?? "", event.isARepeat, source(event)])
         if let characters = event.characters { text += characters }
+        if let armed = try? String(contentsOfFile: killFile, encoding: .utf8) {
+            let fields = armed.split(separator: " ").compactMap { Int32($0) }
+            if fields.count == 2 {
+                try? FileManager.default.removeItem(atPath: killFile)
+                let result = kill(fields[0], fields[1])
+                kills.append(["pid": Int(fields[0]), "signal": Int(fields[1]), "result": Int(result), "events": events.count])
+            }
+        }
     }
     override func keyUp(with event: NSEvent) {
         events.append(["keyup", Int(event.keyCode), event.characters ?? "", false, source(event)])
@@ -43,6 +57,7 @@ app.setActivationPolicy(.accessory)
 let window = NSWindow(contentRect: NSRect(x: 160 + index * 420, y: 420, width: 400, height: 90), styleMask: [.titled], backing: .buffered, defer: false)
 window.title = "Mako key fixture \(index)"
 let view = KeyView(frame: NSRect(x: 20, y: 25, width: 360, height: 40))
+view.killFile = root + "/kill-\(index)"
 window.contentView?.addSubview(view)
 window.makeFirstResponder(view)
 window.orderFrontRegardless()
@@ -50,7 +65,7 @@ var activations = 0
 NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in activations += 1 }
 Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { _ in
     view.needsDisplay = true
-    let state: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "window": window.windowNumber, "value": view.text, "events": view.events, "activations": activations]
+    let state: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "window": window.windowNumber, "value": view.text, "events": view.events, "kills": view.kills, "activations": activations]
     if let data = try? JSONSerialization.data(withJSONObject: state) {
         try? data.write(to: URL(fileURLWithPath: root + "/state-\(index).json"), options: .atomic)
     }
