@@ -482,7 +482,17 @@ const pageViewSchema = z.looseObject({
   nextOffset: z.number().int().nullable().optional(),
   omitted: z.number().int().optional(),
 })
+/** The driver's contract: a refused action carries no delivery. */
+const nativeRefusalSchema = z.object({
+  status: z.literal("refused"),
+  refusal: z.object({ code: z.string().min(1), message: z.string() }),
+  delivery: z.never().optional(),
+})
 const COMMAND_OUTPUT_LIMIT = 8 * 1024 * 1024
+/** Longer than the driver's slowest keystroke spacing (200 ms). */
+const ORPHAN_SETTLE_MS = 600
+/** Inside one program yield (10 s), so the refusal arrives as a result. */
+const ORPHAN_SETTLE_LIMIT_MS = 8_000
 const PAGE_ROUTE_WAIT_MS = 15_000
 const WINDOW_WAIT_MS = 10_000
 const MAX_RUNNING_FRONTS = 64
@@ -707,6 +717,11 @@ export function createControlSession(
   // another unscoped input whose destination the host cannot establish.
   let unscopedNativeUncertain = false
   const nativeReconciled = new Set<string>()
+  // Input whose driver process died can still be running in the driver's
+  // daemon; one observation may catch it half done. Such a window reconciles
+  // only once two reads ORPHAN_SETTLE_MS apart agree.
+  const orphanedInput = new Map<string, { signature?: string; at: number }>()
+  let orphanedUnscoped = false
   const uncertainProfiles = new Set<string>()
   const pageReconciled = new Set<string>()
   const profileKey = (target: PageTarget) =>
@@ -920,7 +935,16 @@ export function createControlSession(
     starting ??= (async () => {
       if (closed) throw new Error("Computer control connection is closed")
       if (!backend) return []
-      const connection = await connectDriver(backend)
+      let connection: ComputerDriverClient
+      try {
+        connection = await connectDriver(backend)
+      } catch (error) {
+        throw new ControlFault(
+          "driver-unavailable",
+          `The native driver could not start (${error instanceof Error ? error.message : String(error)}). Nothing was dispatched; the next call starts it again.`,
+          "not-dispatched"
+        )
+      }
       if (closed) {
         await connection.close()
         throw new Error("Computer control connection closed during startup")
@@ -1177,7 +1201,7 @@ export function createControlSession(
           )
         : new ControlFault(
             "driver-exited",
-            "The native driver stopped while this action was in flight. It may have partly happened (for example, only some keys typed). Mako restarts the driver on the next call and never retries the action: observe the target before continuing.",
+            "The native driver stopped while this action was in flight. It may have partly happened (for example, only some keys typed, or a key pressed without its release). Mako restarts the driver on the next call and never retries the action: observe the target before continuing.",
             "unknown"
           )
     }
@@ -1422,6 +1446,15 @@ export function createControlSession(
   }
   const controlData = (result: Parameters<typeof toolResultData>[0]) => {
     const refused = toolResultError(result)
+    const refusal = result.isError
+      ? nativeRefusalSchema.safeParse(result.structuredContent).data?.refusal
+      : undefined
+    if (refusal)
+      throw new ControlFault(
+        `native-${refusal.code.replaceAll("_", "-")}`,
+        `${refusal.message || refused}. The driver refused before sending any input; nothing was dispatched.`,
+        "not-dispatched"
+      )
     if (refused !== undefined) {
       const message = refused.includes("AXUIElementPerformAction") && refused.includes("-25204")
         ? `${refused}. The app may have acted without acknowledging the request. Observe the window and any new dialog before deciding whether to repeat the action.`
@@ -1520,8 +1553,9 @@ export function createControlSession(
   }
   const controlObserve = async (
     raw: ComputerArguments,
-    signal: AbortSignal
-  ) => {
+    signal: AbortSignal,
+    settleBy = Date.now() + ORPHAN_SETTLE_LIMIT_MS
+  ): Promise<z.infer<typeof ControlObservationSchema>> => {
     const request = controlInput(
       ControlObserveRequestSchema.safeParse(raw),
       "observation options",
@@ -1689,6 +1723,27 @@ export function createControlSession(
         !(request.interactive || request.query) ||
         visibleRefs.has(node.ref ?? "")
     )
+    let orphan = orphanedInput.get(key)
+    if (!orphan && orphanedUnscoped && !nativeReconciled.has(key))
+      orphanedInput.set(key, (orphan = { at: 0 }))
+    if (orphan) {
+      const signature = JSON.stringify(
+        allNodes.map((node) => ({ ...node, ref: undefined }))
+      )
+      const now = Date.now()
+      if (orphan.signature !== signature) Object.assign(orphan, { signature, at: now })
+      if (now - orphan.at < ORPHAN_SETTLE_MS) {
+        if (now >= settleBy)
+          throw new ControlFault(
+            "target-unsettled",
+            `This window kept changing for ${ORPHAN_SETTLE_LIMIT_MS / 1000} s after the native driver stopped, so the interrupted action may still be running. No observation was created and nothing was dispatched; observe again later.`,
+            "rejected"
+          )
+        await wait(orphan.at + ORPHAN_SETTLE_MS - now, signal)
+        return controlObserve(raw, signal, settleBy)
+      }
+      orphanedInput.delete(key)
+    }
     const nodes = scoped.slice(0, request.max)
     const webRefs = new Set(
       nodes.filter((node) => node.inputRoute === "page").map((node) => node.ref)
@@ -1740,7 +1795,8 @@ export function createControlSession(
   const dispatchControlOperation = async (
     target: ControlTarget | undefined,
     operation: z.infer<typeof ControlDispatchRequestSchema>["operation"],
-    signal: AbortSignal
+    signal: AbortSignal,
+    onDispatch?: () => void
   ): Promise<z.infer<typeof z.json>> => {
     if (operation.kind === "command") {
       const action = operation.language === "shell" ? "shell" : "script"
@@ -1837,21 +1893,19 @@ export function createControlSession(
         "This native pointer combination is unsupported; nothing was dispatched"
       )
     const base = { pid: target.pid, window_id: target.window_id }
+    const native = (name: string, args: ComputerArguments) =>
+      invokeTool(name, args, signal, onDispatch)
     if (operation.kind === "set-text")
       return controlData(
-        await invokeTool(
-          "set_value",
-          { ...base, element_token: operation.ref, value: operation.text },
-          signal
-        )
+        await native("set_value", {
+          ...base,
+          element_token: operation.ref,
+          value: operation.text,
+        })
       )
     if (operation.kind === "activate")
       return controlData(
-        await invokeTool(
-          "click",
-          { ...base, element_token: operation.ref },
-          signal
-        )
+        await native("click", { ...base, element_token: operation.ref })
       )
     if (operation.kind === "press-key") {
       const args: ComputerArguments = { ...base }
@@ -1860,7 +1914,7 @@ export function createControlSession(
         args.keys = [...operation.modifiers, operation.key]
       else args.key = operation.key
       const action = operation.modifiers.length > 0 ? "hotkey" : "press_key"
-      return controlData(await invokeTool(action, args, signal))
+      return controlData(await native(action, args))
     }
     if (operation.kind === "pointer") {
       const args =
@@ -1868,14 +1922,14 @@ export function createControlSession(
           ? { ...base, element_token: operation.at.ref }
           : { ...base, x: operation.at.x, y: operation.at.y }
       if (operation.button === "middle")
-        return controlData(await invokeTool("click", { ...args, button: "middle" }, signal))
+        return controlData(await native("click", { ...args, button: "middle" }))
       const action =
         operation.button === "right"
           ? "right_click"
           : operation.count === 2
             ? "double_click"
             : "click"
-      return controlData(await invokeTool(action, args, signal))
+      return controlData(await native(action, args))
     }
     if (operation.kind === "scroll") {
       const args: ComputerArguments = {
@@ -1889,19 +1943,11 @@ export function createControlSession(
         args.x = operation.at.x
         args.y = operation.at.y
       }
-      return controlData(await invokeTool("scroll", args, signal))
+      return controlData(await native("scroll", args))
     }
     const value = z.string().parse(operation.value ?? operation.label)
     return controlData(
-      await invokeTool(
-        "set_value",
-        {
-          ...base,
-          element_token: operation.ref,
-          value,
-        },
-        signal
-      )
+      await native("set_value", { ...base, element_token: operation.ref, value })
     )
   }
   const watchNativeTopology = async (
@@ -2092,11 +2138,16 @@ export function createControlSession(
     let result: JsonValue
     let settling: NativeSettling | undefined
     let focusChange: NativeFocusChange | undefined
+    // Native calls report the moment input leaves Mako; page and command
+    // backends classify their own failures.
+    let dispatched = request.target?.kind !== "window"
     try {
       result = z
         .json()
         .parse(
-          await dispatchControlOperation(request.target, operation, signal)
+          await dispatchControlOperation(request.target, operation, signal, () => {
+            dispatched = true
+          })
         )
       if (signal.aborted)
         throw new ControlFault(
@@ -2119,8 +2170,16 @@ export function createControlSession(
       }
     } catch (error) {
       const detail = controlFaultData(error)
+      if (!dispatched)
+        throw new ControlFault(
+          detail?.code ?? "native-preflight-failed",
+          error instanceof Error ? error.message : "Native preflight failed",
+          "not-dispatched"
+        )
       if (key && (!detail || detail.outcome === "unknown"))
         controlUncertain.add(key)
+      if (key && detail?.code === "driver-exited")
+        orphanedInput.set(key, { at: 0 })
       throw new ControlFault(
         detail?.code ?? "dispatch-failed",
         error instanceof Error ? error.message : "Control dispatch failed",
@@ -2293,11 +2352,17 @@ export function createControlSession(
             error instanceof Error ? error.message : "Native preflight failed",
             "not-dispatched"
           )
-        if (!readOnly) {
-          for (const candidate of affected) controlUncertain.add(candidate)
+        const detail = controlFaultData(error)
+        if (!readOnly && (!detail || detail.outcome === "unknown")) {
+          const orphaned = detail?.code === "driver-exited"
+          for (const candidate of affected) {
+            controlUncertain.add(candidate)
+            if (orphaned) orphanedInput.set(candidate, { at: 0 })
+          }
           if (!target) {
             unscopedNativeUncertain = true
             nativeReconciled.clear()
+            if (orphaned) orphanedUnscoped = true
           }
         }
         throw error
