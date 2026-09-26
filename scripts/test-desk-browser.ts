@@ -358,6 +358,8 @@ try {
     const [remoteStatus] = await remoteService.refresh()
     assert.equal(remoteStatus?.kind, "desk")
     assert.equal(remoteStatus?.origin, "http://127.0.0.1:5173")
+    assert.match(remoteStatus?.guidance ?? "", /^A live client of the real Mako app, not a sandbox/,
+      "Discovery warns that the desk changes the real app before anything mutates it")
     const remoteRun = (
       input: Parameters<typeof BrowserCommandSchema.parse>[0]
     ) =>

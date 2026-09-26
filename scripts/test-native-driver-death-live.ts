@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { delimiter, dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
@@ -15,7 +15,8 @@ import {
 
 // The real native driver is killed while it types into a real Cocoa view in
 // the background: first its stdio process, then the embedded daemon doing
-// the input. The fixture records every key event independently.
+// the input, by SIGKILL and by the host's SIGTERM, each between a key's down
+// and up events. The fixture records every key event independently.
 const driver = process.env.MAKO_TEST_DRIVER
 assert.ok(driver, "Set MAKO_TEST_DRIVER to the exact driver executable")
 const run = promisify(execFile)
@@ -38,6 +39,7 @@ const State = z.object({
   window: z.number(),
   value: z.string(),
   events: z.array(z.tuple([z.string(), z.number(), z.string(), z.boolean(), z.number()])),
+  kills: z.array(z.object({ pid: z.number(), signal: z.number(), result: z.number(), events: z.number() })),
   activations: z.number(),
 })
 const read = async (index: number) =>
@@ -79,6 +81,9 @@ interface Evidence {
   error?: string
   stdioKill?: object
   daemonKill?: object
+  daemonTerm?: object
+  repeatedText?: object
+  journalRemoved?: boolean
 }
 const evidence: Evidence = { driver, version: (await run(driver, ["--version"])).stdout.trim(), status: "running" }
 let session: ReturnType<typeof controlSessionProbe> | undefined
@@ -110,21 +115,21 @@ try {
   const handles = `const target=control.window(${JSON.stringify(targets[0])});
 const other=control.window(${JSON.stringify(targets[1])});
 const fault=(e)=>({code:e.code,outcome:e.outcome,message:e.message});`
+  const typedAtLeast = (start: number, count: number) =>
+    until(async () => (await read(0)).value.length - start >= count)
   /**
-   * Type `text` slowly into the target and run `kill` once `after` characters
-   * landed; recovery starts at once, while orphaned typing may still land.
-   * The recovering observation must be the settled text: one key typed after
-   * it lands directly behind it, and nothing is replayed. That key must not
-   * already be in the field: the driver confirms an accessibility insert when
-   * the field contains the text, even if the insert did nothing.
+   * Type `text` slowly into the target while `kill` ends a driver process;
+   * recovery starts at once, while orphaned typing may still land. The
+   * recovering observation must be the settled text: one key typed after it
+   * lands directly behind it, and nothing is replayed.
    */
-  const interrupted = async (text: string, mark: string, after: number, kill: () => Promise<number>, beforeRecovery = async () => {}) => {
+  const interrupted = async (text: string, mark: string, kill: (start: number) => Promise<number>, beforeRecovery = async () => {}) => {
     const start = (await read(0)).value.length
     const [result, killed] = await Promise.all([
       exec(`${handles}
 await target.observe();
 try { await target.raw('type_text',{text:${JSON.stringify(text)},delay_ms:150}); return {fault:null} } catch(e) { return {fault:fault(e)} }`),
-      until(async () => (await read(0)).value.length - start >= after && kill()),
+      kill(start),
     ])
     const atFault = (await read(0)).value.slice(start)
     await beforeRecovery()
@@ -140,7 +145,38 @@ return {blocked,seen,settleMs,busy};`)
     await new Promise((resolve) => setTimeout(resolve, 150 * text.length + 1_000))
     const final = await read(0)
     const typed = final.value.slice(start)
-    return { result, killed, atFault, seen: recovery.seen.slice(start), settleMs: recovery.settleMs, blocked: recovery.blocked, busy: recovery.busy, typed, held: held(final.events), foreign: foreign(final.events) }
+    const signalled = final.kills.find((entry) => entry.pid === killed)
+    return { result, killed, atFault, seen: recovery.seen.slice(start), settleMs: recovery.settleMs, blocked: recovery.blocked, busy: recovery.busy, typed, held: held(final.events), foreign: foreign(final.events), interruptedKey: signalled && interruptedKey(final.events, signalled.events) }
+  }
+  /**
+   * The key whose down event the fixture was handling when it signalled, and
+   * who released it: the next event for that key code must be its key up.
+   * AppKit reports key ups by key code, not by the string sent with them.
+   */
+  const interruptedKey = (events: z.infer<typeof State>["events"], count: number) => {
+    const [type, code, characters] = events[count - 1]!
+    const next = events.slice(count).find(([, key]) => key === code)
+    return { type, code, characters, releasedBy: next?.[0] === "keyup" ? next[4] : null }
+  }
+  /** Arm the fixture to signal the embedded daemon from inside a key down, after four keys. */
+  const killDaemonDuringKey = (signal: number, onKill: (pid: number) => void) => async (start: number) => {
+    const pid = cuaEmbeddedPid()
+    assert.ok(pid, "The embedded daemon is running")
+    await typedAtLeast(start, 4)
+    await writeFile(join(root, "kill-0"), `${pid} ${signal}`)
+    const kill = await until(async () => (await read(0)).kills.find((entry) => entry.pid === pid))
+    assert.equal(kill.result, 0, "The fixture signalled the daemon")
+    onKill(pid)
+    return pid
+  }
+  const replacedDaemon = (killed: () => number | undefined) => async () => {
+    const pid = await until(async () => {
+      const current = cuaEmbeddedPid()
+      return current && current !== killed() ? current : undefined
+    })
+    daemons.add(pid)
+    assert.equal(cuaEmbeddedSocket(), socket, "The replacement daemon listens on the same socket")
+    return pid
   }
   const settledCorrectly = (outcome: Awaited<ReturnType<typeof interrupted>>, text: string, mark: string) => {
     const detail = JSON.stringify(outcome)
@@ -152,7 +188,8 @@ return {blocked,seen,settleMs,busy};`)
 
   // 1. The host's stdio driver process dies mid-typing.
   const text = "abcdefghijklmnop"
-  const stdio = await interrupted(text, "!", 4, async () => {
+  const stdio = await interrupted(text, "!", async (start) => {
+    await typedAtLeast(start, 4)
     const [pid] = await driverChildren(socket)
     assert.ok(pid, "The session's driver process is running")
     process.kill(pid, "SIGKILL")
@@ -168,48 +205,69 @@ await other.observe(); await other.raw('type_text',{text:'zz'}); return true;`)
   assert.equal((await read(1)).value, "zz", "The unrelated app is usable after reconnect")
   assert.equal(spawns, 2)
 
-  // 2. The embedded daemon doing the input dies mid-typing. The host
-  // replaces it on the same socket; the session's driver reconnects there.
+  // 2. The embedded daemon doing the input is killed between a key's down and
+  // up events. The host replaces it on the same socket; the session's driver
+  // reconnects there, and the replacement releases the key the dead daemon
+  // left pressed.
   const daemonText = "ABCDEFGHIJKLMNOP"
   let replacement: number | undefined
   let killedDaemon: number | undefined
   const daemon = await interrupted(
     daemonText,
     "#",
-    4,
+    killDaemonDuringKey(9, (pid) => (killedDaemon = pid)),
     async () => {
-      const pid = cuaEmbeddedPid()
-      assert.ok(pid, "The embedded daemon is running")
-      process.kill(pid, "SIGKILL")
-      killedDaemon = pid
-      return pid
-    },
-    async () => {
-      replacement = await until(async () => {
-        const pid = cuaEmbeddedPid()
-        return pid && pid !== killedDaemon ? pid : undefined
-      })
-      daemons.add(replacement)
-      assert.equal(cuaEmbeddedSocket(), socket, "The replacement daemon listens on the same socket")
+      replacement = await replacedDaemon(() => killedDaemon)()
     }
   )
   evidence.daemonKill = { ...daemon, replacement }
   assert.equal(daemon.result.fault?.outcome, "unknown", JSON.stringify(daemon.result))
   settledCorrectly(daemon, daemonText, "#")
-  // A daemon killed between a key's down and up events leaves that one key
-  // pressed in the app; nothing can release it on the dead daemon's behalf.
-  assert.ok(daemon.held.length <= 1, `At most the interrupted key is left pressed: ${JSON.stringify(daemon)}`)
+  assert.equal(daemon.interruptedKey?.type, "keydown", JSON.stringify(daemon))
+  assert.deepEqual(daemon.held, [], `The interrupted key was released: ${JSON.stringify(daemon)}`)
+  assert.equal(daemon.interruptedKey?.releasedBy, replacement, `The replacement daemon released it: ${JSON.stringify(daemon)}`)
+
+  // 3. The host's SIGTERM stops the daemon between a key's down and up
+  // events. The daemon releases the key itself before it exits.
+  const termText = "qrstuvwxyzqrstuv"
+  let terminated: number | undefined
+  let afterTerm: number | undefined
+  const term = await interrupted(
+    termText,
+    "%",
+    killDaemonDuringKey(15, (pid) => (terminated = pid)),
+    async () => {
+      afterTerm = await replacedDaemon(() => terminated)()
+    }
+  )
+  evidence.daemonTerm = { ...term, replacement: afterTerm }
+  assert.equal(term.result.fault?.outcome, "unknown", JSON.stringify(term.result))
+  settledCorrectly(term, termText, "%")
+  assert.equal(term.interruptedKey?.type, "keydown", JSON.stringify(term))
+  assert.deepEqual(term.held, [], `The key was released: ${JSON.stringify(term)}`)
+  assert.equal(term.interruptedKey?.releasedBy, terminated, `The terminated daemon released it before exiting: ${JSON.stringify(term)}`)
   const otherAfterDaemon = await exec(`${handles}
 await other.observe(); await other.raw('type_text',{text:'yy'}); return true;`)
   assert.equal(otherAfterDaemon, true)
   assert.equal((await read(1)).value, "zzyy", "The unrelated app is usable on the replacement daemon")
+  // Text already in the field is typed again, not confirmed as a no-op.
+  const repeated = await exec(`${handles}
+await other.observe(); await other.raw('type_text',{text:'y'}); return true;`)
+  evidence.repeatedText = { reply: repeated, value: (await read(1)).value }
+  assert.equal((await read(1)).value, "zzyyy", "Typing text the field already holds adds it")
   for (const index of [0, 1]) {
     const state = await read(index)
     assert.equal(state.activations, 0, `Fixture ${index} never became the active app`)
     assert.deepEqual(foreign(state.events), [], `Only the driver's keys reached fixture ${index}`)
   }
+  // The daemon journals held input beside its socket; the host's stop removes it.
+  const journal = `${socket}.held-input`
+  await access(journal)
+  stopCuaEmbedded()
+  await until(() => access(journal).then(() => false, () => true))
+  evidence.journalRemoved = true
   evidence.status = "passed"
-  console.log(`PASS real driver death: stdio process and daemon killed mid-typing. Evidence: ${root}`)
+  console.log(`PASS real driver death: stdio process killed, daemon killed and terminated mid-key. Evidence: ${root}`)
 } catch (error) {
   evidence.status = "failed"
   evidence.error = String(error)

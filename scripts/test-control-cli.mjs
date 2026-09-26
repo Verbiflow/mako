@@ -94,6 +94,12 @@ try {
   assert.equal(invalidScript.code, "invalid-request")
   assert.equal(invalidScript.outcome, "not-dispatched")
   assert.match(invalidScript.message, /observe/)
+  const unparsed = await command(["exec", "--source-file", "-"], {
+    stdin: `await control.tab(${JSON.stringify(target)}).observe()\nreturn (1`,
+    code: 2,
+  })
+  assert.deepEqual([unparsed.code, unparsed.outcome], ["syntax-error", "not-dispatched"])
+  assert.match(unparsed.message, /did not run/)
   const imageFile = join(directory, "capture with spaces.png")
   const image = await command([
     "shot",

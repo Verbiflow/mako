@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { createControlPreviewPainter } from "../src/lib/control-preview-painter.js"
+import { createControlPreviewPainter, createControlPreviewRate, type ControlPreviewRate } from "../src/lib/control-preview-painter.js"
 import { controlPreviewEighths, controlPreviewSize, fitControlPreview } from "../src/lib/control-preview-decoder.js"
 
 const requests: FakeImage[] = []
@@ -402,8 +402,73 @@ try {
   assert.deepEqual([thumbnail.width, thumbnail.height, thumbnail.draws.at(-1)!.quality], [480, 270, "high"],
     "A full-size fallback shrinking past 2× is filtered rather than aliased")
   fallback.close()
+
+  // Shown rate: painted frames against the host's source sequence.
+  const meter = () => {
+    const reports: (ControlPreviewRate | null)[] = []
+    return { reports, rate: createControlPreviewRate((value) => reports.push(value)) }
+  }
+  const at = (sequence: number, capturedAt: number) => ({ ...frame(sequence), sequence, capturedAt })
+  const play = (rate: ReturnType<typeof createControlPreviewRate>, from: number, to: number, fps: number, keep: (n: number) => boolean, start = 0) => {
+    for (let n = from; n <= to; n++) if (keep(n)) rate.painted(at(n, start + ((n - from) * 1000) / fps))
+  }
+  let run = meter()
+  play(run.rate, 1, 240, 60, () => true)
+  assert.deepEqual(run.reports, [], "A viewer painting every frame reports nothing")
+  run = meter()
+  play(run.rate, 1, 240, 60, (n) => n % 3 !== 0)
+  assert.deepEqual(run.reports, [{ shown: 40, full: 60 }], "Painting two of every three frames reports 40 of 60 fps")
+  play(run.rate, 241, 480, 60, () => true, 4000)
+  assert.deepEqual(run.reports.at(-1), null, "Recovering to the full rate clears the report")
+  run = meter()
+  play(run.rate, 1, 240, 60, (n) => n % 12 !== 0)
+  assert.deepEqual(run.reports, [], "A 92% rate stays below the 90% threshold for showing")
+  run = meter()
+  play(run.rate, 1, 120, 60, (n) => n % 2 !== 0)
+  play(run.rate, 121, 360, 60, (n) => n % 12 !== 0, 2000)
+  assert.deepEqual(run.reports.at(-1), { shown: 55, full: 60 }, "Once shown, a 92% rate stays shown until it passes 95%")
+  run = meter()
+  play(run.rate, 1, 480, 120, (n) => n % 2 === 0)
+  assert.deepEqual(run.reports, [], "The host's 60 fps pace caps the full rate")
+  run = meter()
+  for (let n = 1; n <= 10; n++) run.rate.painted(at(n, n * 1500))
+  assert.deepEqual(run.reports, [], "An idle source that sends a frame per change reports nothing")
+  run = meter()
+  play(run.rate, 1, 60, 60, () => true)
+  play(run.rate, 141, 200, 60, () => true, 140_000 / 60)
+  assert.ok(run.reports.at(-1) && run.reports.at(-1)!.shown < 40 && run.reports.at(-1)!.full === 60,
+    `A 1.35 s viewer stall while the source runs is reported, not treated as idle: ${JSON.stringify(run.reports)}`)
+  run = meter()
+  play(run.rate, 1, 120, 60, (n) => n % 2 !== 0)
+  assert.deepEqual(run.reports, [{ shown: 30, full: 60 }])
+  run.rate.painted(at(1, 2100))
+  assert.deepEqual(run.reports.at(-1), null, "A restarted stream starts a fresh window")
+  run = meter()
+  for (let n = 1; n <= 120; n += 2) for (let repeat = 0; repeat < 3; repeat++) run.rate.painted(at(n, (n * 1000) / 60))
+  assert.deepEqual(run.reports, [{ shown: 30, full: 60 }], "Repainting a held frame is not a new frame")
+  const paired = meter()
+  for (let n = 1; n <= 120; n += 2)
+    for (const half of [0, 1]) paired.rate.painted({ ...frame(1000 + n * 2 + half), sequence: n, capturedAt: ((n + half) * 1000) / 60 })
+  assert.deepEqual(paired.reports, [], "Distinct frames that share a source slot all count as painted")
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  assert.deepEqual(run.reports, [{ shown: 30, full: 60 }], "The label holds between frames")
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  assert.deepEqual(run.reports.at(-1), null, "A second without a new frame clears the label: a still page drops nothing")
+
+  const rated: (ControlPreviewRate | null)[] = []
+  const busy = sized(), loaded = createControlPreviewPainter(busy, (value) => rated.push(value))
+  loaded.resize(852, 480)
+  for (let n = 1; n <= 90; n += 2) {
+    loaded.update({ ...jpeg(700 + n), sequence: n, capturedAt: (n * 1000) / 60 })
+    await flush()
+    await settle(codecs.at(-1)!)
+  }
+  assert.deepEqual(rated, [{ shown: 30, full: 60 }], "The painter reports the rate it actually painted")
+  loaded.resize(0, 0)
+  assert.deepEqual(rated.at(-1), null, "A hidden viewer drops its rate")
+  loaded.close()
   console.log(
-    "Preview painter: bounded decoding/latest-frame queue, retained pixels, displayed-size decoding and repaint, shared scaled decode, corruption/size refusal and late completion cleanup passed"
+    "Preview painter: bounded decoding/latest-frame queue, retained pixels, displayed-size decoding and repaint, shared scaled decode, corruption/size refusal, late completion cleanup and shown-rate reporting passed"
   )
 } finally {
   painter.close()

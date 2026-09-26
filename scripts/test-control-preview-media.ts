@@ -32,6 +32,7 @@ const preview: ControlPreview = {
     id: randomUUID(),
     capturedAt: 120,
     publishedAt: 123,
+    sequence: 42,
     image: { mimeType: "image/jpeg", bytes: randomBytes(700_000) },
   },
 }
@@ -51,6 +52,7 @@ assert.deepEqual(
 )
 assert.equal(decoded!.frame!.capturedAt, 120)
 assert.equal(decoded!.frame!.publishedAt, 123)
+assert.equal(decoded!.frame!.sequence, 42, "The source sequence reaches web viewers")
 assert.equal(decodePreviewMedia(encode(null)), null)
 assert.deepEqual(decodePreviewMedia(encode({ ...preview, frame: null })), {
   ...preview,

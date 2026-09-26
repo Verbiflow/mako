@@ -82,6 +82,7 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   if(request.params.name==='zoom') return {content:[{type:'image',mimeType:'image/png',data:'aW1hZ2U='}],structuredContent:{pid:args.pid,window_id:args.window_id,screenshot_scale:4}};
   if(request.params.name==='hotkey'){ keyboardCalls.push(args); const dropped=args.keys.includes('x'); const value={effect:'unverifiable',keys:args.keys,delivery:{mode:args.delivery_mode??'background'},pid:args.pid,...(dropped?{escalation:{reason:'delivery_failed',target:'foreground'},route:'synthetic_events'}:{})}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='list_apps'){ const value={apps:[{pid:1,active:true,name:'Other'},{pid:42,active:false,name:'Fixture'}]}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
+  if(request.params.name==='list_windows'&&(args.pid===process.ppid||args.pid===999999)) return {content:[{type:'text',text:'{"windows":[]}'}],structuredContent:{windows:[]}};
   if(request.params.name==='list_windows'){ const value={windows:[{pid:args.pid,window_id:7,z_index:1,is_on_screen:true},{pid:args.pid,window_id:8,title:'',bounds:{x:0,y:0,width:1352,height:30},is_on_screen:false},{pid:args.pid,window_id:9,title:'Downloads',bounds:{x:0,y:0,width:900,height:600},is_on_screen:true}]}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='get_accessibility_tree'){ const value={pid:args.pid,elements:Array.from({length:4000},(_,index)=>({element_index:index,role:'AXStaticText',label:'Row '+index+' '+'description '.repeat(6)}))}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   return {content:[{type:'text',text:JSON.stringify(args)}]};
@@ -1166,6 +1167,16 @@ return control.window({pid:42,window_id:9}).activate(ref);`,
   )
   assert.equal(crossTarget.structuredContent?.code, "stale-reference")
   assert.equal(crossTarget.structuredContent?.outcome, "not-dispatched")
+  // An empty window list says whether the process runs at all, and never claims a permission refusal.
+  const empty = await unifiedClient.request({
+    method: "exec",
+    arguments: { source: `return [await control.windows(${process.pid}), await control.windows(999999)]` },
+  })
+  assert.ok(!empty.isError, JSON.stringify(empty))
+  const [windowless, missing] = z.array(z.object({ windows: z.array(z.unknown()), next: z.string() })).parse(JSON.parse(firstText(empty.content)))
+  assert.deepEqual([windowless!.windows, missing!.windows], [[], []])
+  assert.match(windowless!.next, new RegExp(`^Process ${process.pid} owns no native windows right now.*not a permission refusal.*control\\.browsers\\(\\)`))
+  assert.equal(missing!.next, "No process 999999 is running. Use control.apps() for current PIDs.")
   const dispatchOnly = await unifiedClient.request({
     method: "exec",
     arguments: {
@@ -1771,6 +1782,40 @@ try {
 } finally {
 
   await pageOnly.close()
+}
+// Discovery names the exact next call, or the user action, for every connection state.
+const discovery = controlSessionProbe(
+  { command: "/nonexistent/mako-driver" },
+  "discovery-next",
+  undefined,
+  {
+    surface: "control",
+    browserCall: async () => [
+      { id: "aside", name: "Aside", kind: "chromium", connection: { status: "disconnected" } },
+      { id: "chrome", name: "Google Chrome", kind: "chromium", connection: { status: "setup-required" } },
+      { id: "live", name: "Aside", kind: "chromium", connection: { status: "connected", generation: "g" } },
+      { id: "mako", name: "Mako (this app)", kind: "desk", connection: { status: "connected", generation: "d" } },
+      { id: "direct", name: "Chrome", kind: "chromium", connection: { status: "awaiting-approval", startedAt: 1 } },
+      { id: "starting", name: "Edge", kind: "chromium", connection: { status: "connecting" } },
+      { id: "gone", name: "Brave", kind: "chromium", connection: { status: "unavailable", reason: "This preferred profile is not available." } },
+    ],
+  }
+)
+try {
+  const listed = await discovery.request({ method: "exec", arguments: { source: "return await control.browsers()" } })
+  assert.ok(!listed.isError, JSON.stringify(listed))
+  const rows = z.object({ browsers: z.array(z.object({ id: z.string(), next: z.string() }).loose()) }).parse(JSON.parse(firstText(listed.content))).browsers
+  assert.deepEqual(Object.fromEntries(rows.map((row) => [row.id, row.next])), {
+    aside: 'await control.connectBrowser("aside")',
+    chrome: "The user must add the Mako Browser extension to Google Chrome; connecting refuses until then",
+    live: 'await control.openTab({browser:"live",url:"https://example.com"}), or await control.tabs("live") then control.claimTab({browser:"live",tab}) for an open tab',
+    mako: 'await control.openTab({browser:"mako"})',
+    direct: `The user must allow Mako in Chrome's prompt; await control.connectBrowser("direct") finishes once they do`,
+    starting: 'await control.connectBrowser("starting") waits for the connection already starting',
+    gone: "This preferred profile is not available. Connecting refuses until then",
+  }, "Every discovered browser names its next step")
+} finally {
+  await discovery.close()
 }
 console.log(
   "Control engine: driver regression and unified programs, host-routed closed operations with receipts, results as data, target-bound refs, compact observations, background policy, browser lending, artifact receipts, previews and clean driver schemas verified"

@@ -880,6 +880,25 @@ try {
     queried.nodes.map((node) => node.name),
     ["Help"]
   )
+  fixture.axNodes.push({
+    nodeId: "9",
+    parentId: "4",
+    ignored: false,
+    backendDOMNodeId: 9,
+    role: { value: "StaticText" },
+    name: { value: "Send" },
+  })
+  const labelled = z
+    .object({ nodes: z.array(z.object({ role: z.string(), name: z.string().optional(), visibleText: z.string().optional() })) })
+    .parse(await run("task-c", { action: "observe", target: c, query: "send", interactiveOnly: true }))
+  assert.deepEqual(labelled.nodes, [
+    { role: "button", name: "Submit", visibleText: "Send" },
+  ], "a control whose shown text differs from its accessible name reports both, and query finds it by either")
+  const unlabelled = z
+    .object({ nodes: z.array(z.record(z.string(), z.json())) })
+    .parse(await run("task-c", { action: "observe", target: c }))
+  assert.equal(unlabelled.nodes.find((node) => node.role === "link")?.visibleText, undefined, "text equal to the name is not repeated")
+  fixture.axNodes.pop()
 
   // Click: pointer move, press with a buttons mask, then release.
   const fresh = z

@@ -56,7 +56,7 @@ try {
   const session = fixture.sessionFor(target.tab)!
   const sourceAt = Date.now() - 1500
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOioAAAAASUVORK5CYII="
-  const emit = (data = png) =>
+  const emit = (data = png, at = sourceAt) =>
     fixture.emit(session, "Page.screencastFrame", {
       sessionId: 1,
       data,
@@ -65,7 +65,7 @@ try {
         deviceHeight: 1000,
         pageScaleFactor: 1,
         offsetTop: 0,
-        timestamp: sourceAt / 1000,
+        timestamp: at / 1000,
       },
     })
   emit()
@@ -115,6 +115,16 @@ try {
   emit()
   await delay(50)
   assert.ok(previews.read("task", true, "overlay")?.frame, "Valid source frames resume delivery")
+  const counted = previews.read("task", true, "overlay")!.frame!.sequence!
+  const slot = 1000 / 60, base = (Math.floor(sourceAt / slot) + 10) * slot
+  for (let i = 1; i <= 5; i++) emit(png, base + i * 20)
+  await delay(50)
+  assert.equal(previews.read("task", true, "overlay")?.frame?.sequence, counted + 5,
+    "The host numbers every source frame, including those its 60 fps pace coalesces")
+  for (const offset of [205, 208, 212]) emit(png, base + offset)
+  await delay(50)
+  assert.equal(previews.read("task", true, "overlay")?.frame?.sequence, counted + 6,
+    "Frames within one 60 fps slot count once, so a faster source is not a shortfall")
   previews.read("task", false, "overlay")
   previews.observe({
     ...activity,

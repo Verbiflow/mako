@@ -13,7 +13,7 @@ import {
   invokeControlSession,
   serveControlSession,
 } from "@mako/control-runtime/session"
-import { ControlFault } from "@mako/control/control"
+import { ControlFault, controlFaultData } from "@mako/control/control"
 import {
   ControlProgramRuntime,
   ControlProgramError,
@@ -192,6 +192,13 @@ try {
   )
   assert.equal(invalid.isError, true)
   assert.doesNotMatch(text(invalid), /should not execute/)
+  const broken = await js("let unclosed = (1")
+  assert.equal(broken.isError, true)
+  const reported = z
+    .object({ code: z.string(), outcome: z.string(), recovery: z.string() })
+    .parse(JSON.parse(text(broken)))
+  assert.deepEqual([reported.code, reported.outcome], ["syntax-error", "not-dispatched"])
+  assert.match(reported.recovery, /No statement ran/)
   await client.close()
   assert.equal(
     fixture.targets.size,
@@ -200,6 +207,10 @@ try {
   )
   await request({ method: "exec", source: "return 42" })
   summary.sharedSession = true
+  await assert.rejects(
+    request({ method: "exec", source: "return (1" }),
+    (error) => controlFaultData(error)?.outcome === "not-dispatched"
+  )
 } finally {
   await client.close()
   await server.close()
@@ -253,6 +264,42 @@ try {
       e.cause instanceof ControlFault &&
       e.cause.code === "fixture-refusal"
   )
+  // A program that fails to compile never ran: nothing was dispatched. A
+  // SyntaxError thrown while running keeps its unknown outcome.
+  const fault = async (run: Promise<unknown>) => {
+    try {
+      await run
+    } catch (error) {
+      assert.ok(error instanceof ControlProgramError, String(error))
+      return { code: error.code, outcome: error.outcome, message: error.message }
+    }
+    assert.fail("The program should have failed")
+  }
+  const script = (code: string) => native.run(code, signal, { mode: "script", yield: false })
+  const compiled = calls.length
+  for (const [run, where] of [
+    [evaluate("let broken = (1"), /Unexpected end of input \(line 1\)/],
+    [evaluate("return 1"), /Illegal return statement/],
+    [script("return (1"), /ends before every bracket, string or statement is closed/],
+    [script("const a = 1\nlet c = ;"), /Unexpected token ';' \(line 2\)/],
+  ] as const) {
+    const failed = await fault(run)
+    assert.deepEqual([failed.code, failed.outcome], ["syntax-error", "not-dispatched"], failed.message)
+    assert.match(failed.message, where)
+    assert.match(failed.message, /did not run/)
+  }
+  assert.equal(calls.length, compiled, "a program that does not compile calls nothing")
+  for (const run of [
+    evaluate("await win.events(); JSON.parse('{')"),
+    evaluate("eval('(')"),
+    script("await control.window({pid:42,window_id:7}).events(); JSON.parse('{')"),
+  ]) {
+    const failed = await fault(run)
+    assert.notEqual(failed.code, "syntax-error", failed.message)
+    assert.equal(failed.outcome, undefined, "a runtime SyntaxError keeps an unknown outcome")
+  }
+  assert.equal(await evaluate("typeof win").then((value) => JSON.stringify(value).includes("object")), true, "a syntax error keeps REPL state")
+  summary.syntaxErrorsNotDispatched = true
   await evaluate(
     "void setTimeout(async()=>{try{await win.events()}catch(e){state.late=e.message}},30)"
   )
