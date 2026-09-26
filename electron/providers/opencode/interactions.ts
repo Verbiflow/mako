@@ -179,11 +179,11 @@ export class OpenCodeInteractions {
  * refusal back to the model, which is what a decline does in every other
  * harness; only a dismissed request (no choice) stops it.
  */
-export function openCodePermissionReply(sessionID: string, requestID: string, optionId: string | null) {
+export function openCodePermissionReply(sessionID: string, requestID: string, optionId: string | null): Parameters<OpenCodeClient["permission"]["reply"]>[0] {
   if (optionId === "once" || optionId === "always") return { sessionID, requestID, reply: optionId }
   return optionId === "reject"
-    ? { sessionID, requestID, reply: "reject" as const, message: "The user declined this tool request" }
-    : { sessionID, requestID, reply: "reject" as const }
+    ? { sessionID, requestID, reply: "reject", message: "The user declined this tool request" }
+    : { sessionID, requestID, reply: "reject" }
 }
 
 export function openCodeApprovalDigest(request: LivePermissionRequest, response: LivePermissionResponse): string | undefined {
