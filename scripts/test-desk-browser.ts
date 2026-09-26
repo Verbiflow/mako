@@ -360,6 +360,26 @@ try {
     assert.equal(remoteStatus?.origin, "http://127.0.0.1:5173")
     assert.match(remoteStatus?.guidance ?? "", /^A live client of the real Mako app, not a sandbox/,
       "Discovery warns that the desk changes the real app before anything mutates it")
+    assert.equal(remoteStatus?.fixture, undefined)
+    const fixtureRoot = join(registrationRoot, "fixture")
+    const removeFixture = publishDeskBrowserRegistration(
+      {
+        endpoint: await remoteDesk.start(),
+        origin: "http://127.0.0.1:5174",
+        profile: "fixture-0000",
+        sourceRoot: registrationRoot,
+        fixture: true,
+      },
+      fixtureRoot
+    )
+    try {
+      const [fixtureStatus] = await new BrowserService(() => registeredDeskBrowsers(fixtureRoot)).refresh()
+      assert.equal(fixtureStatus?.fixture, true)
+      assert.match(fixtureStatus?.guidance ?? "", /^A fixture desk on its own profile: its host refuses every write/,
+        "Discovery tells agents a fixture desk only reads")
+    } finally {
+      removeFixture()
+    }
     const remoteRun = (
       input: Parameters<typeof BrowserCommandSchema.parse>[0]
     ) =>
