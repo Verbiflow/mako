@@ -3,6 +3,10 @@ import { ControlPreviewImage } from "./control-preview-image"
 import { useEffect, useRef, useState } from "react"
 import { GlobeIcon, MonitorIcon, XIcon } from "lucide-react"
 import { useControlPreview, watchControlPreview } from "@/state/control-preview"
+import {
+  controlPreviewRateDescription,
+  type ControlPreviewRate,
+} from "@/lib/control-preview-painter"
 
 /** The containing timeline owns its position; this never creates a system window or portal. */
 export function ControlPreviewOverlay({
@@ -64,6 +68,7 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
   const preview = useControlPreview((state) => state.previews[id])
   useEffect(() => watchControlPreview(id), [id])
   const error = useControlPreview((state) => state.errors[id])
+  const [rate, setRate] = useState<ControlPreviewRate | null>(null)
   const frame = preview?.frame
   const activity = preview?.activity
   const nativeWindow = preview?.window
@@ -92,6 +97,7 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
               frame={frame}
               label="Live view of the tab this task is using"
               className="block max-h-64 w-full object-contain"
+              onRate={setRate}
             />
           )
         )}
@@ -124,6 +130,15 @@ function PreviewCard({ id, onClose }: { id: string; onClose: () => void }) {
         >
           <XIcon className="size-3.5" />
         </button>
+        {rate && !error && (
+          <span
+            data-control-preview-rate
+            title={controlPreviewRateDescription(rate)}
+            className="glass-control tabular absolute bottom-2 left-2 flex h-6 items-center rounded-full px-2 text-label text-muted-foreground"
+          >
+            {rate.shown} of {rate.full} fps
+          </span>
+        )}
         {error && (
           <p
             role="status"

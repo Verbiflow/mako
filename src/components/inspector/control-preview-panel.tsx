@@ -1,6 +1,10 @@
 import { NativeControlPreview } from "./native-control-preview"
 import { ControlPreviewImage } from "./control-preview-image"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
+import {
+  controlPreviewRateDescription,
+  type ControlPreviewRate,
+} from "@/lib/control-preview-painter"
 import { MonitorIcon, GlobeIcon } from "lucide-react"
 import { Blank } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
@@ -21,6 +25,7 @@ export function ControlPreviewPanel() {
     () => (conversationId ? watchControlPreview(conversationId) : undefined),
     [conversationId]
   )
+  const [rate, setRate] = useState<ControlPreviewRate | null>(null)
   const activity = preview?.activity
   const frame = preview?.frame
   const browser = activity?.kind === "browser"
@@ -105,6 +110,7 @@ export function ControlPreviewPanel() {
               className="block h-auto w-full object-contain"
               frame={frame}
               label={`${browser ? "Browser tab" : "Application window"} observed by this task`}
+              onRate={setRate}
             />
           </figure>
         ) : null}
@@ -114,6 +120,15 @@ export function ControlPreviewPanel() {
               ? activity.operation.replaceAll("_", " ")
               : "Waiting for the next observation"}
           </span>
+          {rate ? (
+            <span
+              data-control-preview-rate
+              title={controlPreviewRateDescription(rate)}
+              className="tabular shrink-0 text-faint"
+            >
+              {rate.shown} of {rate.full} fps
+            </span>
+          ) : null}
           {frame ? (
             <span className="tabular shrink-0 text-faint">
               {new Date(frame.capturedAt).toLocaleTimeString([], {

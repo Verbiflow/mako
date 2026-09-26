@@ -1,25 +1,36 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef } from "react"
 import type { ControlPreview } from "@/lib/types"
-import { createControlPreviewPainter } from "@/lib/control-preview-painter"
+import {
+  createControlPreviewPainter,
+  type ControlPreviewRate,
+} from "@/lib/control-preview-painter"
 
 /** Paints the device pixels the canvas occupies; CSS fits the box to its space. */
 export function ControlPreviewImage({
   frame,
   label,
   className,
+  onRate,
 }: {
   frame: NonNullable<ControlPreview["frame"]>
   label: string
   className?: string
+  onRate?: (rate: ControlPreviewRate | null) => void
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const painter = useRef<ReturnType<typeof createControlPreviewPainter> | null>(
     null
   )
+  const rate = useRef(onRate)
+  useLayoutEffect(() => {
+    rate.current = onRate
+  })
   useEffect(() => {
     const element = canvas.current
     if (!element) return
-    const value = createControlPreviewPainter(element)
+    const value = createControlPreviewPainter(element, (next) =>
+      rate.current?.(next)
+    )
     painter.current = value
     const viewport = globalThis.visualViewport
     let measured: [number, number] | undefined
@@ -50,6 +61,7 @@ export function ControlPreviewImage({
       viewport?.removeEventListener("resize", apply)
       value.close()
       painter.current = null
+      rate.current?.(null)
     }
   }, [])
   useEffect(() => {
