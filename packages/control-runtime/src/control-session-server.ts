@@ -13,7 +13,7 @@ import {
   controlInput,
   RecordingReceiptSchema,
 } from "@mako/control/control"
-import { spillImage } from "@mako/control/program"
+import { ControlProgramError, spillImage } from "@mako/control/program"
 import type { ControlSession } from "./control-session.js"
 import {
   CONTROL_SESSION_PROTOCOL,
@@ -67,34 +67,52 @@ export async function serveControlSession(
       case "js":
         return controlAgent(session)(operation, signal)
       case "exec": {
-        const blocks = await session.execute(
-          { source: operation.source },
-          signal,
-          { yield: false }
-        )
+        let blocks: Awaited<ReturnType<typeof session.execute>>
+        let failure: Error | undefined
+        try {
+          blocks = await session.execute(
+            { source: operation.source },
+            signal,
+            { yield: false }
+          )
+        } catch (error) {
+          if (!(error instanceof ControlProgramError) || !error.output.length) throw error
+          blocks = error.output
+          failure = error.cause
+        }
         const output = []
         for (const block of blocks) {
           if (block.type !== "image") {
             output.push(block)
             continue
           }
-          const directory = z
-            .object({ artifacts: z.string() })
-            .parse(await session.status()).artifacts
-          const receipt = await spillImage(
-            directory,
-            "script-image",
-            block.data,
-            block.mimeType
-          )
-          output.push({
-            type: "text",
-            text: JSON.stringify({
-              ...receipt,
-              note: "Explicit script image saved for shell tools.",
-            }),
-          })
+          try {
+            const directory = z
+              .object({ artifacts: z.string() })
+              .parse(await session.status()).artifacts
+            const receipt = await spillImage(
+              directory,
+              "script-image",
+              block.data,
+              block.mimeType
+            )
+            output.push({
+              type: "text",
+              text: JSON.stringify({
+                ...receipt,
+                note: "Explicit script image saved for shell tools.",
+              }),
+            })
+          } catch (error) {
+            // The program's own fault outranks a lost image receipt.
+            if (!failure) throw error
+            output.push({
+              type: "text",
+              text: JSON.stringify({ image: "unsaved", reason: error instanceof Error ? error.message : String(error) }),
+            })
+          }
         }
+        if (failure) throw new ControlProgramError(output, failure)
         return output
       }
       case "call":
@@ -227,7 +245,9 @@ export async function serveControlSession(
         .end(JSON.stringify({ ok: true, requestId, value }))
     })()
       .catch((error) => {
-        const detail = controlFaultData(error)
+        const partial = error instanceof ControlProgramError ? error.output : undefined
+        const cause = error instanceof ControlProgramError ? error.cause : error
+        const detail = controlFaultData(cause)
         outcome = detail?.outcome ?? outcome
         response.writeHead(200, { "content-type": "application/json" }).end(
           JSON.stringify({
@@ -240,11 +260,12 @@ export async function serveControlSession(
                   ? "invalid-request"
                   : "session-error"),
               message:
-                error instanceof Error
-                  ? error.message
+                cause instanceof Error
+                  ? cause.message
                   : "Local Control request failed",
               outcome,
             },
+            ...(partial?.length ? { output: partial } : {}),
           })
         )
       })

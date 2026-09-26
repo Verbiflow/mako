@@ -94,6 +94,8 @@ export const SessionReplySchema = z.discriminatedUnion("ok", [
       message: z.string(),
       outcome: z.enum(["not-dispatched", "rejected", "unknown"]),
     }),
+    /** Blocks a failed program emitted before its fault, images already saved. */
+    output: z.array(z.json()).optional(),
   }),
 ])
 

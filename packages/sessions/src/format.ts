@@ -347,6 +347,15 @@ export function titleFrom(text: string | undefined): string | undefined {
   return undefined
 }
 
+/**
+ * Mako prepends its Local Control instructions to every prompt it sends, so
+ * every native history stores them in the user's turn. Only that exact
+ * leading envelope is Mako's; anything else the user typed stays.
+ */
+export function withoutControlEnvelope(text: string): string {
+  return text.replace(/^<mako-local-control>\n[\s\S]*?\n<\/mako-local-control>\n\n/, "")
+}
+
 /** Clip tool payloads: catalogues and handoffs need shape, not megabytes. */
 export function clip(
   text: string | undefined,
@@ -386,6 +395,7 @@ export class EntrySink {
   snapshot(): ThreadEntry[] {
     for (const entry of this.entries) {
       if (entry.kind === "user") {
+        entry.text = withoutControlEnvelope(entry.text)
         const portable = extractAttachmentEnvelope(entry.text)
         if (portable.attachments.length) {
           entry.text = portable.text

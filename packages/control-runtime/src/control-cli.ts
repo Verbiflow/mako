@@ -489,12 +489,23 @@ export async function runControlCli(
       SessionOperationSchema.parse(operation),
       controller.signal
     )
-    if (!reply.ok)
+    if (!reply.ok) {
+      let shown = false
+      if (command === "exec" && reply.output?.length) {
+        // Completed steps' output, in the success shape; the fault still decides the exit code.
+        try {
+          await output(execBlocks(reply.output))
+          shown = true
+        } catch {
+          // An unreadable result must not replace the program's own fault.
+        }
+      }
       throw new ControlFault(
         reply.fault.code,
-        reply.fault.message,
+        shown ? `${reply.fault.message} Output emitted before the failure is on stdout.` : reply.fault.message,
         reply.fault.outcome
       )
+    }
     // The engine has already completed this command. Failure to consume or
     // publish its result must never be presented as a pre-dispatch input error.
     try {
@@ -523,32 +534,7 @@ export async function runControlCli(
           value,
           values.overwrite ?? false
         )
-      if (command === "exec") {
-        // The service saves explicit images as artifacts; ordinary values stay lossless.
-        value = z
-          .array(z.record(z.string(), z.json()))
-          .parse(value)
-          .map((block) => {
-            if (block.type === "image")
-              throw new ControlFault(
-                "invalid-image-reply",
-                "Engine returned inline image data instead of a saved artifact. Do not replay the program.",
-                "unknown"
-              )
-            const text = z.string().safeParse(block.text)
-            if (block.type === "text" && text.success) {
-              try {
-                return {
-                  type: "result",
-                  value: z.json().parse(JSON.parse(text.data)),
-                }
-              } catch {
-                return block
-              }
-            }
-            return block
-          })
-      }
+      if (command === "exec") value = execBlocks(value)
       const failedRecording =
         command === "record" &&
         ["failed", "interrupted"].includes(

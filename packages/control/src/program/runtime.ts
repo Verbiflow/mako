@@ -78,7 +78,8 @@ export interface ControlProgramExecution {
   timeoutMs?: number
 }
 
-/** Keep already-emitted evidence when a later statement fails. */
+/** Keep already-emitted evidence when a later statement fails, times out or
+ * is cancelled. `cause` carries the fault; consumers report both. */
 export class ControlProgramError extends Error {
   constructor(readonly output: ControlProgramOutput[], readonly cause: Error) {
     super(cause.message)
@@ -320,9 +321,7 @@ export class ControlProgramRuntime {
             this.worker = undefined
             void worker.terminate()
           }
-          if (execution.mode === "repl")
-            void Promise.all(output).then(blocks => reject(new ControlProgramError(blocks, error)), reject)
-          else reject(error)
+          void Promise.all(output).then(blocks => reject(new ControlProgramError(blocks, error)), reject)
         } else Promise.all(output).then(resolve, reject)
       }
       const receipt = (pending: Promise<{ artifact: true }>) =>
