@@ -1,6 +1,8 @@
-import {spawn, execFile} from "node:child_process"
+import {execFile} from "node:child_process"
+import {randomUUID} from "node:crypto"
+import {readFileSync} from "node:fs"
 import {promisify} from "node:util"
-import {writeFile, readFile} from "node:fs/promises"
+import {mkdir, writeFile, readFile} from "node:fs/promises"
 import {join} from "node:path"
 import {setTimeout as delay} from "node:timers/promises"
 
@@ -63,22 +65,42 @@ Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
 app.run()
 `
 
-/** Native AppKit fixture; Electron input is covered separately through pages. */
+const alive=(pid)=>{ try { process.kill(pid,0); return true } catch { return false } }
+
+/** Native AppKit fixture; Electron input is covered separately through pages.
+ * AppKit activates a directly executed app when it finishes launching, before
+ * any control call. `open -g` asks LaunchServices not to activate the bundle. */
 export async function startCocoaFixture({root,title}) {
-  const source=join(root,"native-proof.swift"), binary=join(root,"native-proof"), status=join(root,"native-proof.json")
+  const source=join(root,"native-proof.swift"), bundle=join(root,"Native Proof.app"), status=join(root,"native-proof.json")
+  await mkdir(join(bundle,"Contents/MacOS"),{recursive:true})
+  await writeFile(join(bundle,"Contents/Info.plist"),`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>native-proof</string>
+<key>CFBundleIdentifier</key><string>dev.mako.test.native-proof.${randomUUID()}</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+</dict></plist>
+`)
   await writeFile(source,cocoaFixtureSource.replace('"Mako cocoa fixture"',JSON.stringify(title)))
-  await promisify(execFile)("xcrun",["swiftc","-O","-o",binary,source],{timeout:180000})
-  const child=spawn(binary,[status],{stdio:"ignore"})
+  await promisify(execFile)("xcrun",["swiftc","-O","-o",join(bundle,"Contents/MacOS/native-proof"),source],{timeout:180000})
+  await promisify(execFile)("open",["-g","-n",bundle,"--args",status],{timeout:30000})
   const state=async()=>JSON.parse(await readFile(status,"utf8"))
+  let pid
   async function until(check,what,timeoutMs=15000) {
     const deadline=Date.now()+timeoutMs
     while(Date.now()<deadline) {
       const result=await check().catch(()=>undefined)
       if(result) return result
-      if(child.exitCode!==null) throw Error("Native fixture exited")
+      if(pid!==undefined&&!alive(pid)) throw Error("Native fixture exited")
       await delay(30)
     }
     throw Error(`Fixture condition timed out: ${what}`)
   }
-  return {state,until,started:()=>until(state,"native fixture startup"),stop:()=>child.kill("SIGTERM")}
+  const started=async()=>{ const value=await until(state,"native fixture startup"); pid=value.pid; return value }
+  const stop=()=>{
+    try { pid??=JSON.parse(readFileSync(status,"utf8")).pid } catch {}
+    if(pid!==undefined&&alive(pid)) process.kill(pid,"SIGTERM")
+  }
+  return {state,until,started,stop}
 }
