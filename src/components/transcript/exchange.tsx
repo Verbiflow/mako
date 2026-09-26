@@ -35,7 +35,7 @@ import {
   restoreThreadReferences,
 } from "@/lib/thread-references"
 import {
-  isInterruptedNote,
+  notesBesideStop,
   responseSections,
   responseText,
   type Exchange as ExchangeData,
@@ -91,18 +91,9 @@ export const Exchange = memo(function Exchange({
   continues?: TurnContinuation
   failed?: boolean
 }) {
-  // The footer says a turn stopped; the provider's own marker at the end of
-  // the same turn would say it twice.
   const stopShown = Boolean(interrupted) && !streaming
   const notes = useMemo(
-    () =>
-      stopShown
-        ? exchange.system.filter(
-            (note) =>
-              note.after < exchange.response.length ||
-              !isInterruptedNote(note.message)
-          )
-        : exchange.system,
+    () => (stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system),
     [exchange.system, exchange.response.length, stopShown]
   )
   const sections = useMemo(

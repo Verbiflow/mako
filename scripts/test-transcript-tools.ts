@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { pairTools, foldTools } from "../src/lib/tools.ts"
 import { threadToMessages } from "../src/lib/foreign-thread.ts"
-import { isInterruptedNote, responseSections, toExchanges } from "../src/lib/exchanges.ts"
+import { isInterruptedNote, notesBesideStop, responseSections, toExchanges } from "../src/lib/exchanges.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
 import type { AttachmentContent } from "@mako/sessions"
 
@@ -334,7 +334,14 @@ assert.ok(
   isInterruptedNote({ id: "n", role: "system", blocks: [{ type: "text", text: "Interrupted" }] }) &&
     !isInterruptedNote({ id: "n", role: "system", blocks: [{ type: "text", text: "Context compacted" }] })
 )
-console.log("Compaction and other notes render where they happened in a long answer")
+const note = (id: string, text: string, after: number) => ({ message: { id, role: "system" as const, blocks: [{ type: "text" as const, text }] }, after })
+assert.deepEqual(
+  notesBesideStop([note("lead", "Interrupted", 0), note("steer", "Interrupted", 1), note("summary", "Context compacted", 2), note("end", "Interrupted", 3)], 3)
+    .map((kept) => kept.message.id),
+  ["steer", "summary"],
+  "With a Stopped footer, the provider's marker above or below the answer goes; a marker between parts of it stays"
+)
+console.log("Compaction and other notes render where they happened in a long answer; a stopped turn says so once")
 
 const controlEnvelope = '<mako-local-control>\nBrowser and computer use: fixture setup\n</mako-local-control>\n\n'
 assert.equal(codexPrompt(controlEnvelope + '<send_user_message_question_reply>\n[{"question":"Which profile?","answer":"Existing"}]\n</send_user_message_question_reply>'), 'Which profile?\n\nExisting')

@@ -59,6 +59,17 @@ export function isInterruptedNote(message: ChatMessage): boolean {
   )
 }
 
+/**
+ * The notes a turn shows once its footer says it stopped. The provider's own
+ * marker at either edge of the answer repeats the footer; one between parts
+ * of the answer marks where it was cut (a steer) and stays.
+ */
+export function notesBesideStop(notes: readonly ExchangeNote[], responses: number): ExchangeNote[] {
+  return notes.filter(
+    (note) => !isInterruptedNote(note.message) || (note.after > 0 && note.after < responses)
+  )
+}
+
 /** `notes` must be ordered by `after`; notes at zero belong above the answer and are skipped. */
 export function responseSections(
   messages: ChatMessage[],
