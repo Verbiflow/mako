@@ -26,6 +26,7 @@ export interface BrowserControlStatus {
   profile?: string
   origin?: string
   sourceRoot?: string
+  fixture?: true
   connection: BrowserConnectionState
 }
 
