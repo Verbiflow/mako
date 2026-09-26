@@ -80,6 +80,7 @@ import {
   BrowserTargetSchema,
 } from "./contracts/browser-control.js"
 import {
+  ComputerDriverExitedError,
   connectMcpComputerDriver,
   type ComputerDriverClient,
   type ComputerDriverConnector,
@@ -211,6 +212,17 @@ const programImageReceiptSchema = z.object({
 const FRONTING_NOTE_ACTIONS: ReadonlySet<string> = new Set([
   "invoke_menu",
   "bring_to_front",
+])
+/** Driver reads that dispatch no app input. Unknown tools are conservatively
+ * treated as mutations; never infer safety from a tool's spelling. */
+const NATIVE_READ_TOOLS: ReadonlySet<string> = new Set([
+  "list_apps",
+  "list_windows",
+  "get_config",
+  "get_window_state",
+  "get_accessibility_tree",
+  "screenshot",
+  "zoom",
 ])
 /** Keys the driver repeats in every window-state result that agents rarely need. */
 const VERBOSE_WINDOW_STATE_KEYS = ["tree_markdown", "_note"]
@@ -892,6 +904,18 @@ export function createControlSession(
     (process.env.MAKO_CONTROL_URL && process.env.MAKO_CONTROL_TOKEN
       ? browserControlClient()
       : undefined)
+  // A driver's tokens die with its process: this voids native evidence, not
+  // browser evidence or unresolved effects. A lost driver is not proof an
+  // action failed.
+  const retireNativeEvidence = () => {
+    snapshots.clear()
+    for (const key of new Set([
+      ...controlViews.keys(),
+      ...controlVisuals.keys(),
+    ]))
+      if (ControlTargetSchema.parse(JSON.parse(key)).kind === "window")
+        invalidateControlTarget(key)
+  }
   const tools = () => {
     starting ??= (async () => {
       if (closed) throw new Error("Computer control connection is closed")
@@ -903,19 +927,17 @@ export function createControlSession(
       }
       client = connection
       session = `mako-${taskId}-${randomUUID().slice(0, 8)}`
-      snapshots.clear()
-      // Driver reconnect invalidates native evidence, not browser evidence or
-      // unresolved effects. A new transport is not proof an action failed.
-      for (const key of new Set([
-        ...controlViews.keys(),
-        ...controlVisuals.keys(),
-      ]))
-        if (ControlTargetSchema.parse(JSON.parse(key)).kind === "window")
-          invalidateControlTarget(key)
+      retireNativeEvidence()
       connection.onClose(() => {
         if (client !== connection) return
         nativeRecordings.connectionEnded()
         starting = undefined
+        // Refs checked before the next call reconnects must already be void.
+        retireNativeEvidence()
+        // Driver-surface programs expose this driver's tool list, which a new
+        // driver may change. Control programs do not, and a running program
+        // must see the native call's own fault rather than be cancelled.
+        if (unified) return
         void runtime?.close()
         runtime = undefined
       })
@@ -1139,12 +1161,27 @@ export function createControlSession(
     const startedAt = Date.now()
     const driverArgs = computerArgumentsSchema.parse(args)
     beforeDispatch?.(driverArgs)
-    const raw = toolResultSchema.parse(
-      await connection.callTool(tool.name, driverArgs, {
+    let reply: Awaited<ReturnType<ComputerDriverClient["callTool"]>>
+    try {
+      reply = await connection.callTool(tool.name, driverArgs, {
         signal,
         timeout: 60_000,
       })
-    )
+    } catch (error) {
+      if (!(error instanceof ComputerDriverExitedError) || closed) throw error
+      throw NATIVE_READ_TOOLS.has(tool.name)
+        ? new ControlFault(
+            "driver-exited",
+            "The native driver stopped during this read. No view was returned and nothing was dispatched; Mako restarts the driver on the next call, so observe again.",
+            "rejected"
+          )
+        : new ControlFault(
+            "driver-exited",
+            "The native driver stopped while this action was in flight. It may have partly happened (for example, only some keys typed). Mako restarts the driver on the next call and never retries the action: observe the target before continuing.",
+            "unknown"
+          )
+    }
+    const raw = toolResultSchema.parse(reply)
     if (tool.name === "get_window_state")
       rememberSnapshot(raw.structuredContent)
     // A session start resets the session's cursor; quiet it again.
@@ -2188,17 +2225,7 @@ export function createControlSession(
       "Use handle.raw(name,args) with a method name and JSON object; consult control help for its schema."
     )
     if (backend === "native") {
-      // These reads do not dispatch app input. Unknown tools are conservatively
-      // treated as mutations; never infer safety from a tool's spelling.
-      const readOnly = new Set([
-        "list_apps",
-        "list_windows",
-        "get_config",
-        "get_window_state",
-        "get_accessibility_tree",
-        "screenshot",
-        "zoom",
-      ]).has(request.name)
+      const readOnly = NATIVE_READ_TOOLS.has(request.name)
       const token = tokenSchema.safeParse(request.args.element_token).data
       const snapshotId =
         token?.split(":")[0] ??

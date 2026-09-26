@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import type { Tool } from "@modelcontextprotocol/sdk/types.js"
+import { ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js"
 import type { JsonObject } from "./json.js"
 import { driverSchemaValidator } from "./driver-schema.js"
 import { z } from "zod"
@@ -39,6 +39,14 @@ export interface ComputerDriverClient {
   close(): Promise<void>
 }
 
+/** The driver process or its transport ended while this call was in flight. */
+export class ComputerDriverExitedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("The native driver stopped during the call", options)
+    this.name = "ComputerDriverExitedError"
+  }
+}
+
 export type ComputerDriverConnector = (
   process: ComputerDriverProcess
 ) => Promise<ComputerDriverClient>
@@ -61,15 +69,21 @@ class McpComputerDriverClient implements ComputerDriverClient {
     args: JsonObject,
     options: ComputerDriverCallOptions = {}
   ): Promise<ComputerDriverResult> {
-    return ComputerDriverResultSchema.parse(
-      await this.client.callTool(
+    let result: unknown
+    try {
+      result = await this.client.callTool(
         { name, arguments: args },
         undefined,
         options.signal || options.timeout
           ? { signal: options.signal, timeout: options.timeout }
           : undefined
       )
-    )
+    } catch (error) {
+      if (error instanceof McpError && error.code === ErrorCode.ConnectionClosed)
+        throw new ComputerDriverExitedError({ cause: error })
+      throw error
+    }
+    return ComputerDriverResultSchema.parse(result)
   }
 
   onClose(listener: () => void): void {
