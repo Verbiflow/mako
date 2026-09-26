@@ -593,9 +593,49 @@ flight and coalesces notifications that arrive meanwhile. Each frame therefore
 costs a host → main → renderer notification plus a renderer → main → host → main →
 renderer read. Contention stretches each hop, and frames beyond one in flight are
 merged away. A parked next-frame read would cut this to one delivery hop without
-changing pixels or transport encoding. Not implemented; awaiting a decision.
+changing pixels or transport encoding. It was built and measured next (below) and
+did not help.
 
 Installation: the default host's only work was this Mako-hosted task, so a
 one-shot launchd job (`install-after-idle.mjs`, plist alongside) reserved the host,
 requested quit after work and waits without force-stopping. `install-state.json`
-records the actual outcome; the installed acceptance jobs are still to run.
+records the actual outcome. Installed acceptance later passed (see the map).
+
+### Parked next-frame preview read (measured, reverted)
+
+The host held a preview read that already had the current frame until the next
+frame arrived (at most 1 s, only while a browser stream was live). The renderer
+issued its next read as soon as a new frame came back. Unit, media-transport, web
+proxy and web delivery tests passed. Two-minute source-host runs, Aside, two viewers,
+recording on, all with exact inputs and zero pixel differences
+(`release/parked-20260926/`, `summary.mjs` prints the table):
+
+| Arm | Load | Preview fps | Reads per host notification |
+| --- | --- | --- | --- |
+| Not parked, no workers | 8.3 / 8.8 | 59.30 / 59.45 | 1.99 |
+| Parked, no workers | 10.0 / 9.7 | 59.66 / 59.37 | 1.00 |
+| Not parked, 2 workers | 12.2 / 13.5 | 59.00 / 58.33 | 1.96 |
+| Parked, 2 workers | 14.5 / 11.6 | 59.00 / 59.17 | 1.00 |
+| Original pull loop, 4 workers | 16.5 / 24.2 | 47.97 / 26.68 | 0.86 / 0.51 |
+| Parked, 4 workers | 18.6 / 21.7 | 49.03 / 34.71 | 0.88 / 0.63 |
+
+The first eight runs were interleaved U-P-U-P-P-U-P-U. Their "not parked" arm ran
+the new renderer against a host that ignores the held frame, the case of a new
+client on an older host: each new frame cost a second, wasted read. The heavy runs
+(ABBA) compare against the original pull loop. Load rose through that series, and
+fps followed load in both arms. Click-to-visible p50 was unchanged (about 61 ms
+unloaded).
+
+Conclusions: parking saves no measurable frames at any load tested. At load 21.7
+even parked reads fell to 0.63 per frame, so the loss comes from per-frame viewer
+and host work starved of CPU, not from the notification hop. Reverted. Remaining
+levers: less per-frame viewer work (each viewer now decodes and paints a full
+1920×1080 frame), or a lower preview rate under contention, reported the way
+recording already reports skipped frames.
+
+Found alongside: a web client restarting Mako showed a spurious "Quit Mako?"
+dialog. With no agents running, a restart asks every client to shut down. The web
+bridge forwarded `mako:quit-client` to the host, which hides the desktop windows
+and Dock icon; while the host was exiting the call failed and opened the quit
+dialog. The web bridge now answers quit itself, as the desktop client does;
+`test-web-delivery.mjs` fails without the fix.

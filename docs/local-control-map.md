@@ -168,12 +168,17 @@ Next:
    viewer reads fall to 51–56/s under load. The production viewer pulls frames
    (notification, then a renderer → main → host read, one in flight, extra
    notifications coalesced), so any hop slowed by CPU contention costs frames.
-   Candidate fix awaiting user choice: keep one read parked at the host that returns
-   the next frame as soon as it exists, removing the notification hop and round
-   trip. Develop and verify it through `npm run web` (source host plus Vite
-   renderer, restarted onto the current build) before packaging. Process priority is weaker on macOS: without root Mako can only lower
-   other work (for example agent subprocesses), not raise itself.
-   [Stage breakdown](local-control-media-fixes.md#candidate-6ac3f4fbd690b74d-and-preview-stage-breakdown).
+   A parked next-frame read (host holds the read until the next frame) was built,
+   measured and reverted. At load 8–14.5 both arms held 58.3–59.7 fps. Under four
+   load workers (load 16.5–24) fps followed load in both (original 47.97/26.68,
+   parked 49.03/34.71), and parked reads still fell to 0.63 per frame. The loss is
+   CPU-starved per-frame work, not the notification hop. Decision needed: reduce
+   per-frame viewer work (each viewer decodes and paints full 1920×1080), or accept
+   a lower preview rate under contention and report it as recording does. Process
+   priority is weaker on macOS: without root Mako can only lower other work (for
+   example agent subprocesses), not raise itself.
+   [Stage breakdown](local-control-media-fixes.md#candidate-6ac3f4fbd690b74d-and-preview-stage-breakdown),
+   [parked-read A/B](local-control-media-fixes.md#parked-next-frame-preview-read-measured-reverted).
 3. Native fixture startup is fixed. The private-driver right/double-click
    recording passes with Aside frontmost (65/65 foreground samples) and with Mako
    frontmost (72/72 samples plus every call; fixture never foreground). One of six
@@ -181,6 +186,8 @@ Next:
    and recording checks still pass.
 4. Install receipt and host wake are fixed and included in the queued candidate.
    [Fixture, receipt and wake evidence](local-control-media-fixes.md#fixture-startup-install-receipt-and-host-wake-local-follow-up).
+5. Restarting from a web client no longer opens a stray "Quit Mako?" dialog or
+   asks the host to hide its desktop windows (local, verified in `npm run web`).
 
 [Media fixes and previous attempts](local-control-media-fixes.md) retain the
 source/candidate tests, failed installers and exact driver lifecycle evidence.
