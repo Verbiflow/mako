@@ -8,21 +8,39 @@ import type { ApprovalDispatch } from "../live-driver.js"
 import { RetainedApprovalDecisions, readRetainedApprovalDecisions } from "../retained-approval-decisions.js"
 import { readLegacyOpenCodeDecisions } from "./legacy-approval-decisions.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
+import { hostWarn } from "../../host-log.js"
 import { NativeForm, openCodeQuestions, openCodeFormAnswer, openCodeAnswerDigest } from "./forms.js"
+import { openCodeToolKind } from "./content.js"
 
-const NativePermission = z.object({ id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), action: z.string(), message: z.string().optional(), resources: z.array(z.string()) })
+const NativePermission = z.object({
+  id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), action: z.string(), message: z.string().optional(),
+  resources: z.array(z.string()), save: z.array(z.string()).optional(),
+  source: z.object({ type: z.literal("tool"), id: z.string() }).optional(),
+})
+type NativePermission = z.infer<typeof NativePermission>
 interface Pending { request: LivePermissionRequest; kind: "form" | "permission"; sessionID: string; id: string; sending: boolean }
+/** Retained per connection; older completions leave first. */
+const MAX_COMPLETED = 2000
+const MAX_PENDING = 256
+
+interface InteractionsInput {
+  client: OpenCodeClient; root: string; conversationId: string;
+  owns(sessionID: string): boolean; emit(event: LiveDriverEvent): void
+  /** The live row title of the tool that asked, and a child session's label. */
+  describe?(sessionID: string, toolID: string | undefined): { title?: string; prefix?: string }
+}
 
 /** Native wire and exact occurrence ownership; the shared host owns receipts/UI. */
 export class OpenCodeInteractions {
+  private readonly input: InteractionsInput
   private readonly store: RetainedApprovalDecisions
   private readonly pending = new Map<string, Pending>()
   private readonly completed = new Set<string>()
   private stopped = false
-  constructor(private readonly input: {
-    client: OpenCodeClient; root: string; conversationId: string;
-    owns(sessionID: string): boolean; emit(event: LiveDriverEvent): void
-  }) { this.store = new RetainedApprovalDecisions(join(input.root, "opencode-native")) }
+  constructor(input: InteractionsInput) {
+    this.input = input
+    this.store = new RetainedApprovalDecisions(join(input.root, "opencode-native"))
+  }
 
   async restore(previous: readonly NativeApprovalIdentity[]): Promise<void> {
     for (const decision of [
@@ -35,11 +53,10 @@ export class OpenCodeInteractions {
     if (event.type === "form.created") {
       if (!this.input.owns(event.data.form.sessionID)) return
       const form = NativeForm.parse(event.data.form)
-      this.add("form", form.sessionID, form.id, form.title, openCodeQuestions(form))
+      this.add("form", form.sessionID, form.id, this.formTitle(form.sessionID, form.title), openCodeQuestions(form))
     } else if (event.type === "permission.asked") {
       if (!this.input.owns(event.data.sessionID)) return
-      const permission = NativePermission.parse(event.data)
-      this.add("permission", permission.sessionID, permission.id, permission.message ?? `${permission.action}: ${permission.resources.join(", ")}`)
+      this.permission(NativePermission.parse(event.data))
     } else if (event.type === "form.replied") {
       await this.decide(event.data.sessionID, event.data.id, openCodeAnswerDigest(event.data.answer), event.created)
     } else if (event.type === "permission.replied") {
@@ -48,20 +65,35 @@ export class OpenCodeInteractions {
       await this.decide(event.data.sessionID, event.data.id, approvalAnswerDigest({ kind: "choice", optionId: null }), event.created)
     }
   }
+  private formTitle(sessionID: string, title: string): string {
+    const prefix = this.input.describe?.(sessionID, undefined).prefix
+    return prefix ? `${prefix}${title}` : title
+  }
+  private permission(permission: NativePermission): void {
+    const described = this.input.describe?.(permission.sessionID, permission.source?.id) ?? {}
+    const subject = permission.message ?? described.title ?? (permission.resources.join(", ") || permission.action)
+    const save = permission.save?.filter(pattern => pattern !== "*") ?? []
+    this.add("permission", permission.sessionID, permission.id, `${described.prefix ?? ""}${subject}`, undefined, openCodeToolKind(permission.action), [
+      { optionId: "once", name: "Allow once", kind: "allow_once" },
+      // OpenCode saves "always" as a project rule for these patterns, beyond this session.
+      { optionId: "always", name: save.length ? `Always allow ${save.join(", ")}` : "Always allow", kind: "allow_always" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ])
+  }
   private key(sessionID: string, id: string): string { return JSON.stringify([sessionID, id]) }
-  private add(kind: Pending["kind"], sessionID: string, id: string, title: string, questions?: LivePermissionRequest["questions"]): void {
+  private add(kind: Pending["kind"], sessionID: string, id: string, title: string, questions?: LivePermissionRequest["questions"],
+    toolKind?: string, options: LivePermissionRequest["options"] = []): void {
     const key = this.key(sessionID, id)
     if (this.pending.has(key) || this.completed.has(key)) return
-    if (this.pending.size + this.completed.size >= 2000) throw new Error("OpenCode interaction capacity reached")
+    if (this.pending.size >= MAX_PENDING) {
+      hostWarn("opencode", "more native requests are pending than one conversation can show", { conversation: this.input.conversationId })
+      return
+    }
     const request: LivePermissionRequest = {
       id: randomUUID(), observationId: randomUUID(), sessionId: this.input.conversationId,
-      native: { scope: this.store.scope, sessionId: sessionID, requestId: id }, title, questions,
-      options: kind === "form" ? [] : [
-        { optionId: "once", name: "Allow once", kind: "allow_once" },
-        { optionId: "always", name: "Allow for session", kind: "allow_always" },
-        { optionId: "reject", name: "Decline", kind: "reject_once" },
-      ],
+      native: { scope: this.store.scope, sessionId: sessionID, requestId: id }, title, questions, options,
     }
+    if (toolKind) request.kind = toolKind
     this.pending.set(key, { request, kind, sessionID, id, sending: false })
     this.input.emit({ type: "live-permission", request })
   }
@@ -69,27 +101,44 @@ export class OpenCodeInteractions {
     const key = this.key(sessionID, id)
     const pending = this.pending.get(key)
     if (!pending?.request.native || this.stopped) return
-    const decision = await this.store.record({ identity: pending.request.native, answerDigest, observedAt })
-    if (this.stopped) return
-    this.input.emit({ type: "live-approval-decision", id: this.input.conversationId, decision })
+    // The native resolution ends the request whether or not its evidence is retained.
     this.end(key, pending, "native-resolution")
+    try {
+      const decision = await this.store.record({ identity: pending.request.native, answerDigest, observedAt })
+      if (!this.stopped) this.input.emit({ type: "live-approval-decision", id: this.input.conversationId, decision })
+    } catch (error) {
+      hostWarn("opencode", "a native decision could not be retained", { conversation: this.input.conversationId, error: error instanceof Error ? error.message : String(error) })
+    }
   }
   private end(key: string, pending: Pending, source: "native-resolution" | "connection-close"): void {
     this.pending.delete(key)
     this.completed.add(key)
+    if (this.completed.size > MAX_COMPLETED) this.completed.delete(this.completed.values().next().value!)
     this.input.emit({ type: "live-permission-ended", id: this.input.conversationId, requestId: pending.request.id,
       observationId: pending.request.observationId!, source })
   }
+  /** Native state after a gap in the event stream. Requests that vanished were resolved natively. */
   async reconcile(sessionID: string): Promise<void> {
-    for (const form of await this.input.client.form.list({ sessionID })) {
+    if (this.stopped) return
+    const forms = await this.input.client.form.list({ sessionID })
+    const permissions = await this.input.client.permission.list({ sessionID })
+    for (const form of forms) {
       const parsed = NativeForm.parse(form)
-      this.add("form", sessionID, parsed.id, parsed.title, openCodeQuestions(parsed))
+      this.add("form", sessionID, parsed.id, this.formTitle(sessionID, parsed.title), openCodeQuestions(parsed))
     }
-    for (const permission of await this.input.client.permission.list({ sessionID })) {
+    const open = new Set<string>()
+    for (const permission of permissions) {
       const parsed = NativePermission.parse(permission)
-      this.add("permission", sessionID, parsed.id, parsed.message ?? parsed.action)
+      open.add(parsed.id)
+      this.permission(parsed)
     }
-    for (const pending of [...this.pending.values()]) if (pending.kind === "form" && pending.sessionID === sessionID) {
+    for (const [key, pending] of [...this.pending]) {
+      if (pending.sessionID !== sessionID) continue
+      if (pending.kind === "permission") {
+        // Permission APIs keep no answer history; only the event carries the choice.
+        if (!open.has(pending.id)) this.end(key, pending, "native-resolution")
+        continue
+      }
       const state = await this.input.client.form.state({ sessionID, formID: pending.id })
       if (state.status === "answered") await this.decide(sessionID, pending.id, openCodeAnswerDigest(state.answer), Date.now())
       else if (state.status === "cancelled") await this.decide(sessionID, pending.id, approvalAnswerDigest({ kind: "choice", optionId: null }), Date.now())
@@ -115,8 +164,7 @@ export class OpenCodeInteractions {
       dispatch.report({ kind: "uncertain", reason: error instanceof Error ? error.message : "Native answer response was lost" })
     }
     // A form state is independent native evidence even when the reply was lost.
-    // Permission APIs expose no consumed-answer history; only their event can confirm it.
-    if (pending.kind === "form") await this.reconcile(pending.sessionID)
+    if (pending.kind === "form") await this.reconcile(pending.sessionID).catch(() => {})
   }
   async close(): Promise<void> {
     if (this.stopped) return

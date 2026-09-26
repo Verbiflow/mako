@@ -1,63 +1,23 @@
-import { statSync } from "node:fs"
-import { readFile } from "node:fs/promises"
+import { existsSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { z } from "zod"
-import {
-  normalizeOpenCodeModels,
-  type OpenCodeModelRow,
-} from "@mako/sessions/model-catalog"
+import type { OpenCodeEvent } from "@opencode/client"
+import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import {
   availableProviderProfile,
   type ProviderProfileLoader,
 } from "../profile-loader.js"
-import { runDiscovery } from "../profile-transport.js"
+import { ProviderLaunchTrace } from "../../provider-launch.js"
 import { resolveOpenCodeInstallation } from "./installation.js"
+import { startOpenCodeApi } from "./native-api.js"
+import { loadOpenCodeCatalog, openCodeLaunchId, type OpenCodeCatalog } from "./catalog.js"
 
-const CacheModelSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    family: z.string().optional(),
-    status: z.string().optional(),
-    reasoning: z.boolean().optional(),
-    reasoning_options: z
-      .union([
-        z.record(z.string(), z.unknown()),
-        z.array(
-          z.object({
-            type: z.string(),
-            values: z.array(z.string()),
-          })
-        ),
-      ])
-      .optional(),
-    attachment: z.boolean().optional(),
-    limit: z
-      .object({
-        context: z.number().optional(),
-        output: z.number().optional(),
-      })
-      .optional(),
-  })
-  .passthrough()
-
-const CacheProviderSchema = z
-  .object({ models: z.record(z.string(), z.unknown()) })
-  .passthrough()
-const CacheSchema = z.record(z.string(), z.unknown())
-const DefaultModelSchema = z.object({
-  data: z.object({
-    id: z.string().min(1),
-    providerID: z.string().min(1),
-    variants: z.array(z.object({ id: z.string().min(1) })).optional(),
-  }),
-})
+const CATALOG_EVENTS = new Set<OpenCodeEvent["type"]>(["catalog.updated", "agent.updated", "command.updated", "skill.updated"])
 
 export const openCodeProfileLoader: ProviderProfileLoader = {
   provider: "opencode",
   label: "OpenCode",
-  transport: "acp",
+  transport: "sdk",
   capabilities: [
     "start",
     "resume",
@@ -72,7 +32,8 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
     "agents",
   ],
   cacheKey: (env) => {
-    const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.OPENCODE_BIN_PATH, env.OPENCODE2_BIN_PATH])
+    const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_CONFIG_HOME, env.OPENCODE_CONFIG_DIR,
+      env.OPENCODE_CONFIG, env.OPENCODE_CONFIG_CONTENT, env.OPENCODE_BIN_PATH, env.OPENCODE2_BIN_PATH])
     try {
       const info = statSync(
         join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "auth.json")
@@ -84,140 +45,61 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
   },
   async load(env, cwd) {
     const installation = await resolveOpenCodeInstallation(env)
-    let output = await runDiscovery(
-      installation.command,
-      ["models"],
-      env,
-      undefined,
-      cwd
-    )
-    // OpenCode v2 registers a cold workspace on its first request and can
-    // return an empty successful response. Read again after that completes.
-    if (!output.trim()) {
-      output = await runDiscovery(
-        installation.command,
-        ["models"],
-        env,
-        undefined,
-        cwd
-      )
-    }
-    const rows = await v2Models(output, env)
-    const catalog = normalizeOpenCodeModels(rows)
+    const directory = cwd && existsSync(cwd) ? cwd : homedir()
+    const catalog = await discoverOpenCodeCatalog(installation.command, env, directory)
     if (!catalog.models.length)
-      throw new Error(
-        "OpenCode did not report any models after workspace initialization"
-      )
-    try {
-      const query = cwd
-        ? `?location[directory]=${encodeURIComponent(cwd)}`
-        : ""
-      const response = DefaultModelSchema.parse(
-        JSON.parse(
-          await runDiscovery(
-            installation.command,
-            ["api", "GET", `/api/model/default${query}`],
-            env,
-            undefined,
-            cwd
-          )
-        )
-      )
-      const identity = `${response.data.providerID}/${response.data.id}`
-      const model = catalog.models.find((model) => model.id === identity)
-      if (!model)
-        throw new Error(
-          "OpenCode's default model is missing from its catalog"
-        )
-      if (response.data.variants) {
-        const variants = response.data.variants.map((variant) => variant.id)
-        model.options = normalizeOpenCodeModels([
-          {
-            id: response.data.id,
-            providerID: response.data.providerID,
-            variants: Object.fromEntries(variants.map((id) => [id, {}])),
-            defaultVariant: variants.includes("default")
-              ? "default"
-              : variants[0],
-          },
-        ]).models.flatMap((entry) => entry.options)
-      }
-      catalog.defaultModel = identity
-      catalog.settings = {
-        model: identity,
+      throw new Error("OpenCode reported no enabled models for this workspace")
+    const profile: HarnessModelCatalog = { models: catalog.models }
+    const fallback = catalog.defaultModel && openCodeLaunchId(catalog.defaultModel)
+    const model = fallback ? catalog.models.find((candidate) => candidate.id === fallback) : undefined
+    if (model) {
+      profile.defaultModel = model.id
+      profile.settings = {
+        model: model.id,
         options: Object.fromEntries(
           model.options.flatMap((option) =>
             option.current === undefined ? [] : [[option.id, option.current]]
           )
         ),
       }
-    } catch {
-      catalog.configurationError =
-        "OpenCode did not report its resolved configuration. Its defaults will be confirmed when the session opens."
+    } else {
+      profile.configurationError = fallback
+        ? "OpenCode's default model is not in its enabled catalog. Choose a model for this conversation."
+        : "OpenCode has no default model configured. Choose a model for this conversation."
     }
-    return availableProviderProfile(openCodeProfileLoader, catalog)
+    return availableProviderProfile(openCodeProfileLoader, profile)
   },
 }
 
-async function v2Models(output: string, env: NodeJS.ProcessEnv): Promise<OpenCodeModelRow[]> {
-  let cached: z.infer<typeof CacheSchema> = {}
+/**
+ * The same native catalog a session reads, from a short-lived server. A
+ * catalog change reported while loading (OpenCode refreshes models after
+ * startup) is read again rather than answered from the older list.
+ */
+async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string): Promise<OpenCodeCatalog> {
+  const trace = new ProviderLaunchTrace({ provider: "opencode", conversation: "model-discovery" }, { report() {} })
+  const api = await startOpenCodeApi({ command, cwd: directory, env, conversationId: "model-discovery", trace })
+  const stream = new AbortController()
   try {
-    const parsed = CacheSchema.safeParse(
-      JSON.parse(
-        await readFile(
-          join(env.XDG_CACHE_HOME || join(homedir(), ".cache"), "opencode", "models.json"),
-          "utf8"
-        )
-      )
-    )
-    if (parsed.success) cached = parsed.data
-  } catch {
-    cached = {}
+    const events = api.client.event.subscribe({ signal: AbortSignal.any([stream.signal, api.signal]) })[Symbol.asyncIterator]()
+    const hello = await api.watch.step("event stream", events.next())
+    if (hello.done || hello.value.type !== "server.connected") throw new Error("OpenCode's event stream did not open")
+    let changes = 0
+    void (async () => {
+      for (;;) {
+        const next = await events.next()
+        if (next.done) return
+        if (CATALOG_EVENTS.has(next.value.type) && (!next.value.location || next.value.location.directory === directory)) changes++
+      }
+    })().catch(() => {})
+    await api.watch.step("plugin activation", api.client.plugin.awaitActivation({ location: { directory } }))
+    for (;;) {
+      const seen = changes
+      const catalog = await api.watch.step("catalog", loadOpenCodeCatalog(api.client, directory, api.signal))
+      if (seen === changes) return catalog
+    }
+  } finally {
+    stream.abort()
+    await api.close()
   }
-
-  return output.split(/\r?\n/).flatMap((line): OpenCodeModelRow[] => {
-    const identity = line.trim()
-    const separator = identity.indexOf("/")
-    if (separator <= 0) return []
-    const providerID = identity.slice(0, separator)
-    const id = identity.slice(separator + 1)
-    const cachedProvider = CacheProviderSchema.safeParse(cached[providerID])
-    const cachedModel = CacheModelSchema.safeParse(
-      cachedProvider.success ? cachedProvider.data.models[id] : undefined
-    )
-    const baseId = id.endsWith("-fast") ? id.slice(0, -5) : id
-    const cachedBase = CacheModelSchema.safeParse(
-      cachedProvider.success ? cachedProvider.data.models[baseId] : undefined
-    )
-    const model = cachedModel.success
-      ? cachedModel.data
-      : cachedBase.success
-        ? cachedBase.data
-        : undefined
-    const name = model && baseId !== id ? `${model.name} Fast` : model?.name
-    const reasoning = Array.isArray(model?.reasoning_options)
-      ? model.reasoning_options.flatMap((option) => option.values)
-      : Object.keys(model?.reasoning_options ?? {})
-    return [
-      {
-        providerID,
-        id,
-        name,
-        family: model?.family,
-        status: model?.status,
-        defaultVariant: reasoning.includes("default")
-          ? "default"
-          : reasoning[0],
-        variants:
-          reasoning.length > 0
-            ? Object.fromEntries(reasoning.map((value) => [value, {}]))
-            : undefined,
-        limit: model?.limit,
-        capabilities: {
-          reasoning: model?.reasoning,
-          input: { text: true, image: model?.attachment },
-        },
-      },
-    ]
-  })
 }

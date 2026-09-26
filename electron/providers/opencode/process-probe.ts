@@ -1,5 +1,4 @@
 import { processIdentityMatches } from "../process-liveness.js"
-import { openCodeRegistryActivity } from "./activity-registry.js"
 import { open, readdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -114,8 +113,7 @@ export function openCodeProcessProbeFor(
   stateRoot = join(
     process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"),
     "opencode"
-  ),
-  activityRoot = join(homedir(), ".mako", "activity", "opencode")
+  )
 ): ProviderProcessProbe {
   return {
     provider: "opencode",
@@ -140,7 +138,7 @@ export function openCodeProcessProbeFor(
         }
         if (files.length > 16)
           throw new Error("Too many OpenCode services to poll")
-        const sessions = await openCodeRegistryActivity(activityRoot, signal)
+        const sessions: ProviderActivitySession[] = []
         for (let offset = 0; offset < files.length; offset += 4) {
           const batch = await Promise.all(
             files

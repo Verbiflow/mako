@@ -48,11 +48,12 @@ export async function resolveOpenCodeInstallation(
   throw new Error("No verified OpenCode v2 executable is available. Install OpenCode v2 or configure OPENCODE_BIN_PATH.")
 }
 
+/** The one native store path that holds this session; anything else is refused. */
 export async function verifyOpenCodeSession(
   sessionId: string,
   nativePath?: string,
   env: NodeJS.ProcessEnv = process.env
-): Promise<void> {
+): Promise<string> {
   const databases = openCodeDatabasePaths(env)
   if (nativePath && !databases.some(database => nativePath.startsWith(`${database}#`)))
     throw new Error("The saved OpenCode session belongs to a different native store configuration.")
@@ -64,9 +65,10 @@ export async function verifyOpenCodeSession(
     id: "runtime-resolution", provider: "opencode", nativeId: sessionId, path, coveredBlocks: 0, includesBase: false,
   })))
   if (nativePath && records[0]?.kind === "unavailable") throw new Error(records[0].reason)
-  const matches = records.filter(record => record.kind === "available")
+  const matches = paths.filter((_, index) => records[index]?.kind === "available")
   if (matches.length !== 1)
     throw new Error(matches.length > 1
       ? "More than one OpenCode native store matches this session. Its exact source is required."
       : "The OpenCode native session could not be resolved in the configured stores.")
+  return matches[0]!
 }

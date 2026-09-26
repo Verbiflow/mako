@@ -44,6 +44,9 @@ export async function startOpenCodeApi(input: {
   child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4096) })
   const watch = new ProviderStartupWatch(child, { harness: "OpenCode", stderr: () => stderr })
   const closed = new Promise<void>(resolve => { child.once("close", () => resolve()) })
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+    child.once("exit", (code, signal) => resolve({ code, signal }))
+  })
   const ready = new Promise<string>((resolve, reject) => {
     let pending = Buffer.alloc(0)
     let settled = false
@@ -105,7 +108,7 @@ export async function startOpenCodeApi(input: {
     const checked = Health.parse(health)
     if (!isOpenCodeV2(checked.version)) throw new Error("OpenCode native API requires a v2 runtime")
     if (checked.pid !== child.pid) throw new Error("OpenCode API does not belong to the launched process")
-    return { client, watch, health: checked, signal: lifetime.signal, close }
+    return { client, watch, health: checked, signal: lifetime.signal, exited, stderr: () => stderr, close }
   } catch (error) {
     await close()
     throw error
