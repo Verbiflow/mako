@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react"
 import type { ControlPreview } from "@/lib/types"
 import { createControlPreviewPainter } from "@/lib/control-preview-painter"
 
-/** Full source pixels; CSS alone fits the preview to its available space. */
+/** Paints the device pixels the canvas occupies; CSS fits the box to its space. */
 export function ControlPreviewImage({
   frame,
   label,
@@ -17,10 +17,25 @@ export function ControlPreviewImage({
     null
   )
   useEffect(() => {
-    if (!canvas.current) return
-    const value = createControlPreviewPainter(canvas.current)
+    const element = canvas.current
+    if (!element) return
+    const value = createControlPreviewPainter(element)
     painter.current = value
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      const device = entry.devicePixelContentBoxSize?.[0]
+      const ratio = globalThis.devicePixelRatio || 1
+      if (device) value.resize(device.inlineSize, device.blockSize)
+      else value.resize(entry.contentRect.width * ratio, entry.contentRect.height * ratio)
+    })
+    // The device-pixel box also reports display scale changes; Safari lacks it.
+    try {
+      observer.observe(element, { box: "device-pixel-content-box" })
+    } catch {
+      observer.observe(element)
+    }
     return () => {
+      observer.disconnect()
       value.close()
       painter.current = null
     }

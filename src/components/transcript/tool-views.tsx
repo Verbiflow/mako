@@ -64,6 +64,7 @@ const ICONS = new Map([
   ["askquestion", CircleHelpIcon],
   ["generateimage", ImageIcon],
   ["askuserquestion", CircleHelpIcon],
+  ["question", CircleHelpIcon],
   ["schedulewakeup", ClockIcon],
   ["awaitshell", SquareTerminalIcon],
   ["write_stdin", SquareTerminalIcon],
