@@ -31,6 +31,20 @@ function grokPermissionMode(tier: AccessTier): string | undefined {
   }
 }
 
+/**
+ * Verified 2026-09-26 against grok 1.0.41: an `is_background` command is
+ * reported through `_x.ai/session_notification` as a `background_tasks`
+ * update carrying every task of the session with its status, again when one
+ * finishes. Grok then starts its own turn to read the output.
+ */
+const GrokBackgroundTasksSchema = z.object({
+  sessionId: z.string(),
+  update: z.object({
+    sessionUpdate: z.literal("background_tasks"),
+    tasks: z.array(z.object({ status: z.string() })),
+  }),
+})
+
 export const grokAcpSource: ProviderAcpSource = {
   provider: "grok",
   approvalEvidence: { kind: "submission-only", reason: "ACP can forward requests if offered; tested native modes denied tools without an interactive ask. Exact decision observation and broader question coverage remain unverified." },
@@ -40,6 +54,17 @@ export const grokAcpSource: ProviderAcpSource = {
     return observer
   },
   compaction: { kind: "unavailable", reason: "Grok's ACP connection does not provide verified compaction. Start a new thread and carry over what matters." },
+  observeBackground: () => ({
+    extension(method, params) {
+      if (method !== "_x.ai/session_notification") return undefined
+      const parsed = GrokBackgroundTasksSchema.safeParse(params)
+      if (!parsed.success) return undefined
+      return {
+        sessionId: parsed.data.sessionId,
+        running: parsed.data.update.tasks.filter((task) => task.status === "running").length,
+      }
+    },
+  }),
   canResume: true,
   launchOptionIds: ["effort"],
   access: { launch: ["plan", "deny", "auto", "full"], default: "deny" },

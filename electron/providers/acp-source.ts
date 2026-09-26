@@ -7,6 +7,7 @@ import type { RequestPermissionRequest, NewSessionRequest } from "@agentclientpr
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "../acp-access.js"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contracts/approval-response.js"
+import type { JsonObject } from "../codex-app-json.js"
 
 export type AcpTuning = SessionSettings
 
@@ -62,6 +63,8 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
     publish(agent: NativeAgentObservation): void
   }): Promise<AcpAgentObserver> | AcpAgentObserver
   compaction?: import("../acp-compaction.js").AcpCompactionSpec
+  /** Provider evidence of background commands, which die with the agent process. */
+  observeBackground?(): AcpBackgroundObserver
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
   /**
@@ -83,6 +86,18 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
   sessionMetadata?(tuning: SessionSettings): NewSessionRequest["_meta"]
   available(appPath: string): boolean
   launch(options: AcpLaunchOptions): Promise<AcpLaunch | null>
+}
+
+export interface AcpBackgroundReport {
+  sessionId: string
+  running: number
+}
+
+/** Each hook returns the named session's running count when the notification reports one. */
+export interface AcpBackgroundObserver {
+  sessionUpdate?(notification: SessionNotification): AcpBackgroundReport | undefined
+  /** Vendor notifications (`_`-prefixed methods), whose payloads the provider parses. */
+  extension?(method: string, params: JsonObject): AcpBackgroundReport | undefined
 }
 
 export interface AcpAgentObserver {

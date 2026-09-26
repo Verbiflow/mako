@@ -148,6 +148,10 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         live.compaction.confirmed = true
       const agent = live.agents.project(message)
       if (agent) engine.emitAgent(live, agent)
+      if (message.type === "system" && message.subtype === "background_tasks_changed") {
+        const running = message.tasks.filter((task) => !task.ambient).length
+        if (running !== (live.state.backgroundTasks ?? 0)) engine.patch(live, { backgroundTasks: running })
+      }
       const updates = live.projection.project(message)
       if (updates.length)
         engine.emitUpdates(live, updates)
@@ -217,6 +221,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       connection: "disconnected",
       error: error instanceof Error ? error.message : String(error),
       lastStop: "failed",
+      backgroundTasks: 0,
     })
   }
 }
@@ -587,6 +592,7 @@ export function createClaudeSdkDriver(
           status: "ready",
           connection: "disconnected",
           lastStop: "interrupted",
+          backgroundTasks: 0,
         })
       }
     },

@@ -7,6 +7,7 @@ import { configureDevinEnvironment } from "./environment.js"
 import { devinCompaction } from "./compaction.js"
 import { devinToolName } from "./tool-name.js"
 import { DevinAgents } from "./agents.js"
+import { devinBackground } from "./background.js"
 import { DevinApprovalObserver, readDevinApprovalDecisions } from "./approval-observer.js"
 import { hostWarn } from "../../host-log.js"
 
@@ -17,6 +18,7 @@ export const devinAcpSource: ProviderAcpSource = {
   toolName: devinToolName,
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
   observeAgents: input => new DevinAgents(input),
+  observeBackground: devinBackground,
   compaction: devinCompaction,
   canResume: true,
   steering: "concurrent-prompt",
