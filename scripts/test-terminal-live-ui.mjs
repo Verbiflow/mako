@@ -110,7 +110,9 @@ async function check() {
       await new Promise((resolve) => setTimeout(resolve, 30))
     }
   }
-  const watchdog = setTimeout(() => app.exit(1), 60000)
+  // The daemon is detached and outlives this app unless it is stopped explicitly.
+  const stopDaemon = () => { try { if (daemonPid) process.kill(daemonPid, "SIGTERM") } catch {} }
+  const watchdog = setTimeout(() => { stopDaemon(); app.exit(1) }, 60000)
   try {
     await window.loadURL(
       `${process.env.MAKO_TERMINAL_UI_URL}scripts/terminal-live-browser.html?cwd=${encodeURIComponent(root)}`
@@ -191,12 +193,14 @@ async function check() {
     throw error
   } finally {
     clearTimeout(watchdog)
-    window.destroy()
     const client = clients.forOwner(owner)
     for (const session of await client.list().catch(() => []))
       await client.kill(session.id)
+    daemonPid = client.daemonPid() ?? daemonPid
     clients.dispose()
-    if (daemonPid) process.kill(daemonPid, "SIGTERM")
+    stopDaemon()
+    // Destroying the last window quits the app, so it goes after cleanup.
+    window.destroy()
   }
   app.exit(0)
 }

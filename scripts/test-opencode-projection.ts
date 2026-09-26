@@ -62,9 +62,11 @@ const message = "msg_assistant"
   const todo = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "todo", input: { todos: [{ content: "Ship it", status: "pending" }] }, executed: false }))
   assert.deepEqual(todo.find(update => update.kind === "plan"), { kind: "plan", entries: [{ content: "Ship it", status: "pending" }] })
 
-  assert.deepEqual(content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "q", name: "question" })), [])
-  assert.deepEqual(content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "q", input: {}, executed: false })), [],
-    "the question tool is the form, never a row")
+  assert.deepEqual(content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "q", name: "question" })),
+    [{ kind: "tool", id: `${root}:q`, title: "question", toolKind: "question", status: "pending" }], "the question leaves a row beside its form")
+  const [asked] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "q", executed: false,
+    input: { questions: [{ header: "Colour", question: "Which colour?", options: [{ label: "red", description: "" }], multiple: false }] } }))
+  assert.equal(asked.kind === "tool-update" && asked.title, "Which colour?", "the row names the question it asked")
 
   const [failed] = content.observe(event("session.tool.failed", { sessionID: root, assistantMessageID: message, id: "e", error: { type: "tool", message: "no match" }, content: [{ type: "text", text: "detail" }] }))
   assert.equal(failed.kind === "tool-update" && failed.status, "failed")
@@ -75,12 +77,15 @@ const message = "msg_assistant"
   assert.deepEqual(content.open(root, "late", "grep"), [], "opening is idempotent")
   const [lateCalled] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "late", input: { pattern: "TODO" }, executed: false }))
   assert.equal(lateCalled.kind === "tool-update" && lateCalled.title, "TODO")
-  assert.deepEqual(content.open(root, "late-question", "question"), [])
-  assert.deepEqual(content.observe(event("session.tool.success", { sessionID: root, assistantMessageID: message, id: "late-question", content: [] })), [])
+  assert.equal(content.open(root, "late-question", "question").length, 1)
+  const [answered] = content.observe(event("session.tool.success", { sessionID: root, assistantMessageID: message, id: "late-question",
+    content: [{ type: "text", text: "User has answered your questions: \"Which colour?\"=\"red\"." }] }))
+  assert.equal(answered.kind === "tool-update" && answered.output, "User has answered your questions: \"Which colour?\"=\"red\".",
+    "the answered row keeps the answer after its form closes")
 
   const settled = content.settle(root, "cancelled", "Stopped before this call finished.")
-  assert.deepEqual(new Set(settled.map(update => update.id)), new Set([`${root}:w`, `${root}:todo`, `${root}:late`]),
-    "settling ends the session's open rows and never the hidden question")
+  assert.deepEqual(new Set(settled.map(update => update.id)), new Set([`${root}:w`, `${root}:todo`, `${root}:q`, `${root}:late`]),
+    "settling ends every open row in the session, an unanswered question included")
   assert.ok(settled.every(update => update.kind === "tool-update" && update.status === "cancelled"))
   assert.equal(content.name(child, "t1"), "read", "settling one session leaves another's calls open")
 
@@ -231,4 +236,4 @@ try {
   assert.equal(new Set(ids).size, ids.length)
 }
 
-console.log("OpenCode projection: session-scoped rows, child labels, diffs, plans, hidden question tool, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids")
+console.log("OpenCode projection: session-scoped rows, child labels, diffs, plans, answered question rows, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids")

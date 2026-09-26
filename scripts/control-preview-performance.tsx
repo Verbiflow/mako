@@ -24,8 +24,9 @@ createRoot(document.getElementById("root")!).render(
   </>
 )
 
-// Called only after the fixture has stopped animating. Compares every source
-// pixel after JPEG decoding; no rescale, pixel tolerance or screenshot oracle.
+// Called only after the fixture has stopped animating. Each viewer must hold
+// exactly its displayed device pixels, matching an independent full-resolution
+// decode of the same retained frame downscaled with high-quality smoothing.
 Object.assign(window, {
   previewAudit: {
     fidelity: async () => {
@@ -35,35 +36,45 @@ Object.assign(window, {
       const url = URL.createObjectURL(new Blob([frame.image.bytes], { type: frame.image.mimeType }))
       image.src = url
       try { await image.decode() } finally { URL.revokeObjectURL(url) }
-      const reference = document.createElement("canvas")
-      reference.width = image.naturalWidth
-      reference.height = image.naturalHeight
-      const context = reference.getContext("2d")!
-      context.drawImage(image, 0, 0)
-      const expected = context.getImageData(
-        0,
-        0,
-        reference.width,
-        reference.height
-      ).data
       return Array.from(document.querySelectorAll("canvas"), (canvas) => {
-        if (
-          canvas.width !== reference.width ||
-          canvas.height !== reference.height
+        const box = canvas.getBoundingClientRect()
+        const scale = Math.min(
+          (box.width * devicePixelRatio) / image.naturalWidth,
+          (box.height * devicePixelRatio) / image.naturalHeight,
+          1
         )
-          throw new Error(
-            "Viewer dimensions differ from the decoded source image"
-          )
+        const displayed = [Math.round(image.naturalWidth * scale), Math.round(image.naturalHeight * scale)]
+        const reference = document.createElement("canvas")
+        reference.width = canvas.width
+        reference.height = canvas.height
+        const context = reference.getContext("2d")!
+        context.imageSmoothingQuality = "high"
+        context.drawImage(image, 0, 0, canvas.width, canvas.height)
+        const expected = context.getImageData(0, 0, canvas.width, canvas.height).data
         const actual = canvas
           .getContext("2d")!
           .getImageData(0, 0, canvas.width, canvas.height).data
-        let differences = 0
-        for (let i = 0; i < expected.length; i++)
-          if (expected[i] !== actual[i]) differences++
+        let sum = 0,
+          squares = 0,
+          largest = 0
+        for (let i = 0; i < expected.length; i++) {
+          if (i % 4 === 3) continue
+          const difference = Math.abs(expected[i]! - actual[i]!)
+          sum += difference
+          squares += difference * difference
+          largest = Math.max(largest, difference)
+        }
+        const channels = (expected.length / 4) * 3
         return {
           width: canvas.width,
           height: canvas.height,
-          differences,
+          displayed,
+          sourceWidth: image.naturalWidth,
+          sourceHeight: image.naturalHeight,
+          meanAbsolute: sum / channels,
+          largestDifference: largest,
+          // Identical pixels report 100 dB so the value survives JSON.
+          psnr: squares ? 10 * Math.log10((255 * 255 * channels) / squares) : 100,
           bytes: actual.length,
         }
       })

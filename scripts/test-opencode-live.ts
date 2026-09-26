@@ -172,7 +172,10 @@ try {
   const form = question.events.find(event => event.type === "live-permission" && event.request.questions?.length)
   assert.ok(form && form.type === "live-permission")
   assert.ok(question.events.some(event => event.type === "live-permission-ended" && event.requestId === form.request.id && event.source === "native-resolution"))
-  assert.ok(!question.updates.some(update => update.kind === "tool" && update.toolKind === "question"), "the question tool is the form, not a row")
+  const questionRow = question.updates.find(update => update.kind === "tool" && update.toolKind === "question")
+  assert.ok(questionRow, "the question leaves a row beside its form")
+  assert.ok(question.updates.some(update => update.kind === "tool-update" && update.id === questionRow.id && update.status === "completed" && update.output?.includes("answered")),
+    "the answered row records the answer")
   report.cases.push("question: OpenCode's form becomes a structured question, the answer is written natively and resolves it")
 
   await driver.setMode(ask.id, "plan")

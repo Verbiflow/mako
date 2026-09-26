@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createControlPreviewPainter } from "../src/lib/control-preview-painter.js"
+import { controlPreviewEighths, controlPreviewSize, fitControlPreview } from "../src/lib/control-preview-decoder.js"
 
 const requests: FakeImage[] = []
 class FakeImage {
@@ -222,7 +223,13 @@ try {
     image = new FakeVideoFrame()
     ready = () => {}
     fail = () => {}
-    constructor() { codecs.push(this) }
+    constructor(readonly init: { data?: unknown; type?: string; desiredWidth?: number; desiredHeight?: number } = {}) {
+      codecs.push(this)
+      if (init.desiredWidth && init.desiredHeight) {
+        this.image.displayWidth = init.desiredWidth
+        this.image.displayHeight = init.desiredHeight
+      }
+    }
     decode() {
       return new Promise<{ image: FakeVideoFrame }>((resolve, reject) => {
         this.ready = () => resolve({ image: this.image })
@@ -273,8 +280,130 @@ try {
   beforeStart.update(frame(303)); beforeStart.close()
   await flush()
   assert.equal(codecs.length, 3, "Disposal before capability resolution allocates no decoder")
+
+  // Displayed-size decoding. Real headers: an APP0 segment before SOF0.
+  const jpeg = (id: number, width = 1920, height = 1080) => ({
+    ...frame(id),
+    image: {
+      mimeType: "image/jpeg" as const,
+      bytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x4a, 0x46, 0xff, 0xc0, 0x00, 0x11, 0x08,
+        height >> 8, height & 255, width >> 8, width & 255, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xd9]),
+    },
+  })
+  assert.deepEqual(controlPreviewSize(jpeg(400)), { width: 1920, height: 1080 }, "JPEG size is read from its header")
+  const png = new Uint8Array(24)
+  png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 5, 0xe8, 0, 0, 3, 0xd6])
+  assert.deepEqual(controlPreviewSize({ ...frame(401), image: { mimeType: "image/png", bytes: png } }), { width: 1512, height: 982 })
+  assert.equal(controlPreviewSize(frame(402)), null, "Unreadable headers fall back to decoded size")
+  assert.deepEqual(
+    [[852, 480], [455, 256], [240, 135], [1600, 900], [1920, 1080]].map(([width, height]) =>
+      controlPreviewEighths({ width: 1920, height: 1080 }, { width: width!, height: height! })),
+    [4, 2, 1, 7, 8],
+    "Smallest JPEG eighth that still covers the displayed pixels"
+  )
+  assert.equal(controlPreviewEighths({ width: 1512, height: 982 }, { width: 756, height: 491 }), 4)
+  assert.deepEqual(fitControlPreview({ width: 1920, height: 1080 }, { width: 1280, height: 512 }), { width: 910, height: 512 })
+  assert.deepEqual(fitControlPreview({ width: 800, height: 600 }, { width: 1600, height: 1200 }), { width: 800, height: 600 },
+    "Small sources are never enlarged")
+
+  const sized = () => {
+    const draws: { image: CanvasImageSource; width?: number; height?: number; quality: ImageSmoothingQuality }[] = []
+    const context = {
+      imageSmoothingQuality: "low" as ImageSmoothingQuality,
+      drawImage: (image: CanvasImageSource, _x: number, _y: number, width?: number, height?: number) => {
+        draws.push({ image, width, height, quality: context.imageSmoothingQuality })
+      },
+    }
+    return { width: 300, height: 150, style: { aspectRatio: "" }, draws, getContext: () => context }
+  }
+  const settle = async (codec: FakeDecoder) => { codec.ready(); await flush(); await paint() }
+  const panel = sized(), overlay = createControlPreviewPainter(panel)
+  overlay.resize(852, 480)
+  overlay.update(jpeg(500))
+  assert.equal(panel.style.aspectRatio, "1920 / 1080", "Layout takes the source shape before the first paint")
+  await flush()
+  assert.deepEqual(codecs.at(-1)!.init, { data: codecs.at(-1)!.init.data, type: "image/jpeg", desiredWidth: 960, desiredHeight: 540 },
+    "A 852×480 viewer decodes the 1920×1080 source at 4/8")
+  await settle(codecs.at(-1)!)
+  assert.deepEqual([panel.width, panel.height], [852, 479], "The canvas holds exactly the displayed device pixels")
+  assert.deepEqual([panel.draws.at(-1)!.width, panel.draws.at(-1)!.height, panel.draws.at(-1)!.quality], [852, 479, "low"],
+    "A scaled decode within 2× of the canvas draws bilinearly")
+  let before = codecs.length
+  overlay.resize(852, 480)
+  await flush()
+  assert.equal(codecs.length, before, "An unchanged box does no work")
+  overlay.resize(1600, 900)
+  await flush()
+  assert.equal(codecs.length, before + 1, "Enlarging repaints the held frame without waiting for a new one")
+  assert.equal(codecs.at(-1)!.init.desiredWidth, 1680)
+  await settle(codecs.at(-1)!)
+  assert.deepEqual([panel.width, panel.height], [1600, 900])
+  overlay.resize(0, 0)
+  before = codecs.length
+  overlay.update(jpeg(501))
+  await flush()
+  assert.equal(codecs.length, before, "A zero-sized viewer decodes nothing")
+  overlay.resize(852, 480)
+  await flush()
+  assert.equal(codecs.length, before + 1, "Showing it again decodes the newest frame")
+  await settle(codecs.at(-1)!)
+  assert.equal(panel.draws.at(-1)!.image, codecs.at(-1)!.image)
+
+  const large = sized(), inspector = createControlPreviewPainter(large)
+  inspector.resize(1600, 900)
+  before = codecs.length
+  const common = jpeg(502)
+  overlay.update(common)
+  inspector.update(common)
+  await flush()
+  assert.equal(codecs.length, before + 1, "Viewers of different sizes share one decode at the larger scale")
+  assert.equal(codecs.at(-1)!.init.desiredWidth, 1680)
+  await settle(codecs.at(-1)!)
+  assert.deepEqual([panel.width, panel.height, large.width, large.height], [852, 479, 1600, 900])
+  inspector.close()
+
+  const unmeasured = createControlPreviewPainter(sized())
+  before = codecs.length
+  overlay.update(jpeg(503))
+  await flush()
+  assert.equal(codecs.at(-1)!.init.desiredWidth, undefined, "A viewer not yet laid out keeps full pixels for everyone")
+  await settle(codecs.at(-1)!)
+  unmeasured.close()
+
+  overlay.update(jpeg(504))
+  await flush()
+  codecs.at(-1)!.ready()
+  await flush()
+  overlay.update(jpeg(505))
+  await flush()
+  const newest = codecs.at(-1)!, from = codecs.length - 1
+  overlay.resize(700, 394)
+  newest.ready()
+  await flush()
+  await paint()
+  for (let i = 0; i < 3; i++) { await flush(); codecs.at(-1)!.ready(); await flush(); await paint() }
+  assert.ok(codecs.slice(from).every((codec) => codec.init.data === newest.init.data) &&
+    codecs.some((codec) => codec.image === panel.draws.at(-1)!.image && codec.init.data === newest.init.data),
+    "A resize during decoding never repaints an older frame")
+  assert.deepEqual([panel.width, panel.height], [700, 394])
+  overlay.close()
+
+  const thumbnail = sized(), fallback = createControlPreviewPainter(thumbnail)
+  fallback.resize(480, 270)
+  const ihdr = new Uint8Array(24)
+  ihdr.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 7, 0x80, 0, 0, 4, 0x38])
+  before = requests.length
+  fallback.update({ ...frame(600), image: { mimeType: "image/png", bytes: ihdr } })
+  await flush()
+  assert.equal(requests.length, before + 1, "Formats without scaled decoding use the full-size image")
+  requests.at(-1)!.ready()
+  await flush()
+  await paint()
+  assert.deepEqual([thumbnail.width, thumbnail.height, thumbnail.draws.at(-1)!.quality], [480, 270, "high"],
+    "A full-size fallback shrinking past 2× is filtered rather than aliased")
+  fallback.close()
   console.log(
-    "Preview painter: bounded decoding/latest-frame queue, retained pixels, exact dimensions, corruption/size refusal and late completion cleanup passed"
+    "Preview painter: bounded decoding/latest-frame queue, retained pixels, displayed-size decoding and repaint, shared scaled decode, corruption/size refusal and late completion cleanup passed"
   )
 } finally {
   painter.close()

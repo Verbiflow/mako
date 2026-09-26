@@ -337,13 +337,11 @@ async function audit() {
           wireBytes += transfer.wireBytes
           decodedBytes += transfer.decodedBytes
         }
-        // MAKO_PREVIEW_PARKED=0 measures the unparked baseline with the same renderer.
-        const held = process.env.MAKO_PREVIEW_PARKED === "0" ? undefined : after
         const value = shared
           ? process.env.MAKO_PREVIEW_IDENTITY === "1"
-            ? await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher, held], 1, { onTransfer: countTransfer })
-            : await invokeRuntimePreview(socket, client, [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher, held], countTransfer)
-          : previews.next ? await previews.next(id, watching, watcher, held) : previews.read(id, watching, watcher)
+            ? await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher], 1, { onTransfer: countTransfer })
+            : await invokeRuntimePreview(socket, client, [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher], countTransfer)
+          : previews.read(id, watching, watcher)
         if (value?.frame?.image.data) {
           value.frame.image = { mimeType: value.frame.image.mimeType, bytes: Buffer.from(value.frame.image.data, "base64") }
         }
@@ -500,7 +498,8 @@ async function audit() {
     previews?.browserTarget("preview-audit", target, () => {})
     await until(async () => {
       rectangle = await viewer.webContents.executeJavaScript(
-        `(()=>{const image=document.querySelector('canvas, img');if(!image || !(image.width>300 || image.naturalWidth))return null;const r=image.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width}})()`
+        // The painter sets the source aspect ratio on its first paint; canvas pixels now follow the displayed box.
+        `(()=>{const image=document.querySelector('canvas, img');if(!image || !(image.style.aspectRatio || image.naturalWidth))return null;const r=image.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,pixels:image.width ? [image.width,image.height] : undefined}})()`
       )
       return rectangle
     }, "production preview image")
@@ -734,19 +733,23 @@ async function audit() {
     for (const image of fidelity) {
       if (extension) {
         assert.ok(
-          image.width >= 1920 && image.height >= 1080,
+          image.sourceWidth >= 1920 && image.sourceHeight >= 1080,
           "Browser capture must retain at least the requested viewport resolution"
         )
         assert.equal(
-          image.width * 1080,
-          image.height * 1920,
+          image.sourceWidth * 1080,
+          image.sourceHeight * 1920,
           "Capture preserves viewport aspect ratio"
         )
-      } else assert.deepEqual([image.width, image.height], [1920, 1080])
-      assert.equal(
-        image.differences,
-        0,
-        "Viewer retains every decoded source pixel"
+      } else assert.deepEqual([image.sourceWidth, image.sourceHeight], [1920, 1080])
+      assert.ok(
+        Math.abs(image.width - image.displayed[0]) <= 1 &&
+          Math.abs(image.height - image.displayed[1]) <= 1,
+        `Viewer holds its displayed device pixels: ${image.width}x${image.height}, displayed ${image.displayed.join("x")}`
+      )
+      assert.ok(
+        image.psnr >= 35 && image.meanAbsolute <= 2,
+        `Viewer matches a high-quality downscale of the retained frame: ${image.psnr.toFixed(1)} dB, mean ${image.meanAbsolute.toFixed(2)}`
       )
       assert.equal(image.bytes, image.width * image.height * 4)
     }

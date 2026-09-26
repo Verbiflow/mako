@@ -90,6 +90,8 @@ app.whenReady().then(async()=>{
     assert.deepEqual(media,{bytes:[0,127,255],capturedAt:1,publishedAt:2});
   }
   console.log('PASS: two real web clients receive exact binary preview bytes and source/publication clocks through the same-origin gateway');
+  assert.equal(await a.executeJavaScript('window.mako.quitClient().then(()=>"kept",e=>e.message)'),'kept');
+  console.log('PASS: a web client answers quit itself; the host never hides its desktop windows for a tab');
   const readFailure=await a.executeJavaScript('window.mako.liveSnapshot("invalid-read").then(()=>null,e=>({name:e.name,message:e.message}))');
   assert.match(readFailure.message,/could not read the host response/);
   assert.ok(!/restarting|not confirmed/.test(readFailure.message));
