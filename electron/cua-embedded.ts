@@ -89,12 +89,13 @@ function alive(pid: number): boolean {
 /**
  * Each host names its driver socket after its own pid; a host that died
  * without its shutdown path leaves that file behind. Dozens accumulate. A
- * socket whose owner no longer runs is unlinked before this host adds its own.
+ * socket whose owner no longer runs is unlinked before this host adds its own,
+ * with the held-input journal its driver keeps beside it.
  */
 async function sweepStaleSockets(stateDir: string): Promise<void> {
   const names = await readdir(stateDir).catch((): string[] => [])
   for (const name of names) {
-    const match = /^embedded-(\d+)\.(sock|log)$/.exec(name)
+    const match = /^embedded-(\d+)\.(sock|log|sock\.held-input)$/.exec(name)
     if (!match) continue
     const owner = Number(match[1])
     if (owner === process.pid) continue

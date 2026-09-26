@@ -23,6 +23,8 @@ interface PreviewEntry {
   nextFrameAt?: number
   frameTimer?: NodeJS.Timeout
   latest?: BrowserFrame
+  sourceFrames: number
+  sourceSlot?: number
   authorize?: () => void
   publish?: NodeJS.Timeout
   oversized?: boolean
@@ -56,6 +58,7 @@ export class ControlPreviews {
         preview: { activity: next, frame: null },
         watchers: new Map(),
         generation: 0,
+        sourceFrames: 0,
       }
       this.entries.set(activity.conversationId, entry)
     }
@@ -152,7 +155,7 @@ export class ControlPreviews {
       : entry.preview
   }
 
-  private frame(entry: PreviewEntry, image: ControlImage | NonNullable<ControlPreview["frame"]>["image"], capturedAt = Date.now()) {
+  private frame(entry: PreviewEntry, image: ControlImage | NonNullable<ControlPreview["frame"]>["image"], capturedAt = Date.now(), sequence?: number) {
     let pixels: NonNullable<ControlPreview["frame"]>["image"]
     if ("bytes" in image) pixels = image // BrowserCapture already validates encoded dimensions.
     else {
@@ -165,7 +168,7 @@ export class ControlPreviews {
     // Bound actual bytes; base64 expansion no longer consumes the delivery budget.
     entry.oversized = pixels.bytes.byteLength > 2 * 1024 * 1024
     if (entry.oversized) return
-    entry.preview.frame = { id: randomUUID(), image: pixels, capturedAt, publishedAt: Date.now() }
+    entry.preview.frame = { id: randomUUID(), image: pixels, capturedAt, publishedAt: Date.now(), sequence }
   }
 
   private stop(entry: PreviewEntry) {
@@ -213,6 +216,13 @@ export class ControlPreviews {
             return
           // Latest-frame delivery: no queue of old images when UI/transport is busy.
           entry.latest = value
+          // Source-clock 60 fps slots, the most the host publishes; a faster
+          // source or late delivery cannot read as a viewer shortfall.
+          const slot = Math.floor(value.capturedAt / (1000 / 60))
+          if (slot !== entry.sourceSlot) {
+            entry.sourceSlot = slot
+            entry.sourceFrames++
+          }
           if (entry.frameTimer) return
           const flush = () => {
             entry.frameTimer = undefined
@@ -221,7 +231,7 @@ export class ControlPreviews {
             if (!latest) return
             const now = performance.now()
             entry.nextFrameAt = Math.max((entry.nextFrameAt ?? now) + 1000 / 60, now)
-            this.frame(entry, { bytes: latest.bytes, mimeType: "image/jpeg" }, latest.capturedAt)
+            this.frame(entry, { bytes: latest.bytes, mimeType: "image/jpeg" }, latest.capturedAt, entry.sourceFrames)
             this.changed(entry.preview.activity)
           }
           const remaining =
