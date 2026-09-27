@@ -99,11 +99,24 @@ export interface AcpBackgroundReport {
   running: number
 }
 
+/** What Stop can use to end a session's background work once its turn is cancelled. */
+export interface AcpBackgroundControl {
+  sessionId: string
+  /** The session's running count as last reported. */
+  running: number
+  /** A vendor request (`_`-prefixed method) whose answer Stop does not need. */
+  request(method: string, params: JsonObject): Promise<void>
+  /** Close the session, which ends the work it started, and resume it in the same process. */
+  reopen(): Promise<void>
+}
+
 /** Each hook returns the named session's running count when the notification reports one. */
 export interface AcpBackgroundObserver {
   sessionUpdate?(notification: SessionNotification): AcpBackgroundReport | undefined
   /** Vendor notifications (`_`-prefixed methods), whose payloads the provider parses. */
   extension?(method: string, params: JsonObject): AcpBackgroundReport | undefined
+  /** End all of the session's background work, as Stop does on every harness. */
+  stop(control: AcpBackgroundControl): Promise<void>
 }
 
 /** Vendor notifications about turns the agent started itself. */

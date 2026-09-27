@@ -1,4 +1,10 @@
+import { z } from "zod"
 import type { AcpBackgroundObserver } from "../acp-source.js"
+
+const backgroundShell = z.object({
+  "cognition.ai/background": z.literal(true),
+  "cognition.ai/backgroundShellId": z.string(),
+})
 
 /**
  * Verified 2026-09-26 against devin 3000.6.14: a `run_in_background` shell
@@ -13,14 +19,25 @@ import type { AcpBackgroundObserver } from "../acp-source.js"
  * session replays each call completed and without the background marker.
  */
 export function devinBackground(): AcpBackgroundObserver {
-  const running = new Set<string>()
+  const shells = new Map<string, string>()
   return {
     sessionUpdate({ sessionId, update }) {
       if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return undefined
-      const before = running.size
-      if (update.status === "completed" || update.status === "failed") running.delete(update.toolCallId)
-      else if (update._meta?.["cognition.ai/background"] === true) running.add(update.toolCallId)
-      return running.size === before ? undefined : { sessionId, running: running.size }
+      const before = shells.size
+      if (update.status === "completed" || update.status === "failed") shells.delete(update.toolCallId)
+      else {
+        const shell = backgroundShell.safeParse(update._meta)
+        if (shell.success) shells.set(update.toolCallId, shell.data["cognition.ai/backgroundShellId"])
+      }
+      return shells.size === before ? undefined : { sessionId, running: shells.size }
+    },
+    /**
+     * The shell's exec call completes as soon as it ends, and no turn follows.
+     * Devin answers `{}` whether or not the shell exists.
+     */
+    async stop(control) {
+      await Promise.all([...shells.values()].map((shellId) =>
+        control.request("_cognition.ai/terminal/killBackgroundShell", { sessionId: control.sessionId, shellId })))
     },
   }
 }

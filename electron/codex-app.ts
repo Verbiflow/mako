@@ -16,10 +16,12 @@ import type {
   ProviderSteerResult,
 } from "./providers/live-driver.js"
 import { resolveCodexExecutable } from "./providers/codex/executable.js"
-import type { ProviderStartOptions } from "./providers/live-driver.js"
+import { SHUTDOWN_GRACE_MS, type ProviderStartOptions } from "./providers/live-driver.js"
+import { hostWarn } from "./host-log.js"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
+import { setTimeout as delay } from "node:timers/promises"
 import { accountEnv } from "./accounts.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable } from "./executable.js"
@@ -37,6 +39,7 @@ import { accessModeId, type AccessTier } from "./contracts/access.js"
 import { boundedText, type JsonObject } from "./codex-app-json.js"
 import { LineAssembler } from "@mako/sessions"
 import {
+  cleanBackground,
   consumeStdout,
   MAX_STDOUT_BUFFER,
   replayHistory,
@@ -75,6 +78,8 @@ type Live = {
   threadId: string | null
   promptSequence: number
   currentTurnId: string | null
+  /** Waiting for the running turn to settle, or for the app-server to exit. */
+  settling: Array<() => void>
   /** The chosen tier; sent with every turn/start and kept by Codex afterwards. */
   access: AccessTier | null
   state: LiveSessionState
@@ -181,6 +186,7 @@ async function startCodex(
     serverRequests: new Map(),
     items: new Map(),
     background: { running: new Set() },
+    settling: [],
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
     approvals: new CodexPermissionObserver(join(app.getPath("userData"), "approval-evidence", "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
@@ -352,13 +358,27 @@ export function codexAppPermission(
   return resolvePermission(live, permissionCallbacks, requestId, response)
 }
 
+/** Stop ends the turn and every terminal the thread left running. */
 export async function codexAppCancel(id: string): Promise<void> {
   const live = sessions.get(id)
   if (!live?.threadId || !live.currentTurnId || live.exited) return
-  await rpcRequest(live, "turn/interrupt", {
-    threadId: live.threadId,
-    turnId: live.currentTurnId,
-  })
+  // The interrupt turns the running command into one more terminal, so the
+  // clean waits for the turn to settle.
+  const clean = () => {
+    if (live.exited) return
+    cleanBackground(live).catch((error) =>
+      hostWarn("codex", "Background terminals were not ended", { conversation: id, error: String(error) }))
+  }
+  live.settling.push(clean)
+  try {
+    await rpcRequest(live, "turn/interrupt", {
+      threadId: live.threadId,
+      turnId: live.currentTurnId,
+    })
+  } catch (error) {
+    live.settling = live.settling.filter((settle) => settle !== clean)
+    throw error
+  }
 }
 
 export async function codexAppSteer(
@@ -414,6 +434,8 @@ export async function codexAppClose(id: string): Promise<void> {
   if (!live) return
   const operation = (async () => {
     updateState(live, { status: "closed" })
+    if (!live.exited)
+      await Promise.race([cleanBackground(live).catch(() => undefined), delay(SHUTDOWN_GRACE_MS, undefined, { ref: false })])
     disposeLive(live, new Error("Codex session closed"))
     if (!live.child.killed) live.child.kill()
     await live.processClosed
@@ -544,6 +566,7 @@ function disposeLive(live: Live, error: Error): void {
   live.serverRequests.clear()
   live.items.clear()
   live.stdoutLines = new LineAssembler(MAX_STDOUT_BUFFER)
+  for (const settle of live.settling.splice(0)) settle()
 }
 
 function clearStartupWatch(live: Live): void {
@@ -553,6 +576,7 @@ function clearStartupWatch(live: Live): void {
 
 function updateState(live: Live, patch: Partial<LiveSessionState>): void {
   engine.patch(live, patch)
+  if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
 }
 
 function emitUpdate(live: Live, update: LiveUpdate): void {

@@ -121,6 +121,7 @@ export type RpcParams = {
   "thread/compact/start": ThreadCompactStartParams
   "turn/interrupt": TurnInterruptParams
   "thread/backgroundTerminals/list": { threadId: string; cursor?: string }
+  "thread/backgroundTerminals/clean": { threadId: string }
 }
 
 export type RpcResults = {
@@ -134,6 +135,7 @@ export type RpcResults = {
   "thread/compact/start": JsonObject
   "turn/interrupt": JsonObject
   "thread/backgroundTerminals/list": { data: { itemId: string }[]; nextCursor?: string | null }
+  "thread/backgroundTerminals/clean": JsonObject
 }
 
 export type RpcMethod = keyof RpcParams

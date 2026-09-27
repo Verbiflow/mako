@@ -96,6 +96,15 @@ export const grokAcpSource: ProviderAcpSource = {
         running: parsed.data.update.tasks.filter((task) => task.status === "running").length,
       }
     },
+    /**
+     * Checked on grok 1.0.41: `session/close` ends every task and the resumed
+     * session keeps its context, with no turn after it. `_x.ai/task/kill` ends
+     * one but always queues a turn about the kill, even when it lands before
+     * the cancel, and that turn has re-run the command the user stopped.
+     */
+    async stop(control) {
+      if (control.running) await control.reopen()
+    },
   }),
   providerTurns: () => ({
     cause(method, params) {

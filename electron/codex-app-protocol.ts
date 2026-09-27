@@ -245,9 +245,19 @@ function completeTurn(context: ProtocolContext, turn: Turn): void {
 }
 
 /**
- * Terminals a turn left running die with this app-server. Codex marks a
- * terminal exited before it completes the command's item, so the list minus
- * completions that race the request is exact.
+ * End every terminal the thread left running, then read what remains.
+ * Checked on codex 0.154: terminals outlive both an interrupt, which turns
+ * the running foreground command into one more, and the app-server's exit.
+ */
+export async function cleanBackground(context: ProtocolContext): Promise<void> {
+  if (!context.threadId) return
+  await rpcRequest(context, "thread/backgroundTerminals/clean", { threadId: context.threadId })
+  await listBackground(context)
+}
+
+/**
+ * Codex marks a terminal exited before it completes the command's item, so
+ * the list minus completions that race the request is exact.
  */
 async function listBackground(context: ProtocolContext): Promise<void> {
   const threadId = context.threadId
@@ -596,6 +606,7 @@ export function rpcRequest(
       return beginRpcRequest(context, method, params, parseSteerResponse)
     case "thread/compact/start":
     case "turn/interrupt":
+    case "thread/backgroundTerminals/clean":
       return beginRpcRequest(context, method, params, parseObjectResult)
     case "thread/backgroundTerminals/list":
       return beginRpcRequest(context, method, params, (value) => {

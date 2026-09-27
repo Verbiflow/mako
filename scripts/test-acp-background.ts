@@ -63,3 +63,30 @@ assert.deepEqual(devin.sessionUpdate(exec("completed", {
 })), { sessionId: "devin-session", running: 0 })
 assert.equal(devin.sessionUpdate(exec("completed", {})), undefined, "an ordinary tool completion reports nothing")
 console.log("PASS: Devin background shells count until their exec call completes")
+
+const control = (running: number) => {
+  const calls: unknown[] = []
+  return {
+    calls,
+    control: {
+      sessionId: "session", running,
+      request: async (method: string, params: JsonObject) => { calls.push([method, params]) },
+      reopen: async () => { calls.push("reopen") },
+    },
+  }
+}
+devin.sessionUpdate(exec("in_progress", { "cognition.ai/background": true, "cognition.ai/backgroundShellId": "a1" }))
+devin.sessionUpdate({ sessionId: "devin-session", update: { sessionUpdate: "tool_call_update", toolCallId: "exec:1#shell", status: "in_progress", _meta: { "cognition.ai/background": true, "cognition.ai/backgroundShellId": "b2" } } })
+const devinStop = control(2)
+await devin.stop(devinStop.control)
+assert.deepEqual(devinStop.calls, [
+  ["_cognition.ai/terminal/killBackgroundShell", { sessionId: "session", shellId: "a1" }],
+  ["_cognition.ai/terminal/killBackgroundShell", { sessionId: "session", shellId: "b2" }],
+])
+const grokStop = control(1)
+await grok.stop(grokStop.control)
+assert.deepEqual(grokStop.calls, ["reopen"], "Grok ends its tasks by closing and resuming the session")
+const grokIdle = control(0)
+await grok.stop(grokIdle.control)
+assert.deepEqual(grokIdle.calls, [], "with nothing running, Grok's session is left alone")
+console.log("PASS: Stop asks Devin to kill each running shell, and reopens a Grok session only while tasks run")

@@ -33,6 +33,9 @@ export function recoveryCapabilities(driver: ProviderLiveDriver | undefined): Re
     : compaction ? { compaction } : UNAVAILABLE_RECOVERY
 }
 
+/** How long a closing provider has to end its own work before it is terminated. */
+export const SHUTDOWN_GRACE_MS = 5_000
+
 export interface ConversationTools {
   url: string
   token: string

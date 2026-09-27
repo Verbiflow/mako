@@ -4,7 +4,7 @@ import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
-import type { ProviderStartOptions, ProviderSteerInput, ProviderSteerResult } from "./providers/live-driver.js"
+import { SHUTDOWN_GRACE_MS, type ProviderStartOptions, type ProviderSteerInput, type ProviderSteerResult } from "./providers/live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction } from "./acp-compaction.js"
@@ -69,7 +69,7 @@ import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { forward } from "./acp-notifications.js"
 import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
-import type { AcpBackgroundReport, AcpTuning } from "./providers/acp-source.js"
+import type { AcpBackgroundObserver, AcpBackgroundReport, AcpTuning } from "./providers/acp-source.js"
 import type { JsonObject } from "./codex-app-json.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
@@ -127,12 +127,14 @@ interface Live {
   providerTurnCause?: string
   /** The agent advertised `session/close`. */
   closesSession?: boolean
+  background?: AcpBackgroundObserver
+  /** Waiting for the running turn to settle, or for the session to end. */
+  settling: Array<() => void>
+  /** Stop is closing and resuming the session to end its background work; a prompt waits for it. */
+  reopening?: Promise<void>
   /** The tier the process was launched with, for providers that read it at start. */
   launchAccess: AccessTier | null
 }
-
-/** How long a closing agent has to end its own work before it is terminated. */
-const SHUTDOWN_GRACE_MS = 5_000
 
 /** Output that begins a turn. A tool update can still belong to the turn before. */
 const TURN_CONTENT = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "plan"])
@@ -307,6 +309,7 @@ async function startAcp(
       configOptions: [],
     },
     pendingPermissions: new Map(),
+    settling: [],
     startup: new AbortController(),
     promptCapabilities: {},
     configOptions: [],
@@ -438,6 +441,7 @@ async function startAcp(
     },
   }
   const background = source?.observeBackground?.()
+  live.background = background
   const providerTurns = source?.providerTurns?.()
   function observeProviderTurn(method: string, params: JsonObject): void {
     if (!providerTurns || !live.sessionId) return
@@ -725,7 +729,10 @@ export async function livePrompt(
   }
   let applied: Awaited<ReturnType<typeof applyTuning>>
   try {
-    applied = await preparePromptAsync(dispatch, () => applyTuning(live, tuning))
+    applied = await preparePromptAsync(dispatch, async () => {
+      await live.reopening
+      return applyTuning(live, tuning)
+    })
   } catch (error) {
     hostWarn("acp", "settings refused", { harness: live.harness, conversation: id, error: errorMessage({ error }) })
     throw error
@@ -854,7 +861,41 @@ export async function liveCancel(id: string): Promise<void> {
   // The protocol requires pending permission requests to settle as cancelled
   // once the client cancels; an agent may otherwise wait on them forever.
   engine.release(live)
-  await live.connection.cancel({ sessionId: live.sessionId })
+  const end = () => void endBackground(live)
+  if (live.state.status === "running") live.settling.push(end)
+  else end()
+  try {
+    await live.connection.cancel({ sessionId: live.sessionId })
+  } catch (error) {
+    live.settling = live.settling.filter((settle) => settle !== end)
+    throw error
+  }
+}
+
+/** Stop ends the session's background work too, once its turn has settled. */
+async function endBackground(live: Live): Promise<void> {
+  const { background, connection, sessionId } = live
+  if (!background || !connection || !sessionId || live.state.status === "closed" || live.state.connection === "disconnected") return
+  try {
+    await background.stop({
+      sessionId,
+      running: live.state.backgroundTasks ?? 0,
+      request: async (method, params) => { await connection.request(method, params) },
+      reopen: () => {
+        const reopening = (async () => {
+          await connection.closeSession({ sessionId })
+          await connection.resumeSession({ sessionId, cwd: live.cwd, mcpServers: live.mcpServers })
+          live.providerTurnCause = undefined
+        })().finally(() => {
+          if (live.reopening === reopening) live.reopening = undefined
+        })
+        live.reopening = reopening
+        return reopening
+      },
+    })
+  } catch (error) {
+    hostWarn("acp", "Background work was not ended", { harness: live.harness, conversation: live.id, error: errorMessage({ error }) })
+  }
 }
 
 const closingSessions = new Map<string, Promise<void>>()
@@ -909,4 +950,5 @@ function update(live: Live, patch: Partial<LiveSessionState>): void {
     patch.settings = acpObservedSettings(live.configOptions, live.state.settings?.model)
   }
   engine.patch(live, patch)
+  if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
 }
