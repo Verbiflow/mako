@@ -50,6 +50,18 @@ export async function refreshWorktrees(): Promise<void> {
   if (mine === reads) worktreesStore.set(stateOf(worktrees))
 }
 
+/** A project asks for spares at most this often; the host keeps them for a day after. */
+const WANT_EVERY_MS = 10 * 60_000
+const wanted = new Map<string, number>()
+
+/** The project in `cwd` is about to start a Thread in a worktree: have the host keep checkouts of it ready. */
+export function wantSpareWorktrees(cwd: string): void {
+  const now = Date.now()
+  if (!hasBridge() || now - (wanted.get(cwd) ?? 0) < WANT_EVERY_MS) return
+  wanted.set(cwd, now)
+  void getMako().wantWorktree(cwd).catch(() => wanted.delete(cwd))
+}
+
 /** Remove a worktree; its branch keeps whatever was committed there. */
 export async function removeWorktree(worktree: ThreadWorktree): Promise<void> {
   try {

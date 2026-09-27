@@ -122,6 +122,8 @@ const replays = [
   "mako:thread-split",
   /** `ThreadStore.undoRegroup`: the operation id is receipted; a repeat returns the first result. */
   "mako:thread-regroup-undo",
+  /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
+  "mako:worktree-want",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

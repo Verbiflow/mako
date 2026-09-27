@@ -2069,6 +2069,8 @@ app.whenReady().then(async () => {
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
   installThreadGroupsIpc(threadStore, liveConversations)
   installThreadWorktreesIpc(threadWorktrees)
+  void threadWorktrees?.tidy().catch((error) =>
+    hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))
   installCheckoutHeadsIpc(checkoutHeads)
   application = installApplicationIpc({
     live: liveConversations,

@@ -20,3 +20,25 @@ export interface ThreadWorktrees {
   root: string
   worktrees: ThreadWorktree[]
 }
+
+export const WORKTREE_BRANCH_PREFIX = "mako/"
+const SLUG_WORDS = 4
+const SLUG_LENGTH = 32
+const FILLER = new Set(["a", "an", "the", "to", "of", "and", "in", "on", "for", "with", "please", "can", "could",
+  "you", "i", "me", "my", "we", "our", "this", "that", "it", "is", "be", "let", "lets", "let's"])
+
+/**
+ * A branch-safe name from the Thread's first words: "Fix the login redirect"
+ * becomes `fix-login-redirect`. Shared so the composer can show the branch a
+ * send will make before it's sent.
+ */
+export function worktreeSlug(text: string | undefined): string {
+  const words = (text ?? "")
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/[\s-]+/)
+    .filter((word) => word && !FILLER.has(word))
+    .slice(0, SLUG_WORDS)
+  return words.join("-").slice(0, SLUG_LENGTH).replace(/-+$/, "") || "thread"
+}

@@ -851,6 +851,7 @@ export const hostCallInputs = {
   "mako:utility-model-settings": z.tuple([]),
   "mako:watch-file": z.tuple([z.string()]),
   "mako:worktree-remove": z.tuple([z.string()]),
+  "mako:worktree-want": z.tuple([z.string()]),
   "mako:worktrees": z.tuple([]),
   "mako:write-plugin": z.tuple([z.string(), z.string()]),
 }

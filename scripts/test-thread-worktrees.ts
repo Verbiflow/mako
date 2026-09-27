@@ -1,12 +1,13 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Actor } from "../electron/contracts/thread-identity.js"
 import { ThreadStore } from "../electron/thread-store.js"
-import { ThreadWorktreeService, worktreeSlug } from "../electron/thread-worktrees.js"
+import { worktreeSlug } from "../electron/contracts/thread-worktrees.js"
+import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 
 /**
  * A Thread's worktree against a real repository: where it goes, what it
@@ -77,11 +78,18 @@ assert.equal(git(prepared.path, "ls-files").split("\n").length, git(shop, "ls-fi
 assert.equal(git(prepared.path, "status", "--porcelain"), "", "a parallel checkout leaves a clean worktree")
 assert.equal(readFileSync(join(prepared.path, "web", "generated", "part-149.ts"), "utf8"), "export const part = 149\n")
 
-// Mako's list of gitignored inputs comes along; dependencies and builds don't.
+// Mako's list of gitignored inputs comes along, then installed dependencies as clones; builds don't.
 assert.equal(prepared.copied, 2)
+assert.equal(prepared.spare, false, "the project's first worktree has no spare to take")
 assert.equal(readFileSync(join(prepared.path, ".env"), "utf8"), "API=1\n")
 assert.equal(readFileSync(join(prepared.path, ".env.local"), "utf8"), "LOCAL=1\n")
-assert.equal(existsSync(join(prepared.path, "node_modules")), false)
+const dependencies = await worktrees.dependencies(first)
+if (process.platform === "darwin") {
+  assert.deepEqual(dependencies, { carried: ["node_modules"] })
+  assert.equal(readFileSync(join(prepared.path, "node_modules", "left-pad", "index.js"), "utf8"), "module.exports = 1\n")
+} else {
+  assert.ok(dependencies?.carried.length || dependencies?.skipped, "Linux clones them where the volume shares blocks and says why not elsewhere")
+}
 assert.equal(existsSync(join(prepared.path, "dist")), false)
 
 // Another Thread with the same words gets the next free name.
@@ -123,12 +131,86 @@ rmSync(join(prepared.path, "web", "draft.ts"))
 const after = await worktrees.remove(prepared.path)
 assert.equal(existsSync(prepared.path), false)
 assert.deepEqual(after.worktrees.map((worktree) => worktree.path), [other.path])
-assert.equal(git(shop, "branch", "--list", "mako/fix-login-redirect"), "mako/fix-login-redirect", "the branch keeps committed work")
+assert.equal(git(shop, "branch", "--list", "mako/fix-login-redirect"), "mako/fix-login-redirect", "the branch keeps committed work, free to check out at once")
 await assert.rejects(worktrees.remove(join(root, "elsewhere")), /Mako didn't make this worktree/)
 
 // Deleted outside Mako: forgotten on the next list.
 git(shop, "worktree", "remove", "--force", other.path)
 assert.deepEqual((await worktrees.list()).worktrees, [])
+
+// Spares: two checkouts of a project that starts worktree Threads, made ahead of time.
+const spareRecords = join(root, "worktrees", "spares")
+const spares = () => readdirSync(spareRecords).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(spareRecords, name), "utf8")))
+await worktrees.settled()
+assert.equal(spares().filter((spare) => spare.repoRoot === shop && spare.state === "ready").length, 2, "each worktree start keeps two spares ready")
+for (const spare of spares()) {
+  assert.match(spare.path, /\/worktrees\/shop-[0-9a-f]{8}\/\.spare-[0-9a-f]{8}$/)
+  assert.equal(git(spare.path, "status", "--porcelain"), "")
+  assert.match(git(shop, "worktree", "list", "--porcelain"), new RegExp(`worktree ${spare.path}\\nHEAD [0-9a-f]+\\ndetached\\nlocked Mako keeps this checkout ready`))
+}
+
+// The send takes one: same name, branch, commit, carried files and subfolder as a fresh checkout.
+const fromSpare = randomUUID()
+const claimed = await worktrees.prepare(fromSpare, join(shop, "web"), "Speed up search")
+assert.equal(claimed.spare, true)
+assert.match(claimed.path, /\/shop-[0-9a-f]{8}\/speed-up-search$/)
+assert.equal(claimed.cwd, join(claimed.path, "web"))
+assert.equal(git(claimed.path, "rev-parse", "--abbrev-ref", "HEAD"), "mako/speed-up-search")
+assert.equal(git(claimed.path, "rev-parse", "HEAD"), git(shop, "rev-parse", "HEAD"))
+assert.equal(git(claimed.path, "status", "--porcelain"), "")
+assert.equal(readFileSync(join(claimed.path, ".env"), "utf8"), "API=1\n")
+assert.doesNotMatch(git(shop, "worktree", "list", "--porcelain"), new RegExp(`worktree ${claimed.path}\\n[^\\n]*\\n[^\\n]*\\nlocked`), "a claimed spare isn't locked")
+await worktrees.dependencies(fromSpare)
+if (process.platform === "darwin") assert.equal(existsSync(join(claimed.path, "node_modules", "left-pad", "index.js")), true, "the spare's cloned dependencies came with it")
+await worktrees.settled()
+assert.equal(spares().filter((spare) => spare.repoRoot === shop).length, 2, "the taken spare is replaced")
+
+// The main checkout moved on: the spare catches up to its commit.
+writeFileSync(join(shop, "web", "index.ts"), "export const moved = true\n")
+git(shop, "commit", "-q", "-am", "moved")
+const caughtUp = await worktrees.prepare(randomUUID(), shop, "after the move")
+assert.equal(caughtUp.spare, true)
+assert.equal(git(caughtUp.path, "rev-parse", "HEAD"), git(shop, "rev-parse", "HEAD"))
+assert.equal(readFileSync(join(caughtUp.path, "web", "index.ts"), "utf8"), "export const moved = true\n")
+assert.equal(git(caughtUp.path, "status", "--porcelain"), "")
+await worktrees.settled()
+
+// Dependencies cloned before the lockfile changed don't fit it: they go, and aren't cloned again while it differs.
+writeFileSync(join(shop, "package-lock.json"), "{\"lockfileVersion\":3}\n")
+const relocked = randomUUID()
+const unlocked = await worktrees.prepare(relocked, shop, "lockfile changed")
+assert.equal(unlocked.spare, true)
+assert.equal(existsSync(join(unlocked.path, "node_modules")), false)
+assert.deepEqual(await worktrees.dependencies(relocked), { carried: [], skipped: "package-lock.json differs from the main checkout's" })
+rmSync(join(shop, "package-lock.json"))
+await worktrees.settled()
+
+// Two hosts sharing the root never take the same spare.
+const hosts = [service(), service()]
+const [left, right] = await Promise.all([hosts[0].prepare(randomUUID(), shop, "left host"), hosts[1].prepare(randomUUID(), shop, "right host")])
+assert.equal(left.spare && right.spare, true)
+assert.notEqual(left.path, right.path)
+assert.equal(git(left.path, "status", "--porcelain") + git(right.path, "status", "--porcelain"), "")
+await Promise.all(hosts.map((host) => host.settled()))
+await worktrees.want(shop)
+await worktrees.settled()
+assert.equal(spares().filter((spare) => spare.repoRoot === shop && spare.state === "ready").length, 2, "one host refills while the other's lock holds")
+
+// A spare half-made by a host that died is given back, as is a record that isn't one; so is a project idle for a day.
+const orphan = { ...spares()[0], id: randomUUID(), state: "preparing", pid: 2 ** 22 + 7, path: join(root, "worktrees", "gone") }
+writeFileSync(join(spareRecords, `${orphan.id}.json`), JSON.stringify(orphan))
+writeFileSync(join(spareRecords, `${randomUUID()}.json`), "{\"cut\":")
+await service().tidy()
+assert.equal(spares().some((spare) => spare.id === orphan.id), false)
+assert.equal(spares().length, 2)
+const idle = spares().filter((spare) => spare.repoRoot === shop)
+assert.equal(idle.length, 2)
+const wantedFile = readdirSync(spareRecords).find((name) => name.endsWith(".wanted"))
+assert.ok(wantedFile)
+writeFileSync(join(spareRecords, wantedFile), String(Date.now() - 25 * 60 * 60_000))
+await service().tidy()
+assert.deepEqual(spares().filter((spare) => spare.repoRoot === shop), [])
+for (const spare of idle) assert.equal(existsSync(spare.path), false, "an idle spare's folder is moved aside at once")
 
 // Folders that can't have one say what to do instead.
 const plain = join(root, "plain")
@@ -137,6 +219,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), plain, "x"), /plain isn't i
 const empty = repository("empty", false)
 await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits yet/)
 
+await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, carried inputs, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, refusals")
+console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), refusals")
