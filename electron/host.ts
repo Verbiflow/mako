@@ -1,9 +1,9 @@
 import type { GitRemoteInput, GitRemoteResult } from "./shared.js"
-import { watch, type FSWatcher } from "node:fs"
 import { homedir } from "node:os"
 import { WorkspaceGit } from "./host-git.js"
 import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"
+import { watchTree, type TreeWatch } from "./tree-watcher.js"
 import type {
   Capabilities,
   FileContents,
@@ -37,7 +37,7 @@ export class AgentHost {
   private readonly workspaceGit: WorkspaceGit
   private readonly workspaceFiles: WorkspaceFiles
   private foreground = true
-  private workspaceWatcher: FSWatcher | null = null
+  private workspaceWatcher: TreeWatch | null = null
   private workspaceWatcherGeneration = 0
   private gitPushGeneration = 0
   private gitRefreshTimer: NodeJS.Timeout | null = null
@@ -90,36 +90,25 @@ export class AgentHost {
   private startWorkspaceWatcher(): void {
     if (this.workspaceWatcher) return
     const generation = ++this.workspaceWatcherGeneration
-    try {
-      this.workspaceWatcher = watch(
-        this.workspace,
-        { recursive: true },
-        (_event, filename) => {
-          if (this.workspaceWatcherGeneration !== generation) return
-          const path = filename?.toString()
-          if (
-            path &&
-            /(^|\/)(node_modules|dist|dist-electron|release|build|out|\.next|coverage|\.turbo)(\/|$)/.test(
-              path
-            )
-          )
-            return
-          if (!this.workspaceGit.noteChange(path)) return
-          if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer)
-          this.gitRefreshTimer = setTimeout(() => {
-            this.gitRefreshTimer = null
-            if (this.workspaceWatcherGeneration === generation)
-              void this.pushGit()
-          }, 180)
-        }
-      )
-      this.workspaceWatcher.on("error", () => {
+    this.workspaceWatcher = watchTree(
+      this.workspace,
+      (paths) => {
+        if (this.workspaceWatcherGeneration !== generation) return
+        let moves = false
+        for (const path of paths) if (this.workspaceGit.noteChange(path)) moves = true
+        if (!moves) return
+        if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer)
+        this.gitRefreshTimer = setTimeout(() => {
+          this.gitRefreshTimer = null
+          if (this.workspaceWatcherGeneration === generation)
+            void this.pushGit()
+        }, 180)
+      },
+      () => {
         if (this.workspaceWatcherGeneration === generation) this.stopWorkspaceWatcher()
-      })
-      this.workspaceGit.trackChanges(true)
-    } catch {
-      this.workspaceWatcher = null
-    }
+      }
+    ) ?? null
+    if (this.workspaceWatcher) this.workspaceGit.trackChanges(true)
   }
 
   private stopWorkspaceWatcher(): void {

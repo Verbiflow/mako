@@ -98,6 +98,17 @@ export interface SessionProvider {
    */
   roots(): string[]
 
+  /**
+   * The roots to watch recursively, when not all of them. A root that also
+   * holds logs or caches its harness writes constantly is left out and its
+   * session stores named in `pollFiles`: a recursive watch hears every one
+   * of those writes, at the cost of `fseventsd` and this process.
+   */
+  watchRoots?(): string[]
+
+  /** Session stores under unwatched roots, checked by `stat` once a second. */
+  pollFiles?(): string[]
+
   /** Every native session file under the roots, stat-only — no reads. */
   discover(): Promise<NativeFile[]>
 

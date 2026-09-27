@@ -90,6 +90,7 @@ const PREVIEW_MIN_BYTES = 4 * 1024 * 1024
 const PREVIEW_WINDOWS = [2, 8, 24].map((mb) => mb * 1024 * 1024)
 
 const WATCH_DEBOUNCE_MS = 24
+const POLL_FILES_MS = 1000
 /**
  * A refresh waits for writes to settle, but never longer than this many
  * settle windows after the first write of a burst. An agent streaming into
@@ -266,6 +267,7 @@ export class SessionCatalog {
   private preparation: Promise<void> | null = null
   private saveTimer: NodeJS.Timeout | null = null
   private watchers = new Map<string, FSWatcher>()
+  private polls = new Map<string, (current: Stats, previous: Stats) => void>()
   private discovering: Promise<void> | null = null
   private watching = false
   private stopped = false
@@ -636,7 +638,22 @@ export class SessionCatalog {
   }
 
   private refreshWatchRoots(): void {
-    const roots = new Set(this.providers.flatMap(provider => provider.roots()))
+    const polls = new Set(this.providers.flatMap(provider => provider.pollFiles?.() ?? []))
+    for (const [file, changed] of this.polls) {
+      if (polls.has(file)) continue
+      unwatchFile(file, changed)
+      this.polls.delete(file)
+    }
+    for (const file of polls) {
+      if (this.polls.has(file)) continue
+      const changed = (current: Stats, previous: Stats) => {
+        if (this.stopped || (current.mtimeMs === previous.mtimeMs && current.size === previous.size && current.ino === previous.ino)) return
+        this.noticed(file)
+      }
+      watchFile(file, { persistent: false, interval: POLL_FILES_MS }, changed)
+      this.polls.set(file, changed)
+    }
+    const roots = new Set(this.providers.flatMap(provider => provider.watchRoots?.() ?? provider.roots()))
     for (const [root, watcher] of this.watchers) {
       if (roots.has(root) && existsSync(root)) continue
       watcher.close()
@@ -810,6 +827,8 @@ export class SessionCatalog {
     this.follows.clear()
     for (const watcher of this.watchers.values()) watcher.close()
     this.watchers.clear()
+    for (const [file, changed] of this.polls) unwatchFile(file, changed)
+    this.polls.clear()
     if (this.pollTimer) {
       clearInterval(this.pollTimer)
       this.pollTimer = null

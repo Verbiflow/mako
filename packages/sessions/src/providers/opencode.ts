@@ -107,6 +107,15 @@ export class OpenCodeProvider implements SessionProvider {
     return [...new Set(this.databases.map(path => dirname(path)))]
   }
 
+  /** The data folder also holds logs, snapshots and tool output a running agent writes continuously. */
+  watchRoots(): string[] {
+    return []
+  }
+
+  pollFiles(): string[] {
+    return this.databasePaths().flatMap((database) => [database, `${database}-wal`])
+  }
+
   observationPaths(path: string): string[] {
     const target = parseSessionPath(path, this.databasePaths())
     return target ? [target.database, `${target.database}-wal`] : []

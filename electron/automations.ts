@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { watch, type FSWatcher } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { join, relative, sep } from "node:path"
+import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
 import {
@@ -10,6 +9,7 @@ import {
   type AutomationRun,
   type HostEvent,
 } from "./shared.js"
+import { watchTree, type TreeWatch } from "./tree-watcher.js"
 
 /**
  * Saved prompts that can fire on their own.
@@ -55,7 +55,7 @@ const OptionalTextSchema = z.string().max(500).optional()
 
 interface Runtime {
   cwd: string
-  watcher: FSWatcher | null
+  watcher: TreeWatch | null
   timers: Map<string, NodeJS.Timeout>
   lastRun: Map<string, number>
   inFlight: Set<string>
@@ -415,14 +415,10 @@ function syncFileWatcher(current: Runtime): void {
   }
   if (current.watcher) return
 
-  try {
-    const watcher: FSWatcher = watch(current.cwd, { recursive: true }, (_event, filename) => {
-      if (!filename || runtime !== current || current.watcher !== watcher) return
-      const path = relative(current.cwd, join(current.cwd, filename.toString()))
-        .split(sep)
-        .join("/")
-      if (!path || isIgnored(path)) return
-
+  const watcher: TreeWatch | undefined = watchTree(current.cwd, (paths) => {
+    if (runtime !== current || current.watcher !== watcher) return
+    for (const path of paths) {
+      if (isIgnored(path)) continue
       for (const automation of automations) {
         if (!automation.enabled || automation.trigger.kind !== "files") continue
         if (!automation.trigger.paths.some((pattern) => matchesGlob(pattern, path)))
@@ -439,17 +435,19 @@ function syncFileWatcher(current: Runtime): void {
           }, DEBOUNCE_MS)
         )
       }
-    })
-    current.watcher = watcher
-  } catch {
-    // Recursive watching is unavailable on some platforms and some volumes.
-    // File triggers simply do not fire there; manual ones still work.
-  }
+    }
+  }, () => {
+    if (current.watcher !== watcher) return
+    current.watcher = null
+    watcher?.close()
+  })
+  // The filesystem root and the home folder aren't watched, and some volumes
+  // can't be; file triggers don't fire there, manual ones still work.
+  current.watcher = watcher ?? null
 }
 
-/** Directories whose churn is never what a rule means. */
-const IGNORED =
-  /(^|\/)(\.git|node_modules|dist|dist-electron|release|build|out|\.next|coverage|\.turbo)(\/|$)/
+/** Git's own bookkeeping is never what a rule means; `watchTree` already drops dependency and build folders. */
+const IGNORED = /(^|\/)\.git(\/|$)/
 
 function isIgnored(path: string): boolean {
   return IGNORED.test(path)

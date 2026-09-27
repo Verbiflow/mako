@@ -502,6 +502,16 @@ export class CursorProvider implements SessionProvider {
     return [this.chatRoot, this.acpRoot, this.sdkStateRoot, this.desktop.root]
   }
 
+  /** Desktop's globalStorage is mostly extension storage and agent-worker logs, written many times a second. */
+  watchRoots(): string[] {
+    return [this.chatRoot, this.acpRoot, this.sdkStateRoot]
+  }
+
+  pollFiles(): string[] {
+    const database = join(this.desktop.root, "state.vscdb")
+    return [database, `${database}-wal`]
+  }
+
   /**
    * A write inside a session directory — the database, its WAL, or
    * `meta.json` — refreshes that session's store. Desktop writes pass

@@ -153,6 +153,15 @@ export class DevinCliProvider implements SessionProvider {
     return [database, `${database}-wal`]
   }
 
+  /** Only the locks folder: logs and plugin state beside it change without a session moving. */
+  watchRoots(): string[] {
+    return [this.lockPath()]
+  }
+
+  pollFiles(): string[] {
+    return this.observationPaths()
+  }
+
   /**
    * Sessions live in the database and their locks; the logs, plugin state
    * and summaries beside them change without a session moving.
