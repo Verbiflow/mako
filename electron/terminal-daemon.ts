@@ -1,6 +1,6 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net"
-import { mkdir, chmod, lstat, readFile, rename, unlink, writeFile } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { mkdir, chmod, lstat, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { spawn as spawnPty, type IDisposable, type IPty } from "@lydell/node-pty"
 import { z } from "zod"
@@ -631,29 +631,41 @@ async function startServer() {
  * never be reached again, yet it kept its shells, its CPU and a timer that
  * rewrote the successor's history file every two seconds. It leaves instead,
  * without touching the files that now belong to the new owner.
+ *
+ * A daemon whose state directory was deleted belongs to a profile that no
+ * longer exists. A long profile path puts the socket in the temp directory,
+ * outside the profile, so deleting a throwaway profile never unlinks it and
+ * the daemon would otherwise run until logout.
  */
 function watchEndpoint(inode: number) {
   const timer = setInterval(() => {
-    void lstat(endpoint)
-      .then((info) => info.ino !== inode)
-      .catch((error) => errnoSchema.safeParse(error).data?.code === "ENOENT")
-      .then((orphaned) => {
-        if (orphaned) void shutdown(0, "orphaned")
-      })
+    void Promise.all([
+      lstat(endpoint)
+        .then((info) => info.ino !== inode)
+        .catch((error) => errnoSchema.safeParse(error).data?.code === "ENOENT"),
+      lstat(stateDir)
+        .then(() => false)
+        .catch((error) => errnoSchema.safeParse(error).data?.code === "ENOENT"),
+    ]).then(([orphaned, removed]) => {
+      if (removed) void shutdown(0, "removed")
+      else if (orphaned) void shutdown(0, "orphaned")
+    })
   }, ENDPOINT_CHECK_MS)
   timer.unref()
 }
 
-async function shutdown(code: number, reason: "stop" | "orphaned" = "stop") {
+async function shutdown(code: number, reason: "stop" | "orphaned" | "removed" = "stop") {
   if (stopping) return
   stopping = true
-  const owned = reason === "stop"
-  if (owned) await persist(true).catch(() => undefined)
+  if (reason === "stop") await persist(true).catch(() => undefined)
   for (const session of sessions.values()) terminateSession(session)
   for (const client of clients) client.socket.destroy()
   // Closing a Unix socket server unlinks its path, which a successor may own.
-  if (owned) server?.close()
-  if (owned && process.platform !== "win32") await unlink(endpoint).catch(() => undefined)
+  if (reason !== "orphaned") server?.close()
+  if (reason !== "orphaned" && process.platform !== "win32") {
+    await unlink(endpoint).catch(() => undefined)
+    if (dirname(endpoint) !== stateDir) await rmdir(dirname(endpoint)).catch(() => undefined)
+  }
   process.exit(code)
 }
 

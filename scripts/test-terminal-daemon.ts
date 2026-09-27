@@ -429,6 +429,33 @@ if (process.platform !== "win32") {
   longClient.dispose()
   if (longPid) process.kill(longPid, "SIGTERM")
 }
+
+// Deleting a long-path profile leaves the daemon's socket in the temp
+// directory; the daemon notices its state is gone and leaves with it.
+if (process.platform !== "win32") {
+  const removedProfile = join(root, "q".repeat(120))
+  const removedState = join(removedProfile, "terminal")
+  const removedEndpoint = terminalEndpoint(removedState)
+  assert.equal(dirname(dirname(removedEndpoint)), tmpdir())
+  const removedClient = new TerminalDaemonClient(entry, removedState, () => undefined)
+  await removedClient.create({ cwd: root, cols: 80, rows: 24 })
+  const removedPid = removedClient.daemonPid()
+  assert.ok(removedPid)
+  removedClient.dispose()
+  await rm(removedProfile, { recursive: true, force: true })
+  let alive = true
+  for (let attempt = 0; attempt < 80 && alive; attempt += 1) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100))
+    try {
+      process.kill(removedPid, 0)
+    } catch {
+      alive = false
+    }
+  }
+  if (alive) process.kill(removedPid, "SIGKILL")
+  assert.equal(alive, false, "a daemon whose profile was deleted exits by itself, ending its shells")
+  assert.equal(await access(dirname(removedEndpoint)).then(() => true, () => false), false, "and removes its socket folder")
+}
 await rm(root, { recursive: true, force: true })
 
 console.log("terminal daemon integration passed")

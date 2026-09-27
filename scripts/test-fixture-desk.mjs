@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { request } from "node:http"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
@@ -90,14 +90,18 @@ try {
 
   // Garbage arguments: a refusal here, not a validation error, shows the check
   // ran before the handler's schema and so before the handler.
-  const automations = (await socketCall(call("mako:automations"))).value
+  // The desk window's boot loads the workspace's automations, so the listed
+  // set can change here legitimately; a save would change the file.
+  const automationsFile = join(root, ".mako", "automations.json")
+  const savedAutomations = () => readFile(automationsFile, "utf8").catch(() => null)
+  const automations = await savedAutomations()
   for (const channel of ["mako:live-start", "mako:list-models", "mako:git-status", "mako:terminal-create", "mako:save-automations", "mako:relaunch", "mako:thread-archive", "mako:not-a-channel"]) {
     const reply = await socketCall(call(channel, { garbage: true }, 7))
     assert.equal(reply.ok, false, channel)
     assert.equal(reply.code, "fixture-refused", `${channel} on the socket: ${JSON.stringify(reply)}`)
   }
   assert.deepEqual((await socketCall(call("mako:terminal-list"))).value, [], "A refused terminal-create started no process")
-  assert.deepEqual((await socketCall(call("mako:automations"))).value, automations, "A refused save wrote nothing")
+  assert.equal(await savedAutomations(), automations, "A refused save wrote nothing")
   assert.equal((await socketCall(call("mako:threads"))).ok, true, "Allowed reads run")
   assert.equal((await socketCall(call("mako:boot"))).ok, true, "The interface can boot")
   const lifecycle = await socketCall(call("mako:lifecycle-command", { kind: "cancel" }))
@@ -156,7 +160,7 @@ try {
     ["lifecycle-command", `window.mako.lifecycleCommand({ kind: "cancel" })`],
     ["save-automations", `window.mako.saveAutomations([])`],
   ]) assert.match(await outcome(expression), /fixture desk refused/, `A hidden desk window's ${label} is refused`)
-  assert.deepEqual((await socketCall(call("mako:automations"))).value, automations, "No desk window wrote automations")
+  assert.equal(await savedAutomations(), automations, "No desk window wrote automations")
   assert.equal(await outcome("window.mako.threads()"), "ran", "A hidden desk window can read")
   assert.deepEqual((await socketCall(call("mako:terminal-list"))).value, [], "No desk window started a terminal")
   await send("Target.closeTarget", { targetId })
