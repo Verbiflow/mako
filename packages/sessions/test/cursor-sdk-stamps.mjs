@@ -68,6 +68,29 @@ try {
   const cancelled = await stamps()
   assert.notEqual(cancelled.idle.revision, first.idle.revision)
   assert.deepEqual(cancelled.running, finished.running)
+  // A catalog cached by the file-stamp rule held every SDK store at the
+  // index's time. The new, older times must replace it once, then settle,
+  // with no peek-rule bump to re-peek every Cursor store.
+  const cachePath = join(home, "catalog.json")
+  const { CATALOG_CACHE_VERSION } = await import("../dist/catalog-cache.js")
+  const entries = {}
+  for (const id of ["running", "idle"]) {
+    const path = join(directory(id), "store.db")
+    entries[path] = { bytes: 0, mtimeMs: Date.parse("2026-09-28T00:00:00.000Z"), revision: "old-rule", peek: 2, ref: { harness: "cursor", nativeId: id, path, title: id } }
+  }
+  await writeFile(cachePath, JSON.stringify({ version: CATALOG_CACHE_VERSION, entries }))
+  const { SessionCatalog } = await import("../dist/catalog.js")
+  const upgraded = new CursorProvider(home, {})
+  let peeks = 0
+  const peek = upgraded.peek.bind(upgraded)
+  upgraded.peek = (file) => { peeks++; return peek(file) }
+  const catalog = new SessionCatalog([upgraded], { cachePath })
+  await catalog.scan()
+  const afterUpgrade = peeks
+  await catalog.scan()
+  await catalog.reconcileActive()
+  assert.equal(peeks, afterUpgrade, "after one pass, unchanged stores are not peeked again")
+  await catalog.stop()
   index.close()
   console.log("cursor-sdk-stamps: ok")
 } finally {

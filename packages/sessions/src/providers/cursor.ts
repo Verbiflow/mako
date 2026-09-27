@@ -477,6 +477,7 @@ export class CursorProvider implements SessionProvider {
   private sdkStateRoot: string
   private sdkRoot: string
   private sdkStamps = new Map<string, CursorSdkAgentStamp>()
+  private sdkStampsAt: string | null = null
   /**
    * 2: every `cursor-agent` store resumes live (the SDK imports it), and an
    * SDK agent Mako imported carries the legacy row's identity.
@@ -562,11 +563,23 @@ export class CursorProvider implements SessionProvider {
   private async nativeStores(paths: string[]): Promise<NativeFile[]> {
     const files = await nativeFiles(paths)
     if (!files.some((file) => this.isSdkStore(file.path))) return files
-    // An index read that fails keeps the last stamps, so a busy moment
-    // doesn't flip every agent to changed and back.
-    this.sdkStamps =
-      readCursorSdkAgentStamps(cursorSdkIndexPath(this.sdkStateRoot)) ??
-      this.sdkStamps
+    const index = cursorSdkIndexPath(this.sdkStateRoot)
+    const indexStamp = (
+      await Promise.all(
+        [index, `${index}-wal`].map((candidate) => stat(candidate).catch(() => null))
+      )
+    )
+      .map((info) => (info ? `${info.size}:${info.mtimeMs}` : "missing"))
+      .join("|")
+    // An unchanged index answers from the last read; a read that fails keeps
+    // the last stamps, so a busy moment doesn't flip every agent to changed.
+    if (indexStamp !== this.sdkStampsAt) {
+      const stamps = readCursorSdkAgentStamps(index)
+      if (stamps) {
+        this.sdkStamps = stamps
+        this.sdkStampsAt = indexStamp
+      }
+    }
     return files.map((file) => {
       if (!this.isSdkStore(file.path)) return file
       const stamp = this.sdkStamps.get(basename(dirname(file.path)))

@@ -311,10 +311,17 @@ export class SessionCatalog {
     return this.archive?.evict(now) ?? Promise.resolve(0)
   }
 
-  private commit(file: NativeFile, ref: ThreadRef | null): boolean {
+  /**
+   * Record a peek of `file`. `seen` is the entry the caller read before it
+   * peeked: a newer entry committed since then wins the race. Against the
+   * entry it started from, an older stamp is simply the file now — a lock
+   * released, a file restored — and refusing it would re-peek forever.
+   */
+  private commit(file: NativeFile, ref: ThreadRef | null, seen: CacheEntry | undefined): boolean {
     const current = this.byPath.get(file.path)
     if (
       current &&
+      current !== seen &&
       (current.mtimeMs > file.mtimeMs ||
         (current.mtimeMs === file.mtimeMs && current.bytes > file.bytes))
     )
@@ -396,7 +403,7 @@ export class SessionCatalog {
             return
           }
           const ref = withWorkspace(await provider.peek(file).catch(() => null))
-          if (!this.commit(file, ref)) return
+          if (!this.commit(file, ref, cached)) return
           if (ref) this.capture(ref)
           if (options.emitChanges) {
             if (ref) this.emit({ type: cached?.ref ? "updated" : "added", ref })
@@ -862,6 +869,9 @@ export class SessionCatalog {
 
   private noticed(path: string, followedTarget?: string): void {
     if (this.stopped) return
+    // SQLite's shared-memory file changes when anyone reads, the catalog
+    // included; a write always moves the database or its WAL as well.
+    if (path.endsWith("-shm")) return
     const provider = this.ownerOf(followedTarget ?? path)
     if (!provider) return
     const mapped = followedTarget ?? provider.watchTarget?.(path)
@@ -956,7 +966,7 @@ export class SessionCatalog {
       if (unchanged && (!followed || !follow?.follower)) continue
       if (!unchanged) {
         const ref = withWorkspace(await provider.peek(file).catch(() => null))
-        if (!this.commit(file, ref)) continue
+        if (!this.commit(file, ref, cached)) continue
         if (ref) {
           if (refMoved(cached?.ref, ref))
             this.emit({ type: cached?.ref ? "updated" : "added", ref })
@@ -1073,7 +1083,7 @@ export class SessionCatalog {
       const ref = previous
         ? await refined(provider, previous, cached.bytes)
         : withWorkspace(await provider.peek(file).catch(() => null))
-      if (!this.commit(file, ref)) return
+      if (!this.commit(file, ref, cached)) return
       this.scheduleSave()
       if (ref) {
         const same =
@@ -1117,7 +1127,7 @@ export class SessionCatalog {
           reusable.fromByte
         )
       : withWorkspace(await provider.peek(file).catch(() => null))
-    if (!this.commit(file, ref)) return
+    if (!this.commit(file, ref, cached)) return
     this.scheduleSave()
     if (ref) {
       if (refMoved(cached?.ref, ref))
@@ -1142,12 +1152,13 @@ export class SessionCatalog {
         }
         return
       }
+      const committed = this.byPath.get(path)
       const update = await follow.follower.next().catch(() => null)
       if (update?.reset && grew && cached.ref) {
         const resetRef = withWorkspace(
           await provider.peek(file).catch(() => null)
         )
-        if (this.commit(file, resetRef) && resetRef)
+        if (this.commit(file, resetRef, committed) && resetRef)
           this.emit({ type: "updated", ref: resetRef })
       }
       if (update && (update.replace || update.entries.length > 0)) {
