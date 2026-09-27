@@ -94,7 +94,7 @@ import {
   listCrashes,
   record,
 } from "./crash.js"
-import { hostLog, hostLogPath, hostWarn, installHostLog } from "./host-log.js"
+import { flushHostLog, hostLog, hostLogPath, hostWarn, installHostLog } from "./host-log.js"
 import { watchRendererHealth } from "./renderer-health.js"
 import { installProviderChildren } from "./provider-children.js"
 import { installAutomation } from "./automation.js"
@@ -649,11 +649,23 @@ let relaunching = false
 let hostClosing = false
 let shuttingDown = false
 let application: ReturnType<typeof installApplicationIpc> | undefined
-if (persistentHost)
-  process.once("SIGTERM", () => {
-    shuttingDown = true
-    app.quit()
-  })
+
+/**
+ * A termination signal shuts the host down, with cleanup. Electron installs
+ * its own handlers for these once its main loop exists, after this file first
+ * runs; they call app.quit(), which a busy or persistent host answers by
+ * staying in the background. Listening only after ready replaces them. Each
+ * listener is one-shot, so a second signal ends the process at once, as
+ * Chromium's own handler would.
+ */
+function stopOnTerminationSignals(): void {
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
+    process.once(signal, () => {
+      hostLog("lifecycle", "stopping", { signal })
+      shuttingDown = true
+      app.quit()
+    })
+}
 
 function hasActiveWork(): boolean {
   return application
@@ -1859,6 +1871,7 @@ async function readFilePreview(request: Request): Promise<Response> {
 installCrashReporting()
 
 app.whenReady().then(async () => {
+  stopOnTerminationSignals()
   const trace = (stage: string) => {
     if (process.env.MAKO_RUNTIME_TRACE === "1")
       console.info("[mako-runtime]", stage)
@@ -2244,6 +2257,8 @@ const quitLifecycle = backgroundLifecycle({
       threadStore?.close()
       threadArchives?.close()
       void workspaceClients.dispose()
+      hostLog("lifecycle", "stopped")
+      await flushHostLog()
     },
     quit: () => {
       if (relaunching && isDev && !persistentHost) app.exit(RELAUNCH_EXIT_CODE)
