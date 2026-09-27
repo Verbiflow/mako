@@ -329,7 +329,11 @@ try {
   await writeFile(`${installed}.update-lock`, "{}")
   assert.deepEqual(await pruneRetainedApplications(installed, null), [], "no pruning while another installer holds the lock")
   await rm(`${installed}.update-lock`)
-  assert.deepEqual(await pruneRetainedApplications(installed, null), [newest], "without a newest backup every pure backup goes")
+  const running = await retained(".mako-update-running1", ["Previous Mako.app"])
+  const daemonFiles = async () => ({ stdout: `p94324\nn${running}/Previous Mako.app/Contents/Frameworks/Mako Helper.app/Contents/MacOS/Mako Helper\n`, stderr: "" })
+  assert.deepEqual(await pruneRetainedApplications(installed, join(newest, "Previous Mako.app"), daemonFiles), [], "a backup a process runs from stays")
+  assert.deepEqual(await pruneRetainedApplications(installed, join(newest, "Previous Mako.app"), async () => { throw new Error("lsof failed") }), [], "a failed listing keeps every backup")
+  assert.deepEqual((await pruneRetainedApplications(installed, null)).sort(), [newest, running].sort(), "without a newest backup every pure backup goes")
   const controlled = spawn(process.execPath, ["-e", "let count=0;process.send('ready');process.on('message',m=>{count++;process.send({message:m,count})});setTimeout(()=>{},10000)"], { stdio: ["ignore", "ignore", "ignore", "ipc"] })
   try {
     await once(controlled, "message")

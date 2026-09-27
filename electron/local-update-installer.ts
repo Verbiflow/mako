@@ -297,12 +297,15 @@ const RETAINED_CONTENTS = new Set(["Previous Mako.app", "installer.mjs", "local-
  * Only the newest backup survives. A staging directory is removed only when
  * it holds nothing but a retained app and its installer script: one that
  * still contains a candidate, or a `failed-*` directory from a rollback, is
- * evidence and stays. The install lock is held throughout so no concurrent
- * installer is between renames with a backup it may still need.
+ * evidence and stays. So does a backup a process still runs from: the
+ * terminal daemon outlives installs by design, and its shells need the
+ * bundle it started from. The install lock is held throughout so no
+ * concurrent installer is between renames with a backup it may still need.
  */
 export async function pruneRetainedApplications(
   target: string,
-  keep: string | null
+  keep: string | null,
+  run: Run = (command, args) => execute(command, args, { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 })
 ): Promise<string[]> {
   const applications = dirname(target)
   const kept = keep ? dirname(keep) : null
@@ -321,6 +324,7 @@ export async function pruneRetainedApplications(
       if (uid !== undefined && info.uid !== uid) continue
       const contents = await readdir(staging).catch(() => null)
       if (!contents || contents.some((entry) => !RETAINED_CONTENTS.has(entry))) continue
+      if (await directoryInUse(staging, run)) continue
       await unregisterBundle(join(staging, "Previous Mako.app"))
       await rm(staging, { recursive: true, force: true })
       removed.push(staging)
@@ -330,6 +334,16 @@ export async function pruneRetainedApplications(
     await unlink(lockPath).catch(() => undefined)
   }
   return removed
+}
+
+/**
+ * Whether any process runs an executable or library from `directory`. lsof
+ * names a file by its current path, so a bundle moved aside by an install is
+ * found where it now is. A failed listing counts as in use.
+ */
+async function directoryInUse(directory: string, run: Run): Promise<boolean> {
+  const listing = await run("lsof", ["-d", "txt", "-Fn"]).catch(() => null)
+  return !listing || listing.stdout.split("\n").some((line) => line.startsWith(`n${directory}/`))
 }
 
 export function desktopLaunchEnvironment(
