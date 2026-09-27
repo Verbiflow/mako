@@ -35,6 +35,8 @@ interface AcpConversationBase {
   revision?: number
   /** The host generation that numbered `revision`; a batch from another epoch is never merged onto this state. */
   epoch?: string
+  /** `LiveSnapshot.activityAt`, on the host's clock. */
+  activityAt?: number
   hydrated?: boolean
   projection?: LiveProjection
   blocks: AcpBlock[]

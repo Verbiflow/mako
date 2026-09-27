@@ -161,8 +161,13 @@ snapshot.blocks.push({
 })
 mock.setLiveSnapshot(snapshot)
 applyLiveSnapshot(snapshot)
-function publishQueue(phase: "starting" | "reasoning" | "responding") {
+const quietBlocks = {
+  "quiet-tool": { type: "tool", id: "quiet-build", toolKind: "execute", title: "npm run build", input: "{\"command\":\"npm run build\"}", output: "", status: "pending" },
+  "quiet-reply": { type: "text", text: "The route guard keeps the destination, and the session refresh" },
+} as const
+function publishQueue(phase: "starting" | "reasoning" | "responding" | keyof typeof quietBlocks) {
   const starting = phase === "starting"
+  const quiet = phase === "quiet-tool" || phase === "quiet-reply" ? quietBlocks[phase] : undefined
   const next: LiveSnapshot = {
     ...snapshot,
     revision: (acpStore.get().conversations[id]?.revision ?? 0) + 1,
@@ -171,7 +176,8 @@ function publishQueue(phase: "starting" | "reasoning" | "responding") {
       status: starting ? "starting" : "running",
       connection: starting ? "starting" : "connected",
     },
-    blocks: starting ? [] : [...snapshot.blocks, phase === "reasoning" ? { type: "thinking", text: "Checking the route guard before changing session recovery." } : { type: "text", text: "Here is the final routing summary." }],
+    blocks: starting ? [] : [...snapshot.blocks, quiet ?? (phase === "reasoning" ? { type: "thinking", text: "Checking the route guard before changing session recovery." } : { type: "text", text: "Here is the final routing summary." })],
+    activityAt: quiet ? Date.now() - (phase === "quiet-tool" ? 4 : 2) * 60_000 : Date.now(),
     requests: [
       {
         ...snapshot.requests[0]!,
@@ -290,6 +296,8 @@ export function Fixture() {
               Working with queue
             </button>
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="responding" onClick={() => publishQueue("responding")}>Streaming reply</button>
+            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-tool" onClick={() => publishQueue("quiet-tool")}>Quiet tool</button>
+            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-reply" onClick={() => publishQueue("quiet-reply")}>Quiet reply</button>
             <button
               className="pressable rounded border border-hairline px-2 py-1"
               onClick={() => setNarrow((value) => !value)}

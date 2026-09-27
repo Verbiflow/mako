@@ -154,9 +154,17 @@ export interface LiveSnapshot extends LiveSummary {
   baseCoveredBlocks?: number
   permissions: LivePermissionRequest[]
   requests: LiveRequest[]
+  /**
+   * When the provider last showed it was working, in host epoch milliseconds:
+   * a turn starting, streamed content or tool output, a question, a child
+   * agent. A running turn quiet since then is shown as quiet, never ended.
+   * Held by this host only; the journal does not keep it.
+   */
+  activityAt?: number
 }
 
 export interface LiveBatch {
+  activityAt?: number
   /** Absolute retained-block coordinates for consumers holding a history window. */
   changedFrom?: number
   blockCount?: number

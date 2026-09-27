@@ -13,7 +13,7 @@ import { loadEarlierLive } from "@/state/live-recovery"
 import { sendTo } from "@/state/acp-queue"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { RecoveryNotice } from "./recovery-notice"
-import { useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Collapse } from "@/components/ui/collapse"
 import { Disclosure, NoticeAction } from "@/components/ui/notice"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
@@ -181,12 +181,14 @@ function AcpActivity({
   starting?: boolean
   preparing?: boolean
 }) {
+  const activityAt = useAcp((state) => activeLiveAcp(state)?.activityAt)
+  const quietForMs = useQuietFor(running ? activityAt : undefined)
   const activity = useAcp((state) => {
     const live = activeLiveAcp(state)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
     // The approval notice owns this status; do not repeat it in the transcript.
     if (approval) return { kind: "idle" as const, label: "" }
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, preparing })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, preparing, quietForMs })
   }, shallowEqual)
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
@@ -194,6 +196,22 @@ function AcpActivity({
       <span className="truncate">{activity.label}</span>
     </div>
   ) : null
+}
+
+/** Time since `activityAt`, read again when it moves and every few seconds while it is set. */
+function useQuietFor(activityAt: number | undefined): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (activityAt === undefined) return
+    const read = () => setNow(Date.now())
+    const first = setTimeout(read, 0)
+    const timer = setInterval(read, 5_000)
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, [activityAt])
+  return activityAt === undefined ? 0 : Math.max(0, now - activityAt)
 }
 
 /**

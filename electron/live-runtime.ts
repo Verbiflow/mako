@@ -49,6 +49,8 @@ export interface Resident {
   openingOperation?: Promise<void>
   pendingCharacters: number
   updates: LiveBatch["updates"]
+  /** See `LiveSnapshot.activityAt`; the next flush publishes it. */
+  activityAt?: number
   timer: ReturnType<typeof setTimeout> | null
   displayPrompt?: string
   /** When this ready provider became eligible to leave the bounded warm pool. */

@@ -66,6 +66,17 @@ try {
   await hydrateLive(auditId(101))
   assert.equal(notices.mock.callCount(), 2, "Older host/IPC disconnect wording is recognized")
   legacy.mock.restore()
+  for (const [index, harness] of providers.entries()) {
+    const quiet = { ...auditSnapshot(1, harness), activityAt: 1_000 }
+    quiet.session.id = auditId(index + 300)
+    const held = () => acpStore.get().conversations[quiet.session.id]
+    applyLiveSnapshot(quiet)
+    assert.equal(held()?.activityAt, 1_000, `${harness}: a snapshot says when the provider last worked`)
+    applyLiveBatch({ id: quiet.session.id, epoch: quiet.epoch, revision: quiet.revision + 1, updates: [{ kind: "text", text: "more" }], activityAt: 4_000 })
+    assert.equal(held()?.activityAt, 4_000, `${harness}: new output moves it`)
+    applyLiveBatch({ id: quiet.session.id, epoch: quiet.epoch, revision: quiet.revision + 2, updates: [] })
+    assert.equal(held()?.activityAt, 4_000, `${harness}: a batch without output keeps it`)
+  }
   assert.equal(sends.mock.callCount(), 0, "Hydration never resends prompts")
   console.log("PASS: all-six refresh outage, bounded retries, retained content, reconnect, genuine errors, dismissal and legacy IPC")
 } finally {

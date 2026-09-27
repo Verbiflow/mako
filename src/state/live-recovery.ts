@@ -75,6 +75,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     blocks: snapshot.blocks,
     revision: snapshot.revision,
     epoch: snapshot.epoch ?? existing?.epoch,
+    activityAt: snapshot.activityAt,
     history: snapshot.history,
     hydrated: true,
     projection: projectLive(snapshot, existing?.projection, pendingPrompts),
@@ -180,6 +181,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
           ? current.threadPath
           : (batch.threadPath ?? undefined),
       revision: batch.revision,
+      activityAt: batch.activityAt ?? current.activityAt,
       updatedAt: Date.now(),
       failureSeen: carriedFailureSeen(current, session),
     }
@@ -241,6 +243,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     session,
     revision: batch.revision,
     epoch: batch.epoch ?? current.epoch,
+    activityAt: batch.activityAt ?? current.activityAt,
     base,
     baseCoveredBlocks,
     threadPath:

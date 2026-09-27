@@ -547,6 +547,15 @@ for (const [toolKind, expected] of [["search","searching"],["execute","executing
   assert.doesNotMatch(renderToStaticMarkup(<ActivityMark state={activity.kind} />), /<canvas/)
 }
 assert.doesNotMatch(renderToStaticMarkup(<ActivityMark state="waiting" size={64} />), /<canvas/)
+const pendingTool = {type:"tool" as const,id:"build",toolKind:"execute",title:"npm run build",input:"{}",output:"",status:"pending"}
+assert.equal(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:59_999}).label,"npm run build","a minute of quiet is ordinary")
+assert.deepEqual(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:3*60_000+10_000}),{kind:"executing",label:"No output for 3m · npm run build"})
+assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"thinking",text:"Weighing"}],quietForMs:65*60_000}),{kind:"reasoning",label:"No output for 1h 5m"})
+assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"text",text:"Half an ans"}],quietForMs:2*60_000}),{kind:"working",label:"No output for 2m"},
+  "a reply that stopped mid-stream stops reading as responding")
+assert.equal(agentActivity({...activityBase,blocks:[],quietForMs:120*60_000}).label,"No output for 2h")
+assert.equal(agentActivity({...activityBase,waiting:true,blocks:[pendingTool],quietForMs:10*60_000}).label,"Waiting for your approval",
+  "a turn waiting on the user is not quiet")
 const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[],current:false,pinned:false,latest:"",order:"",priority:1,running:0,active:1,needsInput:0,failed:0,unread:0}
 const folderMarkup = renderToStaticMarkup(<FolderActivity folder={activeFolder} />)
 assert.match(folderMarkup, /1 running/)

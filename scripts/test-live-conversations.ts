@@ -4,6 +4,8 @@ import { mock } from "node:test"
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
+import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
@@ -905,6 +907,52 @@ async function failureIsolationAndAssets() {
   }
 }
 
+async function quietTurnsCarryLastActivity() {
+  const f = fixture()
+  const clock = mock.method(Date, "now", () => 1_000)
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.snapshot(f.id)
+    f.events.length = 0
+    const batchActivity = () => f.events.flatMap((event) =>
+      event.type === "live-batch" && event.batch.activityAt !== undefined ? [event.batch.activityAt] : [])
+
+    clock.mock.mockImplementation(() => 2_000)
+    f.owner.submit(f.id, randomUUID(), "long build")
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 2_000, "a turn starting is activity")
+
+    clock.mock.mockImplementation(() => 5_000)
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "build", title: "npm run build", status: "pending" } })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 5_000)
+
+    clock.mock.mockImplementation(() => 9_000)
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running", usage: { used: 10, size: 100 } } })
+    f.owner.observe({ type: "live-updates", id: f.id, updates: [] })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 5_000, "usage and empty batches are not output")
+
+    clock.mock.mockImplementation(() => 12_000)
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool-update", id: "build", output: "compiled 3 files" } })
+    const snapshot = f.owner.snapshot(f.id)
+    assert.equal(snapshot?.activityAt, 12_000, "tool output counts")
+    assert.deepEqual(batchActivity(), [2_000, 5_000, 12_000], "batches carry the time only when it moves")
+
+    const journal = new DatabaseSync(join(f.root, `${f.id}.sqlite`), { readOnly: true })
+    try {
+      const metadata = z.object({ value: z.string() }).parse(journal.prepare("SELECT value FROM metadata").get()).value
+      assert.doesNotMatch(metadata, /activityAt/, "the journal does not keep it")
+    } finally {
+      journal.close()
+    }
+    assert.equal(snapshot?.session.status, "running", "a quiet turn is not ended")
+  } finally {
+    clock.mock.restore()
+    f.cleanup()
+  }
+}
+
 async function coalescedToolBursts() {
   const f = fixture()
   try {
@@ -1177,6 +1225,7 @@ await refusedStartup()
 await settledVerdicts()
 await autoContinuedTurn()
 await coalescedToolBursts()
+await quietTurnsCarryLastActivity()
 await failureIsolationAndAssets()
 
 await queuedSettings()

@@ -1451,6 +1451,10 @@ export class LiveConversations {
     // A reconnect may recover retained evidence before the new driver is ready.
     // Its generation-fenced callback and exact saved native occurrence own admission.
     if (!resident || (!resident.driver && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
+    // Opening streams the provider's saved history back; it is not new work.
+    const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.blocks.length)
+    if (showsActivity(event, resident.snapshot.session.status, replaying))
+      resident.activityAt = Date.now()
     if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
       const finishedRequest = resident.snapshot.requests.find(
@@ -1534,10 +1538,7 @@ export class LiveConversations {
       this.approvals.end(resident, bindingId, event)
     } else if (event.type === "live-permission") {
       this.approvals.observe(resident, event.request)
-    } else if (!(
-      resident.opening &&
-      (resident.snapshot.base || resident.snapshot.blocks.length)
-    )) {
+    } else if (!replaying) {
       const updates =
         event.type === "live-update" ? [event.update] : event.updates
       const dispatching = resident.snapshot.requests.some(
@@ -3065,6 +3066,7 @@ export class LiveConversations {
       ...resident.snapshot,
       blocks: reduceLiveUpdates(resident.snapshot.blocks, updates),
       revision: resident.snapshot.revision + 1,
+      activityAt: resident.activityAt,
     }
     resident.journal.commit(snapshot, previous)
     resident.storageFault = false
@@ -3106,6 +3108,10 @@ export class LiveConversations {
         requests:
           previous.requests !== snapshot.requests
             ? snapshot.requests
+            : undefined,
+        activityAt:
+          previous.activityAt !== snapshot.activityAt
+            ? snapshot.activityAt
             : undefined,
       },
     })
@@ -3276,6 +3282,24 @@ function nativeRevision(page: ThreadPage): string {
  * provider's text classifies as, so the renderer can say whether sending
  * again is worth anything without reading the text itself.
  */
+/** Whether the event shows the provider working, for `LiveSnapshot.activityAt`. */
+function showsActivity(event: LiveDriverEvent, status: LiveSessionState["status"], replaying: boolean): boolean {
+  switch (event.type) {
+    case "live-session":
+      return event.session.status === "running" && status !== "running"
+    case "live-update":
+      return !replaying
+    case "live-updates":
+      return event.updates.length > 0 && !replaying
+    case "live-permission":
+    case "live-question":
+    case "live-agent":
+      return true
+    default:
+      return false
+  }
+}
+
 function settleRequest(request: LiveRequest, session: LiveSessionState): LiveRequest {
   const stopped = /cancel|interrupt/i.test(session.lastStop ?? "")
   const dropped = session.lastStop === CONNECTION_LOST_STOP

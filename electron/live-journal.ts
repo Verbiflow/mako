@@ -276,7 +276,7 @@ export class LiveJournal {
       const { blocks, requests, base, ...metadata } = next
       this.db
         .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-        .run(JSON.stringify(metadata))
+        .run(JSON.stringify({ ...metadata, activityAt: undefined }))
       if (!previous || base !== previous.base)
         this.db
           .prepare("INSERT OR REPLACE INTO base VALUES (1, ?)")
