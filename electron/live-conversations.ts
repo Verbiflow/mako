@@ -1,7 +1,7 @@
 import { LiveQuestions } from "./live-questions.js"
 import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
-import { advancePromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
+import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import type {
@@ -27,6 +27,7 @@ import { LiveActions } from "./live-actions.js"
 import type { LiveActionInput } from "./contracts/live-actions.js"
 import type { RewindInput } from "./contracts/workspace-snapshots.js"
 import { LiveChildren } from "./live-children.js"
+import { LiveMoves, snapshotFacts } from "./live-moves.js"
 import { errorMessage } from "./live-runtime.js"
 import type {
   LiveAccess,
@@ -93,6 +94,8 @@ export class LiveConversations {
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
   private readonly children: LiveChildren
+  /** Which Sessions this environment may run, and moving Threads to another. */
+  readonly moves: LiveMoves
   private readonly records = new Map<string, Resident>()
   private readonly closedCache = new Map<string, { bytes: number; revision: number }>()
   private readonly bindingOwners = new Map<string, string>()
@@ -146,6 +149,20 @@ export class LiveConversations {
       steer: (id, input) => this.act(id, input),
     })
     this.actions = new LiveActions(access)
+    this.moves = new LiveMoves({
+      dependencies,
+      resident: (id) => this.records.get(id),
+      control: (resident) => this.control(resident),
+      pending: (resident) => this.transfers.pending(resident),
+      canHibernate: (resident) => this.canHibernate(resident),
+      hibernate: (resident, reason) => this.hibernate(resident, reason),
+      resume: (resident) => {
+        if (!resident.driver && resident.snapshot.session.connection === "hibernated" &&
+            resident.snapshot.requests.some((request) => request.status === "queued"))
+          void this.wake(resident)
+        else this.drain(resident)
+      },
+    })
     this.transfers = new LiveTransfers(access)
     this.children = new LiveChildren(access)
     const journals: JournalFacts[] = []
@@ -217,16 +234,7 @@ export class LiveConversations {
   private registerThread(snapshot: LiveSnapshot, actor: Actor | undefined): void {
     const threads = this.dependencies.threads
     if (!threads) return
-    const facts: JournalFacts = {
-      conversationId: snapshot.session.id,
-      createdAt: snapshot.createdAt,
-      harness: snapshot.session.harness,
-      threadPath: snapshot.threadPath,
-      bindings: snapshot.control?.bindings ?? [{ provider: snapshot.session.harness, nativeId: snapshot.session.nativeId, path: snapshot.threadPath }],
-      ancestry: snapshot.control?.ancestry
-        ? { kind: snapshot.control.ancestry.kind, parentId: snapshot.control.ancestry.parentId }
-        : undefined,
-    }
+    const facts = snapshotFacts(snapshot)
     const key = registrationKey(facts)
     if (this.registeredThreads.get(facts.conversationId) === key) return
     try {
@@ -742,6 +750,9 @@ export class LiveConversations {
           ]
         : [],
     }
+    // Checked with no wait before the journal exists, so a move released
+    // during the history read above is seen here.
+    this.moves.assertOpens(snapshotFacts(snapshot))
     const resident: Resident = {
       connections: new Map(),
       bindingGenerations: new Map(),
@@ -970,7 +981,8 @@ export class LiveConversations {
         ) &&
         !resident.snapshot.requests.some(
           (request) =>
-            request.status === "queued" || request.status === "dispatching"
+            request.status === "dispatching" ||
+            (request.status === "queued" && !this.moves.holdsQueued(resident))
         ) &&
         !native.some(isActiveNativeAgent) &&
         !children.some(
@@ -1159,6 +1171,7 @@ export class LiveConversations {
 
   private async wakeNow(resident: Resident): Promise<void> {
     if (
+      !this.moves.executes(resident) ||
       resident.driver ||
       resident.snapshot.session.connection !== "hibernated" ||
       resident.snapshot.session.status === "closed"
@@ -1641,6 +1654,7 @@ export class LiveConversations {
       if (existing.status === "queued") this.drain(resident)
       return existing
     }
+    this.moves.assertAdmits(resident)
     if (this.transfers.pending(resident))
       throw new Error("A provider switch is pending. Wait for it to settle before sending another message.")
     if (targetBindingId && this.control(resident).activeBindingId !== targetBindingId)
@@ -2116,10 +2130,12 @@ export class LiveConversations {
 
   transfer(id: string, input: TransferInput, actor?: Actor): LiveSnapshot {
     assertLifecycleAdmission()
-    if (this.require(id).rewinding)
+    const resident = this.require(id)
+    if (resident.rewinding)
       throw new Error(
         "Wait for the workspace rewind to finish before switching providers"
       )
+    this.moves.assertStarts(resident)
     return this.transfers.accept(id, input, this.actor(actor))
   }
 
@@ -2856,6 +2872,8 @@ export class LiveConversations {
   private drain(resident: Resident): void {
     if (lifecycleBlocked()) return
     if (this.actions.blocks(resident)) return
+    // Queued work stays queued, not held: cancelling a move starts it again.
+    if (!this.moves.executes(resident)) return
     if (
       resident.checkpointing ||
       resident.rewinding ||
@@ -2896,14 +2914,12 @@ export class LiveConversations {
     )
     const attemptId = randomUUID()
     const bindingId = control.activeBindingId
+    const nativeDelivery: PromptDelivery = { attemptId, bindingId, ownerEpoch: this.epoch, evidence: { kind: "prepared" } }
+    const ownerGeneration = this.moves.generation(resident)
+    if (ownerGeneration !== undefined) nativeDelivery.ownerGeneration = ownerGeneration
     const current = {
       ...request,
-      nativeDelivery: {
-        attemptId,
-        bindingId,
-        ownerEpoch: this.epoch,
-        evidence: { kind: "prepared" as const },
-      },
+      nativeDelivery,
       status: "dispatching" as const,
       context: [
         ...(request.context ?? []),

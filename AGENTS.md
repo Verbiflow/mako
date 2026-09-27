@@ -1249,6 +1249,26 @@ host assigns it and never reads it from caller input. A store with a newer
 schema is refused without writing. `npm run test:thread-store` covers the
 rules, six-harness migration across a restart and actors.
 
+Every Session also has an execution owner (this device or a named cloud
+runtime) and a generation that rises on every owner change, including to
+nobody while in transit (`electron/contracts/thread-execution.ts`, the
+`executions` and `moves` tables). Ownership changes only when the owner
+releases and the destination claims. No timeout, heartbeat or lost connection
+moves it. `LiveMoves` (`electron/live-moves.ts`) gates `drain`, `wakeNow`,
+`open` (before the journal exists), `submit` and `transfer`: a Session owned
+here runs, a leaving one admits prompts and holds them queued (not `held`, so
+a cancel starts them), and one in transit or elsewhere refuses with the owner
+named. Keep each check and the work it guards in one event-loop turn, with no
+`await` between them; that is what makes a release safe. Release refuses
+with `MoveNotQuietError` while any tab is busy or another host holds one of
+the Session's native sessions, and never waits. Each dispatch records
+`nativeDelivery.ownerGeneration`. Additive store changes are
+`store_migrations` entries, and the schema number rises only for a change an
+older reader would misread. A missing `executions` row is read as this
+device at generation 1. `test-thread-execution.ts` and
+`test-thread-execution-host.ts` (six harnesses, round trip, cancel, restart,
+two hosts) run under `test:thread-store`.
+
 A ready provider process is a warm cache, not active work. `LiveConversations`
 keeps at most two warm bindings per host and hibernates either the oldest excess
 or any one idle for ten minutes. Hibernation closes the provider and its MCP

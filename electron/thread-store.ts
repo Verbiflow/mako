@@ -16,6 +16,23 @@ import {
   type ThreadId,
   type ThreadPlacement,
 } from "./contracts/thread-identity.js"
+import {
+  ClaimReceiptSchema,
+  DeviceIdSchema,
+  ExecutionOwnerSchema,
+  HandoffSchema,
+  MoveIdSchema,
+  RefusalSchema,
+  SessionOriginSchema,
+  executionRefusal,
+  sameOwner,
+  type ClaimReceipt,
+  type ExecutionOwner,
+  type Handoff,
+  type MoveId,
+  type Refusal,
+  type SessionExecution,
+} from "./contracts/thread-execution.js"
 import { hostWarn } from "./host-log.js"
 
 /**
@@ -35,11 +52,19 @@ import { hostWarn } from "./host-log.js"
  * row serialize and the second reads the first one's answer.
  */
 export const THREAD_STORE_SCHEMA = 1
+/**
+ * Additive changes on top of `THREAD_STORE_SCHEMA`, which older builds can
+ * ignore. The schema number rises only for a change an older reader would
+ * misread; raising it refuses the whole store to every older host.
+ */
+export const THREAD_STORE_MIGRATION = 2
 
 /** What an operation acts on; its digest tells a replay from a conflict. */
 interface OperationContent {
-  thread: ThreadId
+  thread?: ThreadId
   title?: string
+  move?: MoveId
+  target?: ExecutionOwner
 }
 
 export class ThreadStoreVersionError extends Error {
@@ -53,6 +78,15 @@ export class ThreadOperationConflictError extends Error {
   constructor(id: string) {
     super(`Operation ${id} was already recorded with different content`)
     this.name = "ThreadOperationConflictError"
+  }
+}
+
+export class ThreadMoveConflictError extends Error {
+  readonly move: MoveId
+  constructor(move: MoveId) {
+    super(`This Thread is already moving (move ${move})`)
+    this.name = "ThreadMoveConflictError"
+    this.move = move
   }
 }
 
@@ -103,6 +137,30 @@ export interface ThreadStoreOptions {
   now?: () => number
   /** How a native path is compared; defaults to `realNativePath`. */
   realPath?: (path: string) => string
+  /**
+   * The environment this store executes for. A Mac's store is its own
+   * device; a cloud runtime passes its runtime ID. Fixed when the store is
+   * created.
+   */
+  self?: ExecutionOwner
+}
+
+export interface MoveStatus {
+  phase: MovePhase
+  thread: ThreadId
+  target: ExecutionOwner
+}
+
+export interface MovingSession {
+  session: SessionId
+  journals: string[]
+  natives: { harness: string; nativeId: string }[]
+}
+
+export interface MoveBegan {
+  move: MoveId
+  thread: ThreadId
+  sessions: SessionId[]
 }
 
 /**
@@ -151,6 +209,54 @@ const PlacementSchema = z.object({ thread: ThreadIdSchema, session: SessionIdSch
 const CountSchema = z.object({ count: z.number() })
 const FirstJournalSchema = z.object({ count: z.number(), first: z.number().nullable() })
 const VersionSchema = z.object({ data_version: z.number() })
+const ExecutionRowSchema = z.object({
+  owner_kind: z.enum(["device", "cloud"]).nullable(),
+  owner_id: z.string().nullable(),
+  generation: z.number().int().positive(),
+  move_id: z.string().nullable(),
+})
+const MovePhaseSchema = z.enum(["leaving", "cancelled", "released", "arrived", "refused", "reclaimed"])
+const MoveRowSchema = z.object({
+  id: MoveIdSchema,
+  thread_id: z.string(),
+  source_kind: z.enum(["device", "cloud"]),
+  source_id: z.string(),
+  target_kind: z.enum(["device", "cloud"]),
+  target_id: z.string(),
+  phase: MovePhaseSchema,
+  handoff: z.string().nullable(),
+  outcome: z.string().nullable(),
+})
+type MoveRow = z.infer<typeof MoveRowSchema>
+export type MovePhase = z.infer<typeof MovePhaseSchema>
+interface ReleasedMove { move: MoveRow; handoff: Handoff }
+const MoveBeganSchema = z.object({ move: MoveIdSchema, thread: ThreadIdSchema, sessions: z.array(SessionIdSchema) })
+const MovedSchema = z.object({ move: MoveIdSchema })
+const JournalRowSchema = z.object({ conversation_id: z.string() })
+const NativeRowSchema = z.object({ harness: z.string(), native_id: z.string() })
+
+/**
+ * Migration 2 (track A2): who may execute each Session, and every move of a
+ * Thread between environments. Rows describe this store's view; a Session
+ * minted by an older build has no row until the next open writes one.
+ */
+const EXECUTION_TABLES = `
+CREATE TABLE IF NOT EXISTS moves (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('device', 'cloud')), source_id TEXT NOT NULL,
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('device', 'cloud')), target_id TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK (phase IN ('leaving', 'cancelled', 'released', 'arrived', 'refused', 'reclaimed')),
+  handoff TEXT, outcome TEXT, created_at INTEGER NOT NULL, created_by TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS moves_thread ON moves(thread_id, phase);
+CREATE TABLE IF NOT EXISTS executions (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+  owner_kind TEXT CHECK (owner_kind IN ('device', 'cloud')), owner_id TEXT,
+  generation INTEGER NOT NULL CHECK (generation > 0),
+  move_id TEXT REFERENCES moves(id), updated_at INTEGER NOT NULL, updated_by TEXT NOT NULL,
+  CHECK ((owner_kind IS NULL) = (owner_id IS NULL)));
+CREATE INDEX IF NOT EXISTS executions_move ON executions(move_id);
+CREATE TABLE IF NOT EXISTS store_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+`
 
 const SCHEMA = `
 CREATE TABLE principals (
@@ -196,11 +302,14 @@ export class ThreadStore {
   readonly path: string
   readonly deviceId: string
   readonly localPrincipal: PrincipalId
+  /** The environment whose ownership this store's host enforces. */
+  readonly self: ExecutionOwner
   private readonly db: DatabaseSync
   private readonly now: () => number
   private readonly realPath: (path: string) => string
   private depth = 0
   private readonly placements = new Map<string, ThreadPlacement>()
+  private readonly executions = new Map<string, SessionExecution>()
   private dataVersion = -1
   private readonly reported = new Set<string>()
   private readonly statements = new Map<string, StatementSync>()
@@ -231,6 +340,7 @@ export class ThreadStore {
         } else if (Number(found) > THREAD_STORE_SCHEMA) {
           throw new ThreadStoreVersionError(Number(found))
         }
+        this.migrate(options.self)
         this.db.exec("COMMIT")
       } catch (error) {
         this.db.exec("ROLLBACK")
@@ -238,6 +348,7 @@ export class ThreadStore {
       }
       this.deviceId = z.string().uuid().parse(this.meta("device"))
       this.localPrincipal = PrincipalIdSchema.parse(this.meta("principal"))
+      this.self = ExecutionOwnerSchema.parse(JSON.parse(z.string().parse(this.meta("self"))))
     } catch (error) {
       this.db.close()
       throw error
@@ -356,6 +467,11 @@ export class ThreadStore {
     return this.write(() => this.receipt(input.operationId, "create-session", { thread: input.thread }, input.actor, () => {
       const thread = this.thread(input.thread)
       if (!thread) throw new Error("That Thread no longer exists")
+      for (const member of thread.sessions) {
+        const execution = this.executionState(member)
+        if (execution.state !== "here")
+          throw new Error(executionRefusal(execution) ?? "This Thread is moving; open a new tab once the move ends")
+      }
       const session = this.mintSession("new", null, input.actor)
       this.addMember(thread.id, session, input.actor)
       this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(thread.id)
@@ -377,6 +493,237 @@ export class ThreadStore {
       if (!renamed) throw new Error("That Thread no longer exists")
       return renamed
     })
+  }
+
+  /** Who may execute a Session now, following merges; undefined for a Session this store never saw. */
+  execution(session: SessionId): SessionExecution | undefined {
+    const current = this.canonical(session)
+    return current ? this.executionState(current) : undefined
+  }
+
+  /**
+   * Who may execute a journal's Session, answered from memory until any
+   * commit. A journal the store has not registered yet is new work here,
+   * unless its bindings name a Session this store knows.
+   */
+  journalExecution(facts: JournalFacts): SessionExecution {
+    this.syncVersion()
+    const cached = this.executions.get(facts.conversationId)
+    if (cached) return cached
+    const known = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(facts.conversationId)
+    if (known) {
+      const session = SessionRowSchema.parse(known).session_id
+      const found = this.executionState(this.canonical(session) ?? session)
+      this.executions.set(facts.conversationId, found)
+      return found
+    }
+    // A new journal that names a native session this device recorded, by
+    // path or by ID alone, answers to that Session's owner.
+    const candidates = facts.session
+      ? [facts.session]
+      : facts.ancestry
+        ? []
+        : [this.findJournalSession(facts), ...facts.bindings.flatMap((binding) =>
+          binding.nativeId ? this.nativeSessions(binding.provider, binding.nativeId) : [])]
+    const executions = [...new Set(candidates.flatMap((session) => {
+      const current = session && this.canonical(session)
+      return current ? [current] : []
+    }))].map((session) => this.executionState(session))
+    return executions.find((execution) => execution.state !== "here")
+      ?? executions[0]
+      ?? { state: "here", owner: this.self, generation: 1 }
+  }
+
+  /**
+   * Start moving a Thread to another environment. Every Session in it must
+   * run here with no move open. Nothing changes owner yet: running turns
+   * finish and new work waits until the move is released or cancelled.
+   */
+  beginMove(input: { move: MoveId; thread: ThreadId; target: ExecutionOwner; actor: Actor }): MoveBegan {
+    const target = ExecutionOwnerSchema.parse(input.target)
+    if (sameOwner(target, this.self)) throw new Error("This Thread already runs here")
+    return this.write(() => this.receipt(input.move, "begin-move", { thread: input.thread, move: input.move, target }, input.actor, () => {
+      const thread = this.thread(input.thread)
+      if (!thread) throw new Error("That Thread no longer exists")
+      const open = this.sql("SELECT id FROM moves WHERE thread_id = ? AND phase IN ('leaving', 'released')").get(thread.id)
+      if (open) throw new ThreadMoveConflictError(MoveIdSchema.parse(z.object({ id: z.string() }).parse(open).id))
+      for (const session of thread.sessions) {
+        const execution = this.executionState(session)
+        if (execution.state !== "here")
+          throw new Error(executionRefusal(execution) ?? "A Session in this Thread is already moving")
+      }
+      this.insertMove({ move: input.move, thread: thread.id, source: this.self, target, phase: "leaving", handoff: null, outcome: null, actor: input.actor })
+      for (const session of thread.sessions) {
+        const execution = this.executionState(session)
+        this.setExecution(session, this.self, execution.generation, input.move, input.actor)
+      }
+      return { move: input.move, thread: thread.id, sessions: thread.sessions }
+    }, MoveBeganSchema))
+  }
+
+  moveStatus(move: MoveId): MoveStatus | undefined {
+    const row = this.moveRow(MoveIdSchema.parse(move))
+    return row && { phase: row.phase, thread: ThreadIdSchema.parse(row.thread_id), target: ownerFrom(row.target_kind, row.target_id) }
+  }
+
+  /**
+   * The move's Sessions with their journals and the native sessions this
+   * device recorded for them, for the host to prove quiet before release.
+   */
+  moveJournals(move: MoveId): MovingSession[] {
+    return this.sql("SELECT session_id FROM executions WHERE move_id = ? ORDER BY session_id").all(move)
+      .map((row) => {
+        const session = SessionRowSchema.parse(row).session_id
+        const natives = this.sql(`SELECT harness, native_id FROM locators WHERE device_id = ? AND session_id = ? AND native_id IS NOT NULL
+          UNION SELECT harness, native_id FROM native_claims WHERE device_id = ? AND session_id = ?`).all(this.deviceId, session, this.deviceId, session)
+          .map((native) => NativeRowSchema.parse(native))
+          .map((native) => ({ harness: native.harness, nativeId: native.native_id }))
+        return { session: SessionIdSchema.parse(session), journals: this.journalsOf(session), natives }
+      })
+  }
+
+  /** Keep the Thread here: a move that was never released changes nothing. */
+  cancelMove(input: { operationId: string; move: MoveId; actor: Actor }): void {
+    this.write(() => this.receipt(input.operationId, "cancel-move", { move: input.move }, input.actor, () => {
+      const move = this.leavingMove(input.move)
+      for (const { session } of this.moveJournals(move.id)) {
+        const execution = this.executionState(session)
+        this.setExecution(session, this.self, execution.generation, null, input.actor)
+      }
+      this.setMovePhase(move.id, "cancelled", {})
+      return { move: move.id }
+    }, MovedSchema))
+  }
+
+  /**
+   * Give up the Thread: from this commit nothing here may run its Sessions,
+   * whatever happens to the handoff. The host calls this only once every
+   * journal is quiet and its provider is closed. Replaying the operation
+   * returns the same handoff.
+   */
+  release(input: { operationId: string; move: MoveId; actor: Actor }): Handoff {
+    return this.write(() => this.receipt(input.operationId, "release-move", { move: input.move }, input.actor, () => {
+      const move = this.leavingMove(input.move)
+      const thread = this.thread(ThreadIdSchema.parse(move.thread_id))
+      if (!thread) throw new Error("That Thread no longer exists")
+      const moving = new Set(this.moveJournals(move.id).map((entry) => entry.session))
+      if (thread.sessions.length !== moving.size || thread.sessions.some((session) => !moving.has(session)))
+        throw new Error("This Thread's Sessions changed while it was moving; cancel the move and start again")
+      const sessions = thread.sessions.map((session): Handoff["sessions"][number] => {
+        const row = this.sessionRow(session)
+        const generation = this.executionState(session).generation + 1
+        this.setExecution(session, null, generation, move.id, input.actor)
+        const position = z.object({ position: z.number() })
+          .parse(this.sql("SELECT position FROM memberships WHERE session_id = ?").get(session)).position
+        const entry: Handoff["sessions"][number] = {
+          id: session,
+          origin: SessionOriginSchema.parse(row.origin),
+          position,
+          generation,
+          journals: this.journalsOf(session),
+        }
+        if (row.parent_session) entry.parent = SessionIdSchema.parse(row.parent_session)
+        return entry
+      })
+      const handoff = HandoffSchema.parse({
+        move: move.id,
+        source: this.self,
+        target: ownerFrom(move.target_kind, move.target_id),
+        releasedAt: this.now(),
+        thread: { id: thread.id, owner: thread.owner, title: thread.title, titleSource: thread.titleSource },
+        sessions,
+      })
+      this.setMovePhase(move.id, "released", { handoff: JSON.stringify(handoff) })
+      return handoff
+    }, HandoffSchema))
+  }
+
+  /**
+   * Take ownership of a released Thread under the same identities. A move is
+   * claimed at most once: claiming it again returns the first receipt, and a
+   * move this store refused is never claimed.
+   */
+  claim(input: { operationId: string; handoff: Handoff; actor: Actor }): ClaimReceipt {
+    const handoff = HandoffSchema.parse(input.handoff)
+    if (!sameOwner(handoff.target, this.self)) throw new Error("This handoff is addressed to another environment")
+    return this.write(() => {
+      const known = this.moveRow(handoff.move)
+      if (known?.phase === "arrived" && known.outcome) return ClaimReceiptSchema.parse(JSON.parse(known.outcome))
+      if (known) throw new Error(`This move was already ${known.phase} here`)
+      return this.receipt(input.operationId, "claim-move", { move: handoff.move, thread: handoff.thread.id }, input.actor, () => {
+        for (const session of handoff.sessions) {
+          const found = this.sql("SELECT id, origin, parent_session, created_at, merged_into FROM sessions WHERE id = ?").get(session.id)
+          if (!found) continue
+          if (SessionDetailSchema.parse(found).merged_into) throw new Error("A Session in this handoff was merged here")
+          const execution = this.executionState(session.id)
+          if (execution.state === "here" || execution.state === "leaving")
+            throw new Error("A Session in this handoff already runs here")
+          if (execution.generation >= session.generation)
+            throw new Error("This handoff is older than what this store knows about its Sessions")
+        }
+        this.acceptThread(handoff, input.actor)
+        const receipt = ClaimReceiptSchema.parse({
+          move: handoff.move,
+          owner: this.self,
+          sessions: handoff.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })),
+        })
+        for (const session of receipt.sessions) this.setExecution(session.id, this.self, session.generation, null, input.actor)
+        this.recordArrival(handoff, "arrived", JSON.stringify(receipt), input.actor)
+        return receipt
+      }, ClaimReceiptSchema)
+    })
+  }
+
+  /**
+   * Decline a released Thread for good, so its source may take it back. A
+   * move already claimed here cannot be refused.
+   */
+  refuse(input: { operationId: string; handoff: Handoff; reason: string; actor: Actor }): Refusal {
+    const handoff = HandoffSchema.parse(input.handoff)
+    if (!sameOwner(handoff.target, this.self)) throw new Error("This handoff is addressed to another environment")
+    return this.write(() => {
+      const known = this.moveRow(handoff.move)
+      if (known?.phase === "refused" && known.outcome) return RefusalSchema.parse(JSON.parse(known.outcome))
+      if (known) throw new Error(`This move was already ${known.phase} here`)
+      return this.receipt(input.operationId, "refuse-move", { move: handoff.move }, input.actor, () => {
+        const refusal = RefusalSchema.parse({ move: handoff.move, by: this.self, reason: input.reason })
+        this.recordArrival(handoff, "refused", JSON.stringify(refusal), input.actor)
+        return refusal
+      }, RefusalSchema)
+    })
+  }
+
+  /** The source learns the destination claimed the Thread; its Sessions run there now. */
+  confirm(input: { operationId: string; receipt: ClaimReceipt; actor: Actor }): void {
+    const receipt = ClaimReceiptSchema.parse(input.receipt)
+    this.write(() => this.receipt(input.operationId, "confirm-move", { move: receipt.move }, input.actor, () => {
+      const { move, handoff } = this.releasedMove(receipt.move)
+      // Already arrived when the Thread came back before this receipt did.
+      if (move.phase === "arrived") return { move: move.id }
+      if (move.phase === "reclaimed") throw new Error("This Thread was taken back after its destination refused it")
+      if (!sameOwner(receipt.owner, handoff.target)) throw new Error("This receipt is from an environment the Thread was not sent to")
+      for (const session of handoff.sessions) {
+        const claimed = receipt.sessions.find((entry) => entry.id === session.id)
+        if (claimed?.generation !== session.generation + 1) throw new Error("This receipt does not match the handoff")
+        this.setExecution(session.id, receipt.owner, claimed.generation, null, input.actor)
+      }
+      this.setMovePhase(move.id, "arrived", { outcome: JSON.stringify(receipt) })
+      return { move: move.id }
+    }, MovedSchema))
+  }
+
+  /** The destination refused the Thread for good; it runs here again. */
+  reclaim(input: { operationId: string; refusal: Refusal; actor: Actor }): void {
+    const refusal = RefusalSchema.parse(input.refusal)
+    this.write(() => this.receipt(input.operationId, "reclaim-move", { move: refusal.move }, input.actor, () => {
+      const { move, handoff } = this.releasedMove(refusal.move)
+      if (move.phase === "reclaimed") return { move: move.id }
+      if (move.phase === "arrived") throw new Error("This Thread's destination already claimed it")
+      if (!sameOwner(refusal.by, handoff.target)) throw new Error("This refusal is from an environment the Thread was not sent to")
+      for (const session of handoff.sessions) this.setExecution(session.id, this.self, session.generation + 1, null, input.actor)
+      this.setMovePhase(move.id, "reclaimed", { outcome: JSON.stringify(refusal) })
+      return { move: move.id }
+    }, MovedSchema))
   }
 
   private registerOne(facts: JournalFacts, actor: Actor): string {
@@ -415,7 +762,7 @@ export class ThreadStore {
     }
     for (const binding of facts.bindings) {
       if (binding.path || !binding.nativeId) continue
-      const found = this.claim(binding.provider, binding.nativeId) ?? this.source(binding.provider, binding.nativeId)
+      const found = this.nativeClaim(binding.provider, binding.nativeId) ?? this.source(binding.provider, binding.nativeId)
       if (found) return found
     }
     return undefined
@@ -436,7 +783,7 @@ export class ThreadStore {
     }
     for (const binding of facts.bindings) {
       if (binding.path || !binding.nativeId) continue
-      const found = this.claim(binding.provider, binding.nativeId)
+      const found = this.nativeClaim(binding.provider, binding.nativeId)
       if (!found) {
         this.sql("INSERT INTO native_claims VALUES (?, ?, ?, ?)").run(this.deviceId, binding.provider, binding.nativeId, current)
         continue
@@ -464,7 +811,7 @@ export class ThreadStore {
     const bySource = this.source(ref.harness, key)
     // A pathless binding's claim speaks only for rows without a distinct
     // identity; a Cursor `chats/` copy never answers to its agent's claim.
-    const claimed = key === ref.nativeId ? this.claim(ref.harness, ref.nativeId) : undefined
+    const claimed = key === ref.nativeId ? this.nativeClaim(ref.harness, ref.nativeId) : undefined
     let session = bySource ?? byPath ?? claimed
     for (const other of [byPath, claimed])
       if (session && other && other !== session)
@@ -519,6 +866,10 @@ export class ThreadStore {
   private mergeable(session: string): boolean {
     const row = this.sessionRow(session)
     if (row.merged_into || row.origin === "fork" || row.origin === "delegation" || row.origin === "new") return false
+    // A Session that ever moved, or is moving, keeps its identity: another
+    // environment may hold records of it.
+    const execution = this.executionState(session)
+    if (execution.state !== "here" || execution.generation !== 1) return false
     const membership = this.sql("SELECT thread_id FROM memberships WHERE session_id = ?").get(session)
     if (!membership) return false
     const threadId = MembershipRowSchema.parse(membership).thread_id
@@ -548,6 +899,7 @@ export class ThreadStore {
     this.sql("INSERT INTO operations VALUES (?, 'merge', ?, ?, ?, ?)")
       .run(randomUUID(), JSON.stringify({ loser, winner, reason }), JSON.stringify(actor), JSON.stringify({ session: winner }), this.now())
     this.placements.clear()
+    this.executions.clear()
   }
 
   private conflict(a: string, b: string, reason: string): void {
@@ -571,6 +923,7 @@ export class ThreadStore {
     const session = randomUUID()
     this.sql("INSERT INTO sessions (id, origin, parent_session, created_at, created_by) VALUES (?, ?, ?, ?, ?)")
       .run(session, origin, parent, this.now(), JSON.stringify(actor))
+    this.setExecution(session, this.self, 1, null, actor)
     return session
   }
 
@@ -596,6 +949,161 @@ export class ThreadStore {
     const result = work()
     this.sql("INSERT INTO operations VALUES (?, ?, ?, ?, ?, ?)").run(id, kind, digest, JSON.stringify(actor), JSON.stringify(result), this.now())
     return result
+  }
+
+  private migrate(self: ExecutionOwner | undefined): void {
+    this.db.exec(EXECUTION_TABLES)
+    const stored = this.meta("self")
+    if (stored === undefined) {
+      const owner = self ?? { kind: "device", device: DeviceIdSchema.parse(this.meta("device")) }
+      this.db.prepare("INSERT INTO store_meta VALUES ('self', ?)").run(JSON.stringify(ExecutionOwnerSchema.parse(owner)))
+    } else if (self && !sameOwner(ExecutionOwnerSchema.parse(JSON.parse(stored)), self)) {
+      throw new Error("This Thread store executes for another environment")
+    }
+    const [kind, id] = ownerColumns(ExecutionOwnerSchema.parse(JSON.parse(z.string().parse(this.meta("self")))))
+    const actor: Actor = { kind: "service", name: "migration" }
+    // Sessions from before migration 2, or minted since by an older build.
+    this.db.prepare(`INSERT INTO executions (session_id, owner_kind, owner_id, generation, move_id, updated_at, updated_by)
+      SELECT id, ?, ?, 1, NULL, ?, ? FROM sessions
+      WHERE merged_into IS NULL AND NOT EXISTS (SELECT 1 FROM executions WHERE session_id = sessions.id)`)
+      .run(kind, id, this.now(), JSON.stringify(actor))
+    this.db.prepare("INSERT OR IGNORE INTO store_migrations VALUES (?, ?)").run(THREAD_STORE_MIGRATION, this.now())
+  }
+
+  /** A Session without a row was minted here by a build that predates ownership. */
+  private executionState(session: string): SessionExecution {
+    const found = this.sql("SELECT owner_kind, owner_id, generation, move_id FROM executions WHERE session_id = ?").get(session)
+    if (!found) return { state: "here", owner: this.self, generation: 1 }
+    const row = ExecutionRowSchema.parse(found)
+    const move = row.move_id ? this.moveRow(MoveIdSchema.parse(row.move_id)) : undefined
+    if (row.owner_kind === null || row.owner_id === null) {
+      if (!move) throw new Error("A Session in transit has no move in the Thread store")
+      return { state: "in-transit", generation: row.generation, move: move.id, target: ownerFrom(move.target_kind, move.target_id) }
+    }
+    const owner = ownerFrom(row.owner_kind, row.owner_id)
+    if (!sameOwner(owner, this.self)) return { state: "elsewhere", owner, generation: row.generation }
+    if (move?.phase === "leaving")
+      return { state: "leaving", owner, generation: row.generation, move: move.id, target: ownerFrom(move.target_kind, move.target_id) }
+    return { state: "here", owner, generation: row.generation }
+  }
+
+  private setExecution(session: string, owner: ExecutionOwner | null, generation: number, move: MoveId | null, actor: Actor): void {
+    const [kind, id] = owner ? ownerColumns(owner) : [null, null]
+    this.sql(`INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id) DO UPDATE SET
+      owner_kind = excluded.owner_kind, owner_id = excluded.owner_id, generation = excluded.generation,
+      move_id = excluded.move_id, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
+      .run(session, kind, id, generation, move, this.now(), JSON.stringify(actor))
+    this.executions.clear()
+  }
+
+  private insertMove(input: {
+    move: MoveId
+    thread: ThreadId
+    source: ExecutionOwner
+    target: ExecutionOwner
+    phase: z.infer<typeof MovePhaseSchema>
+    handoff: string | null
+    outcome: string | null
+    actor: Actor
+  }): void {
+    const [sourceKind, sourceId] = ownerColumns(input.source)
+    const [targetKind, targetId] = ownerColumns(input.target)
+    const now = this.now()
+    this.sql(`INSERT INTO moves (id, thread_id, source_kind, source_id, target_kind, target_id, phase, handoff, outcome, created_at, created_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(input.move, input.thread, sourceKind, sourceId, targetKind, targetId, input.phase, input.handoff, input.outcome, now, JSON.stringify(input.actor), now)
+  }
+
+  private setMovePhase(move: MoveId, phase: z.infer<typeof MovePhaseSchema>, columns: { handoff?: string; outcome?: string }): void {
+    this.sql("UPDATE moves SET phase = ?, handoff = coalesce(?, handoff), outcome = coalesce(?, outcome), updated_at = ? WHERE id = ?")
+      .run(phase, columns.handoff ?? null, columns.outcome ?? null, this.now(), move)
+    this.executions.clear()
+  }
+
+  private moveRow(move: MoveId): MoveRow | undefined {
+    const found = this.sql(`SELECT id, thread_id, source_kind, source_id, target_kind, target_id, phase, handoff, outcome
+      FROM moves WHERE id = ?`).get(move)
+    return found ? MoveRowSchema.parse(found) : undefined
+  }
+
+  private leavingMove(id: MoveId): MoveRow {
+    const move = this.moveRow(MoveIdSchema.parse(id))
+    if (!move || !sameOwner(ownerFrom(move.source_kind, move.source_id), this.self)) throw new Error("This store never started that move")
+    if (move.phase !== "leaving") throw new Error(`This move was already ${move.phase}`)
+    return move
+  }
+
+  private releasedMove(id: MoveId): ReleasedMove {
+    const move = this.moveRow(MoveIdSchema.parse(id))
+    if (!move?.handoff || !sameOwner(ownerFrom(move.source_kind, move.source_id), this.self))
+      throw new Error("This store never released that move")
+    return { move, handoff: HandoffSchema.parse(JSON.parse(move.handoff)) }
+  }
+
+  /** The destination's record of a handoff it answered, so a repeat gets the same answer. */
+  private recordArrival(handoff: Handoff, phase: "arrived" | "refused", outcome: string, actor: Actor): void {
+    this.insertMove({
+      move: handoff.move,
+      thread: handoff.thread.id,
+      source: handoff.source,
+      target: handoff.target,
+      phase,
+      handoff: JSON.stringify(handoff),
+      outcome,
+      actor,
+    })
+  }
+
+  /**
+   * Write a handed-off Thread under its own identities. Its native sessions,
+   * paths and claims are the source's and stay there; journals arrive by ID
+   * and carry their bindings through the journal transfer.
+   */
+  private acceptThread(handoff: Handoff, actor: Actor): void {
+    const { thread } = handoff
+    const now = this.now()
+    this.sql("INSERT OR IGNORE INTO principals VALUES (?, 'person', NULL, ?)").run(thread.owner, now)
+    const existing = this.sql("SELECT id, owner_id, title, title_source, revision, merged_into FROM threads WHERE id = ?").get(thread.id)
+    if (!existing) {
+      this.sql("INSERT INTO threads (id, owner_id, title, title_source, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(thread.id, thread.owner, thread.title ?? null, thread.titleSource ?? null, handoff.releasedAt, JSON.stringify(actor))
+    } else {
+      if (ThreadRowSchema.parse(existing).merged_into) throw new Error("The Thread in this handoff was merged here")
+      this.sql("UPDATE threads SET title = ?, title_source = ?, revision = revision + 1 WHERE id = ?")
+        .run(thread.title ?? null, thread.titleSource ?? null, thread.id)
+    }
+    for (const session of [...handoff.sessions].sort((left, right) => left.position - right.position)) {
+      if (!this.sql("SELECT id FROM sessions WHERE id = ?").get(session.id)) {
+        // A parent in a Thread that stayed behind is named in the handoff only.
+        const parent = session.parent && this.sql("SELECT id FROM sessions WHERE id = ?").get(session.parent) ? session.parent : null
+        this.sql("INSERT INTO sessions (id, origin, parent_session, created_at, created_by) VALUES (?, ?, ?, ?, ?)")
+          .run(session.id, session.origin, parent, handoff.releasedAt, JSON.stringify(actor))
+      }
+      if (this.sql("SELECT thread_id FROM memberships WHERE session_id = ?").get(session.id))
+        this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(thread.id, session.position, session.id)
+      else
+        this.sql("INSERT INTO memberships VALUES (?, ?, ?, ?, ?)").run(session.id, thread.id, session.position, now, JSON.stringify(actor))
+      for (const journal of session.journals)
+        this.sql("INSERT OR IGNORE INTO journals VALUES (?, ?, ?, ?)").run(journal, session.id, handoff.releasedAt, now)
+    }
+    // The Thread coming back proves the destination claimed what this store
+    // released, even if its receipt never arrived.
+    this.sql("UPDATE moves SET phase = 'arrived', updated_at = ? WHERE thread_id = ? AND phase = 'released' AND source_kind = ? AND source_id = ?")
+      .run(now, thread.id, ...ownerColumns(this.self))
+    this.placements.clear()
+  }
+
+  private nativeSessions(harness: string, nativeId: string): string[] {
+    return this.sql(`SELECT session_id FROM locators WHERE device_id = ? AND harness = ? AND native_id = ?
+      UNION SELECT session_id FROM native_claims WHERE device_id = ? AND harness = ? AND native_id = ?
+      UNION SELECT session_id FROM sources WHERE device_id = ? AND harness = ? AND key = ?`)
+      .all(this.deviceId, harness, nativeId, this.deviceId, harness, nativeId, this.deviceId, harness, nativeId)
+      .map((row) => SessionRowSchema.parse(row).session_id)
+  }
+
+  private journalsOf(session: string): string[] {
+    return this.sql("SELECT conversation_id FROM journals WHERE session_id = ? ORDER BY created_at, conversation_id").all(session)
+      .map((row) => JournalRowSchema.parse(row).conversation_id)
   }
 
   private placeSession(session: string): ThreadPlacement {
@@ -633,7 +1141,7 @@ export class ThreadStore {
     return found ? SessionRowSchema.parse(found).session_id : undefined
   }
 
-  private claim(harness: string, nativeId: string): string | undefined {
+  private nativeClaim(harness: string, nativeId: string): string | undefined {
     const found = this.sql("SELECT session_id FROM native_claims WHERE device_id = ? AND harness = ? AND native_id = ?").get(this.deviceId, harness, nativeId)
     return found ? SessionRowSchema.parse(found).session_id : undefined
   }
@@ -656,6 +1164,7 @@ export class ThreadStore {
     const version = VersionSchema.parse(this.sql("PRAGMA data_version").get()).data_version
     if (version === this.dataVersion) return
     this.placements.clear()
+    this.executions.clear()
     this.dataVersion = version
   }
 
@@ -670,6 +1179,7 @@ export class ThreadStore {
     } catch (error) {
       this.db.exec("ROLLBACK")
       this.placements.clear()
+      this.executions.clear()
       throw error
     } finally {
       this.depth -= 1
@@ -678,6 +1188,14 @@ export class ThreadStore {
 }
 
 interface JournalPath { path: string; harness: string; nativeId?: string }
+
+function ownerColumns(owner: ExecutionOwner): ["device" | "cloud", string] {
+  return owner.kind === "device" ? ["device", owner.device] : ["cloud", owner.runtime]
+}
+
+function ownerFrom(kind: "device" | "cloud", id: string): ExecutionOwner {
+  return ExecutionOwnerSchema.parse(kind === "device" ? { kind, device: id } : { kind, runtime: id })
+}
 
 function placementKey(ref: SourceRef): string {
   return `${ref.harness}\n${ref.path}\n${ref.identity ?? ""}\n${ref.nativeId}`

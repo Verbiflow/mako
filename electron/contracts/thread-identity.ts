@@ -20,6 +20,8 @@ export const SERVICE_ACTORS = [
   "catalog",
   "auto-continue",
   "relay",
+  /** The transport that carries a Thread's handoff between environments. */
+  "handoff",
 ] as const
 
 /**

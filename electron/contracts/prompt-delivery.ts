@@ -27,6 +27,12 @@ export const PromptDeliverySchema = z.object({
   attemptId: z.string().uuid(),
   bindingId: z.string(),
   ownerEpoch: z.string(),
+  /**
+   * The Session's execution generation when this attempt was dispatched
+   * (track A2). Absent before the Thread store tracked ownership, or when a
+   * host runs without it.
+   */
+  ownerGeneration: z.number().int().positive().optional(),
   evidence: PromptDeliveryEvidenceSchema,
 })
 export type PromptDelivery = z.infer<typeof PromptDeliverySchema>
