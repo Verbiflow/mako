@@ -287,7 +287,16 @@ export const ThreadRow = memo(function ThreadRow({
           {title}
         </span>
       )}
-      {branch ? <GitBranchIcon className="size-3 shrink-0 text-faint/70" aria-label={`In its own worktree, on ${branch}`} /> : null}
+      {branch ? (
+        <span
+          data-thread-branch={branch}
+          className="flex max-w-[7rem] min-w-3 shrink-[3] items-center gap-1 overflow-hidden text-label text-faint"
+        >
+          <GitBranchIcon className="size-3 shrink-0" aria-hidden />
+          <span className="sr-only">worktree</span>
+          <span className="truncate">{branch.replace(/^mako\//, "")}</span>
+        </span>
+      ) : null}
       {showFolder && ref.cwd ? (
         <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint/70">
           {threadFolderKey(ref) ? workspaceName(project ?? ref.cwd) : "tmp"}
