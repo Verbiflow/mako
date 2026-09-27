@@ -57,6 +57,7 @@ import {
   type StartingAcpConversation,
 } from "@/state/acp-state"
 import { prefsStore } from "@/state/prefs"
+import { refreshWorktrees } from "@/state/worktrees"
 import {
   markThreadReviewed,
   setThreadAttention,
@@ -368,7 +369,9 @@ export const acp = {
     attachments: PromptAttachment[] = [],
     displayPrompt = prompt,
     threadPath?: string,
-    placement?: { thread: string; session: string }
+    placement?: { thread: string; session: string },
+    /** Start in a new worktree of `cwd`'s repository; only a new Thread asks. */
+    worktree = false
   ): Promise<boolean> {
     if (!hasBridge()) return false
     const existing = threadPath
@@ -390,7 +393,16 @@ export const acp = {
       blocks: displayPrompt ? [{ type: "user", text: displayPrompt }] : [],
       hiddenUserPrompt: displayPrompt === prompt ? null : prompt,
     })
-    return launch(starting, title ? { title } : {}, prompt, attachments)
+    const options: AcpStartOptions = title ? { title } : {}
+    if (worktree) options.worktree = true
+    const sent = await launch(starting, options, prompt, attachments)
+    if (sent && worktree) void refreshWorktrees().catch(() => {})
+    return sent
+  },
+
+  /** A new Thread from the composer, in its own worktree when that's the choice for new Threads. */
+  startThread(harness: string, cwd: string, prompt: string, attachments: PromptAttachment[] = []): Promise<boolean> {
+    return acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, prefsStore.get().newThreadsInWorktree)
   },
 
   async delegate(provider: string, task: string): Promise<boolean> {

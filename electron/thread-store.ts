@@ -34,6 +34,7 @@ import {
   type SessionExecution,
 } from "./contracts/thread-execution.js"
 import { ThreadGroupSchema, type ThreadGroup } from "./contracts/thread-groups.js"
+import type { ThreadWorktree } from "./contracts/thread-worktrees.js"
 import { hostWarn } from "./host-log.js"
 
 /**
@@ -297,6 +298,21 @@ const REGROUP_LOG = `
 CREATE TABLE IF NOT EXISTS regroups (
   operation_id TEXT PRIMARY KEY, before TEXT NOT NULL, after TEXT NOT NULL, created_at INTEGER NOT NULL);
 `
+/**
+ * Worktrees Mako made for a Thread on a device. A Thread has at most one per
+ * device; its Sessions run in `path` or a folder under it, and `project` is
+ * the folder in the main checkout that the Thread was started from.
+ */
+const WORKTREE_TABLE = `
+CREATE TABLE IF NOT EXISTS thread_worktrees (
+  path TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id), device_id TEXT NOT NULL,
+  repo_root TEXT NOT NULL, project TEXT NOT NULL, branch TEXT NOT NULL, base TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS thread_worktrees_thread ON thread_worktrees(thread_id, device_id);
+`
+const WorktreeRowSchema = z.object({
+  path: z.string(), thread_id: z.string(), repo_root: z.string(), project: z.string(),
+  branch: z.string(), base: z.string(), created_at: z.number(),
+})
 const REGROUP_KEEP_MS = 24 * 60 * 60 * 1000
 const LayoutSchema = z.record(z.string(), z.array(z.string()))
 type Layout = z.infer<typeof LayoutSchema>
@@ -465,6 +481,41 @@ export class ThreadStore {
         origin: this.sessionRow(session).origin,
         started: Boolean(this.sql("SELECT 1 AS found FROM journals WHERE session_id = ? UNION ALL SELECT 1 FROM sources WHERE session_id = ? LIMIT 1").get(session, session)),
       })),
+    })
+  }
+
+  /** Record the worktree a Thread was started in; the first one recorded for the Thread on this device stays. */
+  attachWorktree(input: Omit<ThreadWorktree, "createdAt">): ThreadWorktree | undefined {
+    const thread = this.thread(input.thread)
+    if (!thread) throw new Error("This Thread no longer exists")
+    this.write(() => {
+      this.sql("INSERT OR IGNORE INTO thread_worktrees VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(input.path, thread.id, this.deviceId, input.repoRoot, input.project, input.branch, input.base, this.now())
+    })
+    return this.worktrees().find((worktree) => worktree.path === input.path)
+  }
+
+  /** This device's worktrees, each with the Thread it belongs to now. */
+  worktrees(): ThreadWorktree[] {
+    return this.sql("SELECT path, thread_id, repo_root, project, branch, base, created_at FROM thread_worktrees WHERE device_id = ? ORDER BY created_at")
+      .all(this.deviceId)
+      .map((found) => {
+        const row = WorktreeRowSchema.parse(found)
+        return {
+          path: row.path,
+          thread: this.thread(ThreadIdSchema.parse(row.thread_id))?.id ?? ThreadIdSchema.parse(row.thread_id),
+          repoRoot: row.repo_root,
+          project: row.project,
+          branch: row.branch,
+          base: row.base,
+          createdAt: row.created_at,
+        }
+      })
+  }
+
+  detachWorktree(path: string): void {
+    this.write(() => {
+      this.sql("DELETE FROM thread_worktrees WHERE path = ? AND device_id = ?").run(path, this.deviceId)
     })
   }
 
@@ -1271,6 +1322,7 @@ export class ThreadStore {
     this.db.prepare("DELETE FROM placement_changes WHERE seq <= (SELECT max(seq) FROM placement_changes) - ?").run(PLACEMENT_LOG_KEEP)
     this.db.exec(REGROUP_LOG)
     this.db.prepare("DELETE FROM regroups WHERE created_at < ?").run(this.now() - REGROUP_KEEP_MS)
+    this.db.exec(WORKTREE_TABLE)
     const stored = this.meta("self")
     if (stored === undefined) {
       const owner = self ?? { kind: "device", device: DeviceIdSchema.parse(this.meta("device")) }

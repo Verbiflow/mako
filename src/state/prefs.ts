@@ -68,6 +68,8 @@ export interface Prefs {
   /** Folders open in the project tree. Keys are folded paths, not path prefixes. */
   openDirs: string[]
   autoOpenDiff: boolean
+  /** New Threads start in their own Git worktree instead of the project folder. */
+  newThreadsInWorktree: boolean
   selectedDiffs: PreferenceStringMap
   /** Threads kept at the top of both rails, by session path. */
   pinnedThreads: string[]
@@ -142,6 +144,7 @@ const defaults: Prefs = {
   collapsedDirs: [],
   openDirs: [],
   autoOpenDiff: true,
+  newThreadsInWorktree: false,
   selectedDiffs: {},
   pinnedThreads: [],
   pinnedProjects: [],
@@ -361,6 +364,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     collapsedDirs: readStringList(value.collapsedDirs, defaults.collapsedDirs),
     openDirs: readStringList(value.openDirs, defaults.openDirs),
     autoOpenDiff: readBoolean(value.autoOpenDiff, defaults.autoOpenDiff),
+    newThreadsInWorktree: readBoolean(value.newThreadsInWorktree, defaults.newThreadsInWorktree),
     selectedDiffs: readStringRecord(value.selectedDiffs),
     pinnedThreads: readStringList(value.pinnedThreads, defaults.pinnedThreads),
     pinnedProjects: readStringList(

@@ -67,8 +67,19 @@ function normalizedPath(path: string | undefined): string {
   return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized
 }
 
-function folderPath(path: string | undefined): string {
-  const normalized = normalizedPath(path)
+/** The project folder a Thread worktree's folder stands for, when it is one. */
+export type FolderMap = (path: string) => string | undefined
+
+/** The current map, for callers without their own; `state/worktrees` sets it. */
+let currentFolderMap: FolderMap = () => undefined
+
+export function mapWorktreeFolders(map: FolderMap): void {
+  currentFolderMap = map
+}
+
+function folderPath(path: string | undefined, folderMap: FolderMap = currentFolderMap): string {
+  const project = path ? folderMap(path) : undefined
+  const normalized = normalizedPath(project ?? path)
   if (!normalized) return ""
   if (/^\/(?:private\/)?tmp(?:\/|$)/.test(normalized)) return ""
   if (/^\/(?:private\/)?var\/folders(?:\/|$)/.test(normalized)) return ""
@@ -95,8 +106,8 @@ export function threadBelongsToWorkspace(
   })
 }
 
-export function threadFolderKey(ref: Pick<ThreadRef, "cwd" | "workspace">): string {
-  return folderPath(ref.workspace ?? ref.cwd)
+export function threadFolderKey(ref: Pick<ThreadRef, "cwd" | "workspace">, folderMap?: FolderMap): string {
+  return folderPath(ref.workspace ?? ref.cwd, folderMap)
 }
 
 /**
@@ -227,6 +238,7 @@ export function groupThreadFolders({
   activity = {},
   ranks = {},
   sortBy,
+  folderMap = currentFolderMap,
 }: {
   refs: ThreadRef[]
   live?: AcpPresence[]
@@ -238,13 +250,15 @@ export function groupThreadFolders({
   /** Held recency from `stableThreadRanks`; a thread without one uses its updatedAt. */
   ranks?: RailRanks
   sortBy: RailSortBy
+  /** Worktree folders to the project folders they stand for. */
+  folderMap?: FolderMap
 }): ThreadFolder[] {
   const recency = (ref: ThreadRef): string => ranks[ref.path]?.at ?? ref.updatedAt ?? ""
   const held = new Set(pinnedThreads)
   const byCwd = new Map<string, ThreadRef[]>()
   const allByCwd = new Map<string, ThreadRef[]>()
   for (const ref of refs) {
-    const key = threadFolderKey(ref)
+    const key = threadFolderKey(ref, folderMap)
     const all = allByCwd.get(key)
     if (all) all.push(ref)
     else allByCwd.set(key, [ref])
@@ -253,10 +267,10 @@ export function groupThreadFolders({
     byCwd.get(key)?.push(ref)
   }
   for (const presence of live) {
-    const key = threadFolderKey(presence)
+    const key = threadFolderKey(presence, folderMap)
     if (!byCwd.has(key)) byCwd.set(key, [])
   }
-  const normalizedCurrent = folderPath(currentCwd)
+  const normalizedCurrent = folderPath(currentCwd, folderMap)
   const currentKey =
     [...byCwd.keys()]
       .filter(
@@ -272,12 +286,12 @@ export function groupThreadFolders({
       return (b.startedAt ?? "").localeCompare(a.startedAt ?? "")
     return recency(b).localeCompare(recency(a))
   }
-  const normalizedPinnedFolders = pinnedFolders.map(folderPath)
+  const normalizedPinnedFolders = pinnedFolders.map((path) => folderPath(path, folderMap))
   const pinned = new Set(normalizedPinnedFolders)
   const result: ThreadFolder[] = [...byCwd.entries()].map(([key, entries]) => {
     entries.sort(byOrder)
     const allEntries = allByCwd.get(key) ?? entries
-    const present = live.filter((presence) => threadFolderKey(presence) === key)
+    const present = live.filter((presence) => threadFolderKey(presence, folderMap) === key)
     const liveLatest = present.reduce((latest, presence) => Math.max(latest, presence.createdAt), 0)
     const latest = allEntries.reduce(
       (top, ref) => ((ref.updatedAt ?? "") > top ? ref.updatedAt! : top),
@@ -320,7 +334,7 @@ export function groupThreadFolders({
         (pinned.has(key) ||
           allEntries.some((ref) =>
             [ref.cwd, ref.workspace].some(
-              (path) => Boolean(path) && pinned.has(folderPath(path))
+              (path) => Boolean(path) && pinned.has(folderPath(path, folderMap))
             )
           )),
       pinRank: -1,
@@ -343,7 +357,7 @@ export function groupThreadFolders({
     return normalizedPinnedFolders.findIndex((path) =>
       entries.some((ref) =>
         [ref.cwd, ref.workspace].some(
-          (candidate) => folderPath(candidate) === path
+          (candidate) => folderPath(candidate, folderMap) === path
         )
       )
     )

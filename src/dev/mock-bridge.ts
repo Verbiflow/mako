@@ -151,6 +151,10 @@ export function installMockBridge() {
       external: false,
     }),
     threadGroups: async () => [],
+    worktrees: async () => ({ root: "/mock/worktrees", worktrees: [] }),
+    removeWorktree: async () => {
+      throw new Error("The mock desk has no worktrees to remove.")
+    },
     threadCreateSession: async () => {
       throw new Error("The mock desk has no Thread store, so it can't add a session to a Thread.")
     },

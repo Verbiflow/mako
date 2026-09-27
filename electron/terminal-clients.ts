@@ -1,5 +1,5 @@
 import { TerminalDaemonClient } from "./terminal-client.js"
-import type { TerminalEvent } from "./contracts/terminal.js"
+import type { TerminalEvent, TerminalSession } from "./contracts/terminal.js"
 
 /** Each window owns its attachments and acknowledgements; shells belong to the daemon. */
 export class TerminalClients {
@@ -33,6 +33,13 @@ export class TerminalClients {
       this.#clients.set(owner, client)
     }
     return client
+  }
+
+  /** The daemon's running shells, read through any window's connection; none while no window has one. */
+  async runningShells(): Promise<TerminalSession[]> {
+    const client = this.#clients.values().next().value
+    if (!client) return []
+    return (await client.list()).filter((session) => session.status === "running")
   }
 
   release(owner: string): void {

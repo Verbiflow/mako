@@ -8,7 +8,7 @@ import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo, RuntimeDisconnectedError } from "./runtime-connection.js"
 import { lstat, mkdir, stat, unlink } from "node:fs/promises"
-import { existsSync, rmSync } from "node:fs"
+import { existsSync, realpathSync, rmSync } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
@@ -64,6 +64,8 @@ import { ThreadArchives } from "./thread-archives.js"
 import { ThreadLifecycle } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
+import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
+import { ThreadWorktreeService } from "./thread-worktrees.js"
 import { nativeStopToken } from "./drivers.js"
 import type { LiveStartOptions } from "./shared.js"
 import {
@@ -345,6 +347,20 @@ function openThreadStore(): ThreadStore | null {
   }
 }
 installThreadStore(threadStore)
+/** Beside the Thread store, so every profile sharing the store shares its worktrees. */
+const threadWorktrees = threadStore
+  ? new ThreadWorktreeService(join(realpathSync(dirname(threadStore.path)), "worktrees"), threadStore, async (path) => {
+      const inside = (cwd: string) => cwd === path || cwd.startsWith(`${path}/`)
+      const conversations = liveConversations
+        .summaries()
+        .filter(({ session }) => session.status !== "closed" && inside(session.cwd))
+        .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
+      const shells = (await terminalClients?.runningShells().catch(() => []) ?? [])
+        .filter((shell) => inside(shell.cwd))
+        .map((shell) => `the terminal “${shell.title}”`)
+      return [...conversations, ...shells]
+    })
+  : null
 hostLog("host", "starting", {
   pid: process.pid,
   version: app.getVersion(),
@@ -1488,14 +1504,22 @@ function bindIpc() {
       const remembered = options.resume
         ? sessionMemory?.recall(harness, options.resume)
         : undefined
+      // A new Thread in a worktree starts there; a resume or a new tab of an
+      // existing Thread runs where that Thread already does.
+      if (options.worktree && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Switch to Local to start in the folder itself.")
+      const worktree = options.worktree && !options.resume && !options.session && threadWorktrees
+        ? await threadWorktrees.prepare(options.conversationId, cwd, options.title ?? options.displayPrompt ?? options.initialRequest?.text)
+        : undefined
+      if (worktree) trace("worktree")
+      const startCwd = worktree?.cwd ?? cwd
       const tuning = await resolveHarnessLaunch(
         harness,
-        cwd,
+        startCwd,
         options.tuning ?? remembered?.settings
       )
       trace("profile")
       try {
-        await liveConversations.start(harness, cwd, { ...options, tuning })
+        await liveConversations.start(harness, startCwd, { ...options, worktree: undefined, tuning })
       } catch (error) {
         if (!(error instanceof SessionHeldError) || !options.threadPath) throw error
         const resolved = await continuation.resolve(options.threadPath)
@@ -1503,6 +1527,9 @@ function bindIpc() {
         return continueOwned(resolved)
       }
       trace("accepted")
+      if (worktree)
+        void threadWorktrees?.attach(options.conversationId).catch((error) =>
+          hostWarn("threads", "a worktree could not be recorded against its Thread; the next list attaches it", { conversation: options.conversationId, error: error instanceof Error ? error.message : String(error) }))
       return liveConversations.snapshot(options.conversationId)
     }
   )
@@ -2025,6 +2052,7 @@ app.whenReady().then(async () => {
   })
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
   installThreadGroupsIpc(threadStore, liveConversations)
+  installThreadWorktreesIpc(threadWorktrees)
   application = installApplicationIpc({
     live: liveConversations,
     native: nativeRequests,

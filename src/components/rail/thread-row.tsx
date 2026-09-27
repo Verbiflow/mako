@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState } from "react"
-import { ArchiveIcon, PinIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, GitBranchIcon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { ThreadActions } from "@/components/rail/thread-actions"
@@ -10,6 +10,7 @@ import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
+import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -131,6 +132,11 @@ export const ThreadRow = memo(function ThreadRow({
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
+  const branch = useWorktrees((state) => worktreeAt(state.worktrees, ref.cwd)?.worktree.branch)
+  const project = useWorktrees((state) => {
+    const found = worktreeAt(state.worktrees, ref.cwd)
+    return found && `${found.worktree.repoRoot}${found.inside}`
+  })
   const active = useSession((state) => state.meta?.sessionFile === ref.path)
   const selectedPath = useThreads(
     (state) => state.opening?.ref.path ?? state.viewing?.ref.path
@@ -207,6 +213,7 @@ export const ThreadRow = memo(function ThreadRow({
         ].join(" → "),
         ref.model,
         ref.cwd,
+        branch ? `Worktree on ${branch}` : undefined,
         "Double-click the title to rename",
       ]
         .filter(Boolean)
@@ -280,9 +287,10 @@ export const ThreadRow = memo(function ThreadRow({
           {title}
         </span>
       )}
+      {branch ? <GitBranchIcon className="size-3 shrink-0 text-faint/70" aria-label={`In its own worktree, on ${branch}`} /> : null}
       {showFolder && ref.cwd ? (
         <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint/70">
-          {threadFolderKey(ref) ? workspaceName(ref.cwd) : "tmp"}
+          {threadFolderKey(ref) ? workspaceName(project ?? ref.cwd) : "tmp"}
         </span>
       ) : null}
       {isPinned ? (

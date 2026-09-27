@@ -31,6 +31,8 @@ export interface LiveStartOptions {
   tuning?: SessionSettings
   /** The Thread-store Session this conversation starts in: an empty one a window's `+` tab created. */
   session?: string
+  /** Start a new Thread in its own Git worktree of `cwd`'s repository, made on this first send. */
+  worktree?: boolean
 }
 
 /**

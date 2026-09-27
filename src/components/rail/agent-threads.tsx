@@ -54,6 +54,7 @@ import {
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { setPref, togglePinnedProject, usePrefs } from "@/state/prefs"
+import { useWorktrees } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
 import { Blank } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
@@ -309,6 +310,7 @@ export function AgentThreads() {
     return list
   }, [shownRefs, pinned])
 
+  const folderMap = useWorktrees((state) => state.folderMap)
   const grouped = useMemo(
     () =>
       groupThreadFolders({
@@ -321,8 +323,9 @@ export function AgentThreads() {
         activity: threadActivity,
         ranks: shownRanks,
         sortBy,
+        folderMap,
       }),
-    [cwd, shownRefs, shownLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity]
+    [cwd, shownRefs, shownLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
   )
   // A folder takes its place when first seen and keeps it until you work
   // there. Agent output never moves one.
@@ -539,7 +542,7 @@ export function AgentThreads() {
                   branch={folder.current && railWidth >= 320 ? focusedBranch : undefined}
                   now={now}
                   fold={fold}
-                  liveAgents={shownLive.filter((presence) => (threadFolderKey(presence) || "~") === folder.key)}
+                  liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key)}
                   collapsed={collapsed.includes(`ws:${folder.key}`)}
                   onToggle={() => {
                     const key = `ws:${folder.key}`
@@ -578,7 +581,7 @@ export function AgentThreads() {
                   folder={sessions}
                   now={now}
                   fold={fold}
-                  liveAgents={shownLive.filter((presence) => !threadFolderKey(presence))}
+                  liveAgents={shownLive.filter((presence) => !threadFolderKey(presence, folderMap))}
                   collapsed={collapsed.includes(`ws:${sessions.key}`)}
                   onToggle={() => {
                     const key = `ws:${sessions.key}`

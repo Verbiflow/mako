@@ -1,5 +1,6 @@
 import { LiveComposerControls, NextSessionModePicker } from "./live-controls"
 import { useComposerSettings } from "./use-composer-settings"
+import { WorktreeChoice } from "./worktree-choice"
 import { AgentModelPicker } from "@/components/composer/agent-model-picker"
 import { useAcp } from "@/state/acp"
 import { scopedAcp, useConversationScope } from "@/state/conversation-scope"
@@ -32,6 +33,7 @@ export function ComposerRouting() {
       ) : (
         <NextSessionModePicker />
       )}
+      {scope ? null : <WorktreeChoice />}
     </>
   )
 }

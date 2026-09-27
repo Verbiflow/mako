@@ -506,7 +506,7 @@ export function Composer() {
         } else if (sessionDraft) {
           ok = await startInThread(sessionDraft, harness, full, acpAttachments)
         } else if (descriptorFor(threadsStore.get(), harness)?.live) {
-          ok = await acp.startFresh(harness, cwd ?? "", full, acpAttachments)
+          ok = await acp.startThread(harness, cwd ?? "", full, acpAttachments)
         } else {
           ok = await threads.startNew(harness, full)
         }

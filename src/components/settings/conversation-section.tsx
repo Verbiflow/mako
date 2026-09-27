@@ -5,9 +5,20 @@ export function ConversationSection() {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
   const autoDiff = usePrefs((prefs) => prefs.autoOpenDiff)
   const steerOnEnter = usePrefs((prefs) => prefs.steerOnEnter)
+  const inWorktree = usePrefs((prefs) => prefs.newThreadsInWorktree)
 
   return (
     <ListCard>
+      <SettingRow
+        title="Start new threads in a worktree"
+        description="Each new Thread in a Git project gets its own checkout and branch, with your .env files. Off works in the project folder. The composer can switch this per thread"
+      >
+        <Toggle
+          label="Start new threads in a worktree"
+          on={inWorktree}
+          onChange={() => togglePref("newThreadsInWorktree")}
+        />
+      </SettingRow>
       <SettingRow
         title="Enter steers a running turn"
         description="Off makes Enter queue behind the turn; Cmd+Enter always does the other. Agents that cannot take a message mid-turn queue either way"

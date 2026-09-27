@@ -5,6 +5,7 @@ import { promptClipboard } from "@/lib/prompt-clipboard"
 import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, applyThreadRegroup, loadThreadGroups } from "@/state/thread-groups"
+import { refreshWorktrees } from "@/state/worktrees"
 import { watchThreadSessions } from "@/state/thread-sessions"
 import { watchSessionPanes } from "@/state/session-panes"
 import { receiveControlActivity } from "@/state/control-preview"
@@ -568,6 +569,7 @@ function adoptBoot(boot: BootPayload) {
   void automations.load()
   void threads.load()
   void loadGroups()
+  void loadWorktrees()
   if (!boot.archives) void threadLifecycle.load()
 }
 
@@ -576,6 +578,14 @@ async function loadGroups() {
     await loadThreadGroups()
   } catch (error) {
     toast.error("Threads with several sessions show as separate rows", { description: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+async function loadWorktrees() {
+  try {
+    await refreshWorktrees()
+  } catch (error) {
+    toast.error("Threads in worktrees show under their worktree folder", { description: error instanceof Error ? error.message : String(error) })
   }
 }
 

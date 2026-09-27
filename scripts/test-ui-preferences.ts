@@ -53,6 +53,25 @@ const failed = groupThreadFolders({
 })
 assert.equal(failed[0]?.failed, 1)
 assert.equal(failed[0]?.running, 0)
+
+// A Thread in a worktree files under the project folder it was made from.
+const worktree = "/Users/me/.mako/worktrees/shop-1a2b3c4d/fix-login"
+const inWorktree = groupThreadFolders({
+  refs: [
+    { harness: "codex", nativeId: "a", path: "/a.jsonl", cwd: "/Users/me/shop/web", updatedAt: "2026-09-27T01:00:00Z" },
+    { harness: "claude", nativeId: "b", path: "/b.jsonl", cwd: `${worktree}/web`, updatedAt: "2026-09-27T02:00:00Z" },
+  ],
+  live: [{ ...presence, cwd: worktree }],
+  pinnedThreads: [],
+  pinnedFolders: ["/Users/me/shop"],
+  sortBy: "recent",
+  folderMap: (path) => (path === worktree || path.startsWith(`${worktree}/`) ? `/Users/me/shop${path.slice(worktree.length)}` : undefined),
+})
+assert.deepEqual(inWorktree.map((folder) => [folder.cwd, folder.refs.map((ref) => ref.path)]).sort(), [
+  ["/Users/me/shop", []],
+  ["/Users/me/shop/web", ["/b.jsonl", "/a.jsonl"]],
+])
+assert.equal(inWorktree.find((folder) => folder.cwd === "/Users/me/shop")?.running, 1, "a live agent at the worktree's root counts for the project")
 console.log(
-  "UI contracts: versioned Fable labels, date suffixes, screenshots without MIME metadata, and project-owned live/failed sessions verified"
+  "UI contracts: versioned Fable labels, date suffixes, screenshots without MIME metadata, project-owned live/failed sessions, and worktree Threads under their project verified"
 )
