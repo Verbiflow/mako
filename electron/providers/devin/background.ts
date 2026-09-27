@@ -5,6 +5,12 @@ import type { AcpBackgroundObserver } from "../acp-source.js"
  * outlives its turn as an in-progress exec call whose update carries
  * `cognition.ai/background`, and that call completes with `terminal_exit`
  * when the shell exits.
+ *
+ * Every other end was checked on 2026-09-27 and completes the call too: a
+ * shell killed from outside (`terminal_exit` with exit code -1, within about
+ * five seconds) and one stopped by Devin's `kill_shell`. Cancelling a later
+ * turn leaves the shell running and reports nothing, which is true. A loaded
+ * session replays each call completed and without the background marker.
  */
 export function devinBackground(): AcpBackgroundObserver {
   const running = new Set<string>()

@@ -125,9 +125,14 @@ interface Live {
    * trailing a cancel, stays with the turn it came from.
    */
   providerTurnCause?: string
+  /** The agent advertised `session/close`. */
+  closesSession?: boolean
   /** The tier the process was launched with, for providers that read it at start. */
   launchAccess: AccessTier | null
 }
+
+/** How long a closing agent has to end its own work before it is terminated. */
+const SHUTDOWN_GRACE_MS = 5_000
 
 /** Output that begins a turn. A tool update can still belong to the turn before. */
 const TURN_CONTENT = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "plan"])
@@ -471,6 +476,7 @@ async function startAcp(
       })))
     live.promptCapabilities =
       initialized.agentCapabilities?.promptCapabilities ?? {}
+    live.closesSession = Boolean(initialized.agentCapabilities?.sessionCapabilities?.close)
     const mcpCapabilities = initialized.agentCapabilities?.mcpCapabilities
     const transports: McpTransport[] = ["stdio"]
     if (mcpCapabilities?.http) transports.push("http")
@@ -864,11 +870,7 @@ export async function liveClose(id: string): Promise<void> {
     update(live, { status: "closed" })
     live.startup.abort()
     engine.release(live)
-    live.child.kill()
-    if (live.child.exitCode === null && live.child.signalCode === null)
-      await new Promise<void>((resolve) => {
-        live.child.once("exit", () => resolve())
-      })
+    await endAgent(live)
     if (sessions.get(id) === live) sessions.delete(id)
   })()
   closingSessions.set(id, operation)
@@ -878,6 +880,24 @@ export async function liveClose(id: string): Promise<void> {
     if (closingSessions.get(id) === operation)
       closingSessions.delete(id)
   }
+}
+
+/**
+ * End the agent the way its own client does, so the background work it
+ * started ends with it. Grok stops its tasks on `session/close` and Devin
+ * stops its shells when stdin closes; a signal leaves either one's work
+ * running with nothing left to report it.
+ */
+async function endAgent(live: Live): Promise<void> {
+  const { child } = live
+  if (child.exitCode !== null || child.signalCode !== null) return
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()))
+  const deadline = setTimeout(() => child.kill(), SHUTDOWN_GRACE_MS)
+  if (live.closesSession && live.connection && live.sessionId)
+    await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited])
+  child.stdin.end()
+  await exited
+  clearTimeout(deadline)
 }
 
 export function stopAcp(): void {
