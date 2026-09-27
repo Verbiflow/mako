@@ -19,6 +19,32 @@ export const CURSOR_SDK_WIRE_VERSION = 1
 /** The largest line either side accepts: a tool result the SDK truncated is still under this. */
 export const CURSOR_SDK_MAX_LINE_BYTES = 16 * 1024 * 1024
 
+/**
+ * How the child ends itself, one code per handler, so the host can name the
+ * cause even when the protocol pipe is the thing that broke. The SDK never
+ * exits the process on its own.
+ */
+export const CURSOR_SDK_EXIT = {
+  closed: 0,
+  fatal: 70,
+  stdinError: 71,
+  stdoutError: 72,
+  stderrError: 73,
+  closeTimedOut: 74,
+} as const
+
+const EXIT_REASONS: Record<number, string> = {
+  [CURSOR_SDK_EXIT.fatal]: "an uncaught error, reported on the line before",
+  [CURSOR_SDK_EXIT.stdinError]: "its request pipe failed",
+  [CURSOR_SDK_EXIT.stdoutError]: "its protocol pipe failed",
+  [CURSOR_SDK_EXIT.stderrError]: "its diagnostics pipe failed",
+  [CURSOR_SDK_EXIT.closeTimedOut]: "closing after the host left took too long",
+}
+
+export function cursorSdkExitReason(code: number | null): string | undefined {
+  return code === null ? undefined : EXIT_REASONS[code]
+}
+
 export const JsonValueSchema = z.json()
 export type JsonValue = z.infer<typeof JsonValueSchema>
 

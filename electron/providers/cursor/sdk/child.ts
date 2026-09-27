@@ -38,6 +38,7 @@ import {
   type KnownAgent,
 } from "./import.js"
 import {
+  CURSOR_SDK_EXIT,
   CURSOR_SDK_WIRE_VERSION,
   JsonValueSchema,
   SdkRequestSchema,
@@ -106,12 +107,12 @@ let exiting = false
 function fatal(kind: string, cause: unknown): void {
   if (exiting) return
   exiting = true
-  const deadline = setTimeout(() => process.exit(1), 1_000)
+  const deadline = setTimeout(() => process.exit(CURSOR_SDK_EXIT.fatal), 1_000)
   deadline.unref()
   try {
-    process.stdout.write(`${JSON.stringify({ event: "log", level: "warn", message: `fatal ${kind}: ${crashSummary(cause)}` } satisfies SdkChildLine)}\n`, () => process.exit(1))
+    process.stdout.write(`${JSON.stringify({ event: "log", level: "warn", message: `fatal ${kind}: ${crashSummary(cause)}` } satisfies SdkChildLine)}\n`, () => process.exit(CURSOR_SDK_EXIT.fatal))
   } catch {
-    process.exit(1)
+    process.exit(CURSOR_SDK_EXIT.fatal)
   }
 }
 
@@ -475,7 +476,7 @@ async function handle(line: string): Promise<void> {
   } catch (cause) {
     write({ id: request.data.id, ok: false, error: cursorSdkWireError(cause) })
   }
-  if (request.data.method === "close") process.exit(0)
+  if (request.data.method === "close") process.exit(CURSOR_SDK_EXIT.closed)
 }
 
 function main(): void {
@@ -491,17 +492,17 @@ function main(): void {
   })
   lines.on("close", () => {
     // The host is gone; SDK cancellation or store disposal must not retain us.
-    const deadline = setTimeout(() => process.exit(1), 5_000)
+    const deadline = setTimeout(() => process.exit(CURSOR_SDK_EXIT.closeTimedOut), 5_000)
     deadline.unref()
-    void close().finally(() => process.exit(0))
+    void close().finally(() => process.exit(CURSOR_SDK_EXIT.closed))
   })
   // Never report a broken protocol pipe through that same pipe: doing so from
   // uncaughtException produces an endless EPIPE/error/log loop after host exit.
   // Request-level errors are handled above; an uncaught failure is fatal and
   // reported at most once, so a broken stdout cannot feed its own report.
-  process.stdin.on("error", () => process.exit(1))
-  process.stdout.on("error", () => process.exit(1))
-  process.stderr.on("error", () => process.exit(1))
+  process.stdin.on("error", () => process.exit(CURSOR_SDK_EXIT.stdinError))
+  process.stdout.on("error", () => process.exit(CURSOR_SDK_EXIT.stdoutError))
+  process.stderr.on("error", () => process.exit(CURSOR_SDK_EXIT.stderrError))
   process.on("uncaughtException", (cause) => fatal("exception", cause))
   process.on("unhandledRejection", (cause) => fatal("rejection", cause))
   configureRipgrep()

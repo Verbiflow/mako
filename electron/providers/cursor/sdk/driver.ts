@@ -43,6 +43,7 @@ import type {
   SdkModelSelection,
   SdkRunResult,
 } from "./wire.js"
+import { cursorSdkExitReason } from "./wire.js"
 
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
@@ -429,7 +430,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         if (live.closed) return
         stop(engine, live)
         const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
-        hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail })
+        hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail, reason: signal ? undefined : cursorSdkExitReason(code) })
         if (live.state.status === "running") settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`)
         engine.patch(live, {
           status: live.state.status === "running" ? "failed" : live.state.status,

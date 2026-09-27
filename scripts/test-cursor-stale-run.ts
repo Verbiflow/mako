@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
+import { CURSOR_SDK_EXIT, cursorSdkExitReason } from "../electron/providers/cursor/sdk/wire.ts"
 
 // Exercise the shipped child and real SDK SQLite store. The model catalog is
 // local, credentials are fake, and the backend is deliberately unreachable.
@@ -92,9 +93,22 @@ crashing.stdin.write(`${JSON.stringify({ id: 1, method: "hello" })}\n`)
 await answered
 crashing.stdin.write("\n")
 const [code] = await exited
-assert.equal(code, 1)
+assert.equal(code, CURSOR_SDK_EXIT.fatal)
+assert.match(cursorSdkExitReason(code) ?? "", /uncaught error/)
 const fatal = output.split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((line) => line.event === "log" && String(line.message).startsWith("fatal exception: TypeError"))
 assert.ok(fatal, `the child reported its fatal error: ${output}`)
 assert.ok(!output.includes(secret), "the crash report omits the error message")
 crashing.stdin.destroy()
-console.log("Cursor child crash: fatal exception reported once, without its message, before exit 1 passed")
+
+// A broken protocol pipe cannot carry a report, so the exit code names it.
+const brokenPipe = spawn(process.execPath, [
+  "--import", `data:text/javascript,${encodeURIComponent(`process.stdin.once("data", () => setImmediate(() => process.stdout.emit("error", Object.assign(new Error("EPIPE"), { code: "EPIPE" }))))`)}`,
+  resolve("dist-electron/providers/cursor/sdk/child.js"),
+], { stdio: ["pipe", "pipe", "ignore"], env: { PATH: process.env.PATH } })
+const brokenExit = once(brokenPipe, "exit")
+brokenPipe.stdin.write(`${JSON.stringify({ id: 1, method: "hello" })}\n`)
+const [brokenCode] = await brokenExit
+assert.equal(brokenCode, CURSOR_SDK_EXIT.stdoutError)
+assert.match(cursorSdkExitReason(brokenCode) ?? "", /protocol pipe/)
+brokenPipe.stdin.destroy()
+console.log("Cursor child crash: fatal exception reported once without its message; a broken pipe exits with its own code passed")
