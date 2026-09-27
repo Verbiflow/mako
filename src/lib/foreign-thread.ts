@@ -67,7 +67,7 @@ export function threadToMessages(
       continue
     }
     if (entry.kind === "event") {
-      messages.push({
+      const message: ChatMessage = {
         id: messageId,
         role: "system",
         blocks: [
@@ -78,7 +78,12 @@ export function threadToMessages(
               : entry.label,
           },
         ],
-      })
+      }
+      if (entry.opensTurn) {
+        message.opensTurn = true
+        if (entry.at) message.timestamp = Date.parse(entry.at) || undefined
+      }
+      messages.push(message)
       continue
     }
     const blocks: Block[] = []

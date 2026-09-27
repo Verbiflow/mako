@@ -63,6 +63,12 @@ export const ThreadEntrySchema = z.discriminatedUnion("kind", [
     kind: z.literal("event"),
     label: z.string(),
     detail: z.string().optional(),
+    /**
+     * The provider started a turn on its own and this is what it reported as
+     * the cause (a background command finishing). It opens the turn the way a
+     * prompt would, but it is the provider's words, never the user's.
+     */
+    opensTurn: z.literal(true).optional(),
   }),
 ])
 export const ThreadRefSchema = z.object({

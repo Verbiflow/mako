@@ -124,6 +124,8 @@ export interface ChatMessage {
   streaming?: boolean
   /** Where this message lives in a provider's store; what a fork or rewind names. */
   anchor?: MessageAnchor
+  /** A system message that opens a turn the provider started itself; its text is the provider's cause. */
+  opensTurn?: boolean
 }
 
 /**

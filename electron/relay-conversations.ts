@@ -137,7 +137,7 @@ export class RelayConversations {
           (block) => block.type === "user" && block.requestId === jobId
         )
         const end = snapshot.blocks.findIndex(
-          (block, index) => index > start && block.type === "user"
+          (block, index) => index > start && (block.type === "user" || block.type === "provider-turn")
         )
         const blocks =
           start < 0

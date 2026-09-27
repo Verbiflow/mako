@@ -53,7 +53,7 @@ export function lastReplyText(blocks: readonly AcpBlock[]): string {
   const parts: string[] = []
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index]!
-    if (block.type === "user") break
+    if (block.type === "user" || block.type === "provider-turn") break
     if (block.type === "text") parts.push(block.text)
   }
   return parts.toReversed().join("\n\n")

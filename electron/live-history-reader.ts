@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import type { BlockAddress, EntryBlock, ThreadEntry, ThreadPage } from "@mako/sessions"
-import type { LiveBlock } from "./contracts/live-content.js"
+import { isTurnStart, type LiveBlock } from "./contracts/live-content.js"
 import type { LiveSnapshot } from "./contracts/live-conversations.js"
 import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
@@ -250,9 +250,8 @@ export class LiveHistoryReader {
     const earlierRequests: string[] = []
     for (let index = 0; index < blockStart; index++) {
       const block = source.blocks[index]
-      if (block?.type !== "user") continue
-      if (block.requestId) earlierRequests.push(block.requestId)
-      if (index >= covered && !block.steeringFor) turnStart++
+      if (block?.type === "user" && block.requestId) earlierRequests.push(block.requestId)
+      if (index >= covered && isTurnStart(block)) turnStart++
     }
     const base: ThreadPage | null = source.base ? {
       ...source.base, entries: entries.reverse(), start: baseStart,

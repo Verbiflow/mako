@@ -93,6 +93,15 @@ const edits: LiveUpdate[][] = [
     },
   ],
   [{ kind: "proposed-plan", id: "proposal", status: "drafting", text: "Plan" }],
+  [{ kind: "provider-turn", reason: 'Background command "Sleep" completed (exit code 0)' }],
+  [{ kind: "thinking", id: "provider-thought", text: "Read the output" }],
+  [{ kind: "tool", id: "fresh", title: "Read", status: "running" }],
+  [{ kind: "tool-update", id: "fresh", status: "completed", output: "BG-DONE" }],
+  [{ kind: "text", id: "provider-answer", text: "It printed BG-DONE." }],
+  [
+    { kind: "user", requestId: auditId(1004), text: "After the provider turn" },
+    { kind: "text", id: "after", text: "Answer" },
+  ],
 ]
 for (const updates of edits) {
   snapshot = {

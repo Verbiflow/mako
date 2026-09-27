@@ -23,6 +23,10 @@ export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
       continue
     }
     if (block.type === "thinking") continue
+    if (block.type === "provider-turn") {
+      entries.push({ kind: "event", label: block.reason, opensTurn: true })
+      continue
+    }
     if (block.type === "plan") {
       entries.push({
         kind: "assistant",

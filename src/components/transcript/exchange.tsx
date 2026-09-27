@@ -121,6 +121,8 @@ export const Exchange = memo(function Exchange({
         ) : (
           <Prompt message={exchange.prompt} />
         )
+      ) : exchange.opener ? (
+        <ProviderTurn message={exchange.opener} provider={provider} />
       ) : null}
       {notes.map((note) =>
         note.after === 0 ? (
@@ -129,7 +131,7 @@ export const Exchange = memo(function Exchange({
       )}
 
       {sections.length > 0 ? (
-        <div className={cn("flex flex-col gap-4", exchange.prompt && "mt-4")}>
+        <div className={cn("flex flex-col gap-4", (exchange.prompt || exchange.opener) && "mt-4")}>
           {provider ? <AgentByline provider={provider} /> : null}
           {sections.map((section, index) =>
             section.kind === "note" ? (
@@ -147,7 +149,7 @@ export const Exchange = memo(function Exchange({
               <WorkSection
                 key={section.id}
                 messages={section.messages}
-                startedAt={index === 0 ? exchange.prompt?.timestamp : undefined}
+                startedAt={index === 0 ? (exchange.prompt ?? exchange.opener)?.timestamp : undefined}
                 live={Boolean(streaming && index === lastWork)}
                 interrupted={Boolean(interrupted) && index === lastWork}
                 failed={Boolean(failed && index === lastWork)}
@@ -203,6 +205,28 @@ function Continued({ continuation, timestamp }: { continuation: TurnContinuation
           : "Mako continued the turn"}
       </span>
       {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
+    </div>
+  )
+}
+
+/**
+ * A turn the provider started itself. What it reported as the cause stands
+ * where a prompt would, in Mako's quiet line rather than the user's bubble.
+ */
+function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: string }) {
+  const { liveId } = useTranscriptSource()
+  const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
+  const agent = provider ?? harness
+  return (
+    <div
+      data-provider-turn
+      className="flex min-h-6 items-start gap-2 px-0.5 py-0.5 text-label text-faint"
+    >
+      <BotIcon className="mt-[0.2em] size-3 shrink-0" />
+      <span className="min-w-0 text-pretty break-words">
+        {`${agent ? harnessLabel(agent) : "The agent"} continued on its own: ${textOf(message.blocks)}`}
+      </span>
+      {message.timestamp ? <span className="tabular ml-auto shrink-0">{formatTime(message.timestamp)}</span> : null}
     </div>
   )
 }

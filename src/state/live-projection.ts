@@ -6,7 +6,7 @@ import { threadToMessages } from "@/lib/foreign-thread"
 import { reconcileMessages } from "@/lib/reconcile"
 import { foldTools } from "@/lib/tools"
 import { toExchanges, type Exchange } from "@/lib/exchanges"
-import { changedLiveBlockStart } from "../../electron/contracts/live-content"
+import { changedLiveBlockStart, isTurnStart } from "../../electron/contracts/live-content"
 import { touchedFiles, type TouchedFile } from "@/lib/context-files"
 
 export interface LiveProjection {
@@ -170,24 +170,25 @@ function remember(
 ): void {
   const start = Math.max(
     localCovered(input),
-    input.blocks.findLastIndex(
-      (block) => block.type === "user" && !block.steeringFor
-    )
+    input.blocks.findLastIndex(isTurnStart)
   )
   let turn = previous?.cursor.turn ?? input.history?.turnStart ?? 0
   let plan = previous?.cursor.plan ?? []
   for (let index = previous?.cursor.start ?? localCovered(input); index < start; index++) {
     const block = input.blocks[index]
-    if (block?.type === "user" && !block.steeringFor) turn++
+    if (isTurnStart(block)) turn++
     if (block?.type === "plan") plan = block.entries
   }
-  const user = input.blocks[start]
+  const opener = input.blocks[start]
+  const absolute = start + (input.history?.blockStart ?? 0)
   const id =
-    user?.type === "user"
-      ? user.requestId
-        ? `acp-request-${user.requestId}`
-        : `acp-user-${start + (input.history?.blockStart ?? 0)}`
-      : undefined
+    opener?.type === "user"
+      ? opener.requestId
+        ? `acp-request-${opener.requestId}`
+        : `acp-user-${absolute}`
+      : opener?.type === "provider-turn"
+        ? `acp-turn-${absolute}`
+        : undefined
   const unchanged = previous?.cursor.start === start
   const messageStart = unchanged
     ? previous.messageStart

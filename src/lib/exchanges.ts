@@ -25,6 +25,11 @@ export interface Exchange {
   /** The user's message, absent for anything the agent said unprompted. */
   prompt?: ChatMessage
   /**
+   * For a turn the provider started itself, what it reported as the cause
+   * (a background command finishing). Never set together with `prompt`.
+   */
+  opener?: ChatMessage
+  /**
    * Everything after the prompt, in order: assistant and tool messages, and
    * any message the user steered in while the agent was still working. A
    * steer stays where it landed — after the work it interrupted, before the
@@ -178,15 +183,37 @@ export function toExchanges(
         leading.response.push(message)
         continue
       }
+      // A cause nothing answered was delivered with this prompt, as Claude
+      // does with a notification queued behind it; it belongs to this turn.
+      const folded: Exchange | undefined =
+        current?.opener && current.response.length === 0 && exchanges.at(-1) === current
+          ? exchanges.pop()
+          : undefined
       current = {
         id: message.id,
         prompt: message,
+        response: [],
+        system: folded?.opener ? [{ message: folded.opener, after: 0 }, ...folded.system] : [],
+        timestamp: message.timestamp,
+      }
+      exchanges.push(current)
+      prompts.set(message.id, current)
+      continue
+    }
+
+    if (message.role === "system" && message.opensTurn) {
+      if (current && current.id !== LEAD_EXCHANGE_ID && current.response.length === 0) {
+        current.system.push({ message, after: 0 })
+        continue
+      }
+      current = {
+        id: message.id,
+        opener: message,
         response: [],
         system: [],
         timestamp: message.timestamp,
       }
       exchanges.push(current)
-      prompts.set(message.id, current)
       continue
     }
 
@@ -212,6 +239,7 @@ export function toExchanges(
     const old = byId.get(exchange.id)
     return old &&
       old.prompt === exchange.prompt &&
+      old.opener === exchange.opener &&
       old.response.length === exchange.response.length &&
       old.system.length === exchange.system.length &&
       old.response.every(
@@ -238,7 +266,8 @@ export function responseText(exchange: Exchange): string {
 
 /** A one-line label for the navigator and the jump list. */
 export function promptLabel(exchange: Exchange): string {
-  const text = exchange.prompt ? textOf(exchange.prompt.blocks) : ""
+  const opening = exchange.prompt ?? exchange.opener
+  const text = opening ? textOf(opening.blocks) : ""
   const line = text.replace(/\s+/g, " ").trim()
   if (line) return line
   return exchange.response.length > 0 ? "Agent turn" : "Empty turn"

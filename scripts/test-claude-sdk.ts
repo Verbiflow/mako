@@ -372,6 +372,105 @@ const assistant: SDKAssistantMessage = {
     },
   },
 }
+{
+  // The sequence Claude Code 2.1.283 streamed on 2026-09-27 when a background
+  // command settled after its turn: notification, `init`, reply, then a result
+  // whose origin is the notification.
+  const messages = new Messages()
+  const turnEvents: LiveDriverEvent[] = []
+  let turnInput: AsyncIterator<SDKUserMessage> | undefined
+  const turnDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+    turnInput = options.prompt[Symbol.asyncIterator]()
+    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close(),
+      interrupt: async () => { onInterrupt?.(); await delay(5) } }
+  } })
+  let onInterrupt: (() => void) | undefined
+  await turnDriver.start("/disposable", { conversationId: "turn-fixture", emit: (event) => turnEvents.push(event) })
+  const session = () => turnEvents.findLast((event) => event.type === "live-session")?.session
+  const opened = () => turnEvents.flatMap((event) =>
+    event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : []).filter((update) => update.kind === "provider-turn")
+  const init = () => messages.send({
+    type: "system", subtype: "init", uuid: randomUUID(), session_id: "turn-fixture",
+    apiKeySource: "none", claude_code_version: "2.1.283", cwd: "/disposable",
+    tools: [], mcp_servers: [], model: "fixture", permissionMode: "default",
+    slash_commands: [], output_style: "default", skills: [], plugins: [],
+  })
+  const reply = (text: string) => {
+    const message: SDKAssistantMessage = { ...assistant, uuid: randomUUID(), session_id: "turn-fixture", message: { ...assistant.message, content: [{ type: "text", text, citations: null }] } }
+    messages.send(message)
+  }
+  const result = (origin?: { kind: "task-notification" }) => {
+    const message: SDKMessage = {
+      type: "result", subtype: "success", uuid: randomUUID(), session_id: "turn-fixture",
+      duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "", stop_reason: "end_turn", total_cost_usd: 0,
+      modelUsage: {}, permission_denials: [], queued_turn_count: 0,
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+        cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+        fallback_credit: { status: { type: "redeemed" } }, inference_geo: "", iterations: [], output_tokens_details: { thinking_tokens: 0 },
+        server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" },
+    }
+    if (origin) message.origin = origin
+    messages.send(message)
+  }
+  const notify = (summary: string, ambient = false) => messages.send({
+    type: "system", subtype: "task_notification", task_id: randomUUID(), status: "completed", output_file: "/disposable/out",
+    summary, ambient, uuid: randomUUID(), session_id: "turn-fixture",
+  })
+
+  await turnDriver.prompt("turn-fixture", "Start the sleep", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  await turnInput?.next()
+  init()
+  reply("Started it.")
+  notify("Background command \"Sleep 8 seconds\" completed (exit code 0)")
+  await delay(0)
+  assert.equal(opened().length, 0, "an init and a notification inside Mako's own turn open nothing")
+  result()
+  await delay(0)
+  assert.equal(session()?.status, "ready")
+
+  notify("Live update watcher stopped", true)
+  notify("Background command \"Sleep 8 seconds\" completed (exit code 0)")
+  init()
+  await delay(0)
+  assert.equal(session()?.status, "running", "the turn Claude started itself shows as running")
+  assert.deepEqual(opened(), [{ kind: "provider-turn", reason: "Background command \"Sleep 8 seconds\" completed (exit code 0)" }],
+    "the non-ambient notification names the turn's cause")
+  reply("It printed BG-DONE.")
+  result({ kind: "task-notification" })
+  await delay(0)
+  assert.equal(session()?.status, "ready", "the provider's result ends its own turn")
+  assert.equal(session()?.lastStop, "completed")
+
+  init()
+  await delay(0)
+  assert.equal(opened().at(-1)?.reason, "A background task finished", "a turn started without a notification still opens with a cause")
+  result()
+  await delay(0)
+  assert.equal(session()?.status, "ready")
+
+  notify("Background command \"Watch logs\" completed (exit code 0)")
+  init()
+  await delay(0)
+  assert.equal(session()?.status, "running")
+  onInterrupt = () => {
+    messages.send({ type: "user", uuid: randomUUID(), session_id: "turn-fixture", parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } })
+    messages.send({
+      type: "result", subtype: "error_during_execution", uuid: randomUUID(), session_id: "turn-fixture", origin: { kind: "task-notification" },
+      duration_ms: 1, duration_api_ms: 1, is_error: true, num_turns: 0, stop_reason: null, total_cost_usd: 0, terminal_reason: "aborted_streaming",
+      modelUsage: {}, permission_denials: [], errors: [],
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+        cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+        fallback_credit: { status: { type: "redeemed" } }, inference_geo: "", iterations: [], output_tokens_details: { thinking_tokens: 0 },
+        server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" },
+    } satisfies SDKMessage)
+  }
+  await turnDriver.cancel("turn-fixture")
+  assert.equal(session()?.status, "ready", "Stop settles a turn Claude started itself")
+  assert.equal(session()?.lastStop, "interrupted")
+  assert.equal(session()?.error, undefined, "the interrupt's own aborted result is not reported as an error")
+}
+console.log("PASS: A turn Claude starts after a background task opens with its cause, runs, and settles on its result")
 diagnostic.observe({ ...assistant, error: "authentication_failed", parent_tool_use_id: "child-tool" })
 assert.equal(authDiagnostics.length, 1, "a child failure must not be attributed to the parent account")
 diagnostic.observe({

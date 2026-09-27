@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { backgroundCommandLabel } from "@mako/sessions"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { GrokAgents } from "./agents.js"
@@ -45,6 +46,37 @@ const GrokBackgroundTasksSchema = z.object({
   }),
 })
 
+/**
+ * Verified 2026-09-27 against grok 1.0.41: when a background command settles
+ * with no turn running, Grok sends `_x.ai/task_completed` with the task's
+ * snapshot, runs a turn on it with no prompt pending, and ends that turn
+ * with `turn_completed` on `_x.ai/session_notification`, prompt id
+ * `task-completed-<task>`. Its live wire carries no user chunk for it. A
+ * cancel ends that turn with stop reason `cancelled`, and a command that
+ * settles during a running turn is read in that turn and starts none.
+ */
+const GrokTaskCompletedSchema = z.object({
+  sessionId: z.string(),
+  update: z.object({
+    sessionUpdate: z.literal("task_completed"),
+    task_snapshot: z.object({
+      description: z.string().nullish(),
+      command: z.string().nullish(),
+      exit_code: z.number().nullish(),
+      signal: z.string().nullish(),
+      explicitly_killed: z.boolean().nullish(),
+    }),
+  }),
+})
+
+const GrokTurnCompletedSchema = z.object({
+  sessionId: z.string(),
+  update: z.object({
+    sessionUpdate: z.literal("turn_completed"),
+    stop_reason: z.string().nullish(),
+  }),
+})
+
 export const grokAcpSource: ProviderAcpSource = {
   provider: "grok",
   approvalEvidence: { kind: "submission-only", reason: "ACP can forward requests if offered; tested native modes denied tools without an interactive ask. Exact decision observation and broader question coverage remain unverified." },
@@ -62,6 +94,33 @@ export const grokAcpSource: ProviderAcpSource = {
       return {
         sessionId: parsed.data.sessionId,
         running: parsed.data.update.tasks.filter((task) => task.status === "running").length,
+      }
+    },
+  }),
+  providerTurns: () => ({
+    cause(method, params) {
+      if (method !== "_x.ai/task_completed") return undefined
+      const parsed = GrokTaskCompletedSchema.safeParse(params)
+      if (!parsed.success) return undefined
+      const task = parsed.data.update.task_snapshot
+      return {
+        sessionId: parsed.data.sessionId,
+        reason: backgroundCommandLabel({
+          description: task.description ?? undefined,
+          command: task.command ?? undefined,
+          exitCode: task.exit_code,
+          signal: task.signal,
+          stopped: task.explicitly_killed ?? false,
+        }),
+      }
+    },
+    ended(method, params) {
+      if (method !== "_x.ai/session_notification") return undefined
+      const parsed = GrokTurnCompletedSchema.safeParse(params)
+      if (!parsed.success) return undefined
+      return {
+        sessionId: parsed.data.sessionId,
+        interrupted: /cancel|interrupt|abort/i.test(parsed.data.update.stop_reason ?? ""),
       }
     },
   }),

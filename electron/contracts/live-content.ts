@@ -60,6 +60,8 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     attachments: z.array(AttachmentContentSchema).optional(),
   }),
   z.object({ kind: z.literal("plan"), entries: plan }),
+  /** The provider started a turn on its own; `reason` is what it reported as the cause. */
+  z.object({ kind: z.literal("provider-turn"), reason: z.string() }),
 ])
 export type LiveUpdate = z.infer<typeof LiveUpdateSchema>
 export const LiveBlockSchema = z.discriminatedUnion("type", [
@@ -103,8 +105,14 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
     attachments: z.array(AttachmentContentSchema).optional(),
   }),
   z.object({ type: z.literal("plan"), entries: plan }),
+  z.object({ type: z.literal("provider-turn"), reason: z.string() }),
 ])
 export type LiveBlock = z.infer<typeof LiveBlockSchema>
+
+/** A block that opens a turn: the user's prompt, or the cause of one the provider started itself. */
+export function isTurnStart(block: LiveBlock | undefined): boolean {
+  return (block?.type === "user" && !block.steeringFor) || block?.type === "provider-turn"
+}
 
 const changes = new WeakMap<
   LiveBlock[],
@@ -177,11 +185,7 @@ export function reduceLiveUpdates(
   }
   const tools = new Map<string, number>()
   let turnStart = next.length - 1
-  while (turnStart >= 0) {
-    const block = next[turnStart]!
-    if (block.type === "user" && !block.steeringFor) break
-    turnStart--
-  }
+  while (turnStart >= 0 && !isTurnStart(next[turnStart])) turnStart--
   for (let index = turnStart + 1; index < next.length; index++) {
     const block = next[index]!
     if (block.type === "tool") tools.set(block.id, index)
@@ -295,6 +299,11 @@ export function reduceLiveUpdates(
         replace(index, block)
         break
       }
+      case "provider-turn":
+        tools.clear()
+        turnStart = next.length
+        replace(-1, { type: "provider-turn", reason: update.reason })
+        break
     }
   }
   if (from === blocks.length && next.length === blocks.length) return blocks

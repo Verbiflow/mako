@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { pairTools, foldTools } from "../src/lib/tools.ts"
 import { threadToMessages } from "../src/lib/foreign-thread.ts"
-import { isInterruptedNote, notesBesideStop, responseSections, toExchanges } from "../src/lib/exchanges.ts"
+import { isInterruptedNote, notesBesideStop, promptLabel, responseSections, toExchanges } from "../src/lib/exchanges.ts"
+import { textOf } from "../src/lib/format.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
 import type { AttachmentContent } from "@mako/sessions"
 
@@ -342,6 +343,51 @@ assert.deepEqual(
   "With a Stopped footer, the provider's marker above or below the answer goes; a marker between parts of it stays"
 )
 console.log("Compaction and other notes render where they happened in a long answer; a stopped turn says so once")
+
+// A turn the provider started itself opens its own exchange, headed by the
+// cause it reported, whether read from its native file or streamed live.
+const finished = 'Background command "Sleep 8 seconds" completed (exit code 0)'
+const nativeTurns = toExchanges(
+  threadToMessages([
+    { kind: "user", id: "ask", text: "Start the sleep" },
+    { kind: "assistant", id: "started", blocks: [{ type: "text", text: "Started it." }] },
+    { kind: "event", id: "cause", at: "2026-09-27T01:00:10.000Z", label: finished, opensTurn: true },
+    { kind: "assistant", id: "read", blocks: [{ type: "text", text: "It printed BG-DONE." }] },
+  ])
+)
+assert.deepEqual(nativeTurns.map((exchange) => [Boolean(exchange.prompt), exchange.opener ? textOf(exchange.opener.blocks) : null, exchange.response.length]),
+  [[true, null, 1], [false, finished, 1]], "the provider's turn is its own exchange, not more of the previous answer")
+assert.equal(nativeTurns[1]!.id, "native-event-cause")
+assert.equal(nativeTurns[1]!.timestamp, Date.parse("2026-09-27T01:00:10.000Z"))
+assert.equal(promptLabel(nativeTurns[1]!), finished, "the navigator names the turn by its cause")
+const liveTurns = toExchanges(acpBlocksToMessages([
+  { type: "user", requestId: "r1", text: "Start the sleep" },
+  { type: "text", text: "Started it." },
+  { type: "provider-turn", reason: finished },
+  { type: "tool", id: "read", title: "Read", status: "completed", output: "BG-DONE" },
+  { type: "text", text: "It printed BG-DONE." },
+], true).messages)
+assert.deepEqual(liveTurns.map((exchange) => exchange.id), ["acp-request-r1", "acp-turn-2"])
+assert.equal(liveTurns[1]!.response.at(-1)?.streaming, true, "the running provider turn is the one streaming")
+const queued = toExchanges(
+  threadToMessages([
+    { kind: "event", id: "stale", label: "Background shell command didn't finish before the previous session ended", opensTurn: true },
+    { kind: "user", id: "next", text: "Reply with resumed" },
+    { kind: "assistant", blocks: [{ type: "text", text: "resumed" }] },
+  ])
+)
+assert.deepEqual(queued.map((exchange) => [exchange.prompt?.id ?? null, exchange.system.map((entry) => [entry.message.id, entry.after])]),
+  [["native-user-next", [["native-event-stale", 0]]]], "a cause nothing answered was delivered with the next prompt and sits under it")
+const pair = toExchanges(
+  threadToMessages([
+    { kind: "event", id: "first", label: "First task finished", opensTurn: true },
+    { kind: "event", id: "second", label: "Second task finished", opensTurn: true },
+    { kind: "assistant", blocks: [{ type: "text", text: "Both are done." }] },
+  ])
+)
+assert.deepEqual(pair.map((exchange) => [exchange.opener?.id, exchange.system.map((entry) => entry.message.id)]),
+  [["native-event-first", ["native-event-second"]]], "causes reported together open one turn")
+console.log("A turn the provider started itself is its own exchange headed by its cause, live and native")
 
 const controlEnvelope = '<mako-local-control>\nBrowser and computer use: fixture setup\n</mako-local-control>\n\n'
 assert.equal(codexPrompt(controlEnvelope + '<send_user_message_question_reply>\n[{"question":"Which profile?","answer":"Existing"}]\n</send_user_message_question_reply>'), 'Which profile?\n\nExisting')

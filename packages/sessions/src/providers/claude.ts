@@ -36,6 +36,7 @@ import {
   type LineTranslator,
 } from "../jsonl.js"
 import { normalizeToolOutput } from "../tool-output.js"
+import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 
@@ -124,6 +125,18 @@ interface ClaudeTranslator extends LineTranslator {
 /** Text a user line starts with when the harness, not the user, wrote it. */
 const NOT_A_PROMPT =
   /^(?:<(?:command-name|command-message|local-command|system-reminder|task-notification)|Caveat: )/
+
+/**
+ * Claude Code writes a `<task-notification>` user line (origin
+ * `task-notification`) when a background command or agent settles, and runs a
+ * turn on it when nothing else is queued. Its summary is the turn's cause.
+ */
+function taskNotificationLabel(text: string): string | undefined {
+  const trimmed = text.trimStart()
+  if (!trimmed.startsWith("<task-notification>")) return undefined
+  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(trimmed)?.[1]?.replace(/\s+/g, " ").trim()
+  return summary ? summary.slice(0, 500) : PROVIDER_TURN_FALLBACK
+}
 
 function isString(value: ClaudeJsonValue | undefined): value is string {
   return Object.prototype.toString.call(value) === "[object String]"
@@ -549,6 +562,13 @@ function translator(): ClaudeTranslator {
       if (claudeInterrupted(text)) {
         sink.push({kind: "event", at: line.timestamp, label: "Interrupted"})
         assistant = null
+        return
+      }
+      const notification = taskNotificationLabel(text)
+      if (notification) {
+        assistant = null
+        started = true
+        sink.push({ kind: "event", id: line.uuid, at: line.timestamp, label: notification, opensTurn: true })
         return
       }
       const attachments = attachmentParts(content)

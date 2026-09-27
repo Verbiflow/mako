@@ -8,6 +8,7 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
+import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
 import type { LiveSessionMode, LiveSessionState } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type {
@@ -75,6 +76,8 @@ interface Live {
   closed: boolean
   steered: boolean
   finishing: boolean
+  /** The summary of a task that settled while no turn ran: the cause of the turn Claude starts on it. */
+  providerTurnCause?: string
   exited(): Promise<void>
 }
 export interface ClaudeSdkDependencies {
@@ -130,6 +133,23 @@ function acknowledge(live: Live, message: SDKMessage): void {
   }
 }
 
+function openProviderTurn(engine: Engine, live: Live): void {
+  live.projection.reset()
+  live.transcript.reset()
+  engine.patch(live, {
+    status: "running",
+    nativeForkId: undefined,
+    nativeRunId: undefined,
+    lastStop: undefined,
+    error: undefined,
+  })
+  engine.emitUpdate(live, {
+    kind: "provider-turn",
+    reason: live.providerTurnCause?.replace(/\s+/g, " ").trim().slice(0, 500) || PROVIDER_TURN_FALLBACK,
+  })
+  live.providerTurnCause = undefined
+}
+
 async function pump(engine: Engine, live: Live): Promise<void> {
   try {
     for await (const message of live.query) {
@@ -152,6 +172,15 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         const running = message.tasks.filter((task) => !task.ambient).length
         if (running !== (live.state.backgroundTasks ?? 0)) engine.patch(live, { backgroundTasks: running })
       }
+      if (message.type === "system" && message.subtype === "task_notification" &&
+        !message.ambient && live.state.status !== "running")
+        live.providerTurnCause = message.summary
+      // `init` opens every turn and never arrives between turns (SDK 0.3.283).
+      // Mako marks its own turns running before sending, so an `init` while
+      // settled is a turn Claude started itself, after a task notification.
+      if (message.type === "system" && message.subtype === "init" &&
+        (live.state.status === "ready" || live.state.status === "failed"))
+        openProviderTurn(engine, live)
       const updates = live.projection.project(message)
       if (updates.length)
         engine.emitUpdates(live, updates)
@@ -588,10 +617,13 @@ export function createClaudeSdkDriver(
         // makes Stop definitive; the next prompt resumes the same native session.
         stop(live)
         await live.exited()
+        // The interrupt's own `error_during_execution` result may have settled
+        // the turn as failed first; Stop ends it interrupted.
         engine.patch(live, {
           status: "ready",
           connection: "disconnected",
           lastStop: "interrupted",
+          error: undefined,
           backgroundTasks: 0,
         })
       }

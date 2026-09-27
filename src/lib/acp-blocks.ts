@@ -115,6 +115,17 @@ export function acpBlocksToMessages(
         }
         break
       }
+      case "provider-turn":
+        turnProvider = provider
+        turn += 1
+        assistant = null
+        messages.push({
+          id: `acp-turn-${absolute}`,
+          role: "system",
+          opensTurn: true,
+          blocks: [{ type: "text", text: block.reason }],
+        })
+        break
       case "plan":
         plan = block.entries
         append(

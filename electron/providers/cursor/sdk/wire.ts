@@ -33,16 +33,16 @@ export const CURSOR_SDK_EXIT = {
   closeTimedOut: 74,
 } as const
 
-const EXIT_REASONS: Record<number, string> = {
-  [CURSOR_SDK_EXIT.fatal]: "an uncaught error, reported on the line before",
-  [CURSOR_SDK_EXIT.stdinError]: "its request pipe failed",
-  [CURSOR_SDK_EXIT.stdoutError]: "its protocol pipe failed",
-  [CURSOR_SDK_EXIT.stderrError]: "its diagnostics pipe failed",
-  [CURSOR_SDK_EXIT.closeTimedOut]: "closing after the host left took too long",
-}
+const EXIT_REASONS = new Map<number, string>([
+  [CURSOR_SDK_EXIT.fatal, "an uncaught error, reported on the line before"],
+  [CURSOR_SDK_EXIT.stdinError, "its request pipe failed"],
+  [CURSOR_SDK_EXIT.stdoutError, "its protocol pipe failed"],
+  [CURSOR_SDK_EXIT.stderrError, "its diagnostics pipe failed"],
+  [CURSOR_SDK_EXIT.closeTimedOut, "closing after the host left took too long"],
+])
 
 export function cursorSdkExitReason(code: number | null): string | undefined {
-  return code === null ? undefined : EXIT_REASONS[code]
+  return code === null ? undefined : EXIT_REASONS.get(code)
 }
 
 export const JsonValueSchema = z.json()

@@ -163,7 +163,7 @@ export class LiveAssets {
     }
     if (update.kind === "attachment")
       return [{ ...update, attachment: this.attachment(update.attachment) }]
-    if (update.kind === "plan") return [update]
+    if (update.kind === "plan" || update.kind === "provider-turn") return [update]
     const attachments =
       update.attachments?.map((attachment) => this.attachment(attachment)) ?? []
     if (update.kind === "user") return [{ ...update, attachments }]

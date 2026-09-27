@@ -65,6 +65,12 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
   compaction?: import("../acp-compaction.js").AcpCompactionSpec
   /** Provider evidence of background commands, which die with the agent process. */
   observeBackground?(): AcpBackgroundObserver
+  /**
+   * Turns the agent starts on its own. Declared only by an agent that reports
+   * when such a turn ends: without that, a turn opened on unprompted output
+   * could never settle, so its output stays with the previous turn.
+   */
+  providerTurns?(): AcpProviderTurnObserver
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
   /**
@@ -98,6 +104,14 @@ export interface AcpBackgroundObserver {
   sessionUpdate?(notification: SessionNotification): AcpBackgroundReport | undefined
   /** Vendor notifications (`_`-prefixed methods), whose payloads the provider parses. */
   extension?(method: string, params: JsonObject): AcpBackgroundReport | undefined
+}
+
+/** Vendor notifications about turns the agent started itself. */
+export interface AcpProviderTurnObserver {
+  /** The agent announced the next turn it starts on its own, and why. Without an announcement, no turn opens. */
+  cause(method: string, params: JsonObject): { sessionId: string; reason: string } | undefined
+  /** The agent ended its current turn; `interrupted` when a cancel ended it. */
+  ended(method: string, params: JsonObject): { sessionId: string; interrupted: boolean } | undefined
 }
 
 export interface AcpAgentObserver {

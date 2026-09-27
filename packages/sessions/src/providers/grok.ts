@@ -1,6 +1,7 @@
 import { acpToolDetails } from "../acp-tool-details.js"
 import { acpAttachments } from "../acp-attachments.js"
 import type { AttachmentContent, ToolDetail } from "../content.js"
+import { backgroundCommandLabel } from "../provider-turn.js"
 /**
  * Grok sessions.
  *
@@ -128,6 +129,28 @@ type GrokUpdate =
   | GrokToolUpdate
   | GrokPlan
   | GrokTurnCompleted
+
+/**
+ * Grok records the start of the turn it runs after a background command as a
+ * user chunk it wrote itself, then closes it with `turn_completed` whose
+ * prompt id is `task-completed-<task>` (grok 1.0.41):
+ *
+ *   <system-reminder>
+ *   Background task "<id>" completed (exit code: 0).
+ *   Description: <description> | Duration: 8.2s
+ *   …
+ */
+function backgroundReminderLabel(text: string): string | undefined {
+  const body = /^\s*<system-reminder>\s*([\s\S]*?)<\/system-reminder>\s*$/.exec(text)?.[1]
+  const status = body && /^Background task "[^"]*" ([^\n(.]+)/.exec(body)?.[1]?.trim()
+  if (!body || !status) return undefined
+  const exitCode = /exit code:\s*(-?\d+)/.exec(body)?.[1]
+  return backgroundCommandLabel({
+    description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
+    exitCode: exitCode === undefined ? undefined : Number(exitCode),
+    stopped: /kill|stop|cancel/i.test(status),
+  })
+}
 
 interface LegacyUserLine {
   type: "user"
@@ -781,6 +804,14 @@ function updatesTranslator(): GrokTranslator {
         toolsById.clear()
         latestAssistant = null
         plan = null
+        const opener = event.attachments?.length ? undefined : backgroundReminderLabel(event.text)
+        if (opener) {
+          user = null
+          userKey = undefined
+          started = true
+          sink.push({ kind: "event", at: event.at, label: opener, opensTurn: true })
+          return
+        }
         user = { kind: "user", at: event.at, text: event.text }
         if (event.attachments?.length) user.attachments = event.attachments
         userKey = event.promptKey

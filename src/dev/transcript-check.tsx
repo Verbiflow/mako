@@ -98,13 +98,29 @@ const entries: ThreadEntry[] = [
   },
 ]
 const exchanges = toExchanges(threadToMessages(entries, 0, "claude"))
+const providerTurnEntries: ThreadEntry[] = [
+  { kind: "user", text: "Start `sleep 8; echo BG-DONE` in the background and don't wait for it" },
+  {
+    kind: "assistant",
+    blocks: [
+      { type: "tool", id: "bash", name: "Bash", input: '{"command":"sleep 8; echo BG-DONE","run_in_background":true}', output: "Command running in background with ID: b79s33s60" },
+      { type: "text", text: "Started it in the background." },
+    ],
+  },
+  { kind: "event", at: "2026-09-27T01:20:14.000Z", label: 'Background command "Sleep 8 seconds then print BG-DONE" completed (exit code 0)', opensTurn: true },
+  { kind: "assistant", blocks: [{ type: "text", text: "The background command finished and printed `BG-DONE`." }] },
+  { kind: "event", label: 'Background command "Watch the test logs" failed (exit code 1)', opensTurn: true },
+  { kind: "user", text: "What failed in the watcher?" },
+  { kind: "assistant", blocks: [{ type: "text", text: "The watcher exited with code 1 after the fixture server closed." }] },
+]
+const providerTurnExchanges = toExchanges(threadToMessages(providerTurnEntries, 0, "claude"))
 const code =
   "```typescript\nconst answer: number = 42\n\nconsole.log(answer)\n```\n\n```mermaid\nflowchart LR\n  Prompt --> Agent\n  Agent --> Tool\n  Tool --> Answer\n```"
 const table =
   "| File | Confidence | Result |\n| --- | --- | --- |\n| `src/app.ts:12` | Confirmed | A complete readable result without splitting the header |\n| `package.json` | Confirmed | 3 checks passed |"
 export function Fixtures() {
   const [mode, setMode] = useState<
-    "Media" | "Code and diagrams" | "Tool results" | "Tables"
+    "Media" | "Code and diagrams" | "Tool results" | "Tables" | "Provider turns"
   >("Media")
   const count = useSyncExternalStore(subscribe, () => reads)
   return (
@@ -113,7 +129,7 @@ export function Fixtures() {
         <header className="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-hairline bg-shell p-4">
           <h1 className="text-title font-semibold">Transcript fixtures</h1>
           {(
-            ["Media", "Code and diagrams", "Tool results", "Tables"] as const
+            ["Media", "Code and diagrams", "Tool results", "Tables", "Provider turns"] as const
           ).map((value) => (
             <button
               key={value}
@@ -160,6 +176,13 @@ export function Fixtures() {
               <Prose text={code} />
             ) : mode === "Tables" ? (
               <Prose text={table} />
+            ) : mode === "Provider turns" ? (
+              <ConversationTimeline
+                identity="provider-turn-fixture"
+                source={source}
+                exchanges={providerTurnExchanges}
+                empty={null}
+              />
             ) : (
               <ConversationTimeline
                 identity="transcript-fixture"

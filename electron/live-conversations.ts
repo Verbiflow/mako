@@ -66,7 +66,7 @@ import type {
   LiveStartOptions,
   LiveSummary,
 } from "./shared.js"
-import { reduceLiveUpdates, mergeLiveUpdates, changedLiveBlockStart } from "./contracts/live-content.js"
+import { reduceLiveUpdates, mergeLiveUpdates, changedLiveBlockStart, isTurnStart } from "./contracts/live-content.js"
 import type { InterruptionReason } from "./contracts/live-conversations.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
 import { CONNECTION_LOST_STOP } from "./contracts/providers-acp.js"
@@ -1972,8 +1972,7 @@ export class LiveConversations {
       if (start < 0)
         throw new Error("The source turn is not present in this capture")
       const next = source.blocks.findIndex(
-        (block, index) =>
-          index > start && block.type === "user" && !block.steeringFor
+        (block, index) => index > start && isTurnStart(block)
       )
       if (start < (source.baseCoveredBlocks ?? 0))
         throw new Error("The transcript was refreshed. Choose the answer again from its current history.")

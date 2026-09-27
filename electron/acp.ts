@@ -117,9 +117,20 @@ interface Live {
   configOptions: SessionConfigOption[]
   mcpServers: McpServer[]
   turn: AcpPromptTurn | null
+  /** A turn the agent started itself is running; the agent's own notification ends it. */
+  providerTurn?: boolean
+  /**
+   * The agent announced a turn it will start itself. Only an announced turn
+   * opens: output after the agent ended a turn, such as a thought chunk
+   * trailing a cancel, stays with the turn it came from.
+   */
+  providerTurnCause?: string
   /** The tier the process was launched with, for providers that read it at start. */
   launchAccess: AccessTier | null
 }
+
+/** Output that begins a turn. A tool update can still belong to the turn before. */
+const TURN_CONTENT = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "plan"])
 
 const engine = createLiveEngine<Live>()
 const sessions = engine.sessions
@@ -406,14 +417,36 @@ async function startAcp(
         })
         return
       }
-      forward(live, params, emit, update, live.state.settings,
+      if (live.providerTurnCause !== undefined && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate) &&
+        (live.state.status === "ready" || live.state.status === "failed")) {
+        live.providerTurn = true
+        update(live, { status: "running", nativeRunId: undefined, error: undefined, lastStop: undefined })
+        engine.emitUpdate(live, { kind: "provider-turn", reason: live.providerTurnCause })
+        live.providerTurnCause = undefined
+      }
+      forward(live, params, live.emit, update, live.state.settings,
         params.update.sessionUpdate === "tool_call" ? source?.toolName?.(params.update) : undefined)
     },
     async extNotification(method: string, params: JsonObject) {
       reportBackground(background?.extension?.(method, params))
+      observeProviderTurn(method, params)
     },
   }
   const background = source?.observeBackground?.()
+  const providerTurns = source?.providerTurns?.()
+  function observeProviderTurn(method: string, params: JsonObject): void {
+    if (!providerTurns || !live.sessionId) return
+    const cause = providerTurns.cause(method, params)
+    if (cause?.sessionId === live.sessionId && live.state.status !== "running")
+      live.providerTurnCause = cause.reason
+    const ended = providerTurns.ended(method, params)
+    if (ended?.sessionId !== live.sessionId) return
+    live.providerTurnCause = undefined
+    if (!live.providerTurn) return
+    live.providerTurn = false
+    if (live.state.status === "running")
+      update(live, { status: "ready", lastStop: ended.interrupted ? "interrupted" : "completed" })
+  }
   function reportBackground(report: AcpBackgroundReport | undefined): void {
     if (!report || !live.sessionId || report.sessionId !== live.sessionId) return
     if (report.running !== (live.state.backgroundTasks ?? 0))
@@ -708,6 +741,8 @@ export async function livePrompt(
     update(live, verdict)
   })
   live.turn = turn
+  live.providerTurn = false
+  live.providerTurnCause = undefined
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
   engine.emitUpdate(live, { kind: "user", text })
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)

@@ -25,6 +25,27 @@ assert.equal(grok.extension("_x.ai/other", grokTasks(["running"])), undefined)
 assert.equal(grok.sessionUpdate, undefined, "only Grok's extension channel reports tasks")
 console.log("PASS: Grok background_tasks reports replace the running count")
 
+const turns = grokAcpSource.providerTurns?.()
+assert.ok(turns, "Grok reports the end of the turns it starts itself")
+const snapshot = (task: JsonObject): JsonObject => ({
+  sessionId: "grok-session",
+  update: { sessionUpdate: "task_completed", task_snapshot: {
+    task_id: "01a0-task", command: "sleep 8; echo BG-DONE", cwd: "/work", output: "BG-DONE\n", truncated: false,
+    completed: true, kind: "bash", is_backgrounded: true, signal: null, explicitly_killed: false, ...task,
+  } },
+})
+assert.deepEqual(turns.cause("_x.ai/task_completed", snapshot({ exit_code: 0, description: "Sleep briefly then print BG-DONE" })),
+  { sessionId: "grok-session", reason: 'Background command "Sleep briefly then print BG-DONE" completed (exit code 0)' })
+assert.equal(turns.cause("_x.ai/task_completed", snapshot({ exit_code: 1 }))?.reason, 'Background command "sleep 8; echo BG-DONE" failed (exit code 1)')
+assert.equal(turns.cause("_x.ai/task_completed", snapshot({ exit_code: null, explicitly_killed: true, description: "Watch" }))?.reason, 'Background command "Watch" was stopped')
+assert.equal(turns.cause("_x.ai/session_notification", snapshot({ exit_code: 0 })), undefined, "the snapshot arrives on its own method")
+const completed = (stop_reason: string): JsonObject => ({ sessionId: "grok-session", update: { sessionUpdate: "turn_completed", prompt_id: "task-completed-01a0-task", stop_reason, elapsed_ms: 13148 } })
+assert.deepEqual(turns.ended("_x.ai/session_notification", completed("end_turn")), { sessionId: "grok-session", interrupted: false })
+assert.deepEqual(turns.ended("_x.ai/session_notification", completed("cancelled")), { sessionId: "grok-session", interrupted: true })
+assert.equal(turns.ended("_x.ai/session_notification", grokTasks(["completed"])), undefined)
+assert.equal(devinAcpSource.providerTurns, undefined, "Devin reports no end for an unprompted turn, so it opens none")
+console.log("PASS: Grok names the cause of the turn it starts itself and reports its end")
+
 const devin = devinAcpSource.observeBackground?.()
 assert.ok(devin?.sessionUpdate)
 const exec = (status: ToolCallStatus | undefined, meta: JsonObject): SessionNotification => ({
