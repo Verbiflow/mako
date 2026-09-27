@@ -8,6 +8,8 @@ import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { FOLD_GLYPHS, foldedThreadStatus, foldRowHarness, type FoldedThread, type FoldRow } from "@/lib/thread-fold"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { openFoldedThread } from "@/state/thread-sessions"
+import { onScreenSession } from "@/state/session-panes"
+import { pressTab } from "@/state/tab-drag"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -170,8 +172,11 @@ export const ThreadRow = memo(function ThreadRow({
         openedOnPress.current = false
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
         if (event.target instanceof Element && event.target.closest("input, [data-tip-quiet]")) return
+        const shown = onScreenSession()
         openedOnPress.current = true
         open()
+        // Dragged into the chat, the row opens beside what was there.
+        if (thread) pressTab(event, { thread, title, shown }, event.currentTarget)
       }}
       onClick={() => {
         if (openedOnPress.current) openedOnPress.current = false

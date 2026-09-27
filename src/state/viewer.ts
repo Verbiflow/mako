@@ -72,7 +72,9 @@ export interface ViewerState {
 
 export const AGENT_TAB_ID = "agent"
 const PRIMARY_PANE = "primary"
-export const SECONDARY_PANE = "secondary"
+/** Every split makes a new ID: after the first pane closes, the one left may be any. */
+let paneSequence = 0
+const newPaneId = () => `pane-${++paneSequence}`
 const initialState: ViewerState = {
   loading: false,
   documents: {},
@@ -440,7 +442,7 @@ export const viewer = {
       state.panes[0]
     if (!source.activeId || source.activeId === AGENT_TAB_ID) return
     const secondary: ViewerPane = {
-      id: SECONDARY_PANE,
+      id: newPaneId(),
       tabIds: [source.activeId],
       activeId: source.activeId,
     }
@@ -456,7 +458,7 @@ export const viewer = {
   openAgentPane(side: PaneSide, session: PaneSession): string | null {
     const state = viewerStore.get()
     if (state.panes.length !== 1) return null
-    const pane: ViewerPane = { id: SECONDARY_PANE, tabIds: [AGENT_TAB_ID], activeId: AGENT_TAB_ID, session }
+    const pane: ViewerPane = { id: newPaneId(), tabIds: [AGENT_TAB_ID], activeId: AGENT_TAB_ID, session }
     const before = side === "left" || side === "up"
     commit(
       state.documents,
@@ -526,12 +528,15 @@ export const viewer = {
     watchGeneration += 1
     generation += 1
     requests.clear()
-    commit(
-      {},
-      [{ id: PRIMARY_PANE, tabIds: [AGENT_TAB_ID], activeId: AGENT_TAB_ID }],
-      PRIMARY_PANE,
-      "right"
-    )
+    // Files belong to the project; chats don't. Two Threads side by side
+    // outlive a project switch, which moving focus between them can cause.
+    const state = viewerStore.get()
+    const chats = state.panes
+      .filter((pane) => pane.tabIds.includes(AGENT_TAB_ID))
+      .map((pane) => ({ ...pane, tabIds: [AGENT_TAB_ID], activeId: AGENT_TAB_ID }))
+    const panes = chats.length ? chats : [{ id: PRIMARY_PANE, tabIds: [AGENT_TAB_ID], activeId: AGENT_TAB_ID }]
+    const focused = panes.some((pane) => pane.id === state.focusedPaneId) ? state.focusedPaneId : panes[0].id
+    commit({}, panes, focused, panes.length > 1 ? state.split : "right")
   },
 }
 

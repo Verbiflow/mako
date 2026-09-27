@@ -1,7 +1,7 @@
 import { createHook, createStore } from "@/state/store"
-import { openInPane, openTabInPane } from "@/state/session-panes"
+import { onScreenSession, openInPane, openTabInPane, tabFor } from "@/state/session-panes"
 import type { SessionTab } from "@/state/thread-sessions"
-import { viewerStore, type PaneSide } from "@/state/viewer"
+import { viewerStore, type PaneSession, type PaneSide } from "@/state/viewer"
 
 /**
  * Dragging a Session tab onto the chat. Past a few pixels the tab lifts into
@@ -18,9 +18,12 @@ export interface DropZone {
 }
 
 interface TabDrag {
-  tab: SessionTab
+  /** Absent for a sidebar row: its Thread opens on press, and the drop takes the Session that opened. */
+  tab?: SessionTab
   thread: string
   title: string
+  /** What the focused pane showed before the press, for a row that opens on press. */
+  shown?: PaneSession
 }
 
 export const tabDragStore = createStore<{ drag: TabDrag | null; zone: DropZone | null }>({ drag: null, zone: null })
@@ -58,16 +61,23 @@ function sameZone(left: DropZone | null, right: DropZone | null): boolean {
   return left?.paneId === right?.paneId && left?.side === right?.side
 }
 
+function draggedTab(drag: TabDrag): SessionTab | undefined {
+  if (drag.tab) return drag.tab
+  const opened = onScreenSession()
+  return opened?.thread === drag.thread ? tabFor(opened) : undefined
+}
+
 function drop(drag: TabDrag, zone: DropZone): void {
-  const { panes } = viewerStore.get()
+  const tab = draggedTab(drag)
+  if (!tab) return
+  const { panes, split } = viewerStore.get()
   if (panes.length > 1) {
     const first = panes[0]?.id === zone.paneId
-    const split = viewerStore.get().split
-    openInPane(drag.tab, drag.thread, split === "right" ? (first ? "left" : "right") : first ? "up" : "down")
+    openInPane(tab, drag.thread, split === "right" ? (first ? "left" : "right") : first ? "up" : "down", drag.shown)
     return
   }
-  if (zone.side === "center") openTabInPane(zone.paneId, drag.thread, drag.tab)
-  else openInPane(drag.tab, drag.thread, zone.side)
+  if (zone.side === "center") openTabInPane(zone.paneId, drag.thread, tab)
+  else openInPane(tab, drag.thread, zone.side, drag.shown)
 }
 
 /**

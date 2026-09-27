@@ -10,14 +10,15 @@ import type { ThreadRef } from "../src/lib/types"
  * the test stands in for a transcript landing by setting what is viewed.
  */
 
-const saved = new Map<string, string>()
-Object.assign(globalThis, {
-  localStorage: {
+function memoryStorage(saved = new Map<string, string>()) {
+  return {
     getItem: (key: string) => saved.get(key) ?? null,
     setItem: (key: string, value: string) => saved.set(key, value),
     removeItem: (key: string) => saved.delete(key),
-  },
-})
+  }
+}
+const windowStorage = memoryStorage()
+Object.assign(globalThis, { localStorage: memoryStorage(), sessionStorage: windowStorage })
 
 const { threadsStore } = await import("../src/state/thread-store")
 const { threadGroupsStore } = await import("../src/state/thread-groups")
@@ -66,9 +67,11 @@ lands(first)
 // The tab on screen dragged right: it moves there with focus, and the pane
 // it left shows its neighbour.
 assert.equal(openInPane(tab(first), thread, "right"), true)
+const secondary = viewerStore.get().panes[1]?.id ?? ""
+assert.notEqual(secondary, "primary")
 assert.deepEqual(layout(), [
   { id: "primary", shows: second, focused: false },
-  { id: "secondary", shows: "active", focused: true },
+  { id: secondary, shows: "active", focused: true },
 ], "the dragged tab takes the new pane and focus")
 assert.equal(viewerStore.get().split, "right")
 
@@ -78,12 +81,12 @@ assert.equal(viewerStore.get().split, "right")
 focusWorkbenchPane("primary")
 assert.deepEqual(layout(), [
   { id: "primary", shows: second, focused: true },
-  { id: "secondary", shows: first, focused: false },
+  { id: secondary, shows: first, focused: false },
 ], "focus moves; both panes keep their Sessions")
 lands(second)
 assert.deepEqual(layout(), [
   { id: "primary", shows: "active", focused: true },
-  { id: "secondary", shows: first, focused: false },
+  { id: secondary, shows: first, focused: false },
 ], "the binding goes once the active conversation catches up")
 
 // A tab clicked in the focused pane of two opens there.
@@ -99,25 +102,25 @@ assert.equal(takeComposerFocus(), true)
 assert.equal(takeComposerFocus(), false, "a later composer doesn't steal the caret")
 
 // A rail click while a switch is still on its way wins over the switch.
-focusWorkbenchPane("secondary")
-assert.deepEqual(layout()[1], { id: "secondary", shows: first, focused: true })
+focusWorkbenchPane(secondary)
+assert.deepEqual(layout()[1], { id: secondary, shows: first, focused: true })
 lands(second)
-assert.deepEqual(layout()[1], { id: "secondary", shows: "active", focused: true }, "you went elsewhere: the focused pane follows")
+assert.deepEqual(layout()[1], { id: secondary, shows: "active", focused: true }, "you went elsewhere: the focused pane follows")
 
 // With two panes, dropping on one shows the tab there. Dropping the Session
 // the other pane shows swaps them.
-viewer.bindPanes({ primary: { thread, tab: third } }, "secondary")
+viewer.bindPanes({ primary: { thread, tab: third } }, secondary)
 openInPane(tab(second), thread, "left")
 assert.deepEqual(layout(), [
   { id: "primary", shows: "active", focused: true },
-  { id: "secondary", shows: third, focused: false },
+  { id: secondary, shows: third, focused: false },
 ], "dropping the other pane's Session swaps the two; it is already the active one")
 
 // Closing the focused pane leaves the other showing what it showed.
 closeWorkbenchPane("primary")
-assert.deepEqual(layout(), [{ id: "secondary", shows: third, focused: true }])
+assert.deepEqual(layout(), [{ id: secondary, shows: third, focused: true }])
 lands(third)
-assert.deepEqual(layout(), [{ id: "secondary", shows: "active", focused: true }], "one pane again, following the rail")
+assert.deepEqual(layout(), [{ id: secondary, shows: "active", focused: true }], "one pane again, following the rail")
 
 // A lone Session can't be split beside itself.
 const lone = randomUUID()
@@ -134,5 +137,41 @@ assert.ok(loneTab)
 assert.equal(openInPane(loneTab, loneThread, "right"), false, "nothing to leave behind")
 assert.equal(viewerStore.get().panes.length, 1)
 
+// A sidebar row opens its Thread on press; dragged to an edge, it opens
+// beside what the chat showed before the press, and keeps focus.
+const beforePress = { thread: loneThread, tab: lone }
+lands(first)
+assert.equal(openInPane(tab(first), thread, "right", beforePress), true)
+assert.deepEqual(layout().map(({ shows, focused }) => ({ shows, focused })), [
+  { shows: lone, focused: false },
+  { shows: "active", focused: true },
+], "the dragged Thread beside the one that was there")
+
+// The split survives a reload of the window.
+assert.deepEqual(JSON.parse(windowStorage.getItem("mako:chat-panes") ?? "null"), {
+  focused: { thread, tab: first },
+  resting: { split: "right", first: true, session: beforePress },
+})
 stop()
-console.log("session panes: drag out, focus, caret, catch-up, rail click, swap, close, lone session")
+const [resting] = viewerStore.get().panes
+assert.ok(resting)
+viewer.closePane(resting.id)
+assert.equal(viewerStore.get().panes.length, 1)
+const restarted = watchSessionPanes()
+assert.deepEqual(layout().map(({ shows, focused }) => ({ shows, focused })), [
+  { shows: lone, focused: false },
+  { shows: "active", focused: true },
+], "the pane without focus comes back on its side")
+
+// Switching project closes files, not chats: moving focus between Threads
+// from two projects switches the project each time.
+const before = layout()
+viewer.close()
+assert.deepEqual(layout(), before, "both chats and their Sessions outlive a project switch")
+
+// Back to one pane, only the Thread on screen is kept.
+closeWorkbenchPane(viewerStore.get().panes[0]?.id ?? "")
+assert.equal(JSON.parse(windowStorage.getItem("mako:chat-panes") ?? "{}").resting, undefined)
+
+restarted()
+console.log("session panes: drag out, focus, caret, catch-up, rail click, swap, close, lone session, sidebar drag, reload")

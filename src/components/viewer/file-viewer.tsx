@@ -21,7 +21,6 @@ import { desktop } from "@/state/desktop"
 import { prefsStore } from "@/state/prefs"
 import {
   AGENT_TAB_ID,
-  SECONDARY_PANE,
   viewer,
   useViewer,
   type PaneSession,
@@ -73,6 +72,7 @@ export function FileViewer({
   const panes = useViewer((state) => state.panes)
   const focusedPaneId = useViewer((state) => state.focusedPaneId)
   const split = useViewer((state) => state.split)
+  const [firstPanes] = useState(() => new Set(panes.map((pane) => pane.id)))
   const panesHost = useRef<HTMLDivElement>(null)
   const secondary = useRef<HTMLDivElement>(null)
   const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -162,8 +162,8 @@ export function FileViewer({
       >
         {panes.map((pane, index) => {
           const second = index === 1
-          // Only a split makes the second pane, so it grows in once, as it mounts.
-          const arrived = pane.id === SECONDARY_PANE
+          // A pane made by a split grows in once, as it mounts.
+          const arrived = !firstPanes.has(pane.id)
           const from = horizontal ? (second ? "right" : "left") : second ? "down" : "up"
           return (
             <Fragment key={pane.id}>

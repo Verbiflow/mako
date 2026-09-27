@@ -30,6 +30,7 @@ import {
   type SessionTab,
 } from "@/state/thread-sessions"
 import { archiveSessionTab, openAddToThread, splitIntoNewThread } from "@/state/thread-regroup"
+import { chatPanes, engageWorkbenchPane, splitOnScreenSession } from "@/state/session-panes"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
 import { applyLoadoutEntry } from "@/state/model-loadout"
@@ -173,6 +174,27 @@ const DESK_COMMANDS: DeskCommand[] = [
     when: () => threadHasTabs() || tabsStore.get().tabs.length > 1,
     run: () => {
       if (!stepThreadSession(-1)) stepTab(-1)
+    },
+  },
+  {
+    id: "chat.split",
+    title: "Split chat",
+    section: "Session",
+    hint: "Moves this session to a new pane beside the Thread's next one. To see two Threads, drag one from the sidebar into the chat",
+    keys: "mod+\\",
+    when: () => chatPanes().length === 0 && onScreenSessionTab() !== null,
+    run: () => void splitOnScreenSession(),
+  },
+  {
+    id: "chat.focus-other-pane",
+    title: "Focus other chat pane",
+    section: "Session",
+    hint: "Its session becomes the one you're talking to, with the caret in its composer",
+    keys: "mod+shift+\\",
+    when: () => chatPanes().length > 1,
+    run: () => {
+      const other = chatPanes().find((pane) => pane !== viewerStore.get().focusedPaneId)
+      if (other) engageWorkbenchPane(other)
     },
   },
   {
