@@ -1,6 +1,7 @@
-// An ACP agent replaying what grok 1.0.41 sent on 2026-09-27 around a turn it
-// started itself after a background command finished. The prompt text names
-// the recorded sequence to play once the prompted turn has ended.
+// An ACP agent replaying what grok 1.0.41 and devin 3000.6.14 sent on
+// 2026-09-27 around a turn each started itself after background work finished.
+// The prompt text names the recorded sequence to play once the prompted turn
+// has ended.
 import { Readable, Writable } from "node:stream"
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk"
 
@@ -21,7 +22,36 @@ new AgentSideConnection((connection) => {
   const turnCompleted = (stop_reason) => connection.extNotification("_x.ai/session_notification", {
     sessionId, update: { sessionUpdate: "turn_completed", prompt_id: "task-completed-01a0-task", stop_reason, elapsed_ms: 1798 },
   })
+  const agentStopped = (cause) => connection.extNotification("_cognition.ai/agent_stopped", { cause, stats: {}, sessionId })
+  const subagentStarted = () => update({
+    sessionUpdate: "tool_call_update", toolCallId: "ag1", status: "in_progress",
+    _meta: { "cognition.ai/subagent_started": { agentId: "ag1", title: "Run the checks", task: "Run the checks", profile: "General", depth: 1, isBackground: true, model: "SWE-2 High" } },
+  })
+  const subagentCompleted = (success, summary) => update({
+    sessionUpdate: "tool_call_update", toolCallId: "ag1", status: success ? "completed" : "failed",
+    _meta: { "cognition.ai/subagent_completed": { agentId: "ag1", success, summary, depth: 1 } },
+  })
+  const subagentFinishes = async () => {
+    await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "All checks passed." }, _meta: { "cognition.ai/subagent_context": { parentAgentId: "ag1" } } })
+    await subagentCompleted(true, "All checks passed.")
+    await chunk("agent_thought_chunk", "The subagent finished; I should report it.")
+  }
   const sequences = {
+    async "devin-self-started"() {
+      await subagentFinishes()
+      await chunk("agent_message_chunk", "The checks passed.")
+      await agentStopped("complete")
+    },
+    async "devin-self-cancelled"() {
+      await subagentFinishes()
+      await new Promise((resolve) => { cancelled = resolve })
+      await agentStopped("cancelled")
+    },
+    async "devin-subagent-stopped"() {
+      await new Promise((resolve) => { cancelled = resolve })
+      await subagentCompleted(false, "[Error] Canceled by user")
+      await agentStopped("cancelled")
+    },
     async "self-started"() {
       await taskCompleted()
       await pause(20)
@@ -54,6 +84,10 @@ new AgentSideConnection((connection) => {
     async prompt(params) {
       const name = params.prompt.find((block) => block.type === "text")?.text ?? ""
       await chunk("agent_message_chunk", `Started ${name}.`)
+      if (name.startsWith("devin-")) {
+        await subagentStarted()
+        await agentStopped("complete")
+      }
       setTimeout(() => void sequences[name]?.(), 30)
       return { stopReason: "end_turn" }
     },

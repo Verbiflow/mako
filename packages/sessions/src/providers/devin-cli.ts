@@ -36,6 +36,7 @@ import {
   type TurnUsage,
 } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
+import { subagentLabel } from "../provider-turn.js"
 import type {
   NativeFile,
   SessionFollower,
@@ -437,6 +438,10 @@ const DEVIN_STOP_NOTICE = "[Response interrupted by user]"
 function translator(): MessageTranslator {
   const sink = new EntrySink()
   const tools = new Map<string, ToolBlock>()
+  /** A turn ends with an assistant message that calls no tool, or a stop. */
+  let running = false
+  const subagentCalls = new Map<string, string>()
+  const subagentTitles = new Map<string, string>()
 
   return {
     push(row) {
@@ -447,11 +452,26 @@ function translator(): MessageTranslator {
       if (message.role === "system") {
         const text = contentText(message.content)
         if (text.trim() === DEVIN_STOP_NOTICE) {
+          running = false
           sink.push({ kind: "event", at, label: "Interrupted" })
           return
         }
         const completion = parseSubagentCompletion(text)
         if (!completion) return
+        // Devin runs a turn on a completion that arrives while it is idle.
+        if (!running) {
+          sink.push({
+            kind: "event",
+            id: String(row.rowId),
+            at,
+            label: subagentLabel({
+              description: subagentTitles.get(completion.id),
+              state: completion.status === "completed" ? "completed" : "failed",
+            }),
+            opensTurn: true,
+          })
+          running = true
+        }
         sink.push({
           kind: "assistant",
           at,
@@ -474,6 +494,7 @@ function translator(): MessageTranslator {
         const prompt = devinPromptImages(contentText(message.content))
         const text = prompt.text
         const attachments = [...devinAttachments(message.content), ...prompt.attachments]
+        running = true
         if (text.trim() || attachments.length)
           sink.push({
             kind: "user",
@@ -488,9 +509,12 @@ function translator(): MessageTranslator {
         const blocks: EntryBlock[] = [...devinAttachments(message.content)]
         const thinking = contentText(message.thinking)
         if (thinking.trim()) blocks.push({ type: "thinking", text: devinReferences(thinking) })
+        running = (message.tool_calls?.length ?? 0) > 0
         for (const call of message.tool_calls ?? []) {
           const name = call.name ?? call.function?.name ?? "tool"
           const rawInput = call.arguments ?? call.function?.arguments
+          const title = name === "run_subagent" ? subagentTitle(rawInput) : undefined
+          if (call.id && title) subagentCalls.set(call.id, title)
           const block: ToolBlock = {
             type: "tool",
             id: call.id,
@@ -518,11 +542,15 @@ function translator(): MessageTranslator {
         return
       }
       if (message.role === "tool") {
+        running = true
         const block = message.tool_call_id
           ? tools.get(message.tool_call_id)
           : undefined
         if (!block) return
         const output = contentText(message.content)
+        const title = message.tool_call_id ? subagentCalls.get(message.tool_call_id) : undefined
+        const agent = title ? /^Background subagent started with agent_id=([^\s.]+)/.exec(output)?.[1] : undefined
+        if (title && agent) subagentTitles.set(agent, title)
         block.output = clip(normalizeToolOutput(output))
         const attachments = devinAttachments(message.content)
         if (attachments.length) block.attachments = attachments
@@ -691,6 +719,17 @@ function isJsonObject(value: JsonValue | undefined): value is JsonObject {
     Object(value) === value &&
     !Array.isArray(value)
   )
+}
+
+function subagentTitle(input: JsonValue | undefined): string | undefined {
+  if (isJsonObject(input)) return jsonText(input.title)
+  if (!isTextValue(input)) return undefined
+  try {
+    const parsed: JsonValue = JSON.parse(input)
+    return isJsonObject(parsed) ? jsonText(parsed.title) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function toolInputText(input: JsonValue | undefined): string | undefined {

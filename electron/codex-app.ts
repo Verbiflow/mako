@@ -40,6 +40,7 @@ import { boundedText, type JsonObject } from "./codex-app-json.js"
 import { LineAssembler } from "@mako/sessions"
 import {
   cleanBackground,
+  endSubagents,
   consumeStdout,
   MAX_STDOUT_BUFFER,
   replayHistory,
@@ -92,6 +93,7 @@ type Live = {
   serverRequests: Map<string, PendingServerRequest>
   items: Map<string, ItemTracker>
   background: ProtocolContext["background"]
+  subagentTurns: Map<string, Array<() => void>>
   stdoutLines: LineAssembler
   stderrBuffer: string
   approvals: CodexPermissionObserver
@@ -186,6 +188,7 @@ async function startCodex(
     serverRequests: new Map(),
     items: new Map(),
     background: { running: new Set() },
+    subagentTurns: new Map(),
     settling: [],
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
@@ -358,7 +361,7 @@ export function codexAppPermission(
   return resolvePermission(live, permissionCallbacks, requestId, response)
 }
 
-/** Stop ends the turn and every terminal the thread left running. */
+/** Stop ends the turn, every terminal the thread left running, and its subagents' work. */
 export async function codexAppCancel(id: string): Promise<void> {
   const live = sessions.get(id)
   if (!live?.threadId || live.exited) return
@@ -366,6 +369,8 @@ export async function codexAppCancel(id: string): Promise<void> {
     if (live.exited) return
     cleanBackground(live).catch((error) =>
       hostWarn("codex", "Background terminals were not ended", { conversation: id, error: String(error) }))
+    endSubagents(live).catch((error) =>
+      hostWarn("codex", "Subagents were not ended", { conversation: id, error: String(error) }))
   }
   if (!live.currentTurnId) {
     clean()
@@ -439,7 +444,10 @@ export async function codexAppClose(id: string): Promise<void> {
   const operation = (async () => {
     updateState(live, { status: "closed" })
     if (!live.exited)
-      await Promise.race([cleanBackground(live).catch(() => undefined), delay(SHUTDOWN_GRACE_MS, undefined, { ref: false })])
+      await Promise.race([
+        Promise.allSettled([cleanBackground(live), endSubagents(live)]),
+        delay(SHUTDOWN_GRACE_MS, undefined, { ref: false }),
+      ])
     disposeLive(live, new Error("Codex session closed"))
     if (!live.child.killed) live.child.kill()
     await live.processClosed
@@ -571,6 +579,8 @@ function disposeLive(live: Live, error: Error): void {
   live.items.clear()
   live.stdoutLines = new LineAssembler(MAX_STDOUT_BUFFER)
   for (const settle of live.settling.splice(0)) settle()
+  for (const waiters of live.subagentTurns.values()) for (const settle of waiters) settle()
+  live.subagentTurns.clear()
 }
 
 function clearStartupWatch(live: Live): void {

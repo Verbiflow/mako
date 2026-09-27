@@ -122,7 +122,9 @@ export interface AcpBackgroundObserver {
 /** Vendor notifications about turns the agent started itself. */
 export interface AcpProviderTurnObserver {
   /** The agent announced the next turn it starts on its own, and why. Without an announcement, no turn opens. */
-  cause(method: string, params: JsonObject): { sessionId: string; reason: string } | undefined
+  cause?(method: string, params: JsonObject): { sessionId: string; reason: string } | undefined
+  /** The same announcement, carried by a session update; it sees child-owned updates too. */
+  updateCause?(notification: SessionNotification): { sessionId: string; reason: string } | undefined
   /** The agent ended its current turn; `interrupted` when a cancel ended it. */
   ended(method: string, params: JsonObject): { sessionId: string; interrupted: boolean } | undefined
 }

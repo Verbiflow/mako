@@ -374,7 +374,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // Verified 2026-09-27 (SDK 1.0.31): a shell the SDK moved to the
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.
-    backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, so none outlives its turn, and Stop ends the run." },
+    backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run." },
     canResume: true,
     checkpoint,
     resumeVerdict,

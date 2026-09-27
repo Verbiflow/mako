@@ -71,6 +71,10 @@ const BackgroundTerminalsSchema = z.object({
   data: z.array(z.object({ itemId: z.string() })),
   nextCursor: z.string().nullish(),
 })
+const LoadedThreadsSchema = z.object({
+  data: z.array(z.string()),
+  nextCursor: z.string().nullish(),
+})
 
 export function consumeStdout(context: ProtocolContext, chunk: Buffer): void {
   if (context.exited) return
@@ -146,6 +150,8 @@ function handleNotification(
   ) {
     if (notification.method === "turn/started" || notification.method === "turn/completed")
       context.protocol.observeAgentTurn?.(notification.threadId)
+    if (notification.method === "turn/completed")
+      for (const settle of context.subagentTurns?.get(notification.threadId) ?? []) settle()
     return
   }
   switch (notification.method) {
@@ -253,6 +259,45 @@ export async function cleanBackground(context: ProtocolContext): Promise<void> {
   if (!context.threadId) return
   await rpcRequest(context, "thread/backgroundTerminals/clean", { threadId: context.threadId })
   await listBackground(context)
+}
+
+/**
+ * End the turns and terminals of every subagent the thread started.
+ * Checked on codex 0.154: a subagent is another thread loaded in the same
+ * app-server. It keeps working after its parent's turn ends, after an
+ * interrupt of the parent, and after the app-server exits, and interrupting
+ * its own turn leaves its running command as a terminal of its thread.
+ */
+export async function endSubagents(context: ProtocolContext): Promise<void> {
+  const root = context.threadId
+  if (!root) return
+  const threads: string[] = []
+  let cursor: string | undefined
+  do {
+    const page = await rpcRequest(context, "thread/loaded/list", { cursor })
+    threads.push(...page.data)
+    cursor = page.nextCursor ?? undefined
+  } while (cursor)
+  await Promise.all(threads.filter((threadId) => threadId !== root).map((threadId) => endSubagent(context, threadId)))
+}
+
+async function endSubagent(context: ProtocolContext, threadId: string): Promise<void> {
+  const waiters = context.subagentTurns ??= new Map<string, Array<() => void>>()
+  let settle = () => {}
+  const settled = new Promise<void>((resolve) => { settle = resolve })
+  waiters.set(threadId, [...(waiters.get(threadId) ?? []), settle])
+  try {
+    const [turn] = (await rpcRequest(context, "thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" })).data
+    if (turn?.status === "inProgress") {
+      await rpcRequest(context, "turn/interrupt", { threadId, turnId: turn.id })
+      await settled
+    }
+  } finally {
+    const rest = waiters.get(threadId)?.filter((waiter) => waiter !== settle) ?? []
+    if (rest.length) waiters.set(threadId, rest)
+    else waiters.delete(threadId)
+    await rpcRequest(context, "thread/backgroundTerminals/clean", { threadId })
+  }
 }
 
 /**
@@ -613,6 +658,12 @@ export function rpcRequest(
         const parsed = BackgroundTerminalsSchema.safeParse(value)
         return parsed.success ? { valid: true, value: parsed.data }
           : { valid: false, message: "Invalid background terminal list" }
+      })
+    case "thread/loaded/list":
+      return beginRpcRequest(context, method, params, (value) => {
+        const parsed = LoadedThreadsSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid loaded thread list" }
       })
   }
 }

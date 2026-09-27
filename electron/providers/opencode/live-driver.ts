@@ -5,6 +5,8 @@ import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
+import { openCodeNoticeLabel, PROVIDER_TURN_FALLBACK } from "@mako/sessions"
+import { z } from "zod"
 import { applyControlEnvironment } from "../../control-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { traceProviderLaunch } from "../../provider-launch.js"
@@ -42,9 +44,22 @@ import { openCodeCheckpoint, openCodeResumeVerdict } from "./resume.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
 
-/** One native send and the execution it starts. The inbox ID binds both. */
+type NoticePayload = Extract<Extract<OpenCodeEvent, { type: "session.inbox.enqueued" }>["data"]["item"], { type: "synthetic" }>["payload"]
+
+/** A notice's metadata: what ended (a shell, or a subagent's session), and how. */
+const NoticeMetadata = z.object({
+  source: z.string().optional(),
+  state: z.string().optional(),
+  shellID: z.string().optional(),
+  childID: z.string().optional(),
+})
+
+/**
+ * One native send and the execution it starts. The inbox ID binds both. A
+ * `provider` turn is an execution OpenCode started itself, on a notice.
+ */
 interface Turn {
-  kind: "prompt" | "command" | "compaction"
+  kind: "prompt" | "command" | "compaction" | "provider"
   /** Client-chosen for prompts and compaction; a command's is learned from its enqueue echo. */
   inboxId?: string
   enqueued: boolean
@@ -73,6 +88,14 @@ interface Live {
   turn: Turn | null
   /** Waiting for the running turn to settle, or for the session to end. */
   settling: Array<() => void>
+  /** Waiting for a subagent session's execution to settle, by its session. */
+  childSettling: Map<string, Array<() => void>>
+  /** The latest notice OpenCode enqueued while no turn ran: the cause of the turn it starts on it. */
+  providerTurnCause?: string
+  /** Shells and subagent sessions Stop ended. OpenCode notifies the root of each end. */
+  stopped: Set<string>
+  /** Those notices, by inbox item. A turn OpenCode starts on one is stopped too. */
+  stopNotices: Set<string>
   /** Context tokens of the root session's latest step; cost is the session's own total. */
   context?: number
   cost?: number
@@ -234,12 +257,45 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   async function endShells(live: Live): Promise<void> {
     const location = { directory: live.cwd }
     const listed = await live.api.client.shell.list({ location })
-    await Promise.all(live.shells.ending(listed.data).map(shell => live.api.client.shell.remove({ id: shell.id, location })))
+    await Promise.all(live.shells.ending(listed.data).map(shell => {
+      live.stopped.add(shell.id)
+      return live.api.client.shell.remove({ id: shell.id, location })
+    }))
+  }
+
+  /** Interrupt every subagent session still executing, and wait for each to settle. */
+  async function interruptChildren(live: Live): Promise<void> {
+    await Promise.all([...live.children].map(async sessionID => {
+      let settle = () => {}
+      const settled = new Promise<void>(resolve => { settle = resolve })
+      live.childSettling.set(sessionID, [...(live.childSettling.get(sessionID) ?? []), settle])
+      live.stopped.add(sessionID)
+      try {
+        if ((await live.api.client.session.interrupt({ sessionID })).interrupted) await settled
+      } finally {
+        const rest = live.childSettling.get(sessionID)?.filter(waiter => waiter !== settle) ?? []
+        if (rest.length) live.childSettling.set(sessionID, rest)
+        else live.childSettling.delete(sessionID)
+      }
+    }))
+  }
+
+  /**
+   * Subagents first. Checked on opencode 2.0.1: a background subagent keeps
+   * executing after its parent's turn and its interrupt, and one whose shell
+   * is removed runs the command again in a new shell.
+   */
+  async function endBackground(live: Live): Promise<void> {
+    try {
+      await interruptChildren(live)
+    } finally {
+      await endShells(live)
+    }
   }
 
   /** Shells outlive the server, so they end before it closes, while it can still reach them. */
-  async function endShellsWithinGrace(live: Live): Promise<void> {
-    await Promise.race([endShells(live).catch(() => {}), delay(SHUTDOWN_GRACE_MS, undefined, { ref: false })])
+  async function endBackgroundWithinGrace(live: Live): Promise<void> {
+    await Promise.race([endBackground(live).catch(() => {}), delay(SHUTDOWN_GRACE_MS, undefined, { ref: false })])
   }
 
   function observeAgent(live: Live, event: OpenCodeEvent) {
@@ -259,6 +315,22 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           status: event.type === "session.tool.success" ? "completed" : "failed" })
         return
     }
+  }
+
+  function observeNotice(live: Live, inboxID: string, notice: NoticePayload): void {
+    const parsed = NoticeMetadata.safeParse(notice.metadata ?? {})
+    const metadata = parsed.success ? parsed.data : {}
+    const ended = metadata.shellID ?? metadata.childID
+    if (ended && live.stopped.delete(ended)) live.stopNotices.add(inboxID)
+    if (!live.turn) live.providerTurnCause = openCodeNoticeLabel({ text: notice.text, description: notice.description, source: metadata.source, state: metadata.state })
+  }
+
+  /** Mako sends every other turn, so an execution starting while none is bound is one OpenCode started on a notice. */
+  function openProviderTurn(live: Live): void {
+    live.turn = { kind: "provider", enqueued: true, delivered: true }
+    engine.patch(live, { status: "running", nativeRunId: undefined, lastStop: undefined, error: undefined })
+    engine.emitUpdate(live, { kind: "provider-turn", reason: live.providerTurnCause ?? PROVIDER_TURN_FALLBACK })
+    live.providerTurnCause = undefined
   }
 
   function receive(live: Live, event: OpenCodeEvent): void {
@@ -285,8 +357,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         else if (live.children.has(event.data.sessionID)) live.content?.nameSession(event.data.sessionID, event.data.title)
         return
       case "session.inbox.enqueued": {
+        if (event.data.sessionID !== root) return
+        if (event.data.item.type === "synthetic") observeNotice(live, event.data.inboxID, event.data.item.payload)
         const turn = live.turn
-        if (event.data.sessionID !== root || !turn) return
+        if (!turn) return
         if (turn.kind === "command" && !turn.inboxId && event.data.item.type === "user") turn.inboxId = event.data.inboxID
         if (turn.inboxId !== event.data.inboxID || turn.enqueued) return
         turn.enqueued = true
@@ -295,8 +369,16 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return
       }
       case "session.inbox.delivered":
-        if (event.data.sessionID === root && live.turn?.inboxId === event.data.inboxID) live.turn.delivered = true
+        if (event.data.sessionID !== root) return
+        if (live.turn?.inboxId === event.data.inboxID) live.turn.delivered = true
+        if (live.stopNotices.delete(event.data.inboxID) && live.turn?.kind === "provider")
+          live.api.client.session.interrupt({ sessionID: root }).catch(error =>
+            hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText(error) }))
         return
+      case "session.execution.started":
+        if (event.data.sessionID === root && !live.turn && (live.state.status === "ready" || live.state.status === "failed"))
+          openProviderTurn(live)
+        break
       case "session.inbox.cancelled":
         if (event.data.sessionID === root && live.turn?.inboxId === event.data.inboxID && !live.turn.delivered)
           finish(live, { kind: "interrupted", reason: "cancelled before delivery" })
@@ -308,6 +390,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (sessionID !== root) {
           if (live.children.has(sessionID) && event.type !== "session.execution.succeeded" && live.content)
             engine.emitUpdates(live, live.content.settle(sessionID, event.type === "session.execution.failed" ? "failed" : "cancelled", "The subagent stopped before this call finished."))
+          for (const settle of live.childSettling.get(sessionID) ?? []) settle()
           return
         }
         if (!live.turn?.delivered) return
@@ -483,6 +566,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     live.agents?.dispose()
     void live.interactions?.close().catch(() => {})
     live.settling.length = 0
+    for (const waiters of live.childSettling.values()) for (const settle of waiters) settle()
+    live.childSettling.clear()
   }
 
   async function startCompaction(live: ReturnType<typeof requireLive>, actionId: string, dispatch?: PromptDispatch): Promise<void> {
@@ -514,7 +599,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     },
     approvalAnswerDigest: openCodeApprovalDigest,
     observesNativeAgents: true,
-    backgroundStop: { kind: "ends-on-stop", how: "Stop removes every running shell of the conversation's sessions once the interrupted turn settles, and at once with no turn running; closing removes them before the server exits. OpenCode 2.0.1 keeps a background shell through an interrupt and past its server's exit." },
+    backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts every subagent session still executing and then removes every running shell of the conversation's sessions, once the interrupted turn settles, and at once with no turn running; closing does both before the server exits. OpenCode 2.0.1 keeps a background shell and a background subagent through an interrupt, and a shell past its server's exit." },
     compaction: {
       kind: "supported",
       async start(id, actionId) {
@@ -545,7 +630,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
       const live: Live = {
         api, cwd, emit: options.emit, launchAccess, children: new Set(), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
-        shells: new OpenCodeShells(sessionID => owns(live, sessionID)), settling: [], stream: new AbortController(), closed: false,
+        shells: new OpenCodeShells(sessionID => owns(live, sessionID)), settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
         state: {
           id: options.conversationId, harness: "opencode", cwd, title: options.title, nativeId: options.resume, nativePath,
           status: "starting", connection: "starting", modes: [...openCodeModes], currentMode: null, configOptions: [], settings: options.tuning,
@@ -655,6 +740,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const inboxId = slash?.kind === "command" ? undefined : openCodeMessageId()
       const turn: Turn = { kind: slash?.kind === "command" ? "command" : "prompt", inboxId, enqueued: false, delivered: false, dispatch }
       live.turn = turn
+      live.providerTurnCause = undefined
+      live.stopped.clear()
+      live.stopNotices.clear()
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
       dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
@@ -692,14 +780,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       await live.api.client.session.switchAgent({ sessionID: live.root, agent })
       engine.patch(live, { currentMode: openCodeModeForAgent(agent, live.launchAccess) })
     },
-    /** Stop ends the turn and every shell the conversation left running. */
+    /** Stop ends the turn, its subagents, and every shell the conversation left running. */
     async cancel(id) {
       const live = requireLive(id)
       const turn = live.turn
       const end = () => {
         if (live.closed) return
-        endShells(live).catch(error =>
-          hostWarn("opencode", "Background shells were not ended", { conversation: live.state.id, error: errorText(error) }))
+        endBackground(live).catch(error =>
+          hostWarn("opencode", "Background work was not ended", { conversation: live.state.id, error: errorText(error) }))
       }
       if (live.state.status !== "running" || !turn) {
         end()
@@ -713,7 +801,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         // An unacknowledged interrupt is not a stopped turn. End the server so
         // its exit marks the session disconnected before anything continues it.
         live.settling = live.settling.filter(settle => settle !== end)
-        await endShellsWithinGrace(live)
+        await endBackgroundWithinGrace(live)
         await live.api.close()
         throw error
       }
@@ -729,7 +817,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (!live) return
       sessions.delete(id)
       if (live.closed) return
-      await endShellsWithinGrace(live)
+      await endBackgroundWithinGrace(live)
       stop(live)
       await live.api.close()
     },

@@ -4,6 +4,7 @@ import { removeSessionRows } from "../sqlite-removal.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { openCodeDatabasePaths } from "./opencode-location.js"
+import { openCodeNoticeLabel } from "./opencode-notice.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
@@ -542,9 +543,10 @@ function currentEntries(
     )
     .all(sessionId, MAX_MESSAGES)
   const sink = new EntrySink()
+  const execution = { running: false }
   for (const fields of stored) {
     const row = parseStoredRow(fields)
-    if (row) pushCurrent(sink, row)
+    if (row) pushCurrent(sink, row, execution)
   }
   return sink.done()
 }
@@ -591,9 +593,36 @@ function legacyEntries(
   return sink.done()
 }
 
-function pushCurrent(sink: EntrySink, row: StoredRow): void {
+/**
+ * `execution.running`: the session's execution had not ended at this row. A
+ * step that ended in tool calls continues it; any other end settles it. A
+ * synthetic notice delivered while it runs is read in that execution.
+ */
+function pushCurrent(sink: EntrySink, row: StoredRow, execution: { running: boolean }): void {
   const type = row.type ?? jsonText(row.data.type)
   const at = isoOf(timeCreated(row.data) ?? row.timeCreated)
+  if (type === "user") execution.running = true
+  if (type === "assistant") {
+    const finish = jsonText(row.data.finish)
+    execution.running = finish === undefined || finish === "tool-calls"
+  }
+  if (type === "synthetic") {
+    if (!execution.running)
+      sink.push({
+        kind: "event",
+        id: row.id,
+        at,
+        label: openCodeNoticeLabel({
+          text: jsonText(row.data.text),
+          description: jsonText(row.data.description),
+          source: jsonText(jsonObject(row.data.metadata)?.source),
+          state: jsonText(jsonObject(row.data.metadata)?.state),
+        }),
+        opensTurn: true,
+      })
+    execution.running = true
+    return
+  }
   if (type === "user") {
     const text = jsonText(row.data.text)
     const attachments = fileParts([

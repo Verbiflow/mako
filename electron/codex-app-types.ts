@@ -122,6 +122,7 @@ export type RpcParams = {
   "turn/interrupt": TurnInterruptParams
   "thread/backgroundTerminals/list": { threadId: string; cursor?: string }
   "thread/backgroundTerminals/clean": { threadId: string }
+  "thread/loaded/list": { cursor?: string }
 }
 
 export type RpcResults = {
@@ -136,6 +137,7 @@ export type RpcResults = {
   "turn/interrupt": JsonObject
   "thread/backgroundTerminals/list": { data: { itemId: string }[]; nextCursor?: string | null }
   "thread/backgroundTerminals/clean": JsonObject
+  "thread/loaded/list": { data: string[]; nextCursor?: string | null }
 }
 
 export type RpcMethod = keyof RpcParams
@@ -194,6 +196,8 @@ export interface ProtocolContext {
    * completions that arrive while a terminal list is in flight.
    */
   background: { running: Set<string>; raced?: Set<string> }
+  /** Waiters for a subagent's turn to settle, by the subagent's thread. */
+  subagentTurns?: Map<string, Array<() => void>>
   stdoutLines: LineAssembler
   exited: boolean
   protocol: ProtocolCallbacks

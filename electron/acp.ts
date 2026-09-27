@@ -390,6 +390,7 @@ async function startAcp(
     async sessionUpdate(params: SessionNotification) {
       if (live.sessionId && params.sessionId !== live.sessionId) return
       reportBackground(background?.sessionUpdate?.(params))
+      announceProviderTurn(providerTurns?.updateCause?.(params))
       if (live.agents?.observe(params) === "child") return
       approvals?.observe?.(params)
       live.compaction?.observe(params.update)
@@ -443,11 +444,13 @@ async function startAcp(
   const background = source?.observeBackground?.()
   live.background = background
   const providerTurns = source?.providerTurns?.()
+  function announceProviderTurn(cause: { sessionId: string; reason: string } | undefined): void {
+    if (cause && cause.sessionId === live.sessionId && live.state.status !== "running")
+      live.providerTurnCause = cause.reason
+  }
   function observeProviderTurn(method: string, params: JsonObject): void {
     if (!providerTurns || !live.sessionId) return
-    const cause = providerTurns.cause(method, params)
-    if (cause?.sessionId === live.sessionId && live.state.status !== "running")
-      live.providerTurnCause = cause.reason
+    announceProviderTurn(providerTurns.cause?.(method, params))
     const ended = providerTurns.ended(method, params)
     if (ended?.sessionId !== live.sessionId) return
     live.providerTurnCause = undefined

@@ -28,9 +28,12 @@ export {
 export { normalizeToolOutput } from "./tool-output.js"
 export {
   backgroundCommandLabel,
+  subagentLabel,
   PROVIDER_TURN_FALLBACK,
   type BackgroundCommandOutcome,
+  type SubagentOutcome,
 } from "./provider-turn.js"
+export { openCodeNoticeLabel, type OpenCodeNotice } from "./providers/opencode-notice.js"
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
 export { SessionArchive } from "./archive.js"

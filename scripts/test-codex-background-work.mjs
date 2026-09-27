@@ -48,7 +48,7 @@ async function check() {
   }
   const leftovers = []
 
-  async function open() {
+  async function open(first = "start") {
     const id = randomUUID()
     await codexAppStart(root, {
       conversationId: id,
@@ -65,6 +65,14 @@ async function check() {
     }
     const pid = (prefix) => Number(texts().find((text) => text.startsWith(prefix))?.split(" ")[1])
     const prompt = (text) => codexAppPrompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    if (first === "spawn") {
+      await prompt("spawn")
+      await until("the subagent's command", () => pid("subagent ") > 0 && session()?.status === "ready")
+      const subagent = pid("subagent ")
+      leftovers.push(subagent)
+      assert.ok(running(subagent), "the subagent's command runs after its parent's turn")
+      return { id, subagent, until }
+    }
     await prompt("start")
     await until("the background command", () => pid("background ") > 0)
     await until("the running count", () => session()?.status === "ready" && session()?.backgroundTasks === 1)
@@ -103,6 +111,18 @@ async function check() {
     await delay(100)
     assert.equal(running(closing.background), false, "closing ends the terminals before the app-server exits")
     console.log("PASS: Closing a conversation ends the terminals its thread left running")
+
+    const agent = await open("spawn")
+    await codexAppCancel(agent.id)
+    await agent.until("the subagent's command to end", () => !running(agent.subagent))
+    await codexAppClose(agent.id)
+    console.log("PASS: Stop with no turn running interrupts a subagent's turn and ends the command the interrupt left running")
+
+    const closingAgent = await open("spawn")
+    await codexAppClose(closingAgent.id)
+    await delay(100)
+    assert.equal(running(closingAgent.subagent), false, "closing ends a subagent's work before the app-server exits")
+    console.log("PASS: Closing a conversation ends its subagents' work")
   } finally {
     for (const pid of leftovers) if (running(pid)) process.kill(pid)
   }

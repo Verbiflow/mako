@@ -257,6 +257,26 @@ try {
   assert.ok(agent && agent.type === "live-agent", "the subagent is observed natively")
   report.cases.push("subagent: the task tool's child session is observed as a native agent")
 
+  const updatesSince = (from: number) => full.events.slice(from).flatMap(event => event.type === "live-updates" ? event.updates : event.type === "live-update" ? [event.update] : [])
+  const noticeFrom = full.events.length
+  const finishing = await turn(full, `Use the bash tool with background set to true to run exactly: sleep 8 && echo ${marker}-finished\nDo not wait for it; reply with the word started. When it finishes, reply with only the word noticed.`)
+  assert.equal(finishing.state.lastStop, "end_turn", finishing.state.error)
+  const opener = await until("the turn OpenCode starts on the finished command", () => updatesSince(noticeFrom).find(update => update.kind === "provider-turn"), 60_000)
+  assert.ok(opener.kind === "provider-turn")
+  assert.equal(opener.reason, `Background command "sleep 8 && echo ${marker}-finished" completed (exit code 0)`)
+  const openerAt = full.events.findIndex(event => event.type === "live-update" ? event.update === opener : event.type === "live-updates" && event.updates.includes(opener))
+  const openedAs = full.events.slice(0, openerAt).findLast(event => event.type === "live-session")
+  assert.ok(openedAs?.type === "live-session" && openedAs.session.status === "running", "the turn OpenCode starts shows running")
+  const noticed = await until("that turn to settle with its answer", () => full.state().status !== "running"
+    && updatesSince(noticeFrom).slice(updatesSince(noticeFrom).indexOf(opener)).some(update => update.kind === "text") && full.state(), 60_000)
+  assert.equal(noticed.lastStop, "end_turn", noticed.error)
+  report.cases.push("provider turn: a background command finishing opens the turn OpenCode starts on its notice, which runs and settles")
+
+  const quiet = async (from: number, what: string) => {
+    await new Promise(resolve => setTimeout(resolve, 8000))
+    assert.ok(!updatesSince(from).some(update => update.kind === "text"), `OpenCode does not answer the notice of ${what} Stop ended`)
+    assert.notEqual(full.state().status, "running")
+  }
   const backgroundMarker = `${marker}-background`
   const backgroundRunning = () => spawnSync("pgrep", ["-f", backgroundMarker]).stdout.toString().trim().length > 0
   for (const end of ["stop", "close"] as const) {
@@ -264,12 +284,35 @@ try {
     assert.equal(launched.state.lastStop, "end_turn", launched.state.error)
     await until("the background shell to count", () => full.state().backgroundTasks === 1)
     assert.ok(backgroundRunning(), "the background command keeps running after its turn")
+    const stopFrom = full.events.length
     if (end === "stop") await driver.cancel(full.id)
     else await driver.close(full.id)
     await until(`${end} to end the background command`, () => !backgroundRunning(), 10_000)
-    if (end === "stop") assert.equal(full.state().backgroundTasks, 0)
+    if (end === "stop") {
+      assert.equal(full.state().backgroundTasks, 0)
+      await quiet(stopFrom, "a command")
+    }
   }
-  report.cases.push("background: a background bash command counts until Stop, with no turn running, or close ends it")
+  report.cases.push("background: a background bash command counts until Stop, with no turn running, or close ends it; OpenCode does not answer its notice")
+
+  const subagents = conversation()
+  chats.push(subagents.id)
+  await start(subagents, { modeId: accessModeId("full") })
+  const subagentMarker = `${marker}-subagent`
+  const subagentRunning = () => spawnSync("pgrep", ["-f", subagentMarker]).stdout.toString().trim().length > 0
+  const delegated = await turn(subagents, `Use the task tool with background set to true to launch the general subagent with this prompt: "Use the bash tool (not in the background) to run exactly: sleep 300 && echo ${subagentMarker}. Wait for it, then reply done." Do not wait for the subagent and do not run any command yourself; reply with the word started.`)
+  assert.notEqual(delegated.state.status, "running")
+  await until("the subagent's command to run", subagentRunning, 90_000)
+  const subagentStop = subagents.events.length
+  await driver.cancel(subagents.id)
+  await until("Stop to end the subagent's command", () => !subagentRunning(), 15_000)
+  await new Promise(resolve => setTimeout(resolve, 8000))
+  assert.ok(!subagentRunning(), "the subagent does not run its command again")
+  const afterSubagentStop = subagents.events.slice(subagentStop).flatMap(event => event.type === "live-updates" ? event.updates : event.type === "live-update" ? [event.update] : [])
+  assert.ok(!afterSubagentStop.some(update => update.kind === "text"), "OpenCode does not answer the notice of the subagent Stop ended")
+  assert.notEqual(subagents.state().status, "running")
+  await driver.close(subagents.id)
+  report.cases.push("background subagent: Stop with no turn running interrupts it and ends its command; OpenCode does not answer its notice")
 
   const edits = conversation()
   chats.push(edits.id)

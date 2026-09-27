@@ -34,17 +34,33 @@ const snapshot = (task: JsonObject): JsonObject => ({
     completed: true, kind: "bash", is_backgrounded: true, signal: null, explicitly_killed: false, ...task,
   } },
 })
-assert.deepEqual(turns.cause("_x.ai/task_completed", snapshot({ exit_code: 0, description: "Sleep briefly then print BG-DONE" })),
+assert.deepEqual(turns.cause?.("_x.ai/task_completed", snapshot({ exit_code: 0, description: "Sleep briefly then print BG-DONE" })),
   { sessionId: "grok-session", reason: 'Background command "Sleep briefly then print BG-DONE" completed (exit code 0)' })
-assert.equal(turns.cause("_x.ai/task_completed", snapshot({ exit_code: 1 }))?.reason, 'Background command "sleep 8; echo BG-DONE" failed (exit code 1)')
-assert.equal(turns.cause("_x.ai/task_completed", snapshot({ exit_code: null, explicitly_killed: true, description: "Watch" }))?.reason, 'Background command "Watch" was stopped')
-assert.equal(turns.cause("_x.ai/session_notification", snapshot({ exit_code: 0 })), undefined, "the snapshot arrives on its own method")
+assert.equal(turns.cause?.("_x.ai/task_completed", snapshot({ exit_code: 1 }))?.reason, 'Background command "sleep 8; echo BG-DONE" failed (exit code 1)')
+assert.equal(turns.cause?.("_x.ai/task_completed", snapshot({ exit_code: null, explicitly_killed: true, description: "Watch" }))?.reason, 'Background command "Watch" was stopped')
+assert.equal(turns.cause?.("_x.ai/session_notification", snapshot({ exit_code: 0 })), undefined, "the snapshot arrives on its own method")
 const completed = (stop_reason: string): JsonObject => ({ sessionId: "grok-session", update: { sessionUpdate: "turn_completed", prompt_id: "task-completed-01a0-task", stop_reason, elapsed_ms: 13148 } })
 assert.deepEqual(turns.ended("_x.ai/session_notification", completed("end_turn")), { sessionId: "grok-session", interrupted: false })
 assert.deepEqual(turns.ended("_x.ai/session_notification", completed("cancelled")), { sessionId: "grok-session", interrupted: true })
 assert.equal(turns.ended("_x.ai/session_notification", grokTasks(["completed"])), undefined)
-assert.equal(devinAcpSource.providerTurns, undefined, "Devin reports no end for an unprompted turn, so it opens none")
 console.log("PASS: Grok names the cause of the turn it starts itself and reports its end")
+
+const devinTurns = devinAcpSource.providerTurns?.()
+assert.ok(devinTurns?.updateCause, "Devin announces the turns it starts itself in session updates")
+const subagent = (key: "cognition.ai/subagent_started" | "cognition.ai/subagent_completed", value: JsonObject, status: ToolCallStatus): SessionNotification => ({
+  sessionId: "devin-session",
+  update: { sessionUpdate: "tool_call_update", toolCallId: "ag1", status, _meta: { [key]: { agentId: "ag1", depth: 1, ...value } } },
+})
+assert.equal(devinTurns.updateCause(subagent("cognition.ai/subagent_started", { title: "Run the checks", isBackground: true }, "in_progress")), undefined)
+assert.deepEqual(devinTurns.updateCause(subagent("cognition.ai/subagent_completed", { success: true, summary: "passed" }, "completed")),
+  { sessionId: "devin-session", reason: 'Subagent "Run the checks" completed' })
+assert.equal(devinTurns.updateCause(subagent("cognition.ai/subagent_completed", { success: false, summary: "[Error] Canceled by user" }, "failed"))?.reason, "A subagent failed")
+assert.equal(devinTurns.updateCause(subagent("cognition.ai/subagent_completed", { success: true, depth: 2 }, "completed")), undefined, "a nested subagent reports to its parent subagent")
+const stopped = (cause: string): JsonObject => ({ cause, stats: {}, sessionId: "devin-session" })
+assert.deepEqual(devinTurns.ended("_cognition.ai/agent_stopped", stopped("complete")), { sessionId: "devin-session", interrupted: false })
+assert.deepEqual(devinTurns.ended("_cognition.ai/agent_stopped", stopped("cancelled")), { sessionId: "devin-session", interrupted: true })
+assert.equal(devinTurns.ended("_cognition.ai/thinking_complete", stopped("complete")), undefined)
+console.log("PASS: Devin names the subagent whose completion starts its turn and reports that turn's end")
 
 const devin = devinAcpSource.observeBackground?.()
 assert.ok(devin?.sessionUpdate)
