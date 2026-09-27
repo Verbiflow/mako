@@ -32,10 +32,12 @@ import {
   newestCursorSdkAgentId,
   cursorSdkAgentIdForDirectory,
   readCursorSdkAgent,
+  readCursorSdkAgentStamps,
   readCursorSdkRunStream,
   removeCursorSdkAgent,
   type CursorSdkAgentMatch,
   type CursorSdkAgentRecord,
+  type CursorSdkAgentStamp,
   type CursorSdkCancelledRun,
 } from "./cursor-sdk-index.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
@@ -474,6 +476,7 @@ export class CursorProvider implements SessionProvider {
    */
   private sdkStateRoot: string
   private sdkRoot: string
+  private sdkStamps = new Map<string, CursorSdkAgentStamp>()
   /**
    * 2: every `cursor-agent` store resumes live (the SDK imports it), and an
    * SDK agent Mako imported carries the legacy row's identity.
@@ -551,31 +554,28 @@ export class CursorProvider implements SessionProvider {
 
   /**
    * Stores with their revision. An SDK store's root pointer lives in
-   * index.db, so that file's stat is part of every SDK store's revision:
+   * index.db, so the agent's index facts are part of its store's revision:
    * a pointer that moved after the last blob write still reads as a change.
+   * Only that agent's facts: the file itself changes whenever any agent
+   * streams, and every agent re-reading on it re-archived them all.
    */
   private async nativeStores(paths: string[]): Promise<NativeFile[]> {
     const files = await nativeFiles(paths)
     if (!files.some((file) => this.isSdkStore(file.path))) return files
-    const index = cursorSdkIndexPath(this.sdkStateRoot)
-    const stamps = await Promise.all(
-      [index, `${index}-wal`].map((candidate) =>
-        stat(candidate).catch(() => null)
-      )
-    )
-    const revision = stamps
-      .map((info) => (info ? `${info.size}:${info.mtimeMs}` : "missing"))
-      .join("|")
-    const mtimeMs = Math.max(...stamps.map((info) => info?.mtimeMs ?? 0))
-    return files.map((file) =>
-      this.isSdkStore(file.path)
-        ? {
-            ...file,
-            mtimeMs: Math.max(file.mtimeMs, mtimeMs),
-            revision: `${file.revision}|index:${revision}`,
-          }
-        : file
-    )
+    // An index read that fails keeps the last stamps, so a busy moment
+    // doesn't flip every agent to changed and back.
+    this.sdkStamps =
+      readCursorSdkAgentStamps(cursorSdkIndexPath(this.sdkStateRoot)) ??
+      this.sdkStamps
+    return files.map((file) => {
+      if (!this.isSdkStore(file.path)) return file
+      const stamp = this.sdkStamps.get(basename(dirname(file.path)))
+      return {
+        ...file,
+        mtimeMs: Math.max(file.mtimeMs, stamp?.updatedMs ?? 0),
+        revision: `${file.revision}|index:${stamp?.revision ?? "missing"}`,
+      }
+    })
   }
 
   /**

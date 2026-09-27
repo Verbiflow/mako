@@ -366,6 +366,60 @@ export function readCursorSdkAgent(
   }
 }
 
+/** What the index says about one agent, reduced to a comparable stamp. */
+export interface CursorSdkAgentStamp {
+  revision: string
+  /** The newest `updated_at` of the agent's row and its runs, 0 when unknown. */
+  updatedMs: number
+}
+
+/**
+ * Every agent's index facts, keyed by its `agent-<hash>` directory. The SDK
+ * streams each running agent's events into this one file, so the file's own
+ * stat moves every few seconds for all agents at once; an agent's row and
+ * its runs move only when that agent does.
+ */
+export function readCursorSdkAgentStamps(indexPath: string): Map<string, CursorSdkAgentStamp> | null {
+  const database = openReadOnly(indexPath)
+  if (!database) return null
+  try {
+    const runs = new Map<string, { count: number; updatedAt?: string }>()
+    try {
+      for (const row of database
+        .prepare("SELECT agent_id, COUNT(*) AS runs, MAX(updated_at) AS updated_at FROM runs GROUP BY agent_id")
+        .all()) {
+        const agentId = text(row["agent_id"])
+        if (agentId) runs.set(agentId, { count: count(row["runs"]), updatedAt: text(row["updated_at"]) })
+      }
+    } catch {
+      // An index without runs stamps agents by their own rows.
+    }
+    const stamps = new Map<string, CursorSdkAgentStamp>()
+    for (const row of database.prepare("SELECT * FROM agents").all()) {
+      const agentId = text(row["agent_id"])
+      if (!agentId) continue
+      const run = runs.get(agentId)
+      const facts = Object.keys(row).sort().map((key) => [key, row[key]])
+      const revision = createHash("sha256")
+        .update(JSON.stringify([facts, run?.count ?? 0, run?.updatedAt ?? null]))
+        .digest("hex")
+        .slice(0, 16)
+      const updatedMs = Math.max(
+        0,
+        ...[text(row["updated_at"]), run?.updatedAt]
+          .map((value) => (value ? Date.parse(value) : NaN))
+          .filter((value) => Number.isFinite(value))
+      )
+      stamps.set(cursorSdkDirectoryName(agentId), { revision, updatedMs })
+    }
+    return stamps
+  } catch {
+    return null
+  } finally {
+    database.close()
+  }
+}
+
 /**
  * The agent whose index row moved most recently. A write to `index.db` is
  * the SDK recording a checkpoint or a run transition for exactly one agent,
