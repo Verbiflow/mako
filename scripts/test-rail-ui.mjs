@@ -251,6 +251,21 @@ async function checkWindow() {
   assert.equal(await tip(), null, "the tip leaves with the pointer")
   console.log("PASS: the rail's tip replaces the native title")
 
+  // 3c. A row's controls float over its trailing edge: the pointer shows
+  // them without taking any width from the title.
+  const firstRow = `document.querySelectorAll(${JSON.stringify(tipRows)})[0]`
+  const titleWidth = () => evaluate(`${firstRow}.querySelector('span.truncate').getBoundingClientRect().width`)
+  const controlsShown = `((controls) => controls.offsetParent !== null && getComputedStyle(controls).opacity === '1')(${firstRow}.querySelector('.rail-row-actions'))`
+  const restingWidth = await titleWidth()
+  assert.equal(await evaluate(controlsShown), false, "a row's controls are hidden at rest")
+  const hoverPoint = await tipRowPoint(0)
+  await move(hoverPoint.x, hoverPoint.y)
+  await until(controlsShown, "a row's controls appear under the pointer")
+  assert.equal(await titleWidth(), restingWidth, "the title keeps its width while the controls show")
+  await move(900, 500)
+  await frames()
+  console.log("PASS: a row's controls float over it; hovering never re-truncates its title")
+
   // 4. Only working there lifts a folder.
   await evaluate(`import('/src/state/prefs.ts').then(({noteFolderUse}) => noteFolderUse(${JSON.stringify(victimRef.cwd)}))`)
   await until(`document.querySelector('.thread-jump-scope [data-flip-key^="folder:"]')?.dataset.flipKey === ${JSON.stringify(lastFolder)}`, "your own prompt lifts the folder")

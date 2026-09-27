@@ -3,7 +3,8 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
 import { useMemo } from "react"
-import { useOnScreen, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
+import { CheckoutChip } from "@/components/stage/checkout-chip"
+import { onScreenTab, useOnScreen, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
 import { closeWorkbenchPane } from "@/state/session-panes"
 import { activeAcp, useAcp } from "@/state/acp"
 import { usePrefs } from "@/state/prefs"
@@ -43,6 +44,13 @@ export function StageStrip({
     [active, bound]
   )
   const sessionTabs = useThreadTabs(here)
+  const workspaceCwd = useSession((state) => state.meta?.cwd)
+  // A pane without focus names only its Thread and tab; its folder is the tab's.
+  const shownTab = sessionTabs.find((tab) => tab.id === onScreenTab(here))
+  const checkoutCwd =
+    here.cwd ??
+    (shownTab?.kind === "draft" ? shownTab.draft.cwd : shownTab?.ref?.cwd ?? shownTab?.presence?.cwd) ??
+    (bound ? undefined : workspaceCwd)
 
   if (!pane) return null
   const canSplit = pane.activeId !== AGENT_TAB_ID
@@ -181,6 +189,7 @@ export function StageStrip({
           )
         })}
       </div>
+      <CheckoutChip cwd={checkoutCwd} />
       {!canClosePane ? (
         <div className="flex shrink-0 items-center gap-0.5 px-1">
           <IconAction

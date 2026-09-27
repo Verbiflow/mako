@@ -46,7 +46,7 @@ export function RailSkeleton() {
             <Skeleton className="h-2.5" style={{ width: row.header }} />
           </div>
         ) : (
-          <div key={index} className="flex h-7 items-center gap-2 pr-2 pl-[26px]" style={{ opacity: 1 - index * 0.07 }}>
+          <div key={index} className="ml-[13px] flex h-7 items-center gap-2 border-l border-hairline pr-2 pl-3" style={{ opacity: 1 - index * 0.07 }}>
             <Skeleton className="size-3 rounded-full" />
             <Skeleton className="h-2.5" style={{ width: `${row.width}%` }} />
             <Skeleton className="ml-auto h-2 w-6 opacity-60" />

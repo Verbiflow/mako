@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState } from "react"
-import { ArchiveIcon, GitBranchIcon, PinIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { ThreadActions } from "@/components/rail/thread-actions"
@@ -90,7 +90,22 @@ const Detach = memo(function Detach({ path }: { path: string }) {
   )
 })
 
-/** At most this many agent marks on a folded row; its tip names every Session's agent. */
+/** A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open. */
+export const ROW_ACTIONS =
+  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+
+/** How many Sessions a folded row stands for. */
+export function SessionCount({ count }: { count: number }) {
+  return (
+    <span
+      aria-label={`${count} sessions`}
+      className="tabular flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-fill-selected px-1 text-label leading-none text-muted-foreground"
+    >
+      {count}
+    </span>
+  )
+}
+
 function foldRowTarget(row: FoldRow): ThreadTarget {
   return row.kind === "native" ? nativeThreadTarget(row.ref) : { kind: "live", id: row.key }
 }
@@ -224,9 +239,9 @@ export const ThreadRow = memo(function ThreadRow({
       data-conversation-id={target.kind === "live" ? target.id : undefined}
       data-thread-indent={indent || undefined}
       className={cn(
-        "group relative flex h-8 w-full items-center gap-2 rounded-md pr-1.5 text-left",
-        indent ? "pl-[26px]" : "pl-1.5",
-        "transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised"
+        "group relative flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left",
+        indent ? "pl-2" : "pl-1.5",
+        "transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
       )}
     >
       {/* Where this conversation has lived: earlier harnesses dimmed and
@@ -287,15 +302,11 @@ export const ThreadRow = memo(function ThreadRow({
           {title}
         </span>
       )}
+      {folded ? <SessionCount count={folded.members.length} /> : null}
+      {/* The branch itself is in the tip and on the chat's strip; the row
+          spends its width on the title. */}
       {branch ? (
-        <span
-          data-thread-branch={branch}
-          className="flex max-w-[7rem] min-w-3 shrink-[3] items-center gap-1 overflow-hidden text-label text-faint"
-        >
-          <GitBranchIcon className="size-3 shrink-0" aria-hidden />
-          <span className="sr-only">worktree</span>
-          <span className="truncate">{branch.replace(/^mako\//, "")}</span>
-        </span>
+        <FolderGit2Icon data-thread-worktree={branch} className="size-3 shrink-0 text-faint/80" aria-label={`In a worktree on ${branch}`} />
       ) : null}
       {showFolder && ref.cwd ? (
         <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint/70">
@@ -303,7 +314,7 @@ export const ThreadRow = memo(function ThreadRow({
         </span>
       ) : null}
       {isPinned ? (
-        <PinIcon className="size-3 shrink-0 fill-current text-foreground/60 group-hover:hidden group-focus-within:hidden" aria-label="Pinned" />
+        <PinIcon className="size-3 shrink-0 fill-current text-foreground/60" aria-label="Pinned" />
       ) : null}
       <Attached path={ref.path} />
       {ref.archived ? (
@@ -312,15 +323,14 @@ export const ThreadRow = memo(function ThreadRow({
           aria-label="Saved copy: the native session is gone; Mako kept the conversation"
         />
       ) : null}
-      {/* The row's controls join the row on hover or focus, so a row never
-          reserves width for buttons nobody can see and never stacks a second
-          fill over its own hover. They also stay while a menu inside is open:
-          the menu is portaled, so focus leaves the row, and a hidden trigger
-          has no box to anchor the menu to. Over the controls the row's tip
-          stands down for their own labels. */}
+      {/* The row's controls float over its trailing edge on hover or focus
+          (`.rail-row-actions`), so the title keeps its width. They also stay
+          while a menu inside is open: the menu is portaled, so focus leaves
+          the row. Over the controls the row's tip stands down for their own
+          labels. */}
       <span
         data-tip-quiet
-        className="-my-1 hidden shrink-0 items-center group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
+        className={cn("rail-row-actions", ROW_ACTIONS)}
         onClick={(event) => event.stopPropagation()}
       >
         <button

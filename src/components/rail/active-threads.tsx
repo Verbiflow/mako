@@ -3,6 +3,7 @@ import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { ThreadActions } from "@/components/rail/thread-actions"
+import { ROW_ACTIONS, SessionCount } from "@/components/rail/thread-row"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { workspaceName } from "@/lib/format"
 import { FOLD_GLYPHS, foldRowHarness, type FoldedThread } from "@/lib/thread-fold"
@@ -67,8 +68,8 @@ export function LiveAgentRow({
       data-thread-indent={indent || undefined}
       onClick={open}
       className={cn(
-        "pressable group relative flex h-8 w-full items-center gap-2 rounded-md pr-1.5 text-left transition-colors duration-100 hover:bg-fill-hover",
-        indent ? "pl-[26px]" : "pl-1.5"
+        "pressable group relative flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left transition-colors duration-100 hover:bg-fill-hover",
+        indent ? "pl-2" : "pl-1.5"
       )}
     >
       <span className="flex shrink-0 items-center -space-x-1">
@@ -84,13 +85,15 @@ export function LiveAgentRow({
       <span className="min-w-0 flex-[1_1_60%] truncate text-ui text-foreground/85">
         {title}
       </span>
+      {folded ? <SessionCount count={folded.members.length} /> : null}
       {!indent ? (
         <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">
           {threadFolderKey(presence) ? workspaceName(presence.cwd) : "tmp"}
         </span>
       ) : null}
       <span
-        className="-my-1 hidden shrink-0 items-center group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
+        data-tip-quiet
+        className={cn("rail-row-actions", ROW_ACTIONS)}
         onClick={(event) => event.stopPropagation()}
       >
         <ThreadActions

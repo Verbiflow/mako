@@ -513,7 +513,7 @@ diffs-container {
   }
 
   .thread-jump-scope[data-jump-hints] [data-thread-row][data-thread-indent][data-jump-index]::after {
-    left: 24px;
+    left: 6px;
   }
 
   /*
@@ -858,6 +858,25 @@ diffs-container {
    radius, plus a 1.5px gap that shows whatever the row is painted with. */
 .thread-glyph:not(:last-child) {
   mask-image: radial-gradient(circle at calc(100% + 2px) 50%, transparent 7.5px, #000 8px);
+}
+
+/*
+ * A rail row's controls float over its trailing edge instead of joining the
+ * line, so a title never re-truncates as the pointer passes. Their backdrop
+ * is the row's own paint, the translucent hover fill over the opaque rail
+ * (or the raised fill of the open row), fading in from the left over the
+ * text it covers.
+ */
+.rail-row-actions {
+  --row-under: var(--shell);
+  --row-over: var(--fill-hover);
+  background:
+    linear-gradient(to right, transparent, var(--row-over) 14px),
+    linear-gradient(to right, transparent, var(--row-under) 14px);
+}
+[data-active] > .rail-row-actions {
+  --row-under: var(--raised);
+  --row-over: transparent;
 }
 
 .composer-send:not(:disabled) {

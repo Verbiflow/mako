@@ -45,7 +45,9 @@ import {
 } from "@/state/threads"
 import type { ThreadRef } from "@/lib/types"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
-import { actions, useSession } from "@/state/session"
+import { actions } from "@/state/session"
+import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
+import { CheckoutLabel } from "@/components/rail/checkout-label"
 import { useAcp } from "@/state/acp"
 import {
   canonicalThreadRefs,
@@ -152,14 +154,11 @@ export function AgentThreads() {
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const grouping = usePrefs((prefs) => prefs.railGrouping)
   const folderUse = usePrefs((prefs) => prefs.folderUse)
-  const railWidth = usePrefs((prefs) => prefs.railWidth)
   const scroller = useRef<HTMLDivElement>(null)
   // The order caught when the pointer entered the rail; held until it leaves,
   // so nothing can change place under a click.
   const [hold, setHold] = useState<{ ranks: RailRanks; folderRanks: FolderRanks } | null>(null)
-  const { cwd, ready: workspaceReady } = useWorkspaceFocus()
-  const branch = useSession((state) => state.git?.branch)
-  const focusedBranch = workspaceReady ? branch : undefined
+  const { cwd } = useWorkspaceFocus()
   const now = useLiveTime()
 
   useEffect(() => {
@@ -386,6 +385,10 @@ export function AgentThreads() {
         Math.max(FOLDER_ROWS, priorityFolders)
       )
   const hiddenFolders = workspaceFolders.length - shownFolders.length
+  const shownCheckouts = shownFolders.flatMap((folder) => (folder.cwd ? [folder.cwd] : [])).join("\n")
+  useEffect(() => {
+    if (shownCheckouts) followCheckouts(shownCheckouts.split("\n"))
+  }, [shownCheckouts])
 
   useEffect(() => {
     const rows =
@@ -539,7 +542,6 @@ export function AgentThreads() {
                 <FolderSection
                   key={folder.key}
                   folder={folder}
-                  branch={folder.current && railWidth >= 320 ? focusedBranch : undefined}
                   now={now}
                   fold={fold}
                   liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key)}
@@ -870,9 +872,12 @@ function HarnessFilter({
  * rest as a single line. "More" unfolds
  * the tail in place — the grid-rows trick animates to unknown heights.
  */
+/** `ROW_ACTIONS` for a folder header, whose group is `group/folder`. */
+const FOLDER_ACTIONS =
+  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-within/folder:pointer-events-auto group-focus-within/folder:opacity-100"
+
 function FolderSection({
   folder,
-  branch,
   now,
   fold,
   liveAgents,
@@ -884,7 +889,6 @@ function FolderSection({
   onPages,
 }: {
   folder: ThreadFolder
-  branch?: string
   now: number
   fold: ThreadFold
   liveAgents: AcpPresence[]
@@ -903,6 +907,7 @@ function FolderSection({
     folder.latest !== "" &&
     now - Date.parse(folder.latest) > COLD_MS
   const closed = collapsed ? !cold : cold
+  const head = useCheckoutHead(folder.cwd ?? undefined)
   const contentId = `folder-${folder.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
   const limit = FOLDER_LEAD_ROWS + pages * PAGE_ROWS
@@ -912,10 +917,10 @@ function FolderSection({
 
   return (
     <section className="pb-1">
-      <div data-flip-key={`folder:${folder.key}`} className="group/folder flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
+      <div data-flip-key={`folder:${folder.key}`} className="group/folder relative flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
         <button
           type="button"
-          title={folder.cwd ?? folder.name}
+          title={[folder.cwd ?? folder.name, head ? `On ${checkoutSentence(head)}` : undefined].filter(Boolean).join("\n")}
           aria-expanded={!closed}
           aria-controls={contentId}
           onClick={onToggle}
@@ -938,7 +943,7 @@ function FolderSection({
           </span>
           <span
             className={cn(
-              "min-w-14 flex-1 truncate text-ui",
+              "min-w-8 shrink truncate text-ui",
               folder.current
                 ? "font-medium text-foreground"
                 : "text-foreground/80"
@@ -946,26 +951,21 @@ function FolderSection({
           >
             {folder.name}
           </span>
-          {branch ? (
-            <span
-              title={branch}
-              className="min-w-0 max-w-24 shrink truncate font-mono text-label text-faint/70"
-            >
-              {branch}
-            </span>
-          ) : null}
+          {/* The main checkout's own branch; it gives way before the name does. */}
+          {head ? <CheckoutLabel head={head} className="min-w-8 shrink-[4] text-label text-faint/80" /> : null}
+          <span className="flex-1" />
           <FolderActivity folder={folder} />
           {/* Open, the newest row already shows this time. */}
           {closed && !folder.priority && folder.latest ? (
-            <span className="tabular shrink-0 pr-0.5 text-label text-faint/60 group-hover/folder:hidden group-focus-within/folder:hidden">
+            <span className="tabular shrink-0 pr-0.5 text-label text-faint/60">
               {formatRelative(folder.latest)}
             </span>
           ) : null}
           {folder.pinned ? (
-            <PinIcon className="size-3 shrink-0 fill-current text-faint/70 group-hover/folder:hidden group-focus-within/folder:hidden" />
+            <PinIcon className="size-3 shrink-0 fill-current text-faint/70" />
           ) : null}
         </button>
-        <span className="mr-0.5 hidden shrink-0 items-center group-hover/folder:flex group-focus-within/folder:flex">
+        <span data-tip-quiet className={cn("rail-row-actions", FOLDER_ACTIONS)}>
           {onNew ? (
             <button
               type="button"
@@ -1002,7 +1002,9 @@ function FolderSection({
           closed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
         )}
       >
-        <div className="min-h-0 overflow-hidden">
+        {/* The folder's rows hang from a hairline under its glyph; their
+            fills start past it, so the line never breaks. */}
+        <div className="ml-[13px] min-h-0 overflow-hidden border-l border-hairline pl-1">
           {shownLive.map((presence) => <LiveAgentRow key={presence.key} presence={presence} folded={fold.byLead.get(presence.key)} indent />)}
           {visible.map((ref) => (
             <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />
@@ -1011,7 +1013,7 @@ function FolderSection({
             <button
               type="button"
               onClick={() => onPages(pages + 1)}
-              className="flex h-6 w-full items-center rounded-md pl-8 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               More
               <span className="tabular ml-1 text-label text-faint/60">
@@ -1022,7 +1024,7 @@ function FolderSection({
             <button
               type="button"
               onClick={() => onPages(0)}
-              className="flex h-6 w-full items-center rounded-md pl-8 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               Less
             </button>
