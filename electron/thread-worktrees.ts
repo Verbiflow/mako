@@ -151,6 +151,13 @@ export class ThreadWorktreeService {
     await this.spares.settled()
   }
 
+  /** Commits on a worktree's branch since the commit it started at; undefined for a folder that isn't one of Mako's worktrees. */
+  async ahead(path: string): Promise<number | undefined> {
+    const worktree = this.threads.worktrees().find((entry) => entry.path === path)
+    if (!worktree || !existsSync(path)) return undefined
+    return Number(await git(path, ["rev-list", "--count", `${worktree.base}..HEAD`]))
+  }
+
   /** The dependency clone for a conversation's worktree, once it finishes. */
   dependencies(conversationId: string): Promise<DependencyCarry> | undefined {
     return this.carrying.get(conversationId)

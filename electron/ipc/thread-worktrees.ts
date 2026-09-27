@@ -8,6 +8,8 @@ const UNAVAILABLE = "This Mako couldn't open its Thread store, so it can't keep 
 export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | null) {
   registerIpc("mako:worktrees", (): Promise<ThreadWorktrees> | ThreadWorktrees =>
     worktrees ? worktrees.list() : { root: "", worktrees: [] })
+  registerIpc("mako:worktree-ahead", async (_event, path: string): Promise<number | null> =>
+    (await worktrees?.ahead(path)) ?? null)
   registerIpc("mako:worktree-want", async (_event, cwd: string): Promise<void> => {
     await worktrees?.want(cwd)
   })

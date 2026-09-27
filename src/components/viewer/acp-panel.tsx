@@ -215,12 +215,17 @@ function AcpActivity({
   const scope = useConversationScope()
   const activityAt = useAcp((state) => scopedLiveAcp(state, scope)?.activityAt)
   const quietForMs = useQuietFor(running ? activityAt : undefined)
+  const making = useAcp((state) => {
+    const current = scopedAcp(state, scope)
+    return current?.kind === "starting" && current.worktree === "making"
+  })
+  const makingWorktree = useLasting(making, MAKING_WORKTREE_SHOWN_AFTER_MS)
   const activity = useAcp((state) => {
     const live = scopedLiveAcp(state, scope)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
     // The approval notice owns this status; do not repeat it in the transcript.
     if (approval) return { kind: "idle" as const, label: "" }
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, preparing, quietForMs })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, preparing, quietForMs })
   }, shallowEqual)
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
@@ -228,6 +233,23 @@ function AcpActivity({
       <span className="truncate">{activity.label}</span>
     </div>
   ) : null
+}
+
+/** A spare worktree is ready in well under this; only a checkout made on the spot is worth naming. */
+const MAKING_WORKTREE_SHOWN_AFTER_MS = 400
+
+/** `value`, once it has held for `ms`; false again as soon as it stops. */
+function useLasting(value: boolean, ms: number): boolean {
+  const [lasted, setLasted] = useState(false)
+  useEffect(() => {
+    if (!value) return
+    const timer = setTimeout(() => setLasted(true), ms)
+    return () => {
+      clearTimeout(timer)
+      setLasted(false)
+    }
+  }, [value, ms])
+  return value && lasted
 }
 
 /** Time since `activityAt`, read again when it moves and every few seconds while it is set. */

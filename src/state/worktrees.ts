@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
@@ -48,6 +49,30 @@ export async function refreshWorktrees(): Promise<void> {
   const mine = ++reads
   const { worktrees } = await getMako().worktrees()
   if (mine === reads) worktreesStore.set(stateOf(worktrees))
+}
+
+/**
+ * Commits on the worktree at `path` since its Thread started, read again
+ * whenever `head` moves; `head` comes from the Git status the Changes
+ * watcher already keeps, so this adds no watcher of its own.
+ */
+export function useWorktreeAhead(path: string | undefined, head: string | undefined): number | undefined {
+  const [ahead, setAhead] = useState<{ path: string; count: number }>()
+  useEffect(() => {
+    if (!path || !head || !hasBridge()) return
+    let current = true
+    void getMako().worktreeAhead(path).then(
+      (count) => {
+        if (current && count !== null) setAhead({ path, count })
+      },
+      () => {}
+    )
+    return () => {
+      current = false
+    }
+  }, [path, head])
+  // The previous count stands while a new HEAD is read, so the chip doesn't blink on a commit.
+  return ahead && ahead.path === path ? ahead.count : undefined
 }
 
 /** A project asks for spares at most this often; the host keeps them for a day after. */

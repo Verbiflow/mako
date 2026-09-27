@@ -51,6 +51,7 @@ interface BeginStartInput {
   placement?: { thread: string; session: string }
   blocks: AcpBlock[]
   hiddenUserPrompt: string | null
+  worktree?: boolean
 }
 
 export function beginStart(input: BeginStartInput): StartingAcpConversation {
@@ -75,6 +76,7 @@ export function beginStart(input: BeginStartInput): StartingAcpConversation {
     createdAt: now,
     updatedAt: now,
   }
+  if (input.worktree) conversation.worktree = "making"
   conversation.projection = projectAcp(conversation)
   replaceAcpConversation(key, conversation)
   acpStore.set({ activeKey: key })
@@ -94,6 +96,13 @@ export function updateStarting(
           projection: projectAcp({ ...conversation, ...patch }),
         }
       : conversation
+  )
+}
+
+/** The host checked out the starting Thread's worktree; what's left is connecting. */
+export function worktreeMade(key: string): void {
+  updateAcpConversation(key, (conversation) =>
+    conversation.kind === "starting" && conversation.worktree === "making" ? { ...conversation, worktree: "made" } : conversation
   )
 }
 

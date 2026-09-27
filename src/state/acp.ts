@@ -392,6 +392,7 @@ export const acp = {
       placement,
       blocks: displayPrompt ? [{ type: "user", text: displayPrompt }] : [],
       hiddenUserPrompt: displayPrompt === prompt ? null : prompt,
+      worktree,
     })
     const options: AcpStartOptions = title ? { title } : {}
     if (worktree) options.worktree = true

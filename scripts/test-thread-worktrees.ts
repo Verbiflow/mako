@@ -105,6 +105,12 @@ assert.deepEqual(threads.worktrees().map(({ path, thread, branch, repoRoot }) =>
   { path: prepared.path, thread: placed.thread, branch: prepared.branch, repoRoot: shop },
 ])
 
+// The strip counts the Thread's own commits, from the commit it started at.
+assert.equal(await worktrees.ahead(prepared.path), 0)
+git(prepared.path, "commit", "-q", "--allow-empty", "-m", "thread work")
+assert.equal(await worktrees.ahead(prepared.path), 1)
+assert.equal(await worktrees.ahead(shop), undefined, "the main checkout isn't a Thread worktree")
+
 // A start that finished before the host stopped is attached by the next list.
 started(second)
 const listed = await worktrees.list()

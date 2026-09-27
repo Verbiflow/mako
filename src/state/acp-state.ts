@@ -53,6 +53,8 @@ export interface StartingAcpConversation extends AcpConversationBase {
   unconfirmedStart?: LiveStartOptions
   settingsTarget: ComposerTarget
   kind: "starting"
+  /** A new Thread starting in its own worktree, and whether the host has checked it out yet. */
+  worktree?: "making" | "made"
 }
 
 export interface LiveAcpConversation extends AcpConversationBase {

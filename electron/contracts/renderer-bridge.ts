@@ -180,6 +180,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     checkoutHeads: (folders: string[]) => invokeTrustedHost<CheckoutHeads>("mako:checkout-heads", folders),
     removeWorktree: (path: string) => invokeTrustedHost<ThreadWorktrees>("mako:worktree-remove", path),
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),
+    worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
     threadCreateSession: (operationId: string, thread: string) =>
       invokeTrustedHost<ThreadPlacement>("mako:thread-create-session", operationId, thread),
     threadJoin: (operationId: string, sessions: string[], thread: string) =>

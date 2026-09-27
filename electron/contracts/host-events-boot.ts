@@ -62,6 +62,8 @@ export type HostEventBody =
   | { type: "thread-archives"; snapshot: ThreadArchiveSnapshot }
   /** A followed checkout's HEAD moved, by folder; window-wide. */
   | { type: "checkout-heads"; heads: CheckoutHeads }
+  /** A new Thread's worktree is checked out; its provider starts next. */
+  | { type: "worktree-ready"; conversationId: string }
   | { type: "live-batch"; batch: LiveBatch }
   | { type: "live-owner-connection"; ids: string[]; connected: boolean }
   | { type: "session"; session: SessionState }

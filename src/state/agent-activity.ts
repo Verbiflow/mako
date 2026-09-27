@@ -22,9 +22,9 @@ export function toolActivity(name: string): AgentActivityKind {
   return "executing"
 }
 
-export function agentActivity({ blocks, waiting, connecting, preparing, quietForMs = 0 }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; preparing: boolean; quietForMs?: number }): AgentActivity {
+export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, preparing, quietForMs = 0 }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; preparing: boolean; quietForMs?: number }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
-  if (connecting) return { kind: "connecting", label: "Connecting" }
+  if (connecting) return { kind: "connecting", label: makingWorktree ? "Making a worktree" : "Connecting" }
   if (preparing) return { kind: "connecting", label: "Sending" }
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
   const tool = blocks.findLast((block) => block.type === "tool" && block.status === "pending")

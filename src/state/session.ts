@@ -69,6 +69,7 @@ import {
   threadsStore,
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
+import { worktreeMade } from "@/state/acp-start"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
 import { recoverThreadReader } from "@/state/thread-viewing"
@@ -204,6 +205,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "checkout-heads") {
     applyCheckoutHeads(event.heads)
+    return
+  }
+  if (event.type === "worktree-ready") {
+    worktreeMade(event.conversationId)
     return
   }
   if (event.type === "thread-group") {

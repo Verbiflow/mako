@@ -1525,7 +1525,10 @@ function bindIpc() {
       const worktree = options.worktree && !options.resume && !options.session && threadWorktrees
         ? await threadWorktrees.prepare(options.conversationId, cwd, options.title ?? options.displayPrompt ?? options.initialRequest?.text)
         : undefined
-      if (worktree) trace("worktree")
+      if (worktree) {
+        trace("worktree")
+        emit({ type: "worktree-ready", conversationId: options.conversationId })
+      }
       const startCwd = worktree?.cwd ?? cwd
       const tuning = await resolveHarnessLaunch(
         harness,
