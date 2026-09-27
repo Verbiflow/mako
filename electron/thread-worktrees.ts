@@ -2,6 +2,7 @@ import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
 import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { availableParallelism } from "node:os"
 import { basename, dirname, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
@@ -85,11 +86,24 @@ export function worktreeSlug(text: string | undefined): string {
   return words.join("-").slice(0, SLUG_LENGTH).replace(/-+$/, "") || "thread"
 }
 
-/** A directory as APFS clones on macOS, where `cp -c` shares blocks until either side writes. */
-async function cloneTree(from: string, to: string): Promise<void> {
-  if (process.platform === "darwin") await execute("cp", ["-c", "-R", from, to])
-  else await cp(from, to, { recursive: true, mode: constants.COPYFILE_FICLONE, verbatimSymlinks: true })
+/**
+ * Copy-on-write where the filesystem has it: APFS clones through `cp -c`, and
+ * reflinks through FICLONE on btrfs and XFS. Both fall back to a plain copy
+ * (another volume, HFS+, ext4). Node's FICLONE never clones on macOS: libuv
+ * copies the bytes there.
+ */
+async function cloneEntry(from: string, to: string, directory: boolean): Promise<void> {
+  if (process.platform === "darwin") await execute("/bin/cp", directory ? ["-c", "-n", "-R", from, to] : ["-c", "-n", from, to])
+  else if (directory) await cp(from, to, { recursive: true, mode: constants.COPYFILE_FICLONE, verbatimSymlinks: true })
+  else await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
 }
+
+/**
+ * Git's parallel checkout. APFS spends extra workers on contention past four;
+ * Linux filesystems keep gaining to about eight (50,000 files: one worker
+ * 10-20 s, these 2-5 s, for about the same CPU).
+ */
+const CHECKOUT_WORKERS = Math.min(process.platform === "darwin" ? 4 : 8, availableParallelism())
 
 /**
  * The main checkout's gitignored inputs a fresh checkout lacks. Entries the
@@ -110,8 +124,7 @@ async function carryIgnored(repoRoot: string, destination: string): Promise<numb
     await mkdir(dirname(to), { recursive: true })
     const info = await lstat(from)
     if (info.isSymbolicLink()) await symlink(await readlink(from), to)
-    else if (info.isDirectory()) await cloneTree(from, to)
-    else await copyFile(from, to, constants.COPYFILE_FICLONE)
+    else await cloneEntry(from, to, info.isDirectory())
     copied += 1
   }
   return copied
@@ -279,9 +292,10 @@ export class ThreadWorktreeService {
       const branched = await succeeds(receipt.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${receipt.branch}`])
       await mkdir(dirname(receipt.path), { recursive: true, mode: 0o700 })
       try {
+        const parallel = ["-c", `checkout.workers=${CHECKOUT_WORKERS}`, "-c", "checkout.thresholdForParallelism=100"]
         await git(receipt.repoRoot, branched
-          ? ["worktree", "add", receipt.path, receipt.branch]
-          : ["worktree", "add", "-b", receipt.branch, receipt.path, receipt.base])
+          ? [...parallel, "worktree", "add", receipt.path, receipt.branch]
+          : [...parallel, "worktree", "add", "-b", receipt.branch, receipt.path, receipt.base])
       } catch (error) {
         throw new Error(`Git couldn't create the worktree: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
       }

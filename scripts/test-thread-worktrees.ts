@@ -29,6 +29,9 @@ function repository(name: string, commit = true): string {
   git(path, "config", "user.name", "Test")
   writeFileSync(join(path, ".gitignore"), "node_modules/\ndist/\n.env\n.env.*\n")
   writeFileSync(join(path, "web", "index.ts"), "export {}\n")
+  // Past Git's threshold, so the checkout runs its parallel workers.
+  mkdirSync(join(path, "web", "generated"))
+  for (let n = 0; n < 150; n += 1) writeFileSync(join(path, "web", "generated", `part-${n}.ts`), `export const part = ${n}\n`)
   writeFileSync(join(path, ".env"), "API=1\n")
   writeFileSync(join(path, ".env.local"), "LOCAL=1\n")
   mkdirSync(join(path, "node_modules", "left-pad"), { recursive: true })
@@ -70,6 +73,9 @@ assert.equal(prepared.cwd, join(prepared.path, "web"))
 assert.match(prepared.path, /\/worktrees\/shop-[0-9a-f]{8}\/fix-login-redirect$/)
 assert.equal(git(prepared.path, "rev-parse", "--abbrev-ref", "HEAD"), "mako/fix-login-redirect")
 assert.equal(git(prepared.path, "rev-parse", "HEAD"), git(shop, "rev-parse", "HEAD"), "it starts from the checkout's commit")
+assert.equal(git(prepared.path, "ls-files").split("\n").length, git(shop, "ls-files").split("\n").length, "every tracked file is checked out")
+assert.equal(git(prepared.path, "status", "--porcelain"), "", "a parallel checkout leaves a clean worktree")
+assert.equal(readFileSync(join(prepared.path, "web", "generated", "part-149.ts"), "utf8"), "export const part = 149\n")
 
 // Mako's list of gitignored inputs comes along; dependencies and builds don't.
 assert.equal(prepared.copied, 2)
