@@ -5,11 +5,15 @@ import {
   controlPreviewRateDescription,
   type ControlPreviewRate,
 } from "@/lib/control-preview-painter"
-import { MonitorIcon, GlobeIcon } from "lucide-react"
+import { MonitorIcon, GlobeIcon, Maximize2Icon } from "lucide-react"
 import { Blank } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
-import { useControlPreview, watchControlPreview } from "@/state/control-preview"
+import {
+  useControlPreview,
+  watchControlPreview,
+  zoomControlPreview,
+} from "@/state/control-preview"
 
 export function ControlPreviewPanel() {
   const conversationId = useAcp(
@@ -96,23 +100,37 @@ export function ControlPreviewPanel() {
         ) : null}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
-        {preview?.window && conversationId ? (
-          <NativeControlPreview
-            key={`${conversationId}:${preview.window.pid}:${preview.window.windowId}`}
-            id={conversationId}
-            poster={frame ?? undefined}
-            className="block h-auto w-full rounded-lg object-contain"
-          />
-        ) : frame ? (
-          <figure className="m-0 overflow-hidden rounded-lg bg-background [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
-            <ControlPreviewImage
-              key={`${conversationId}:${activity?.kind}:${activity?.target}`}
-              className="block h-auto w-full object-contain"
-              frame={frame}
-              label={`${browser ? "Browser tab" : "Application window"} observed by this task`}
-              onRate={setRate}
-            />
-          </figure>
+        {conversationId && (preview?.window || frame) ? (
+          <button
+            type="button"
+            aria-label="Enlarge over the chat"
+            onClick={() => zoomControlPreview(conversationId)}
+            className="group pressable relative block w-full cursor-zoom-in overflow-hidden rounded-lg bg-background [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
+          >
+            {preview?.window ? (
+              <NativeControlPreview
+                key={`${conversationId}:${preview.window.pid}:${preview.window.windowId}`}
+                id={conversationId}
+                poster={frame ?? undefined}
+                className="block h-auto w-full object-contain"
+              />
+            ) : frame ? (
+              <ControlPreviewImage
+                key={`${conversationId}:${activity?.kind}:${activity?.target}`}
+                className="block h-auto w-full object-contain"
+                frame={frame}
+                label={`${browser ? "Browser tab" : "Application window"} observed by this task`}
+                onRate={setRate}
+              />
+            ) : null}
+            <span
+              aria-hidden
+              className="glass-control absolute right-2 bottom-2 flex h-6 items-center gap-1 rounded-full px-2 text-label text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+            >
+              <Maximize2Icon className="size-3" />
+              Enlarge
+            </span>
+          </button>
         ) : null}
         <div className="mt-2.5 flex items-baseline gap-2 px-0.5 text-label">
           <span className="min-w-0 flex-1 truncate text-muted-foreground first-letter:uppercase">

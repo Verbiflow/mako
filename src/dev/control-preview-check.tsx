@@ -156,6 +156,35 @@ async function run() {
       "Native window video advances in the production chat preview"
     )
   }
+  const pane = panes.querySelector('[data-pane="one"]')!
+  const settled = async () => {
+    await Promise.all(pane.querySelector("section")!.getAnimations().map((animation) => animation.finished))
+    return pane.querySelector("section")!.getBoundingClientRect()
+  }
+  const small = await settled()
+  pane.querySelector<HTMLButtonElement>('[aria-label="Enlarge preview"]')!.click()
+  await until(() => Boolean(pane.querySelector('[aria-label="Shrink preview"]')))
+  const large = await settled()
+  const paneBox = pane.getBoundingClientRect()
+  check(
+    large.width > small.width * 1.1 &&
+      large.left >= paneBox.left && large.right <= paneBox.right &&
+      large.top >= paneBox.top && large.bottom <= paneBox.bottom,
+    `Enlarging grows the preview inside its task (${Math.round(small.width)} → ${Math.round(large.width)} px wide)`
+  )
+  check(document.activeElement === pane.querySelector('[aria-label="Shrink preview"]'), "Enlarging moves focus to Shrink")
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+  await until(() => Boolean(pane.querySelector('[aria-label="Enlarge preview"]')))
+  const back = await settled()
+  check(
+    controlPreviewStore.get().zoomed === null && Math.abs(back.width - small.width) < 1,
+    "Esc returns the preview to its corner"
+  )
+  pane.querySelector<HTMLButtonElement>('[aria-label="Enlarge preview"]')!.click()
+  await until(() => Boolean(pane.querySelector(".control-preview-scrim")))
+  pane.querySelector<HTMLElement>(".control-preview-scrim")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
+  await until(() => Boolean(pane.querySelector('[aria-label="Enlarge preview"]')))
+  check(controlPreviewStore.get().zoomed === null, "A press outside the enlarged preview shrinks it")
   panes.querySelector<HTMLButtonElement>('[aria-label="Hide preview"]')!.click()
   await until(() => !panes.querySelector("section"))
   check(

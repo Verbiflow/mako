@@ -6,13 +6,21 @@ interface PreviewState {
   previews: Record<string, ControlPreview | null>
   activities: Record<string, ControlActivity>
   errors: Record<string, string | null>
+  /** The conversation whose chat preview is enlarged over its transcript. */
+  zoomed: string | null
 }
 export const controlPreviewStore = createStore<PreviewState>({
   previews: {},
   activities: {},
   errors: {},
+  zoomed: null,
 })
 export const useControlPreview = createHook(controlPreviewStore)
+
+export function zoomControlPreview(conversationId: string | null) {
+  if (controlPreviewStore.get().zoomed !== conversationId)
+    controlPreviewStore.set({ zoomed: conversationId })
+}
 
 const watches = new Map<string, { users: number; stop: () => void }>()
 

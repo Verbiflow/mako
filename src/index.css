@@ -1660,11 +1660,69 @@ diffs-container {
   }
 }
 
+/*
+ * The live preview over a transcript arrives as glass settling into place,
+ * and while the task works a thin light travels its rim. The ring is a mask
+ * over a wide gradient that only translates, so the sweep composites without
+ * repainting the card.
+ */
+.control-preview-card {
+  animation: control-preview-arrive 180ms var(--ease-out) both;
+  transform-origin: top right;
+}
+@keyframes control-preview-arrive {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+.control-preview-scrim {
+  animation: pane-drop-in 180ms var(--ease-out) both;
+}
+.control-preview-rim {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.control-preview-rim > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 300%;
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    color-mix(in oklab, var(--foreground) 38%, transparent) 50%,
+    transparent 60%
+  );
+  animation: control-preview-sweep 2.8s linear infinite;
+}
+@keyframes control-preview-sweep {
+  from {
+    translate: -66.7% 0;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tab-drag-ghost,
   .pane-drop,
-  .workbench-pane-arrive {
+  .workbench-pane-arrive,
+  .control-preview-card,
+  .control-preview-scrim {
     animation: none;
+  }
+  .control-preview-rim {
+    display: none;
   }
   .pane-drop-plate {
     transition: none;
