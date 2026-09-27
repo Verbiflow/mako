@@ -149,6 +149,12 @@ async function main(): Promise<void> {
     const heard = events.findLast((event) => event.type === "thread-regroup")
     assert.deepEqual(heard?.type === "thread-regroup" ? heard.regroup : undefined, split, `${harness}: windows hear where the Session went`)
 
+    const undone = owner.undoRegroup(randomUUID(), splitId)
+    assert.deepEqual(lastGroup(events, home.thread), [home.session, forked.session, tab.session], `${harness}: an undone split puts the tab back where it was`)
+    assert.deepEqual(placementOf(owner, forkId), { thread: home.thread, session: forked.session }, `${harness}: and its summary names its Thread again`)
+    assert.ok(undone.placements.some((placed) => placed.session === forked.session && placed.thread === home.thread), `${harness}: windows hear where it went back to`)
+    owner.splitSessions(randomUUID(), [forked.session])
+
     const apartPlaced = apart.threadId && apart.sessionId ? { thread: apart.threadId, session: apart.sessionId } : undefined
     assert.ok(apartPlaced)
     owner.joinThread(randomUUID(), [forked.session, apartPlaced.session], home.thread)
@@ -175,7 +181,7 @@ async function main(): Promise<void> {
   }
   await owner.stop()
   reopened.close()
-  console.log(`thread groups host: ${HARNESSES.length} harnesses name their Thread, fork into it, start in a new tab, split out and join, stable across restart`)
+  console.log(`thread groups host: ${HARNESSES.length} harnesses name their Thread, fork into it, start in a new tab, split out, undo in place and join, stable across restart`)
 }
 
 try {

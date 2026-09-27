@@ -93,6 +93,7 @@ export const ThreadRefSchema = z.object({
     .optional(),
   modelProvider: z.string().optional(),
   identity: z.string().optional(),
+  parentNativeId: z.string().optional(),
   liveResume: z.boolean().optional(),
   workspaceMissing: z.boolean().optional(),
   accessMode: z.string().optional(),

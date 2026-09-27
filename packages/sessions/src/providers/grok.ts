@@ -637,7 +637,7 @@ export class GrokProvider implements SessionProvider {
     // reminder, is not a conversation yet. The row appears when the first
     // user turn or generated title lands.
     if (!title && !sawUser) return null
-    return {
+    const ref: ThreadRef = {
       harness: this.harness,
       nativeId: summary.id,
       path: file.path,
@@ -655,6 +655,8 @@ export class GrokProvider implements SessionProvider {
       updatedAt: new Date(file.mtimeMs).toISOString(),
       bytes: file.bytes,
     }
+    if (summary.parentSessionId && summary.parentSessionId !== summary.id) ref.parentNativeId = summary.parentSessionId
+    return ref
   }
 
   /**

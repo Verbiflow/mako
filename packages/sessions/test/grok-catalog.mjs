@@ -116,6 +116,8 @@ try {
   assert.equal(await provider.peek(files[placeholderPath]), null, "session/new without a prompt is not a thread")
   assert.equal((await provider.peek(files[livePath])).title, "Investigate untitled Grok sessions")
   assert.equal((await provider.peek(files[forkPath])).title, "Forked investigation", "forks stay in the catalog")
+  assert.equal((await provider.peek(files[forkPath])).parentNativeId, liveId, "a fork names the session it came from")
+  assert.equal((await provider.peek(files[livePath])).parentNativeId, undefined)
   assert.equal(await provider.peek(files[childPath]), null, "a child recorded under the parent subagents/ dir is not a thread")
   assert.equal(await provider.peek(files[kindPath]), null, "session_kind=subagent is not a thread")
 

@@ -188,6 +188,8 @@ export class OpenCodeProvider implements SessionProvider {
       const model = modelFromSession(row) ?? latestModel(database, kind, row.id)
       const ref = refFrom(row, file.path, file.bytes, model)
       ref.title ??= firstUserTitle(database, kind, row.id)
+      const parent = forkParent(database, kind, row, target.v2 ? "session_v2" : "session")
+      if (parent) ref.parentNativeId = parent
       return ref
     } catch {
       return null
@@ -473,6 +475,44 @@ function refFrom(
   }
   if (model?.effort) ref.settings = { model: modelId, options: { effort: model.effort } }
   return ref
+}
+
+const FORK_TITLE = /^(.+) \(fork #(\d+)\)$/
+
+/**
+ * OpenCode records no parent for a fork. It names the copy after its source
+ * ("X" forks to "X (fork #1)", "X (fork #1)" to "X (fork #2)") and copies
+ * its history, so the source is the earlier session in the same folder with
+ * that title and the same first prompt.
+ */
+function forkParent(
+  database: DatabaseSync,
+  kind: StoreKind,
+  row: SessionRow,
+  table: "session" | "session_v2"
+): string | undefined {
+  const match = row.title?.match(FORK_TITLE)
+  const base = match?.[1]
+  const count = Number(match?.[2])
+  if (!base || !count || !row.directory) return undefined
+  const title = count > 1 ? `${base} (fork #${count - 1})` : base
+  const prompt = firstUserTitle(database, kind, row.id)
+  if (prompt === undefined) return undefined
+  try {
+    const candidates = database
+      .prepare(
+        `SELECT id FROM ${table} WHERE title = ? AND directory = ? AND id != ? AND time_created <= ?
+         ORDER BY time_created DESC LIMIT 8`
+      )
+      .all(title, row.directory, row.id, row.startedAt ?? Number.MAX_SAFE_INTEGER)
+    for (const candidate of candidates) {
+      const id = sqliteText(candidate.id)
+      if (id && firstUserTitle(database, kind, id) === prompt) return id
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
 }
 
 function firstUserTitle(

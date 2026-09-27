@@ -49,59 +49,71 @@ export function rowSessions(thread: string | undefined, session: string | undefi
  * tab of the Thread it joined, with its text where it was, unless that
  * Thread has one already, which then takes the text.
  */
-function carryDraft(from: string, to: string): void {
+function carryDraft(from: string, to: string): "moved" | "merged" | null {
   const { drafts, open } = threadGroupsStore.get()
   const draft = drafts[from]
-  if (!draft) return
+  if (!draft) return null
   discardSessionDraft(from)
   const existing = drafts[to]
   const key = sessionDraftKey(draft) ?? ""
   if (!existing) {
     putSessionDraft({ ...draft, thread: to, key }, open === from)
-    return
+    return "moved"
   }
   const text = draftText(key)
   const plans = draftsStore.get().drafts.find((entry) => entry.key === key)?.plans
-  if (!text && !plans?.length) return
+  if (!text && !plans?.length) return null
   appendRecoveredDraft(sessionDraftKey(existing) ?? "", { id: crypto.randomUUID(), key, text, attachments: [], plans })
   rememberDraft(key, "")
+  return "merged"
 }
 
-/** Run a regroup; a refusal is shown under `failed` and the Sessions stay where they were. */
-async function regroup(work: () => Promise<ThreadRegroup>, failed: string): Promise<boolean> {
+/**
+ * Run a regroup under a fresh operation ID, which its Undo names. A refusal
+ * is shown under `failed` and the Sessions stay where they were.
+ */
+async function regroup(work: (operationId: string) => Promise<ThreadRegroup>, failed: string): Promise<string | null> {
+  const operationId = crypto.randomUUID()
   try {
-    applyThreadRegroup(await work())
-    return true
+    applyThreadRegroup(await work(operationId))
+    return operationId
   } catch (error) {
     toast.error(failed, { description: error instanceof Error ? error.message : String(error) })
-    return false
+    return null
   }
 }
 
-const join = (sessions: readonly string[], thread: string) => () => getMako().threadJoin(crypto.randomUUID(), [...sessions], thread)
-const split = (sessions: readonly string[]) => () => getMako().threadSplit(crypto.randomUUID(), [...sessions])
+const join = (sessions: readonly string[], thread: string) => (id: string) => getMako().threadJoin(id, [...sessions], thread)
+const split = (sessions: readonly string[]) => (id: string) => getMako().threadSplit(id, [...sessions])
+
+/** Every Session goes back to the Thread and position it had; a carried draft goes back with its Thread. */
+async function undoRegroup(operation: string, draft?: { from: string; to: string }): Promise<void> {
+  if (!(await regroup((id) => getMako().threadRegroupUndo(id, operation), "Couldn't undo"))) return
+  if (draft) carryDraft(draft.from, draft.to)
+}
 
 /** Add Sessions to another Thread; they become its last tabs. */
 export async function addToThread(request: AddToThreadRequest, target: { thread: string; title: string }): Promise<boolean> {
   const source = threadGroupsStore.get().groups[request.from]
   const emptied = !source || source.sessions.every((member) => request.sessions.includes(member.id))
-  if (!(await regroup(join(request.sessions, target.thread), `Couldn't add to “${target.title}”`))) return false
-  if (emptied) carryDraft(request.from, target.thread)
-  // An emptied Thread now resolves to the target, so undoing it takes a Thread of its own.
-  const undo = emptied ? split(request.sessions) : join(request.sessions, request.from)
+  const operation = await regroup(join(request.sessions, target.thread), `Couldn't add to “${target.title}”`)
+  if (!operation) return false
+  const carried = emptied ? carryDraft(request.from, target.thread) : null
+  const draft = carried === "moved" ? { from: target.thread, to: request.from } : undefined
   toast(`Added to “${target.title}”`, {
     duration: ACTION_TOAST_MS,
-    action: { label: "Undo", onClick: () => { void regroup(undo, "Couldn't undo") } },
+    action: { label: "Undo", onClick: () => { void undoRegroup(operation, draft) } },
   })
   return true
 }
 
 /** Split Sessions into a new Thread of their own. */
-export async function splitIntoNewThread(sessions: readonly string[], from: string): Promise<boolean> {
-  if (!(await regroup(split(sessions), "Couldn't split into a new thread"))) return false
+export async function splitIntoNewThread(sessions: readonly string[]): Promise<boolean> {
+  const operation = await regroup(split(sessions), "Couldn't split into a new thread")
+  if (!operation) return false
   toast("Split into a new thread", {
     duration: ACTION_TOAST_MS,
-    action: { label: "Undo", onClick: () => { void regroup(join(sessions, from), "Couldn't undo") } },
+    action: { label: "Undo", onClick: () => { void undoRegroup(operation) } },
   })
   return true
 }

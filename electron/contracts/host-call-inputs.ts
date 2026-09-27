@@ -769,6 +769,7 @@ export const hostCallInputs = {
     z.number().optional(),
   ]),
   "mako:thread-preview": z.tuple([z.string()]),
+  "mako:thread-regroup-undo": z.tuple([z.string(), z.string()]),
   "mako:thread-remember-mode": z.tuple([z.string(), z.string()]),
   "mako:thread-run": z.tuple([z.string()]),
   "mako:thread-split": z.tuple([z.string(), z.array(z.string())]),

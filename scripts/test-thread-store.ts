@@ -390,6 +390,109 @@ function membership(): void {
   reopened.close()
 }
 
+/** A fork its harness made lands in its parent's Thread, the way a Mako fork does. */
+function harnessForks(): void {
+  const threads = store("harness-forks")
+  const fork = (harness: string, nativeId: string, parent: string): SourceRef => ({ ...row(harness, nativeId, `/${harness}/${nativeId}`), parentNativeId: parent })
+  const parent = threads.resolveRefs([row("claude", "p", "/claude/p")], catalog).get("/claude/p")
+  assert.ok(parent)
+  const child = threads.resolveRefs([fork("claude", "f", "p")], catalog).get("/claude/f")
+  assert.equal(child?.thread, parent.thread, "a harness fork joins its parent's Thread")
+  assert.deepEqual(threads.thread(parent.thread)?.sessions, [parent.session, child?.session], "as the last tab")
+
+  const batch = threads.resolveRefs([fork("codex", "cf2", "cf1"), fork("codex", "cf1", "c"), row("codex", "c", "/codex/c")], catalog)
+  const lineage = batch.get("/codex/c")?.thread
+  assert.ok(lineage)
+  assert.equal(batch.get("/codex/cf1")?.thread, lineage, "a fork listed before its parent still finds it")
+  assert.equal(batch.get("/codex/cf2")?.thread, lineage, "so does a fork of a fork")
+  const lone = threads.resolveRefs([fork("grok", "g", "unknown")], catalog).get("/grok/g")
+  assert.ok(lone)
+  assert.deepEqual(threads.thread(lone.thread)?.sessions, [lone.session], "a fork of a session never seen stands alone")
+
+  const moving = threads.resolveRefs([row("opencode", "m", "/opencode/m")], catalog).get("/opencode/m")
+  assert.ok(moving)
+  threads.beginMove({ move: MoveIdSchema.parse(randomUUID()), thread: moving.thread, target: { kind: "cloud", runtime: RuntimeIdSchema.parse(randomUUID()) }, actor: threads.person() })
+  assert.notEqual(threads.resolveRefs([fork("opencode", "mf", "m")], catalog).get("/opencode/mf")?.thread, moving.thread, "a moving Thread takes no fork")
+
+  // Mako forks the parent; the catalog lists the native fork before Mako records which native session it is.
+  const owner = journal({ harness: "claude", bindings: [{ provider: "claude", nativeId: "q", path: "/claude/q" }] })
+  const home = threads.registerJournal(owner, migration)
+  const early = threads.resolveRefs([fork("claude", "qf", "q")], catalog).get("/claude/qf")
+  assert.equal(early?.thread, home.thread)
+  const made = journal({ harness: "claude", ancestry: { kind: "fork", parentId: owner.conversationId, placement: "parent-thread" } })
+  const placed = threads.registerJournal(made, migration)
+  const bound = threads.registerJournal({ ...made, bindings: [{ provider: "claude", nativeId: "qf", path: "/claude/qf" }] }, migration)
+  assert.deepEqual(bound, placed, "Mako's own fork keeps its Session")
+  assert.equal(threads.thread(home.thread)?.id, home.thread, "the parent's Thread keeps its ID")
+  assert.deepEqual(threads.thread(home.thread)?.sessions, [home.session, placed.session], "and shows the fork once")
+  assert.deepEqual(threads.resolveRefs([fork("claude", "qf", "q")], catalog).get("/claude/qf"), placed, "the native row is Mako's fork")
+  threads.close()
+
+  // Imported before its row named a parent: adopted once on the next serve, then left alone.
+  const earlier = store("harness-forks-earlier")
+  const before = earlier.resolveRefs([row("codex", "a", "/codex/a"), row("codex", "af", "/codex/af")], catalog)
+  earlier.close()
+  const later = new ThreadStore(join(root, "harness-forks-earlier.sqlite"), { now })
+  const adopted = later.resolveRefs([row("codex", "a", "/codex/a"), fork("codex", "af", "a")], catalog)
+  const home2 = before.get("/codex/a")?.thread
+  const oldThread = before.get("/codex/af")?.thread
+  const adoptedFork = adopted.get("/codex/af")
+  assert.ok(home2 && oldThread && adoptedFork)
+  assert.equal(adoptedFork.thread, home2, "an earlier harness fork joins its parent's Thread")
+  assert.equal(later.thread(oldThread)?.id, home2, "its old Thread follows")
+  later.splitSessions({ operationId: randomUUID(), sessions: [adoptedFork.session], actor: later.person() })
+  later.close()
+  const again = new ThreadStore(join(root, "harness-forks-earlier.sqlite"), { now })
+  assert.notEqual(again.resolveRefs([fork("codex", "af", "a")], catalog).get("/codex/af")?.thread, home2, "a fork split out once stays out")
+  again.close()
+}
+
+/** Undo puts every Session back in its Thread and position, or refuses. */
+function undoRegroups(): void {
+  const path = join(root, "undo.sqlite")
+  const threads = new ThreadStore(path, { now })
+  const person = threads.person()
+  const home = threads.registerJournal(journal({ harness: "claude" }), migration)
+  const middle = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
+  const last = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
+  const lone = threads.registerJournal(journal({ harness: "codex" }), migration)
+  const order = [home.session, middle.session, last.session]
+
+  const split = randomUUID()
+  const [, created] = threads.splitSessions({ operationId: split, sessions: [middle.session], actor: person })
+  assert.ok(created)
+  const undoSplit = randomUUID()
+  assert.deepEqual(threads.undoRegroup({ operationId: undoSplit, undoing: split, actor: person }), [home.thread, created])
+  assert.deepEqual(threads.thread(home.thread)?.sessions, order, "an undone split puts the Session back where it was, not last")
+  assert.equal(threads.thread(created)?.id, home.thread, "the split's Thread follows the one its Session returned to")
+  assert.deepEqual(threads.undoRegroup({ operationId: undoSplit, undoing: split, actor: person }), [home.thread, created], "a repeated undo returns its first result")
+  assert.throws(() => threads.undoRegroup({ operationId: randomUUID(), undoing: split, actor: person }), /no longer be undone/, "a change is undone once")
+
+  const partial = randomUUID()
+  threads.joinThread({ operationId: partial, sessions: [middle.session], thread: lone.thread, actor: person })
+  threads.undoRegroup({ operationId: randomUUID(), undoing: partial, actor: person })
+  assert.deepEqual(threads.thread(home.thread)?.sessions, order, "an undone add returns the Session to its own Thread and position")
+  assert.deepEqual(threads.thread(lone.thread)?.sessions, [lone.session])
+
+  const emptying = randomUUID()
+  threads.joinThread({ operationId: emptying, sessions: [lone.session], thread: home.thread, actor: person })
+  assert.equal(threads.thread(lone.thread)?.id, home.thread)
+  threads.close()
+
+  const reopened = new ThreadStore(path, { now })
+  assert.deepEqual(reopened.undoRegroup({ operationId: randomUUID(), undoing: emptying, actor: person }), [home.thread, lone.thread], "undo survives a restart")
+  assert.equal(reopened.thread(lone.thread)?.id, lone.thread, "an emptied Thread comes back under its own ID")
+  assert.deepEqual(reopened.thread(lone.thread)?.sessions, [lone.session])
+  assert.deepEqual(reopened.sessionPlacement(lone.session), { thread: lone.thread, session: lone.session })
+  assert.deepEqual(reopened.thread(home.thread)?.sessions, order)
+
+  const stale = randomUUID()
+  reopened.splitSessions({ operationId: stale, sessions: [last.session], actor: person })
+  reopened.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
+  assert.throws(() => reopened.undoRegroup({ operationId: randomUUID(), undoing: stale, actor: person }), /changed since/, "undo refuses once a Thread it touched has changed")
+  reopened.close()
+}
+
 try {
   identityAndVersion()
   startedJournals()
@@ -405,6 +508,8 @@ try {
   twoHosts()
   placementLog()
   membership()
+  undoRegroups()
+  harnessForks()
   console.log("thread store: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

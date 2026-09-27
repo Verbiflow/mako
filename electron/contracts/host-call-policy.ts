@@ -118,6 +118,8 @@ const replays = [
   "mako:thread-join",
   /** `ThreadStore.splitSessions`: the operation id is receipted; a repeat returns the first new Thread. */
   "mako:thread-split",
+  /** `ThreadStore.undoRegroup`: the operation id is receipted; a repeat returns the first result. */
+  "mako:thread-regroup-undo",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

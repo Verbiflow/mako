@@ -193,7 +193,7 @@ const DESK_COMMANDS: DeskCommand[] = [
     when: () => threadHasTabs() && onScreenSessionTab() !== null,
     run: () => {
       const found = onScreenSessionTab()
-      if (found) void splitIntoNewThread([found.tab.id], found.thread)
+      if (found) void splitIntoNewThread([found.tab.id])
     },
   },
   {

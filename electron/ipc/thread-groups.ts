@@ -23,4 +23,6 @@ export function installThreadGroupsIpc(store: ThreadStore | null, live: LiveConv
     live.joinThread(operationId, sessions, thread))
   registerIpc("mako:thread-split", (_event, operationId: string, sessions: string[]): ThreadRegroup =>
     live.splitSessions(operationId, sessions))
+  registerIpc("mako:thread-regroup-undo", (_event, operationId: string, undoing: string): ThreadRegroup =>
+    live.undoRegroup(operationId, undoing))
 }

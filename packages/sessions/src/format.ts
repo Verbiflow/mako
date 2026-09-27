@@ -112,6 +112,13 @@ export interface ThreadRef {
    */
   identity?: string
   /**
+   * The native id of the session this one was forked from, when the harness
+   * says so: Claude's `forkedFrom`, Codex's `forked_from_id`, Grok's
+   * `parent_session_id`, or the OpenCode session whose history an OpenCode
+   * fork copied. Never set for a child agent.
+   */
+  parentNativeId?: string
+  /**
    * False when the provider's live transport cannot load this store and only
    * a native run can continue it: Cursor's `session/load` answers "Session
    * not found" for a `chats/` store. Unset means the transport decides.

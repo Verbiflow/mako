@@ -107,6 +107,8 @@ interface ClaudeLine {
   uuid?: string
   timestamp?: string
   sessionId?: string
+  /** The session a `--fork-session` copy of this line came from. */
+  forkedFrom?: string
   cwd?: string
   isSidechain: boolean
   isMeta: boolean
@@ -267,6 +269,7 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
     uuid: stringValue(root["uuid"]),
     timestamp: stringValue(root["timestamp"]),
     sessionId: stringValue(root["sessionId"]),
+    forkedFrom: forkedFromSession(root["forkedFrom"]),
     cwd: stringValue(root["cwd"]),
     isSidechain: root["isSidechain"] === true,
     isMeta: root["isMeta"] === true,
@@ -274,6 +277,10 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
     isAbortedMidStream: root["isAbortedMidStream"] === true,
     message: parseMessage(root["message"]),
   }
+}
+
+function forkedFromSession(value: ClaudeJsonValue | undefined): string | undefined {
+  return isJsonObject(value) ? stringValue(value["sessionId"]) : undefined
 }
 
 function parseDeclaredRoots(raw: string): string[] {
@@ -708,6 +715,8 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (line.isSidechain) return
   if (!ref.nativeId && line.sessionId !== undefined)
     ref.nativeId = line.sessionId
+  if (!ref.parentNativeId && line.forkedFrom && line.forkedFrom !== ref.nativeId)
+    ref.parentNativeId = line.forkedFrom
   if (!ref.cwd && line.cwd !== undefined) ref.cwd = line.cwd
   if (!ref.startedAt && line.timestamp !== undefined)
     ref.startedAt = line.timestamp

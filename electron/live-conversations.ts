@@ -2168,6 +2168,13 @@ export class LiveConversations {
     return this.announceRegroup(threads.splitSessions({ operationId, sessions: ids, actor: threads.person() }), ids)
   }
 
+  /** Undo a join or split: every Session it moved goes back to its Thread and position. */
+  undoRegroup(operationId: string, undoing: string): ThreadRegroup {
+    const threads = this.requireThreads()
+    const changed = threads.undoRegroup({ operationId, undoing, actor: threads.person() })
+    const sessions = [...new Set(changed.flatMap((thread) => threads.thread(thread)?.sessions ?? []))]
+    return this.announceRegroup(changed, sessions)
+  }
   private requireThreads(): ThreadStore {
     const threads = this.dependencies.threads
     if (!threads) throw new Error("This Mako couldn't open its Thread store, so it can't regroup sessions.")

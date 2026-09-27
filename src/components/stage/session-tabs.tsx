@@ -86,7 +86,7 @@ function SessionTabMenu({ tab, thread, title, alone, children }: {
           >
             <ListPlusIcon className="size-3.5" />Add to thread…
           </ContextMenu.Item>
-          <ContextMenu.Item className={menuItem} disabled={alone} onSelect={() => { void splitIntoNewThread([tab.id], thread) }}>
+          <ContextMenu.Item className={menuItem} disabled={alone} onSelect={() => { void splitIntoNewThread([tab.id]) }}>
             <SplitIcon className="size-3.5" />Split into new thread
           </ContextMenu.Item>
           <ContextMenu.Separator className="mx-1 my-1 h-px bg-hairline" />

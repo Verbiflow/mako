@@ -64,6 +64,7 @@ export const THREAD_STORE_MIGRATION = 2
 interface OperationContent {
   thread?: ThreadId
   sessions?: SessionId[]
+  undoing?: string
   title?: string
   move?: MoveId
   target?: ExecutionOwner
@@ -120,7 +121,7 @@ export interface JournalFacts {
   session?: SessionId
 }
 
-export type SourceRef = Pick<ThreadRef, "harness" | "nativeId" | "path" | "identity">
+export type SourceRef = Pick<ThreadRef, "harness" | "nativeId" | "path" | "identity" | "parentNativeId">
 
 export interface ThreadRecord {
   id: ThreadId
@@ -286,6 +287,20 @@ CREATE TRIGGER IF NOT EXISTS placement_thread_merged AFTER UPDATE OF merged_into
 `
 /** Log rows kept past a store open; a host further behind than this forgets everything once. */
 const PLACEMENT_LOG_KEEP = 10_000
+
+/**
+ * Each regroup's Thread layouts before and after it, so undoing it puts every
+ * Session back in its Thread and position, and an emptied Thread comes back
+ * under its own ID. Only needed while an Undo can still be pressed.
+ */
+const REGROUP_LOG = `
+CREATE TABLE IF NOT EXISTS regroups (
+  operation_id TEXT PRIMARY KEY, before TEXT NOT NULL, after TEXT NOT NULL, created_at INTEGER NOT NULL);
+`
+const REGROUP_KEEP_MS = 24 * 60 * 60 * 1000
+const LayoutSchema = z.record(z.string(), z.array(z.string()))
+type Layout = z.infer<typeof LayoutSchema>
+const RegroupRowSchema = z.object({ before: z.string(), after: z.string() })
 
 const SCHEMA = `
 CREATE TABLE principals (
@@ -464,7 +479,7 @@ export class ThreadStore {
     const located = refs.map((ref) => ({ ref, path: this.realPath(ref.path) }))
     const placed = this.write(() => {
       const known = located.filter((entry) => this.locator(entry.path))
-      const unknown = located.filter((entry) => !this.locator(entry.path))
+      const unknown = parentsFirst(located.filter((entry) => !this.locator(entry.path)))
       const result = new Map<string, ThreadPlacement>()
       for (const entry of [...known, ...unknown])
         result.set(entry.ref.path, this.placeSession(this.resolveOne({ ...entry.ref, path: entry.path }, actor)))
@@ -572,6 +587,7 @@ export class ThreadStore {
       if (!joining.length) return []
       const sources = [...new Set(joining.map((session) => this.placeSession(session).thread))]
       this.requireHere([target.id, ...sources])
+      const before = this.layout([target.id, ...sources])
       let position = CountSchema.parse(this.sql("SELECT coalesce(max(position) + 1, 0) AS count FROM memberships WHERE thread_id = ?").get(target.id)).count
       for (const session of joining)
         this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(target.id, position++, session)
@@ -579,7 +595,8 @@ export class ThreadStore {
         const left = this.thread(source)
         if (left && !left.sessions.length) this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(target.id, source)
       }
-      this.sql(`UPDATE threads SET revision = revision + 1 WHERE id IN (${[target.id, ...sources].map(() => "?").join(", ")})`).run(target.id, ...sources)
+      this.bumpRevisions([target.id, ...sources])
+      this.recordRegroup(input.operationId, before, this.layout([target.id, ...sources]))
       return [target.id, ...sources]
     }, z.array(ThreadIdSchema)))
   }
@@ -599,14 +616,68 @@ export class ThreadStore {
       if (!thread || thread.sessions.every((session) => leaving.includes(session)))
         throw new Error("A thread keeps at least one session; this one already stands alone.")
       this.requireHere([from])
+      const before = this.layout([from])
       const created = ThreadIdSchema.parse(randomUUID())
       this.sql("INSERT INTO threads (id, owner_id, created_at, created_by) VALUES (?, ?, ?, ?)")
         .run(created, this.localPrincipal, this.now(), JSON.stringify(input.actor))
       for (const [position, session] of thread.sessions.filter((member) => leaving.includes(member)).entries())
         this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(created, position, session)
-      this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(from)
+      this.bumpRevisions([from])
+      this.recordRegroup(input.operationId, before, this.layout([from, created]))
       return [from, created]
     }, z.array(ThreadIdSchema)))
+  }
+
+  /**
+   * Put every Session a join or split moved back in its Thread and position.
+   * A Thread the join emptied comes back under its own ID, and a Thread the
+   * split created follows the one its Sessions return to. Refused once any of
+   * those Threads has changed since, rather than guessing. Returns every
+   * Thread whose Sessions changed.
+   */
+  undoRegroup(input: { operationId: string; undoing: string; actor: Actor }): ThreadId[] {
+    return this.write(() => this.receipt(input.operationId, "undo-regroup", { undoing: input.undoing }, input.actor, () => {
+      const found = this.sql("SELECT before, after FROM regroups WHERE operation_id = ?").get(input.undoing)
+      if (!found) throw new Error("That change can no longer be undone.")
+      const row = RegroupRowSchema.parse(found)
+      const before = LayoutSchema.parse(JSON.parse(row.before))
+      const after = LayoutSchema.parse(JSON.parse(row.after))
+      const touched = Object.keys(after).map((thread) => ThreadIdSchema.parse(thread))
+      const now = this.layout(touched)
+      if (touched.some((thread) => !sameList(now[thread] ?? [], after[thread] ?? [])))
+        throw new Error("Those sessions have changed since, so this can't be undone.")
+      this.requireHere(touched.filter((thread) => now[thread]?.length))
+      for (const [thread, sessions] of Object.entries(before)) {
+        this.sql("UPDATE threads SET merged_into = NULL WHERE id = ?").run(thread)
+        for (const [position, session] of sessions.entries())
+          this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(thread, position, session)
+      }
+      for (const thread of touched) {
+        if (before[thread]?.length) continue
+        const home = Object.entries(before).find(([, sessions]) => sessions.some((session) => after[thread]?.includes(session)))?.[0]
+        if (home) this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(home, thread)
+      }
+      this.bumpRevisions(touched)
+      this.sql("DELETE FROM regroups WHERE operation_id = ?").run(input.undoing)
+      return touched
+    }, z.array(ThreadIdSchema)))
+  }
+
+  /** Each Thread's Sessions in tab order, read from memberships, not following merges. */
+  private layout(threads: readonly ThreadId[]): Layout {
+    const layout: Layout = {}
+    for (const thread of threads)
+      layout[thread] = this.sql("SELECT session_id FROM memberships WHERE thread_id = ? ORDER BY position, session_id").all(thread)
+        .map((member) => SessionRowSchema.parse(member).session_id)
+    return layout
+  }
+
+  private recordRegroup(operationId: string, before: Layout, after: Layout): void {
+    this.sql("INSERT INTO regroups VALUES (?, ?, ?, ?)").run(operationId, JSON.stringify(before), JSON.stringify(after), this.now())
+  }
+
+  private bumpRevisions(threads: readonly ThreadId[]): void {
+    this.sql(`UPDATE threads SET revision = revision + 1 WHERE id IN (${threads.map(() => "?").join(", ")})`).run(...threads)
   }
 
   /** The current Sessions behind the given IDs, following merges, once each. */
@@ -956,13 +1027,70 @@ export class ThreadStore {
     for (const other of [byPath, claimed])
       if (session && other && other !== session)
         session = this.reconcile(session, other, `${ref.harness} catalog row's path, identity and native claims name different Sessions`, actor)
-    session ??= this.mintSingleton("imported", null, actor)
+    if (session) this.adoptFork(session, ref, actor)
+    session ??= this.mintImported(ref, actor)
     if (!bySource)
       this.sql("INSERT INTO sources VALUES (?, ?, ?, ?, ?)").run(this.deviceId, ref.harness, key, session, this.now())
     if (!located)
       this.sql("INSERT INTO locators VALUES (?, ?, ?, ?, ?, 'catalog')")
         .run(this.deviceId, ref.path, ref.harness, ref.nativeId, session)
     return session
+  }
+
+  /**
+   * A native session seen for the first time. A fork its harness made joins
+   * its parent's Thread as the last tab, the way a fork made in Mako does,
+   * unless that Thread is moving or runs elsewhere.
+   */
+  private mintImported(ref: SourceRef, actor: Actor): string {
+    const parent = ref.parentNativeId ? this.nativeSession(ref.harness, ref.parentNativeId) : undefined
+    if (!parent) return this.mintSingleton("imported", null, actor)
+    const home = this.placeSession(parent).thread
+    const here = this.thread(home)?.sessions.every((member) => this.executionState(member).state === "here")
+    if (!here) return this.mintSingleton("imported", parent, actor)
+    const session = this.mintSession("imported", parent, actor)
+    this.addMember(home, session, actor)
+    this.bumpRevisions([home])
+    return session
+  }
+
+  /**
+   * A harness fork imported before its row named a parent stands alone.
+   * It joins its parent's Thread once, if nothing depends on it standing
+   * alone: never adopted or split before (no parent recorded), alone in an
+   * untitled Thread, and no Mako conversation of its own.
+   */
+  private adoptFork(session: string, ref: SourceRef, actor: Actor): void {
+    if (!ref.parentNativeId) return
+    const current = this.canonical(session)
+    if (!current) return
+    const row = this.sessionRow(current)
+    if (row.origin !== "imported" || row.parent_session || !this.mergeable(current) || this.hasJournals(current)) return
+    const parent = this.nativeSession(ref.harness, ref.parentNativeId)
+    if (!parent || parent === current || this.descends(parent, current)) return
+    const own = this.placeSession(current).thread
+    const home = this.placeSession(parent).thread
+    if (home === own || !this.thread(home)?.sessions.every((member) => this.executionState(member).state === "here")) return
+    this.sql("UPDATE sessions SET parent_session = ? WHERE id = ?").run(parent, current)
+    const next = CountSchema.parse(this.sql("SELECT coalesce(max(position) + 1, 0) AS count FROM memberships WHERE thread_id = ?").get(home)).count
+    this.sql("UPDATE memberships SET thread_id = ?, position = ?, added_at = ?, added_by = ? WHERE session_id = ?").run(home, next, this.now(), JSON.stringify(actor), current)
+    this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(home, own)
+    this.bumpRevisions([home])
+  }
+
+  /** The Session behind a native id of this device, however it was first recorded. */
+  private nativeSession(harness: string, nativeId: string): string | undefined {
+    const found = this.source(harness, nativeId) ?? this.nativeClaim(harness, nativeId) ?? this.locatedNative(harness, nativeId)
+    return found ? this.canonical(found) : undefined
+  }
+
+  private hasJournals(session: string): boolean {
+    return CountSchema.parse(this.sql("SELECT count(*) AS count FROM journals WHERE session_id = ?").get(session)).count > 0
+  }
+
+  private locatedNative(harness: string, nativeId: string): string | undefined {
+    const found = this.sql("SELECT session_id FROM locators WHERE device_id = ? AND harness = ? AND native_id = ? LIMIT 1").get(this.deviceId, harness, nativeId)
+    return found ? SessionRowSchema.parse(found).session_id : undefined
   }
 
   /**
@@ -1010,6 +1138,9 @@ export class ThreadStore {
     // environment may hold records of it.
     const execution = this.executionState(session)
     if (execution.state !== "here" || execution.generation !== 1) return false
+    // A harness-made fork the catalog found before Mako's own record of it:
+    // only its tab depends on it.
+    if (row.origin === "imported" && row.parent_session && !this.hasJournals(session)) return true
     const membership = this.sql("SELECT thread_id FROM memberships WHERE session_id = ?").get(session)
     if (!membership) return false
     const threadId = MembershipRowSchema.parse(membership).thread_id
@@ -1035,7 +1166,10 @@ export class ThreadStore {
     this.sql("UPDATE sessions SET parent_session = ? WHERE parent_session = ?").run(winner, loser)
     this.sql("DELETE FROM memberships WHERE session_id = ?").run(loser)
     this.sql("UPDATE sessions SET merged_into = ? WHERE id = ?").run(winner, loser)
-    this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(winnerThread, membership.thread_id)
+    // A loser that shared its Thread leaves only its tab; the Thread stays.
+    const left = CountSchema.parse(this.sql("SELECT count(*) AS count FROM memberships WHERE thread_id = ?").get(membership.thread_id)).count
+    if (!left && membership.thread_id !== winnerThread)
+      this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(winnerThread, membership.thread_id)
     this.sql("INSERT INTO operations VALUES (?, 'merge', ?, ?, ?, ?)")
       .run(randomUUID(), JSON.stringify({ loser, winner, reason }), JSON.stringify(actor), JSON.stringify({ session: winner }), this.now())
     this.forgetPlacements()
@@ -1135,6 +1269,8 @@ export class ThreadStore {
     this.db.exec(EXECUTION_TABLES)
     this.db.exec(PLACEMENT_LOG)
     this.db.prepare("DELETE FROM placement_changes WHERE seq <= (SELECT max(seq) FROM placement_changes) - ?").run(PLACEMENT_LOG_KEEP)
+    this.db.exec(REGROUP_LOG)
+    this.db.prepare("DELETE FROM regroups WHERE created_at < ?").run(this.now() - REGROUP_KEEP_MS)
     const stored = this.meta("self")
     if (stored === undefined) {
       const owner = self ?? { kind: "device", device: DeviceIdSchema.parse(this.meta("device")) }
@@ -1412,6 +1548,27 @@ function ownerFrom(kind: "device" | "cloud", id: string): ExecutionOwner {
 /** A NUL can't start a harness name, so a journal's key never meets a catalog row's. */
 function journalPlacementKey(conversationId: string): string {
   return `\0journal\n${conversationId}`
+}
+
+/** A batch's forks after the parents they name, so a fork finds its parent's Thread. */
+function parentsFirst<T extends { ref: SourceRef }>(entries: readonly T[]): T[] {
+  const byNative = new Map(entries.map((entry) => [`${entry.ref.harness}\n${entry.ref.nativeId}`, entry]))
+  const depth = new Map<T, number>()
+  const measure = (entry: T, seen: number): number => {
+    const known = depth.get(entry)
+    if (known !== undefined) return known
+    const parent = entry.ref.parentNativeId ? byNative.get(`${entry.ref.harness}\n${entry.ref.parentNativeId}`) : undefined
+    const found = parent && parent !== entry && seen < 64 ? measure(parent, seen + 1) + 1 : 0
+    depth.set(entry, found)
+    return found
+  }
+  return entries.map((entry, index) => ({ entry, index, depth: measure(entry, 0) }))
+    .sort((left, right) => left.depth - right.depth || left.index - right.index)
+    .map(({ entry }) => entry)
+}
+
+function sameList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index])
 }
 
 function placementKey(ref: SourceRef): string {

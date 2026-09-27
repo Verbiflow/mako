@@ -180,6 +180,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<ThreadRegroup>("mako:thread-join", operationId, sessions, thread),
     threadSplit: (operationId: string, sessions: string[]) =>
       invokeTrustedHost<ThreadRegroup>("mako:thread-split", operationId, sessions),
+    threadRegroupUndo: (operationId: string, undoing: string) =>
+      invokeTrustedHost<ThreadRegroup>("mako:thread-regroup-undo", operationId, undoing),
     threadControls: (target: ThreadTarget) =>
       invokeTrustedHost<ThreadControls>("mako:thread-controls", target),
     archiveThread: (command: ArchiveCommand) =>

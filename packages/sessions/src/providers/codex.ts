@@ -75,6 +75,7 @@ interface CodexSessionMeta extends CodexRolloutBase {
   cwd?: string
   startedAt?: string
   threadSource?: string
+  forkedFrom?: string
 }
 
 interface CodexThreadMetadata {
@@ -405,6 +406,7 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
         cwd: stringValue(payload?.["cwd"]),
         startedAt: stringValue(payload?.["timestamp"]),
         threadSource: stringValue(payload?.["thread_source"]),
+        forkedFrom: stringValue(payload?.["forked_from_id"]),
       }
     case "turn_context": {
       const options: NonNullable<SessionSettings["options"]> = {}
@@ -642,6 +644,7 @@ export class CodexProvider implements SessionProvider {
           updatedAt: new Date(file.mtimeMs).toISOString(),
           bytes: file.bytes,
         }
+        if (event.forkedFrom && event.forkedFrom !== event.id) found.ref.parentNativeId = event.forkedFrom
         return spent < budget
       }
       if (!sawMeta) return false // Not a rollout file at all.
