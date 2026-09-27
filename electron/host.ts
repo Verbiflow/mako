@@ -4,6 +4,7 @@ import { WorkspaceGit } from "./host-git.js"
 import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
+import { watchOutsideGitDir, type GitDirWatch } from "./git-dir-watch.js"
 import type {
   Capabilities,
   FileContents,
@@ -38,6 +39,7 @@ export class AgentHost {
   private readonly workspaceFiles: WorkspaceFiles
   private foreground = true
   private workspaceWatcher: TreeWatch | null = null
+  private gitDirWatch: GitDirWatch | null = null
   private workspaceWatcherGeneration = 0
   private gitPushGeneration = 0
   private gitRefreshTimer: NodeJS.Timeout | null = null
@@ -96,19 +98,28 @@ export class AgentHost {
         if (this.workspaceWatcherGeneration !== generation) return
         let moves = false
         for (const path of paths) if (this.workspaceGit.noteChange(path)) moves = true
-        if (!moves) return
-        if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer)
-        this.gitRefreshTimer = setTimeout(() => {
-          this.gitRefreshTimer = null
-          if (this.workspaceWatcherGeneration === generation)
-            void this.pushGit()
-        }, 180)
+        if (moves) this.scheduleGitRefresh(generation)
       },
       () => {
         if (this.workspaceWatcherGeneration === generation) this.stopWorkspaceWatcher()
       }
     ) ?? null
-    if (this.workspaceWatcher) this.workspaceGit.trackChanges(true)
+    if (!this.workspaceWatcher) return
+    this.workspaceGit.trackChanges(true)
+    this.gitDirWatch = watchOutsideGitDir(this.workspace, () => {
+      if (this.workspaceWatcherGeneration !== generation) return
+      this.workspaceGit.noteChange(undefined)
+      this.scheduleGitRefresh(generation)
+    })
+  }
+
+  private scheduleGitRefresh(generation: number): void {
+    if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer)
+    this.gitRefreshTimer = setTimeout(() => {
+      this.gitRefreshTimer = null
+      if (this.workspaceWatcherGeneration === generation)
+        void this.pushGit()
+    }, 180)
   }
 
   private stopWorkspaceWatcher(): void {
@@ -116,6 +127,8 @@ export class AgentHost {
     this.workspaceGit.trackChanges(false)
     this.workspaceWatcher?.close()
     this.workspaceWatcher = null
+    this.gitDirWatch?.close()
+    this.gitDirWatch = null
     if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer)
     this.gitRefreshTimer = null
   }

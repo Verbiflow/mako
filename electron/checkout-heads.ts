@@ -42,7 +42,7 @@ function headKey(head: CheckoutHead | null): string {
 }
 
 /** The Git directory of the checkout holding `folder`: `.git` itself, or where a linked worktree's `.git` file points. */
-async function locateGitDir(folder: string): Promise<string | null> {
+export async function locateGitDir(folder: string): Promise<string | null> {
   for (let dir = resolve(folder); ; dir = dirname(dir)) {
     const dotGit = join(dir, ".git")
     const info = await stat(dotGit).catch(() => null)
