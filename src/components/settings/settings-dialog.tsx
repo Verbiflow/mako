@@ -17,6 +17,7 @@ import { section as editor } from "@/components/settings/sections/editor"
 import { section as keyboard } from "@/components/settings/sections/keyboard"
 import { section as commits } from "@/components/settings/sections/commit-prompt"
 import { section as automations } from "@/components/settings/sections/automations"
+import { section as worktrees } from "@/components/settings/sections/worktrees"
 import { section as integrations } from "@/components/settings/sections/integrations"
 import { section as mcp } from "@/components/settings/sections/mcp"
 import { section as skills } from "@/components/settings/sections/skills"
@@ -37,6 +38,7 @@ const SECTIONS: readonly SettingsSection[] = [
   keyboard,
   commits,
   automations,
+  worktrees,
   integrations,
   mcp,
   skills,

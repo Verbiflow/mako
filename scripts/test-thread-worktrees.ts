@@ -107,7 +107,9 @@ assert.deepEqual(threads.worktrees().map(({ path, thread, branch, repoRoot }) =>
 
 // The strip counts the Thread's own commits, from the commit it started at.
 assert.equal(await worktrees.ahead(prepared.path), 0)
-git(prepared.path, "commit", "-q", "--allow-empty", "-m", "thread work")
+writeFileSync(join(prepared.path, "notes.md"), "thread notes\n")
+git(prepared.path, "add", "notes.md")
+git(prepared.path, "commit", "-q", "-m", "thread work")
 assert.equal(await worktrees.ahead(prepared.path), 1)
 assert.equal(await worktrees.ahead(shop), undefined, "the main checkout isn't a Thread worktree")
 
@@ -115,6 +117,23 @@ assert.equal(await worktrees.ahead(shop), undefined, "the main checkout isn't a 
 started(second)
 const listed = await worktrees.list()
 assert.deepEqual(listed.worktrees.map((worktree) => worktree.path).sort(), [prepared.path, other.path].sort())
+
+// Cleanup reads what decides whether each worktree can go.
+const detail = async (path: string) => (await worktrees.inventory()).worktrees.find((worktree) => worktree.path === path)
+assert.deepEqual((await detail(prepared.path))?.landing, { kind: "open", into: "main", commits: 1 })
+assert.deepEqual((await detail(other.path))?.landing, { kind: "empty" })
+writeFileSync(join(other.path, "scratch.txt"), "x\n")
+const dirty = await detail(other.path)
+assert.equal(dirty?.changes, 1)
+assert.ok((dirty?.bytes ?? 0) > 0, "its own files are measured")
+rmSync(join(other.path, "scratch.txt"))
+busy.set(other.path, ["“Other”"])
+assert.deepEqual((await detail(other.path))?.users, ["“Other”"])
+busy.delete(other.path)
+// A squash merge leaves none of the branch's commits on main; its work landed all the same.
+git(shop, "merge", "-q", "--squash", "mako/fix-login-redirect")
+git(shop, "commit", "-q", "-m", "squashed")
+assert.deepEqual((await detail(prepared.path))?.landing, { kind: "merged", into: "main" })
 
 // Cut short between `git worktree add` and the copy: the next start finishes it.
 const third = randomUUID()
@@ -228,4 +247,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), refusals")
+console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), refusals")

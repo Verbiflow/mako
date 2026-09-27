@@ -4,7 +4,7 @@ import { DropdownMenu } from "radix-ui"
 import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, ListPlusIcon, MoreHorizontalIcon, SquareIcon, Trash2Icon } from "lucide-react"
 import { desktop } from "@/state/desktop"
 import { threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
-import { removeWorktree, useWorktrees, worktreeAt } from "@/state/worktrees"
+import { offerWorktreeRemoval, removeWorktree, useWorktrees, worktreeAt } from "@/state/worktrees"
 import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { openAddToThread, rowSessions } from "@/state/thread-regroup"
 
@@ -27,8 +27,11 @@ export function ThreadActions({ target, title, archived, running, controlled, pa
   const oneOfMany = useThreadGroups((state) => !archiveTargets && thread !== undefined && state.groups[thread] !== undefined)
   const archive = async () => {
     const restoringOne = archived && oneOfMany
-    const changed = await threadLifecycle.archive(archiveTargets ?? [target], !archived, !restoringOne)
+    // Putting the whole Thread away, with nothing running in it, is when its worktree stops being needed.
+    const leftBehind = !archived && !running && !oneOfMany ? worktree : undefined
+    const changed = await threadLifecycle.archive(archiveTargets ?? [target], !archived, !restoringOne && !leftBehind)
     if (changed && restoringOne) toast("Session restored")
+    if (changed && leftBehind) offerWorktreeRemoval(leftBehind)
     if (changed && !archived && thread) discardSessionDraft(thread)
   }
   const [busy, setBusy] = useState(false)

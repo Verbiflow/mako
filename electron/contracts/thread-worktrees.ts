@@ -21,6 +21,32 @@ export interface ThreadWorktrees {
   worktrees: ThreadWorktree[]
 }
 
+/** Where a worktree's branch stands against the branch its main checkout has checked out. */
+export type WorktreeLanding =
+  /** Everything it committed is in `into`: merged, rebased or squashed. */
+  | { kind: "merged"; into: string }
+  /** It never committed anything. */
+  | { kind: "empty" }
+  | { kind: "open"; into: string; commits: number }
+  /** The main checkout isn't on a branch, or Git couldn't tell. */
+  | { kind: "unknown" }
+
+export interface WorktreeDetail extends ThreadWorktree {
+  /** Files with uncommitted changes, untracked ones included. */
+  changes: number
+  landing: WorktreeLanding
+  /** What runs inside it: conversations and shells. */
+  users: string[]
+  /** Its own files; dependency folders cloned from the main checkout share their blocks and aren't counted. */
+  bytes: number | null
+}
+
+export interface WorktreeInventory {
+  worktrees: WorktreeDetail[]
+  /** Checkouts kept ready for new Threads, and their own files' size. */
+  spares: { count: number; bytes: number | null }
+}
+
 export const WORKTREE_BRANCH_PREFIX = "mako/"
 const SLUG_WORDS = 4
 const SLUG_LENGTH = 32

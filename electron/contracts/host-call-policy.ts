@@ -39,6 +39,7 @@ const reads = [
   "mako:thread-groups",
   "mako:worktrees",
   "mako:worktree-ahead",
+  "mako:worktree-inventory",
   "mako:checkout-heads",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",

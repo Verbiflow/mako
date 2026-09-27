@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
-import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeDetail, WorktreeInventory } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
 import { createHook, createStore } from "@/state/store"
 
@@ -97,4 +98,42 @@ export async function removeWorktree(worktree: ThreadWorktree): Promise<void> {
   } catch (error) {
     toast.error("The worktree wasn't removed", { description: error instanceof Error ? error.message : String(error) })
   }
+}
+
+/** Every worktree with what decides whether it can go, and the spares kept for new Threads. */
+export async function readWorktreeInventory(): Promise<WorktreeInventory> {
+  if (!hasBridge()) return { worktrees: [], spares: { count: 0, bytes: null } }
+  return getMako().worktreeInventory()
+}
+
+/** Nothing would be lost and nothing stopped: its work is on the main checkout's branch, or it never had any. */
+export function removable(worktree: WorktreeDetail): boolean {
+  return worktree.changes === 0 && worktree.users.length === 0 && (worktree.landing.kind === "merged" || worktree.landing.kind === "empty")
+}
+
+/** Remove every worktree whose work landed or never started; their branches stay. */
+export async function removeLandedWorktrees(worktrees: readonly WorktreeDetail[]): Promise<void> {
+  const failed: string[] = []
+  let removed = 0
+  for (const worktree of worktrees.filter(removable)) {
+    try {
+      const { worktrees: left } = await getMako().removeWorktree(worktree.path)
+      reads += 1
+      worktreesStore.set(stateOf(left))
+      removed += 1
+    } catch (error) {
+      failed.push(`${worktree.branch}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  if (removed) toast(removed === 1 ? "1 worktree removed" : `${removed} worktrees removed`, { description: "Their branches keep their commits." })
+  if (failed.length) toast.error(failed.length === 1 ? "A worktree wasn't removed" : `${failed.length} worktrees weren't removed`, { description: failed.join("\n") })
+}
+
+/** A Thread was put away with its worktree still on disk: say so, with the removal one click away. */
+export function offerWorktreeRemoval(worktree: ThreadWorktree): void {
+  toast("Thread archived", {
+    description: `Its worktree on ${worktree.branch} is still on disk. Removing it keeps the branch.`,
+    duration: ACTION_TOAST_MS,
+    action: { label: "Remove worktree", onClick: () => void removeWorktree(worktree) },
+  })
 }

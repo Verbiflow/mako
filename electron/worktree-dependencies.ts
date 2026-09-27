@@ -146,6 +146,18 @@ export async function carryDependencies(repoRoot: string, checkout: string, back
   return { carried }
 }
 
+/**
+ * A checkout's own size, in the background band. Dependency folders are left
+ * out: cloned from the main checkout, they share its blocks, and `du` would
+ * count each clone at full size.
+ */
+export async function ownBytes(path: string): Promise<number | null> {
+  const skip = [...DEPENDENCY_FOLDERS].flatMap((name) => process.platform === "darwin" ? ["-I", name] : [`--exclude=${name}`])
+  const [command, args] = belowAgents("du", ["-sk", ...skip, path])
+  const kilobytes = Number((await execute(command, args).then(({ stdout }) => stdout, () => "")).split("\t")[0])
+  return Number.isFinite(kilobytes) && kilobytes > 0 ? kilobytes * 1024 : null
+}
+
 /** Deletes a tree in the background band; tens of thousands of files take seconds nobody should wait for. */
 export async function removeBelowAgents(path: string): Promise<void> {
   const [command, args] = belowAgents("/bin/rm", ["-rf", path])

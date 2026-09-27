@@ -123,6 +123,11 @@ export class WorktreeSpares {
     return kept
   }
 
+  /** Spares as recorded, ready or being made, without giving any back. */
+  recorded(): Promise<Spare[]> {
+    return this.list()
+  }
+
   /** Remove a spare: moved aside at once, deleted in the background band. */
   async discard(spare: Spare): Promise<void> {
     await rm(this.file(spare.id), { force: true })

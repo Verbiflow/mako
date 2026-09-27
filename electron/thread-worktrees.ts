@@ -7,8 +7,8 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import type { ThreadStore } from "./thread-store.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList } from "./contracts/thread-worktrees.js"
-import { carryDependencies, ignoredEntries, lockDigest, removeBelowAgents, type DependencyCarry } from "./worktree-dependencies.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding } from "./contracts/thread-worktrees.js"
+import { carryDependencies, ignoredEntries, lockDigest, ownBytes, removeBelowAgents, type DependencyCarry } from "./worktree-dependencies.js"
 import { git, GitError, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
 import { placeSpare, setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 
@@ -60,6 +60,18 @@ async function cloneEntry(from: string, to: string, directory: boolean): Promise
   if (process.platform === "darwin") await execute("/bin/cp", directory ? ["-c", "-n", "-R", from, to] : ["-c", "-n", from, to])
   else if (directory) await cp(from, to, { recursive: true, mode: constants.COPYFILE_FICLONE, verbatimSymlinks: true })
   else await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
+}
+
+/** `map` with at most `limit` running at once, results in order. */
+async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = []
+  // One iterator shared by every worker: each takes the next value as it frees up.
+  const queue = values.entries()
+  const worker = async () => {
+    for (const [index, value] of queue) results[index] = await map(value)
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, worker))
+  return results
 }
 
 /**
@@ -149,6 +161,51 @@ export class ThreadWorktreeService {
   async settled(): Promise<void> {
     await Promise.all([...this.wanting, ...this.carrying.values()])
     await this.spares.settled()
+  }
+
+  /**
+   * Every worktree with what decides whether it can go: uncommitted files,
+   * what runs there, whether its branch landed, and its own size. Sizes are
+   * read in the background band, a few at a time.
+   */
+  async inventory(): Promise<WorktreeInventory> {
+    const { worktrees } = await this.list()
+    const detailed = await mapLimited(worktrees, 4, async (worktree): Promise<WorktreeDetail> => {
+      const [status, landing, users, bytes] = await Promise.all([
+        git(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => ""),
+        this.landing(worktree),
+        this.inUse(worktree.path),
+        ownBytes(worktree.path),
+      ])
+      return { ...worktree, changes: status ? status.split("\n").length : 0, landing, users, bytes }
+    })
+    const spares = await this.spares.recorded()
+    const spareBytes = await mapLimited(spares, 4, (spare) => ownBytes(spare.path))
+    const known = spareBytes.filter((bytes) => bytes !== null)
+    return { worktrees: detailed, spares: { count: spares.length, bytes: known.length ? known.reduce((sum, bytes) => sum + bytes, 0) : null } }
+  }
+
+  /**
+   * Whether the branch's work is in the branch the main checkout is on. A
+   * merge, a fast-forward and a rebase leave the branch's commits reachable;
+   * a squash doesn't, so a branch whose merge would leave the target's tree
+   * as it is has landed too.
+   */
+  private async landing(worktree: ThreadWorktree): Promise<WorktreeLanding> {
+    const into = await git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
+    if (!into) return { kind: "unknown" }
+    try {
+      const commits = Number(await git(worktree.repoRoot, ["rev-list", "--count", `${worktree.base}..${worktree.branch}`]))
+      if (commits === 0) return { kind: "empty" }
+      if (await succeeds(worktree.repoRoot, ["merge-base", "--is-ancestor", worktree.branch, into])) return { kind: "merged", into }
+      const [merged, target] = await Promise.all([
+        git(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]).catch(() => ""),
+        git(worktree.repoRoot, ["rev-parse", `${into}^{tree}`]),
+      ])
+      return merged === target ? { kind: "merged", into } : { kind: "open", into, commits }
+    } catch {
+      return { kind: "unknown" }
+    }
   }
 
   /** Commits on a worktree's branch since the commit it started at; undefined for a folder that isn't one of Mako's worktrees. */

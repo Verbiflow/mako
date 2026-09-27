@@ -7,7 +7,7 @@ import type {
   StopTarget,
 } from "./thread-lifecycle.js"
 import type { ThreadGroup, ThreadRegroup } from "./thread-groups.js"
-import type { ThreadWorktrees } from "./thread-worktrees.js"
+import type { ThreadWorktrees, WorktreeInventory } from "./thread-worktrees.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
@@ -181,6 +181,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     removeWorktree: (path: string) => invokeTrustedHost<ThreadWorktrees>("mako:worktree-remove", path),
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
+    worktreeInventory: () => invokeTrustedHost<WorktreeInventory>("mako:worktree-inventory"),
     threadCreateSession: (operationId: string, thread: string) =>
       invokeTrustedHost<ThreadPlacement>("mako:thread-create-session", operationId, thread),
     threadJoin: (operationId: string, sessions: string[], thread: string) =>
