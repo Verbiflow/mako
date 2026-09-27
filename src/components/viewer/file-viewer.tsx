@@ -15,7 +15,7 @@ import { Divider } from "@/components/shell/divider"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { GitLoading } from "@/components/inspector/git-loading"
 import { StageStrip } from "@/components/stage/stage-strip"
-import { focusWorkbenchPane } from "@/state/session-panes"
+import { engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
 import { useTabDrag, type DropSide } from "@/state/tab-drag"
 import { desktop } from "@/state/desktop"
 import { prefsStore } from "@/state/prefs"
@@ -46,7 +46,6 @@ const View = lazy(() =>
 
 /** One pane's chat: its Session while unfocused, and whether it has the composer. */
 export interface AgentSurfaceProps {
-  paneId: string
   session?: PaneSession
   composer: boolean
 }
@@ -241,9 +240,11 @@ const FilePane = memo(function FilePane({
       data-pane-id={pane.id}
       onPointerDownCapture={(event) => {
         const target = event.target instanceof Element ? event.target : null
+        const resting = Boolean(target?.closest("[data-pane-reply]"))
         swallow.current =
-          !focused && agent && Boolean(pane.session) && Boolean(target && chat.current?.contains(target)) && !target?.closest("[data-pane-reply]")
-        focusWorkbenchPane(pane.id)
+          !focused && agent && Boolean(pane.session) && Boolean(target && chat.current?.contains(target)) && !resting
+        if (resting) engageWorkbenchPane(pane.id)
+        else focusWorkbenchPane(pane.id)
       }}
       className={cn(
         "workbench-pane relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface",
@@ -265,7 +266,7 @@ const FilePane = memo(function FilePane({
             !agent && "hidden"
           )}
         >
-          <AgentSurface paneId={pane.id} session={pane.session} composer={composer} />
+          <AgentSurface session={pane.session} composer={composer} />
         </div>
       ) : null}
       {!agent && document ? <DocumentView document={document} /> : null}

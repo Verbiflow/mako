@@ -5,9 +5,8 @@ import { ThreadViewer } from "@/components/viewer/thread-viewer"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { FileViewer, type AgentSurfaceProps } from "@/components/viewer/file-viewer"
 import { ConversationScopeContext, useConversationScope, type ConversationScope } from "@/state/conversation-scope"
-import { focusWorkbenchPane, usePaneScope } from "@/state/session-panes"
-import { sessionTabTitle, useThreadTabs } from "@/state/thread-sessions"
-import type { PaneSession } from "@/state/viewer"
+import { usePaneScope } from "@/state/session-panes"
+import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
 import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
@@ -238,47 +237,25 @@ export function Stage() {
   )
 }
 
-const AgentSurface = memo(function AgentSurface({ paneId, session, composer }: AgentSurfaceProps) {
+const AgentSurface = memo(function AgentSurface({ session, composer }: AgentSurfaceProps) {
   const scope = usePaneScope(session)
   return (
     <main className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <ConversationScopeContext.Provider value={scope}>
         <ConversationSurface />
+        {!composer && (scope?.kind === "live" || scope?.kind === "history") ? (
+          <PaneComposer />
+        ) : null}
       </ConversationScopeContext.Provider>
       {composer ? (
         <>
           <Composer />
           <SearchView />
         </>
-      ) : (
-        <PaneReply paneId={paneId} session={session} />
-      )}
+      ) : null}
     </main>
   )
 })
-
-/** Where a chat without focus has its composer: one press moves focus, and the composer, here. */
-function PaneReply({ paneId, session }: { paneId: string; session?: PaneSession }) {
-  const tabs = useThreadTabs(session ? { thread: session.thread, session: session.tab } : {})
-  const overrides = usePrefs((prefs) => prefs.titleOverrides)
-  const tab = session ? tabs.find((candidate) => candidate.id === session.tab) : undefined
-  const title = tab ? sessionTabTitle(tab, overrides) : "this session"
-  return (
-    <div className="shrink-0 px-3 pt-1 pb-3">
-      <button
-        type="button"
-        data-pane-reply
-        onClick={() => {
-          focusWorkbenchPane(paneId)
-          window.dispatchEvent(new CustomEvent("mako:focus-composer"))
-        }}
-        className="pressable flex h-10 w-full items-center rounded-xl border border-hairline bg-raised/60 px-3.5 text-left text-ui text-faint hover:border-border hover:text-muted-foreground"
-      >
-        <span className="truncate">Reply to {title}</span>
-      </button>
-    </div>
-  )
-}
 
 /** A chat without focus whose Session has no transcript to stream. */
 function PaneNotice({ scope }: { scope: Extract<ConversationScope, { kind: "draft" | "missing" }> }) {

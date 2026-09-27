@@ -104,6 +104,23 @@ export function openInPane(tab: SessionTab, thread: string, side: PaneSide): boo
 }
 
 /** Focus a pane. Pressing in a chat without focus makes its Session the active conversation. */
+/** When a press on a chat pane's resting composer asked for the caret; the composer that mounts next takes it. */
+let composerFocusAsked = 0
+const COMPOSER_FOCUS_FRESH_MS = 1_000
+
+/** Focus a chat pane and put the caret in the composer that mounts there. */
+export function engageWorkbenchPane(paneId: string): void {
+  composerFocusAsked = performance.now()
+  focusWorkbenchPane(paneId)
+}
+
+/** Whether a newly mounted composer should take the caret; true once per press. */
+export function takeComposerFocus(): boolean {
+  const asked = composerFocusAsked
+  composerFocusAsked = 0
+  return asked > 0 && performance.now() - asked < COMPOSER_FOCUS_FRESH_MS
+}
+
 export function focusWorkbenchPane(paneId: string): void {
   const state = viewerStore.get()
   if (state.focusedPaneId === paneId) return

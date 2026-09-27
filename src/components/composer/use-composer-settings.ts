@@ -12,14 +12,25 @@ import {
   settingsTargetKey,
 } from "@/state/composer-settings"
 import { shallowEqual } from "@/state/store"
+import { scopedAcp, useConversationScope } from "@/state/conversation-scope"
 
-/** Subscribe to setting facts, never transcript blocks or streaming token counts. */
+/**
+ * Subscribe to setting facts, never transcript blocks or streaming token
+ * counts. In a chat pane without focus they are that pane's Session's.
+ */
 export function useComposerSettings(provider?: string) {
-  const harness = useThreads((state) => provider ?? state.composerHarness)
-  const ref = useThreads((state) => state.opening?.ref ?? state.viewing?.ref)
+  const scope = useConversationScope()
+  const globalRef = useThreads((state) => state.opening?.ref ?? state.viewing?.ref)
+  const ref = scope ? (scope.kind === "history" ? scope.ref : undefined) : globalRef
+  const scopedHarness = useAcp((state) => (scope ? scopedAcp(state, scope)?.harness : undefined))
+  const harness = useThreads(
+    (state) => provider ?? (scope ? (scopedHarness ?? ref?.harness ?? state.composerHarness) : state.composerHarness)
+  )
   const workspace = useSession((state) => state.meta?.cwd)
   const live = useAcp((state) => {
-    const conversation = ref ? acpForThread(state, ref) : activeAcp(state)
+    const conversation = scope
+      ? (scopedAcp(state, scope) ?? (ref ? acpForThread(state, ref) : null))
+      : ref ? acpForThread(state, ref) : activeAcp(state)
     return {
       id: conversation?.key,
       harness: conversation?.harness,

@@ -32,11 +32,11 @@ import { Banner } from "@/components/composer/banner"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ComposerRouting } from "@/components/composer/composer-routing"
 import { steeringTitle } from "@/components/composer/steering"
-import { useCompactRow } from "@/components/composer/use-compact-row"
+import { ROUTING_COMPACT_LEVELS, useCompactRow } from "@/components/composer/use-compact-row"
 
 /** Access to its glyph, then the harness to its glyph; see the routing row. */
-const ROUTING_COMPACT_LEVELS = 2
 import { usePrefs } from "@/state/prefs"
+import { takeComposerFocus } from "@/state/session-panes"
 import { ComposerAdditions } from "@/components/composer/composer-additions"
 import { harnessTitle } from "@/components/composer/harness-title"
 import { MentionMenu } from "@/components/composer/mention-menu"
@@ -273,6 +273,13 @@ export function Composer() {
     draftRef.current = draft
     updateRef.current = update
   }, [draft, update])
+  // A press on a chat pane's resting composer moved this composer there.
+  useEffect(() => {
+    if (!takeComposerFocus()) return
+    const node = textarea.current
+    node?.focus({ preventScroll: true })
+    node?.setSelectionRange(node.value.length, node.value.length)
+  }, [])
 
   /** Re-read the token under the caret after any edit or caret move. */
   const syncMention = useCallback(() => {

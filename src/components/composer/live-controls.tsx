@@ -28,14 +28,18 @@ import { LiveActionStatus } from "@/components/viewer/live-action-status"
 import { RetainedRequests } from "@/components/viewer/acp-panel"
 import { CaptureNotice } from "@/components/viewer/capture-notice"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 
 export function LiveComposerControls() {
+  const scope = useConversationScope()
   const connection = useAcp(
     (state) => activeLiveAcp(state)?.session.connection
   )
   const usage = useAcp((state) => activeLiveAcp(state)?.session.usage)
   const conversationId = useAcp((state) => state.activeKey)
   const [open, setOpen] = useState(false)
+  // A pane without focus shows its Session's access; the rest act on the active conversation.
+  if (scope) return <ModePicker />
   return (
     <>
       <ModePicker />
@@ -179,9 +183,10 @@ export function AccessModeList({
 
 /** The running session's ladder; a pick applies now and is kept for the provider's next session. */
 function ModePicker() {
-  const modes = useAcp((state) => activeLiveAcp(state)?.session.modes)
-  const current = useAcp((state) => activeLiveAcp(state)?.session.currentMode)
-  const harness = useAcp((state) => activeLiveAcp(state)?.harness ?? "")
+  const scope = useConversationScope()
+  const modes = useAcp((state) => scopedLiveAcp(state, scope)?.session.modes)
+  const current = useAcp((state) => scopedLiveAcp(state, scope)?.session.currentMode)
+  const harness = useAcp((state) => scopedLiveAcp(state, scope)?.harness ?? "")
   if (!modes?.length) return null
   return (
     <AccessPicker
@@ -202,11 +207,14 @@ function ModePicker() {
  * until the agent is already working.
  */
 export function NextSessionModePicker() {
-  const harness = useThreads((state) => state.composerHarness)
+  const scope = useConversationScope()
+  const scopedRef = scope?.kind === "history" ? scope.ref : undefined
+  const harness = useThreads((state) => scopedRef?.harness ?? state.composerHarness)
   const modes = useThreads((state) => providerAccessModes(state, harness))
   // The thread on screen remembers the tier its last turn ran under; that
   // is what a reply resumes with, so it is what the picker shows.
-  const viewing = useThreads((state) => state.opening?.ref ?? state.viewing?.ref)
+  const globalViewing = useThreads((state) => state.opening?.ref ?? state.viewing?.ref)
+  const viewing = scope ? scopedRef : globalViewing
   const remembered = threadAccessMode(viewing, modes, harness)
   const saved = usePrefs((prefs) =>
     savedProviderMode(prefs.providerModes, modes, harness)

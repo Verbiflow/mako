@@ -40,6 +40,9 @@ export function compactLevel(fits: (level: number) => boolean, max: number): num
  * Whatever still overflows scrolls, and `data-overflow` names the hidden
  * edge for the fade.
  */
+/** The composer's routing row: access drops to its glyph first, then the harness. */
+export const ROUTING_COMPACT_LEVELS = 2
+
 export function useCompactRow(ref: RefObject<HTMLElement | null>, levels: number): void {
   useEffect(() => {
     const element = ref.current

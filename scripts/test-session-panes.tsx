@@ -22,7 +22,7 @@ Object.assign(globalThis, {
 const { threadsStore } = await import("../src/state/thread-store")
 const { threadGroupsStore } = await import("../src/state/thread-groups")
 const { viewer, viewerStore } = await import("../src/state/viewer")
-const { closeWorkbenchPane, focusWorkbenchPane, openInPane, openTabInPane, watchSessionPanes } = await import("../src/state/session-panes")
+const { closeWorkbenchPane, engageWorkbenchPane, focusWorkbenchPane, openInPane, openTabInPane, takeComposerFocus, watchSessionPanes } = await import("../src/state/session-panes")
 const { currentThreadTabs } = await import("../src/state/thread-sessions")
 
 const thread = randomUUID()
@@ -92,6 +92,12 @@ assert.deepEqual(layout()[0], { id: "primary", shows: third, focused: true })
 lands(third)
 assert.deepEqual(layout()[0], { id: "primary", shows: "active", focused: true })
 
+// A press on a resting composer asks for the caret once, for the composer that mounts next.
+assert.equal(takeComposerFocus(), false)
+engageWorkbenchPane("primary")
+assert.equal(takeComposerFocus(), true)
+assert.equal(takeComposerFocus(), false, "a later composer doesn't steal the caret")
+
 // A rail click while a switch is still on its way wins over the switch.
 focusWorkbenchPane("secondary")
 assert.deepEqual(layout()[1], { id: "secondary", shows: first, focused: true })
@@ -129,4 +135,4 @@ assert.equal(openInPane(loneTab, loneThread, "right"), false, "nothing to leave 
 assert.equal(viewerStore.get().panes.length, 1)
 
 stop()
-console.log("session panes: drag out, focus, catch-up, rail click, swap, close, lone session")
+console.log("session panes: drag out, focus, caret, catch-up, rail click, swap, close, lone session")

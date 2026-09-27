@@ -1,19 +1,23 @@
 import { LiveComposerControls, NextSessionModePicker } from "./live-controls"
 import { useComposerSettings } from "./use-composer-settings"
 import { AgentModelPicker } from "@/components/composer/agent-model-picker"
-import { activeAcp, useAcp } from "@/state/acp"
+import { useAcp } from "@/state/acp"
+import { scopedAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 
 
 /** The selected provider answers the next turn in the current conversation. */
 export function ComposerRouting() {
-  const viewing = useThreads(
+  const scope = useConversationScope()
+  const globalViewing = useThreads(
     (state) => state.opening?.ref ?? state.viewing?.ref
   )
-  const harness = useThreads((state) => state.composerHarness)
-  const activeHarness = useAcp((state) => activeAcp(state)?.harness)
-  const liveThreadPath = useAcp((state) => activeAcp(state)?.threadPath)
+  const viewing = scope ? (scope.kind === "history" ? scope.ref : undefined) : globalViewing
+  const globalHarness = useThreads((state) => state.composerHarness)
+  const activeHarness = useAcp((state) => scopedAcp(state, scope)?.harness)
+  const liveThreadPath = useAcp((state) => scopedAcp(state, scope)?.threadPath)
   const settings = useComposerSettings()
+  const harness = scope ? settings.target.harness : globalHarness
   const liveOwnsComposer = Boolean(
     activeHarness && (!viewing || viewing.path === liveThreadPath)
   )
