@@ -1,5 +1,6 @@
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
+import type { CheckoutHeads } from "./checkout-heads.js"
 import type { ThreadGroupChange, ThreadRegroup } from "./thread-groups.js"
 import {
   type ControlActivity,
@@ -59,6 +60,8 @@ export type HostEventBody =
   | { type: "host-disconnected"; message: string }
   | { type: "host-reconnected" }
   | { type: "thread-archives"; snapshot: ThreadArchiveSnapshot }
+  /** A followed checkout's HEAD moved, by folder; window-wide. */
+  | { type: "checkout-heads"; heads: CheckoutHeads }
   | { type: "live-batch"; batch: LiveBatch }
   | { type: "live-owner-connection"; ids: string[]; connected: boolean }
   | { type: "session"; session: SessionState }

@@ -25,6 +25,7 @@ export const hostCallInputs = {
   "mako:build-update": z.tuple([]),
   "mako:capabilities": z.tuple([]),
   "mako:check-updates": z.tuple([]),
+  "mako:checkout-heads": z.tuple([z.array(z.string())]),
   "mako:clear-crashes": z.tuple([]),
   "mako:clear-queue": z.tuple([]),
   "mako:close-tab": z.tuple([z.string()]),

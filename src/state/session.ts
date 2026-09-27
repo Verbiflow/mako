@@ -6,6 +6,7 @@ import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, applyThreadRegroup, loadThreadGroups } from "@/state/thread-groups"
 import { refreshWorktrees } from "@/state/worktrees"
+import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
 import { watchSessionPanes } from "@/state/session-panes"
 import { receiveControlActivity } from "@/state/control-preview"
@@ -199,6 +200,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-archives") {
     applyThreadArchives(event.snapshot)
+    return
+  }
+  if (event.type === "checkout-heads") {
+    applyCheckoutHeads(event.heads)
     return
   }
   if (event.type === "thread-group") {
@@ -570,6 +575,7 @@ function adoptBoot(boot: BootPayload) {
   void threads.load()
   void loadGroups()
   void loadWorktrees()
+  refollowCheckouts()
   if (!boot.archives) void threadLifecycle.load()
 }
 

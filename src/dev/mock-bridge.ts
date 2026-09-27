@@ -1,4 +1,5 @@
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
+import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type {
   DelegateInput,
@@ -38,6 +39,13 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
+
+/** The fixture projects' checkouts: one on its default branch, one mid-feature, one mid-rebase. */
+const MOCK_HEADS = new Map<string, CheckoutHead>([
+  ["/Users/you/mako", { kind: "branch", name: "main" }],
+  ["/Users/you/api", { kind: "branch", name: "billing-webhook-retries" }],
+  ["/Users/you/site", { kind: "rebasing", name: "pricing-table" }],
+])
 
 function mockThreadContexts(
   paths: string[]
@@ -152,6 +160,8 @@ export function installMockBridge() {
     }),
     threadGroups: async () => [],
     worktrees: async () => ({ root: "/mock/worktrees", worktrees: [] }),
+    checkoutHeads: async (folders: string[]) =>
+      Object.fromEntries(folders.map((folder) => [folder, MOCK_HEADS.get(folder) ?? null])),
     removeWorktree: async () => {
       throw new Error("The mock desk has no worktrees to remove.")
     },

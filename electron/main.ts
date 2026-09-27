@@ -66,6 +66,8 @@ import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
+import { CheckoutHeadService } from "./checkout-heads.js"
+import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
 import { nativeStopToken } from "./drivers.js"
 import type { LiveStartOptions } from "./shared.js"
 import {
@@ -347,6 +349,7 @@ function openThreadStore(): ThreadStore | null {
   }
 }
 installThreadStore(threadStore)
+const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
 /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
 const threadWorktrees = threadStore
   ? new ThreadWorktreeService(join(realpathSync(dirname(threadStore.path)), "worktrees"), threadStore, async (path) => {
@@ -2066,6 +2069,7 @@ app.whenReady().then(async () => {
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
   installThreadGroupsIpc(threadStore, liveConversations)
   installThreadWorktreesIpc(threadWorktrees)
+  installCheckoutHeadsIpc(checkoutHeads)
   application = installApplicationIpc({
     live: liveConversations,
     native: nativeRequests,
@@ -2256,6 +2260,7 @@ const quitLifecycle = backgroundLifecycle({
       installThreadStore(null)
       threadStore?.close()
       threadArchives?.close()
+      checkoutHeads.close()
       void workspaceClients.dispose()
       hostLog("lifecycle", "stopped")
       await flushHostLog()
