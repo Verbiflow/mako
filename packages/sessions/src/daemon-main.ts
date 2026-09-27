@@ -24,6 +24,8 @@ import {
   type DaemonClaim,
 } from "./daemon.js"
 
+const EVICTION_MS = 3600_000
+
 /** Return transient scan capacity after a quiet beat; retained catalog data is tiny. */
 function collectIdleHeap(): void {
   if (process.memoryUsage().heapTotal < 32 * 1024 * 1024) return
@@ -98,6 +100,10 @@ async function main(): Promise<void> {
   const stopCollectionEvents = catalog.onEvent(scheduleCollection)
   const collectionFallback = setInterval(collectIdleHeap, 60_000)
   collectionFallback.unref?.()
+  const eviction = setInterval(() => {
+    catalog.evictArchive().catch((error) => console.error("mako-syncd: eviction failed", error))
+  }, EVICTION_MS)
+  eviction.unref?.()
   scheduleCollection()
 
   let stopping = false
@@ -106,6 +112,7 @@ async function main(): Promise<void> {
     stopping = true
     if (collectionTimer) clearTimeout(collectionTimer)
     clearInterval(collectionFallback)
+    clearInterval(eviction)
     stopCollectionEvents()
     server.close()
     await catalog.stop()

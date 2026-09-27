@@ -49,8 +49,20 @@ interface Scheduled {
   since: number
 }
 
+/**
+ * Which kept copies to drop. An evicted copy is forgotten the way a user
+ * deletion is: its row goes and it is not captured again.
+ */
+export interface EvictionPolicy {
+  select(kept: readonly ThreadRef[], now: Date): readonly string[]
+}
+
+/** Keeps every copy. The default until a retention schedule is designed. */
+export const keepEverything: EvictionPolicy = { select: () => [] }
+
 export class SessionArchive {
   private root: string
+  private eviction: EvictionPolicy
   private database: DatabaseSync | null = null
   private index = new Map<string, ThreadRef>()
   private dataVersion = -1
@@ -62,8 +74,18 @@ export class SessionArchive {
   private queue: Promise<void> = Promise.resolve()
   private stopping: Promise<void> | null = null
 
-  constructor(root: string) {
+  constructor(root: string, eviction: EvictionPolicy = keepEverything) {
     this.root = root
+    this.eviction = eviction
+  }
+
+  /** Forget the copies the eviction policy selects; returns how many went. */
+  async evict(now = new Date()): Promise<number> {
+    await this.load()
+    this.refreshIndex()
+    const paths = this.eviction.select([...this.index.values()], now)
+    for (const path of paths) await this.forget(path)
+    return paths.length
   }
 
   load(): Promise<void> {

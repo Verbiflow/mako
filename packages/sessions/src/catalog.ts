@@ -44,7 +44,7 @@ import type {
   SessionProvider,
   SessionUpdate,
 } from "./providers/types.js"
-import { SessionArchive } from "./archive.js"
+import { SessionArchive, type EvictionPolicy } from "./archive.js"
 
 export type CatalogEvent =
   | { type: "added"; ref: ThreadRef }
@@ -298,12 +298,17 @@ export class SessionCatalog {
 
   constructor(
     providers: SessionProvider[],
-    options: { cachePath?: string; archivePath?: string } = {}
+    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy } = {}
   ) {
     this.providers = providers
     this.cachePath = options.cachePath
     if (options.archivePath)
-      this.archive = new SessionArchive(options.archivePath)
+      this.archive = new SessionArchive(options.archivePath, options.eviction)
+  }
+
+  /** Run the archive's eviction policy; 0 without an archive. */
+  evictArchive(now = new Date()): Promise<number> {
+    return this.archive?.evict(now) ?? Promise.resolve(0)
   }
 
   private commit(file: NativeFile, ref: ThreadRef | null): boolean {

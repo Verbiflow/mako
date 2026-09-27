@@ -36,7 +36,8 @@ export {
 export { openCodeNoticeLabel, type OpenCodeNotice } from "./providers/opencode-notice.js"
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
-export { SessionArchive } from "./archive.js"
+export { SessionArchive, keepEverything } from "./archive.js"
+export type { EvictionPolicy } from "./archive.js"
 export {
   connectDaemon,
   connectDaemonPort,
@@ -105,6 +106,7 @@ export { GrokProvider } from "./providers/grok.js"
 export { ClaudeProvider } from "./providers/claude.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
+import type { EvictionPolicy } from "./archive.js"
 import { CodexProvider } from "./providers/codex.js"
 import { CursorProvider } from "./providers/cursor.js"
 import { GrokProvider } from "./providers/grok.js"
@@ -136,7 +138,7 @@ export async function defaultCatalogIdentity(archivePath: string): Promise<strin
 
 /** The catalog with every built-in provider, ready to scan. */
 export function defaultCatalog(
-  options: { cachePath?: string; archivePath?: string } = {}
+  options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy } = {}
 ): SessionCatalog {
   const catalog = new SessionCatalog(
     defaultProviders(),
