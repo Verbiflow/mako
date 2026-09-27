@@ -24,7 +24,9 @@ Object.assign(globalThis, {
 const { renderToStaticMarkup } = await import("react-dom/server")
 const { EMPTY_FOLD, foldThreads, foldedThreadStatus, presenceThreadStatus } = await import("../src/lib/thread-fold")
 const { sessionTabTitle, threadSessionTabs } = await import("../src/state/thread-sessions")
-const { discardSessionDraft, leaveSessionDraft, putSessionDraft, sessionDraftKey, threadGroupsStore } = await import("../src/state/thread-groups")
+const { discardSessionDraft, leaveSessionDraft, putSessionDraft, rowThread, sessionDraftKey, threadGroupsStore } = await import("../src/state/thread-groups")
+const { threadChoices } = await import("../src/state/thread-regroup")
+const { threadArchiveKey } = await import("../electron/contracts/thread-lifecycle")
 const { rememberDraft } = await import("../src/state/drafts")
 const { SessionTabList } = await import("../src/components/stage/session-tabs")
 const { TooltipProvider } = await import("../src/components/ui/tooltip")
@@ -116,6 +118,43 @@ assert.deepEqual(whileStarting.map((tab) => tab.kind), ["session", "session", "s
 const beforeEvent = threadSessionTabs({ thread, refs: [parent], presences: [presence("late", "devin", randomUUID())], draft: undefined })
 assert.equal(beforeEvent.length, 2, "a row naming the Thread shows before the group's event arrives")
 
+const archivedFork = new Set([threadArchiveKey({ kind: "live", id: fork.key })])
+assert.deepEqual(threadSessionTabs({ thread, group, refs: [parent], presences: [fork], archived: archivedFork }).map((tab) => tab.id), [first], "an archived Session leaves the strip")
+assert.deepEqual(threadSessionTabs({ thread, group, refs: [parent], presences: [fork], archived: archivedFork, shown: second }).map((tab) => tab.id), [first, second], "unless it is on screen")
+
+const elsewhere = randomUUID()
+const regrouped = { [first]: thread, [second]: elsewhere }
+assert.deepEqual(threadSessionTabs({ thread, refs: [parent], presences: [fork], threadOf: regrouped }).map((tab) => tab.id), [first], "a Session split away leaves before its row is listed again")
+assert.deepEqual(threadSessionTabs({ thread: elsewhere, refs: [parent], presences: [fork], threadOf: regrouped }).map((tab) => tab.id), [second], "and shows in the Thread it went to")
+assert.equal(rowThread(fork, regrouped), elsewhere)
+assert.equal(rowThread(fork, {}), thread, "a Session nobody regrouped keeps the Thread it was listed with")
+
+/* Add to thread ------------------------------------------------------------- */
+
+const [near, far, older] = [randomUUID(), randomUUID(), randomUUID()]
+const choices = threadChoices({
+  refs: [
+    parent,
+    { harness: "codex", nativeId: "far", path: "/codex/far", title: "Elsewhere", cwd: "/other", threadId: far, sessionId: randomUUID(), updatedAt: "2026-09-26T10:00:00Z" },
+    { harness: "grok", nativeId: "near", path: "/grok/near", title: "Same project", cwd: "/repo", threadId: near, sessionId: randomUUID(), updatedAt: "2026-09-25T10:00:00Z" },
+    { harness: "claude", nativeId: "old", path: "/claude/old", title: "Older", cwd: "/repo", threadId: older, sessionId: randomUUID(), updatedAt: "2026-09-01T10:00:00Z" },
+  ],
+  presences: [fork],
+  groups,
+  threadOf,
+  archived: new Set([threadArchiveKey({ kind: "file", path: "/claude/old" })]),
+  overrides: { "/grok/near": "Renamed" },
+  exclude: thread,
+  cwd: "/repo",
+})
+assert.deepEqual(choices.map((choice) => choice.title), ["Renamed", "Elsewhere"], "the same project first, then the newest; never itself or an archived Thread")
+const itself = threadChoices({ refs: [parent], presences: [fork], groups, threadOf, archived: new Set(), overrides: {}, exclude: randomUUID() })
+assert.deepEqual(itself.map((choice) => [choice.title, choice.sessions, choice.harnesses]), [["Fix rail flicker", 2, ["claude", "codex"]]], "a Thread is one choice, named by its first Session")
+const liveFirst = threadChoices({ refs: [parent], presences: [fork], groups, threadOf, archived: new Set(), overrides: {}, exclude: randomUUID(), cwd: "/repo" })
+const untitled = threadChoices({ refs: [], presences: [presence("solo", "grok", randomUUID())], groups: {}, threadOf: {}, archived: new Set(), overrides: {}, exclude: randomUUID() })
+assert.deepEqual(liveFirst.map((choice) => choice.harnesses), [["claude", "codex"]], "agents in tab order, whichever row was read first")
+assert.deepEqual(untitled.map((choice) => choice.title), ["New Grok conversation"], "an untitled live conversation is named as the rail names it")
+
 assert.deepEqual(
   whileStarting.map((tab) => sessionTabTitle(tab, {})),
   ["Fix rail flicker", "Codex", "OpenCode"],
@@ -151,6 +190,17 @@ assert.match(strip, />Fix rail flicker</)
 assert.match(strip, />Draft</, "a new tab off screen reads as a draft")
 assert.match(strip, /New session in this Thread/, "the + says what it does")
 assert.doesNotMatch(strip, /data-new/, "tabs painted with their strip do not animate")
+assert.match(strip, /aria-label="Archive Codex"/, "a Session tab archives that Session alone")
+assert.match(strip, /aria-label="Close new tab"/)
+
+const alone = renderToStaticMarkup(
+  <TooltipProvider>
+    <div role="tablist">
+      <SessionTabList tabs={tabs.filter((tab) => tab.id !== second)} here={{ thread, session: first }} paneId="main" agentActive />
+    </div>
+  </TooltipProvider>
+)
+assert.doesNotMatch(alone, /aria-label="Archive /, "a Thread's only Session is archived from its row, as the Thread")
 
 discardSessionDraft(thread)
 assert.equal(threadGroupsStore.get().drafts[thread], undefined)

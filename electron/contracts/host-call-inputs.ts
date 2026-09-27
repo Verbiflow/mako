@@ -760,6 +760,7 @@ export const hostCallInputs = {
       .optional(),
   ]),
   "mako:thread-groups": z.tuple([]),
+  "mako:thread-join": z.tuple([z.string(), z.array(z.string()), z.string()]),
   "mako:thread-open": z.tuple([z.string()]),
   "mako:thread-owner-resolve": z.tuple([z.string()]),
   "mako:thread-page": z.tuple([
@@ -770,6 +771,7 @@ export const hostCallInputs = {
   "mako:thread-preview": z.tuple([z.string()]),
   "mako:thread-remember-mode": z.tuple([z.string(), z.string()]),
   "mako:thread-run": z.tuple([z.string()]),
+  "mako:thread-split": z.tuple([z.string(), z.array(z.string())]),
   "mako:thread-stop": z.tuple([
     z.union([
       z.object({

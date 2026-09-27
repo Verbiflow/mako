@@ -34,7 +34,7 @@ export function StageStrip({
     return path ? prefs.titleOverrides[path] : undefined
   })
   const here = useOnScreen()
-  const sessionTabs = useThreadTabs(here.thread)
+  const sessionTabs = useThreadTabs(here)
 
   if (!pane) return null
   const canSplit = pane.activeId !== AGENT_TAB_ID

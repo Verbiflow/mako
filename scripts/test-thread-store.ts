@@ -307,6 +307,89 @@ function twoHosts(): void {
   second.close()
 }
 
+function placementLog(): void {
+  const path = join(root, "placement-log.sqlite")
+  const first = new ThreadStore(path, { now })
+  const second = new ThreadStore(path, { now })
+  const a = row("codex", "a", "/codex/a.jsonl")
+  const b = row("codex", "b", "/codex/b.jsonl")
+  const c = row("codex", "c", "/codex/c.jsonl")
+  const [placedA, placedB, placedC] = [a, b, c].map((ref) => first.place(ref, catalog))
+  assert.ok(placedA && placedB && placedC)
+
+  // An older build writes through the triggers the store installed, not through this class.
+  const raw = new DatabaseSync(path)
+  const moveRaw = (session: string, thread: string) => raw.prepare("UPDATE memberships SET thread_id = ? WHERE session_id = ?").run(thread, session)
+  raw.exec("DROP TRIGGER placement_member_moved")
+  moveRaw(placedB.session, placedC.thread)
+  first.close()
+  const reopened = new ThreadStore(path, { now })
+  moveRaw(placedB.session, placedB.thread)
+  assert.deepEqual(reopened.place(b, catalog), placedB, "opening a store puts its triggers back")
+  moveRaw(placedA.session, placedC.thread)
+  assert.equal(reopened.place(a, catalog).thread, placedC.thread, "a Session another writer moved is read again")
+
+  raw.exec("DROP TRIGGER placement_member_moved")
+  moveRaw(placedB.session, placedC.thread)
+  raw.exec("CREATE TRIGGER placement_member_moved AFTER UPDATE OF thread_id ON memberships WHEN OLD.thread_id IS NOT NEW.thread_id BEGIN INSERT INTO placement_changes (session_id) VALUES (NEW.session_id); END")
+  moveRaw(placedA.session, placedA.thread)
+  assert.equal(reopened.place(a, catalog).thread, placedA.thread)
+  assert.equal(reopened.place(b, catalog).thread, placedB.thread, "a foreign commit evicts only the Sessions it logged")
+
+  raw.prepare("INSERT INTO placement_changes (seq, session_id) VALUES ((SELECT max(seq) FROM placement_changes) + 50, 'pruned')").run()
+  second.place(row("codex", "d", "/codex/d.jsonl"), catalog)
+  assert.equal(reopened.place(b, catalog).thread, placedC.thread, "a gap in the log forgets every placement")
+  raw.close()
+
+  const refs = Array.from({ length: 5_000 }, (_, index) => row("claude", `bulk-${index}`, `/claude/bulk-${index}.jsonl`))
+  reopened.placeMany(refs, catalog)
+  second.place(row("codex", "e", "/codex/e.jsonl"), catalog)
+  const started = performance.now()
+  assert.equal(reopened.placeMany(refs, catalog).size, refs.length)
+  const ms = performance.now() - started
+  assert.ok(ms < 25, `serving 5,000 placed rows after another host's commit took ${ms.toFixed(1)} ms`)
+  reopened.close()
+  second.close()
+}
+
+function membership(): void {
+  const path = join(root, "membership.sqlite")
+  const threads = new ThreadStore(path, { now })
+  const person = threads.person()
+  const home = threads.registerJournal(journal({ harness: "claude" }), migration)
+  const tab = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
+  const loose = threads.registerJournal(journal({ harness: "codex" }), migration)
+  const other = threads.registerJournal(journal({ harness: "grok" }), migration)
+
+  const operationId = randomUUID()
+  const changed = threads.joinThread({ operationId, sessions: [loose.session], thread: home.thread, actor: person })
+  assert.deepEqual(changed, [home.thread, loose.thread])
+  assert.deepEqual(threads.joinThread({ operationId, sessions: [loose.session], thread: home.thread, actor: person }), changed, "a repeated join returns its first result")
+  assert.deepEqual(threads.thread(home.thread)?.sessions, [home.session, tab.session, loose.session], "a joining Session becomes the last tab")
+  assert.equal(threads.thread(loose.thread)?.id, home.thread, "the Thread it left empty follows the one it joined")
+  assert.deepEqual(threads.sessionPlacement(loose.session), { thread: home.thread, session: loose.session })
+  assert.deepEqual(threads.joinThread({ operationId: randomUUID(), sessions: [loose.session], thread: home.thread, actor: person }), [], "joining a Thread a Session is already in changes nothing")
+  assert.throws(() => threads.joinThread({ operationId, sessions: [other.session], thread: home.thread, actor: person }), ThreadOperationConflictError)
+
+  const split = threads.splitSessions({ operationId: randomUUID(), sessions: [loose.session, tab.session], actor: person })
+  const [from, created] = split
+  assert.equal(from, home.thread)
+  assert.ok(created && created !== home.thread)
+  assert.deepEqual(threads.thread(home.thread)?.sessions, [home.session])
+  assert.deepEqual(threads.thread(created)?.sessions, [tab.session, loose.session], "split Sessions keep their order")
+  assert.throws(() => threads.splitSessions({ operationId: randomUUID(), sessions: [home.session], actor: person }), /at least one session/)
+  assert.throws(() => threads.splitSessions({ operationId: randomUUID(), sessions: [home.session, tab.session], actor: person }), /one thread/)
+  threads.close()
+
+  const reopened = new ThreadStore(path, { now })
+  assert.deepEqual(reopened.thread(created)?.sessions, [tab.session, loose.session], "membership survives a restart")
+  reopened.beginMove({ move: MoveIdSchema.parse(randomUUID()), thread: other.thread, target: { kind: "cloud", runtime: RuntimeIdSchema.parse(randomUUID()) }, actor: person })
+  assert.throws(() => reopened.joinThread({ operationId: randomUUID(), sessions: [other.session], thread: home.thread, actor: person }), /is moving/, "a moving Thread gives up no Sessions")
+  assert.throws(() => reopened.joinThread({ operationId: randomUUID(), sessions: [home.session], thread: other.thread, actor: person }), /is moving/, "a moving Thread takes no Sessions")
+  assert.deepEqual(reopened.thread(home.thread)?.sessions, [home.session], "a refused join changes nothing")
+  reopened.close()
+}
+
 try {
   identityAndVersion()
   startedJournals()
@@ -320,6 +403,8 @@ try {
   receipts()
   threadGroups()
   twoHosts()
+  placementLog()
+  membership()
   console.log("thread store: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

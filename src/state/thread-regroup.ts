@@ -1,0 +1,206 @@
+import { toast } from "sonner"
+import type { ThreadGroup, ThreadRegroup } from "../../electron/contracts/thread-groups.ts"
+import type { ThreadRef } from "@/lib/types"
+import { getMako } from "@/lib/bridge"
+import { harnessLabel } from "@/lib/harness-label"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import type { AcpPresence } from "@/state/acp-presence"
+import { appendRecoveredDraft, draftText, draftsStore, rememberDraft } from "@/state/drafts"
+import { createHook, createStore } from "@/state/store"
+import {
+  applyThreadRegroup,
+  discardSessionDraft,
+  putSessionDraft,
+  rowThread,
+  sessionDraftKey,
+  threadGroupsStore,
+} from "@/state/thread-groups"
+import { archivedLive, archivedThread, nativeThreadTarget, threadLifecycle, type ThreadTarget } from "@/state/thread-lifecycle"
+import { currentOnScreen, currentThreadTabs, openSessionTab, type SessionTab } from "@/state/thread-sessions"
+
+/** What "Add to thread…" acts on: a whole Thread from its row, or one Session from its tab. */
+export interface AddToThreadRequest {
+  sessions: string[]
+  from: string
+  /** How the picker names what is being added. */
+  title: string
+  cwd?: string
+}
+
+export const addToThreadStore = createStore<{ request: AddToThreadRequest | null }>({ request: null })
+export const useAddToThread = createHook(addToThreadStore)
+
+export function openAddToThread(request: AddToThreadRequest): void {
+  addToThreadStore.set({ request })
+}
+
+export function closeAddToThread(): void {
+  addToThreadStore.set({ request: null })
+}
+
+/** A row stands for its whole Thread, archived Sessions included, so a Thread stays whole. */
+export function rowSessions(thread: string | undefined, session: string | undefined): string[] {
+  const group = thread ? threadGroupsStore.get().groups[thread] : undefined
+  return group ? group.sessions.map((member) => member.id) : session ? [session] : []
+}
+
+/**
+ * A Thread emptied by a join keeps its unsent new tab: it becomes the new
+ * tab of the Thread it joined, with its text where it was, unless that
+ * Thread has one already, which then takes the text.
+ */
+function carryDraft(from: string, to: string): void {
+  const { drafts, open } = threadGroupsStore.get()
+  const draft = drafts[from]
+  if (!draft) return
+  discardSessionDraft(from)
+  const existing = drafts[to]
+  const key = sessionDraftKey(draft) ?? ""
+  if (!existing) {
+    putSessionDraft({ ...draft, thread: to, key }, open === from)
+    return
+  }
+  const text = draftText(key)
+  const plans = draftsStore.get().drafts.find((entry) => entry.key === key)?.plans
+  if (!text && !plans?.length) return
+  appendRecoveredDraft(sessionDraftKey(existing) ?? "", { id: crypto.randomUUID(), key, text, attachments: [], plans })
+  rememberDraft(key, "")
+}
+
+/** Run a regroup; a refusal is shown under `failed` and the Sessions stay where they were. */
+async function regroup(work: () => Promise<ThreadRegroup>, failed: string): Promise<boolean> {
+  try {
+    applyThreadRegroup(await work())
+    return true
+  } catch (error) {
+    toast.error(failed, { description: error instanceof Error ? error.message : String(error) })
+    return false
+  }
+}
+
+const join = (sessions: readonly string[], thread: string) => () => getMako().threadJoin(crypto.randomUUID(), [...sessions], thread)
+const split = (sessions: readonly string[]) => () => getMako().threadSplit(crypto.randomUUID(), [...sessions])
+
+/** Add Sessions to another Thread; they become its last tabs. */
+export async function addToThread(request: AddToThreadRequest, target: { thread: string; title: string }): Promise<boolean> {
+  const source = threadGroupsStore.get().groups[request.from]
+  const emptied = !source || source.sessions.every((member) => request.sessions.includes(member.id))
+  if (!(await regroup(join(request.sessions, target.thread), `Couldn't add to “${target.title}”`))) return false
+  if (emptied) carryDraft(request.from, target.thread)
+  // An emptied Thread now resolves to the target, so undoing it takes a Thread of its own.
+  const undo = emptied ? split(request.sessions) : join(request.sessions, request.from)
+  toast(`Added to “${target.title}”`, {
+    duration: ACTION_TOAST_MS,
+    action: { label: "Undo", onClick: () => { void regroup(undo, "Couldn't undo") } },
+  })
+  return true
+}
+
+/** Split Sessions into a new Thread of their own. */
+export async function splitIntoNewThread(sessions: readonly string[], from: string): Promise<boolean> {
+  if (!(await regroup(split(sessions), "Couldn't split into a new thread"))) return false
+  toast("Split into a new thread", {
+    duration: ACTION_TOAST_MS,
+    action: { label: "Undo", onClick: () => { void regroup(join(sessions, from), "Couldn't undo") } },
+  })
+  return true
+}
+
+function tabTarget(tab: Extract<SessionTab, { kind: "session" }>): ThreadTarget | null {
+  if (tab.ref) return nativeThreadTarget(tab.ref)
+  return tab.presence ? { kind: "live", id: tab.presence.key } : null
+}
+
+/**
+ * Archive one Session of a Thread from its tab. Its run keeps going. The
+ * Thread's other tabs stay, and the one on screen hands over to its
+ * neighbour first.
+ */
+export async function archiveSessionTab(tab: Extract<SessionTab, { kind: "session" }>, thread: string): Promise<boolean> {
+  const target = tabTarget(tab)
+  if (!target) return false
+  const here = currentOnScreen()
+  if (here.session === tab.id) {
+    const sessions = currentThreadTabs(thread).filter((candidate) => candidate.kind === "session")
+    const at = sessions.findIndex((candidate) => candidate.id === tab.id)
+    const neighbour = sessions[at + 1] ?? sessions[at - 1]
+    if (neighbour) openSessionTab(neighbour)
+  }
+  if (!(await threadLifecycle.archive([target], true, false))) return false
+  const running = tab.presence?.status === "running" || tab.presence?.status === "starting"
+  toast("Session archived", {
+    description: running ? "Its run keeps going." : undefined,
+    duration: ACTION_TOAST_MS,
+    action: {
+      label: "Undo",
+      onClick: () => {
+        void threadLifecycle.archive([target], false, false)
+      },
+    },
+  })
+  return true
+}
+
+/** A Thread "Add to thread…" can pick. */
+export interface ThreadChoice {
+  thread: string
+  title: string
+  cwd?: string
+  /** Each Session's agent, in tab order. */
+  harnesses: string[]
+  sessions: number
+  updatedAt: number
+}
+
+/**
+ * Every other Thread with something on screen in the rail, newest first,
+ * the Threads of the same project before the rest. A Thread is named by
+ * the first Session in its tab order that has a row.
+ */
+export function threadChoices(input: {
+  refs: readonly ThreadRef[]
+  presences: readonly AcpPresence[]
+  groups: Readonly<Record<string, ThreadGroup>>
+  threadOf: Readonly<Record<string, string>>
+  archived: ReadonlySet<string>
+  overrides: Readonly<Record<string, string>>
+  exclude: string
+  cwd?: string
+}): ThreadChoice[] {
+  const { groups, threadOf, archived, overrides, exclude } = input
+  interface Row { thread: string; rank: number; harness: string; cwd?: string; title: string; updatedAt: number }
+  const rows: Row[] = []
+  const seen = new Set<string>()
+  const take = (row: { threadId?: string; sessionId?: string; harness: string; cwd?: string }, title: string, updatedAt: number) => {
+    const thread = rowThread(row, threadOf)
+    if (!thread || thread === exclude) return
+    const index = groups[thread]?.sessions.findIndex((member) => member.id === row.sessionId) ?? -1
+    rows.push({ thread, rank: index < 0 ? Number.MAX_SAFE_INTEGER : index, harness: row.harness, cwd: row.cwd, title, updatedAt })
+  }
+  for (const ref of input.refs) {
+    if (!ref.sessionId || seen.has(ref.sessionId) || archivedThread(ref, archived)) continue
+    seen.add(ref.sessionId)
+    take(ref, overrides[ref.path] ?? ref.title ?? "Untitled session", ref.updatedAt ? Date.parse(ref.updatedAt) || 0 : 0)
+  }
+  for (const presence of input.presences) {
+    if (!presence.sessionId || seen.has(presence.sessionId) || archivedLive(presence, archived)) continue
+    seen.add(presence.sessionId)
+    const title = (presence.threadPath ? overrides[presence.threadPath] : undefined) ?? presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
+    take(presence, title, presence.createdAt)
+  }
+  // In tab order, so a Thread is named by its first Session and shows its agents as the rail does.
+  rows.sort((left, right) => left.rank - right.rank)
+  const byThread = new Map<string, ThreadChoice>()
+  for (const row of rows) {
+    const found = byThread.get(row.thread)
+    if (!found) {
+      byThread.set(row.thread, { thread: row.thread, title: row.title, cwd: row.cwd, harnesses: [row.harness], sessions: 1, updatedAt: row.updatedAt })
+      continue
+    }
+    found.sessions += 1
+    found.updatedAt = Math.max(found.updatedAt, row.updatedAt)
+    found.harnesses.push(row.harness)
+  }
+  const near = (choice: ThreadChoice) => (input.cwd && choice.cwd === input.cwd ? 0 : 1)
+  return [...byThread.values()].sort((left, right) => near(left) - near(right) || right.updatedAt - left.updatedAt)
+}

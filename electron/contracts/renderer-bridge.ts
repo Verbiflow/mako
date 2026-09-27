@@ -6,7 +6,7 @@ import type {
   ArchiveCommand,
   StopTarget,
 } from "./thread-lifecycle.js"
-import type { ThreadGroup } from "./thread-groups.js"
+import type { ThreadGroup, ThreadRegroup } from "./thread-groups.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
@@ -176,6 +176,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
     threadCreateSession: (operationId: string, thread: string) =>
       invokeTrustedHost<ThreadPlacement>("mako:thread-create-session", operationId, thread),
+    threadJoin: (operationId: string, sessions: string[], thread: string) =>
+      invokeTrustedHost<ThreadRegroup>("mako:thread-join", operationId, sessions, thread),
+    threadSplit: (operationId: string, sessions: string[]) =>
+      invokeTrustedHost<ThreadRegroup>("mako:thread-split", operationId, sessions),
     threadControls: (target: ThreadTarget) =>
       invokeTrustedHost<ThreadControls>("mako:thread-controls", target),
     archiveThread: (command: ArchiveCommand) =>

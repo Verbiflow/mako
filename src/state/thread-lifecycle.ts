@@ -80,8 +80,12 @@ export const threadLifecycle = {
     catch (error) { toast.error("Archived threads could not be loaded", { description: error instanceof Error ? error.message : String(error) }) }
   },
   controls(target: ThreadTarget) { return getMako().threadControls(target) },
-  /** Archive or restore a thread; a Thread with several Sessions passes one target per Session. */
-  async archive(targets: readonly ThreadTarget[], archived: boolean): Promise<boolean> {
+  /**
+   * Archive or restore a thread; a Thread with several Sessions passes one
+   * target per Session. A caller that says what happened itself passes
+   * `announce: false`; failures are always reported.
+   */
+  async archive(targets: readonly ThreadTarget[], archived: boolean, announce = true): Promise<boolean> {
     let changed = 0
     try {
       for (const one of targets) {
@@ -93,7 +97,7 @@ export const threadLifecycle = {
         // restore does not bring back news you have already dismissed.
         if (archived) acknowledgeThread(one)
       }
-      toast(archived ? "Thread archived. Running work is not stopped." : "Thread restored")
+      if (announce) toast(archived ? "Thread archived. Running work is not stopped." : "Thread restored")
       return true
     } catch (error) {
       const description = error instanceof Error ? error.message : String(error)

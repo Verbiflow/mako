@@ -154,6 +154,12 @@ export function installMockBridge() {
     threadCreateSession: async () => {
       throw new Error("The mock desk has no Thread store, so it can't add a session to a Thread.")
     },
+    threadJoin: async () => {
+      throw new Error("The mock desk has no Thread store, so it can't regroup sessions.")
+    },
+    threadSplit: async () => {
+      throw new Error("The mock desk has no Thread store, so it can't regroup sessions.")
+    },
     archiveThread: async (command) => {
       const { threadArchiveKey } =
         await import("../../electron/contracts/thread-lifecycle")

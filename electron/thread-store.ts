@@ -63,6 +63,7 @@ export const THREAD_STORE_MIGRATION = 2
 /** What an operation acts on; its digest tells a replay from a conflict. */
 interface OperationContent {
   thread?: ThreadId
+  sessions?: SessionId[]
   title?: string
   move?: MoveId
   target?: ExecutionOwner
@@ -211,6 +212,7 @@ const PlacementSchema = z.object({ thread: ThreadIdSchema, session: SessionIdSch
 const CountSchema = z.object({ count: z.number() })
 const FirstJournalSchema = z.object({ count: z.number(), first: z.number().nullable() })
 const VersionSchema = z.object({ data_version: z.number() })
+const PlacementChangeRowSchema = z.object({ seq: z.number(), session_id: z.string() })
 const ExecutionRowSchema = z.object({
   owner_kind: z.enum(["device", "cloud"]).nullable(),
   owner_id: z.string().nullable(),
@@ -259,6 +261,31 @@ CREATE TABLE IF NOT EXISTS executions (
 CREATE INDEX IF NOT EXISTS executions_move ON executions(move_id);
 CREATE TABLE IF NOT EXISTS store_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
 `
+
+/**
+ * Every Session whose Thread changed, in commit order. Hosts share one store,
+ * and a host that sees another's commit forgets only these Sessions'
+ * placements instead of re-placing its whole catalog. Triggers write the log,
+ * so a build that predates it logs its merges too once any newer build has
+ * opened the store. A new Session's first membership isn't logged: nothing
+ * can have cached it.
+ */
+const PLACEMENT_LOG = `
+CREATE TABLE IF NOT EXISTS placement_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS placement_member_moved AFTER UPDATE OF thread_id ON memberships
+  WHEN OLD.thread_id IS NOT NEW.thread_id
+  BEGIN INSERT INTO placement_changes (session_id) VALUES (NEW.session_id); END;
+CREATE TRIGGER IF NOT EXISTS placement_member_left AFTER DELETE ON memberships
+  BEGIN INSERT INTO placement_changes (session_id) VALUES (OLD.session_id); END;
+CREATE TRIGGER IF NOT EXISTS placement_session_merged AFTER UPDATE OF merged_into ON sessions
+  WHEN NEW.merged_into IS NOT NULL
+  BEGIN INSERT INTO placement_changes (session_id) VALUES (NEW.id); END;
+CREATE TRIGGER IF NOT EXISTS placement_thread_merged AFTER UPDATE OF merged_into ON threads
+  WHEN NEW.merged_into IS NOT NULL
+  BEGIN INSERT INTO placement_changes (session_id) SELECT session_id FROM memberships WHERE thread_id = NEW.id; END;
+`
+/** Log rows kept past a store open; a host further behind than this forgets everything once. */
+const PLACEMENT_LOG_KEEP = 10_000
 
 const SCHEMA = `
 CREATE TABLE principals (
@@ -311,8 +338,11 @@ export class ThreadStore {
   private readonly realPath: (path: string) => string
   private depth = 0
   private readonly placements = new Map<string, ThreadPlacement>()
+  /** The cache keys holding each Session, so a logged change forgets only those. */
+  private readonly keysBySession = new Map<string, Set<string>>()
   private readonly executions = new Map<string, SessionExecution>()
   private dataVersion = -1
+  private changeSeq = 0
   private readonly reported = new Set<string>()
   private readonly statements = new Map<string, StatementSync>()
   readonly conflicts: StoreConflict[] = []
@@ -349,6 +379,7 @@ export class ThreadStore {
         throw error
       }
       this.deviceId = z.string().uuid().parse(this.meta("device"))
+      this.changeSeq = CountSchema.parse(this.db.prepare("SELECT coalesce(max(seq), 0) AS count FROM placement_changes").get()).count
       this.localPrincipal = PrincipalIdSchema.parse(this.meta("principal"))
       this.self = ExecutionOwnerSchema.parse(JSON.parse(z.string().parse(this.meta("self"))))
     } catch (error) {
@@ -395,7 +426,7 @@ export class ThreadStore {
     const row = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(conversationId)
     if (!row) return undefined
     const placed = this.placeSession(SessionRowSchema.parse(row).session_id)
-    this.placements.set(key, placed)
+    this.remember(key, placed)
     return placed
   }
 
@@ -446,21 +477,37 @@ export class ThreadStore {
       const current = session && this.sessionPlacement(session)
       if (!current) continue
       placed.set(ref.path, current)
-      this.placements.set(placementKey(ref), current)
+      this.remember(placementKey(ref), current)
     }
     return placed
   }
 
   /**
    * A served row's placement, answered from memory after the first time.
-   * Another host's commit (a merge) clears the memory.
+   * A commit that changes a Session's Thread, from any host, forgets that
+   * Session's rows only.
    */
   place(ref: SourceRef, actor: Actor): ThreadPlacement {
-    this.syncVersion()
-    const cached = this.placements.get(placementKey(ref))
-    if (cached) return cached
-    const placed = this.resolveRefs([ref], actor).get(ref.path)
+    const placed = this.placeMany([ref], actor).get(ref.path)
     if (!placed) throw new Error("The Thread store did not place a catalog row")
+    return placed
+  }
+
+  /**
+   * Rows served together, checked against other hosts' commits once. Only
+   * rows never placed, or whose Session changed Thread, touch the database,
+   * all in one transaction.
+   */
+  placeMany(refs: readonly SourceRef[], actor: Actor): Map<string, ThreadPlacement> {
+    this.syncVersion()
+    const placed = new Map<string, ThreadPlacement>()
+    const missing: SourceRef[] = []
+    for (const ref of refs) {
+      const cached = this.placements.get(placementKey(ref))
+      if (cached) placed.set(ref.path, cached)
+      else missing.push(ref)
+    }
+    if (missing.length) for (const [path, found] of this.resolveRefs(missing, actor)) placed.set(path, found)
     return placed
   }
 
@@ -510,6 +557,76 @@ export class ThreadStore {
       this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(thread.id)
       return { thread: thread.id, session: SessionIdSchema.parse(session) }
     }, PlacementSchema))
+  }
+
+  /**
+   * Sessions join another Thread after its own, in the order given. A Thread
+   * they leave empty follows the one they joined, so anything holding its ID
+   * finds them. Returns every Thread whose Sessions changed.
+   */
+  joinThread(input: { operationId: string; sessions: readonly SessionId[]; thread: ThreadId; actor: Actor }): ThreadId[] {
+    return this.write(() => this.receipt(input.operationId, "join-thread", { sessions: [...input.sessions], thread: input.thread }, input.actor, () => {
+      const target = this.thread(input.thread)
+      if (!target) throw new Error("That thread no longer exists.")
+      const joining = this.members(input.sessions).filter((session) => !target.sessions.includes(SessionIdSchema.parse(session)))
+      if (!joining.length) return []
+      const sources = [...new Set(joining.map((session) => this.placeSession(session).thread))]
+      this.requireHere([target.id, ...sources])
+      let position = CountSchema.parse(this.sql("SELECT coalesce(max(position) + 1, 0) AS count FROM memberships WHERE thread_id = ?").get(target.id)).count
+      for (const session of joining)
+        this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(target.id, position++, session)
+      for (const source of sources) {
+        const left = this.thread(source)
+        if (left && !left.sessions.length) this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(target.id, source)
+      }
+      this.sql(`UPDATE threads SET revision = revision + 1 WHERE id IN (${[target.id, ...sources].map(() => "?").join(", ")})`).run(target.id, ...sources)
+      return [target.id, ...sources]
+    }, z.array(ThreadIdSchema)))
+  }
+
+  /**
+   * Sessions of one Thread leave it for a new Thread of their own, keeping
+   * their order. The Thread must keep at least one Session. Returns the old
+   * Thread and the new one.
+   */
+  splitSessions(input: { operationId: string; sessions: readonly SessionId[]; actor: Actor }): ThreadId[] {
+    return this.write(() => this.receipt(input.operationId, "split-sessions", { sessions: [...input.sessions] }, input.actor, () => {
+      const leaving = this.members(input.sessions)
+      const threads = [...new Set(leaving.map((session) => this.placeSession(session).thread))]
+      const from = threads[0]
+      if (!from || threads.length > 1) throw new Error("Only sessions from one thread can be split off together.")
+      const thread = this.thread(from)
+      if (!thread || thread.sessions.every((session) => leaving.includes(session)))
+        throw new Error("A thread keeps at least one session; this one already stands alone.")
+      this.requireHere([from])
+      const created = ThreadIdSchema.parse(randomUUID())
+      this.sql("INSERT INTO threads (id, owner_id, created_at, created_by) VALUES (?, ?, ?, ?)")
+        .run(created, this.localPrincipal, this.now(), JSON.stringify(input.actor))
+      for (const [position, session] of thread.sessions.filter((member) => leaving.includes(member)).entries())
+        this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(created, position, session)
+      this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(from)
+      return [from, created]
+    }, z.array(ThreadIdSchema)))
+  }
+
+  /** The current Sessions behind the given IDs, following merges, once each. */
+  private members(sessions: readonly SessionId[]): string[] {
+    const found = sessions.map((session) => {
+      const current = this.canonical(session)
+      if (!current) throw new Error("A session in this thread no longer exists. Refresh and try again.")
+      return current
+    })
+    return [...new Set(found)]
+  }
+
+  /** A Thread takes or gives up members only while every Session in it runs here. */
+  private requireHere(threads: readonly ThreadId[]): void {
+    for (const id of threads)
+      for (const member of this.thread(id)?.sessions ?? []) {
+        const execution = this.executionState(member)
+        if (execution.state === "elsewhere") throw new Error("That thread runs on another device, so its sessions can only be regrouped there.")
+        if (execution.state !== "here") throw new Error("That thread is moving. Regroup its sessions once the move ends.")
+      }
   }
 
   renameThread(input: { operationId: string; thread: ThreadId; title: string; actor: Actor }): ThreadRecord {
@@ -921,7 +1038,7 @@ export class ThreadStore {
     this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(winnerThread, membership.thread_id)
     this.sql("INSERT INTO operations VALUES (?, 'merge', ?, ?, ?, ?)")
       .run(randomUUID(), JSON.stringify({ loser, winner, reason }), JSON.stringify(actor), JSON.stringify({ session: winner }), this.now())
-    this.placements.clear()
+    this.forgetPlacements()
     this.executions.clear()
   }
 
@@ -1016,6 +1133,8 @@ export class ThreadStore {
 
   private migrate(self: ExecutionOwner | undefined): void {
     this.db.exec(EXECUTION_TABLES)
+    this.db.exec(PLACEMENT_LOG)
+    this.db.prepare("DELETE FROM placement_changes WHERE seq <= (SELECT max(seq) FROM placement_changes) - ?").run(PLACEMENT_LOG_KEEP)
     const stored = this.meta("self")
     if (stored === undefined) {
       const owner = self ?? { kind: "device", device: DeviceIdSchema.parse(this.meta("device")) }
@@ -1153,7 +1272,7 @@ export class ThreadStore {
     // released, even if its receipt never arrived.
     this.sql("UPDATE moves SET phase = 'arrived', updated_at = ? WHERE thread_id = ? AND phase = 'released' AND source_kind = ? AND source_id = ?")
       .run(now, thread.id, ...ownerColumns(this.self))
-    this.placements.clear()
+    this.forgetPlacements()
   }
 
   private nativeSessions(harness: string, nativeId: string): string[] {
@@ -1223,12 +1342,41 @@ export class ThreadStore {
     return found ? MetaRowSchema.parse(found).value : undefined
   }
 
+  /** `data_version` moves only for other connections' commits; this host's own are consumed in `write`. */
   private syncVersion(): void {
     const version = VersionSchema.parse(this.sql("PRAGMA data_version").get()).data_version
     if (version === this.dataVersion) return
-    this.placements.clear()
-    this.executions.clear()
     this.dataVersion = version
+    this.executions.clear()
+    this.consumeChanges()
+  }
+
+  private consumeChanges(): void {
+    const rows = this.sql("SELECT seq, session_id FROM placement_changes WHERE seq > ? ORDER BY seq").all(this.changeSeq)
+      .map((row) => PlacementChangeRowSchema.parse(row))
+    const first = rows[0]
+    if (!first) return
+    // Rows are consecutive unless an open pruned past this host's position.
+    if (first.seq !== this.changeSeq + 1) this.forgetPlacements()
+    else for (const row of rows) this.forgetSession(row.session_id)
+    this.changeSeq = rows.at(-1)?.seq ?? this.changeSeq
+  }
+
+  private remember(key: string, placed: ThreadPlacement): void {
+    this.placements.set(key, placed)
+    const keys = this.keysBySession.get(placed.session)
+    if (keys) keys.add(key)
+    else this.keysBySession.set(placed.session, new Set([key]))
+  }
+
+  private forgetSession(session: string): void {
+    for (const key of this.keysBySession.get(session) ?? []) this.placements.delete(key)
+    this.keysBySession.delete(session)
+  }
+
+  private forgetPlacements(): void {
+    this.placements.clear()
+    this.keysBySession.clear()
   }
 
   private write<T>(work: () => T): T {
@@ -1238,10 +1386,11 @@ export class ThreadStore {
     try {
       const result = work()
       this.db.exec("COMMIT")
+      this.consumeChanges()
       return result
     } catch (error) {
       this.db.exec("ROLLBACK")
-      this.placements.clear()
+      this.forgetPlacements()
       this.executions.clear()
       throw error
     } finally {

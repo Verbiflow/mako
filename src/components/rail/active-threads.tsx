@@ -9,6 +9,7 @@ import { FOLD_GLYPHS, foldRowHarness, type FoldedThread } from "@/lib/thread-fol
 import { threadFolderKey } from "@/lib/thread-folders"
 import { acp } from "@/state/acp"
 import type { AcpPresence } from "@/state/acp-presence"
+import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { cn } from "@/lib/utils"
 
@@ -23,6 +24,7 @@ export function LiveAgentRow({
   indent?: boolean
 }) {
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
+  const thread = useThreadGroups((state) => folded?.thread ?? rowThread(presence, state.threadOf))
   const [since] = useState(() => performance.now())
   const label =
     presence.status === "needs-permission"
@@ -98,7 +100,9 @@ export function LiveAgentRow({
           running={presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission"}
           controlled
           path={presence.threadPath}
-          thread={folded?.thread ?? presence.threadId}
+          thread={thread}
+          session={presence.sessionId}
+          cwd={presence.cwd}
           archiveTargets={archiveTargets}
         />
       </span>

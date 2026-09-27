@@ -108,18 +108,22 @@ export function installThreadStore(store: ThreadStore | null): void {
   threadStore = store
 }
 
-function withThreadPlacement(ref: ThreadRef): ThreadRef {
-  if (!threadStore) return ref
+/** Places refs in one pass: cached rows cost a map lookup, and misses share one transaction. */
+function withThreadPlacements(refs: readonly ThreadRef[]): ThreadRef[] {
+  if (!threadStore || !refs.length) return [...refs]
   try {
-    const placed = threadStore.place(ref, CATALOG_ACTOR)
-    return { ...ref, threadId: placed.thread, sessionId: placed.session }
+    const placed = threadStore.placeMany(refs, CATALOG_ACTOR)
+    return refs.map((ref) => {
+      const found = placed.get(ref.path)
+      return found ? { ...ref, threadId: found.thread, sessionId: found.session } : ref
+    })
   } catch (error) {
     if (!placementFailed)
       hostWarn("threads", "Thread store placement failed; refs are served without Thread IDs", {
         error: error instanceof Error ? error.message : String(error),
       })
     placementFailed = true
-    return ref
+    return [...refs]
   }
 }
 
@@ -131,16 +135,24 @@ function placeCatalog(refs: readonly ThreadRef[]): void {
   if (!threadStore) return
   const started = performance.now()
   try {
-    threadStore.resolveRefs(refs, CATALOG_ACTOR)
+    threadStore.placeMany(refs, CATALOG_ACTOR)
     hostLog("threads", "catalog placed in Threads", { rows: refs.length, ms: Math.round(performance.now() - started) })
   } catch (error) {
     hostWarn("threads", "catalog placement failed", { error: error instanceof Error ? error.message : String(error) })
   }
 }
 
-function annotate(ref: ThreadRef): ThreadRef {
+function annotated(ref: ThreadRef): ThreadRef {
   const known = sessionMemory ? sessionMemory.annotate(ref) : ref
-  return withThreadPlacement(withWorkspacePresence(annotateLineage(known)))
+  return withWorkspacePresence(annotateLineage(known))
+}
+
+function annotate(ref: ThreadRef): ThreadRef {
+  return withThreadPlacements([annotated(ref)])[0] ?? ref
+}
+
+function annotateAll(refs: readonly ThreadRef[]): ThreadRef[] {
+  return withThreadPlacements(refs.map(annotated))
 }
 
 /**
@@ -922,14 +934,14 @@ function catalogRefs(filter: { cwd?: string; harness?: string }): ThreadRef[] {
 export function listThreads(
   filter: { cwd?: string; harness?: string } = {}
 ): ThreadRef[] {
-  return catalogRefs(filter).slice(0, LIST_CAP).map(annotate)
+  return annotateAll(catalogRefs(filter).slice(0, LIST_CAP))
 }
 
 /** The window's rail list, by the same rule the window applies to every push. */
 export function railThreads(
   filter: { cwd?: string; harness?: string } = {}
 ): ThreadRef[] {
-  return threadList(catalogRefs(filter)).map(annotate)
+  return annotateAll(threadList(catalogRefs(filter)))
 }
 
 /** Recovery must not depend on the sidebar's ordering or visible result cap. */

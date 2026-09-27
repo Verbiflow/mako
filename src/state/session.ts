@@ -4,7 +4,7 @@ import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
 import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
-import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
+import { applyThreadGroupChange, applyThreadRegroup, loadThreadGroups } from "@/state/thread-groups"
 import { watchThreadSessions } from "@/state/thread-sessions"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
@@ -201,6 +201,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-group") {
     applyThreadGroupChange(event.change)
+    return
+  }
+  if (event.type === "thread-regroup") {
+    applyThreadRegroup(event.regroup)
     return
   }
   if (event.type === "host-reconnected") {

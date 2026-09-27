@@ -19,7 +19,17 @@ import { openInterfacePreview, reloadInterface } from "@/state/development"
 import { stage } from "@/state/stage"
 import { surfaces } from "@/extend/surfaces"
 import { tabsStore } from "@/state/tabs"
-import { closeSessionDraft, newSessionInThread, stepThreadSession, threadHasTabs } from "@/state/thread-sessions"
+import {
+  closeSessionDraft,
+  currentOnScreen,
+  currentThreadTabs,
+  newSessionInThread,
+  sessionTabTitle,
+  stepThreadSession,
+  threadHasTabs,
+  type SessionTab,
+} from "@/state/thread-sessions"
+import { archiveSessionTab, openAddToThread, splitIntoNewThread } from "@/state/thread-regroup"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
 import { applyLoadoutEntry } from "@/state/model-loadout"
@@ -64,6 +74,15 @@ function closeActiveTab() {
   if (closeSessionDraft()) return
   const tabId = tabsStore.get().activeId
   if (tabId) void actions.closeTab(tabId)
+}
+
+/** The Session tab on screen, when a Thread's Session is what the conversation area shows. */
+function onScreenSessionTab(): { tab: Extract<SessionTab, { kind: "session" }>; thread: string; title: string } | null {
+  const here = currentOnScreen()
+  if (!here.thread || !here.session) return null
+  const tab = currentThreadTabs(here.thread).find((candidate) => candidate.kind === "session" && candidate.id === here.session)
+  if (tab?.kind !== "session") return null
+  return { tab, thread: here.thread, title: sessionTabTitle(tab, prefsStore.get().titleOverrides) }
 }
 
 /** Advance to the next effort level the current model actually supports. */
@@ -154,6 +173,38 @@ const DESK_COMMANDS: DeskCommand[] = [
     when: () => threadHasTabs() || tabsStore.get().tabs.length > 1,
     run: () => {
       if (!stepThreadSession(-1)) stepTab(-1)
+    },
+  },
+  {
+    id: "thread.add-to-thread",
+    title: "Add this session to a thread…",
+    section: "Session",
+    hint: "It becomes the last tab of the thread you pick",
+    when: () => onScreenSessionTab() !== null,
+    run: () => {
+      const found = onScreenSessionTab()
+      if (found) openAddToThread({ sessions: [found.tab.id], from: found.thread, title: found.title, cwd: currentOnScreen().cwd })
+    },
+  },
+  {
+    id: "thread.split-session",
+    title: "Split this session into a new thread",
+    section: "Session",
+    when: () => threadHasTabs() && onScreenSessionTab() !== null,
+    run: () => {
+      const found = onScreenSessionTab()
+      if (found) void splitIntoNewThread([found.tab.id], found.thread)
+    },
+  },
+  {
+    id: "thread.archive-session",
+    title: "Archive this session",
+    section: "Session",
+    hint: "The thread's other sessions stay",
+    when: () => threadHasTabs() && onScreenSessionTab() !== null,
+    run: () => {
+      const found = onScreenSessionTab()
+      if (found) void archiveSessionTab(found.tab, found.thread)
     },
   },
   {

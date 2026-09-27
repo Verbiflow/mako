@@ -1,11 +1,12 @@
 import { useState } from "react"
 import { toast } from "sonner"
 import { DropdownMenu } from "radix-ui"
-import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, MoreHorizontalIcon, SquareIcon } from "lucide-react"
+import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, ListPlusIcon, MoreHorizontalIcon, SquareIcon } from "lucide-react"
 import { threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
-import { discardSessionDraft } from "@/state/thread-groups"
+import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
+import { openAddToThread, rowSessions } from "@/state/thread-regroup"
 
-export function ThreadActions({ target, title, archived, running, controlled, path, thread, archiveTargets }: {
+export function ThreadActions({ target, title, archived, running, controlled, path, thread, session, cwd, archiveTargets }: {
   target: ThreadTarget
   title: string
   archived: boolean
@@ -13,11 +14,18 @@ export function ThreadActions({ target, title, archived, running, controlled, pa
   controlled: boolean
   path?: string
   thread?: string
+  /** The row's own Session; with `thread`, what "Add to thread…" takes along. */
+  session?: string
+  cwd?: string
   /** Every Session a folded row stands for; archive puts them all away. */
   archiveTargets?: ThreadTarget[]
 }) {
+  // An archived row of a Thread whose other Sessions are still out is one Session of it.
+  const oneOfMany = useThreadGroups((state) => !archiveTargets && thread !== undefined && state.groups[thread] !== undefined)
   const archive = async () => {
-    const changed = await threadLifecycle.archive(archiveTargets ?? [target], !archived)
+    const restoringOne = archived && oneOfMany
+    const changed = await threadLifecycle.archive(archiveTargets ?? [target], !archived, !restoringOne)
+    if (changed && restoringOne) toast("Session restored")
     if (changed && !archived && thread) discardSessionDraft(thread)
   }
   const [busy, setBusy] = useState(false)
@@ -44,7 +52,17 @@ export function ThreadActions({ target, title, archived, running, controlled, pa
         <DropdownMenu.Trigger asChild><button type="button" aria-label={`Actions for ${title}`} className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"><MoreHorizontalIcon className="size-3.5" /></button></DropdownMenu.Trigger>
         <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={4} className="overlay-panel z-50 min-w-48 rounded-lg p-1 text-ui">
           <DropdownMenu.Item disabled={busy || !controls?.stop} onSelect={() => { void stop() }} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"><SquareIcon className="size-3" />{controls?.external ? "Controlled by another app" : "Stop run and pause queue"}</DropdownMenu.Item>
-          <DropdownMenu.Item data-thread-action="archive" onSelect={() => { void archive() }} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover">{archived ? <ArchiveRestoreIcon className="size-3.5" /> : <ArchiveIcon className="size-3.5" />}{archived ? "Restore thread" : running ? "Archive when finished" : "Archive thread"}</DropdownMenu.Item>
+          <DropdownMenu.Item data-thread-action="archive" onSelect={() => { void archive() }} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover">{archived ? <ArchiveRestoreIcon className="size-3.5" /> : <ArchiveIcon className="size-3.5" />}{archived ? (oneOfMany ? "Restore session" : "Restore thread") : running ? "Archive when finished" : "Archive thread"}</DropdownMenu.Item>
+          {thread && !archived ? (
+            <DropdownMenu.Item
+              data-thread-action="add-to-thread"
+              disabled={!rowSessions(thread, session).length}
+              onSelect={() => openAddToThread({ sessions: rowSessions(thread, session), from: thread, title, cwd })}
+              className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
+            >
+              <ListPlusIcon className="size-3.5" />Add to thread…
+            </DropdownMenu.Item>
+          ) : null}
           {path ? <>
             <DropdownMenu.Item onSelect={() => { void threadLifecycle.copyTranscript(path, "concise") }} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover"><ClipboardListIcon className="size-3.5" />Copy concise transcript</DropdownMenu.Item>
             <DropdownMenu.Item onSelect={() => { void threadLifecycle.copyTranscript(path, "full") }} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover"><ClipboardCopyIcon className="size-3.5" />Copy full transcript</DropdownMenu.Item>

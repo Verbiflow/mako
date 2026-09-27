@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { ThreadGroup, ThreadGroupChange } from "../../electron/contracts/thread-groups.ts"
+import type { ThreadGroup, ThreadGroupChange, ThreadRegroup } from "../../electron/contracts/thread-groups.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { readAttachmentDrafts, readDraftStorage, writeDraftStorage } from "@/lib/draft-persistence"
 import { draftsStore } from "@/state/drafts"
@@ -20,6 +20,8 @@ export interface SessionDraft {
   session?: string
   /** The agent picked in the tab, when one was. */
   harness?: string
+  /** Where its text is kept, when it came from a Thread that joined this one. */
+  key?: string
 }
 
 const SessionDraftSchema = z.object({
@@ -29,13 +31,16 @@ const SessionDraftSchema = z.object({
   title: z.string(),
   session: z.string().uuid().optional(),
   harness: z.string().optional(),
+  key: z.string().optional(),
 })
 
 export interface ThreadGroupsState {
   /** Threads with two or more Sessions, by Thread ID. */
   groups: Readonly<Record<string, ThreadGroup>>
-  /** The Thread of every Session in `groups`. */
+  /** The Thread of every Session in `groups`, and of every Session regrouped since the window opened. */
   threadOf: Readonly<Record<string, string>>
+  /** Sessions that changed Thread while this window was open. */
+  placed: Readonly<Record<string, string>>
   /** The Session you last had on screen in each Thread. */
   lastViewed: Readonly<Record<string, string>>
   /** Each Thread's new tab, by Thread ID. */
@@ -46,11 +51,11 @@ export interface ThreadGroupsState {
 
 /** Where the composer keeps a Thread's new-tab text; one per Thread, so it outlives the tab. */
 export function sessionDraftKey(draft: SessionDraft | null | undefined): string | undefined {
-  return draft ? `thread-session:${draft.thread}` : undefined
+  return draft ? (draft.key ?? `thread-session:${draft.thread}`) : undefined
 }
 
 export function draftHasContent(draft: SessionDraft): boolean {
-  const key = `thread-session:${draft.thread}`
+  const key = draft.key ?? `thread-session:${draft.thread}`
   const saved = draftsStore.get().drafts.find((entry) => entry.key === key)
   return Boolean(saved?.text.trim() || saved?.plans?.length || readAttachmentDrafts()[key]?.length)
 }
@@ -68,7 +73,7 @@ function restoredDrafts(): Record<string, SessionDraft> {
   }
 }
 
-export const threadGroupsStore = createStore<ThreadGroupsState>({ groups: {}, threadOf: {}, lastViewed: {}, drafts: restoredDrafts(), open: null })
+export const threadGroupsStore = createStore<ThreadGroupsState>({ groups: {}, threadOf: {}, placed: {}, lastViewed: {}, drafts: restoredDrafts(), open: null })
 export const useThreadGroups = createHook(threadGroupsStore)
 
 let savedDrafts = threadGroupsStore.get().drafts
@@ -115,8 +120,13 @@ export function rememberDraftHarness(harness: string): void {
   if (draft && draft.harness !== harness) putSessionDraft({ ...draft, harness }, false)
 }
 
-function indexSessions(groups: Readonly<Record<string, ThreadGroup>>) {
-  return Object.fromEntries(Object.values(groups).flatMap((group) => group.sessions.map((session) => [session.id, group.id])))
+function indexSessions(groups: Readonly<Record<string, ThreadGroup>>, placed: Readonly<Record<string, string>>) {
+  return { ...placed, ...Object.fromEntries(Object.values(groups).flatMap((group) => group.sessions.map((session) => [session.id, group.id]))) }
+}
+
+/** A row's Thread: the group or regroup this window heard of, else the one stamped when it was listed. */
+export function rowThread(row: { threadId?: string; sessionId?: string }, threadOf: Readonly<Record<string, string>>): string | undefined {
+  return (row.sessionId === undefined ? undefined : threadOf[row.sessionId]) ?? row.threadId
 }
 
 function withChange(groups: Readonly<Record<string, ThreadGroup>>, change: ThreadGroupChange) {
@@ -134,7 +144,15 @@ export function applyThreadGroupChange(change: ThreadGroupChange): void {
   for (const arrived of loads) arrived.push(change)
   threadGroupsStore.set((state) => {
     const groups = withChange(state.groups, change)
-    return { groups, threadOf: indexSessions(groups) }
+    return { groups, threadOf: indexSessions(groups, state.placed) }
+  })
+}
+
+export function applyThreadRegroup(regroup: ThreadRegroup): void {
+  threadGroupsStore.set((state) => {
+    const placed = { ...state.placed }
+    for (const { session, thread } of regroup.placements) placed[session] = thread
+    return { placed, threadOf: indexSessions(state.groups, placed) }
   })
 }
 
@@ -146,7 +164,7 @@ export async function loadThreadGroups(): Promise<void> {
     const list = await getMako().threadGroups()
     let groups: Record<string, ThreadGroup> = Object.fromEntries(list.map((group) => [group.id, group]))
     for (const change of arrived) groups = withChange(groups, change)
-    threadGroupsStore.set({ groups, threadOf: indexSessions(groups) })
+    threadGroupsStore.set((state) => ({ groups, threadOf: indexSessions(groups, state.placed) }))
   } finally {
     loads.delete(arrived)
   }

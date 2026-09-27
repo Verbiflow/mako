@@ -6,7 +6,7 @@ import { ThreadActions } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { FOLD_GLYPHS, foldedThreadStatus, foldRowHarness, type FoldedThread, type FoldRow } from "@/lib/thread-fold"
-import { useThreadGroups } from "@/state/thread-groups"
+import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { workspaceName } from "@/lib/format"
@@ -124,7 +124,8 @@ export const ThreadRow = memo(function ThreadRow({
         )
     )
   )
-  const draftOpen = useThreadGroups((state) => state.open !== null && state.open === (folded?.thread ?? ref.threadId))
+  const thread = useThreadGroups((state) => folded?.thread ?? rowThread(ref, state.threadOf))
+  const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
@@ -319,7 +320,9 @@ export const ThreadRow = memo(function ThreadRow({
           // A folded row's status may be another Session's run; its stop lives in that tab.
           controlled={!folded && (target.kind === "live" || working)}
           path={ref.path}
-          thread={folded?.thread ?? ref.threadId}
+          thread={thread}
+          session={ref.sessionId}
+          cwd={ref.cwd}
           archiveTargets={folded?.members.map(foldRowTarget)}
         />
         <Detach path={ref.path} />

@@ -78,8 +78,9 @@ import {
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
-import type { JournalFacts, SourceRef } from "./thread-store.js"
-import { SessionIdSchema, ThreadIdSchema, type Actor } from "./contracts/thread-identity.js"
+import type { JournalFacts, SourceRef, ThreadStore } from "./thread-store.js"
+import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId } from "./contracts/thread-identity.js"
+import type { ThreadRegroup } from "./contracts/thread-groups.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
@@ -2150,6 +2151,39 @@ export class LiveConversations {
     } catch (error) {
       hostWarn("threads", "a Thread's tabs could not be announced", { thread, error: errorMessage({ error }) })
     }
+  }
+
+  /** Add Sessions to another Thread, after its own. A repeat of the operation changes nothing more. */
+  joinThread(operationId: string, sessions: readonly string[], thread: string): ThreadRegroup {
+    const threads = this.requireThreads()
+    const ids = sessions.map((session) => SessionIdSchema.parse(session))
+    const changed = threads.joinThread({ operationId, sessions: ids, thread: ThreadIdSchema.parse(thread), actor: threads.person() })
+    return this.announceRegroup(changed, ids)
+  }
+
+  /** Split Sessions of one Thread into a new Thread of their own. */
+  splitSessions(operationId: string, sessions: readonly string[]): ThreadRegroup {
+    const threads = this.requireThreads()
+    const ids = sessions.map((session) => SessionIdSchema.parse(session))
+    return this.announceRegroup(threads.splitSessions({ operationId, sessions: ids, actor: threads.person() }), ids)
+  }
+
+  private requireThreads(): ThreadStore {
+    const threads = this.dependencies.threads
+    if (!threads) throw new Error("This Mako couldn't open its Thread store, so it can't regroup sessions.")
+    return threads
+  }
+
+  private announceRegroup(changed: readonly string[], sessions: readonly SessionId[]): ThreadRegroup {
+    const threads = this.requireThreads()
+    const placements = sessions.flatMap((session) => {
+      const placed = threads.sessionPlacement(session)
+      return placed ? [{ session: placed.session, thread: placed.thread }] : []
+    })
+    const regroup = { placements }
+    this.dependencies.emit({ type: "thread-regroup", regroup })
+    for (const thread of changed) this.announceGroup(thread)
+    return regroup
   }
 
   previewRewind(

@@ -114,6 +114,10 @@ const replays = [
   "mako:thread-remember-mode",
   /** `ThreadStore.createSession`: the operation id is receipted; a repeat returns the first Session. */
   "mako:thread-create-session",
+  /** `ThreadStore.joinThread`: the operation id is receipted; a repeat returns the first result. */
+  "mako:thread-join",
+  /** `ThreadStore.splitSessions`: the operation id is receipted; a repeat returns the first new Thread. */
+  "mako:thread-split",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

@@ -17,10 +17,12 @@ import {
   leaveSessionDraft,
   openSessionDraft,
   putSessionDraft,
+  rowThread,
   threadGroupsStore,
   useThreadGroups,
   type SessionDraft,
 } from "@/state/thread-groups"
+import { archivedLive, archivedThread, threadArchiveStore, useThreadArchives } from "@/state/thread-lifecycle"
 import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
@@ -63,29 +65,31 @@ export interface OnScreen {
 }
 
 /** The same choice `ConversationSurface` makes between the viewer and a live panel. */
-function onScreen(view: ViewSlot | null, live: LiveSlot | null, draft: SessionDraft | null): OnScreen {
+function onScreen(view: ViewSlot | null, live: LiveSlot | null, draft: SessionDraft | null, threadOf: Readonly<Record<string, string>>): OnScreen {
   const viewerShown = view && (!live || view.viewingPath !== live.threadPath || (live.starting && view.viewingPath !== undefined))
   if (viewerShown) {
     const { ref } = view
-    return { thread: ref.threadId, session: ref.sessionId, cwd: ref.cwd, title: prefsStore.get().titleOverrides[ref.path] ?? ref.title }
+    return { thread: rowThread(ref, threadOf), session: ref.sessionId, cwd: ref.cwd, title: prefsStore.get().titleOverrides[ref.path] ?? ref.title }
   }
   if (live) {
     const title = (live.threadPath ? prefsStore.get().titleOverrides[live.threadPath] : undefined) ?? live.title
-    return { thread: live.threadId, session: live.sessionId, cwd: live.cwd, title }
+    return { thread: rowThread(live, threadOf), session: live.sessionId, cwd: live.cwd, title }
   }
   if (draft) return { thread: draft.thread, draft, cwd: draft.cwd, title: draft.title }
   return {}
 }
 
 export function currentOnScreen(): OnScreen {
-  return onScreen(viewSlot(threadsStore.get()), liveSlot(acpStore.get()), openSessionDraft(threadGroupsStore.get()))
+  const groups = threadGroupsStore.get()
+  return onScreen(viewSlot(threadsStore.get()), liveSlot(acpStore.get()), openSessionDraft(groups), groups.threadOf)
 }
 
 export function useOnScreen(): OnScreen {
   const view = useThreads(viewSlot, shallowEqual)
   const live = useAcp(liveSlot, shallowEqual)
   const draft = useThreadGroups(openSessionDraft)
-  return onScreen(view, live, draft)
+  const threadOf = useThreadGroups((state) => state.threadOf)
+  return onScreen(view, live, draft, threadOf)
 }
 
 /** One tab of a Thread's strip: a Session, or the Thread's new tab. */
@@ -96,8 +100,9 @@ export type SessionTab =
 /**
  * A Thread's tabs in the Thread's order, the new tab last. A Session with
  * neither a catalog row nor a live conversation has nothing to show and is
- * left out; an empty one is reused by the next new tab. A row that names
- * this Thread before the group's event arrives is shown after the rest.
+ * left out; an empty one is reused by the next new tab. So is an archived
+ * one, unless it is the Session on screen. A row that names this Thread
+ * before the group's event arrives is shown after the rest.
  */
 export function threadSessionTabs(input: {
   thread: string
@@ -105,21 +110,26 @@ export function threadSessionTabs(input: {
   refs: readonly ThreadRef[]
   presences: readonly AcpPresence[]
   draft?: SessionDraft
+  threadOf?: Readonly<Record<string, string>>
+  archived?: ReadonlySet<string>
+  shown?: string
 }): SessionTab[] {
-  const { thread, group, draft } = input
+  const { thread, group, draft, threadOf = {}, archived, shown } = input
   const grouped = new Set<string>(group?.sessions.map((session) => session.id))
   const belongs = (row: { threadId?: string; sessionId?: string }) =>
-    row.threadId === thread || (row.sessionId !== undefined && grouped.has(row.sessionId))
+    (row.sessionId !== undefined && grouped.has(row.sessionId)) || rowThread(row, threadOf) === thread
   const refs = new Map<string, ThreadRef>()
   const presences = new Map<string, AcpPresence>()
   const order = [...grouped]
   for (const ref of input.refs) {
     if (!ref.sessionId || refs.has(ref.sessionId) || !belongs(ref)) continue
+    if (archived && ref.sessionId !== shown && archivedThread(ref, archived)) continue
     refs.set(ref.sessionId, ref)
     if (!grouped.has(ref.sessionId)) order.push(ref.sessionId)
   }
   for (const presence of input.presences) {
     if (!presence.sessionId || presences.has(presence.sessionId) || !belongs(presence)) continue
+    if (archived && presence.sessionId !== shown && archivedLive(presence, archived)) continue
     presences.set(presence.sessionId, presence)
     if (!grouped.has(presence.sessionId) && !refs.has(presence.sessionId)) order.push(presence.sessionId)
   }
@@ -135,14 +145,17 @@ export function threadSessionTabs(input: {
 }
 
 /** The Thread on screen as tabs: its Sessions in order, then its new tab. */
-export function useThreadTabs(thread: string | undefined): SessionTab[] {
+export function useThreadTabs(here: OnScreen): SessionTab[] {
+  const { thread, session: shown } = here
   const group = useThreadGroups((state) => (thread ? state.groups[thread] : undefined))
   const draft = useThreadGroups((state) => (thread ? state.drafts[thread] : undefined))
+  const threadOf = useThreadGroups((state) => state.threadOf)
+  const archived = useThreadArchives((state) => state.keys)
   const refs = useThreads((state) => state.threads)
   const presences = useAcp(selectAcpPresence, sameAcpPresence)
   return useMemo(
-    () => (thread ? threadSessionTabs({ thread, group, refs, presences, draft }) : []),
-    [thread, group, refs, presences, draft]
+    () => (thread ? threadSessionTabs({ thread, group, refs, presences, draft, threadOf, archived, shown }) : []),
+    [thread, group, refs, presences, draft, threadOf, archived, shown]
   )
 }
 
@@ -154,6 +167,9 @@ export function currentThreadTabs(thread: string): SessionTab[] {
     refs: threadsStore.get().threads,
     presences: selectAcpPresence(acpStore.get()),
     draft: groups.drafts[thread],
+    threadOf: groups.threadOf,
+    archived: threadArchiveStore.get().keys,
+    shown: currentOnScreen().session,
   })
 }
 
@@ -234,6 +250,17 @@ export function closeSessionDraft(): boolean {
   return true
 }
 
+/** Close a Thread's new tab from its ×, on screen or not. */
+export function closeDraftTab(draft: SessionDraft): void {
+  if (currentOnScreen().draft?.id === draft.id) {
+    closeSessionDraft()
+    return
+  }
+  const kept = draftHasContent(draft)
+  discardSessionDraft(draft.thread)
+  if (kept) toast("Draft put away. A new tab in this Thread brings it back.")
+}
+
 /** Step through the Thread's tabs; false when the Thread on screen has one. */
 export function stepThreadSession(delta: 1 | -1): boolean {
   const here = currentOnScreen()
@@ -299,8 +326,8 @@ export function watchThreadSessions(): () => void {
     const switched = tabsStore.get().activeId !== attached
     attached = tabsStore.get().activeId
     if (threadGroupsStore.get().open !== null && (view || live || switched)) leaveSessionDraft()
-    const { groups, lastViewed } = threadGroupsStore.get()
-    const here = onScreen(view, live, null)
+    const { groups, lastViewed, threadOf } = threadGroupsStore.get()
+    const here = onScreen(view, live, null, threadOf)
     if (here.thread && here.session && groups[here.thread] && lastViewed[here.thread] !== here.session)
       threadGroupsStore.set({ lastViewed: { ...lastViewed, [here.thread]: here.session } })
   }
