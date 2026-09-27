@@ -7,9 +7,10 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import type { ThreadStore } from "./thread-store.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding } from "./contracts/thread-worktrees.js"
+import type { GitDiff } from "./contracts/git-workspace-search.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile } from "./contracts/thread-worktrees.js"
 import { carryDependencies, ignoredEntries, lockDigest, ownBytes, removeBelowAgents, type DependencyCarry } from "./worktree-dependencies.js"
-import { git, GitError, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
+import { git, GitError, gitExecutable, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
 import { placeSpare, setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 
 const execute = promisify(execFile)
@@ -60,6 +61,45 @@ async function cloneEntry(from: string, to: string, directory: boolean): Promise
   if (process.platform === "darwin") await execute("/bin/cp", directory ? ["-c", "-n", "-R", from, to] : ["-c", "-n", from, to])
   else if (directory) await cp(from, to, { recursive: true, mode: constants.COPYFILE_FICLONE, verbatimSymlinks: true })
   else await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
+}
+
+/** What a review loads in full; the files past these are listed but not read. */
+const REVIEW_FILES = 25
+const REVIEW_BYTES = 512 * 1024
+const REVIEW_FILE_BYTES = 256 * 1024
+/** Untracked files whose lines a review counts; past this they are listed uncounted. */
+const COUNTED_UNTRACKED = 200
+
+/** `git diff --numstat -z -M`: a rename's record has an empty path, then the old and new paths. */
+function parseNumstat(output: string): WorktreeReviewFile[] {
+  const files: WorktreeReviewFile[] = []
+  const fields = output.split("\0")[Symbol.iterator]()
+  const count = (value: string) => value === "-" ? null : Number(value)
+  for (const field of fields) {
+    const match = /^(-|\d+)\t(-|\d+)\t(.*)$/s.exec(field)
+    if (!match) continue
+    const [, added = "-", removed = "-", named = ""] = match
+    const from = named ? undefined : fields.next().value
+    const path = named || (fields.next().value ?? "")
+    const file: WorktreeReviewFile = { path, insertions: count(added), deletions: count(removed) }
+    if (from) file.from = from
+    files.push(file)
+  }
+  return files
+}
+
+/** A text file's lines, or null for a binary or very large one. */
+async function textLines(path: string): Promise<number | null> {
+  const bytes = await readFile(path).catch(() => null)
+  if (!bytes || bytes.length > REVIEW_FILE_BYTES * 4 || bytes.subarray(0, 8000).includes(0)) return null
+  let lines = 0
+  for (const byte of bytes) if (byte === 10) lines += 1
+  return bytes.length && bytes.at(-1) !== 10 ? lines + 1 : lines
+}
+
+/** A file as Git has it at `revision`, byte for byte, or null when it isn't there. */
+async function shown(cwd: string, revision: string, path: string): Promise<string | null> {
+  return execute(gitExecutable(), ["show", `${revision}:${path}`], { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).then(({ stdout }) => stdout, () => null)
 }
 
 /** `map` with at most `limit` running at once, results in order. */
@@ -213,6 +253,97 @@ export class ThreadWorktreeService {
     const worktree = this.threads.worktrees().find((entry) => entry.path === path)
     if (!worktree || !existsSync(path)) return undefined
     return Number(await git(path, ["rev-list", "--count", `${worktree.base}..HEAD`]))
+  }
+
+  private known(path: string): ThreadWorktree {
+    const worktree = this.threads.worktrees().find((entry) => entry.path === path)
+    if (!worktree || !existsSync(path)) throw new Error("Mako didn't make this worktree.")
+    return worktree
+  }
+
+  /**
+   * The worktree's work since it branched, committed and uncommitted, against
+   * where it meets the branch the main checkout has out, and whether merging
+   * it there is safe now.
+   */
+  async review(path: string): Promise<WorktreeReview> {
+    const worktree = this.known(path)
+    const into = await git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "") || null
+    const base = into ? await git(path, ["merge-base", into, "HEAD"]).catch(() => worktree.base) : worktree.base
+    const [commits, numstat, untracked, status] = await Promise.all([
+      git(path, ["rev-list", "--count", `${base}..HEAD`]).then(Number),
+      git(path, ["diff", "--numstat", "-z", "-M", base]),
+      git(path, ["ls-files", "--others", "--exclude-standard", "-z"]),
+      git(path, ["status", "--porcelain", "--untracked-files=normal"]),
+    ])
+    const files = parseNumstat(numstat)
+    const added = untracked.split("\0").filter(Boolean)
+    const counted = await mapLimited(added.slice(0, COUNTED_UNTRACKED), 8, (file) => textLines(join(path, file)))
+    added.forEach((file, index) => {
+      const lines = counted[index] ?? null
+      files.push({ path: file, insertions: lines, deletions: lines === null ? null : 0 })
+    })
+    return { path, branch: worktree.branch, into, base, commits, files, merge: await this.mergeCheck(worktree, into, commits, status !== "") }
+  }
+
+  private async mergeCheck(worktree: ThreadWorktree, into: string | null, commits: number, dirty: boolean): Promise<WorktreeMergeCheck> {
+    if (!into) return { ok: false, reason: "The project checkout isn't on a branch." }
+    if (dirty) return { ok: false, reason: "Commit or discard this worktree's changes first." }
+    if (commits === 0) return { ok: false, reason: `Nothing is committed here that ${into} doesn't have.` }
+    const main = await git(worktree.repoRoot, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable")
+    if (main) return { ok: false, reason: `The project checkout has uncommitted changes on ${into}.` }
+    // Merged in memory first: a conflict is found without touching either checkout.
+    if (!await succeeds(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]))
+      return { ok: false, reason: `It conflicts with ${into}. Merge ${into} into this branch and resolve it here, or open a pull request.` }
+    return { ok: true, into }
+  }
+
+  /** The review's files, before and after, for the diff viewer. */
+  async reviewDiffs(path: string): Promise<{ diffs: GitDiff[]; truncated: number }> {
+    const review = await this.review(path)
+    const diffs: GitDiff[] = []
+    let bytes = 0
+    for (const file of review.files) {
+      if (diffs.length >= REVIEW_FILES || bytes >= REVIEW_BYTES) break
+      if (file.insertions === null) {
+        diffs.push({ path: file.path, binary: true, oldFile: null, newFile: null })
+        continue
+      }
+      const [before, after] = await Promise.all([
+        shown(path, review.base, file.from ?? file.path),
+        readFile(join(path, file.path), "utf8").catch(() => null),
+      ])
+      if ((before?.length ?? 0) > REVIEW_FILE_BYTES || (after?.length ?? 0) > REVIEW_FILE_BYTES) {
+        diffs.push({ path: file.path, binary: false, oldFile: null, newFile: null, preview: { kind: "unavailable", reason: "Too large to show here." } })
+        continue
+      }
+      bytes += (before?.length ?? 0) + (after?.length ?? 0)
+      diffs.push({
+        path: file.path,
+        binary: false,
+        oldFile: before === null ? null : { name: file.from ?? file.path, contents: before },
+        newFile: after === null ? null : { name: file.path, contents: after },
+      })
+    }
+    return { diffs, truncated: review.files.length - diffs.length }
+  }
+
+  /**
+   * Merge the worktree's branch into the branch the main checkout has out,
+   * only when the review says it is safe; a merge Git stops is aborted, so
+   * the main checkout is left as it was.
+   */
+  async merge(path: string): Promise<{ branch: string; into: string }> {
+    const review = await this.review(path)
+    if (!review.merge.ok) throw new Error(review.merge.reason)
+    const { repoRoot } = this.known(path)
+    try {
+      await git(repoRoot, ["merge", "--no-edit", review.branch])
+    } catch (error) {
+      await git(repoRoot, ["merge", "--abort"]).catch(() => undefined)
+      throw new Error(`Git stopped the merge and ${review.merge.into} was left as it was. ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    }
+    return { branch: review.branch, into: review.merge.into }
   }
 
   /** The dependency clone for a conversation's worktree, once it finishes. */

@@ -168,6 +168,9 @@ export function installMockBridge() {
     wantWorktree: async () => {},
     worktreeAhead: async () => null,
     worktreeInventory: async () => ({ worktrees: [], spares: { count: 0, bytes: null } }),
+    worktreeReview: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
+    worktreeReviewDiffs: async () => ({ diffs: [], truncated: 0 }),
+    mergeWorktree: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     threadCreateSession: async () => {
       throw new Error("The mock desk has no Thread store, so it can't add a session to a Thread.")
     },

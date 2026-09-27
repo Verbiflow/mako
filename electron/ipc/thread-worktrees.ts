@@ -1,6 +1,7 @@
 import { registerIpc } from "./register.js"
 import type { ThreadWorktreeService } from "../thread-worktrees.js"
-import type { ThreadWorktrees, WorktreeInventory } from "../contracts/thread-worktrees.js"
+import type { GitDiff } from "../contracts/git-workspace-search.js"
+import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "../contracts/thread-worktrees.js"
 
 const UNAVAILABLE = "This Mako couldn't open its Thread store, so it can't keep worktrees."
 
@@ -10,6 +11,18 @@ export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | nul
     worktrees ? worktrees.list() : { root: "", worktrees: [] })
   registerIpc("mako:worktree-inventory", (): Promise<WorktreeInventory> | WorktreeInventory =>
     worktrees ? worktrees.inventory() : { worktrees: [], spares: { count: 0, bytes: null } })
+  registerIpc("mako:worktree-review", (_event, path: string): Promise<WorktreeReview> => {
+    if (!worktrees) throw new Error(UNAVAILABLE)
+    return worktrees.review(path)
+  })
+  registerIpc("mako:worktree-review-diffs", (_event, path: string): Promise<{ diffs: GitDiff[]; truncated: number }> => {
+    if (!worktrees) throw new Error(UNAVAILABLE)
+    return worktrees.reviewDiffs(path)
+  })
+  registerIpc("mako:worktree-merge", (_event, path: string): Promise<{ branch: string; into: string }> => {
+    if (!worktrees) throw new Error(UNAVAILABLE)
+    return worktrees.merge(path)
+  })
   registerIpc("mako:worktree-ahead", async (_event, path: string): Promise<number | null> =>
     (await worktrees?.ahead(path)) ?? null)
   registerIpc("mako:worktree-want", async (_event, cwd: string): Promise<void> => {

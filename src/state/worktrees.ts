@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import type { ThreadWorktree, WorktreeDetail, WorktreeInventory } from "../../electron/contracts/thread-worktrees.ts"
+import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
+import type { GitStatus } from "@/lib/types"
+import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
@@ -74,6 +76,59 @@ export function useWorktreeAhead(path: string | undefined, head: string | undefi
   }, [path, head])
   // The previous count stands while a new HEAD is read, so the chip doesn't blink on a commit.
   return ahead && ahead.path === path ? ahead.count : undefined
+}
+
+/** After a status change, the branch review waits this long before reading again: an agent's edits come in bursts. */
+const REVIEW_SETTLE_MS = 400
+
+/**
+ * The worktree at `path`'s work since it branched, read again once `status`
+ * (the Git status the Changes watcher already keeps) settles, or on `reread`.
+ */
+export function useWorktreeReview(path: string | undefined, status: GitStatus | null | undefined) {
+  const [review, setReview] = useState<WorktreeReview>()
+  const [asked, setAsked] = useState(0)
+  const shownFor = useRef<string>(undefined)
+  useEffect(() => {
+    if (!path || !hasBridge()) return
+    let current = true
+    const timer = setTimeout(() => {
+      void getMako().worktreeReview(path).then(
+        (next) => {
+          if (!current) return
+          shownFor.current = path
+          setReview(next)
+        },
+        () => {}
+      )
+    }, shownFor.current === path ? REVIEW_SETTLE_MS : 0)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [path, status, asked])
+  const reread = useCallback(() => setAsked((count) => count + 1), [])
+  return { review: review?.path === path ? review : undefined, reread } satisfies { review: WorktreeReview | undefined; reread: () => void }
+}
+
+export function readWorktreeReviewDiffs(path: string): Promise<{ diffs: GitDiff[]; truncated: number }> {
+  return getMako().worktreeReviewDiffs(path)
+}
+
+/** Merge the worktree's branch into the main checkout's branch; once it's in, removing the worktree is one click. */
+export async function mergeWorktree(worktree: ThreadWorktree): Promise<boolean> {
+  try {
+    const { branch, into } = await getMako().mergeWorktree(worktree.path)
+    toast(`Merged into ${into}`, {
+      description: `${branch} is in the project checkout now, so its worktree can go.`,
+      duration: ACTION_TOAST_MS,
+      action: { label: "Remove worktree", onClick: () => void removeWorktree(worktree) },
+    })
+    return true
+  } catch (error) {
+    toast.error("The branch wasn't merged", { description: error instanceof Error ? error.message : String(error) })
+    return false
+  }
 }
 
 /** A project asks for spares at most this often; the host keeps them for a day after. */

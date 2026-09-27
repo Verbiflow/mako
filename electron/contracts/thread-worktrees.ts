@@ -68,3 +68,28 @@ export function worktreeSlug(text: string | undefined): string {
     .slice(0, SLUG_WORDS)
   return words.join("-").slice(0, SLUG_LENGTH).replace(/-+$/, "") || "thread"
 }
+
+export interface WorktreeReviewFile {
+  path: string
+  /** Where a renamed file was at the base. */
+  from?: string
+  /** Null when not counted: a binary or very large file. */
+  insertions: number | null
+  deletions: number | null
+}
+
+/** Whether the branch can be merged into the main checkout's branch here, and if not, why. */
+export type WorktreeMergeCheck = { ok: true; into: string } | { ok: false; reason: string }
+
+/** A worktree's work since it branched: committed and uncommitted, against where it meets the main checkout's branch. */
+export interface WorktreeReview {
+  path: string
+  branch: string
+  /** The main checkout's branch, or null when it isn't on one. */
+  into: string | null
+  /** Where the branch meets `into`, or the commit it started at. */
+  base: string
+  commits: number
+  files: WorktreeReviewFile[]
+  merge: WorktreeMergeCheck
+}

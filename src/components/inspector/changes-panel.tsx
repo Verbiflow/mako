@@ -8,6 +8,7 @@ import { CommitBox } from "@/components/inspector/commit-box"
 import { Annotation, GutterAdd, ReviewBar } from "@/components/inspector/review"
 import { review, useReview } from "@/state/review"
 import { PullRequestCard } from "@/components/inspector/pull-request"
+import { WorktreeReview } from "@/components/inspector/worktree-review"
 import { Slot } from "@/extend/slot"
 import { actions, useSession } from "@/state/session"
 import { git as gitActions } from "@/state/git"
@@ -341,6 +342,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   if (files.length === 0) {
     return (
       <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
+        <WorktreeReview />
         <div className="min-h-0 flex-1">
           <Blank
             icon={<CheckCircle2Icon />}
@@ -364,6 +366,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
 
   return (
     <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
+      <WorktreeReview />
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline px-2.5 text-label text-faint">
         {/* The counts already project pending checkbox intent, so a stage
             write in flight only marks the reading busy; swapping the whole
