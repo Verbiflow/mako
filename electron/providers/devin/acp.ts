@@ -19,6 +19,7 @@ export const devinAcpSource: ProviderAcpSource = {
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
   observeAgents: input => new DevinAgents(input),
   observeBackground: devinBackground,
+  backgroundStop: { kind: "ends-on-stop", how: "Stop kills each running background shell with killBackgroundShell, with or without a running turn; no turn follows. Closing closes stdin, which ends them; a signal would leave them running." },
   compaction: devinCompaction,
   canResume: true,
   steering: "concurrent-prompt",

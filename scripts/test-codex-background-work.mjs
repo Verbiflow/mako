@@ -91,6 +91,13 @@ async function check() {
     await codexAppClose(conversation.id)
     console.log("PASS: Stop ends the turn, the terminals the thread left running, and the command the interrupt turned into one; the thread answers afterwards")
 
+    const idle = await open()
+    await codexAppCancel(idle.id)
+    await idle.until("the background command to end", () => !running(idle.background))
+    await idle.until("the running count to clear", () => idle.session()?.backgroundTasks === 0)
+    await codexAppClose(idle.id)
+    console.log("PASS: Stop with no turn running ends the terminals the thread left running")
+
     const closing = await open()
     await codexAppClose(closing.id)
     await delay(100)

@@ -4,9 +4,12 @@ import type { ProviderLiveDriver } from "./live-driver.js"
 
 /** Shared ACP transport; each provider contributes its own launch capability. */
 export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
+  if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
+    throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)
   return {
     provider: source.provider,
     approvalEvidence: source.approvalEvidence,
+    backgroundStop: source.backgroundStop,
     approvalAnswerDigest: source.approvalAnswerDigest,
     observesNativeAgents: source.observeAgents ? true : undefined,
     canResume: source.canResume,

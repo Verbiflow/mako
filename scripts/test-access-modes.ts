@@ -234,3 +234,13 @@ assert.throws(
   () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
   /not one of its declared modes/
 )
+
+// Stop ends the turn and the background work it started on every harness.
+assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.backgroundStop.kind])), {
+  cursor: "ends-with-turn", devin: "ends-on-stop", grok: "ends-on-stop", opencode: "ends-on-stop", codex: "ends-on-stop", claude: "ends-on-stop",
+}, "every adapter says how Stop ends its background work, or why none outlives its turn")
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, backgroundStop: undefined }), /how Stop ends its background work/,
+  "registration rejects a new adapter that does not say how Stop ends its background work")
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, backgroundStop: { kind: "ends-on-stop", how: " " } }), /how Stop ends its background work/)
+assert.throws(() => acpLiveDriver({ ...devinAcpSource, observeBackground: undefined }), /background observer/,
+  "an ACP adapter ends background work on Stop only through its background observer")

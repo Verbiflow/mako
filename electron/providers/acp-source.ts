@@ -51,7 +51,7 @@ export interface AcpApprovalObserver {
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict" | "approvalEvidence" | "approvalAnswerDigest"> {
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict" | "approvalEvidence" | "approvalAnswerDigest" | "backgroundStop"> {
   /** Native tool identity supplied by provider extensions to ACP metadata. */
   toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
   /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */
@@ -63,7 +63,7 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
     publish(agent: NativeAgentObservation): void
   }): Promise<AcpAgentObserver> | AcpAgentObserver
   compaction?: import("../acp-compaction.js").AcpCompactionSpec
-  /** Provider evidence of background commands, which die with the agent process. */
+  /** Provider evidence of background commands, and how Stop ends them. Required when Stop ends background work. */
   observeBackground?(): AcpBackgroundObserver
   /**
    * Turns the agent starts on its own. Declared only by an agent that reports

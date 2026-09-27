@@ -361,14 +361,18 @@ export function codexAppPermission(
 /** Stop ends the turn and every terminal the thread left running. */
 export async function codexAppCancel(id: string): Promise<void> {
   const live = sessions.get(id)
-  if (!live?.threadId || !live.currentTurnId || live.exited) return
-  // The interrupt turns the running command into one more terminal, so the
-  // clean waits for the turn to settle.
+  if (!live?.threadId || live.exited) return
   const clean = () => {
     if (live.exited) return
     cleanBackground(live).catch((error) =>
       hostWarn("codex", "Background terminals were not ended", { conversation: id, error: String(error) }))
   }
+  if (!live.currentTurnId) {
+    clean()
+    return
+  }
+  // The interrupt turns the running command into one more terminal, so the
+  // clean waits for the turn to settle.
   live.settling.push(clean)
   try {
     await rpcRequest(live, "turn/interrupt", {

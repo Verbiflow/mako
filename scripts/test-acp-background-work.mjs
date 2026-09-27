@@ -127,4 +127,16 @@ async function check() {
     await liveClose(conversation.id)
   }
   console.log("PASS: Stop ends the turn and the background work on Grok (close and resume) and Devin (killBackgroundShell); the session answers afterwards")
+
+  for (const agent of ["grok", "devin"]) {
+    const conversation = await open(agent)
+    await conversation.until("the running count", () => conversation.session()?.backgroundTasks === 1)
+    await liveCancel(conversation.id)
+    await conversation.until("the background command to end", () => !running(conversation.background))
+    await conversation.until("the running count to clear", () => conversation.session()?.backgroundTasks === 0)
+    await conversation.prompt("after")
+    await conversation.until("the next answer", () => conversation.texts().includes("answered after"))
+    await liveClose(conversation.id)
+  }
+  console.log("PASS: Stop with no turn running ends the background work on Grok and Devin; the session answers afterwards")
 }

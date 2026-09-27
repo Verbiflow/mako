@@ -36,6 +36,7 @@ for (const type of ["string", "array"] as const) {
 const nativeEncoding = () => "a".repeat(64)
 assert.equal(acpLiveDriver({
   provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   approvalAnswerDigest: nativeEncoding, canResume: false, available: () => true, launch: async () => null,
 }).approvalAnswerDigest, nativeEncoding)
 
@@ -45,6 +46,7 @@ const sessions = new Map<string, LiveSessionState>()
 let receive: (event: HostEvent) => void = () => {}
 const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   canResume: true,
   provider: "test",
   available: () => true,

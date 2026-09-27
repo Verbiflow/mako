@@ -11,6 +11,7 @@ export const codexLiveDriver: ProviderLiveDriver = {
   observesNativeAgents: true,
   canResume: true,
   forkPoint: "run",
+  backgroundStop: { kind: "ends-on-stop", how: "Stop cleans the thread's background terminals once the interrupted turn settles, and at once with no turn running; closing cleans them before the app-server exits. Codex 0.154 keeps terminals through an interrupt, which adds the running command, and past the app-server's exit." },
   steer: async (...args) =>
     (await import("../../codex-app.js")).codexAppSteer(...args),
   // Re-probed 2026-09-14 (app-server 0.147.0): after thread/compact/start a

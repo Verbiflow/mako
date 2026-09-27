@@ -299,6 +299,7 @@ export function createClaudeSdkDriver(
     observesNativeAgents: true,
     canResume: true,
     forkPoint: "checkpoint",
+    backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. Mako declares no per-task stop affordance, so an interrupt stops them too." },
     steering: "step",
     modes: CLAUDE_MODES,
     defaultMode: "default",

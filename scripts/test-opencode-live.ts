@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
@@ -255,7 +256,20 @@ try {
   const agent = child.events.find(event => event.type === "live-agent")
   assert.ok(agent && agent.type === "live-agent", "the subagent is observed natively")
   report.cases.push("subagent: the task tool's child session is observed as a native agent")
-  await driver.close(full.id)
+
+  const backgroundMarker = `${marker}-background`
+  const backgroundRunning = () => spawnSync("pgrep", ["-f", backgroundMarker]).stdout.toString().trim().length > 0
+  for (const end of ["stop", "close"] as const) {
+    const launched = await turn(full, `Use the bash tool with background set to true to run exactly: sleep 300 && echo ${backgroundMarker}\nDo not wait for it; reply with the word started.`)
+    assert.equal(launched.state.lastStop, "end_turn", launched.state.error)
+    await until("the background shell to count", () => full.state().backgroundTasks === 1)
+    assert.ok(backgroundRunning(), "the background command keeps running after its turn")
+    if (end === "stop") await driver.cancel(full.id)
+    else await driver.close(full.id)
+    await until(`${end} to end the background command`, () => !backgroundRunning(), 10_000)
+    if (end === "stop") assert.equal(full.state().backgroundTasks, 0)
+  }
+  report.cases.push("background: a background bash command counts until Stop, with no turn running, or close ends it")
 
   const edits = conversation()
   chats.push(edits.id)

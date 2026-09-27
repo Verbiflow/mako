@@ -86,6 +86,7 @@ export const grokAcpSource: ProviderAcpSource = {
     return observer
   },
   compaction: { kind: "unavailable", reason: "Grok's ACP connection does not provide verified compaction. Start a new thread and carry over what matters." },
+  backgroundStop: { kind: "ends-on-stop", how: "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Closing sends session/close too." },
   observeBackground: () => ({
     extension(method, params) {
       if (method !== "_x.ai/session_notification") return undefined

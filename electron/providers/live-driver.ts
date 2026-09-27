@@ -36,6 +36,17 @@ export function recoveryCapabilities(driver: ProviderLiveDriver | undefined): Re
 /** How long a closing provider has to end its own work before it is terminated. */
 export const SHUTDOWN_GRACE_MS = 5_000
 
+/**
+ * Stop ends the turn and the background work the conversation started, on
+ * every harness. A harness either ends that work on Stop, with or without a
+ * running turn, or never lets it outlive the turn that started it. A harness
+ * that can do neither means Stop leaves background work running on all of
+ * them instead.
+ */
+export type BackgroundStop =
+  | { kind: "ends-on-stop"; how: string }
+  | { kind: "ends-with-turn"; evidence: string }
+
 export interface ConversationTools {
   url: string
   token: string
@@ -77,6 +88,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
   /** The mode a fresh session runs under when nothing was chosen — the level the chip reports before launch. */
   defaultMode?: string
   compaction?: ProviderCompaction
+  backgroundStop: BackgroundStop
   forkPoint?: "run" | "checkpoint"
   canResume: boolean
   checkpoint?(path: string): Promise<string | undefined>
@@ -130,6 +142,10 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
       throw new Error(`${driver.provider}: mode ${mode.id} names a tier with no enforcer`)
   if (driver.defaultMode && !driver.modes?.some((mode) => mode.id === driver.defaultMode))
     throw new Error(`${driver.provider}: defaultMode ${driver.defaultMode} is not one of its declared modes`)
+  const background = driver.backgroundStop
+  const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : ""
+  if (!reason.trim())
+    throw new Error(`${driver.provider}: declare how Stop ends its background work, or the evidence that none outlives its turn`)
 }
 
 /** Call immediately before answering a native request, after any adapter awaits. */

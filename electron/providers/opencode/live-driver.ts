@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
+import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -12,7 +13,7 @@ import type { LiveActionResult } from "../../contracts/live-actions.js"
 import type { LiveSessionState, McpRegistrySnapshot, PromptAttachment } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
-import type { ProviderLiveDriver, ProviderStartOptions } from "../live-driver.js"
+import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, verifyOpenCodeSession } from "./installation.js"
 import { configureOpenCodePermissions } from "./permissions.js"
@@ -36,6 +37,7 @@ import {
 import { OpenCodeContent } from "./content.js"
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
+import { OpenCodeShells } from "./background.js"
 import { openCodeCheckpoint, openCodeResumeVerdict } from "./resume.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
@@ -67,7 +69,10 @@ interface Live {
   content?: OpenCodeContent
   interactions?: OpenCodeInteractions
   agents?: OpenCodeAgents
+  shells: OpenCodeShells
   turn: Turn | null
+  /** Waiting for the running turn to settle, or for the session to end. */
+  settling: Array<() => void>
   /** Context tokens of the root session's latest step; cost is the session's own total. */
   context?: number
   cost?: number
@@ -222,6 +227,19 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       hostWarn("opencode", "turn failed", { conversation: live.state.id, type: outcome.type ?? "", error: outcome.message })
       engine.patch(live, { status: "failed", lastStop: outcome.type === "aborted" ? "cancelled" : "failed", error: outcome.message.slice(0, 2000) })
     }
+    for (const settle of live.settling.splice(0)) settle()
+  }
+
+  /** End every shell the conversation's sessions left running. */
+  async function endShells(live: Live): Promise<void> {
+    const location = { directory: live.cwd }
+    const listed = await live.api.client.shell.list({ location })
+    await Promise.all(live.shells.ending(listed.data).map(shell => live.api.client.shell.remove({ id: shell.id, location })))
+  }
+
+  /** Shells outlive the server, so they end before it closes, while it can still reach them. */
+  async function endShellsWithinGrace(live: Live): Promise<void> {
+    await Promise.race([endShells(live).catch(() => {}), delay(SHUTDOWN_GRACE_MS, undefined, { ref: false })])
   }
 
   function observeAgent(live: Live, event: OpenCodeEvent) {
@@ -253,6 +271,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     }
     if (!live.root) return
     const root = live.root
+    const background = live.shells.observe(event)
+    if (background !== undefined) engine.patch(live, { backgroundTasks: background })
     switch (event.type) {
       case "session.created":
         if (event.data.parentID && owns(live, event.data.parentID)) {
@@ -380,6 +400,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     const root = live.root
     if (!root || !live.interactions) return
     for (const sessionID of [root, ...live.children]) await live.interactions.reconcile(sessionID)
+    const background = live.shells.reconcile((await live.api.client.shell.list({ location: { directory: live.cwd } })).data)
+    if (background !== undefined) engine.patch(live, { backgroundTasks: background })
     const turn = live.turn
     if (!turn) return
     const active = await live.api.client.session.active()
@@ -460,6 +482,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     live.stream.abort()
     live.agents?.dispose()
     void live.interactions?.close().catch(() => {})
+    live.settling.length = 0
   }
 
   async function startCompaction(live: ReturnType<typeof requireLive>, actionId: string, dispatch?: PromptDispatch): Promise<void> {
@@ -491,6 +514,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     },
     approvalAnswerDigest: openCodeApprovalDigest,
     observesNativeAgents: true,
+    backgroundStop: { kind: "ends-on-stop", how: "Stop removes every running shell of the conversation's sessions once the interrupted turn settles, and at once with no turn running; closing removes them before the server exits. OpenCode 2.0.1 keeps a background shell through an interrupt and past its server's exit." },
     compaction: {
       kind: "supported",
       async start(id, actionId) {
@@ -521,7 +545,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
       const live: Live = {
         api, cwd, emit: options.emit, launchAccess, children: new Set(), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
-        stream: new AbortController(), closed: false,
+        shells: new OpenCodeShells(sessionID => owns(live, sessionID)), settling: [], stream: new AbortController(), closed: false,
         state: {
           id: options.conversationId, harness: "opencode", cwd, title: options.title, nativeId: options.resume, nativePath,
           status: "starting", connection: "starting", modes: [...openCodeModes], currentMode: null, configOptions: [], settings: options.tuning,
@@ -668,16 +692,28 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       await live.api.client.session.switchAgent({ sessionID: live.root, agent })
       engine.patch(live, { currentMode: openCodeModeForAgent(agent, live.launchAccess) })
     },
+    /** Stop ends the turn and every shell the conversation left running. */
     async cancel(id) {
       const live = requireLive(id)
       const turn = live.turn
-      if (live.state.status !== "running" || !turn) return
+      const end = () => {
+        if (live.closed) return
+        endShells(live).catch(error =>
+          hostWarn("opencode", "Background shells were not ended", { conversation: live.state.id, error: errorText(error) }))
+      }
+      if (live.state.status !== "running" || !turn) {
+        end()
+        return
+      }
+      live.settling.push(end)
       let interrupted: boolean
       try {
         interrupted = (await live.api.client.session.interrupt({ sessionID: live.root })).interrupted
       } catch (error) {
         // An unacknowledged interrupt is not a stopped turn. End the server so
         // its exit marks the session disconnected before anything continues it.
+        live.settling = live.settling.filter(settle => settle !== end)
+        await endShellsWithinGrace(live)
         await live.api.close()
         throw error
       }
@@ -693,6 +729,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (!live) return
       sessions.delete(id)
       if (live.closed) return
+      await endShellsWithinGrace(live)
       stop(live)
       await live.api.close()
     },

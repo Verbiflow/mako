@@ -371,6 +371,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
     observesNativeAgents: true,
     compaction: { kind: "unavailable", reason: "Cursor's SDK does not expose manual compaction. Start a new thread and carry over what matters." },
+    // Verified 2026-09-27 (SDK 1.0.31): a shell the SDK moved to the
+    // background completed its call and died as its run finished; the local
+    // executor disposes every shell it started when the run ends.
+    backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, so none outlives its turn, and Stop ends the run." },
     canResume: true,
     checkpoint,
     resumeVerdict,
