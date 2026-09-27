@@ -832,6 +832,34 @@ diffs-container {
   animation: review-dot-arrive 220ms var(--ease-out) both;
 }
 
+/*
+ * A Session joining its Thread while you watch: the tab slides out of the
+ * `+` beside it, and the rail row's glyph stack takes the new mark the way
+ * an unread answer arrives. Neither plays when a Thread comes on screen or
+ * a row scrolls into view, only when something was added.
+ */
+@keyframes session-tab-arrive {
+  from {
+    opacity: 0;
+    transform: translate3d(4px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.session-tab[data-new] {
+  animation: session-tab-arrive var(--duration-menu) var(--ease-out) both;
+}
+.thread-glyph[data-new] {
+  animation: review-dot-arrive 220ms var(--ease-out) both;
+}
+/* The next mark sits 4px over this 12px one: centre 2px past the edge, 6px
+   radius, plus a 1.5px gap that shows whatever the row is painted with. */
+.thread-glyph:not(:last-child) {
+  mask-image: radial-gradient(circle at calc(100% + 2px) 50%, transparent 7.5px, #000 8px);
+}
+
 .composer-send:not(:disabled) {
   border: 1px solid color-mix(in srgb, var(--foreground) 70%, var(--surface));
   background: linear-gradient(160deg, var(--foreground), color-mix(in srgb, var(--foreground) 75%, var(--surface)) 52%, var(--foreground));

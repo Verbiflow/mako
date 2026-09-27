@@ -814,8 +814,9 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
 
 /**
  * Fork from this answer. The conversation up to and including this turn
- * becomes a NEW thread — on the same harness or any other — while the
- * original stays open. Foreign turns fork through the emitters (their
+ * becomes a new Session — on the same harness or any other — while the
+ * original stays open. It joins this Thread as a tab; Option-click puts it
+ * in a Thread of its own. Foreign turns fork through the emitters (their
  * message ids carry the entry index); native turns already have Fork on
  * the prompt, so this stays quiet there.
  */
@@ -841,8 +842,8 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       <>
         <button
           type="button"
-          title="Create an idle fork after this answer"
-          onClick={() => void acp.fork(liveRequestId)}
+          title="Fork after this answer into a new tab in this Thread. Option-click forks into a new Thread."
+          onClick={(event) => void acp.fork(liveRequestId, event.altKey ? "new" : "parent")}
           className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
         >
           <GitForkIcon className="size-3" /> Fork
@@ -875,7 +876,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          title="Fork from this answer into a new thread — any harness"
+          title="Fork from this answer into a new tab in this Thread, any agent. Option-click an agent to fork into a new Thread."
           className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
         >
           <GitForkIcon className="size-3" />
@@ -895,9 +896,9 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
           <button
             key={target}
             type="button"
-            onClick={() => {
+            onClick={(event) => {
               setOpen(false)
-              void threads.forkAt(viewing, anchor, target)
+              void threads.forkAt(viewing, anchor, target, event.altKey ? "new" : "parent")
             }}
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui text-foreground/90 transition-colors duration-100 hover:bg-fill-hover"
           >

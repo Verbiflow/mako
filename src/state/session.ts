@@ -4,6 +4,8 @@ import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
 import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
+import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
+import { watchThreadSessions } from "@/state/thread-sessions"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
@@ -195,6 +197,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-archives") {
     applyThreadArchives(event.snapshot)
+    return
+  }
+  if (event.type === "thread-group") {
+    applyThreadGroupChange(event.change)
     return
   }
   if (event.type === "host-reconnected") {
@@ -526,6 +532,7 @@ function adoptSnapshot(next: TabSnapshot) {
 }
 
 let stopOutboxWatch: (() => void) | undefined
+let stopThreadWatch: (() => void) | undefined
 function adoptBoot(boot: BootPayload) {
   const active = boot.tabs.find((tab) => tab.id === boot.activeTabId) ?? boot.tabs[0]
   if (!active) throw new Error("The host started without a conversation")
@@ -533,6 +540,7 @@ function adoptBoot(boot: BootPayload) {
   if (boot.archives) applyThreadArchives(boot.archives)
   hydrateLiveSummaries(boot.live)
   stopOutboxWatch ??= watchPendingMessages(() => { void restorePendingMessages() })
+  stopThreadWatch ??= watchThreadSessions()
   void restorePendingMessages()
   store.set({
     phase: "ready",
@@ -552,7 +560,16 @@ function adoptBoot(boot: BootPayload) {
   void application.load()
   void automations.load()
   void threads.load()
+  void loadGroups()
   if (!boot.archives) void threadLifecycle.load()
+}
+
+async function loadGroups() {
+  try {
+    await loadThreadGroups()
+  } catch (error) {
+    toast.error("Threads with several sessions show as separate rows", { description: error instanceof Error ? error.message : String(error) })
+  }
 }
 
 export const actions = {
@@ -587,6 +604,7 @@ export const actions = {
       void providers.loadAll()
       void providers.loadRuntimeUpdates()
       void threads.load()
+      void loadGroups()
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
       if (epoch === connectionEpoch) hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })

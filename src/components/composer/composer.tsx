@@ -64,6 +64,8 @@ import {
 import type { PromptAttachment } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { acp, acpStore, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
+import { openSessionDraft, sessionDraftKey, threadGroupsStore, useThreadGroups } from "@/state/thread-groups"
+import { startInThread } from "@/state/thread-sessions"
 import {
   draftText,
   projectDraftKey,
@@ -149,8 +151,9 @@ export function Composer() {
   )
   const opening = useThreads((state) => state.opening)
   const liveDraftKey = useAcp((state) => activeAcp(state)?.draftKey)
-  const draftKey = liveDraftKey ?? viewingPath ?? projectDraftKey(workspaceCwd)
-  const draftReady = Boolean(liveDraftKey || viewingPath || workspaceCwd)
+  const newSessionKey = useThreadGroups((state) => sessionDraftKey(openSessionDraft(state)))
+  const draftKey = liveDraftKey ?? viewingPath ?? newSessionKey ?? projectDraftKey(workspaceCwd)
+  const draftReady = Boolean(liveDraftKey || viewingPath || newSessionKey || workspaceCwd)
   const status = useSession(
     useCallback(
       (state) => ({
@@ -376,6 +379,7 @@ export function Composer() {
         viewingRef && viewingRef.path !== liveThreadPath
       )
       const harness = threadsStore.get().composerHarness
+      const sessionDraft = openSessionDraft(threadGroupsStore.get())
       // Wait out staging — a screenshot mid-copy must not race the send
       // and leave a dead [Attachment N] marker with no file behind it —
       // then put even inline-shaped images on disk, since a CLI reads
@@ -492,6 +496,8 @@ export function Composer() {
               ok = await acp.send(full, acpAttachments)
             }
           }
+        } else if (sessionDraft) {
+          ok = await startInThread(sessionDraft, harness, full, acpAttachments)
         } else if (descriptorFor(threadsStore.get(), harness)?.live) {
           ok = await acp.startFresh(harness, cwd ?? "", full, acpAttachments)
         } else {
@@ -510,6 +516,7 @@ export function Composer() {
           activeAcp(acpStore.get())?.draftKey ??
           threadsStore.get().opening?.ref.path ??
           threadsStore.get().viewing?.ref.path ??
+          sessionDraftKey(openSessionDraft(threadGroupsStore.get())) ??
           projectDraftKey(sessionStore.get().meta?.cwd ?? "")
         // This callback still owns the submitted attachment bucket, even after navigation.
         const restored = restoreEmptyDraft(
@@ -748,7 +755,9 @@ export function Composer() {
               : viewingRunning
                 ? `Queue a message for ${harnessTitle(routedHarness)}`
                 : `Reply — ${harnessTitle(routedHarness)} answers`
-        : `Ask ${harnessTitle(newHarness)} for a change`
+        : newSessionKey
+          ? `Start a ${harnessTitle(newHarness)} session in this Thread`
+          : `Ask ${harnessTitle(newHarness)} for a change`
 
   // The composer is a structural pane, not a floating card: it tiles the full
   // width of the conversation under one hairline, like every other pane, so

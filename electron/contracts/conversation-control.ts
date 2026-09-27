@@ -155,8 +155,12 @@ export const ConversationControlSchema = z.object({
       parentId: z.string().uuid(),
       sourceRevision: z.number().int().nonnegative(),
       point: z.string(),
+      /** A fork made with this set joins its parent's Thread as a tab. Older forks have their own Thread. */
+      placement: z.literal("parent-thread").optional(),
     })
     .optional(),
+  /** The Thread-store Session this journal was started in (a `+` tab), recorded before the first commit. */
+  session: z.string().uuid().optional(),
   activeBindingId: z.string().uuid(),
   bindings: z.array(ProviderBindingSchema),
   transfers: z.array(ContextTransferSchema),
@@ -181,5 +185,7 @@ export const ForkInputSchema = z.object({
       anchor: MessageAnchorSchema.optional(),
     }),
   ]),
+  /** Where the fork's Session goes. Absent means its parent's Thread, the default since track A3. */
+  thread: z.enum(["parent", "new"]).optional(),
 })
 export type ForkInput = z.infer<typeof ForkInputSchema>

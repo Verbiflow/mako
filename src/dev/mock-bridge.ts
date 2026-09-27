@@ -150,6 +150,10 @@ export function installMockBridge() {
       stop: null,
       external: false,
     }),
+    threadGroups: async () => [],
+    threadCreateSession: async () => {
+      throw new Error("The mock desk has no Thread store, so it can't add a session to a Thread.")
+    },
     archiveThread: async (command) => {
       const { threadArchiveKey } =
         await import("../../electron/contracts/thread-lifecycle")

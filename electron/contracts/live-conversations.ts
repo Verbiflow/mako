@@ -29,6 +29,8 @@ export interface LiveStartOptions {
   displayPrompt?: string
   modeId?: string
   tuning?: SessionSettings
+  /** The Thread-store Session this conversation starts in: an empty one a window's `+` tab created. */
+  session?: string
 }
 
 /**
@@ -141,6 +143,9 @@ export interface LiveSummary {
   epoch?: string
   threadPath?: string
   createdAt: number
+  /** The Thread and Session this conversation belongs to, the same IDs a catalog row carries. */
+  threadId?: string
+  sessionId?: string
 }
 
 export interface LiveSnapshot extends LiveSummary {

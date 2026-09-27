@@ -80,16 +80,26 @@ export const threadLifecycle = {
     catch (error) { toast.error("Archived threads could not be loaded", { description: error instanceof Error ? error.message : String(error) }) }
   },
   controls(target: ThreadTarget) { return getMako().threadControls(target) },
-  async archive(target: ThreadTarget, archived: boolean) {
+  /** Archive or restore a thread; a Thread with several Sessions passes one target per Session. */
+  async archive(targets: readonly ThreadTarget[], archived: boolean): Promise<boolean> {
+    let changed = 0
     try {
-      applyThreadArchives(await getMako().archiveThread({ id: crypto.randomUUID(), target, archived }))
-      // Putting a thread away is at least as much an acknowledgement as
-      // opening it: its unread answer or failure stops counting in the
-      // app icon's badge, and the row's mark stands down so a
-      // restore does not bring back news you have already dismissed.
-      if (archived) acknowledgeThread(target)
+      for (const one of targets) {
+        applyThreadArchives(await getMako().archiveThread({ id: crypto.randomUUID(), target: one, archived }))
+        changed += 1
+        // Putting a thread away is at least as much an acknowledgement as
+        // opening it: its unread answer or failure stops counting in the
+        // app icon's badge, and the row's mark stands down so a
+        // restore does not bring back news you have already dismissed.
+        if (archived) acknowledgeThread(one)
+      }
       toast(archived ? "Thread archived. Running work is not stopped." : "Thread restored")
-    } catch (error) { toast.error("The thread was not changed", { description: error instanceof Error ? error.message : String(error) }) }
+      return true
+    } catch (error) {
+      const description = error instanceof Error ? error.message : String(error)
+      toast.error(changed ? `${changed} of ${targets.length} sessions in this thread were ${archived ? "archived" : "restored"}` : "The thread was not changed", { description })
+      return false
+    }
   },
   async stop(target: StopTarget) {
     try {

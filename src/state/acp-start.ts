@@ -47,6 +47,8 @@ interface BeginStartInput {
   cwd: string
   title?: string
   threadPath?: string
+  /** A `+` tab's Thread and the Session its first send starts in. */
+  placement?: { thread: string; session: string }
   blocks: AcpBlock[]
   hiddenUserPrompt: string | null
 }
@@ -65,6 +67,8 @@ export function beginStart(input: BeginStartInput): StartingAcpConversation {
     cwd: input.cwd,
     title: input.title,
     threadPath: input.threadPath,
+    threadId: input.placement?.thread,
+    sessionId: input.placement?.session,
     blocks: input.blocks,
     queued: [],
     hiddenUserPrompt: input.hiddenUserPrompt,
@@ -149,6 +153,7 @@ export async function launch(
         options.tuning ?? (await settingsForSend(starting.settingsTarget)),
       conversationId: starting.key,
       threadPath: starting.threadPath,
+      session: starting.sessionId,
       displayPrompt: starting.hiddenUserPrompt
         ? starting.blocks
             .filter((block) => block.type === "user")
@@ -176,7 +181,7 @@ const retryDelays = new Map<string, number>()
 export async function restorePendingStart(command: Extract<OutboxCommand, { kind: "start" }>): Promise<void> {
   const [harness, cwd, input] = command.args
   const starting: StartingAcpConversation = { kind: "starting", key: input.conversationId, draftKey: command.draftKey,
-    settingsTarget: currentSettingsTarget(harness), harness, cwd, threadPath: input.threadPath, title: input.title,
+    settingsTarget: currentSettingsTarget(harness), harness, cwd, threadPath: input.threadPath, sessionId: input.session, title: input.title,
     blocks: [], queued: [], hiddenUserPrompt: null, createdAt: Date.now(), updatedAt: Date.now(), unconfirmedStart: input }
   const existing = acpStore.get().conversations[input.conversationId]
   if (existing?.kind === "live") {

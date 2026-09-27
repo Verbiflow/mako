@@ -10,7 +10,7 @@ import {
   type Refusal,
   type SessionExecution,
 } from "./contracts/thread-execution.js"
-import type { Actor, ThreadId } from "./contracts/thread-identity.js"
+import { SessionIdSchema, type Actor, type ThreadId } from "./contracts/thread-identity.js"
 import { hostWarn } from "./host-log.js"
 import type { Dependencies, Resident } from "./live-runtime.js"
 import { errorMessage } from "./live-runtime.js"
@@ -49,8 +49,9 @@ export function snapshotFacts(snapshot: LiveSnapshot): JournalFacts {
     threadPath: snapshot.threadPath,
     bindings: snapshot.control?.bindings ?? [{ provider: snapshot.session.harness, nativeId: snapshot.session.nativeId, path: snapshot.threadPath }],
     ancestry: snapshot.control?.ancestry
-      ? { kind: snapshot.control.ancestry.kind, parentId: snapshot.control.ancestry.parentId }
+      ? { kind: snapshot.control.ancestry.kind, parentId: snapshot.control.ancestry.parentId, placement: snapshot.control.ancestry.placement }
       : undefined,
+    session: snapshot.control?.session ? SessionIdSchema.parse(snapshot.control.session) : undefined,
   }
 }
 

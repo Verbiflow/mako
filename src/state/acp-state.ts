@@ -28,6 +28,9 @@ interface AcpConversationBase {
   title?: string
   nativePaths?: string[]
   threadPath?: string
+  /** The Thread-store Thread and Session, from the host; a `+` tab's start knows them before it does. */
+  threadId?: string
+  sessionId?: string
   control?: LiveSnapshot["control"]
   requests?: LiveSnapshot["requests"]
   base?: LiveSnapshot["base"]

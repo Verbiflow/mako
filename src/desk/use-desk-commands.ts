@@ -19,6 +19,7 @@ import { openInterfacePreview, reloadInterface } from "@/state/development"
 import { stage } from "@/state/stage"
 import { surfaces } from "@/extend/surfaces"
 import { tabsStore } from "@/state/tabs"
+import { closeSessionDraft, newSessionInThread, stepThreadSession, threadHasTabs } from "@/state/thread-sessions"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
 import { applyLoadoutEntry } from "@/state/model-loadout"
@@ -60,6 +61,7 @@ function closeActiveTab() {
     viewer.closeTab(pane.id, pane.activeId)
     return
   }
+  if (closeSessionDraft()) return
   const tabId = tabsStore.get().activeId
   if (tabId) void actions.closeTab(tabId)
 }
@@ -109,42 +111,50 @@ const DESK_COMMANDS: DeskCommand[] = [
   },
   {
     id: "session.new",
-    title: "New session",
+    title: "New thread",
     section: "Session",
     keys: "mod+n",
     run: () => void actions.newSession(),
   },
   {
     id: "tab.new",
-    title: "Attach another session",
+    title: "New tab",
     section: "Session",
-    hint: "A second conversation kept running beside this one",
+    hint: "A new session in the Thread on screen, any agent; outside a Thread, another attached session",
     keys: "mod+t",
-    run: () => void actions.openTab(),
+    run: () => {
+      if (!newSessionInThread()) void actions.openTab()
+    },
   },
   {
     id: "tab.close",
     title: "Close active tab",
     section: "Session",
-    hint: "Closes the active file, or detaches the active session",
+    hint: "Closes the active file or new tab, or detaches the active session",
     keys: "mod+w",
     run: closeActiveTab,
   },
   {
     id: "tab.next",
-    title: "Next attached session",
+    title: "Next tab",
     section: "Session",
+    hint: "The Thread's next session, or the next attached session",
     keys: "mod+shift+]",
-    when: () => tabsStore.get().tabs.length > 1,
-    run: () => stepTab(1),
+    when: () => threadHasTabs() || tabsStore.get().tabs.length > 1,
+    run: () => {
+      if (!stepThreadSession(1)) stepTab(1)
+    },
   },
   {
     id: "tab.previous",
-    title: "Previous attached session",
+    title: "Previous tab",
     section: "Session",
+    hint: "The Thread's previous session, or the previous attached session",
     keys: "mod+shift+[",
-    when: () => tabsStore.get().tabs.length > 1,
-    run: () => stepTab(-1),
+    when: () => threadHasTabs() || tabsStore.get().tabs.length > 1,
+    run: () => {
+      if (!stepThreadSession(-1)) stepTab(-1)
+    },
   },
   {
     id: "session.focus-composer",

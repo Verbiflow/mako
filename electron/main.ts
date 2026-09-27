@@ -63,6 +63,7 @@ import { ThreadStore, threadStorePath } from "./thread-store.js"
 import { ThreadArchives } from "./thread-archives.js"
 import { ThreadLifecycle } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
+import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { nativeStopToken } from "./drivers.js"
 import type { LiveStartOptions } from "./shared.js"
 import {
@@ -2023,6 +2024,7 @@ app.whenReady().then(async () => {
     external: (path) => Boolean(threadActivitySnapshot()[path]),
   })
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
+  installThreadGroupsIpc(threadStore, liveConversations)
   application = installApplicationIpc({
     live: liveConversations,
     native: nativeRequests,

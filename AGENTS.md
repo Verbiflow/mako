@@ -843,8 +843,17 @@ the workspace name centred two inches away. Identity is the rail's footer and
 only there, and Settings is a row in the menu it opens. No glyph in the strip
 duplicates a doorway that already exists: the palette is Cmd+K and search is
 the one control there with no other way in. The rail is the vertical thread
-list; horizontal tabs inside the central workbench hold the agent session,
-files, and diffs for that thread, never more sessions.
+list; horizontal tabs inside the central workbench hold that thread's
+sessions, then its files and diffs. The rail never nests sessions: a Thread
+with several is one row wearing each Session's agent mark and the most
+demanding status among them (`src/lib/thread-fold.ts`), and clicking it
+opens the Session you last had open there. `+` and Cmd+T open the Thread's
+new tab; nothing is created until its first message is sent, an empty new
+tab disappears when you leave it, and one holding unsent text stays as a
+Draft tab, its text kept per Thread (`src/state/thread-sessions.ts`). An
+untitled Session's tab shows its agent's name, never a shared placeholder. A fork
+joins its parent's Thread as a tab unless Option-click asks for a new one.
+Moves are per Thread; no control offers to move one Session.
 
 The composer groups file attachments, screenshots, references, skills, and MCP
 settings under one + popover. `composer.controls` contributions render inside

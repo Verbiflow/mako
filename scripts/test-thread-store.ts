@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "../electron/contracts/thread-identity.js"
+import { MoveIdSchema, RuntimeIdSchema } from "../electron/contracts/thread-execution.js"
 import {
   THREAD_STORE_SCHEMA,
   ThreadOperationConflictError,
@@ -254,6 +255,40 @@ function receipts(): void {
   threads.close()
 }
 
+function threadGroups(): void {
+  const path = join(root, "groups.sqlite")
+  const threads = new ThreadStore(path, { now })
+  const parent = journal({ harness: "claude", bindings: [{ provider: "claude", nativeId: "p", path: "/claude/a/p.jsonl" }] })
+  const home = threads.registerJournal(parent, migration)
+  assert.deepEqual(threads.groups(), [], "a Thread with one Session is no group")
+
+  const fork = journal({ harness: "codex", ancestry: { kind: "fork", parentId: parent.conversationId, placement: "parent-thread" } })
+  const forked = threads.registerJournal(fork, migration)
+  assert.equal(forked.thread, home.thread, "a fork asked into its parent's Thread joins it")
+  assert.notEqual(forked.session, home.session, "as its own Session")
+  assert.deepEqual(threads.group(home.thread)?.sessions.map((session) => [session.id, session.started]), [[home.session, true], [forked.session, true]])
+
+  const tab = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: threads.person() })
+  assert.deepEqual(threads.group(home.thread)?.sessions.at(-1), { id: tab.session, origin: "new", started: false }, "an unsent tab's Session is empty")
+  const started = journal({ harness: "opencode", session: tab.session })
+  assert.deepEqual(threads.registerJournal(started, threads.person()), tab)
+  assert.equal(threads.group(home.thread)?.sessions.at(-1)?.started, true, "its first journal starts it")
+  assert.deepEqual(threads.groups().map((group) => group.id), [home.thread])
+
+  const stray = journal({ harness: "grok", session: randomUUID() })
+  assert.notEqual(threads.registerJournal(stray, migration).thread, home.thread, "a journal naming an unknown Session starts its own Thread")
+  threads.close()
+
+  const reopened = new ThreadStore(path, { now })
+  assert.deepEqual(reopened.registerJournals([started, fork, parent], migration).get(started.conversationId), tab, "a restart places a tab's journal in its Session again")
+  assert.deepEqual(reopened.journalPlacement(fork.conversationId), forked)
+  const leaving = reopened.beginMove({ move: MoveIdSchema.parse(randomUUID()), thread: home.thread, target: { kind: "cloud", runtime: RuntimeIdSchema.parse(randomUUID()) }, actor: reopened.person() })
+  assert.equal(leaving.sessions.length, 3)
+  const late = journal({ harness: "devin", ancestry: { kind: "fork", parentId: parent.conversationId, placement: "parent-thread" } })
+  assert.notEqual(reopened.registerJournal(late, migration).thread, home.thread, "a fork of a moving Thread gets its own Thread")
+  reopened.close()
+}
+
 function twoHosts(): void {
   const path = join(root, "shared.sqlite")
   const first = new ThreadStore(path, { now })
@@ -283,6 +318,7 @@ try {
   handoffAndCatalogFirst()
   conflicts()
   receipts()
+  threadGroups()
   twoHosts()
   console.log("thread store: ok")
 } finally {

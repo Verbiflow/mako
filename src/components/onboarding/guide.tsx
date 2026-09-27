@@ -50,7 +50,7 @@ const REGIONS: Region[] = [
   {
     name: "Sessions",
     commandId: "tab.new",
-    what: "A second conversation kept running beside this one. Background work keeps going; ⌘⇧[ and ⌘⇧] cycle through them.",
+    what: "A new session in the Thread on screen, with any agent; it starts when you send. Outside a Thread, a second conversation kept running beside this one. ⌘⇧[ and ⌘⇧] step through them.",
   },
   {
     name: "Account",

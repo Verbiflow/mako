@@ -1,5 +1,6 @@
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
+import type { ThreadGroupChange } from "./thread-groups.js"
 import {
   type ControlActivity,
   type BrowserControlStatus,
@@ -88,6 +89,8 @@ export type HostEventBody =
    */
   | { type: "threads"; threads: CatalogThreadRef[] }
   | { type: "thread-ref"; ref: CatalogThreadRef }
+  /** A Thread gained or lost a Session; window-wide. */
+  | { type: "thread-group"; change: ThreadGroupChange }
   | { type: "thread-removed"; path: string }
   | {
       type: "thread-activity"

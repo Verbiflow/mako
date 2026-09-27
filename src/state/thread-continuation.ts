@@ -196,7 +196,8 @@ export const threadContinuationActions = {
   async forkAt(
     ref: ThreadRef,
     anchor: MessageAnchor,
-    harness: string
+    harness: string,
+    thread: "parent" | "new" = "parent"
   ): Promise<boolean> {
     if (!hasBridge()) return false
     if (descriptorFor(threadsStore.get(), harness)?.live === true) {
@@ -214,6 +215,7 @@ export const threadContinuationActions = {
             revision: JSON.stringify([ref.revision, ref.bytes, ref.updatedAt]),
             anchor,
           },
+          thread,
         })
         const { acp } = await import("@/state/acp")
         applyLiveSnapshot(fork)

@@ -79,7 +79,7 @@ import {
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import type { JournalFacts, SourceRef } from "./thread-store.js"
-import type { Actor } from "./contracts/thread-identity.js"
+import { SessionIdSchema, ThreadIdSchema, type Actor } from "./contracts/thread-identity.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
@@ -107,6 +107,7 @@ export class LiveConversations {
   private readonly recovered = new Map<string, LiveSummary>()
   /** What each journal last told the Thread store, so a flush registers only news. */
   private readonly registeredThreads = new Map<string, string>()
+  private placementWarned = false
   private readonly assets: LiveAssets
   private readonly dependencies: Dependencies
   /**
@@ -172,7 +173,7 @@ export class LiveConversations {
         try {
           const found = journal.summary()
           if (found) {
-            const { ancestry, ...summary } = found
+            const { ancestry, threadSession, ...summary } = found
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             this.backfillMemory(id, summary.session)
             journals.push({
@@ -182,6 +183,7 @@ export class LiveConversations {
               threadPath: summary.threadPath,
               bindings: summary.nativeBindings,
               ancestry,
+              session: threadSession ? SessionIdSchema.parse(threadSession) : undefined,
             })
             this.recovered.set(id, {
               ...summary,
@@ -238,11 +240,24 @@ export class LiveConversations {
     const key = registrationKey(facts)
     if (this.registeredThreads.get(facts.conversationId) === key) return
     try {
-      threads.registerJournal(facts, actor ?? { kind: "service", name: "catalog" })
+      const placed = threads.registerJournal(facts, actor ?? { kind: "service", name: "catalog" })
+      const first = !this.registeredThreads.has(facts.conversationId)
       this.registeredThreads.set(facts.conversationId, key)
+      if (first && facts.session) this.announceGroup(placed.thread)
     } catch (error) {
       hostWarn("threads", "journal registration failed", { conversation: facts.conversationId, error: errorMessage({ error }) })
     }
+  }
+
+  /**
+   * A `+` tab's Session, checked before the journal exists: a tab left open
+   * after its Session was merged away fails here and leaves no conversation.
+   */
+  private startingSession(session: string): string {
+    const id = SessionIdSchema.parse(session)
+    if (this.dependencies.threads && !this.dependencies.threads.sessionPlacement(id))
+      throw new Error("This tab's session no longer exists. Open a new tab and send again; your draft is kept.")
+    return id
   }
 
   /** The initiator of an admitted request: the local person unless a caller inside the host says otherwise. */
@@ -411,7 +426,7 @@ export class LiveConversations {
 
   summaries(): LiveSummary[] {
     return [
-      ...[...this.recovered.values()].map((summary) => ({ ...summary, epoch: this.epoch })),
+      ...[...this.recovered.values()].map((summary) => ({ ...summary, epoch: this.epoch, ...this.placement(summary.session.id) })),
       ...[...this.records.values()].map(({ snapshot }) => ({
         hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
         nativePaths: snapshot.control?.bindings.flatMap((binding) =>
@@ -422,8 +437,25 @@ export class LiveConversations {
         epoch: this.epoch,
         threadPath: snapshot.threadPath,
         createdAt: snapshot.createdAt,
+        ...this.placement(snapshot.session.id),
       })),
     ]
+  }
+
+  /**
+   * The Thread and Session a window files this conversation under. Read at
+   * the edge and never written into the journal: a merge or a move changes
+   * it, and the store is the one place that knows.
+   */
+  private placement(id: string): Pick<LiveSummary, "threadId" | "sessionId"> {
+    try {
+      const placed = this.dependencies.threads?.journalPlacement(id)
+      return placed ? { threadId: placed.thread, sessionId: placed.session } : {}
+    } catch (error) {
+      if (!this.placementWarned) hostWarn("threads", "a conversation's Thread could not be read; it is served without one", { conversation: id, error: errorMessage({ error }) })
+      this.placementWarned = true
+      return {}
+    }
   }
 
   /** A connected driver is authoritative even if a ledger write failed earlier. */
@@ -524,7 +556,10 @@ export class LiveConversations {
 
   /** The snapshot as this host numbers it; the renderer merges batches only onto the same epoch. */
   private stamp(snapshot: LiveSnapshot): LiveSnapshot {
-    return snapshot.epoch === this.epoch ? snapshot : { ...snapshot, epoch: this.epoch }
+    const placed = this.placement(snapshot.session.id)
+    return snapshot.epoch === this.epoch && snapshot.threadId === placed.threadId && snapshot.sessionId === placed.sessionId
+      ? snapshot
+      : { ...snapshot, epoch: this.epoch, ...placed }
   }
 
   capture(id: string, path: string): Promise<LiveSnapshot> {
@@ -691,11 +726,13 @@ export class LiveConversations {
         "The saved history could not be loaded; the conversation was not started"
       )
     const id = options.conversationId
+    const session = options.session === undefined ? undefined : this.startingSession(options.session)
     const snapshot: LiveSnapshot = {
       control: {
         children: [],
         merges: [],
         ancestry,
+        session,
         activeBindingId: id,
         bindings: [
           {
@@ -1922,6 +1959,7 @@ export class LiveConversations {
     this.flush(parent)
     const source = parent.snapshot
     const point = JSON.stringify(command.point)
+    const placement = command.thread === "new" ? undefined : "parent-thread"
     const existing = this.load(command.id)
     if (existing) {
       if (
@@ -1931,7 +1969,9 @@ export class LiveConversations {
           existing.snapshot.session.harness) !== command.provider
       )
         throw new Error("This fork ID belongs to another source point")
-      return existing.snapshot
+      if (existing.snapshot.control.ancestry.placement !== placement)
+        throw new Error("This fork ID was used for a fork into another Thread")
+      return this.stamp(existing.snapshot)
     }
     let nativeFork: NonNullable<ConversationControl["ancestry"]>["nativeFork"]
     let entries = source.base?.entries ?? []
@@ -2066,6 +2106,7 @@ export class LiveConversations {
           parentId: id,
           sourceRevision: source.revision,
           point,
+          placement,
         },
         activeBindingId: command.id,
         bindings: [],
@@ -2095,7 +2136,20 @@ export class LiveConversations {
       timer: null,
     })
     this.registerThread(snapshot, this.actor())
-    return snapshot
+    const stamped = this.stamp(snapshot)
+    if (placement && stamped.threadId) this.announceGroup(stamped.threadId)
+    return stamped
+  }
+
+  /** Tell every window what a Thread's tabs are now, after a Session joined it. */
+  announceGroup(thread: string): void {
+    const threads = this.dependencies.threads
+    if (!threads) return
+    try {
+      this.dependencies.emit({ type: "thread-group", change: { thread, group: threads.group(ThreadIdSchema.parse(thread)) ?? null } })
+    } catch (error) {
+      hostWarn("threads", "a Thread's tabs could not be announced", { thread, error: errorMessage({ error }) })
+    }
   }
 
   previewRewind(

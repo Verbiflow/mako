@@ -5,6 +5,8 @@ import { ThreadViewer } from "@/components/viewer/thread-viewer"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { FileViewer } from "@/components/viewer/file-viewer"
 import { SearchView } from "@/components/search/search-view"
+import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
+import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
 import { ErrorBoundary } from "@/components/shell/error-boundary"
 import { useSurfaces, type SurfaceDefinition } from "@/extend/surfaces"
@@ -337,11 +339,13 @@ function ConversationSurface() {
   // conversation in full. Swapping to the live panel any earlier showed the
   // new prompt alone until the history arrived a moment later.
   const starting = useAcp((state) => activeAcp(state)?.kind === "starting")
+  const draft = useThreadGroups(openSessionDraft)
   if (
     viewing &&
     (!live || viewingPath !== liveThreadPath || (starting && viewingPath))
   )
     return <ThreadViewer />
   if (live) return <AcpPanel />
+  if (draft) return <SessionDraftReceipt draft={draft} />
   return <Transcript />
 }

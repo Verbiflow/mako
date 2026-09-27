@@ -36,6 +36,7 @@ const reads = [
   "mako:thread-preview",
   "mako:thread-block",
   "mako:thread-archives",
+  "mako:thread-groups",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
   "mako:thread-continuation-resolve",
@@ -111,6 +112,8 @@ const replays = [
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */
   "mako:thread-remember-mode",
+  /** `ThreadStore.createSession`: the operation id is receipted; a repeat returns the first Session. */
+  "mako:thread-create-session",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

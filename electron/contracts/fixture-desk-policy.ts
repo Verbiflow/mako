@@ -25,6 +25,7 @@ const fixtureReads = [
   "mako:thread-preview",
   "mako:thread-block",
   "mako:thread-archives",
+  "mako:thread-groups",
   "mako:live-snapshot",
   "mako:live-state",
   "mako:live-locate",

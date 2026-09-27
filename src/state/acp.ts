@@ -367,7 +367,8 @@ export const acp = {
     prompt: string,
     attachments: PromptAttachment[] = [],
     displayPrompt = prompt,
-    threadPath?: string
+    threadPath?: string,
+    placement?: { thread: string; session: string }
   ): Promise<boolean> {
     if (!hasBridge()) return false
     const existing = threadPath
@@ -385,6 +386,7 @@ export const acp = {
       cwd,
       title,
       threadPath,
+      placement,
       blocks: displayPrompt ? [{ type: "user", text: displayPrompt }] : [],
       hiddenUserPrompt: displayPrompt === prompt ? null : prompt,
     })
@@ -440,7 +442,8 @@ export const acp = {
     }
   },
 
-  async fork(requestId: string): Promise<boolean> {
+  /** A fork joins this conversation's Thread as a tab unless `thread` is `new`. */
+  async fork(requestId: string, thread: "parent" | "new" = "parent"): Promise<boolean> {
     const current = activeLiveAcp(acpStore.get())
     if (!current || !hasBridge()) return false
     try {
@@ -448,6 +451,7 @@ export const acp = {
         id: crypto.randomUUID(),
         provider: current.harness,
         point: { kind: "run", requestId },
+        thread,
       })
       applyLiveSnapshot(snapshot)
       acp.activate(snapshot.session.id)

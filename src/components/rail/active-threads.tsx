@@ -1,22 +1,29 @@
+import { useState } from "react"
+import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { HarnessIcon } from "@/components/ui/provider-icon"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { ThreadActions } from "@/components/rail/thread-actions"
-import { archivedLive, useThreadArchives } from "@/state/thread-lifecycle"
+import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { workspaceName } from "@/lib/format"
+import { FOLD_GLYPHS, foldRowHarness, type FoldedThread } from "@/lib/thread-fold"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { acp } from "@/state/acp"
 import type { AcpPresence } from "@/state/acp-presence"
+import { openFoldedThread } from "@/state/thread-sessions"
 import { cn } from "@/lib/utils"
 
 export function LiveAgentRow({
   presence,
+  folded,
   indent = false,
 }: {
   presence: AcpPresence
+  /** Set when this row stands for a Thread with several Sessions. */
+  folded?: FoldedThread
   indent?: boolean
 }) {
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
+  const [since] = useState(() => performance.now())
   const label =
     presence.status === "needs-permission"
       ? "Needs your approval"
@@ -39,23 +46,39 @@ export function LiveAgentRow({
             : "idle"
   const title =
     presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
+  const open = () => {
+    if (folded) openFoldedThread(folded.thread, folded.members)
+    else acp.activate(presence.key)
+  }
+  const archiveTargets = folded?.members.map((member): ThreadTarget =>
+    member.kind === "native" ? nativeThreadTarget(member.ref) : { kind: "live", id: member.key }
+  )
   return (
     <div
       role="button"
       tabIndex={0}
-      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); acp.activate(presence.key) } }}
-      aria-label={`${title}, ${label}`}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open() } }}
+      aria-label={folded ? `${title}, ${folded.members.length} sessions, ${label}` : `${title}, ${label}`}
       data-thread-row
       data-flip-key={presence.key}
       data-conversation-id={presence.key}
       data-thread-indent={indent || undefined}
-      onClick={() => acp.activate(presence.key)}
+      onClick={open}
       className={cn(
         "pressable group relative flex h-8 w-full items-center gap-2 rounded-md pr-1.5 text-left transition-colors duration-100 hover:bg-fill-hover",
         indent ? "pl-[26px]" : "pl-1.5"
       )}
     >
-      <HarnessIcon harness={presence.harness} className="size-3 shrink-0" />
+      <span className="flex shrink-0 items-center -space-x-1">
+        {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
+          <FoldGlyph
+            key={member?.key ?? presence.key}
+            harness={member ? foldRowHarness(member) : presence.harness}
+            live={false}
+            rowSince={since}
+          />
+        ))}
+      </span>
       <span className="min-w-0 flex-[1_1_60%] truncate text-ui text-foreground/85">
         {title}
       </span>
@@ -68,7 +91,16 @@ export function LiveAgentRow({
         className="-my-1 hidden shrink-0 items-center group-hover:flex group-focus-within:flex group-focus-visible:flex has-[[data-state=open]]:flex"
         onClick={(event) => event.stopPropagation()}
       >
-        <ThreadActions target={{ kind: "live", id: presence.key }} title={title} archived={archived} running={presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission"} controlled path={presence.threadPath} />
+        <ThreadActions
+          target={{ kind: "live", id: presence.key }}
+          title={title}
+          archived={archived}
+          running={presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission"}
+          controlled
+          path={presence.threadPath}
+          thread={folded?.thread ?? presence.threadId}
+          archiveTargets={archiveTargets}
+        />
       </span>
       <span title={label} className="flex shrink-0 text-muted-foreground">
         <ActivityMark state={state} size={20} />

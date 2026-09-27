@@ -173,6 +173,7 @@ export const hostCallInputs = {
             path: z.string().optional(),
           })
         ),
+        displayText: z.string().optional(),
       }),
       z.object({
         kind: z.literal("steer-queued"),
@@ -189,6 +190,7 @@ export const hostCallInputs = {
             path: z.string().optional(),
           })
         ),
+        displayText: z.string().optional(),
       }),
       z.object({
         kind: z.literal("compact"),
@@ -269,6 +271,7 @@ export const hostCallInputs = {
             .optional(),
         }),
       ]),
+      thread: z.union([z.literal("new"), z.literal("parent")]).optional(),
     }),
   ]),
   "mako:live-locate": z.tuple([z.string(), z.string()]),
@@ -396,6 +399,7 @@ export const hostCallInputs = {
             .optional(),
         })
         .optional(),
+      session: z.string().optional(),
     }),
   ]),
   "mako:live-state": z.tuple([z.string()]),
@@ -416,6 +420,7 @@ export const hostCallInputs = {
           path: z.string().optional(),
         })
       ),
+      displayText: z.string().optional(),
     }),
   ]),
   "mako:live-transfer": z.tuple([
@@ -434,6 +439,7 @@ export const hostCallInputs = {
         })
       ),
       bindingId: z.string().optional(),
+      displayText: z.string().optional(),
       tuning: z
         .object({
           model: z.string().optional(),
@@ -738,6 +744,7 @@ export const hostCallInputs = {
       }),
     ]),
   ]),
+  "mako:thread-create-session": z.tuple([z.string(), z.string()]),
   "mako:thread-file": z.tuple([z.string(), z.string()]),
   "mako:thread-follow": z.tuple([z.string(), z.number()]),
   "mako:thread-fork": z.tuple([
@@ -752,6 +759,7 @@ export const hostCallInputs = {
       })
       .optional(),
   ]),
+  "mako:thread-groups": z.tuple([]),
   "mako:thread-open": z.tuple([z.string()]),
   "mako:thread-owner-resolve": z.tuple([z.string()]),
   "mako:thread-page": z.tuple([

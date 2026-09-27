@@ -33,6 +33,7 @@ import {
   type Refusal,
   type SessionExecution,
 } from "./contracts/thread-execution.js"
+import { ThreadGroupSchema, type ThreadGroup } from "./contracts/thread-groups.js"
 import { hostWarn } from "./host-log.js"
 
 /**
@@ -112,7 +113,8 @@ export interface JournalFacts {
   harness: string
   threadPath?: string
   bindings: ReadonlyArray<{ provider: string; nativeId?: string; path?: string }>
-  ancestry?: { kind: "fork" | "delegation"; parentId: string }
+  /** `parent-thread` puts a fork's new Session in its parent's Thread; without it a fork has its own Thread. */
+  ancestry?: { kind: "fork" | "delegation"; parentId: string; placement?: "parent-thread" }
   /** A journal started inside a Session that already exists (a `+` tab). */
   session?: SessionId
 }
@@ -384,9 +386,40 @@ export class ThreadStore {
     return this.write(() => this.placeSession(this.registerOne(facts, actor)))
   }
 
+  /** Where a journal's Session is, answered from memory until any commit moves a Session. */
   journalPlacement(conversationId: string): ThreadPlacement | undefined {
+    this.syncVersion()
+    const key = journalPlacementKey(conversationId)
+    const cached = this.placements.get(key)
+    if (cached) return cached
     const row = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(conversationId)
-    return row ? this.placeSession(SessionRowSchema.parse(row).session_id) : undefined
+    if (!row) return undefined
+    const placed = this.placeSession(SessionRowSchema.parse(row).session_id)
+    this.placements.set(key, placed)
+    return placed
+  }
+
+  /** Every Thread with more than one Session, each with its Sessions in tab order. */
+  groups(): ThreadGroup[] {
+    return this.sql("SELECT thread_id FROM memberships GROUP BY thread_id HAVING count(*) > 1 ORDER BY min(added_at), thread_id").all()
+      .flatMap((row) => {
+        const group = this.group(ThreadIdSchema.parse(MembershipRowSchema.parse(row).thread_id))
+        return group ? [group] : []
+      })
+  }
+
+  /** One Thread's group, following merges; undefined while it has one Session. */
+  group(id: ThreadId): ThreadGroup | undefined {
+    const thread = this.thread(id)
+    if (!thread || thread.sessions.length < 2) return undefined
+    return ThreadGroupSchema.parse({
+      id: thread.id,
+      sessions: thread.sessions.map((session) => ({
+        id: session,
+        origin: this.sessionRow(session).origin,
+        started: Boolean(this.sql("SELECT 1 AS found FROM journals WHERE session_id = ? UNION ALL SELECT 1 FROM sources WHERE session_id = ? LIMIT 1").get(session, session)),
+      })),
+    })
   }
 
   /**
@@ -732,19 +765,9 @@ export class ThreadStore {
       const session = SessionRowSchema.parse(known).session_id
       return this.attach(facts, session, actor)
     }
-    let session: string | undefined
-    if (facts.session) {
-      session = this.canonical(facts.session)
-      if (!session) throw new Error("The Session this conversation was started in no longer exists")
-    } else if (facts.ancestry) {
-      // A fork's inherited history names its parent's native session; only
-      // the link to the parent counts, never a match through it.
-      const parent = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(facts.ancestry.parentId)
-      session = this.mintSingleton(facts.ancestry.kind, parent ? SessionRowSchema.parse(parent).session_id : null, actor)
-    } else {
-      session = this.findJournalSession(facts)
-        ?? this.mintSingleton(facts.threadPath ? "captured" : "started", null, actor)
-    }
+    const session = this.startedIn(facts) ?? (facts.ancestry
+      ? this.mintDescendant(facts.ancestry, actor)
+      : this.findJournalSession(facts) ?? this.mintSingleton(facts.threadPath ? "captured" : "started", null, actor))
     this.sql("INSERT INTO journals VALUES (?, ?, ?, ?)").run(facts.conversationId, session, facts.createdAt, this.now())
     return this.attach(facts, session, actor)
   }
@@ -908,6 +931,46 @@ export class ThreadStore {
     this.reported.add(pair)
     this.conflicts.push({ sessions: [SessionIdSchema.parse(a), SessionIdSchema.parse(b)], reason })
     hostWarn("threads", "two Sessions claim one native session; neither was merged", { sessions: `${a} ${b}`, reason })
+  }
+
+  /**
+   * The Session a `+` tab's first send started in. A journal naming a Session
+   * this store never held (the store was recreated) is placed as if it named
+   * none: throwing would fail every journal registered in the same batch.
+   */
+  private startedIn(facts: JournalFacts): string | undefined {
+    if (!facts.session) return undefined
+    const session = this.canonical(facts.session)
+    if (!session)
+      hostWarn("threads", "a journal names a Session this store doesn't have; placing it by its records", { conversation: facts.conversationId })
+    return session
+  }
+
+  /**
+   * A fork or delegated child. Its inherited history names its parent's
+   * native session, so only the link to the parent counts, never a match
+   * through it. A fork made to join its parent's Thread does so when it can.
+   */
+  private mintDescendant(ancestry: NonNullable<JournalFacts["ancestry"]>, actor: Actor): string {
+    const found = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(ancestry.parentId)
+    const parent = found ? this.canonical(SessionRowSchema.parse(found).session_id) ?? null : null
+    const home = parent && ancestry.placement === "parent-thread" ? this.forkHome(parent) : undefined
+    if (!home) return this.mintSingleton(ancestry.kind, parent, actor)
+    const session = this.mintSession(ancestry.kind, parent, actor)
+    this.addMember(home, session, actor)
+    this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(home)
+    return session
+  }
+
+  /**
+   * The Thread a new fork of `parent` joins: the parent's, unless any Session
+   * there runs elsewhere or is moving. A release checks that the moving set
+   * is unchanged, so a Thread in transit takes no new member.
+   */
+  private forkHome(parent: string): ThreadId | undefined {
+    const thread = this.thread(this.placeSession(parent).thread)
+    if (!thread) return undefined
+    return thread.sessions.every((member) => this.executionState(member).state === "here") ? thread.id : undefined
   }
 
   private mintSingleton(origin: SessionOrigin, parent: string | null, actor: Actor): string {
@@ -1195,6 +1258,11 @@ function ownerColumns(owner: ExecutionOwner): ["device" | "cloud", string] {
 
 function ownerFrom(kind: "device" | "cloud", id: string): ExecutionOwner {
   return ExecutionOwnerSchema.parse(kind === "device" ? { kind, device: id } : { kind, runtime: id })
+}
+
+/** A NUL can't start a harness name, so a journal's key never meets a catalog row's. */
+function journalPlacementKey(conversationId: string): string {
+  return `\0journal\n${conversationId}`
 }
 
 function placementKey(ref: SourceRef): string {

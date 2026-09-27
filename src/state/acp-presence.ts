@@ -10,6 +10,8 @@ export interface AcpPresence {
   title?: string
   nativePaths?: string[]
   threadPath?: string
+  threadId?: string
+  sessionId?: string
   status: "starting" | "ready" | "running" | "needs-permission" | "failed"
 }
 
@@ -25,6 +27,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
           title: conversation.title,
           threadPath: conversation.threadPath,
           nativePaths: conversation.nativePaths,
+          threadId: conversation.threadId,
+          sessionId: conversation.sessionId,
           status: "starting",
         }
         return [presence]
@@ -39,6 +43,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
         title: conversation.title,
         threadPath: conversation.threadPath,
         nativePaths: conversation.nativePaths,
+        threadId: conversation.threadId,
+        sessionId: conversation.sessionId,
         // A dropped connection Mako is about to continue itself is a working
         // row, not a failed one: the send is seconds away.
         status:
@@ -71,6 +77,8 @@ export function sameAcpPresence(
         candidate.createdAt === presence.createdAt &&
         candidate.title === presence.title &&
         candidate.threadPath === presence.threadPath &&
+        candidate.threadId === presence.threadId &&
+        candidate.sessionId === presence.sessionId &&
         (candidate.nativePaths ?? []).join("\0") ===
           (presence.nativePaths ?? []).join("\0") &&
         candidate.status === presence.status

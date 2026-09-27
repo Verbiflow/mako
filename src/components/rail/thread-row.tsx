@@ -3,7 +3,11 @@ import { ArchiveIcon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { ThreadActions } from "@/components/rail/thread-actions"
-import { archivedThread, nativeThreadTarget, useThreadArchives } from "@/state/thread-lifecycle"
+import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
+import { FoldGlyph } from "@/components/rail/fold-glyph"
+import { FOLD_GLYPHS, foldedThreadStatus, foldRowHarness, type FoldedThread, type FoldRow } from "@/lib/thread-fold"
+import { useThreadGroups } from "@/state/thread-groups"
+import { openFoldedThread } from "@/state/thread-sessions"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -83,22 +87,44 @@ const Detach = memo(function Detach({ path }: { path: string }) {
   )
 })
 
+/** At most this many agent marks on a folded row; its tip names every Session's agent. */
+function foldRowTarget(row: FoldRow): ThreadTarget {
+  return row.kind === "native" ? nativeThreadTarget(row.ref) : { kind: "live", id: row.key }
+}
+
 export const ThreadRow = memo(function ThreadRow({
   threadRef: ref,
+  folded,
   indent,
   showFolder,
 }: {
   threadRef: ThreadRef
+  /** Set when this row stands for a Thread with several Sessions. */
+  folded?: FoldedThread
   indent?: boolean
   showFolder?: boolean
 }) {
   const override = usePrefs((prefs) => prefs.titleOverrides[ref.path])
   const [editing, setEditing] = useState<string | null>(null)
+  const [since] = useState(() => performance.now())
   // A thread whose CLI is being driven from here right now wears a pulse —
   // the same promise a tab's dot makes: something is working behind this row.
-  const status = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
+  const status = useThreads(
+    (state) => (folded ? foldedThreadStatus(folded.members, (member) => threadStatus(member, state)) : threadStatus(ref, state)),
+    sameThreadStatus
+  )
   const archived = useThreadArchives((state) => archivedThread(ref, state.keys))
   const target = nativeThreadTarget(ref)
+  const foldedLive = useAcp((state) =>
+    Boolean(
+      folded &&
+        state.activeKey &&
+        folded.members.some((member) =>
+          member.kind === "live" ? member.presence.key === state.activeKey : acpForThread(state, member.ref)?.key === state.activeKey
+        )
+    )
+  )
+  const draftOpen = useThreadGroups((state) => state.open !== null && state.open === (folded?.thread ?? ref.threadId))
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
@@ -115,18 +141,25 @@ export const ThreadRow = memo(function ThreadRow({
   )
 
   const open = () => {
-    void threads.view(ref)
+    if (folded) openFoldedThread(folded.thread, folded.members)
+    else void threads.view(ref)
   }
   // Opening on press, not release, lights the row a click's length sooner.
   const openedOnPress = useRef(false)
 
   // One selection at a time: while a thread is open in the viewer, IT is
   // the selection — the native tab keeps its state but not its highlight,
-  // because two lit rows read as a broken click.
+  // because two lit rows read as a broken click. A folded row is lit by
+  // any of its Sessions, and by its new tab.
   const focusedPath = selectedPath ?? livePath
-  const lit = selectedPath
-    ? selectedPath === ref.path
-    : selectedLive || (focusedPath ? focusedPath === ref.path : active)
+  const lit = draftOpen || (folded
+    ? selectedPath
+      ? folded.members.some((member) => member.kind === "native" && member.ref.path === selectedPath)
+      : foldedLive
+    : selectedPath
+      ? selectedPath === ref.path
+      : selectedLive || (focusedPath ? focusedPath === ref.path : active))
+  const title = override ?? ref.title ?? "Untitled session"
 
   return (
     <div
@@ -155,7 +188,10 @@ export const ThreadRow = memo(function ThreadRow({
       // The row's full text, shown by the rail's own tip (`rail-tip.tsx`),
       // never a native `title`: on macOS those arrive late or not at all.
       data-tip={[
-        override ?? ref.title ?? "Untitled session",
+        title,
+        folded
+          ? `${folded.members.length} sessions: ${folded.members.map((member) => harnessLabel(foldRowHarness(member))).join(", ")}`
+          : undefined,
         ref.archived
           ? "Archived: the native store lost this; Mako kept it. Reply to bring it back to life."
           : undefined,
@@ -182,22 +218,26 @@ export const ThreadRow = memo(function ThreadRow({
     >
       {/* Where this conversation has lived: earlier harnesses dimmed and
           tucked behind, the current one in front. One mark when it has
-          only ever been one place — which is most sessions. */}
+          only ever been one place — which is most sessions. A Thread with
+          several Sessions shows the agent of each, first Session first. */}
       <span className="flex shrink-0 items-center -space-x-1">
-        {(ref.lineage ?? []).slice(-1).map((origin, index) => (
-          <HarnessIcon
-            key={`${origin.harness}-${index}`}
-            harness={origin.harness}
-            className="size-3 opacity-40"
-          />
-        ))}
-        <HarnessIcon
-          harness={liveProvider ?? ref.harness}
-          className={cn(
-            "size-3",
-            (working || activeElsewhere) && "animate-live"
-          )}
-        />
+        {[
+          ...(folded ? [] : (ref.lineage ?? []).slice(-1).map((origin, index) => (
+            <HarnessIcon
+              key={`lineage:${origin.harness}-${index}`}
+              harness={origin.harness}
+              className="size-3 opacity-40"
+            />
+          ))),
+          ...(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
+            <FoldGlyph
+              key={member?.key ?? ref.path}
+              harness={member && member.key !== ref.path ? foldRowHarness(member) : (liveProvider ?? ref.harness)}
+              live={working || activeElsewhere}
+              rowSince={since}
+            />
+          )),
+        ]}
       </span>
       {editing !== null ? (
         <input
@@ -231,7 +271,7 @@ export const ThreadRow = memo(function ThreadRow({
             lit ? "font-medium text-foreground" : "text-foreground/85"
           )}
         >
-          {override ?? ref.title ?? "Untitled session"}
+          {title}
         </span>
       )}
       {showFolder && ref.cwd ? (
@@ -271,7 +311,17 @@ export const ThreadRow = memo(function ThreadRow({
         >
           <PinIcon className={cn("size-3", isPinned && "fill-current")} />
         </button>
-        <ThreadActions target={target} title={override ?? ref.title ?? "Untitled session"} archived={archived} running={working || activeElsewhere || status.kind === "needs-permission"} controlled={target.kind === "live" || working} path={ref.path} />
+        <ThreadActions
+          target={target}
+          title={title}
+          archived={archived}
+          running={working || activeElsewhere || status.kind === "needs-permission"}
+          // A folded row's status may be another Session's run; its stop lives in that tab.
+          controlled={!folded && (target.kind === "live" || working)}
+          path={ref.path}
+          thread={folded?.thread ?? ref.threadId}
+          archiveTargets={folded?.members.map(foldRowTarget)}
+        />
         <Detach path={ref.path} />
       </span>
       <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />

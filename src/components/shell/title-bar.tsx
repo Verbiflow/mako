@@ -79,7 +79,7 @@ export function TitleBar() {
         </IconAction>
 
         <IconAction
-          label="New session"
+          label="New thread"
           keys={formatChord("mod+n")}
           onClick={() => void actions.newSession()}
         >

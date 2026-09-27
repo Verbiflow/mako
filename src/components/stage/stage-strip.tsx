@@ -1,6 +1,8 @@
 import { IconAction } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { MakoMark } from "@/components/ui/mako-mark"
+import { SessionTabList } from "@/components/stage/session-tabs"
+import { useOnScreen, useThreadTabs } from "@/state/thread-sessions"
 import { activeAcp, useAcp } from "@/state/acp"
 import { usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
@@ -31,6 +33,8 @@ export function StageStrip({
     const path = viewing?.path ?? liveThreadPath
     return path ? prefs.titleOverrides[path] : undefined
   })
+  const here = useOnScreen()
+  const sessionTabs = useThreadTabs(here.thread)
 
   if (!pane) return null
   const canSplit = pane.activeId !== AGENT_TAB_ID
@@ -57,6 +61,16 @@ export function StageStrip({
           const agent = id === AGENT_TAB_ID
           if (!agent && !document) return null
           const active = id === pane.activeId
+          if (agent && sessionTabs.length > 0)
+            return (
+              <SessionTabList
+                key={`${id}:${here.thread ?? ""}`}
+                tabs={sessionTabs}
+                here={here}
+                paneId={pane.id}
+                agentActive={active}
+              />
+            )
           const title = agent ? agentTitle : document.title
           const pinned = agent || document.pinned
           return (

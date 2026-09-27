@@ -168,8 +168,9 @@ export function journalSummary(metadata: string) {
     threadPath,
     createdAt,
     ancestry: control?.ancestry
-      ? { kind: control.ancestry.kind, parentId: control.ancestry.parentId }
+      ? { kind: control.ancestry.kind, parentId: control.ancestry.parentId, placement: control.ancestry.placement }
       : undefined,
+    threadSession: control?.session,
     hasSessionQuestions: Boolean(control?.questions?.length),
     nativeBindings: control?.bindings ?? [{ provider: session.harness, nativeId: session.nativeId }],
     nativePaths: control?.bindings.flatMap((binding) =>
