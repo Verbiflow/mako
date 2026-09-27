@@ -29,10 +29,24 @@ export interface ViewerDocument {
   renderMode: ViewerRenderMode
 }
 
+/** A Session shown in a pane: its Thread, and its tab (a Session ID, or the new tab's draft ID). */
+export interface PaneSession {
+  thread: string
+  tab: string
+}
+
+export type PaneSide = "left" | "right" | "up" | "down"
+
 export interface ViewerPane {
   id: string
   tabIds: string[]
   activeId?: string
+  /**
+   * What this pane's chat shows while another pane has focus. The focused
+   * pane shows the window's active conversation instead, and keeps this only
+   * until that conversation catches up with it.
+   */
+  session?: PaneSession
 }
 
 export interface ViewerState {
@@ -58,6 +72,7 @@ export interface ViewerState {
 
 export const AGENT_TAB_ID = "agent"
 const PRIMARY_PANE = "primary"
+export const SECONDARY_PANE = "secondary"
 const initialState: ViewerState = {
   loading: false,
   documents: {},
@@ -348,9 +363,10 @@ export const viewer = {
 
   showAgent() {
     const state = viewerStore.get()
-    const pane = state.panes.find((candidate) =>
-      candidate.tabIds.includes(AGENT_TAB_ID)
-    )
+    const holds = (candidate: ViewerPane) => candidate.tabIds.includes(AGENT_TAB_ID)
+    const pane =
+      state.panes.find((candidate) => candidate.id === state.focusedPaneId && holds(candidate)) ??
+      state.panes.find(holds)
     if (!pane) return
     commit(
       state.documents,
@@ -424,11 +440,43 @@ export const viewer = {
       state.panes[0]
     if (!source.activeId || source.activeId === AGENT_TAB_ID) return
     const secondary: ViewerPane = {
-      id: "secondary",
+      id: SECONDARY_PANE,
       tabIds: [source.activeId],
       activeId: source.activeId,
     }
     commit(state.documents, [...state.panes, secondary], secondary.id, split)
+    void watchActiveFile()
+  },
+
+  /**
+   * Open a second pane holding a chat, on `side` of the one there is. Focus
+   * doesn't move; `bindPanes` decides it. Returns the new pane's ID, or null
+   * when there are two panes already.
+   */
+  openAgentPane(side: PaneSide, session: PaneSession): string | null {
+    const state = viewerStore.get()
+    if (state.panes.length !== 1) return null
+    const pane: ViewerPane = { id: SECONDARY_PANE, tabIds: [AGENT_TAB_ID], activeId: AGENT_TAB_ID, session }
+    const before = side === "left" || side === "up"
+    commit(
+      state.documents,
+      before ? [pane, ...state.panes] : [...state.panes, pane],
+      state.focusedPaneId,
+      side === "left" || side === "right" ? "right" : "down"
+    )
+    return pane.id
+  },
+
+  /** Set what panes show without focus, show their chats, and focus one, in one change. */
+  bindPanes(sessions: Readonly<Record<string, PaneSession | undefined>>, focusedPaneId: string) {
+    const state = viewerStore.get()
+    if (!state.panes.some((pane) => pane.id === focusedPaneId)) return
+    const panes = state.panes.map((pane) => {
+      if (!(pane.id in sessions)) return pane
+      const tabIds = pane.tabIds.includes(AGENT_TAB_ID) ? pane.tabIds : [AGENT_TAB_ID, ...pane.tabIds]
+      return { ...pane, tabIds, activeId: pane.id === focusedPaneId ? AGENT_TAB_ID : pane.activeId ?? AGENT_TAB_ID, session: sessions[pane.id] }
+    })
+    commit(state.documents, panes, focusedPaneId)
     void watchActiveFile()
   },
 

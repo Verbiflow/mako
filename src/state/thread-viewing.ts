@@ -98,6 +98,21 @@ export function rememberThread(thread: ViewedThread) {
   }
 }
 
+/** The last read of a transcript, if this window still holds it. */
+export function rememberedThread(path: string): ViewedThread | undefined {
+  return threadCache.get(path)
+}
+
+/** A fresh read for a pane without focus, kept for the moment it takes focus. */
+export async function readThreadForPane(path: string): Promise<ViewedThread | null> {
+  if (!hasBridge()) return null
+  const page = await getMako().pageThread(path)
+  if (!page) return null
+  const thread = viewedPage(page)
+  rememberThread(thread)
+  return thread
+}
+
 export function isOptimisticEcho(entry: ViewedThreadEntry): boolean {
   return entry.kind === "user" && entry.echo === true
 }

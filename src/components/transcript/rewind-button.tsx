@@ -1,7 +1,8 @@
 import { useState } from "react"
 import { RotateCcwIcon } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
-import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { acp, useAcp } from "@/state/acp"
+import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import type { RewindPreview } from "@/lib/types"
 
 type PreviewState =
@@ -21,9 +22,10 @@ export function RewindButton({
   requestId: string
   position?: "before" | "after"
 }) {
+  const scope = useConversationScope()
   const snapshots = useAcp(
     (state) =>
-      activeLiveAcp(state)?.requests?.find(
+      scopedLiveAcp(state, scope)?.requests?.find(
         (request) => request.id === requestId
       )?.snapshots
   )

@@ -1,6 +1,6 @@
 import { memo, useState, type KeyboardEvent, type ReactNode } from "react"
 import { ContextMenu } from "radix-ui"
-import { ArchiveIcon, ListPlusIcon, PencilLineIcon, PlusIcon, SplitIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, Columns2Icon, ListPlusIcon, PencilLineIcon, PlusIcon, Rows2Icon, SplitIcon, XIcon } from "lucide-react"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { IconAction } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -13,14 +13,15 @@ import {
   closeDraftTab,
   newSessionInThread,
   onScreenTab,
-  openSessionTab,
   sessionTabTitle,
   type OnScreen,
   type SessionTab,
 } from "@/state/thread-sessions"
 import { archiveSessionTab, openAddToThread, splitIntoNewThread } from "@/state/thread-regroup"
+import { openInPane, openTabInPane } from "@/state/session-panes"
+import { pressTab } from "@/state/tab-drag"
 import { sameThreadStatus, threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
-import { AGENT_TAB_ID, viewer } from "@/state/viewer"
+import { AGENT_TAB_ID } from "@/state/viewer"
 
 /** A tab that mounts this long after its Thread's strip did joined while you watched. */
 const ARRIVAL_MS = 32
@@ -90,6 +91,13 @@ function SessionTabMenu({ tab, thread, title, alone, children }: {
             <SplitIcon className="size-3.5" />Split into new thread
           </ContextMenu.Item>
           <ContextMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
+          <ContextMenu.Item className={menuItem} onSelect={() => { openInPane(tab, thread, "right") }}>
+            <Columns2Icon className="size-3.5" />Open to the right
+          </ContextMenu.Item>
+          <ContextMenu.Item className={menuItem} onSelect={() => { openInPane(tab, thread, "down") }}>
+            <Rows2Icon className="size-3.5" />Open below
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
           <ContextMenu.Item className={menuItem} disabled={alone} onSelect={() => { void archiveSessionTab(tab, thread) }}>
             <ArchiveIcon className="size-3.5" />Archive session
           </ContextMenu.Item>
@@ -123,10 +131,7 @@ function SessionTabButton({
     tab.kind === "draft"
       ? selected ? composerHarness : tab.draft.harness
       : (tab.presence?.harness ?? tab.ref?.harness)
-  const open = () => {
-    viewer.activate(paneId, AGENT_TAB_ID)
-    openSessionTab(tab)
-  }
+  const open = () => openTabInPane(paneId, thread, tab)
   const close = tab.kind === "draft" || closable
     ? () => {
         if (tab.kind === "draft") closeDraftTab(tab.draft)
@@ -155,6 +160,9 @@ function SessionTabButton({
         data-tab-id={selected ? AGENT_TAB_ID : undefined}
         data-session-tab={tab.id}
         title={tab.kind === "draft" ? `New session in this Thread${selected ? "" : ", not sent yet"}` : title}
+        onPointerDown={(event) => {
+          if (thread) pressTab(event, { tab, thread, title }, event.currentTarget)
+        }}
         onMouseDown={(event) => {
           if (event.button === 0 && event.detail > 0) open()
         }}

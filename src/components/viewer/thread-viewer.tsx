@@ -1,4 +1,5 @@
 import { NativeRequestNotice } from "./native-request-notice"
+import { useConversationScope } from "@/state/conversation-scope"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { harnessLabel } from "@/components/rail/harness-meta"
@@ -170,12 +171,15 @@ function createExchangeBuilder() {
 }
 
 export function ThreadViewer() {
-  const thread = useThreads((state) => state.viewing)
-  const opening = useThreads((state) => state.opening)
+  const scope = useScopedHistory()
+  const viewing = useThreads((state) => state.viewing)
+  const globalOpening = useThreads((state) => state.opening)
+  const thread = scope ? scope.thread : viewing
+  const opening = scope ? (scope.thread ? null : { kind: "loading" as const, ref: scope.ref }) : globalOpening
   const busy = opening?.kind === "loading"
 
   useEffect(() => {
-    if (!thread && !opening) return
+    if (scope || (!thread && !globalOpening)) return
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
       if (event.key === "Escape") {
@@ -185,7 +189,7 @@ export function ThreadViewer() {
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [opening, thread])
+  }, [globalOpening, scope, thread])
 
   if (opening && (!thread || opening.kind === "failed"))
     return (
@@ -205,6 +209,12 @@ export function ThreadViewer() {
       <Conversation key={thread.ref.path} />
     </div>
   )
+}
+
+/** The history a pane without focus shows, or null in the focused pane. */
+function useScopedHistory() {
+  const scope = useConversationScope()
+  return scope?.kind === "history" ? scope : null
 }
 
 function ThreadLoadingShell({
@@ -259,12 +269,16 @@ function ThreadLoadingShell({
  * conversation here.
  */
 function Conversation() {
-  const thread = useThreads((state) => state.viewing)
-  const run = useThreads((state) => state.run)
+  const scope = useScopedHistory()
+  const viewing = useThreads((state) => state.viewing)
+  const globalRun = useThreads((state) => state.run)
+  const thread = scope ? scope.thread : viewing
+  const run = scope ? null : globalRun
+  const ref = thread?.ref
   // Another thread's catalog event must not repaint this transcript: the
   // status is compared by its fields, not by the object each call allocates.
   const status = useThreads(
-    (state) => (state.viewing ? threadStatus(state.viewing.ref, state) : null),
+    (state) => (ref ? threadStatus(ref, state) : null),
     sameOptionalStatus
   )
   const [buildExchanges] = useState(() => createExchangeBuilder())
@@ -294,7 +308,7 @@ function Conversation() {
           ? lastExchangeId
           : undefined
       }
-      hasEarlier={thread.hasEarlier}
+      hasEarlier={!scope && thread.hasEarlier}
       loadingEarlier={thread.loadingEarlier}
       onLoadEarlier={() => threads.loadEarlier()}
       empty={

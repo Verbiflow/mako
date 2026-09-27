@@ -6,6 +6,7 @@ import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, applyThreadRegroup, loadThreadGroups } from "@/state/thread-groups"
 import { watchThreadSessions } from "@/state/thread-sessions"
+import { watchSessionPanes } from "@/state/session-panes"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
@@ -537,6 +538,7 @@ function adoptSnapshot(next: TabSnapshot) {
 
 let stopOutboxWatch: (() => void) | undefined
 let stopThreadWatch: (() => void) | undefined
+let stopPaneWatch: (() => void) | undefined
 function adoptBoot(boot: BootPayload) {
   const active = boot.tabs.find((tab) => tab.id === boot.activeTabId) ?? boot.tabs[0]
   if (!active) throw new Error("The host started without a conversation")
@@ -545,6 +547,7 @@ function adoptBoot(boot: BootPayload) {
   hydrateLiveSummaries(boot.live)
   stopOutboxWatch ??= watchPendingMessages(() => { void restorePendingMessages() })
   stopThreadWatch ??= watchThreadSessions()
+  stopPaneWatch ??= watchSessionPanes()
   void restorePendingMessages()
   store.set({
     phase: "ready",

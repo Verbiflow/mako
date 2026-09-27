@@ -1536,3 +1536,137 @@ diffs-container {
   background: var(--fill-selected);
   border-radius: 4px;
 }
+
+/*
+ * Dragging a Session tab onto the chat. The ghost is a chip of glass that
+ * follows the pointer; each pane shows one plate where the tab would land,
+ * which glides between halves as the pointer crosses them.
+ */
+.tab-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 10px;
+  overflow: hidden;
+  border-radius: 8px;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  background: color-mix(in oklab, var(--popover) 72%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+  box-shadow:
+    var(--elevation-overlay),
+    inset 0 0 0 0.5px var(--hairline),
+    inset 0 1px 0 0 var(--glass-rim);
+  animation: tab-drag-lift 140ms var(--ease-out) both;
+}
+.tab-drag-ghost svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+:root[data-tab-dragging],
+:root[data-tab-dragging] * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+@keyframes tab-drag-lift {
+  from {
+    opacity: 0;
+    scale: 0.94;
+  }
+}
+
+.pane-drop {
+  position: absolute;
+  /* Below the pane's 40px tab strip: the tab lands in the chat, not on the tabs. */
+  inset: 40px 0 0;
+  z-index: 30;
+  pointer-events: none;
+  animation: pane-drop-in 120ms var(--ease-out) both;
+}
+.pane-drop-plate {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--text-label);
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 14%, transparent);
+  opacity: 0;
+  transition:
+    top 180ms var(--ease-out),
+    right 180ms var(--ease-out),
+    bottom 180ms var(--ease-out),
+    left 180ms var(--ease-out),
+    opacity 120ms var(--ease-out);
+}
+.pane-drop[data-side] .pane-drop-plate {
+  opacity: 1;
+}
+.pane-drop[data-side="left"] .pane-drop-plate {
+  right: calc(50% + 4px);
+}
+.pane-drop[data-side="right"] .pane-drop-plate {
+  left: calc(50% + 4px);
+}
+.pane-drop[data-side="up"] .pane-drop-plate {
+  bottom: calc(50% + 4px);
+}
+.pane-drop[data-side="down"] .pane-drop-plate {
+  top: calc(50% + 4px);
+}
+@keyframes pane-drop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A pane opened beside the chat grows in from the side it was dropped on. */
+.workbench-pane-arrive {
+  animation: workbench-pane-arrive 180ms var(--ease-out) both;
+}
+.workbench-pane-arrive[data-arrive-from="right"] {
+  --pane-from: 12px 0;
+}
+.workbench-pane-arrive[data-arrive-from="left"] {
+  --pane-from: -12px 0;
+}
+.workbench-pane-arrive[data-arrive-from="down"] {
+  --pane-from: 0 12px;
+}
+.workbench-pane-arrive[data-arrive-from="up"] {
+  --pane-from: 0 -12px;
+}
+@keyframes workbench-pane-arrive {
+  from {
+    opacity: 0;
+    translate: var(--pane-from);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-drag-ghost,
+  .pane-drop,
+  .workbench-pane-arrive {
+    animation: none;
+  }
+  .pane-drop-plate {
+    transition: none;
+  }
+}

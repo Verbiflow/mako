@@ -1,4 +1,5 @@
 import {
+  Fragment,
   lazy,
   memo,
   Suspense,
@@ -14,12 +15,16 @@ import { Divider } from "@/components/shell/divider"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { GitLoading } from "@/components/inspector/git-loading"
 import { StageStrip } from "@/components/stage/stage-strip"
+import { focusWorkbenchPane } from "@/state/session-panes"
+import { useTabDrag, type DropSide } from "@/state/tab-drag"
 import { desktop } from "@/state/desktop"
 import { prefsStore } from "@/state/prefs"
 import {
   AGENT_TAB_ID,
+  SECONDARY_PANE,
   viewer,
   useViewer,
+  type PaneSession,
   type ViewerDocument,
   type ViewerPane,
 } from "@/state/viewer"
@@ -39,6 +44,13 @@ const View = lazy(() =>
   }))
 )
 
+/** One pane's chat: its Session while unfocused, and whether it has the composer. */
+export interface AgentSurfaceProps {
+  paneId: string
+  session?: PaneSession
+  composer: boolean
+}
+
 /**
  * The central workbench for the agent session, files, and diffs.
  *
@@ -52,7 +64,7 @@ export function FileViewer({
   style,
   workspaceRef,
 }: {
-  AgentSurface: ComponentType
+  AgentSurface: ComponentType<AgentSurfaceProps>
   className?: string
   style?: CSSProperties
   workspaceRef: RefObject<HTMLDivElement | null>
@@ -111,6 +123,16 @@ export function FileViewer({
 
   const hasSecondPane = panes.length === 2
   const horizontal = split === "right"
+  const holdsAgent = (pane: ViewerPane) => pane.tabIds.includes(AGENT_TAB_ID)
+  const chats = panes.filter(holdsAgent).length
+  // The composer sits in the focused chat, or else in the chat showing the
+  // active conversation, so there is always exactly one.
+  const composerPane =
+    panes.find((pane) => pane.id === focusedPaneId && holdsAgent(pane)) ??
+    panes.find((pane) => holdsAgent(pane) && !pane.session) ??
+    panes.find(holdsAgent)
+  const closable = (pane: ViewerPane) => hasSecondPane && (chats === 2 || !holdsAgent(pane))
+
   const secondMin = horizontal
     ? Math.min(240, bounds.width / 2)
     : Math.min(180, bounds.height / 2)
@@ -139,47 +161,52 @@ export function FileViewer({
           hasSecondPane && !horizontal && "flex-col"
         )}
       >
-        <FilePane
-          AgentSurface={AgentSurface}
-          pane={panes[0]}
-          documents={documents}
-          focused={focusedPaneId === panes[0].id}
-          canClosePane={false}
-        />
-        {hasSecondPane ? (
-          <>
-            <Divider
-              side={horizontal ? "right" : "bottom"}
-              size={secondSize}
-              min={secondMin}
-              max={secondMax}
-              onResize={(next) => {
-                if (!secondary.current) return
-                if (horizontal) secondary.current.style.width = `${next}px`
-                else secondary.current.style.height = `${next}px`
-              }}
-              onCommit={(next) => {
-                if (horizontal) setPaneWidth(next)
-                else setPaneHeight(next)
-              }}
-            />
-            <div
-              ref={secondary}
-              style={
-                horizontal ? { width: secondSize } : { height: secondSize }
-              }
-              className="flex min-h-0 min-w-0 shrink-0"
-            >
-              <FilePane
-                AgentSurface={AgentSurface}
-                pane={panes[1]}
-                documents={documents}
-                focused={focusedPaneId === panes[1].id}
-                canClosePane
-              />
-            </div>
-          </>
-        ) : null}
+        {panes.map((pane, index) => {
+          const second = index === 1
+          // Only a split makes the second pane, so it grows in once, as it mounts.
+          const arrived = pane.id === SECONDARY_PANE
+          const from = horizontal ? (second ? "right" : "left") : second ? "down" : "up"
+          return (
+            <Fragment key={pane.id}>
+              {second ? (
+                <Divider
+                  side={horizontal ? "right" : "bottom"}
+                  size={secondSize}
+                  min={secondMin}
+                  max={secondMax}
+                  onResize={(next) => {
+                    if (!secondary.current) return
+                    if (horizontal) secondary.current.style.width = `${next}px`
+                    else secondary.current.style.height = `${next}px`
+                  }}
+                  onCommit={(next) => {
+                    if (horizontal) setPaneWidth(next)
+                    else setPaneHeight(next)
+                  }}
+                />
+              ) : null}
+              <div
+                ref={second ? secondary : undefined}
+                style={second ? (horizontal ? { width: secondSize } : { height: secondSize }) : undefined}
+                data-arrive-from={arrived ? from : undefined}
+                className={cn(
+                  "flex min-h-0 min-w-0",
+                  second ? "shrink-0" : "flex-1",
+                  arrived && "workbench-pane-arrive"
+                )}
+              >
+                <FilePane
+                  AgentSurface={AgentSurface}
+                  pane={pane}
+                  documents={documents}
+                  focused={focusedPaneId === pane.id}
+                  composer={composerPane?.id === pane.id}
+                  canClosePane={closable(pane)}
+                />
+              </div>
+            </Fragment>
+          )
+        })}
       </div>
     </div>
   )
@@ -190,42 +217,83 @@ const FilePane = memo(function FilePane({
   pane,
   documents,
   focused,
+  composer,
   canClosePane,
 }: {
-  AgentSurface: ComponentType
+  AgentSurface: ComponentType<AgentSurfaceProps>
   pane: ViewerPane
   documents: Record<string, ViewerDocument>
   focused: boolean
+  composer: boolean
   canClosePane: boolean
 }) {
   const agent = pane.activeId === AGENT_TAB_ID
   const hasAgent = pane.tabIds.includes(AGENT_TAB_ID)
   const document = pane.activeId ? documents[pane.activeId] : undefined
+  const chat = useRef<HTMLDivElement>(null)
+  // The first press in a chat without focus only moves focus there. Its
+  // buttons act on the active conversation, which is still the other one.
+  const swallow = useRef(false)
 
   return (
     <section
       aria-label="Workbench pane"
-      onPointerDown={() => viewer.focusPane(pane.id)}
+      data-pane-id={pane.id}
+      onPointerDownCapture={(event) => {
+        const target = event.target instanceof Element ? event.target : null
+        swallow.current =
+          !focused && agent && Boolean(pane.session) && Boolean(target && chat.current?.contains(target)) && !target?.closest("[data-pane-reply]")
+        focusWorkbenchPane(pane.id)
+      }}
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col bg-surface",
+        "workbench-pane relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface",
         focused && "ring-1 ring-border ring-inset"
       )}
     >
       <StageStrip paneId={pane.id} canClosePane={canClosePane} />
       {hasAgent ? (
         <div
+          ref={chat}
+          onClickCapture={(event) => {
+            if (!swallow.current) return
+            swallow.current = false
+            event.preventDefault()
+            event.stopPropagation()
+          }}
           className={cn(
             "flex min-h-0 min-w-0 flex-1 flex-col",
             !agent && "hidden"
           )}
         >
-          <AgentSurface />
+          <AgentSurface paneId={pane.id} session={pane.session} composer={composer} />
         </div>
       ) : null}
       {!agent && document ? <DocumentView document={document} /> : null}
+      <PaneDropOverlay paneId={pane.id} />
     </section>
   )
 })
+
+const DROP_LABELS = {
+  left: "Open on the left",
+  right: "Open to the right",
+  up: "Open above",
+  down: "Open below",
+  center: "Open here",
+} satisfies Record<DropSide, string>
+
+/** Where a dragged tab would land in this pane, while one is dragged. */
+function PaneDropOverlay({ paneId }: { paneId: string }) {
+  const dragging = useTabDrag((state) => state.drag !== null)
+  const side = useTabDrag((state) => (state.zone?.paneId === paneId ? state.zone.side : null))
+  const panes = useViewer((state) => state.panes.length)
+  if (!dragging) return null
+  return (
+    <div className="pane-drop" data-side={side ?? undefined} aria-hidden>
+      <div className="pane-drop-plate">{side ? (panes > 1 ? "Show here" : DROP_LABELS[side]) : null}</div>
+    </div>
+  )
+}
 
 function DocumentView({ document }: { document: ViewerDocument }) {
   const previewable =

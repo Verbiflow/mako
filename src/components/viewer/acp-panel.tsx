@@ -18,6 +18,7 @@ import { Collapse } from "@/components/ui/collapse"
 import { Disclosure, NoticeAction } from "@/components/ui/notice"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
+import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 import { toast } from "sonner"
 import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/lib/types"
@@ -49,12 +50,15 @@ import {
 const EMPTY_QUEUE: never[] = []
 
 export function AcpPanel() {
-  const session = useAcp((state) => activeLiveAcp(state)?.session ?? null)
-  const starting = useAcp((state) => activeAcp(state)?.kind === "starting")
+  const scope = useConversationScope()
+  const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
+  const starting = useAcp((state) => scopedAcp(state, scope)?.kind === "starting")
   // The reader was already looking at this conversation's history when it
   // went live: the same turns stay where they are, so the panel does not
-  // arrive as a new surface.
-  const continued = useContinuedInPlace()
+  // arrive as a new surface. Read once, so moving focus between panes never
+  // replays the entrance.
+  const inPlace = useContinuedInPlace()
+  const [continued] = useState(inPlace)
 
   if (starting) {
     return (
@@ -68,30 +72,57 @@ export function AcpPanel() {
   return (
     <div data-live-conversation={session.id} className={cn(!continued && "animate-enter", "flex min-h-0 flex-1 flex-col bg-surface")}>
       <Blocks continued={continued} />
-      <TransferStatus />
-      <LiveActionStatus />
-      <RetainedRequests />
-      <ApprovalStatus />
-      <Permission />
-      <SessionQuestion />
+      {scope ? (
+        <PaneWaiting />
+      ) : (
+        <>
+          <TransferStatus />
+          <LiveActionStatus />
+          <RetainedRequests />
+          <ApprovalStatus />
+          <Permission />
+          <SessionQuestion />
+        </>
+      )}
     </div>
   )
 }
 
 function useContinuedInPlace(): boolean {
-  const threadPath = useAcp((state) => activeAcp(state)?.threadPath)
-  return useThreads((state) => threadPath !== undefined && state.viewing?.ref.path === threadPath)
+  const scope = useConversationScope()
+  const threadPath = useAcp((state) => scopedAcp(state, scope)?.threadPath)
+  const viewed = useThreads((state) => threadPath !== undefined && state.viewing?.ref.path === threadPath)
+  // A pane opening beside another grows in; its transcript doesn't enter again.
+  return scope !== null || viewed
+}
+
+/** A pane without focus says the agent is waiting; the answer is given once the pane has focus. */
+function PaneWaiting() {
+  const scope = useConversationScope()
+  const waiting = useAcp((state) => {
+    const live = scopedLiveAcp(state, scope)
+    if (!live) return false
+    return Boolean(live.permission) || Boolean(live.control && latestPendingQuestion(live.control, live.requests ?? EMPTY_QUEUE))
+  })
+  if (!waiting) return null
+  return (
+    <p className="flex shrink-0 items-center gap-1.5 border-t border-hairline px-4 py-2 text-label text-caution">
+      <ShieldQuestionIcon className="size-3.5 shrink-0" />
+      Waiting for your answer. Click here to answer.
+    </p>
+  )
 }
 
 function Blocks({ starting = false, continued = false }: { starting?: boolean; continued?: boolean }) {
-  const session = useAcp((state) => activeLiveAcp(state)?.session ?? null)
-  const projection = useAcp((state) => activeAcp(state)?.projection)
-  const history = useAcp((state) => activeAcp(state)?.base)
-  const historyWindow = useAcp((state) => activeAcp(state)?.history)
+  const scope = useConversationScope()
+  const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
+  const projection = useAcp((state) => scopedAcp(state, scope)?.projection)
+  const history = useAcp((state) => scopedAcp(state, scope)?.base)
+  const historyWindow = useAcp((state) => scopedAcp(state, scope)?.history)
   // Stable from the first keystroke of a start through promotion and any
   // later binding: the transcript keeps its scroll position and its turns.
-  const identity = useAcp((state) => activeAcp(state)?.draftKey ?? "none")
-  const requests = useAcp((state) => activeAcp(state)?.requests ?? EMPTY_QUEUE)
+  const identity = useAcp((state) => scopedAcp(state, scope)?.draftKey ?? "none")
+  const requests = useAcp((state) => scopedAcp(state, scope)?.requests ?? EMPTY_QUEUE)
   const sessionId = session?.id
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const loadEarlier = useMemo(
@@ -111,7 +142,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
     [sessionId]
   )
   const preparing = useAcp((state) => {
-    const current = activeLiveAcp(state)
+    const current = scopedLiveAcp(state, scope)
     return Boolean(
       current &&
       (current.requests?.some((request) => request.status === "dispatching") ||
@@ -181,10 +212,11 @@ function AcpActivity({
   starting?: boolean
   preparing?: boolean
 }) {
-  const activityAt = useAcp((state) => activeLiveAcp(state)?.activityAt)
+  const scope = useConversationScope()
+  const activityAt = useAcp((state) => scopedLiveAcp(state, scope)?.activityAt)
   const quietForMs = useQuietFor(running ? activityAt : undefined)
   const activity = useAcp((state) => {
-    const live = activeLiveAcp(state)
+    const live = scopedLiveAcp(state, scope)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
     // The approval notice owns this status; do not repeat it in the transcript.
     if (approval) return { kind: "idle" as const, label: "" }

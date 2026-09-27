@@ -2,7 +2,9 @@ import { IconAction } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
-import { useOnScreen, useThreadTabs } from "@/state/thread-sessions"
+import { useMemo } from "react"
+import { useOnScreen, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
+import { closeWorkbenchPane } from "@/state/session-panes"
 import { activeAcp, useAcp } from "@/state/acp"
 import { usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
@@ -33,7 +35,13 @@ export function StageStrip({
     const path = viewing?.path ?? liveThreadPath
     return path ? prefs.titleOverrides[path] : undefined
   })
-  const here = useOnScreen()
+  const active = useOnScreen()
+  const bound = pane?.session
+  // A chat without focus shows its own Session, and so do its tabs.
+  const here = useMemo<OnScreen>(
+    () => (bound ? { thread: bound.thread, session: bound.tab } : active),
+    [active, bound]
+  )
   const sessionTabs = useThreadTabs(here)
 
   if (!pane) return null
@@ -199,7 +207,7 @@ export function StageStrip({
           label="Close pane"
           size="xs"
           className="m-1"
-          onClick={() => viewer.closePane(pane.id)}
+          onClick={() => closeWorkbenchPane(pane.id)}
         >
           <XIcon />
         </IconAction>

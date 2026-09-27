@@ -7,7 +7,8 @@ import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
-import { acp, useAcp, activeLiveAcp } from "@/state/acp"
+import { acp, useAcp } from "@/state/acp"
+import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { PlanSummary } from "./tool-details"
 import { TranscriptAttachment } from "./attachment"
 import { memo, useMemo, useState } from "react"
@@ -822,14 +823,16 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
  */
 function ForkButton({ exchange }: { exchange: ExchangeData }) {
   const [open, setOpen] = useState(false)
-  const viewing = useThreads((state) => state.viewing?.ref)
+  const scope = useConversationScope()
+  const globalViewing = useThreads((state) => state.viewing?.ref)
+  const viewing = scope ? (scope.kind === "history" ? scope.ref : undefined) : globalViewing
   const targets = useThreads((state) => continueTargets(state))
   const last = exchange.response.at(-1)
   const nativeEntry = useSession((state) =>
     last && state.tree.some((entry) => entry.id === last.id) ? last.id : null
   )
   const liveRequestId = useAcp((state) => {
-    const live = activeLiveAcp(state)
+    const live = scopedLiveAcp(state, scope)
     const requestId = exchange.prompt?.requestId
     if (!requestId) return null
     return live?.requests?.find((request) => request.id === requestId)
