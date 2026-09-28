@@ -9,6 +9,7 @@ import { closeWorkbenchPane } from "@/state/session-panes"
 import { activeAcp, useAcp } from "@/state/acp"
 import { usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
+import { useWorktrees, workingFolder } from "@/state/worktrees"
 import { useThreads } from "@/state/threads"
 import { AGENT_TAB_ID, viewer, useViewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
@@ -47,9 +48,11 @@ export function StageStrip({
   const workspaceCwd = useSession((state) => state.meta?.cwd)
   // A pane without focus names only its Thread and tab; its folder is the tab's.
   const shownTab = sessionTabs.find((tab) => tab.id === onScreenTab(here))
+  const shownRef = shownTab?.kind === "session" ? shownTab.ref : undefined
+  const refCwd = useWorktrees((state) => (shownRef ? workingFolder(state, shownRef) : undefined))
   const checkoutCwd =
     here.cwd ??
-    (shownTab?.kind === "draft" ? shownTab.draft.cwd : shownTab?.ref?.currentCwd ?? shownTab?.ref?.cwd ?? shownTab?.presence?.cwd) ??
+    (shownTab?.kind === "draft" ? shownTab.draft.cwd : refCwd ?? shownTab?.presence?.cwd) ??
     (bound ? undefined : workspaceCwd)
 
   if (!pane) return null

@@ -77,7 +77,12 @@ export interface ThreadRef {
   /** The native file (or directory) holding the full session. */
   path: string
   cwd?: string
-  /** Where its latest turn ran, when that isn't `cwd`: a harness moved it, as Claude Code's EnterWorktree does. `cwd` stays where it started, which is where it resumes. */
+  /**
+   * Where its latest turn ran, when the harness records that and it isn't
+   * `cwd`: Claude Code's EnterWorktree or its shell changing folder, a Codex
+   * turn started in another folder. `cwd` stays where it started, which is
+   * where it resumes. The window counts it as a move only into a worktree.
+   */
   currentCwd?: string
   workspace?: string
   title?: string

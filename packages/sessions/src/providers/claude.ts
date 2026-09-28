@@ -39,6 +39,7 @@ import { normalizeToolOutput } from "../tool-output.js"
 import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
+import { followCurrentCwd } from "./current-cwd.js"
 
 type ClaudeJsonScalar = boolean | number | string | null
 type ClaudeJsonValue = ClaudeJsonScalar | ClaudeJsonObject | ClaudeJsonValue[]
@@ -315,8 +316,8 @@ export class ClaudeProvider implements SessionProvider {
    * not when the thread was last used; its newest message is.
    */
   activityFromContent = true
-  /** 1: rows carry `currentCwd`, the folder a session moved to (EnterWorktree). */
-  peekVersion = 1
+  /** 2: rows carry `currentCwd` (EnterWorktree, or the shell changing folder), one folder's two spellings counted as one. */
+  peekVersion = 2
   private root: string
   private home: string
   private configDir: string | undefined
@@ -480,7 +481,7 @@ export class ClaudeProvider implements SessionProvider {
       }
       const model = sessionModel(line)
       if (model) next.model = model
-      followCwd(next, line.cwd)
+      followCurrentCwd(next, line.cwd)
     })
     if (lastMessageAt !== undefined && lastMessageAt > (next.updatedAt ?? ""))
       next.updatedAt = lastMessageAt
@@ -714,13 +715,6 @@ function sessionModel(line: ClaudeLine): string | undefined {
   return model && !model.startsWith("<") ? model : undefined
 }
 
-/** Claude Code records the folder on every line; EnterWorktree moves it into a worktree mid-session, ExitWorktree back. */
-function followCwd(ref: ThreadRef, cwd: string | undefined): void {
-  if (cwd === undefined) return
-  if (cwd === ref.cwd) delete ref.currentCwd
-  else ref.currentCwd = cwd
-}
-
 function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (line.isSidechain) return
   if (!ref.nativeId && line.sessionId !== undefined)
@@ -728,7 +722,7 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (!ref.parentNativeId && line.forkedFrom && line.forkedFrom !== ref.nativeId)
     ref.parentNativeId = line.forkedFrom
   if (!ref.cwd && line.cwd !== undefined) ref.cwd = line.cwd
-  followCwd(ref, line.cwd)
+  followCurrentCwd(ref, line.cwd)
   if (!ref.startedAt && line.timestamp !== undefined)
     ref.startedAt = line.timestamp
   if (!ref.model) {

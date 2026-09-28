@@ -18,7 +18,7 @@ Object.assign(globalThis, {
 
 const { renderToStaticMarkup } = await import("react-dom/server")
 const { applyCheckoutHeads } = await import("@/state/checkout-heads")
-const { worktreeAt, worktreesStore } = await import("@/state/worktrees")
+const { workingFolder, worktreeAt, worktreesStore } = await import("@/state/worktrees")
 const { threadsStore } = await import("@/state/threads")
 const { WorkspaceChoice } = await import("@/components/composer/workspace-choice")
 
@@ -49,8 +49,20 @@ assert.match(composer, /data-worktree-origin="outside"/)
 assert.match(composer, /aria-label="Makes changes on its own branch, agent\/fix-login, in a worktree made outside Mako"/)
 assert.match(composer, />agent\/fix-login</)
 threadsStore.set({ ...threadsStore.get(), opening: { kind: "loading", ref: { ...ref, cwd: "/Users/you/app" } } })
-applyCheckoutHeads({ "/Users/you/app": { kind: "branch", name: "main" } })
+applyCheckoutHeads({ "/Users/you/app": { kind: "branch", name: "main" }, "/Users/you/app/api": { kind: "branch", name: "main" } })
 assert.match(renderToStaticMarkup(<WorkspaceChoice />), /data-workspace="project-folder"/, "the main checkout is still the project folder")
+
+// A harness that records the folder of its latest turn (Claude, Codex): a move into a worktree moves the Session; a cd doesn't.
+const places = worktreesStore.get()
+assert.equal(workingFolder(places, { cwd: "/Users/you/app", currentCwd: `${linked.path}/web` }), `${linked.path}/web`, "EnterWorktree, or a Codex turn in a worktree")
+assert.equal(workingFolder(places, { cwd: "/Users/you/app", currentCwd: "/Users/you/app/api" }), "/Users/you/app", "the shell changing into a subfolder")
+assert.equal(workingFolder(places, { cwd: "/Users/you", currentCwd: "/Users/you/other-repo" }), "/Users/you", "the shell changing into another repository")
+assert.equal(workingFolder(places, { cwd: linked.path, currentCwd: `${linked.path}/web` }), linked.path, "a cd inside the worktree it started in")
+assert.equal(workingFolder(places, { cwd: "/Users/you/app" }), "/Users/you/app")
+threadsStore.set({ ...threadsStore.get(), opening: { kind: "loading", ref: { ...ref, cwd: "/Users/you/app", currentCwd: `${linked.path}/web` } } })
+assert.match(renderToStaticMarkup(<WorkspaceChoice />), /data-workspace="own-branch"[^>]*data-worktree-origin="outside"/, "a Session its harness moved into a worktree shows that branch")
+threadsStore.set({ ...threadsStore.get(), opening: { kind: "loading", ref: { ...ref, cwd: "/Users/you/app", currentCwd: "/Users/you/app/api" } } })
+assert.match(renderToStaticMarkup(<WorkspaceChoice />), /data-workspace="project-folder"/, "a cd leaves it in the project folder")
 threadsStore.set({ ...threadsStore.get(), opening: null })
 
 applyCheckoutHeads({ [linked.path]: { kind: "detached", commit: "0123456789abcdef0123456789abcdef01234567", linked } })
@@ -66,4 +78,4 @@ worktreesStore.set({ ...worktreesStore.get(), worktrees: [made] })
 applyCheckoutHeads({ [linked.path]: { kind: "branch", name: "mako/fix-login", linked } })
 assert.equal(worktreeAt(worktreesStore.get().outside, linked.path), undefined, "a worktree Mako made isn't also an outside one")
 
-console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, detached, removed, Mako's own excluded")
+console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, moved by its harness vs a cd, detached, removed, Mako's own excluded")

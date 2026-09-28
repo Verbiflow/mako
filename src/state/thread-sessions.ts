@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useEffect, useMemo } from "react"
 import type { ThreadGroup } from "../../electron/contracts/thread-groups.ts"
 import type { PromptAttachment, ThreadRef } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
@@ -27,6 +27,8 @@ import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
 import { threads, useThreads } from "@/state/threads"
+import { followCheckouts } from "@/state/checkout-heads"
+import { useWorktrees, workingFolder, worktreesStore, type WorktreePlaces } from "@/state/worktrees"
 
 interface LiveSlot {
   key: string
@@ -65,21 +67,22 @@ export interface OnScreen {
 }
 
 /** The same choice `ConversationSurface` makes between the viewer and a live panel. */
-function onScreen(view: ViewSlot | null, live: LiveSlot | null, draft: SessionDraft | null, threadOf: Readonly<Record<string, string>>, liveMovedTo: string | undefined): OnScreen {
+function onScreen(view: ViewSlot | null, live: LiveSlot | null, draft: SessionDraft | null, threadOf: Readonly<Record<string, string>>, liveMovedTo: string | undefined, places: WorktreePlaces): OnScreen {
   const viewerShown = view && (!live || view.viewingPath !== live.threadPath || (live.starting && view.viewingPath !== undefined))
   if (viewerShown) {
     const { ref } = view
-    return { thread: rowThread(ref, threadOf), session: ref.sessionId, cwd: ref.currentCwd ?? ref.cwd, title: prefsStore.get().titleOverrides[ref.path] ?? ref.title }
+    return { thread: rowThread(ref, threadOf), session: ref.sessionId, cwd: workingFolder(places, ref), title: prefsStore.get().titleOverrides[ref.path] ?? ref.title }
   }
   if (live) {
     const title = (live.threadPath ? prefsStore.get().titleOverrides[live.threadPath] : undefined) ?? live.title
-    return { thread: rowThread(live, threadOf), session: live.sessionId, cwd: liveMovedTo ?? live.cwd, title }
+    const cwd = liveMovedTo ? workingFolder(places, { cwd: live.cwd, currentCwd: liveMovedTo }) : live.cwd
+    return { thread: rowThread(live, threadOf), session: live.sessionId, cwd, title }
   }
   if (draft) return { thread: draft.thread, draft, cwd: draft.cwd, title: draft.title }
   return {}
 }
 
-/** Where the live conversation's catalog row says it moved to since it started, if anywhere. */
+/** The folder the harness last recorded for the live conversation, when it isn't where it started. */
 function movedTo(state: ThreadsState, live: LiveSlot | null): string | undefined {
   return live?.threadPath ? state.threads.find((ref) => ref.path === live.threadPath)?.currentCwd : undefined
 }
@@ -87,7 +90,7 @@ function movedTo(state: ThreadsState, live: LiveSlot | null): string | undefined
 export function currentOnScreen(): OnScreen {
   const groups = threadGroupsStore.get()
   const live = liveSlot(acpStore.get())
-  return onScreen(viewSlot(threadsStore.get()), live, openSessionDraft(groups), groups.threadOf, movedTo(threadsStore.get(), live))
+  return onScreen(viewSlot(threadsStore.get()), live, openSessionDraft(groups), groups.threadOf, movedTo(threadsStore.get(), live), worktreesStore.get())
 }
 
 export function useOnScreen(): OnScreen {
@@ -96,7 +99,13 @@ export function useOnScreen(): OnScreen {
   const liveMovedTo = useThreads((state) => movedTo(state, live))
   const draft = useThreadGroups(openSessionDraft)
   const threadOf = useThreadGroups((state) => state.threadOf)
-  return onScreen(view, live, draft, threadOf, liveMovedTo)
+  const places = useWorktrees((state) => state)
+  // Whether the folder a harness moved to is a worktree is read from its checkout.
+  const moved = liveMovedTo ?? view?.ref.currentCwd
+  useEffect(() => {
+    if (moved) followCheckouts([moved])
+  }, [moved])
+  return onScreen(view, live, draft, threadOf, liveMovedTo, places)
 }
 
 /** One tab of a Thread's strip: a Session, or the Thread's new tab. */
@@ -334,7 +343,7 @@ export function watchThreadSessions(): () => void {
     attached = tabsStore.get().activeId
     if (threadGroupsStore.get().open !== null && (view || live || switched)) leaveSessionDraft()
     const { groups, lastViewed, threadOf } = threadGroupsStore.get()
-    const here = onScreen(view, live, null, threadOf, undefined)
+    const here = onScreen(view, live, null, threadOf, undefined, worktreesStore.get())
     if (here.thread && here.session && groups[here.thread] && lastViewed[here.thread] !== here.session)
       threadGroupsStore.set({ lastViewed: { ...lastViewed, [here.thread]: here.session } })
   }

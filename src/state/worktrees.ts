@@ -46,6 +46,24 @@ export function worktreeAt<Worktree extends { path: string }>(
   return undefined
 }
 
+/**
+ * Where a Session works now. A harness that moved it into a worktree
+ * (Claude's EnterWorktree, a Codex turn in another folder) records the new
+ * folder as `currentCwd`; its shell changing into a subfolder or another
+ * repository records one too, and that doesn't move the Session. A worktree
+ * made outside Mako counts once its checkout head has been read, so callers
+ * follow `currentCwd`.
+ */
+export type WorktreePlaces = Pick<WorktreesState, "worktrees" | "outside">
+
+export function workingFolder(state: WorktreePlaces, ref: { cwd?: string; currentCwd?: string }): string | undefined {
+  const moved = ref.currentCwd
+  const into = moved ? (worktreeAt(state.worktrees, moved) ?? worktreeAt(state.outside, moved))?.worktree : undefined
+  if (!moved || !into) return ref.cwd
+  // A `cd` inside the worktree it started in is no move either.
+  return worktreeAt([into], ref.cwd) ? ref.cwd : moved
+}
+
 function outsideOf(heads: CheckoutHeads, worktrees: readonly ThreadWorktree[]): OutsideWorktree[] {
   const found = new Map<string, OutsideWorktree>()
   for (const head of Object.values(heads)) {

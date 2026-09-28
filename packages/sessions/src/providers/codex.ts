@@ -55,6 +55,7 @@ import {
 } from "../jsonl.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import type { NativeFile, SessionProvider } from "./types.js"
+import { followCurrentCwd } from "./current-cwd.js"
 
 const MAX_TRANSLATED_BYTES = 64 * 1024 * 1024
 
@@ -92,6 +93,8 @@ interface CodexPeekResult {
 interface CodexTurnContext extends CodexRolloutBase {
   kind: "turn_context"
   model?: string
+  /** The folder the turn ran in; a client may start any turn in another one. */
+  cwd?: string
   settings: SessionSettings
 }
 
@@ -418,6 +421,7 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
         kind: "turn_context",
         at,
         model: stringValue(payload?.["model"]),
+        cwd: stringValue(payload?.["cwd"]),
         settings: { model: stringValue(payload?.["model"]), options },
       }
     }
@@ -489,8 +493,8 @@ function sqliteNumber(value: SQLOutputValue | undefined): number | undefined {
 
 export class CodexProvider implements SessionProvider {
   harness = "codex" as const
-  /** 1: the service tier is read from `thread_settings_applied`. */
-  peekVersion = 1
+  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. */
+  peekVersion = 2
   displayName = "Codex"
   private root: string
   private metadataPath: string
@@ -665,6 +669,7 @@ export class CodexProvider implements SessionProvider {
     if (!ref) return null
     // Head metadata identifies the thread. Only the bounded tail describes its latest settings.
     ref.settings = {}
+    let turnCwd: string | undefined
     await readLines(
       file.path,
       Math.max(0, file.bytes - 2 * 1024 * 1024),
@@ -673,11 +678,12 @@ export class CodexProvider implements SessionProvider {
         if (event?.kind === "turn_context") {
           ref.settings = latestSettings(ref.settings, event.settings)
           if (event.model) ref.model = event.model
+          turnCwd = event.cwd ?? turnCwd
         }
       }
     )
     const details = await this.threadMetadata(ref.nativeId)
-    return details
+    const next: ThreadRef = details
       ? {
           ...ref,
           cwd: details.cwd ?? ref.cwd,
@@ -688,6 +694,8 @@ export class CodexProvider implements SessionProvider {
               : ref.updatedAt,
         }
       : ref
+    followCurrentCwd(next, turnCwd)
+    return next
   }
 
   /**
@@ -719,19 +727,32 @@ export class CodexProvider implements SessionProvider {
     return true
   }
 
-  /** Codex names a thread in its state database after the first turn; pick that up without rereading the rollout. */
-  async refine(ref: ThreadRef, _fromByte: number): Promise<ThreadRef> {
+  /**
+   * Codex names a thread in its state database after the first turn; pick
+   * that up without rereading the rollout. Only the appended bytes are read,
+   * for a turn that ran in another folder.
+   */
+  async refine(ref: ThreadRef, fromByte: number): Promise<ThreadRef> {
+    let turnCwd: string | undefined
+    await readLines(ref.path, fromByte, (raw) => {
+      if (!raw.includes('"turn_context"')) return
+      const event = parseCodexRolloutLine(raw)
+      if (event?.kind === "turn_context") turnCwd = event.cwd ?? turnCwd
+    })
     const details = await this.threadMetadata(ref.nativeId)
-    if (!details) return ref
-    return {
-      ...ref,
-      cwd: details.cwd ?? ref.cwd,
-      title: details.title ?? ref.title,
-      updatedAt:
-        details.updatedAt && details.updatedAt > (ref.updatedAt ?? "")
-          ? details.updatedAt
-          : ref.updatedAt,
-    }
+    const next: ThreadRef = details
+      ? {
+          ...ref,
+          cwd: details.cwd ?? ref.cwd,
+          title: details.title ?? ref.title,
+          updatedAt:
+            details.updatedAt && details.updatedAt > (ref.updatedAt ?? "")
+              ? details.updatedAt
+              : ref.updatedAt,
+        }
+      : { ...ref }
+    followCurrentCwd(next, turnCwd)
+    return next
   }
 
   async read(path: string): Promise<Thread | null> {
