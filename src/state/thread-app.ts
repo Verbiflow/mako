@@ -1,3 +1,7 @@
+import { attachmentReference } from "@/lib/attachment-references"
+import type { Attachment } from "@/lib/attachments"
+import { getMako } from "@/lib/bridge"
+import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
 
@@ -176,12 +180,10 @@ export function checkTitle(tier: "quick" | "full"): string {
   return tier === "quick" ? "Quick check" : "Full check"
 }
 
-/**
- * Hand a crashed process's or failed check's output to the Thread's agent: the
- * output goes in as an attached file, the composer gets one sentence that
- * names it, and nothing is sent until the person sends it.
- */
-export function sendToAgent(cwd: string, failed: { process: AppProcessView } | { check: AppCheckView }): void {
+export type AppFailure = { process: AppProcessView } | { check: AppCheckView }
+
+/** What went wrong, what it printed, and what to ask for, worded once for every place it goes. */
+function failureReport(cwd: string, failed: AppFailure) {
   const key = "process" in failed ? processKey(failed.process.name) : (`check:${failed.check.tier}` as const)
   const output = driver?.output(cwd, key) ?? ""
   // Terminal colours and cursor codes mean nothing to the agent.
@@ -189,19 +191,63 @@ export function sendToAgent(cwd: string, failed: { process: AppProcessView } | {
   const plain = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "")
   const tail = plain.trimEnd().split("\n").slice(-400).join("\n")
   const name = "process" in failed ? failed.process.name : checkTitle(failed.check.tier)
-  let text: (references: string) => string
+  let what: string
+  let ask: string
   if ("process" in failed) {
     const exit = failed.process.exit
-    const what = `The app's ${name} process stopped with code ${exit?.code ?? "unknown"}${exit ? `, ${formatDuration(exit.afterMs)} after it started` : ""}.`
-    text = (output) => `${what} What it printed is in ${output}. Find out why, fix it, and start the app again to show it stays up.`
+    what = `The app's ${name} process stopped with code ${exit?.code ?? "unknown"}${exit ? `, ${formatDuration(exit.afterMs)} after it started` : ""}.`
+    ask = "Find out why, fix it, and start the app again to show it stays up."
   } else {
-    const what = `The ${name.toLowerCase()} (\`${failed.check.command}\`) failed.`
-    text = (output) => `${what} What it printed is in ${output}. Fix what it found and run the check again to show it passes.`
+    what = `The ${name.toLowerCase()} (\`${failed.check.command}\`) failed.`
+    ask = "Fix what it found and run the check again to show it passes."
   }
+  return {
+    file: `${name} output.txt`,
+    label: `${name} output`,
+    output: `${tail}\n`,
+    prompt: (reference: string) => `${what} What it printed is in ${reference}. ${ask}`,
+    /** For anywhere outside Mako, where a staged file's path means nothing: the output goes inline. */
+    standalone: () => {
+      const fence = "`".repeat(Math.max(3, ...Array.from(tail.matchAll(/`+/g), (run) => run[0].length + 1)))
+      return `${what} What it printed:\n\n${fence}text\n${tail}\n${fence}\n\n${ask}`
+    },
+  }
+}
+
+/**
+ * Hand a crashed process's or failed check's output to the Thread's agent: the
+ * output goes in as an attached file, the composer gets one sentence that
+ * names it, and nothing is sent until the person sends it.
+ */
+export function sendToAgent(cwd: string, failed: AppFailure): void {
+  const report = failureReport(cwd, failed)
   window.dispatchEvent(new CustomEvent("mako:attach", {
     detail: {
-      files: [{ file: new File([`${tail}\n`], `${name} output.txt`, { type: "text/plain" }), contextLabel: `${name} output`, origin: "terminal" }],
-      text,
+      files: [{ file: new File([report.output], report.file, { type: "text/plain" }), contextLabel: report.label, origin: "terminal" }],
+      text: report.prompt,
     },
   }))
+}
+
+/**
+ * The same request on the clipboard, to paste into any chat or anywhere else.
+ * Pasted into a Mako composer it comes back as the attached output; pasted
+ * elsewhere it is the sentence with the output written out.
+ */
+export async function copyAppFailure(cwd: string, failed: AppFailure, { notify = true } = {}): Promise<boolean> {
+  const report = failureReport(cwd, failed)
+  const bytes = new TextEncoder().encode(report.output)
+  const staged = await getMako()
+    .stageFile(report.file, btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join("")))
+    .catch(() => null)
+  if (!staged) return actions.copy(report.standalone(), { notify })
+  const attachment: Attachment = {
+    id: crypto.randomUUID(), index: 1, name: report.file, contextLabel: report.label, origin: "terminal",
+    mimeType: "text/plain", kind: "text", size: bytes.length, stagedPath: staged.path,
+  }
+  return actions.copy(report.prompt(attachmentReference(attachment)), {
+    attachments: [attachment],
+    plainText: report.standalone(),
+    notify,
+  })
 }

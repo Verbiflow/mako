@@ -76,7 +76,7 @@ async function checkClipboard() {
   }
   const value = page => page.executeJavaScript("document.querySelector('.composer-input').value")
   const select = (page, start = 0, end = null) => page.executeJavaScript(`(() => {const input=document.querySelector('.composer-input'); input.focus(); input.setSelectionRange(${start},${end ?? "input.value.length"});})()`)
-  const preview = page => until(page, "(() => {const buttons=[...document.querySelectorAll('[aria-label=\"Attachments\"] [aria-label^=\"Preview \"]')]; return buttons.length > 0 && buttons.every(button => button.querySelector('img')?.naturalWidth > 0)})()")
+  const preview = page => until(page, "(() => {const buttons=[...document.querySelectorAll('[aria-label=\"Attachments\"] [aria-label^=\"Preview \"]')]; return buttons.length > 0 && buttons.every(button => button.querySelector('canvas[data-ready]')?.width > 0)})()")
   const paste = async page => {
     page.paste()
     await new Promise(resolve => setTimeout(resolve, 150))
@@ -201,10 +201,10 @@ async function checkClipboard() {
       await paste(realTarget)
       await preview(realTarget)
       assert.equal(await value(realTarget), originalText)
-      const pixels = await realTarget.executeJavaScript("(() => {const image=document.querySelector('[aria-label=\"Attachments\"] img'); const canvas=document.createElement('canvas'); canvas.width=image.naturalWidth;canvas.height=image.naturalHeight; const context=canvas.getContext('2d');context.drawImage(image,0,0);return {width:canvas.width,height:canvas.height,pixel:[...context.getImageData(0,0,1,1).data]};})()")
-      assert.deepEqual(pixels, {width:80,height:60,pixel:[255,255,255,255]})
       await click(realTarget, '[aria-label="Attachments"] [aria-label^="Preview "]')
       await until(realTarget, "(() => {const content=document.querySelector('[data-slot=\"popover-content\"]');return content?.getAttribute('data-state') === 'open' && getComputedStyle(content).opacity === '1' && content.querySelector('img')?.naturalWidth > 0})()")
+      const pixels = await realTarget.executeJavaScript("(() => {const image=document.querySelector('[data-slot=\"popover-content\"] img'); const canvas=document.createElement('canvas'); canvas.width=image.naturalWidth;canvas.height=image.naturalHeight; const context=canvas.getContext('2d');context.drawImage(image,0,0);return {width:canvas.width,height:canvas.height,pixel:[...context.getImageData(0,0,1,1).data]};})()")
+      assert.deepEqual(pixels, {width:80,height:60,pixel:[255,255,255,255]})
       await realTarget.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")
       await writeFile(join(root, "real-host-preview.png"), (await realTarget.capturePage()).toPNG())
       await new Promise(resolve => {realTarget.once('did-finish-load', resolve);realTarget.reload()})

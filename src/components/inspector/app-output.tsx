@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
 import {
   checkTitle,
+  copyAppFailure,
   formatAgo,
   formatDuration,
   outputsOf,
@@ -113,11 +114,17 @@ function FailureBar({ cwd, view, outputKey }: { cwd: string; view: ThreadAppView
 
 function Failure({ cwd, failure }: { cwd: string; failure: NonNullable<ReturnType<typeof failureOf>> }) {
   const [asked, setAsked] = useState(false)
+  const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!asked) return
     const timer = setTimeout(() => setAsked(false), 2_400)
     return () => clearTimeout(timer)
   }, [asked])
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1_600)
+    return () => clearTimeout(timer)
+  }, [copied])
   return (
     <div role="alert" className="dock-alert flex h-11 shrink-0 items-center gap-2 border-b border-hairline bg-terminal pr-2 pl-3">
       <p className="mr-2 min-w-0 flex-1 truncate text-ui">
@@ -134,6 +141,19 @@ function Failure({ cwd, failure }: { cwd: string; failure: NonNullable<ReturnTyp
         }}
       >
         {"process" in failure ? "Restart" : "Run again"}
+      </button>
+      <button
+        type="button"
+        data-app-action="copy-failure"
+        title="Copy what happened and what it printed, to paste into any chat or issue"
+        className={dockButton("plain")}
+        onClick={() => {
+          void copyAppFailure(cwd, failure, { notify: false }).then((done) => done && setCopied(true))
+        }}
+      >
+        <span key={String(copied)} className="changing-label">
+          {copied ? "Copied" : "Copy"}
+        </span>
       </button>
       <button
         type="button"

@@ -1,5 +1,5 @@
 import { FileIcon, FilmIcon, XIcon } from "lucide-react"
-import { useRef } from "react"
+import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { useCompactRow } from "@/components/composer/use-compact-row"
 import { fileDir, fileName } from "@/lib/format"
@@ -7,6 +7,7 @@ import { readGitConflictContext, type GitConflictSnapshot } from "@/lib/git-conf
 import {
   formatBytes,
   useAttachmentPreview,
+  useAttachmentText,
   type Attachment,
 } from "@/lib/attachments"
 import {
@@ -31,8 +32,13 @@ export function AttachmentStrip({
   return items.length === 0 ? null : <Strip items={items} onRemove={onRemove} />
 }
 
-/** The row scrolls without a scrollbar; the edge still hiding a tile fades. */
-function Strip({ items, onRemove }: { items: Attachment[]; onRemove(id: string): void }) {
+/**
+ * The row scrolls without a scrollbar; the edge still hiding a tile fades.
+ * The composer renders on every keystroke, so the row and its tiles are
+ * memoised: a tile renders again only when its own attachment changes, which
+ * needs `onRemove` to keep its identity.
+ */
+const Strip = memo(function Strip({ items, onRemove }: { items: Attachment[]; onRemove(id: string): void }) {
   const strip = useRef<HTMLDivElement>(null)
   useCompactRow(strip, 0)
   return (
@@ -46,7 +52,7 @@ function Strip({ items, onRemove }: { items: Attachment[]; onRemove(id: string):
       )}
     </div>
   )
-}
+})
 
 const tile =
   "pressable flex h-14 shrink-0 overflow-hidden rounded-lg bg-raised ring-1 ring-hairline ring-inset transition-[box-shadow] duration-150 hover:ring-border focus-visible:outline focus-visible:outline-ring"
@@ -70,6 +76,47 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "
 /** A line a person scanning output would read as the failure. */
 const FAILURE_LINE = /\b(error|failed|fatal|exception|panic)\b|✗|✘/i
 
+/** Longer than a miniature can show at half size; a minified line stays cheap to lay out. */
+const GLANCE_CHARS = 80
+
+interface Glance {
+  lines: number
+  head: string[]
+  /** The last lines with something on them, for terminal output. */
+  tail: string[]
+}
+
+/**
+ * What a tile shows of a text, found by scanning for line breaks rather than
+ * splitting: a text can be 200 KB, and only its ends and its line count are
+ * drawn.
+ */
+function glance(text: string): Glance {
+  let lines = 1
+  for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) lines++
+  if (text.endsWith("\n")) lines--
+  const head: string[] = []
+  for (let start = 0; head.length < 6; ) {
+    const end = text.indexOf("\n", start)
+    head.push(text.slice(start, end === -1 ? start + GLANCE_CHARS : Math.min(end, start + GLANCE_CHARS)))
+    if (end === -1) break
+    start = end + 1
+  }
+  const tail: string[] = []
+  for (let end = text.length, scanned = 0; end > 0 && tail.length < 5 && scanned < 200; scanned++) {
+    const at = text.lastIndexOf("\n", end - 1)
+    const line = text.slice(at + 1, Math.min(end, at + 1 + GLANCE_CHARS))
+    if (line.trim()) tail.unshift(line)
+    end = at
+  }
+  return { lines, head, tail }
+}
+
+/** Logs and pasted output matter at their end, so the view opens there. Module-level so it runs once per opening, not on every render. */
+function openAtEnd(node: HTMLPreElement | null) {
+  if (node) node.scrollTop = node.scrollHeight
+}
+
 /**
  * The tile's left square, drawn from what the file is: terminal output as the
  * foot of a terminal, a conflict snapshot as conflict markers, other text as
@@ -77,31 +124,31 @@ const FAILURE_LINE = /\b(error|failed|fatal|exception|panic)\b|✗|✘/i
  * out at the type scale and shrunk by half, so the lines are texture and the
  * popover is where the file is read.
  */
-function Face({ item }: { item: Attachment }) {
+function Face({ item, text }: { item: Attachment; text: Glance | undefined }) {
   const surface = item.origin === "terminal" ? "bg-[var(--terminal-face)]" : "bg-background"
   const extension = item.name.includes(".") ? item.name.split(".").pop()?.toUpperCase().slice(0, 4) : undefined
   return (
     <span aria-hidden className={cn("relative h-full w-18 shrink-0 overflow-hidden border-r border-hairline", surface)}>
-      {item.text === undefined && item.origin !== "terminal" ? (
+      {text === undefined && item.origin !== "terminal" ? (
         <span className="absolute inset-0 flex items-center justify-center text-label font-medium text-faint">
           {extension ?? "FILE"}
         </span>
       ) : (
         <span className="absolute top-0 left-0 flex h-[200%] w-[200%] origin-top-left scale-50 flex-col p-3 font-mono text-label leading-[17px]">
-          <Miniature item={item} />
+          <Miniature origin={item.origin} text={text} />
         </span>
       )}
     </span>
   )
 }
 
-function Miniature({ item }: { item: Attachment }) {
+function Miniature({ origin, text }: { origin: Attachment["origin"]; text: Glance | undefined }) {
   const line = "overflow-hidden whitespace-pre"
-  if (item.origin === "terminal") {
-    const lines = (item.text ?? "").split("\n").filter((text) => text.trim()).slice(-5)
+  if (origin === "terminal") {
+    const lines = text?.tail.length ? text.tail : ["$"]
     return (
       <span className="mt-auto flex flex-col">
-        {(lines.length ? lines : ["$"]).map((text, index) => (
+        {lines.map((text, index) => (
           <span key={index} className={cn(line, FAILURE_LINE.test(text) ? "text-[var(--terminal-face-alert)]" : "text-[var(--terminal-face-ink)]")}>
             {text}
           </span>
@@ -109,7 +156,7 @@ function Miniature({ item }: { item: Attachment }) {
       </span>
     )
   }
-  if (item.origin === "git-conflicts") {
+  if (origin === "git-conflicts") {
     const band = "h-1.5 shrink-0 rounded-[2px]"
     const ours = "bg-[color-mix(in_oklab,var(--added)_60%,transparent)]"
     const theirs = "bg-[color-mix(in_oklab,var(--terminal-blue)_60%,transparent)]"
@@ -127,7 +174,7 @@ function Miniature({ item }: { item: Attachment }) {
   }
   return (
     <>
-      {(item.text ?? "").split("\n").slice(0, 6).map((text, index) => (
+      {(text?.head ?? []).map((text, index) => (
         <span key={index} className={cn(line, "text-faint")}>{text || " "}</span>
       ))}
     </>
@@ -135,10 +182,15 @@ function Miniature({ item }: { item: Attachment }) {
 }
 
 /** A text or other file: what it is at a glance, its name and size, and, for text, a look inside. */
-function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): void }) {
+const FileTile = memo(function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): void }) {
   const label = item.contextLabel ?? item.name
-  const conflict = item.origin === "git-conflicts" && item.text ? readGitConflictContext(item.text) : null
-  const lines = item.text === undefined ? undefined : item.text.replace(/\n$/, "").split("\n").length
+  const source = useAttachmentText(item)
+  const text = useMemo(() => (source === undefined ? undefined : glance(source)), [source])
+  const conflict = useMemo(
+    () => (item.origin === "git-conflicts" && source ? readGitConflictContext(source) : null),
+    [item.origin, source]
+  )
+  const lines = text?.lines
   const detail =
     item.error ??
     (item.pending
@@ -150,7 +202,7 @@ function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): 
         : [lines === undefined ? undefined : plural(lines, "line"), formatBytes(item.size)].filter(Boolean).join(" · "))
   const body = (
     <>
-      <Face item={item} />
+      <Face item={item} text={text} />
       <span className="flex min-w-0 flex-col justify-center gap-0.5 px-3">
         <span className="truncate text-ui font-medium text-foreground">{label}</span>
         <span className={cn("truncate text-label", item.error ? "text-negative" : "text-faint")}>{detail}</span>
@@ -160,7 +212,7 @@ function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): 
   const face = cn(tile, "w-60 text-left", item.error && "ring-negative/40")
   return (
     <div title={label === item.name ? item.name : `${label} · ${item.name}`} className={cn("group relative shrink-0", item.pending && "opacity-60")}>
-      {item.text ? (
+      {source ? (
         <Popover>
           <PopoverTrigger asChild>
             <button type="button" aria-label={`Show ${label}`} className={face}>
@@ -176,16 +228,13 @@ function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): 
               <ConflictList snapshot={conflict} />
             ) : (
               <pre
-                // Logs and pasted output matter at their end, so the view opens there.
-                ref={(node) => {
-                  if (node) node.scrollTop = node.scrollHeight
-                }}
+                ref={openAtEnd}
                 className={cn(
                   "max-h-[50vh] overflow-y-auto px-3 py-2.5 font-mono text-label leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]",
                   item.origin === "terminal" ? "bg-terminal text-foreground" : "text-muted-foreground"
                 )}
               >
-                {item.text}
+                {source}
               </pre>
             )}
           </PopoverContent>
@@ -196,7 +245,7 @@ function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): 
       <RemoveButton label={item.name} onRemove={() => onRemove(item.id)} />
     </div>
   )
-}
+})
 
 /** A conflict snapshot as the files it names, not the JSON the agent reads. */
 function ConflictList({ snapshot }: { snapshot: GitConflictSnapshot }) {
@@ -220,7 +269,7 @@ function ConflictList({ snapshot }: { snapshot: GitConflictSnapshot }) {
   )
 }
 
-function Thumbnail({
+const Thumbnail = memo(function Thumbnail({
   item,
   onRemove,
 }: {
@@ -242,7 +291,7 @@ function Thumbnail({
             className={cn(tile, "w-22 flex-col items-center justify-center gap-1 bg-background", item.error && "ring-negative/40")}
           >
             {preview && item.kind === "image" ? (
-              <img src={preview} alt={item.name} className="attachment-preview size-full object-cover" decoding="async" />
+              <ImageThumb url={preview} alt={item.name} />
             ) : preview && video ? (
               <video src={preview} muted playsInline preload="metadata" className="attachment-preview size-full object-cover" />
             ) : loaded?.kind === "unavailable" ? (
@@ -271,6 +320,69 @@ function Thumbnail({
       </Popover>
       <RemoveButton label={item.name} onRemove={() => onRemove(item.id)} />
     </div>
+  )
+})
+
+/** The tile's box in CSS pixels; the thumbnail is decoded to cover it and no larger. */
+const THUMB = { width: 88, height: 56 }
+
+/**
+ * A picture at the size of its tile. An `<img>` of the original keeps the
+ * whole picture decoded for as long as the tile shows, about 59 MB for a 5K
+ * screenshot, to paint 88 by 56 pixels. Here the picture is decoded once at
+ * tile size and the full one is dropped; the popover decodes the original only
+ * while it is open. The bitmap is shown, never read back, so a preview served
+ * from another origin (`mako-file:`) draws as well as a pasted one.
+ */
+function ImageThumb({ url, alt }: { url: string; alt: string }) {
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const [state, setState] = useState<{ url: string; kind: "ready" | "failed" } | null>(null)
+  useEffect(() => {
+    let live = true
+    const image = new Image()
+    const release = () => {
+      image.onload = image.onerror = null
+      image.src = ""
+    }
+    image.onload = () => {
+      const scale = Math.min(1, Math.max(THUMB.width / image.naturalWidth, THUMB.height / image.naturalHeight)) * devicePixelRatio
+      void createImageBitmap(image, {
+        resizeWidth: Math.max(1, Math.round(image.naturalWidth * scale)),
+        resizeHeight: Math.max(1, Math.round(image.naturalHeight * scale)),
+        resizeQuality: "medium",
+      }).then(
+        (bitmap) => {
+          release()
+          const node = canvas.current
+          if (!live || !node) return bitmap.close()
+          node.width = bitmap.width
+          node.height = bitmap.height
+          node.getContext("bitmaprenderer")?.transferFromImageBitmap(bitmap)
+          setState({ url, kind: "ready" })
+        },
+        () => {
+          release()
+          if (live) setState({ url, kind: "failed" })
+        }
+      )
+    }
+    image.onerror = () => live && setState({ url, kind: "failed" })
+    image.src = url
+    return () => {
+      live = false
+      release()
+    }
+  }, [url])
+  const shown = state?.url === url ? state.kind : undefined
+  if (shown === "failed") return <span className="px-2 text-center text-label leading-tight text-muted-foreground">Preview unavailable</span>
+  return (
+    <canvas
+      ref={canvas}
+      role="img"
+      aria-label={alt}
+      data-ready={shown === "ready" || undefined}
+      className="size-full object-cover opacity-0 transition-opacity duration-150 data-ready:opacity-100"
+    />
   )
 }
 

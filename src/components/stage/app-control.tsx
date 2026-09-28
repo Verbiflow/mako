@@ -10,6 +10,7 @@ import { actions } from "@/state/session"
 import {
   checkMark,
   checkTitle,
+  copyAppFailure,
   formatAgo,
   formatBytes,
   formatDuration,
@@ -255,6 +256,9 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
         <>
           <Action data-app-action="send-to-agent" onSelect={() => sendToAgent(cwd, { process: crashed })}>
             Ask the agent to fix it
+          </Action>
+          <Action data-app-action="copy-failure" onSelect={() => void copyAppFailure(cwd, { process: crashed })}>
+            Copy to paste elsewhere
           </Action>
           <Action data-app-action="show-output" onSelect={() => showAppOutput(cwd, processKey(crashed.name))}>
             Show what it printed

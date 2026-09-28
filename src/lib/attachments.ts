@@ -638,6 +638,27 @@ export function useAttachmentPreview(item: Attachment) {
   return resolved?.path === item.stagedPath ? resolved?.preview : undefined
 }
 
+/** A text attachment's words after a paste or a reload, which carry only its path: read once from the staged copy. */
+export function useAttachmentText(item: Attachment): string | undefined {
+  const [resolved, setResolved] = useState<{ path: string; text: string | undefined } | null>(null)
+  const path = item.kind === "text" && item.text === undefined && !item.pending ? item.stagedPath : undefined
+  useEffect(() => {
+    if (!path) return
+    let current = true
+    void getMako()
+      .readFile(path)
+      .then(
+        (file) => current && setResolved({ path, text: file.binary ? undefined : file.contents.slice(0, MAX_INLINE_TEXT) }),
+        () => current && setResolved({ path, text: undefined })
+      )
+    return () => {
+      current = false
+    }
+  }, [path])
+  if (item.text !== undefined) return item.text
+  return resolved?.path === path ? resolved?.text : undefined
+}
+
 function attachmentMetadata(item: Attachment): Attachment {
   return {
     ...item,

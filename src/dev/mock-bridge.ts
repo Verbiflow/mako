@@ -96,6 +96,9 @@ async function mockThreadContexts(
  * without spending tokens. Dev-only; never bundled into a production build.
  */
 
+/** What the page staged, so a pasted or reloaded attachment reads back the words it was given. */
+const STAGED_TEXT = new Map<string, string>()
+
 export function installMockBridge() {
   const listeners = new Set<(event: HostEvent) => void>()
   const terminalListeners = new Set<(event: TerminalEvent) => void>()
@@ -298,13 +301,17 @@ export function installMockBridge() {
     resolveFileUrl: (url) => url,
     unwatchFile: async () => {},
     createWorkspaceText: async (cwd: string, path: string) => `${cwd}/${path}`,
-    readFile: async (path: string) => ({
-      path,
-      contents: `// ${path}\n// The browser mock has no filesystem; this stands in for one.\n`,
-      size: 96,
-      binary: false,
-      truncated: false,
-    }),
+    readFile: async (path: string) => {
+      const staged = STAGED_TEXT.get(path)
+      if (staged !== undefined) return { path, contents: staged, size: staged.length, binary: false, truncated: false }
+      return {
+        path,
+        contents: `// ${path}\n// The browser mock has no filesystem; this stands in for one.\n`,
+        size: 96,
+        binary: false,
+        truncated: false,
+      }
+    },
     readThreadFile: async (_threadPath: string, path: string) => ({
       path,
       contents: `// ${path}\n// The browser mock has no filesystem; this stands in for one.\n`,
@@ -467,11 +474,12 @@ export function installMockBridge() {
     }),
     disconnectUtilityModel: async () => {},
 
-    stageFile: async (name: string) => ({
-      path: `/tmp/mako-attachments/${name}`,
-      name,
-      size: 0,
-    }),
+    stageFile: async (name: string, data: string) => {
+      const path = `/tmp/mako-attachments/${name}`
+      const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+      STAGED_TEXT.set(path, new TextDecoder().decode(bytes))
+      return { path, name, size: bytes.length }
+    },
     defaultCommitPrompt: async () =>
       "You are an expert at writing Git commits.",
     computerDriver: async () => ({

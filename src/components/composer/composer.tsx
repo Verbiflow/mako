@@ -280,6 +280,13 @@ export function Composer() {
     draftRef.current = draft
     updateRef.current = update
   }, [draft, update])
+  // The attachment tiles are memoised; one callback for their lifetime keeps a
+  // keystroke from rendering every tile again.
+  const removeAttachmentRef = useRef(removeAttachment)
+  useEffect(() => {
+    removeAttachmentRef.current = removeAttachment
+  })
+  const removeAttachmentTile = useCallback((id: string) => removeAttachmentRef.current(id), [])
   // A press on a chat pane's resting composer moved this composer there.
   useEffect(() => {
     if (!takeComposerFocus()) return
@@ -895,7 +902,7 @@ export function Composer() {
           />
           <AttachmentStrip
             items={attachments.items}
-            onRemove={removeAttachment}
+            onRemove={removeAttachmentTile}
           />
 
           <div

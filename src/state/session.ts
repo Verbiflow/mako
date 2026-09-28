@@ -1057,11 +1057,20 @@ export const actions = {
 
   async copy(
     text: string,
-    { notify = true, attachments = [] }: { notify?: boolean; attachments?: readonly Attachment[] } = {}
+    {
+      notify = true,
+      attachments = [],
+      plainText,
+    }: {
+      notify?: boolean
+      attachments?: readonly Attachment[]
+      /** What apps other than Mako paste, when the draft's own wording would point them at a file they cannot read. */
+      plainText?: string
+    } = {}
   ): Promise<boolean> {
     try {
       if (attachments.length) {
-        const payload = promptClipboard(text, attachments)
+        const payload = { ...promptClipboard(text, attachments), ...(plainText === undefined ? {} : { text: plainText }) }
         try {
           await navigator.clipboard.write([new ClipboardItem({
             "text/plain": new Blob([payload.text], { type: "text/plain" }),
@@ -1081,7 +1090,7 @@ export const actions = {
       toast.error("Could not copy", {
         id: "clipboard-error",
         duration: ACTION_TOAST_MS,
-        action: { label: "Retry", onClick: () => void actions.copy(text, { notify, attachments }) },
+        action: { label: "Retry", onClick: () => void actions.copy(text, { notify, attachments, plainText }) },
       })
       return false
     }
