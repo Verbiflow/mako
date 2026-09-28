@@ -5,6 +5,8 @@ import { acpStore } from "../src/state/acp-state.ts"
 import { threadGroupsStore } from "../src/state/thread-groups.ts"
 import { wholeThreadTargets } from "../src/state/session-archive.ts"
 import { threadsStore } from "../src/state/threads.ts"
+import { archivedThread } from "../src/state/thread-lifecycle.ts"
+import { threadArchiveKey, threadShownKey } from "../electron/contracts/thread-lifecycle.ts"
 
 // Archiving a Thread's row puts every Session of it away, not only the rows
 // a search or filter left showing: two catalog rows and a live conversation
@@ -28,6 +30,11 @@ assert.deepEqual(wholeThreadTargets(thread), [
   { kind: "live", id: "live-1" },
 ], "every Session with something to archive, whatever the rail shows")
 assert.equal(wholeThreadTargets("33333333-3333-4333-8333-333333333333"), undefined, "a Thread of one Session archives its own row")
+// A row its harness archived files with the archived ones until it's restored here.
+const inCodex: ThreadRef = { harness: "codex", nativeId: "in-codex", path: "/home/.codex/archived_sessions/rollout-in-codex.jsonl", nativeArchived: true }
+assert.equal(archivedThread(inCodex, new Set()), true)
+assert.equal(archivedThread(inCodex, new Set([threadShownKey(threadArchiveKey({ kind: "native", provider: "codex", nativeId: "in-codex" }))])), false, "restored here")
+assert.equal(archivedThread({ ...inCodex, nativeArchived: undefined }, new Set()), false)
 const asking = new Map([["/a", "needs-permission" as const]])
 assert.equal(railAnnouncement(asking, [{ key: "/a", title: "Fix login", kind: "needs-permission" }]), undefined, "a row still asking isn't announced again")
 assert.equal(railAnnouncement(asking, [{ key: "/a", title: "Fix login", kind: "needs-permission" }, { key: "/b", title: "Ship docs", kind: "failed" }]), "Ship docs failed", "a row that starts asking is")

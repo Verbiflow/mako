@@ -59,7 +59,7 @@ try {
 
   // Store origins: the three writers, told apart by path alone.
   assert.deepEqual(cursorStoreOrigin(acpPath, { home }), { origin: "acp-sessions", sessionId: legacyId })
-  assert.deepEqual(cursorStoreOrigin(chatsPath, { home }), { origin: "chats", sessionId: legacyId })
+  assert.deepEqual(cursorStoreOrigin(chatsPath, { home }), { origin: "chats", sessionId: legacyId, workspace: "hash" })
   assert.deepEqual(cursorStoreOrigin(join(stateRoot, "agents", "agent-abc", "store.db"), { home }), {
     origin: "sdk",
     directoryName: "agent-abc",
@@ -67,7 +67,7 @@ try {
   assert.equal(cursorStoreOrigin(join(home, ".cursor", "acp-sessions", legacyId, "meta.json"), { home }), null)
   assert.equal(cursorStoreOrigin(join(home, "elsewhere", "store.db"), { home }), null)
   assert.equal(cursorLegacyIdentity({ origin: "acp-sessions", sessionId: legacyId }, legacyId), legacyId)
-  assert.equal(cursorLegacyIdentity({ origin: "chats", sessionId: legacyId }, legacyId), `chats:${legacyId}`)
+  assert.equal(cursorLegacyIdentity({ origin: "chats", sessionId: legacyId, workspace: "hash" }, legacyId), `chats:${legacyId}`)
 
   // Legacy checkpoints: the root blob through hex or plain meta, never a file hash.
   writeLegacyStore(acpPath, "root-1", 2, false)

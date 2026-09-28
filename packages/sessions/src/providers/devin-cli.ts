@@ -82,6 +82,8 @@ interface DiscoveryRow {
   id: string
   activity: StoredTimestamp
   top: number
+  title: string | null
+  cwd: string | null
 }
 
 interface SessionRow {
@@ -207,7 +209,8 @@ export class DevinCliProvider implements SessionProvider {
       const stored = db
         .prepare(
           `SELECT s.id AS id, s.last_activity_at AS activity,
-                  COALESCE(s.main_chain_id, 0) AS top
+                  COALESCE(s.main_chain_id, 0) AS top,
+                  s.title AS title, s.working_directory AS cwd
            FROM sessions s WHERE s.hidden = 0`
         )
         .all()
@@ -223,6 +226,8 @@ export class DevinCliProvider implements SessionProvider {
           path: `${this.dbPath()}#${row.id}`,
           bytes: row.top,
           mtimeMs: (at ? Date.parse(at) : info.mtimeMs) + (isLocked ? 0.5 : 0),
+          // Devin renames a session without touching last_activity_at.
+          revision: JSON.stringify([row.title, row.cwd]),
           locked: isLocked,
         })
       }
@@ -598,6 +603,8 @@ function parseDiscoveryRow(fields: SqliteFields): DiscoveryRow | null {
     id: fields.id,
     activity: sqliteNumber(fields.activity),
     top: isSqliteNumber(fields.top) ? fields.top : 0,
+    title: isTextValue(fields.title) ? fields.title : null,
+    cwd: isTextValue(fields.cwd) ? fields.cwd : null,
   }
 }
 

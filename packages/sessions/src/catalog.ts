@@ -17,9 +17,9 @@
  *     costs one positional read of only the appended bytes per flush.
  */
 
-import { existsSync, realpathSync, watchFile, unwatchFile, type Stats } from "node:fs"
+import { existsSync, realpathSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
-import { dirname, join, sep } from "node:path"
+import { basename, dirname, join, sep } from "node:path"
 import {
   parseCache,
   CATALOG_CACHE_VERSION,
@@ -268,6 +268,12 @@ export class SessionCatalog {
   private preparation: Promise<void> | null = null
   private saveTimer: NodeJS.Timeout | null = null
   private watchers = new Map<string, RootWatch>()
+  /**
+   * Roots that don't exist yet, by the folder they'll appear in. Codex makes
+   * `archived_sessions` at its first archive; waiting for the next discovery
+   * sweep showed that session as lost for up to half a minute.
+   */
+  private awaited = new Map<string, FSWatcher>()
   private polls = new Map<string, (current: Stats, previous: Stats) => void>()
   private discovering: Promise<void> | null = null
   private watching = false
@@ -660,8 +666,17 @@ export class SessionCatalog {
       watcher.close()
       this.watchers.delete(root)
     }
+    for (const [root, waiting] of this.awaited) {
+      if (roots.has(root) && !existsSync(root)) continue
+      waiting.close()
+      this.awaited.delete(root)
+    }
     for (const root of roots) {
-      if (this.watchers.has(root) || !existsSync(root)) continue
+      if (!existsSync(root)) {
+        this.awaitRoot(root)
+        continue
+      }
+      if (this.watchers.has(root)) continue
       try {
         const watcher = watchRoot(root, (path) => {
           if (this.watchers.get(root) === watcher) this.noticed(path)
@@ -674,6 +689,27 @@ export class SessionCatalog {
       } catch {
         // Discovery still runs; retry registration on the next sweep.
       }
+    }
+  }
+
+  private awaitRoot(root: string): void {
+    const parent = dirname(root)
+    if (this.awaited.has(root) || !existsSync(parent)) return
+    try {
+      const waiting = watch(parent, { persistent: false }, (_event, name) => {
+        if (this.stopped || this.awaited.get(root) !== waiting) return
+        if (name !== null && name !== basename(root)) return
+        if (!existsSync(root)) return
+        this.refreshWatchRoots()
+        void this.reconcileDiscovery()
+      })
+      waiting.on("error", () => {
+        waiting.close()
+        if (this.awaited.get(root) === waiting) this.awaited.delete(root)
+      })
+      this.awaited.set(root, waiting)
+    } catch {
+      // The next discovery sweep finds it instead.
     }
   }
 
@@ -826,6 +862,8 @@ export class SessionCatalog {
     this.follows.clear()
     for (const watcher of this.watchers.values()) watcher.close()
     this.watchers.clear()
+    for (const waiting of this.awaited.values()) waiting.close()
+    this.awaited.clear()
     for (const [file, changed] of this.polls) unwatchFile(file, changed)
     this.polls.clear()
     if (this.pollTimer) {
@@ -1267,6 +1305,11 @@ export class SessionCatalog {
 
   private emit(event: CatalogEvent): void {
     if (this.stopped) return
+    // `list` goes on serving a record its store dropped from the archive, so
+    // the event says the same: announced as removed, the row vanished and a
+    // reload brought it back.
+    const kept = event.type === "removed" ? this.archive?.kept(event.path) : undefined
+    if (kept) event = { type: "updated", ref: withWorkspace(kept) ?? kept }
     // Archive once the writer releases its lock. Re-translating a giant live
     // conversation on every checkpoint competes with the agent writing it.
     if (this.archive && (event.type === "added" || event.type === "updated")) {

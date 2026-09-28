@@ -20,3 +20,15 @@ export function threadArchiveKey(target: ThreadTarget): string {
   if (target.kind === "file") return `file:${target.path}`
   return `native:${JSON.stringify([target.provider, target.nativeId])}`
 }
+/** Marks a Session its harness archived as restored in Mako all the same. */
+export function threadShownKey(key: string): string {
+  return `shown:${key}`
+}
+/**
+ * Whether a Session sits with the archived ones: Mako archived it, or its
+ * harness did and nobody restored it here.
+ */
+export function archivedByKeys(keys: readonly string[], hidden: ReadonlySet<string>, nativeArchived: boolean | undefined): boolean {
+  if (keys.some((key) => hidden.has(key))) return true
+  return Boolean(nativeArchived) && !keys.some((key) => hidden.has(threadShownKey(key)))
+}

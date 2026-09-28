@@ -89,11 +89,14 @@ async function openDatabase(path: string): Promise<DatabaseSync | null> {
  * One aggregate over the header table stands in for the whole listing:
  * a header added, removed, updated or checkpointed changes it.
  */
-function discoverFingerprint(db: DatabaseSync): string | null {
+function discoverFingerprint(db: DatabaseSync, archived: string): string | null {
   try {
     const row = db
       .prepare(
-        "SELECT COUNT(*) AS count, MAX(lastUpdatedAt) AS updated, MAX(checkpointAt) AS checkpoint FROM composerHeaders WHERE COALESCE(isSubagent,0) = 0"
+        // Archiving in Cursor moves no timestamp; the archived rows' own
+        // ids are what change. A rename or a new folder rewrites the
+        // header's value, which the lengths almost always show.
+        `SELECT COUNT(*) AS count, MAX(lastUpdatedAt) AS updated, MAX(checkpointAt) AS checkpoint, TOTAL(CASE WHEN ${archived} THEN rowid END) AS archived, TOTAL(length(value) * rowid) AS headers FROM composerHeaders WHERE COALESCE(isSubagent,0) = 0`
       )
       .get()
     const parsed = z
@@ -101,15 +104,51 @@ function discoverFingerprint(db: DatabaseSync): string | null {
         count: z.number(),
         updated: z.number().nullable(),
         checkpoint: z.number().nullable(),
+        archived: z.number(),
+        headers: z.number(),
       })
       .safeParse(row)
     return parsed.success
-      ? `${parsed.data.count}:${parsed.data.updated ?? 0}:${parsed.data.checkpoint ?? 0}`
+      ? `${parsed.data.count}:${parsed.data.updated ?? 0}:${parsed.data.checkpoint ?? 0}:${parsed.data.archived}:${parsed.data.headers}`
       : null
   } catch {
     return null
   }
 }
+
+/** The header's archive flag, or a constant where this Cursor has none. */
+function archiveColumn(db: DatabaseSync): string {
+  try {
+    return db.prepare("SELECT 1 FROM pragma_table_info('composerHeaders') WHERE name = 'isArchived'").get()
+      ? "isArchived"
+      : "0"
+  } catch {
+    return "0"
+  }
+}
+
+const HeaderStamp = z.object({
+  lastUpdatedAt: z.number().nullable(),
+  checkpointAt: z.number().nullable(),
+  isArchived: z.number().nullable(),
+  name: z.string().nullable(),
+  cwd: z.string().nullable(),
+})
+
+/** The header columns a row shows, read without parsing the whole value. */
+const HEADER_SHOWN = "json_extract(value, '$.name') AS name, json_extract(value, '$.workspaceIdentifier.uri.fsPath') AS cwd"
+
+/** Cursor renames and re-homes a composer without moving its timestamps. */
+function headerRevision(stamp: z.infer<typeof HeaderStamp>): string {
+  return `${stamp.lastUpdatedAt ?? 0}:${stamp.checkpointAt ?? 0}${stamp.isArchived ? ":archived" : ""}:${JSON.stringify([stamp.name, stamp.cwd])}`
+}
+
+/**
+ * How long an unchanged fingerprint answers discovery. The fingerprint
+ * misses a rename that keeps the header's length; a full read this often
+ * catches it.
+ */
+const FINGERPRINT_TRUST_MS = 30_000
 
 function timestamp(value: number | undefined): string | undefined {
   return value && Number.isFinite(value) && value > 0 && value < 8.64e15
@@ -122,7 +161,7 @@ export class CursorDesktopStore {
   readonly root: string
   private readonly databasePath: string
   private readonly readRevisions = new Map<string, string>()
-  private lastDiscover: { fingerprint: string; files: NativeFile[] } | null =
+  private lastDiscover: { fingerprint: string; files: NativeFile[]; at: number } | null =
     null
   private lastRead: {
     path: string
@@ -157,27 +196,25 @@ export class CursorDesktopStore {
       // A write anywhere in the database re-runs discovery; when no header
       // moved, the previous list is the answer and the aggregate is the
       // whole cost.
-      const fingerprint = discoverFingerprint(db)
+      const archived = archiveColumn(db)
+      const fingerprint = discoverFingerprint(db, archived)
       if (
         fingerprint &&
         this.lastDiscover &&
-        this.lastDiscover.fingerprint === fingerprint
+        this.lastDiscover.fingerprint === fingerprint &&
+        Date.now() - this.lastDiscover.at < FINGERPRINT_TRUST_MS
       )
         return this.lastDiscover.files
       // Headers are small, separately indexed records. Never hydrate composerData in a catalog scan.
       const files = db
         .prepare(
-          "SELECT composerId, lastUpdatedAt, checkpointAt FROM composerHeaders WHERE COALESCE(isSubagent,0) = 0 ORDER BY lastUpdatedAt DESC LIMIT 20000"
+          `SELECT composerId, lastUpdatedAt, checkpointAt, ${archived} AS isArchived, ${HEADER_SHOWN} FROM composerHeaders WHERE COALESCE(isSubagent,0) = 0 ORDER BY lastUpdatedAt DESC LIMIT 20000`
         )
         .all()
         .flatMap((row) => {
-          const parsed = z
-            .object({
-              composerId: z.string().regex(/^[\da-f-]{36}$/i),
-              lastUpdatedAt: z.number().nullable(),
-              checkpointAt: z.number().nullable(),
-            })
-            .safeParse(row)
+          const parsed = HeaderStamp.extend({
+            composerId: z.string().regex(/^[\da-f-]{36}$/i),
+          }).safeParse(row)
           if (!parsed.success) return []
           const updated = parsed.data.lastUpdatedAt ?? 0
           return [
@@ -185,11 +222,11 @@ export class CursorDesktopStore {
               path: `${this.databasePath}#composer:${parsed.data.composerId}`,
               bytes: 0,
               mtimeMs: updated,
-              revision: `${updated}:${parsed.data.checkpointAt ?? 0}`,
+              revision: headerRevision(parsed.data),
             },
           ]
         })
-      if (fingerprint) this.lastDiscover = { fingerprint, files }
+      if (fingerprint) this.lastDiscover = { fingerprint, files, at: Date.now() }
       return files
     } catch {
       return []
@@ -206,26 +243,28 @@ export class CursorDesktopStore {
     try {
       const row = db
         .prepare(
-          "SELECT value, lastUpdatedAt, checkpointAt FROM composerHeaders WHERE composerId = ? AND COALESCE(isSubagent,0) = 0 AND length(value) <= 65536"
+          `SELECT value, lastUpdatedAt, checkpointAt, ${archiveColumn(db)} AS isArchived, ${HEADER_SHOWN} FROM composerHeaders WHERE composerId = ? AND COALESCE(isSubagent,0) = 0 AND length(value) <= 65536`
         )
         .get(id)
+      const stamp = HeaderStamp.safeParse(row)
       const header = parseJson(Header, row?.value)
-      return header
-        ? {
-            harness: "cursor",
-            nativeId: id,
-            path: file.path,
-            title: titleFrom(header.name),
-            cwd: header.workspaceIdentifier?.uri?.fsPath,
-            startedAt: timestamp(header.createdAt),
-            updatedAt: timestamp(header.lastUpdatedAt),
-            bytes: file.bytes,
-            revision: `${row?.lastUpdatedAt ?? 0}:${row?.checkpointAt ?? 0}`,
-            // Cursor CLI cannot resume a desktop composer. It remains portable read-only history.
-            resumeUnavailable:
-              "Cursor desktop history continues here by copying the conversation into a new agent session.",
-          }
-        : null
+      if (!header) return null
+      const ref: ThreadRef = {
+        harness: "cursor",
+        nativeId: id,
+        path: file.path,
+        title: titleFrom(header.name),
+        cwd: header.workspaceIdentifier?.uri?.fsPath,
+        startedAt: timestamp(header.createdAt),
+        updatedAt: timestamp(header.lastUpdatedAt),
+        bytes: file.bytes,
+        revision: stamp.success ? headerRevision(stamp.data) : "0:0",
+        // Cursor CLI cannot resume a desktop composer. It remains portable read-only history.
+        resumeUnavailable:
+          "Cursor desktop history continues here by copying the conversation into a new agent session.",
+      }
+      if (stamp.success && stamp.data.isArchived) ref.nativeArchived = true
+      return ref
     } catch {
       return null
     } finally {

@@ -7,8 +7,8 @@ import { ThreadArchives } from "../electron/thread-archives.ts"
 import { ThreadLifecycle } from "../electron/thread-lifecycle.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
-import { threadArchiveKey } from "../electron/contracts/thread-lifecycle.ts"
+import type { LiveSessionState, ThreadRef } from "../electron/shared.ts"
+import { archivedByKeys, threadArchiveKey, threadShownKey } from "../electron/contracts/thread-lifecycle.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-thread-lifecycle-"))
 const archives = new ThreadArchives(join(root, "archives.sqlite"))
@@ -91,5 +91,31 @@ try {
   const secondReader=new ThreadArchives(join(root,"archives.sqlite"))
   assert.deepEqual(secondReader.snapshot(),archives.snapshot())
   secondReader.close()
-  console.log("Thread lifecycle: shared archive/restore receipts, duplicate commands, exact-run Stop, held queue and unrelated-run isolation verified")
+
+  // A Session its harness archived sits with the archived ones until it's
+  // restored here; archiving it again here forgets that restore.
+  const refs: ThreadRef[] = [
+    { harness: "codex", nativeId: "archived-in-codex", path: "/home/.codex/archived_sessions/rollout-a.jsonl", nativeArchived: true },
+    { harness: "claude", nativeId: "plain", path: "/home/.claude/projects/p/plain.jsonl" },
+  ]
+  const natives = new ThreadLifecycle({live:owner,archives,native:{list:()=>[],editQueued:()=>[]},threads:()=>refs,nativeToken:()=>null,abortNative:()=>{},external:()=>false})
+  const codex = { kind: "native", provider: "codex", nativeId: "archived-in-codex" } as const
+  assert.equal(natives.controls(codex).archived, true, "archived in Codex is archived here")
+  natives.archive({ id: randomUUID(), target: codex, archived: false })
+  assert.equal(natives.controls(codex).archived, false, "restored here though Codex still has it archived")
+  assert.ok(archives.snapshot().keys.includes(threadShownKey(threadArchiveKey(codex))))
+  natives.archive({ id: randomUUID(), target: codex, archived: true })
+  assert.equal(natives.controls(codex).archived, true)
+  assert.equal(archives.snapshot().keys.includes(threadShownKey(threadArchiveKey(codex))), false, "archiving again forgets the restore")
+  natives.archive({ id: randomUUID(), target: codex, archived: false })
+  refs[0] = { ...refs[0]!, path: "/home/.codex/sessions/2026/09/28/rollout-a.jsonl", nativeArchived: undefined }
+  assert.equal(natives.controls(codex).archived, false, "unarchived in Codex, it stays out")
+  const plain = { kind: "native", provider: "claude", nativeId: "plain" } as const
+  natives.archive({ id: randomUUID(), target: plain, archived: true })
+  natives.archive({ id: randomUUID(), target: plain, archived: false })
+  assert.equal(archives.snapshot().keys.some((key) => key.startsWith("shown:") && key.includes("plain")), false, "restoring a Session only Mako archived records nothing more")
+  assert.equal(archivedByKeys(["file:/x"], new Set(), true), true)
+  assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x"]), true), false)
+  assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x", "file:/x"]), true), true, "Mako's own archive wins over a restore marker")
+  console.log("Thread lifecycle: shared archive/restore receipts, duplicate commands, exact-run Stop, held queue and unrelated-run isolation verified; a Session its harness archived is archived here until restored here")
 } finally { owner.stop(); archives.close(); await rm(root,{recursive:true,force:true}) }

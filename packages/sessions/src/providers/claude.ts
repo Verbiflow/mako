@@ -105,6 +105,8 @@ interface ClaudeLine {
   type: string
   /** A title Claude Code wrote for the session, rewritten as it evolves. */
   title?: string
+  /** The name `/rename` gave the session. It outranks Claude Code's own. */
+  customTitle?: string
   uuid?: string
   timestamp?: string
   sessionId?: string
@@ -266,6 +268,7 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
   return {
     type,
     title: stringValue(root["aiTitle"]) ?? stringValue(root["summary"]),
+    customTitle: type === "custom-title" ? stringValue(root["customTitle"]) : undefined,
     effort: stringValue(root["effort"]),
     uuid: stringValue(root["uuid"]),
     timestamp: stringValue(root["timestamp"]),
@@ -478,17 +481,26 @@ export class ClaudeProvider implements SessionProvider {
   async refine(ref: ThreadRef, fromByte: number): Promise<ThreadRef> {
     const next: ThreadRef = { ...ref }
     let lastMessageAt: string | undefined
+    let named = false
+    let written: string | undefined
     await readLines(ref.path, fromByte, (raw) => {
       const line = parseClaudeLine(raw)
       if (!line || line.isSidechain) return
       lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
-      if (line.title?.trim() && (line.type === "ai-title" || line.type === "summary")) {
-        next.title = titleFrom(line.title) ?? next.title
+      if (line.customTitle?.trim()) {
+        next.title = titleFrom(line.customTitle) ?? next.title
+        named = true
+      } else if (line.title?.trim() && (line.type === "ai-title" || line.type === "summary")) {
+        written = line.title
       }
       const model = sessionModel(line)
       if (model) next.model = model
       followCurrentCwd(next, line.cwd)
     })
+    // Claude Code writes the `/rename` name again just before each title of
+    // its own, so a renamed session's is in the bytes right before this one.
+    if (written && !named && !(await renamedBefore(ref.path, fromByte)))
+      next.title = titleFrom(written) ?? next.title
     if (lastMessageAt !== undefined && lastMessageAt > (next.updatedAt ?? ""))
       next.updatedAt = lastMessageAt
     return next
@@ -688,6 +700,19 @@ function attachmentParts(
 
 /** Refs whose title Claude Code wrote; a prompt never replaces one of these. */
 const storedTitles = new WeakSet<ThreadRef>()
+/** Refs `/rename` named; neither a prompt nor Claude Code's title replaces these. */
+const customTitles = new WeakSet<ThreadRef>()
+
+/** Whether a `/rename` name was written from 64 KB before `byte` on. */
+async function renamedBefore(path: string, byte: number): Promise<boolean> {
+  let found = false
+  await readLines(path, Math.max(0, byte - 65_536), (raw) => {
+    if (!raw.includes('"custom-title"')) return
+    found = Boolean(parseClaudeLine(raw)?.customTitle?.trim())
+    return !found
+  })
+  return found
+}
 
 /**
  * The timestamp of a conversation message, or the one already held if this
@@ -735,10 +760,18 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
     const model = sessionModel(line)
     if (model) ref.model = model
   }
+  // A `/rename` name is the user's; the latest one wins over everything.
+  if (line.customTitle?.trim()) {
+    ref.title = titleFrom(line.customTitle)
+    customTitles.add(ref)
+    storedTitles.add(ref)
+    return
+  }
   // Claude Code names the session itself (`ai-title`, once `summary`) and
   // rewrites that name as the conversation moves on, so the latest one wins.
   // The first prompt only stands in until a written title exists.
   if (line.title?.trim() && (line.type === "ai-title" || line.type === "summary")) {
+    if (customTitles.has(ref)) return
     ref.title = titleFrom(line.title)
     storedTitles.add(ref)
     return

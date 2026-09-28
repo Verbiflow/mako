@@ -148,6 +148,7 @@ export class OpenCodeProvider implements SessionProvider {
                 path: sessionPath(path, row.id),
                 bytes: row.revision,
                 mtimeMs: row.updatedAt ?? info.mtimeMs,
+                revision: rowState(row),
               }))
             )
           }
@@ -165,6 +166,7 @@ export class OpenCodeProvider implements SessionProvider {
                 path: sessionPath(path, row.id, true),
                 bytes: row.revision,
                 mtimeMs: row.updatedAt ?? info.mtimeMs,
+                revision: rowState(row),
               }))
             )
           }
@@ -480,8 +482,9 @@ function refFrom(
     startedAt: isoOf(row.startedAt),
     updatedAt: isoOf(row.updatedAt),
     bytes: revision,
-    archived: row.archived,
   }
+  // Archived in OpenCode, not lost: the row is intact and resumes as it is.
+  if (row.archived) ref.nativeArchived = true
   if (model?.effort) ref.settings = { model: modelId, options: { effort: model.effort } }
   return ref
 }
@@ -1017,6 +1020,11 @@ function parseObject(raw: string | undefined): JsonObject | undefined {
 function timeCreated(data: JsonObject): number | undefined {
   const time = jsonObject(data.time)
   return time ? (jsonNumber(time.created) ?? jsonNumber(time.start)) : undefined
+}
+
+/** Archiving or renaming may leave the row's times alone; the stamp still has to move. */
+function rowState(row: SessionRow): string {
+  return JSON.stringify([row.archived ? "archived" : "open", row.title ?? null, row.directory ?? null])
 }
 
 function revisionOf(timestamp: number, count: number): number {

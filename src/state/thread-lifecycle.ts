@@ -6,7 +6,7 @@ import { markSeen, subjectId } from "@/state/notifications"
 import { markThreadReviewed } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
 import { formatTranscript, type TranscriptDepth } from "@mako/sessions/transcript"
-import { threadArchiveKey, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget, type ThreadRef } from "../../electron/shared"
+import { archivedByKeys, threadArchiveKey, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget, type ThreadRef } from "../../electron/shared"
 import { toast } from "sonner"
 
 export const threadArchiveStore = createStore({ revision: -1, keys: new Set<string>() })
@@ -25,7 +25,9 @@ export function nativeThreadTarget(ref: ThreadRef): ThreadTarget {
 }
 
 export function archivedThread(ref: ThreadRef, keys: ReadonlySet<string>): boolean {
-  return keys.has(threadArchiveKey(nativeThreadTarget(ref))) || keys.has(threadArchiveKey({ kind: "file", path: ref.path })) || (ref.nativeId ? keys.has(threadArchiveKey({ kind: "native", provider: ref.harness, nativeId: ref.nativeId })) : false)
+  const own = [threadArchiveKey(nativeThreadTarget(ref)), threadArchiveKey({ kind: "file", path: ref.path })]
+  if (ref.nativeId) own.push(threadArchiveKey({ kind: "native", provider: ref.harness, nativeId: ref.nativeId }))
+  return archivedByKeys(own, keys, ref.nativeArchived)
 }
 
 export function archivedLive(presence: AcpPresence, keys: ReadonlySet<string>): boolean {

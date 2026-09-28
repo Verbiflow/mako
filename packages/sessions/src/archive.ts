@@ -203,6 +203,12 @@ export class SessionArchive {
     return this.index.has(path)
   }
 
+  /** The saved copy of a native path, as `orphans` lists it. */
+  kept(path: string): ThreadRef | undefined {
+    this.refreshIndex()
+    return this.index.get(path)
+  }
+
   note(ref: ThreadRef, read: () => Promise<Thread | null>): void {
     if (this.stopping || this.deleted.has(ref.path)) return
     const state = this.captureState(ref.path)

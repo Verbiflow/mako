@@ -42,6 +42,7 @@ import {
 } from "./cursor-sdk-index.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
 import {
+  cursorChatIdentity,
   cursorSdkIndexPath,
   cursorSdkStateRoot,
   cursorSdkStorePath,
@@ -470,6 +471,8 @@ export class CursorProvider implements SessionProvider {
   rescanDebounceMs = 250
   private readonly desktop: CursorDesktopStore
   private chatRoot: string
+  /** The chats stores of each session id, by the session directory's name. */
+  private chatStores = new Map<string, Set<string>>()
   private acpRoot: string
   /**
    * Mako's own Cursor SDK agents: `<state root>/index.db` names them and
@@ -699,13 +702,18 @@ export class CursorProvider implements SessionProvider {
 
   async discover(): Promise<NativeFile[]> {
     const paths: string[] = []
+    const chatStores = new Map<string, Set<string>>()
     const workspaces = await readdir(this.chatRoot).catch((): string[] => [])
     for (const workspace of workspaces) {
       const root = join(this.chatRoot, workspace)
       const sessions = await readdir(root).catch((): string[] => [])
-      for (const session of sessions)
-        paths.push(join(root, session, "store.db"))
+      for (const session of sessions) {
+        const store = join(root, session, "store.db")
+        paths.push(store)
+        chatStores.set(session, (chatStores.get(session) ?? new Set()).add(store))
+      }
     }
+    this.chatStores = chatStores
     const acpSessions = await readdir(this.acpRoot).catch((): string[] => [])
     for (const session of acpSessions)
       paths.push(join(this.acpRoot, session, "store.db"))
@@ -720,6 +728,18 @@ export class CursorProvider implements SessionProvider {
 
   private ownsChat(path: string): boolean {
     return path.startsWith(`${this.chatRoot}${sep}`)
+  }
+
+  /**
+   * The identity of a chats store, told apart from the same session id in
+   * other workspaces. Discovery lists them all; a store peeked since joins
+   * its session's set, so one resumed elsewhere between sweeps is counted.
+   */
+  private chatIdentity(store: string, nativeId: string): string {
+    const session = basename(dirname(store))
+    const stores = (this.chatStores.get(session) ?? new Set<string>()).add(store)
+    this.chatStores.set(session, stores)
+    return cursorChatIdentity(store, nativeId, stores)
   }
 
   /**
@@ -789,10 +809,11 @@ export class CursorProvider implements SessionProvider {
       }
       // `cursor-agent -p --resume <id>` on an ACP session once wrote its new
       // turns to a second store under chats/ with the same agent id
-      // (verified 2026-09-12). The two hold different turns, so the chats
-      // copy is its own row. Either continues through the SDK, which imports
+      // (verified 2026-09-12), and one run from another folder writes a
+      // store under that folder's workspace. Each holds different turns, so
+      // each is its own row. Any continues through the SDK, which imports
       // the store it is asked to reopen.
-      if (this.ownsChat(file.path)) ref.identity = `chats:${nativeId}`
+      if (this.ownsChat(file.path)) ref.identity = this.chatIdentity(file.path, nativeId)
       // An agent Mako imported is the continuation of a legacy row: it takes
       // that row's identity so the catalog shows one thread, and being the
       // newer of the two it is the one shown.

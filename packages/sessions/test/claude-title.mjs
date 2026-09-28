@@ -65,6 +65,35 @@ assert.equal(
 )
 console.log("Claude titles: written titles win over prompts, latest wins, legacy summary honored")
 
+// `/rename` writes a custom-title record, and Claude Code writes it again
+// right before each title of its own. The user's name wins wherever it sits.
+const custom = (name) => line({ type: "custom-title", customTitle: name, sessionId: "session-1" })
+const aiTitle = (name) => line({ type: "ai-title", aiTitle: name, sessionId: "session-1" })
+const renamed = await peek(
+  "renamed.jsonl",
+  user("first prompt", "u1") + aiTitle("Claude's name") + custom("Login redirect fix") + aiTitle("Claude's newer name")
+)
+assert.equal(renamed?.title, "Login redirect fix", "a later ai-title does not replace the /rename name")
+const renamedPath = join(home, "renamed.jsonl")
+let renamedBytes = (await stat(renamedPath)).size
+await writeFile(renamedPath, user("go on", "u2") + custom("Login redirect fix") + aiTitle("Yet another name"), { flag: "a" })
+const kept = await new ClaudeProvider(home).refine(renamed, renamedBytes)
+assert.equal(kept.title, "Login redirect fix", "appended ai-title with its custom-title keeps the name")
+renamedBytes = (await stat(renamedPath)).size
+await writeFile(renamedPath, aiTitle("Written alone"), { flag: "a" })
+const split = await new ClaudeProvider(home).refine(kept, renamedBytes)
+assert.equal(split.title, "Login redirect fix", "an ai-title appended in a later write than its custom-title keeps the name")
+renamedBytes = (await stat(renamedPath)).size
+await writeFile(renamedPath, custom("Renamed again"), { flag: "a" })
+assert.equal((await new ClaudeProvider(home).refine(split, renamedBytes)).title, "Renamed again")
+const unrenamed = await peek("unrenamed.jsonl", user("first prompt", "u1") + aiTitle("Claude's name"))
+const unrenamedBytes = (await stat(join(home, "unrenamed.jsonl"))).size
+await writeFile(join(home, "unrenamed.jsonl"), aiTitle("Claude's newer name"), { flag: "a" })
+assert.equal((await new ClaudeProvider(home).refine(unrenamed, unrenamedBytes)).title, "Claude's newer name", "without a rename Claude's latest title still lands")
+const renamedThread = await new ClaudeProvider(home).read(renamedPath)
+assert.equal(renamedThread?.entries.filter((entry) => entry.kind === "user").length, 2, "custom-title records are not transcript entries")
+console.log("Claude titles: a /rename name outranks Claude Code's titles in the peek and in every refine")
+
 // Claude Code composes some assistant messages itself ("API error", "no
 // response requested") and stamps them `<synthetic>`. The row keeps the model
 // the conversation actually ran on, in the peek and in a later refine.

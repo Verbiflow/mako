@@ -226,6 +226,7 @@ try {
         [file.path]: {
           bytes: file.bytes,
           mtimeMs: file.mtimeMs,
+          revision: file.revision,
           ref: opened.ref,
         },
       },
@@ -288,6 +289,18 @@ try {
     }
     console.log("Devin native WAL observation delivered without directory events")
   } finally { await watched.stop(); writer.close() }
+  // Devin's rename writes the title alone and leaves last_activity_at be.
+  const renaming = new SessionCatalog([provider])
+  try {
+    const before = (await renaming.scan()).find(ref => ref.nativeId === "session-1")
+    const renamer = new DatabaseSync(join(dir, "sessions.db"))
+    renamer.prepare("UPDATE sessions SET title = ? WHERE id = ?").run("Renamed in Devin", "session-1")
+    renamer.close()
+    const after = (await renaming.scan()).find(ref => ref.nativeId === "session-1")
+    assert.notEqual(before.title, "Renamed in Devin")
+    assert.equal(after.title, "Renamed in Devin", "a rename that moves no timestamp still reaches the row")
+    console.log("Devin rename without an activity bump reaches the row")
+  } finally { await renaming.stop() }
   provider.close()
   console.log("Devin CLI tests clean: streamed rows, tools, thinking, locks, and incremental follow verified.")
 } finally {

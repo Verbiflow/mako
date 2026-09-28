@@ -1,0 +1,180 @@
+import assert from "node:assert/strict"
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
+import { setTimeout as delay } from "node:timers/promises"
+import { SessionCatalog } from "../dist/catalog.js"
+import { CodexProvider } from "../dist/providers/codex.js"
+import { CursorProvider } from "../dist/providers/cursor.js"
+import { OpenCodeProvider } from "../dist/providers/opencode.js"
+
+const home = await mkdtemp(join(tmpdir(), "mako-native-archive-"))
+try {
+  // Codex's archive moves the rollout into archived_sessions, filename kept
+  // and date folders flattened, and points state_5.sqlite at it.
+  const id = "01a0e74f-b716-77a2-8b46-71174540cd62"
+  const name = `rollout-2026-09-28T02-19-16-${id}.jsonl`
+  const dated = join(home, ".codex", "sessions", "2026", "09", "28")
+  const archivedDir = join(home, ".codex", "archived_sessions")
+  const live = join(dated, name)
+  const archived = join(archivedDir, name)
+  await mkdir(dated, { recursive: true })
+  await mkdir(archivedDir, { recursive: true })
+  const line = (type, payload) => `${JSON.stringify({ timestamp: "2026-09-28T09:19:16Z", type, payload })}\n`
+  await writeFile(live, line("session_meta", { id, cwd: home }) + line("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "Fix the login redirect" }] }))
+  const state = new DatabaseSync(join(home, ".codex", "state_5.sqlite"))
+  state.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT, title TEXT, cwd TEXT, updated_at_ms INTEGER, thread_source TEXT, rollout_path TEXT)")
+  state.prepare("INSERT INTO threads VALUES (?, NULL, 'Fix the login redirect', ?, ?, 'user', ?)").run(id, home, Date.now(), live)
+  const archivePath = join(home, "mako-archive")
+
+  // Mako's archive keeps a copy of the session while it's where it was.
+  const first = new SessionCatalog([new CodexProvider(home)], { archivePath })
+  const [open] = await first.scan()
+  assert.equal(open.path, live)
+  assert.equal(open.nativeArchived, undefined)
+  await first.stop()
+
+  const catalog = new SessionCatalog([new CodexProvider(home)], { archivePath })
+  const events = []
+  catalog.onEvent((event) => events.push(event))
+  await catalog.scan()
+  await rename(live, archived)
+  state.prepare("UPDATE threads SET rollout_path = ? WHERE id = ?").run(archived, id)
+  await catalog.scan({ emitChanges: true })
+  const arrived = events.find((event) => event.type !== "removed" && event.ref.path === archived)
+  assert.equal(arrived?.ref.nativeArchived, true, "the rollout in archived_sessions is listed, archived in Codex")
+  assert.equal(arrived?.ref.archived, undefined, "archived in Codex is not lost")
+  const left = events.find((event) => event.type === "removed" || event.ref.path === live)
+  assert.equal(left?.type, "updated", "the old path the archive holds is its saved copy, not a removal")
+  assert.equal(left.ref.archived, true)
+  let listed = catalog.list()
+  assert.equal(listed.length, 1, "one session, one row")
+  assert.equal(listed[0].path, archived, "the native record beats Mako's copy")
+
+  // Unarchiving moves it back to its dated folder.
+  events.length = 0
+  await rename(archived, live)
+  state.prepare("UPDATE threads SET rollout_path = ? WHERE id = ?").run(live, id)
+  await catalog.scan({ emitChanges: true })
+  const back = events.find((event) => event.type !== "removed" && event.ref.path === live)
+  assert.equal(back?.ref.nativeArchived, undefined, "unarchived, it is out again")
+  assert.equal(back.ref.archived, undefined)
+  assert.deepEqual(events.filter((event) => event.type === "removed").map((event) => event.path), [archived])
+  listed = catalog.list()
+  assert.equal(listed.length, 1)
+  assert.equal(listed[0].path, live)
+
+  // Deleted in Codex: the row stays as Mako's saved copy, live as after a reload.
+  events.length = 0
+  await rm(live)
+  await catalog.scan({ emitChanges: true })
+  assert.deepEqual(events.map((event) => [event.type, event.ref?.archived]), [["updated", true]])
+  assert.equal(catalog.list()[0].archived, true)
+  await catalog.stop()
+  state.close()
+
+  // A record with no saved copy is still simply removed.
+  const bare = join(home, "bare")
+  const bareDated = join(bare, ".codex", "sessions", "2026", "09", "28")
+  await mkdir(bareDated, { recursive: true })
+  await writeFile(join(bareDated, name), line("session_meta", { id, cwd: home }))
+  const plain = new SessionCatalog([new CodexProvider(bare)], { archivePath: join(bare, "mako-archive") })
+  const plainEvents = []
+  plain.onEvent((event) => plainEvents.push(event))
+  await plain.scan()
+  await rm(join(bareDated, name))
+  await plain.scan({ emitChanges: true })
+  assert.deepEqual(plainEvents.map((event) => event.type), ["removed"])
+  await plain.stop()
+  console.log("Native archive: a Codex rollout archived and unarchived follows its file both ways; a deleted one with a saved copy stays as that copy")
+
+  // The first archive on a machine makes archived_sessions. The watcher
+  // hears the folder appear rather than waiting for the discovery sweep.
+  const fresh = join(home, "fresh")
+  const freshDated = join(fresh, ".codex", "sessions", "2026", "09", "28")
+  const freshArchived = join(fresh, ".codex", "archived_sessions")
+  await mkdir(freshDated, { recursive: true })
+  await writeFile(join(freshDated, name), line("session_meta", { id, cwd: home }))
+  const watched = new SessionCatalog([new CodexProvider(fresh)])
+  const watchedEvents = []
+  watched.onEvent((event) => watchedEvents.push(event))
+  await watched.scan()
+  watched.startWatching()
+  await delay(200)
+  const movedAt = Date.now()
+  await mkdir(freshArchived)
+  await rename(join(freshDated, name), join(freshArchived, name))
+  while (!watchedEvents.some((event) => event.type !== "removed" && event.ref.path === join(freshArchived, name)) && Date.now() - movedAt < 5000) await delay(25)
+  const heardIn = Date.now() - movedAt
+  assert.ok(heardIn < 5000, `the first archive is heard in ${heardIn} ms, not at the 30 s sweep`)
+  await watched.stop()
+  console.log(`Native archive: the first archive, which creates archived_sessions, is heard in ${heardIn} ms`)
+
+  // OpenCode's archive leaves the row intact; the session resumes as it is.
+  const openRoot = join(home, ".local", "share", "opencode")
+  await mkdir(openRoot, { recursive: true })
+  const openDb = new DatabaseSync(join(openRoot, "opencode.db"))
+  openDb.exec(`
+    CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL, name TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL);
+    CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER);
+    CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+    INSERT INTO project VALUES ('p', '/repo', 'repo', 1, 1);
+    INSERT INTO session VALUES ('ses_a', 'p', NULL, '/repo', 'Refactor the parser', 1000, 2000, NULL);
+  `)
+  const openCatalog = new SessionCatalog([new OpenCodeProvider(home, {})])
+  const openEvents = []
+  openCatalog.onEvent((event) => openEvents.push(event))
+  const [session] = await openCatalog.scan()
+  assert.equal(session.nativeArchived, undefined)
+  openDb.exec("UPDATE session SET time_archived = 3000 WHERE id = 'ses_a'")
+  await openCatalog.scan({ emitChanges: true })
+  const openArchived = openEvents.find((event) => event.type === "updated")?.ref
+  assert.equal(openArchived?.nativeArchived, true, "archiving without touching time_updated still reaches the row")
+  assert.equal(openArchived.archived, undefined, "archived in OpenCode is not lost")
+  openDb.exec("UPDATE session SET title = 'Parser refactor' WHERE id = 'ses_a'")
+  await openCatalog.scan({ emitChanges: true })
+  assert.equal(openEvents.at(-1)?.ref?.title, "Parser refactor", "a rename without touching time_updated reaches the row too")
+  await openCatalog.stop()
+  openDb.close()
+  console.log("Native archive: an OpenCode archive marks the row archived there, still resumable")
+
+  // Cursor's Archive sets a header flag and moves no timestamp.
+  const cursorRoot = join(home, process.platform === "darwin" ? "Library/Application Support/Cursor/User/globalStorage" : ".config/Cursor/User/globalStorage")
+  await mkdir(cursorRoot, { recursive: true })
+  const cursorDb = new DatabaseSync(join(cursorRoot, "state.vscdb"))
+  cursorDb.exec("CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT, subagentTypeName TEXT); CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+  const composer = "12345678-1234-1234-1234-123456789abc"
+  const header = { composerId: composer, name: "Architecture review", createdAt: 1700000000000, lastUpdatedAt: 1700000001000, workspaceIdentifier: { uri: { fsPath: home } } }
+  cursorDb.prepare("INSERT INTO composerHeaders (composerId, lastUpdatedAt, isArchived, isSubagent, checkpointAt, value) VALUES (?, ?, 0, 0, 1, ?)").run(composer, header.lastUpdatedAt, JSON.stringify(header))
+  const cursor = new CursorProvider(home, {})
+  const [desk] = await cursor.discover()
+  assert.equal((await cursor.peek(desk)).nativeArchived, undefined)
+  cursorDb.exec("UPDATE composerHeaders SET isArchived = 1")
+  const [flagged] = await cursor.discover()
+  assert.notEqual(flagged.revision, desk.revision, "the stamp moves when only the archive flag does")
+  const flaggedRef = await cursor.peek(flagged)
+  assert.equal(flaggedRef.nativeArchived, true)
+  assert.equal(flaggedRef.archived, undefined)
+  // A rename rewrites the header's value and nothing else; so does one that
+  // keeps the name's length, which the fingerprint can't see.
+  const renameTo = (name) => cursorDb.prepare("UPDATE composerHeaders SET value = ?").run(JSON.stringify({ ...header, name }))
+  renameTo("Architecture notes")
+  const [renamed] = await cursor.discover()
+  assert.notEqual(renamed.revision, flagged.revision, "a rename moves the stamp")
+  assert.equal((await cursor.peek(renamed)).title, "Architecture notes")
+  renameTo("Architecture plans")
+  const realNow = Date.now
+  Date.now = () => realNow() + 31_000
+  try {
+    const [sameLength] = await cursor.discover()
+    assert.notEqual(sameLength.revision, renamed.revision, "a same-length rename is caught once the fingerprint stops answering")
+  } finally {
+    Date.now = realNow
+  }
+  cursorDb.close()
+  console.log("Native archive: Cursor's Archive flag and renames reach the row though they move no timestamp")
+} finally {
+  await rm(home, { recursive: true, force: true })
+}

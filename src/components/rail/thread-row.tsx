@@ -248,6 +248,7 @@ export const ThreadRow = memo(function ThreadRow({
           ref.archived
             ? "Archived: the native store lost this; Mako kept it. Reply to bring it back to life."
             : undefined,
+          ref.nativeArchived && !ref.archived ? `Archived in ${harnessLabel(ref.harness)}` : undefined,
           [
             ...(ref.lineage ?? []).map((origin) => harnessLabel(origin.harness)),
             harnessLabel(ref.harness),

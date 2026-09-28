@@ -329,7 +329,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     if (!origin || origin.origin === "sdk") return undefined
     const source: SdkImportSource = {
       path: options.threadPath,
-      identity: cursorLegacyIdentity(origin, options.resume),
+      identity: cursorLegacyIdentity(origin, options.resume, dependencies.home ?? homedir()),
       cwd,
     }
     if (options.title) source.name = options.title

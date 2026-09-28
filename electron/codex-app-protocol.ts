@@ -652,6 +652,7 @@ export function rpcRequest(
     case "thread/compact/start":
     case "turn/interrupt":
     case "thread/backgroundTerminals/clean":
+    case "thread/unarchive":
       return beginRpcRequest(context, method, params, parseObjectResult)
     case "thread/backgroundTerminals/list":
       return beginRpcRequest(context, method, params, (value) => {

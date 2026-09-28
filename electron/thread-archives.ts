@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite"
 import { createHash } from "node:crypto"
 import { z } from "zod"
-import { type ArchiveCommand, type ThreadArchiveSnapshot } from "./contracts/thread-lifecycle.js"
+import { threadShownKey, type ArchiveCommand, type ThreadArchiveSnapshot } from "./contracts/thread-lifecycle.js"
 
 export class ThreadArchives {
   private readonly db: DatabaseSync
@@ -14,7 +14,11 @@ export class ThreadArchives {
     const keys = this.db.prepare("SELECT key FROM archives ORDER BY key").all().map((row) => z.object({ key: z.string() }).parse(row).key)
     return { revision, keys }
   }
-  set(command: ArchiveCommand, keys: string[]): ThreadArchiveSnapshot {
+  /**
+   * `natively` says the harness itself archived the target. Restoring such a
+   * Session records that it's shown anyway; archiving it again forgets that.
+   */
+  set(command: ArchiveCommand, keys: string[], natively = false): ThreadArchiveSnapshot {
     const digest = createHash("sha256").update(JSON.stringify(command)).digest("hex")
     this.db.exec("BEGIN IMMEDIATE")
     try {
@@ -22,8 +26,17 @@ export class ThreadArchives {
       if (old) {
         if (z.object({ digest: z.string() }).parse(old).digest !== digest) throw new Error("This archive request ID was already used for another action")
       } else {
-        const statement = this.db.prepare(command.archived ? "INSERT OR IGNORE INTO archives VALUES (?)" : "DELETE FROM archives WHERE key=?")
-        for (const key of new Set(keys)) statement.run(key)
+        const insert = this.db.prepare("INSERT OR IGNORE INTO archives VALUES (?)")
+        const remove = this.db.prepare("DELETE FROM archives WHERE key=?")
+        for (const key of new Set(keys)) {
+          if (command.archived) {
+            insert.run(key)
+            remove.run(threadShownKey(key))
+          } else {
+            remove.run(key)
+            if (natively) insert.run(threadShownKey(key))
+          }
+        }
         this.db.prepare("INSERT INTO receipts VALUES (?, ?)").run(command.id, digest)
         this.db.prepare("UPDATE revision SET value=value+1 WHERE id=1").run()
       }

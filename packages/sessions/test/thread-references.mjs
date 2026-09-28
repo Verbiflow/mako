@@ -45,7 +45,7 @@ const localThread = {
   title: "Exact local reference",
 }
 const localToken = threadToken(localThread.harness, localThread.nativeId)
-const localCalls = installBridge((path) => ({
+const localCalls = installBridge(() => ({
   kind: "file",
   file: `/content-addressed/sha256-abc/transcript.md`,
   title: localThread.title,
@@ -277,6 +277,16 @@ assert.notEqual(
   threadToken(forkOriginal.harness, threadReferenceId(forkOriginal)),
   "the mention menu must mint distinct tokens for the two stores"
 )
+// The same session id resumed from another folder is a third conversation.
+const forkElsewhere = {
+  ...forkCopy,
+  identity: `chats:elsewhere:${forkId}`,
+  path: `/cursor/chats/elsewhere/${forkId}/store.db`,
+  title: "Fork resumed elsewhere",
+}
+assert.equal(findThreadReference([forkElsewhere, forkCopy], "cursor", forkId), forkCopy, "without an original, a bare native id means the first chats store")
+assert.equal(findThreadReference([forkElsewhere, forkCopy, forkOriginal], "cursor", forkId), forkOriginal, "the original still wins")
+assert.equal(findThreadReference([forkElsewhere, forkCopy], "cursor", `chats:elsewhere:${forkId}`), forkElsewhere, "its identity names it")
 const forkCalls = installBridge((path) => ({
   kind: "file",
   file: `/content-addressed/${path.includes("/chats/") ? "fork-copy" : "fork-original"}/transcript.md`,

@@ -115,6 +115,7 @@ export type RpcParams = {
     serviceTier?: string
     config?: JsonObject
   }
+  "thread/unarchive": { threadId: string }
   "thread/turns/list": { threadId: string; limit: 1; sortDirection: "desc"; itemsView: "notLoaded" }
   "turn/start": TurnStartParams
   "turn/steer": TurnSteerParams
@@ -130,6 +131,7 @@ export type RpcResults = {
   "thread/start": ThreadResponse
   "thread/fork": ThreadResponse
   "thread/resume": ThreadResponse
+  "thread/unarchive": JsonObject
   "thread/turns/list": { data: CodexAgentRun[] }
   "turn/start": { turn: Turn }
   "turn/steer": { turnId: string }

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { threadIdentity } from "../dist/format.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { cursorLegacyIdentity } from "../dist/providers/cursor-sdk-paths.js"
 
 async function writeStore(directory, meta, prompt) {
   await mkdir(directory, { recursive: true })
@@ -129,6 +130,44 @@ try {
     "the SDK agent stands in for the acp-sessions store; the chats fork is still its own row"
   )
   console.log("Cursor fork: an acp-sessions store and its chats continuation are two rows with one agent id; an SDK import takes the original's place")
+
+  // `cursor-agent --resume <id>` from another folder starts a new
+  // conversation under that folder's workspace with the same id and none of
+  // the history. The first chats store keeps `chats:<id>`; each later one is
+  // told apart by its workspace, whether a sweep or a watcher finds it.
+  await writeFile(
+    join(home, ".cursor", "chats", "workspace", id, "meta.json"),
+    JSON.stringify({ cwd: home, hasConversation: true, createdAtMs: 1_500, updatedAtMs: 2_000 })
+  )
+  const elsewhere = await writeStore(join(home, ".cursor", "chats", "elsewhere", id), { agentId: id }, "beta")
+  await writeFile(
+    join(home, ".cursor", "chats", "elsewhere", id, "meta.json"),
+    JSON.stringify({ cwd: join(home, "b"), hasConversation: true, createdAtMs: 3_000, updatedAtMs: 3_000 })
+  )
+  const resumed = new CursorProvider(home, {})
+  const resumedFiles = await resumed.discover()
+  const refOf = async (path) => resumed.peek(resumedFiles.find((file) => file.path === path) ?? { path, bytes: 0, mtimeMs: 0 })
+  assert.equal((await refOf(fork)).identity, `chats:${id}`, "the first chats store keeps the identity references name")
+  assert.equal((await refOf(elsewhere)).identity, `chats:elsewhere:${id}`, "a later one adds its workspace")
+  const third = await writeStore(join(home, ".cursor", "chats", "third", id), { agentId: id }, "gamma")
+  await writeFile(
+    join(home, ".cursor", "chats", "third", id, "meta.json"),
+    JSON.stringify({ cwd: join(home, "c"), hasConversation: true, createdAtMs: 4_000, updatedAtMs: 4_000 })
+  )
+  assert.equal((await refOf(third)).identity, `chats:third:${id}`, "one peeked between sweeps is told apart too")
+  for (const [path, workspace] of [[fork, "workspace"], [elsewhere, "elsewhere"], [third, "third"]])
+    assert.equal(
+      cursorLegacyIdentity({ origin: "chats", sessionId: id, workspace }, id, home),
+      (await refOf(path)).identity,
+      `continuing the ${workspace} store records the identity of its own row`
+    )
+  const everyStore = await new SessionCatalog([new CursorProvider(home, {})]).scan()
+  assert.deepEqual(
+    everyStore.filter((ref) => ref.path.includes("/chats/")).map((ref) => ref.path).sort(),
+    [elsewhere, fork, third].sort(),
+    "every folder's conversation is listed"
+  )
+  console.log("Cursor fork: the same session id resumed from other folders lists each folder's conversation")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

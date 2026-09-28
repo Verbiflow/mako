@@ -108,6 +108,13 @@ export interface ThreadRef {
    * movable to any harness — no longer resumable by its original CLI.
    */
   archived?: boolean
+  /**
+   * The harness archived this session itself: Codex's archive (which moves
+   * the rollout into `archived_sessions`), Cursor's Archive, an OpenCode
+   * archive. The record is intact. Mako files it with its archived threads;
+   * Codex resumes it only once it is unarchived.
+   */
+  nativeArchived?: boolean
   /** Native history is readable, but its owning control transport cannot resume it. */
   resumeUnavailable?: string
   /**

@@ -497,6 +497,17 @@ export class CodexProvider implements SessionProvider {
   peekVersion = 2
   displayName = "Codex"
   private root: string
+  /**
+   * Where Codex's archive moves a rollout, filename kept and date folders
+   * flattened; unarchiving moves it back. The row follows it both ways.
+   */
+  private archivedRoot: string
+  /**
+   * Codex appends a thread's name here whenever it names or renames one, and
+   * only then; the name itself lands in the state database, which every turn
+   * rewrites, and the rollout is untouched.
+   */
+  private nameLog: string
   private metadataPath: string
   private metadataMtime = -1
   private metadata = new Map<string, CodexThreadMetadata>()
@@ -508,8 +519,12 @@ export class CodexProvider implements SessionProvider {
 
   constructor(home = homedir()) {
     this.root = join(home, ".codex", "sessions")
+    this.archivedRoot = join(home, ".codex", "archived_sessions")
+    this.nameLog = join(home, ".codex", "session_index.jsonl")
     this.metadataPath = join(home, ".codex", "state_5.sqlite")
   }
+
+  rescanRoot = (path: string): boolean => path === this.nameLog
 
   private async threadMetadata(
     id: string
@@ -573,15 +588,50 @@ export class CodexProvider implements SessionProvider {
   }
 
   roots(): string[] {
-    return [this.root]
+    return [this.root, this.archivedRoot, this.nameLog]
+  }
+
+  watchRoots(): string[] {
+    return [this.root, this.archivedRoot]
+  }
+
+  pollFiles(): string[] {
+    return [this.nameLog]
+  }
+
+  /** Each named thread's name, so a rename re-reads a rollout it didn't touch. */
+  private async names(): Promise<Map<string, string>> {
+    const names = new Map<string, string>()
+    const sqlite = existsSync(this.metadataPath) ? await import("node:sqlite").catch(() => null) : null
+    if (!sqlite) return names
+    try {
+      const database = new sqlite.DatabaseSync(this.metadataPath, { readOnly: true })
+      try {
+        for (const row of database.prepare("SELECT id, name FROM threads WHERE name IS NOT NULL AND name != ''").all()) {
+          const id = sqliteText(row.id)
+          const name = sqliteText(row.name)
+          if (id && name) names.set(id, name)
+        }
+      } finally {
+        database.close()
+      }
+    } catch {
+      // Unnamed is the safe reading: the rollout's own stat still decides.
+    }
+    return names
   }
 
   observationPaths(path: string): string[] {
     return [path, this.metadataPath, `${this.metadataPath}-wal`]
   }
 
+  private rollouts(): Promise<string[]> {
+    const jsonl = (name: string) => name.endsWith(".jsonl")
+    return Promise.all([walkFiles(this.root, jsonl), walkFiles(this.archivedRoot, jsonl)]).then((found) => found.flat())
+  }
+
   async discover(): Promise<NativeFile[]> {
-    const paths = await walkFiles(this.root, (name) => name.endsWith(".jsonl"))
+    const [paths, names] = await Promise.all([this.rollouts(), this.names()])
     const byIdentity = new Map<string, NativeFile[]>()
     for (let index = 0; index < paths.length; index += 8) {
       const batch = await Promise.all(
@@ -615,10 +665,11 @@ export class CodexProvider implements SessionProvider {
             candidates.length > 1
               ? (await this.threadMetadata(id))?.rolloutPath
               : undefined
-          return (
+          const file =
             candidates.find((file) => file.path === current) ??
             candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
-          )
+          const name = names.get(id)
+          return file && name !== undefined ? { ...file, revision: `name:${name}` } : file
         })
       )
       for (const file of batch) if (file) files.push(file)
@@ -695,21 +746,22 @@ export class CodexProvider implements SessionProvider {
         }
       : ref
     followCurrentCwd(next, turnCwd)
+    if (file.path.startsWith(`${this.archivedRoot}/`)) next.nativeArchived = true
     return next
   }
 
   /**
    * Remove a thread: its rollout file, any resumed rollout for the same id,
-   * and its row in the state database. Subagent rollouts named after it go
-   * too; they have no life without their parent.
+   * archived or not, and its row in the state database. Subagent rollouts
+   * named after it go too; they have no life without their parent.
    */
   async remove(path: string): Promise<boolean> {
-    if (!path.startsWith(`${this.root}/`)) return false
+    if (![this.root, this.archivedRoot].some((root) => path.startsWith(`${root}/`))) return false
     const id = basename(path).match(
       /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i
     )?.[0]
     if (!id) return false
-    const files = (await walkFiles(this.root, (name) => name.endsWith(".jsonl"))).filter(
+    const files = (await this.rollouts()).filter(
       (candidate) => basename(candidate).includes(id)
     )
     for (const file of files) await rm(file, { force: true })

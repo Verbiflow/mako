@@ -2,7 +2,7 @@ import type { LiveConversations } from "./live-conversations.js"
 import type { NativeRequests } from "./native-requests.js"
 import type { ThreadArchives } from "./thread-archives.js"
 import type { ThreadRef } from "./shared.js"
-import { threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget } from "./contracts/thread-lifecycle.js"
+import { archivedByKeys, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget } from "./contracts/thread-lifecycle.js"
 
 interface ThreadLifecycleDependencies {
   live: LiveConversations
@@ -25,9 +25,13 @@ export class ThreadLifecycle {
       : summary.session.harness === target.provider && summary.session.nativeId === target.nativeId)
   }
 
+  private ref(target: ThreadTarget): ThreadRef | undefined {
+    return this.dependencies.threads().find((ref) => target.kind === "file" ? ref.path === target.path : target.kind === "native" && ref.harness === target.provider && ref.nativeId === target.nativeId)
+  }
+
   keys(target: ThreadTarget): string[] {
     const keys = [threadArchiveKey(target)]
-    const ref = this.dependencies.threads().find((ref) => target.kind === "file" ? ref.path === target.path : target.kind === "native" && ref.harness === target.provider && ref.nativeId === target.nativeId)
+    const ref = this.ref(target)
     if (ref) {
       keys.push(threadArchiveKey({ kind: "file", path: ref.path }))
       if (ref.nativeId) keys.push(threadArchiveKey({ kind: "native", provider: ref.harness, nativeId: ref.nativeId }))
@@ -46,7 +50,7 @@ export class ThreadLifecycle {
 
   controls(target: ThreadTarget): ThreadControls {
     const hidden = new Set(this.dependencies.archives.snapshot().keys)
-    const archived = this.keys(target).some((key) => hidden.has(key))
+    const archived = archivedByKeys(this.keys(target), hidden, this.ref(target)?.nativeArchived)
     const owner = this.owner(target)
     const requestId = owner && this.dependencies.live.activeRequest(owner.session.id)
     if (owner && requestId) return { archived, stop: { kind: "live", id: owner.session.id, requestId }, external: false }
@@ -61,7 +65,8 @@ export class ThreadLifecycle {
     const keys = this.keys(command.target)
     const receipt = this.dependencies.archives.set(
       command,
-      keys
+      keys,
+      this.ref(command.target)?.nativeArchived
     )
     if (owner)
       this.dependencies.live.setArchived(

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { join, sep } from "node:path"
+import { basename, dirname, join, sep } from "node:path"
+import { z } from "zod"
 
 /**
  * Where Mako keeps the Cursor SDK's local agent stores. The SDK's own default
@@ -51,7 +53,7 @@ export function cursorSdkIndexPath(stateRoot: string): string {
 export type CursorStoreOrigin =
   | { origin: "sdk"; directoryName: string }
   | { origin: "acp-sessions"; sessionId: string }
-  | { origin: "chats"; sessionId: string }
+  | { origin: "chats"; sessionId: string; workspace: string }
 
 export function cursorStoreOrigin(
   path: string,
@@ -76,9 +78,9 @@ export function cursorStoreOrigin(
   }
   const chats = parts(join(home, ".cursor", "chats"))
   if (chats) {
-    const [, sessionId, file] = chats
-    return chats.length === 3 && file === "store.db" && sessionId && SESSION_ID.test(sessionId)
-      ? { origin: "chats", sessionId }
+    const [workspace, sessionId, file] = chats
+    return chats.length === 3 && file === "store.db" && workspace && sessionId && SESSION_ID.test(sessionId)
+      ? { origin: "chats", sessionId, workspace }
       : null
   }
   return null
@@ -88,9 +90,63 @@ const SESSION_ID = /^[\w-]+$/
 
 /**
  * The catalog identity of a `cursor-agent` store's row: the agent id, except
- * that a `chats/` copy of an ACP session is its own row (`chats:<id>`). An
- * agent imported from such a store records this so the two collapse.
+ * that a `chats/` store is its own row (`cursorChatIdentity`). An agent
+ * imported from such a store records this so the two collapse. Without
+ * `home` the other workspaces can't be looked at and a chats store reads as
+ * the only one.
  */
-export function cursorLegacyIdentity(origin: CursorStoreOrigin, nativeId: string): string {
-  return origin.origin === "chats" ? `chats:${nativeId}` : nativeId
+export function cursorLegacyIdentity(origin: CursorStoreOrigin, nativeId: string, home?: string): string {
+  if (origin.origin !== "chats") return nativeId
+  if (home === undefined) return `chats:${nativeId}`
+  const chats = join(home, ".cursor", "chats")
+  return cursorChatIdentity(
+    join(chats, origin.workspace, origin.sessionId, "store.db"),
+    nativeId,
+    cursorChatStores(chats, origin.sessionId)
+  )
+}
+
+/** Every `chats/<workspace>/<session>/store.db` holding this session id. */
+export function cursorChatStores(chatsRoot: string, sessionId: string): string[] {
+  let workspaces: string[]
+  try {
+    workspaces = readdirSync(chatsRoot)
+  } catch {
+    return []
+  }
+  return workspaces
+    .map((workspace) => join(chatsRoot, workspace, sessionId, "store.db"))
+    .filter((store) => existsSync(store))
+}
+
+/**
+ * The identity of a `chats/<workspace>/<session>/store.db` row. A `chats/`
+ * copy of an ACP session is its own row (`chats:<id>`). `cursor-agent
+ * --resume <id>` run from another folder starts a new conversation under
+ * that folder's workspace, reusing the id and carrying none of the history
+ * (verified 2026-09-28), so the stores are different conversations. The
+ * earliest keeps `chats:<id>`, which is what every reference minted before
+ * this names; each later one adds its workspace.
+ */
+export function cursorChatIdentity(store: string, nativeId: string, siblings: Iterable<string>): string {
+  const others = [...new Set(siblings)].filter((other) => other !== store && existsSync(other))
+  if (others.length === 0) return `chats:${nativeId}`
+  const earliest = [store, ...others]
+    .map((path) => ({ path, born: chatCreatedAt(path) }))
+    .sort((a, b) => a.born - b.born || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))[0]
+  return earliest?.path === store
+    ? `chats:${nativeId}`
+    : `chats:${basename(dirname(dirname(store)))}:${nativeId}`
+}
+
+const ChatMeta = z.object({ createdAtMs: z.number() })
+
+/** When a chats store began; one without a readable meta.json sorts last. */
+function chatCreatedAt(store: string): number {
+  try {
+    const meta = ChatMeta.safeParse(JSON.parse(readFileSync(join(dirname(store), "meta.json"), "utf8")))
+    return meta.success ? meta.data.createdAtMs : Number.POSITIVE_INFINITY
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
 }

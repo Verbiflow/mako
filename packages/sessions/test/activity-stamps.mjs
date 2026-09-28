@@ -31,11 +31,9 @@ try {
       sessionId,
       cwd: "/Users/dev/mako",
       timestamp: at,
-      message: {
-        role: type,
-        ...(type === "assistant" ? { model: "claude-opus-5" } : {}),
-        content: [{ type: "text", text }],
-      },
+      message: type === "assistant"
+        ? { role: type, model: "claude-opus-5", content: [{ type: "text", text }] }
+        : { role: type, content: [{ type: "text", text }] },
     })
   const idle = join(projects, "idle-session.jsonl")
   const fresh = join(projects, "fresh-session.jsonl")
@@ -134,10 +132,12 @@ try {
   )
 
   // A file with no message in it at all still has a time: the file's own.
+  // (One that doesn't even say where it runs isn't listed.)
   const placeholder = join(projects, "placeholder.jsonl")
   await writeFile(
     placeholder,
     line({ type: "summary", summary: "Untitled", sessionId: "placeholder", leafUuid: "leaf-0" }) +
+      line({ type: "system", subtype: "informational", sessionId: "placeholder", cwd: projects, content: "Session started" }) +
       line({ type: "last-prompt", sessionId: "placeholder", leafUuid: "leaf-0" })
   )
   const placeholderInfo = await stat(placeholder)

@@ -87,11 +87,12 @@ function tokenKey(harness: string, id: string): string {
 /**
  * One row out of several that a token could mean. A provider may present one
  * native session as more than one store (Cursor's `chats/` continuation of an
- * ACP session carries `identity: "chats:<id>"`); the store without a derived
- * identity is the original, and a token that names only the shared native id
- * — every token minted before identities existed — means that one. Rows with
- * different native ids are genuinely different conversations and stay
- * ambiguous.
+ * ACP session carries `identity: "chats:<id>"`, and one resumed from another
+ * folder `chats:<workspace>:<id>`); the store without a derived identity is
+ * the original, or failing that the first chats store, and a token that
+ * names only the shared native id — every token minted before identities
+ * existed — means that one. Rows with different native ids are genuinely
+ * different conversations and stay ambiguous.
  */
 function primary(candidates: ThreadRef[]): ThreadRef | undefined {
   if (candidates.length === 1) return candidates[0]
@@ -99,7 +100,9 @@ function primary(candidates: ThreadRef[]): ThreadRef | undefined {
   const nativeId = candidates[0]!.nativeId
   if (!candidates.every((entry) => entry.nativeId === nativeId)) return undefined
   const originals = candidates.filter((entry) => entry.identity === undefined)
-  return originals.length === 1 ? originals[0] : undefined
+  if (originals.length > 0) return originals.length === 1 ? originals[0] : undefined
+  const first = candidates.filter((entry) => entry.identity === `chats:${nativeId}`)
+  return first.length === 1 ? first[0] : undefined
 }
 
 /**

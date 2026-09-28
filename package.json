@@ -18,6 +18,7 @@
     "test:acp-background-work": "npm run build:electron && node scripts/test-acp-background-work.mjs",
     "test:thread-environment-launch": "npm run build:electron && node scripts/test-thread-environment-launch.mjs",
     "test:codex-background-work": "npm run build:electron && node scripts/test-codex-background-work.mjs",
+    "test:codex-archived-resume": "npm run build:electron && node scripts/test-codex-archived-resume.mjs",
     "test:desktop-continuity": "npm run build:electron && node scripts/test-desktop-continuity.mjs",
     "test:desktop-crashes": "npm run build:electron && node scripts/test-desktop-crashes.mjs",
     "test:window-boot": "tsx --tsconfig tsconfig.app.json scripts/test-window-boot.ts",
