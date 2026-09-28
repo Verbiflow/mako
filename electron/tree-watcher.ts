@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
-import parcel, { type AsyncSubscription } from "@parcel/watcher"
+import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
 
 /** Folders whose churn is never a change anyone watching a project means: dependencies and build output. */
 export const QUIET_FOLDERS = ["node_modules", ".next", "dist", "dist-electron", "build", "out", "target", "coverage", ".turbo", "release", ".venv"] as const
@@ -15,6 +15,13 @@ const QUIET_GLOBS = [`**/{${QUIET_FOLDERS.join(",")}}`, `**/{${QUIET_FOLDERS.joi
 function isQuietFolder(path: string): boolean {
   const segments = path.split("/")
   return segments.length <= 3 && QUIET_FOLDERS.some((name) => name === segments.at(-1))
+}
+
+let backend: WatchBackend | undefined
+
+/** Watch through `next` instead of the watcher child, for tests. */
+export function useWatchBackend(next: WatchBackend): void {
+  backend = next
 }
 
 export interface TreeWatch {
@@ -76,20 +83,25 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
   }
   let closed = false
   let excluded: string[] = []
-  let subscription: Promise<AsyncSubscription | undefined> = Promise.resolve(undefined)
+  let subscription: Promise<WatchSubscription | undefined> = Promise.resolve(undefined)
+  let generation = 0
 
   // The next subscription starts before the previous one stops, so nothing
   // written in between is missed; a change heard twice costs one more debounce.
   const start = () => {
     excluded = quietFoldersOf(real)
     const previous = subscription
-    subscription = parcel
-      .subscribe(real, (error, events) => {
+    const current = ++generation
+    backend ??= childBackend()
+    subscription = backend(real, [...excluded, ...QUIET_GLOBS], {
+      dropped: () => {
+        if (!closed) onDropped?.()
+      },
+      gone: () => {
+        if (!closed && current === generation) onError()
+      },
+      events: (events) => {
         if (closed) return
-        if (error) {
-          onDropped?.()
-          return
-        }
         const paths: string[] = []
         let appeared = false
         for (const event of events) {
@@ -100,7 +112,8 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
         }
         if (appeared && process.platform === "darwin" && quietFoldersOf(real).join("\0") !== excluded.join("\0")) start()
         if (paths.length) onChange(paths)
-      }, { ignore: [...excluded, ...QUIET_GLOBS] })
+      },
+    })
       .then(async (next) => {
         await previous.then((old) => old?.unsubscribe()).catch(() => {})
         if (!closed) return next

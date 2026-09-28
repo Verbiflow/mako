@@ -3,17 +3,17 @@ import { execFileSync } from "node:child_process"
 import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import parcel from "@parcel/watcher"
+import type { WatchEvent } from "../electron/contracts/watcher-child.ts"
+import { parcelBackend } from "../electron/watch-backend.ts"
+import { useWatchBackend } from "../electron/tree-watcher.ts"
 
-type Callback = (error: Error | null, events: { type: string; path: string }[]) => void
+type Callback = (error: Error | null, events: WatchEvent[]) => void
 const subscriptions: { path: string; closed: number; callback: Callback }[] = []
-const original = parcel.subscribe
-// SAFETY: the host only subscribes, reads the callback and unsubscribes; this fake answers all three.
-parcel.subscribe = (async (path: string, callback: Callback) => {
+useWatchBackend(parcelBackend(async (path: string, callback: Callback) => {
   const watcher = { path, closed: 0, callback }
   subscriptions.push(watcher)
   return { unsubscribe: async () => { watcher.closed += 1 } }
-}) as typeof parcel.subscribe
+}))
 const platform = Object.getOwnPropertyDescriptor(process, "platform") ?? { value: process.platform, configurable: true }
 const settled = () => new Promise((resolve) => setTimeout(resolve, 20))
 
@@ -62,6 +62,5 @@ try {
   await mac.host.dispose()
   console.log("host background watch: Linux keeps it through a tab switch without reading Git, macOS closes it, dropped events survived")
 } finally {
-  parcel.subscribe = original
   await rm(root, { recursive: true, force: true })
 }

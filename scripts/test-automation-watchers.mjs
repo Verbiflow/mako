@@ -3,16 +3,16 @@ import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
-import parcel from "@parcel/watcher"
+import { parcelBackend } from "../electron/watch-backend.ts"
+import { useWatchBackend } from "../electron/tree-watcher.ts"
 
 const subscriptions = []
-const original = parcel.subscribe
-parcel.subscribe = async (path, callback, options) => {
+useWatchBackend(parcelBackend(async (path, callback, options) => {
   const watcher = { path, options, closed: 0, change: (file) => callback(null, [{ type: "update", path: join(path, file) }]),
     drop: () => callback(new Error("Events were dropped by the FSEvents client. File system must be re-scanned."), []) }
   subscriptions.push(watcher)
   return { unsubscribe: async () => { watcher.closed += 1 } }
-}
+}))
 const settled = () => new Promise((resolve) => setImmediate(resolve))
 const { watchWorkspace, stopWatching, saveAutomations, setEnabled, bindAutomations, fireAutomation } =
   await import("../electron/automations.ts")
@@ -88,6 +88,5 @@ try {
 } finally {
   stopWatching()
   mock.timers.reset()
-  parcel.subscribe = original
   await rm(root, { recursive: true, force: true })
 }
