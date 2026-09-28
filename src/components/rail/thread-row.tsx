@@ -193,7 +193,6 @@ export const ThreadRow = memo(function ThreadRow({
     controlled: !folded && (target.kind === "live" || working),
     path: ref.path,
     thread,
-    session: ref.sessionId,
     cwd: ref.cwd,
     archiveTargets: folded?.members.map(foldRowTarget),
     pinned: isPinned,

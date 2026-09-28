@@ -1,12 +1,12 @@
 import { useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, ListPlusIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, SquareIcon, SquarePlusIcon, Trash2Icon } from "lucide-react"
+import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, SquareIcon, Trash2Icon } from "lucide-react"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { desktop } from "@/state/desktop"
 import { threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
 import { offerWorktreeRemoval, removeWorktree, useWorktrees, worktreeAt } from "@/state/worktrees"
 import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
-import { openAddSession, openAddToThread, rowSessions, wholeThreadTargets } from "@/state/thread-regroup"
+import { wholeThreadTargets } from "@/state/session-archive"
 
 export interface ThreadMenuProps {
   target: ThreadTarget
@@ -16,8 +16,6 @@ export interface ThreadMenuProps {
   controlled: boolean
   path?: string
   thread?: string
-  /** The row's own Session; with `thread`, what "Add to thread…" takes along. */
-  session?: string
   cwd?: string
   /** Every Session a folded row stands for; archive puts them all away. */
   archiveTargets?: ThreadTarget[]
@@ -64,7 +62,7 @@ function useThreadMenu(props: ThreadMenuProps) {
 }
 
 function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
-  const { target, title, archived, running, path, thread, session, cwd, archiveTargets, pinned, onPin, onRename } = props
+  const { target, archived, running, path, thread, cwd, archiveTargets, pinned, onPin, onRename } = props
   const { controls, error } = menu
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
   // An archived row of a Thread whose other Sessions are still out is one Session of it.
@@ -91,19 +89,6 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
           <PencilLineIcon className="size-3.5" />Rename
         </MenuItem>
       ) : null}
-      {thread && !archived ? <>
-        {onPin || onRename ? <MenuSeparator /> : null}
-        <MenuItem data-thread-action="add-session" onSelect={() => openAddSession({ thread, title, cwd })}>
-          <SquarePlusIcon className="size-3.5" />Add existing session…
-        </MenuItem>
-        <MenuItem
-          data-thread-action="add-to-thread"
-          disabled={!rowSessions(thread, session).length}
-          onSelect={() => openAddToThread({ sessions: rowSessions(thread, session), from: thread, title, cwd })}
-        >
-          <ListPlusIcon className="size-3.5" />Add to thread…
-        </MenuItem>
-      </> : null}
       {path ? <>
         <MenuSeparator />
         <MenuItem onSelect={() => { void threadLifecycle.copyTranscript(path, "concise") }}><ClipboardListIcon className="size-3.5" />Copy concise transcript</MenuItem>

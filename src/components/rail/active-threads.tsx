@@ -64,7 +64,6 @@ export function LiveAgentRow({
     controlled: true,
     path: presence.threadPath,
     thread,
-    session: presence.sessionId,
     cwd: presence.cwd,
     archiveTargets,
   }
