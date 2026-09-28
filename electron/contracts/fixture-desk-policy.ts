@@ -27,6 +27,7 @@ const fixtureReads = [
   "mako:thread-archives",
   "mako:thread-groups",
   "mako:worktrees",
+  "mako:workspace-moves",
   "mako:live-snapshot",
   "mako:live-state",
   "mako:live-locate",

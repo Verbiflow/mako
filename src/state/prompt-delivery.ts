@@ -49,15 +49,20 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
   return stops
 }
 
+/** A prompt Mako sent on its own: an automatic continuation, or the note after an agent's move onto its own branch. */
+export type MakoPrompt = { kind: "continued"; continuation: TurnContinuation } | { kind: "moved" }
+
 /**
- * The requests that carry on an earlier turn, keyed by their own request id,
- * so the transcript can show Mako's continuation as Mako's line and not as
- * words the user typed.
+ * The prompts Mako sent itself, keyed by their request id, so the transcript
+ * shows them as Mako's line and not as words the user typed.
  */
-export function turnContinuations(requests: readonly LiveRequest[]): Map<string, TurnContinuation> {
-  const continuations = new Map<string, TurnContinuation>()
-  for (const request of requests) if (request.continues) continuations.set(request.id, request.continues)
-  return continuations
+export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoPrompt> {
+  const prompts = new Map<string, MakoPrompt>()
+  for (const request of requests) {
+    if (request.continues?.auto) prompts.set(request.id, { kind: "continued", continuation: request.continues })
+    else if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
+  }
+  return prompts
 }
 
 /**

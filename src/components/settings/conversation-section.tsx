@@ -1,11 +1,13 @@
-import { ListCard, SettingRow, Toggle } from "@/components/ui/kit"
+import { Action, ListCard, SettingRow, Toggle } from "@/components/ui/kit"
 import { togglePref, usePrefs } from "@/state/prefs"
+import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
 
 export function ConversationSection() {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
   const autoDiff = usePrefs((prefs) => prefs.autoOpenDiff)
   const steerOnEnter = usePrefs((prefs) => prefs.steerOnEnter)
   const inWorktree = usePrefs((prefs) => prefs.newThreadsInWorktree)
+  const alwaysAllowed = useWorkspaceMoves((moves) => moves.alwaysAllowed)
 
   return (
     <ListCard>
@@ -19,6 +21,15 @@ export function ConversationSection() {
           onChange={() => togglePref("newThreadsInWorktree")}
         />
       </SettingRow>
+      {alwaysAllowed.map((project) => (
+        <SettingRow
+          key={project}
+          title={`Agents in ${projectName(project)} move to their own branch without asking`}
+          description={`You chose Always allow for ${project}. Ask again to answer each agent that wants to move.`}
+        >
+          <Action onClick={() => void workspaceMoves.forget(project)}>Ask again</Action>
+        </SettingRow>
+      ))}
       <SettingRow
         title="Enter steers a running turn"
         description="Off makes Enter queue behind the turn; Cmd+Enter always does the other. Agents that cannot take a message mid-turn queue either way"

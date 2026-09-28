@@ -22,6 +22,8 @@ export const SERVICE_ACTORS = [
   "relay",
   /** The transport that carries a Thread's handoff between environments. */
   "handoff",
+  /** Mako carrying a Session onto its Thread's own branch, which the agent asked for. */
+  "workspace",
 ] as const
 
 /**

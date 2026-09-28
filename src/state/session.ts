@@ -6,6 +6,7 @@ import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, applyThreadRegroup, loadThreadGroups } from "@/state/thread-groups"
 import { refreshWorktrees } from "@/state/worktrees"
+import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
@@ -210,6 +211,18 @@ function apply(event: HostEvent) {
   }
   if (event.type === "worktree-ready") {
     worktreeMade(event.conversationId)
+    return
+  }
+  if (event.type === "worktrees-changed") {
+    void loadWorktrees()
+    return
+  }
+  if (event.type === "workspace-moves") {
+    applyWorkspaceMoves(event.moves)
+    return
+  }
+  if (event.type === "workspace-moved") {
+    void workspaceMoved(event)
     return
   }
   if (event.type === "thread-group") {
@@ -581,6 +594,7 @@ function adoptBoot(boot: BootPayload) {
   void threads.load()
   void loadGroups()
   void loadWorktrees()
+  void loadWorkspaceMoves().catch(() => {})
   followChatFolders()
   refollowCheckouts()
   if (!boot.archives) void threadLifecycle.load()

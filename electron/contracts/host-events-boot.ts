@@ -1,6 +1,7 @@
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
+import type { WorkspaceMoves } from "./workspace-moves.js"
 import type { ThreadGroupChange, ThreadRegroup } from "./thread-groups.js"
 import {
   type ControlActivity,
@@ -64,6 +65,12 @@ export type HostEventBody =
   | { type: "checkout-heads"; heads: CheckoutHeads }
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
+  /** An agent's tool changed this device's worktrees; windows read them again. */
+  | { type: "worktrees-changed" }
+  /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
+  | { type: "workspace-moves"; moves: WorkspaceMoves }
+  /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
+  | { type: "workspace-moved"; from: string; to: string; branch?: string; changed: number }
   | { type: "live-batch"; batch: LiveBatch }
   | { type: "live-owner-connection"; ids: string[]; connected: boolean }
   | { type: "session"; session: SessionState }

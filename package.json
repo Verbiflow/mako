@@ -109,7 +109,7 @@
     "test:transfer-scheduling": "node --import tsx scripts/test-transfer-scheduling.ts",
     "test:conversation-control": "node scripts/test-catalog-readiness.mjs && npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts && npm run test:thread-store",
     "test:thread-store": "tsx scripts/test-thread-store.ts && tsx scripts/test-thread-environment.ts && tsx scripts/test-thread-store-hosts.ts && tsx scripts/test-thread-migration.ts && tsx scripts/test-thread-execution.ts && tsx scripts/test-thread-execution-host.ts && tsx scripts/test-thread-groups-host.ts && npm run test:thread-worktrees && npm run test:checkout-heads",
-    "test:thread-worktrees": "tsx scripts/test-thread-worktrees.ts && tsx scripts/test-chat-folders.ts",
+    "test:thread-worktrees": "tsx scripts/test-thread-worktrees.ts && tsx scripts/test-chat-folders.ts && tsx scripts/test-workspace-moves.ts",
     "test:tree-watcher": "tsx scripts/test-tree-watcher.ts && tsx scripts/test-watch-backend.ts && tsx scripts/test-host-background-watch.ts && tsx scripts/test-tree-poll.ts && tsx scripts/test-tree-watcher-fallback.ts",
     "test:checkout-heads": "tsx scripts/test-checkout-heads.ts",
     "test:provider-e2e": "npm run build:electron && node scripts/test-provider-e2e.mjs",

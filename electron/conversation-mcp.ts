@@ -7,6 +7,7 @@ import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationTools } from "./providers/live-driver.js"
+import { registerWorkspaceTools, type WorkspaceTools } from "./workspace-tools.js"
 
 type ConversationOwner = Pick<LiveConversations, "authorizeAgent">
 
@@ -40,7 +41,8 @@ async function readMessage(request: IncomingMessage, maxBytes: number) {
  */
 export async function startConversationMcp(
   owner: ConversationOwner,
-  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>
+  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
+  workspace?: WorkspaceTools
 ) {
   const scopes = new Map<string, Scope>()
   const server = createServer((request, response) => {
@@ -79,11 +81,16 @@ export async function startConversationMcp(
       })
       const disconnected = new AbortController()
       if (controlRequestId !== undefined) scope.controlRequests.set(controlRequestId, disconnected)
-      const mcp = createControlMcpServer((operation, signal) => {
+      const authorized = () => {
         if (scope.revoked || scope.expiresAt < Date.now()) throw new Error("This task grant has expired")
         owner.authorizeAgent(scope.conversationId, scope.bindingId)
+        return scope.conversationId
+      }
+      const mcp = createControlMcpServer((operation, signal) => {
+        authorized()
         return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
       })
+      if (workspace) registerWorkspaceTools(mcp, workspace, authorized)
       response.once("close", () => {
         if (controlRequestId !== undefined) scope.controlRequests.delete(controlRequestId)
         if (!response.writableFinished) disconnected.abort()

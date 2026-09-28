@@ -44,6 +44,7 @@ const reads = [
   "mako:worktree-review-diffs",
   "mako:checkout-heads",
   "mako:chat-folders",
+  "mako:workspace-moves",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
   "mako:thread-continuation-resolve",
@@ -127,6 +128,10 @@ const replays = [
   "mako:thread-regroup-undo",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
+  /** `WorkspaceMoves.answer`: the request id; an answered request ignores a repeat. */
+  "mako:workspace-move-answer",
+  /** Forgetting a project that isn't remembered is a no-op. */
+  "mako:workspace-move-forget",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

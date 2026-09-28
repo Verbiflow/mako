@@ -238,8 +238,7 @@ export class ThreadWorktreeService {
    */
   async prepareFork(sourceId: string, forkId: string, cwd: string, name: string | undefined): Promise<PreparedWorktree> {
     if (!this.pending.has(forkId) && !(await this.receipt(forkId))) {
-      const placed = this.threads.journalPlacement(sourceId)
-      const current = placed && this.threads.worktrees().find((worktree) => worktree.thread === placed.thread)
+      const current = this.ofConversation(sourceId)
       if (current) throw new Error(`This Thread already works in its own worktree, on ${current.branch}. Move the Session into that one instead.`)
       const repoRoot = await git(await realpath(cwd), ["rev-parse", "--show-toplevel"]).catch(() => "")
       const busy = repoRoot ? await this.working(repoRoot) : []
@@ -257,12 +256,17 @@ export class ThreadWorktreeService {
    */
   async joinFolder(sourceId: string, forkId: string, cwd: string): Promise<string | undefined> {
     if (this.pending.has(forkId) || (await this.receipt(forkId))) return undefined
-    const placed = this.threads.journalPlacement(sourceId)
-    const current = placed && this.threads.worktrees().find((worktree) => worktree.thread === placed.thread)
+    const current = this.ofConversation(sourceId)
     if (!current) return undefined
     const inside = relative(await realpath(current.repoRoot).catch(() => current.repoRoot), await realpath(cwd).catch(() => cwd))
     const folder = inside && !inside.startsWith("..") && !isAbsolute(inside) ? join(current.path, inside) : current.path
     return existsSync(folder) ? folder : current.path
+  }
+
+  /** The worktree of the Thread this conversation's journal joined, on this device. */
+  ofConversation(conversationId: string): ThreadWorktree | undefined {
+    const placed = this.threads.journalPlacement(conversationId)
+    return placed ? this.threads.worktrees().find((worktree) => worktree.thread === placed.thread) : undefined
   }
 
   /**

@@ -68,6 +68,9 @@ import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { installChatFoldersIpc } from "./ipc/chat-folders.js"
+import { installWorkspaceMovesIpc } from "./ipc/workspace-moves.js"
+import { WorkspaceMoves, type MoveSource } from "./workspace-moves.js"
+import { moveablePlace, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
@@ -408,6 +411,7 @@ function appIcon() {
 
 let conversationMcp: Awaited<ReturnType<typeof startConversationMcp>> | null =
   null
+let workspaceMoves: WorkspaceMoves | null = null
 let nativeRequests: NativeRequests | null = null
 const appshots = new Appshots(async () => {
   const driver = resolveExecutable("cua-driver")
@@ -623,10 +627,70 @@ function emitTerminalWake() {
     renderer.webContents.send("mako:terminal-event", { type: "wake" })
 }
 
+/** Fork a conversation into its Thread's worktree, making one (and moving the checkout's changes) when it has none. */
+async function forkIntoWorktree(id: string, input: ForkInput): Promise<{ fork: LiveSnapshot; moved: number }> {
+  if (!threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
+  const source = liveConversations.snapshot(id)
+  if (!source) throw new Error("Open the conversation before moving it into a worktree.")
+  // A Thread has one worktree: a Session moving in once it exists joins it, and nothing moves with it.
+  const joined = await threadWorktrees.joinFolder(id, input.id, source.session.cwd)
+  if (joined) return { fork: liveConversations.fork(id, input, joined), moved: 0 }
+  const worktree = await threadWorktrees.prepareFork(id, input.id, source.session.cwd, source.session.title)
+  let fork: LiveSnapshot
+  try {
+    fork = liveConversations.fork(id, input, worktree.cwd)
+  } catch (error) {
+    await threadWorktrees.abandon(input.id).catch(() => undefined)
+    throw error
+  }
+  // The fork exists before anything moves, so a refused fork leaves the checkout untouched.
+  const moved = await threadWorktrees.moveChanges(input.id)
+  await threadWorktrees.attach(input.id)
+  return { fork, moved }
+}
+
+/**
+ * The move an agent asked for and the user allowed, once its turn ended:
+ * the Session goes on in the Thread's worktree from its last answer, the
+ * one it leaves is archived, and the agent is told where it is now.
+ */
+async function moveOntoOwnBranch(id: string): Promise<void> {
+  const source = liveConversations.snapshot(id)
+  if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
+  const last = source.requests.filter((request) => request.status === "completed").at(-1)
+  if (!last) throw new Error("The agent's turn didn't finish, so it didn't move onto its own branch. Move it from the composer once it has an answer.")
+  const { fork, moved } = await forkIntoWorktree(id, {
+    id: crypto.randomUUID(),
+    provider: source.session.harness,
+    point: { kind: "run", requestId: last.id },
+    thread: "parent",
+    worktree: true,
+    move: true,
+  })
+  emit({ type: "thread-archives", snapshot: threadLifecycle.archive({ id: crypto.randomUUID(), target: { kind: "live", id }, archived: true }) })
+  const branch = threadWorktrees?.ofConversation(fork.session.id)?.branch
+  const event: Extract<HostEvent, { type: "workspace-moved" }> = { type: "workspace-moved", from: id, to: fork.session.id, changed: moved }
+  if (branch) event.branch = branch
+  emit(event)
+  const came = moved ? ` The ${moved === 1 ? "uncommitted file" : `${moved} uncommitted files`} from the project folder came with you.` : ""
+  const tuning = await resolveHarnessLaunch(fork.session.harness, fork.session.cwd, last.tuning)
+  liveConversations.submit(
+    fork.session.id,
+    crypto.randomUUID(),
+    `You're on this Thread's own branch now${branch ? `, ${branch}` : ""}, in ${fork.session.cwd}.${came} Work there from now on, and carry on where you left off.`,
+    [],
+    tuning,
+    undefined,
+    undefined,
+    { kind: "service", name: "workspace" }
+  )
+}
+
 function emit(event: HostEvent, client?: string) {
   if (hostClosing) return
   if (event.type === "threads" || event.type === "thread-ref")
     liveConversations?.discoverNativePaths()
+  if (event.type === "live-batch") workspaceMoves?.settled(event.batch.id)
   if (event.type === "thread-run" && event.run.status !== "running")
     nativeRequests?.ready(event.run.path)
   // Git status is recomputed after every turn and on focus, which is exactly
@@ -1606,27 +1670,9 @@ function bindIpc() {
     (_event, id: string, actionId: string) =>
       liveConversations.acknowledgeAction(id, actionId)
   )
-  handle("mako:live-fork", async (_event, id: string, input: ForkInput) => {
-    if (!input.worktree) return liveConversations.fork(id, input)
-    if (!threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
-    const source = liveConversations.snapshot(id)
-    if (!source) throw new Error("Open the conversation before moving it into a worktree.")
-    // A Thread has one worktree: a Session moving in once it exists joins it, and nothing moves with it.
-    const joined = await threadWorktrees.joinFolder(id, input.id, source.session.cwd)
-    if (joined) return liveConversations.fork(id, input, joined)
-    const worktree = await threadWorktrees.prepareFork(id, input.id, source.session.cwd, source.session.title)
-    let snapshot: LiveSnapshot
-    try {
-      snapshot = liveConversations.fork(id, input, worktree.cwd)
-    } catch (error) {
-      await threadWorktrees.abandon(input.id).catch(() => undefined)
-      throw error
-    }
-    // The fork exists before anything moves, so a refused fork leaves the checkout untouched.
-    await threadWorktrees.moveChanges(input.id)
-    await threadWorktrees.attach(input.id)
-    return snapshot
-  })
+  handle("mako:live-fork", async (_event, id: string, input: ForkInput) =>
+    input.worktree ? (await forkIntoWorktree(id, input)).fork : liveConversations.fork(id, input)
+  )
   handle("mako:live-capture", (_event, id: string, path: string) =>
     liveConversations.capture(id, path)
   )
@@ -2068,7 +2114,37 @@ app.whenReady().then(async () => {
     }
   )
   trace("journals ready")
-  conversationMcp = await startConversationMcp(liveConversations, (bindingId, operation, signal) => controlSessions.request(bindingId, operation, signal))
+  const moves = new WorkspaceMoves({
+    file: join(app.getPath("userData"), "workspace-moves.json"),
+    source: (id) => {
+      const snapshot = liveConversations.snapshot(id)
+      if (!snapshot || snapshot.session.status === "closed") return undefined
+      const { session } = snapshot
+      const source: MoveSource = {
+        cwd: session.cwd,
+        harness: session.harness,
+        busy: session.status === "starting" || session.status === "running" ||
+          snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching"),
+      }
+      if (session.title) source.title = session.title
+      return source
+    },
+    place: (id, cwd) => moveablePlace(threadWorktrees, id, cwd),
+    move: moveOntoOwnBranch,
+    announce: (state) => emit({ type: "workspace-moves", moves: state }),
+    failed: (_id, message) => emit({ type: "notice", level: "error", message }),
+  })
+  workspaceMoves = moves
+  conversationMcp = await startConversationMcp(
+    liveConversations,
+    (bindingId, operation, signal) => controlSessions.request(bindingId, operation, signal),
+    workspaceTools({
+      cwd: (id) => liveConversations.snapshot(id)?.session.cwd,
+      worktrees: threadWorktrees,
+      moves,
+      removed: () => emit({ type: "worktrees-changed" }),
+    })
+  )
   trace("conversation tools ready")
   controlService = await startControlService(
     browserControl,
@@ -2096,6 +2172,7 @@ app.whenReady().then(async () => {
   installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
   installThreadWorktreesIpc(threadWorktrees)
   installChatFoldersIpc()
+  installWorkspaceMovesIpc(moves)
   const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>
     hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))
   tidyWorktrees()

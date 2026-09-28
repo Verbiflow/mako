@@ -45,7 +45,7 @@ import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, turnStopLabel, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, turnStopLabel, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { useTranscriptSource } from "./source-context"
 import { HARNESS_LABEL, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -62,6 +62,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CopyIcon,
+  GitBranchIcon,
   GitForkIcon,
   PencilIcon,
   PlayIcon,
@@ -81,15 +82,15 @@ export const Exchange = memo(function Exchange({
   exchange,
   streaming,
   interrupted,
-  continues,
+  sentByMako,
   failed,
 }: {
   exchange: ExchangeData
   streaming?: boolean
   /** True when the turn stopped early; a `TurnStop` also says why and whether it can be continued. */
   interrupted?: boolean | TurnStop
-  /** This exchange picks up an earlier, cut-short turn; Mako's own continuation is drawn as Mako's line. */
-  continues?: TurnContinuation
+  /** Mako sent this exchange's prompt itself, so it's drawn as Mako's line. */
+  sentByMako?: MakoPrompt
   failed?: boolean
 }) {
   const stopShown = Boolean(interrupted) && !streaming
@@ -117,8 +118,10 @@ export const Exchange = memo(function Exchange({
   return (
     <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
       {exchange.prompt ? (
-        continues?.auto ? (
-          <Continued continuation={continues} timestamp={exchange.prompt.timestamp} />
+        sentByMako?.kind === "continued" ? (
+          <Continued continuation={sentByMako.continuation} timestamp={exchange.prompt.timestamp} />
+        ) : sentByMako?.kind === "moved" ? (
+          <MovedNote timestamp={exchange.prompt.timestamp} />
         ) : (
           <Prompt message={exchange.prompt} />
         )
@@ -205,6 +208,17 @@ function Continued({ continuation, timestamp }: { continuation: TurnContinuation
           ? `Mako continued the turn after the connection to ${provider} dropped`
           : "Mako continued the turn"}
       </span>
+      {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
+    </div>
+  )
+}
+
+/** Mako told the agent it's on its Thread's own branch now, after the move it asked for. */
+function MovedNote({ timestamp }: { timestamp?: number }) {
+  return (
+    <div data-turn-moved className="flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-faint">
+      <GitBranchIcon className="size-3" />
+      <span>Mako moved this session onto its own branch</span>
       {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
     </div>
   )

@@ -4,7 +4,7 @@ import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
+import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
 import { autoContinueCandidate } from "../electron/contracts/turn-continuation"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
@@ -194,7 +194,11 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
     text: continueTurnPrompt("connection-lost"),
     continues: { requestId: dropped.id, reason: "connection-lost", auto: true },
   }
-  assert.deepEqual([...turnContinuations([quit, dropped, continuation])], [[continuation.id, continuation.continues]])
+  assert.deepEqual([...makoPrompts([quit, dropped, continuation])], [[continuation.id, { kind: "continued", continuation: continuation.continues }]])
+  const manual: LiveRequest = { ...continuation, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", continues: { requestId: dropped.id, reason: "connection-lost", auto: false } }
+  assert.equal(makoPrompts([manual]).size, 0, "a continuation the user sent is the user's words")
+  const moved: LiveRequest = { ...request, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", actor: { kind: "service", name: "workspace" } }
+  assert.deepEqual([...makoPrompts([moved])], [[moved.id, { kind: "moved" }]], "the note after an agent's move is Mako's")
   assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
   assert.equal(autoContinueCandidate([dropped]), dropped, "the newest dropped turn is Mako's to continue")
   assert.equal(autoContinueCandidate([dropped, continuation]), undefined, "a turn already continued is not continued again")

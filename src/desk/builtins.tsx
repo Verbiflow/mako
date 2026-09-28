@@ -2,6 +2,7 @@ import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
 import { AppshotButton } from "@/components/composer/appshot-button"
 import { ProviderConnectionNotice } from "@/components/composer/connection-notice"
+import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
 import {
   GitBranchIcon,
@@ -87,6 +88,7 @@ export function installBuiltins(): () => void {
     registerSlot("control-preview", "transcript.overlay", ControlPreviewOverlay),
     registerSlot("appshot", "composer.controls", AppshotButton, -10),
     registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
+    registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
 
     ...["bash", "Bash", "shell", "Shell", "exec_command"].map((name) =>
       registerToolView(name, {

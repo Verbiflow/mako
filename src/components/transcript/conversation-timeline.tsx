@@ -20,8 +20,7 @@ import {
   TurnNavigator,
 } from "@/components/transcript/turn-navigator"
 import { LEAD_EXCHANGE_ID, isInterruptedNote, type Exchange as ExchangeData } from "@/lib/exchanges"
-import type { TurnStop } from "@/state/prompt-delivery"
-import type { TurnContinuation } from "@/lib/types"
+import type { MakoPrompt, TurnStop } from "@/state/prompt-delivery"
 import { cn } from "@/lib/utils"
 import { ArrowDownIcon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
@@ -170,7 +169,7 @@ export function ConversationTimeline({
   streamingId,
   interruptedId,
   interruptedRequests,
-  continuations,
+  makoPrompts,
   failedId,
   empty,
   footer,
@@ -186,8 +185,8 @@ export function ConversationTimeline({
   interruptedId?: string
   /** Turns cut short, by request id, with the reason and whether the newest may be continued. */
   interruptedRequests?: ReadonlyMap<string, TurnStop>
-  /** Requests that pick up an earlier turn, by their own request id; Mako's are shown as Mako's. */
-  continuations?: ReadonlyMap<string, TurnContinuation>
+  /** Prompts Mako sent itself, by request id, shown as Mako's line. */
+  makoPrompts?: ReadonlyMap<string, MakoPrompt>
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
@@ -616,7 +615,7 @@ export function ConversationTimeline({
         interruptedRequests?.get(exchange.prompt?.requestId ?? "") ??
         (exchange.id === interruptedId || exchangeInterrupted(exchange))
       }
-      continues={continuations?.get(exchange.prompt?.requestId ?? "")}
+      sentByMako={makoPrompts?.get(exchange.prompt?.requestId ?? "")}
       failed={exchange.id === failedId}
     />
   )

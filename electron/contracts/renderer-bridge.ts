@@ -9,6 +9,7 @@ import type {
 import type { ThreadGroup, ThreadRegroup } from "./thread-groups.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
 import type { ChatFolders } from "./chat-folders.js"
+import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
@@ -186,6 +187,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeReview: (path: string) => invokeTrustedHost<WorktreeReview>("mako:worktree-review", path),
     worktreeReviewDiffs: (path: string) => invokeTrustedHost<{ diffs: GitDiff[]; truncated: number }>("mako:worktree-review-diffs", path),
     mergeWorktree: (path: string) => invokeTrustedHost<{ branch: string; into: string }>("mako:worktree-merge", path),
+    workspaceMoves: () => invokeTrustedHost<WorkspaceMoves>("mako:workspace-moves"),
+    answerWorkspaceMove: (id: string, answer: WorkspaceMoveAnswer) => invokeTrustedHost<void>("mako:workspace-move-answer", id, answer),
+    forgetWorkspaceMoves: (project: string) => invokeTrustedHost<void>("mako:workspace-move-forget", project),
     threadCreateSession: (operationId: string, thread: string) =>
       invokeTrustedHost<ThreadPlacement>("mako:thread-create-session", operationId, thread),
     threadJoin: (operationId: string, sessions: string[], thread: string) =>

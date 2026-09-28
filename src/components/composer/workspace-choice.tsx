@@ -68,7 +68,8 @@ function WorkspaceMenu({
           value={value}
           onValueChange={(next) => {
             setOpen(false)
-            if (next !== value) onChoose(next as Workspace)
+            const chosen = OPTIONS.find((option) => option.value === next)?.value
+            if (chosen && chosen !== value) onChoose(chosen)
           }}
         >
           {OPTIONS.map(({ value: option, label, Icon }) => (

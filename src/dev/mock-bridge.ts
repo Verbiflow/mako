@@ -1,5 +1,6 @@
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
+import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
@@ -143,6 +144,7 @@ export function installMockBridge() {
 
   const archivedThreads = new Set<string>()
   let archiveRevision = 0
+  let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   window.mako = {
     boot: async () => boot,
     threadArchives: async () => ({
@@ -168,6 +170,23 @@ export function installMockBridge() {
     worktreeReview: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     worktreeReviewDiffs: async () => ({ diffs: [], truncated: 0 }),
     mergeWorktree: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
+    workspaceMoves: async () => workspaceMoves,
+    answerWorkspaceMove: async (id, answer) => {
+      const request = workspaceMoves.requests.find((candidate) => candidate.id === id)
+      if (!request) return
+      workspaceMoves = {
+        requests: workspaceMoves.requests.flatMap((candidate) =>
+          candidate.id !== id ? [candidate] : answer === "deny" ? [] : [{ ...candidate, state: "allowed" as const }]),
+        alwaysAllowed: answer === "always" && !workspaceMoves.alwaysAllowed.includes(request.project)
+          ? [...workspaceMoves.alwaysAllowed, request.project]
+          : workspaceMoves.alwaysAllowed,
+      }
+      emit({ type: "workspace-moves", moves: workspaceMoves })
+    },
+    forgetWorkspaceMoves: async (project) => {
+      workspaceMoves = { ...workspaceMoves, alwaysAllowed: workspaceMoves.alwaysAllowed.filter((candidate) => candidate !== project) }
+      emit({ type: "workspace-moves", moves: workspaceMoves })
+    },
     threadCreateSession: async () => {
       throw new Error("The mock desk has no Thread store, so it can't add a session to a Thread.")
     },

@@ -1,6 +1,6 @@
 import { latestPendingQuestion } from "../../../electron/contracts/live-questions"
 import { ApprovalStatus } from "./approval-status"
-import { promptDelivery, recoverableRequests, turnContinuations, turnStopLabel, turnStops } from "@/state/prompt-delivery"
+import { promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "@/state/prompt-delivery"
 import { agentActivity } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { useCopy } from "@/components/ui/use-copy"
@@ -155,7 +155,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
     session?.status === "starting" ||
     session?.status === "running"
   const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
-  const continuations = useMemo(() => turnContinuations(requests), [requests])
+  const madeByMako = useMemo(() => makoPrompts(requests), [requests])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
   const lastExchangeId = exchanges.at(-1)?.id
 
@@ -170,7 +170,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       exchanges={exchanges}
       streamingId={running ? lastExchangeId : undefined}
       interruptedRequests={interruptedRequests}
-      continuations={continuations}
+      makoPrompts={madeByMako}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
       empty={
         <div className="mx-auto flex w-full max-w-content flex-col gap-4 px-6 py-6">
