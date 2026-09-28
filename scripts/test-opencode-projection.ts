@@ -108,6 +108,7 @@ const store = await mkdtemp(join(tmpdir(), "mako-opencode-projection-"))
 try {
   const calls: Array<[string, unknown]> = []
   let openPermissions: unknown[] = []
+  let whileReadingState: (() => Promise<void>) | undefined
   type FormReply = Parameters<OpenCodeRequestClient["form"]["reply"]>[0]
   const formStates = new Map<string, { status: "answered"; answer: FormReply["answer"] } | { status: "cancelled" }>()
   // SAFETY: OpenCodeInteractions calls only these methods; their results follow the native shapes.
@@ -120,7 +121,12 @@ try {
       reply: async (input: FormReply) => { calls.push(["form.reply", input]); formStates.set(input.formID, { status: "answered", answer: input.answer }) },
       cancel: async (input: { formID: string }) => { calls.push(["form.cancel", input]); formStates.set(input.formID, { status: "cancelled" }) },
       list: async () => [],
-      state: async (input: { formID: string }) => formStates.get(input.formID) ?? { status: "pending" },
+      state: async (input: { formID: string }) => {
+        const during = whileReadingState
+        whileReadingState = undefined
+        await during?.()
+        return formStates.get(input.formID) ?? { status: "pending" }
+      },
     },
   } as OpenCodeRequestClient
   const emitted: LiveDriverEvent[] = []
@@ -196,6 +202,16 @@ try {
   const skipped = requests().at(-1)!
   await interactions.respond(skipped.id, { kind: "choice", optionId: null }, dispatch())
   assert.deepEqual(calls.at(-1), ["form.cancel", { sessionID: root, formID: "frm_2" }])
+
+  await interactions.observe(event("form.created", { form: { id: "frm_3", sessionID: root, title: "Still open", fields: [{ key: "x", type: "string" }] } }))
+  whileReadingState = () => interactions.observe(asked("per_late"))
+  await interactions.reconcile(root)
+  const askedDuring = requests().find(item => item.native?.requestId === "per_late")
+  assert.ok(askedDuring, "a request asked during reconciliation is shown")
+  assert.ok(!emitted.some(item => item.type === "live-permission-ended" && item.requestId === askedDuring.id),
+    "a request asked while reconciliation waits is not ended as resolved")
+  await interactions.observe(event("permission.replied", { sessionID: root, requestID: "per_late", reply: "once" }))
+  await interactions.observe(event("form.cancelled", { sessionID: root, id: "frm_3" }))
 
   for (let index = 0; index < 300; index++) await interactions.observe(asked(`flood_${index}`))
   const flood = requests().filter(item => item.native?.requestId.startsWith("flood_"))

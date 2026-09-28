@@ -216,9 +216,10 @@ export function MentionMenu({
     ]
   }, [commands, commandsHarness, kind, query])
 
-  const groups = capabilities
-    ? [...commandGroup, ...capabilityGroups]
-    : referenceGroups
+  const groups = useMemo(
+    () => (capabilities ? [...commandGroup, ...capabilityGroups] : referenceGroups),
+    [capabilities, commandGroup, capabilityGroups, referenceGroups]
+  )
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups])
 
   const [cursor, setCursor] = useState(0)

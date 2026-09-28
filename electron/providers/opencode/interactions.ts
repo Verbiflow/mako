@@ -138,7 +138,8 @@ export class OpenCodeInteractions {
       open.add(parsed.id)
       this.permission(parsed)
     }
-    for (const [key, pending] of [...this.pending]) {
+    // A snapshot: a request that arrives during an await below isn't in `open` and must not be ended.
+    for (const [key, pending] of Array.from(this.pending)) {
       if (pending.sessionID !== sessionID) continue
       if (pending.kind === "permission") {
         // Permission APIs keep no answer history; only the event carries the choice.
