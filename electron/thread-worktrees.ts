@@ -186,6 +186,20 @@ export class ThreadWorktreeService {
   }
 
   /**
+   * A worktree for a fork of `sourceId` that joins the source's Thread. A
+   * Thread has one worktree per device, so a Thread that has one already is
+   * refused; a repeated request finds its first worktree.
+   */
+  async prepareFork(sourceId: string, forkId: string, cwd: string, name: string | undefined): Promise<PreparedWorktree> {
+    if (!this.pending.has(forkId) && !(await this.receipt(forkId))) {
+      const placed = this.threads.journalPlacement(sourceId)
+      const current = placed && this.threads.worktrees().find((worktree) => worktree.thread === placed.thread)
+      if (current) throw new Error(`This Thread already works in its own worktree, on ${current.branch}. Continue in that tab.`)
+    }
+    return this.prepare(forkId, cwd, name)
+  }
+
+  /**
    * The folder's project is about to start a worktree Thread (its composer
    * is set to Worktree): keep spares of it ready. Returns once recorded.
    */

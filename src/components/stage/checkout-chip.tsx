@@ -43,10 +43,12 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
   const sinceStart = useWorktreeAhead(worktree?.path, git?.head)
   const changed = git?.files.length
   const ahead = worktree ? sinceStart : git?.upstream ? git.ahead : undefined
-  // Only the chat on screen can move, and only once it has an answer to fork after.
+  // Only the chat on screen can move, once it has an answer to fork after, and only while its Thread has no worktree.
+  const worktrees = useWorktrees((state) => state.worktrees)
   const movable = useAcp((state) => {
     const live = activeLiveAcp(state)
     if (worktree || !cwd || live?.session.cwd !== cwd || !live.requests?.some((request) => request.status === "completed")) return undefined
+    if (worktrees.some((candidate) => candidate.thread === live.threadId)) return undefined
     return live.session.status === "running" ? "running" : "idle"
   })
   if (!folder || !head) return null

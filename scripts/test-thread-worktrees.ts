@@ -319,6 +319,18 @@ await assert.rejects(worktrees.moveChanges(driftId), /moved to another commit/)
 assert.equal(readFileSync(join(shop, "web", "draft.ts"), "utf8"), "stays\n")
 git(shop, "checkout", "--", "web/draft.ts")
 
+// A Thread has one worktree per device, so a fork that would give it a second is refused.
+await assert.rejects(worktrees.prepareFork(cartId, randomUUID(), shop, "Second tree"), /already works in its own worktree, on mako\/review-cart/)
+const loneId = randomUUID()
+started(loneId)
+const loneFork = randomUUID()
+const forked = await worktrees.prepareFork(loneId, loneFork, shop, "Fork elsewhere")
+const lonePlacement = threads.journalPlacement(loneId)
+assert.ok(lonePlacement)
+threads.attachWorktree({ path: forked.path, thread: lonePlacement.thread, repoRoot: shop, project: shop, branch: forked.branch, base: git(shop, "rev-parse", "HEAD") })
+assert.equal((await worktrees.prepareFork(loneId, loneFork, shop, "Fork elsewhere")).path, forked.path, "a repeated request finds its first worktree")
+await assert.rejects(worktrees.prepareFork(loneId, randomUUID(), shop, "Another"), /already works in its own worktree/)
+
 // A worktree made for a fork that was refused goes, branch and all.
 const refusedId = randomUUID()
 const refused = await worktrees.prepare(refusedId, shop, "Never started")
@@ -338,4 +350,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, abandoned), refusals")
+console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, abandoned), refusals")

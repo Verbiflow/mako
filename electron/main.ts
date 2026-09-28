@@ -1604,7 +1604,7 @@ function bindIpc() {
     if (!threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
     const source = liveConversations.snapshot(id)
     if (!source) throw new Error("Open the conversation before continuing it in a worktree.")
-    const worktree = await threadWorktrees.prepare(input.id, source.session.cwd, source.session.title)
+    const worktree = await threadWorktrees.prepareFork(id, input.id, source.session.cwd, source.session.title)
     let snapshot: LiveSnapshot
     try {
       snapshot = liveConversations.fork(id, input, worktree.cwd)
