@@ -1,4 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { RailAnnouncer } from "@/components/rail/thread-status"
+import type { RailAsk } from "@/lib/rail-announcement"
 import {
   Popover,
   PopoverContent,
@@ -294,6 +296,17 @@ export function AgentThreads() {
     return { priorities: nextPriorities, threadActivity: nextActivity, statuses: nextStatuses }
   }, [attention, externalActivity, fold, shownRefs, observed, working])
 
+  const asks = useMemo((): RailAsk[] => [
+    ...shownRefs.flatMap((ref): RailAsk[] => {
+      const kind = statuses[ref.path]?.kind
+      return kind === "needs-permission" || kind === "failed" ? [{ key: ref.path, title: ref.title ?? "A thread", kind }] : []
+    }),
+    ...shownLive.flatMap((presence): RailAsk[] =>
+      presence.status === "needs-permission" || presence.status === "failed"
+        ? [{ key: presence.key, title: presence.title ?? "A conversation", kind: presence.status }]
+        : []),
+  ], [shownRefs, shownLive, statuses])
+
   // Ranks from the last render decide this one, so a thread that is busy
   // keeps its place instead of climbing on every appended byte.
   const ranks = useMemo(
@@ -423,6 +436,7 @@ export function AgentThreads() {
       }}
       className="thread-jump-scope flex min-h-0 flex-1 flex-col"
     >
+      <RailAnnouncer asks={asks} />
       <RailHeader
         searching={searching}
         query={query}

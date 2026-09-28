@@ -29,7 +29,7 @@ import {
   threadHasTabs,
   type SessionTab,
 } from "@/state/thread-sessions"
-import { archiveSessionTab, openAddToThread, splitIntoNewThread } from "@/state/thread-regroup"
+import { archiveSessionTab, hasThreadUndo, openAddToThread, splitIntoNewThread, undoLastThreadChange } from "@/state/thread-regroup"
 import { chatPanes, engageWorkbenchPane, splitOnScreenSession } from "@/state/session-panes"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
@@ -228,6 +228,15 @@ const DESK_COMMANDS: DeskCommand[] = [
       const found = onScreenSessionTab()
       if (found) void archiveSessionTab(found.tab, found.thread)
     },
+  },
+  {
+    id: "thread.undo",
+    title: "Undo the last thread change",
+    section: "Session",
+    hint: "Adding to a thread, splitting one, or archiving a session",
+    keywords: "undo regroup split add archive restore",
+    when: hasThreadUndo,
+    run: undoLastThreadChange,
   },
   {
     id: "session.focus-composer",

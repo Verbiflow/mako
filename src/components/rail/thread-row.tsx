@@ -90,6 +90,9 @@ const Detach = memo(function Detach({ path }: { path: string }) {
   )
 })
 
+/** Where a row's controls float while its mark asks for you, so hovering the row doesn't cover it. */
+export const ROW_ACTIONS_BESIDE_MARK = "right-6"
+
 /** A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open. */
 export const ROW_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
@@ -330,7 +333,7 @@ export const ThreadRow = memo(function ThreadRow({
           labels. */}
       <span
         data-tip-quiet
-        className={cn("rail-row-actions", ROW_ACTIONS)}
+        className={cn("rail-row-actions", ROW_ACTIONS, (status.kind === "needs-permission" || status.kind === "failed") && ROW_ACTIONS_BESIDE_MARK)}
         onClick={(event) => event.stopPropagation()}
       >
         <button

@@ -1,8 +1,9 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { formatRelative } from "@/lib/format"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import type { ThreadStatus } from "@/state/threads"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
+import { railAnnouncement, type RailAsk } from "@/lib/rail-announcement"
 
 /** Slack for an answer that lands as its row is painted: still fresh. */
 const REVIEW_FRESH_MS = 2_000
@@ -30,7 +31,7 @@ export function ThreadStatusMark({
     const label = `Open in ${harnessLabel(status.app)}; no running turn reported`
     return (
       <span
-        role="status"
+        role="img"
         aria-label={label}
         title={label}
         className="flex shrink-0 items-center gap-1.5 text-label text-faint"
@@ -66,7 +67,7 @@ export function ThreadStatusMark({
       ) : null
     return (
       <span
-        role="status"
+        role="img"
         aria-label="Answer ready to review"
         title="Answer ready to review"
         className="flex size-5 shrink-0 items-center justify-center"
@@ -95,7 +96,7 @@ export function ThreadStatusMark({
           : (status.detail ?? "Needs your approval")
   return (
     <span
-      role="status"
+      role="img"
       aria-label={label}
       title={label}
       className="flex shrink-0 items-center text-muted-foreground"
@@ -104,3 +105,23 @@ export function ThreadStatusMark({
     </span>
   )
 }
+
+
+/**
+ * The rail's one live region. Row marks are labelled images, so a list of
+ * hundreds of rows doesn't speak every change; this says only what asks for
+ * you, as it starts: a new approval or a failure. What was already asking
+ * when the rail appeared isn't announced.
+ */
+export function RailAnnouncer({ asks }: { asks: readonly RailAsk[] }) {
+  const [message, setMessage] = useState("")
+  const seen = useRef<ReadonlyMap<string, RailAsk["kind"]> | null>(null)
+  useEffect(() => {
+    const previous = seen.current
+    seen.current = new Map(asks.map((ask) => [ask.key, ask.kind]))
+    const next = previous && railAnnouncement(previous, asks)
+    if (next) setMessage(next)
+  }, [asks])
+  return <span aria-live="polite" className="sr-only">{message}</span>
+}
+

@@ -6,7 +6,7 @@ import { desktop } from "@/state/desktop"
 import { threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
 import { offerWorktreeRemoval, removeWorktree, useWorktrees, worktreeAt } from "@/state/worktrees"
 import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
-import { openAddToThread, rowSessions } from "@/state/thread-regroup"
+import { openAddToThread, rowSessions, wholeThreadTargets } from "@/state/thread-regroup"
 
 export function ThreadActions({ target, title, archived, running, controlled, path, thread, session, cwd, archiveTargets }: {
   target: ThreadTarget
@@ -27,9 +27,10 @@ export function ThreadActions({ target, title, archived, running, controlled, pa
   const oneOfMany = useThreadGroups((state) => !archiveTargets && thread !== undefined && state.groups[thread] !== undefined)
   const archive = async () => {
     const restoringOne = archived && oneOfMany
+    const targets = restoringOne ? [target] : (thread && wholeThreadTargets(thread)) || archiveTargets || [target]
     // Putting the whole Thread away, with nothing running in it, is when its worktree stops being needed.
-    const leftBehind = !archived && !running && !oneOfMany ? worktree : undefined
-    const changed = await threadLifecycle.archive(archiveTargets ?? [target], !archived, !restoringOne && !leftBehind)
+    const leftBehind = !archived && !running ? worktree : undefined
+    const changed = await threadLifecycle.archive(targets, !archived, !restoringOne && !leftBehind)
     if (changed && restoringOne) toast("Session restored")
     if (changed && leftBehind) offerWorktreeRemoval(leftBehind)
     if (changed && !archived && thread) discardSessionDraft(thread)

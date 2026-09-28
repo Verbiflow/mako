@@ -4,7 +4,9 @@ import type { ThreadRef } from "@/lib/types"
 import { getMako } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import type { AcpPresence } from "@/state/acp-presence"
+import { selectAcpPresence, type AcpPresence } from "@/state/acp-presence"
+import { acpStore } from "@/state/acp-state"
+import { threadsStore } from "@/state/threads"
 import { appendRecoveredDraft, draftText, draftsStore, rememberDraft } from "@/state/drafts"
 import { createHook, createStore } from "@/state/store"
 import {
@@ -36,6 +38,26 @@ export function openAddToThread(request: AddToThreadRequest): void {
 
 export function closeAddToThread(): void {
   addToThreadStore.set({ request: null })
+}
+
+/**
+ * What archiving a Thread with several Sessions acts on: every Session with
+ * a row in the catalog or a live conversation, found in the whole list, not
+ * the rows a filter or search left showing.
+ */
+export function wholeThreadTargets(thread: string): ThreadTarget[] | undefined {
+  const group = threadGroupsStore.get().groups[thread]
+  if (!group) return undefined
+  const refs = threadsStore.get().threads
+  const live = selectAcpPresence(acpStore.get())
+  const targets = new Map<string, ThreadTarget>()
+  for (const member of group.sessions) {
+    const ref = refs.find((entry) => entry.sessionId === member.id)
+    const presence = ref ? undefined : live.find((entry) => entry.sessionId === member.id)
+    const target: ThreadTarget | undefined = ref ? nativeThreadTarget(ref) : presence && { kind: "live", id: presence.key }
+    if (target) targets.set(JSON.stringify(target), target)
+  }
+  return targets.size ? [...targets.values()] : undefined
 }
 
 /** A row stands for its whole Thread, archived Sessions included, so a Thread stays whole. */
@@ -86,6 +108,40 @@ async function regroup(work: (operationId: string) => Promise<ThreadRegroup>, fa
 const join = (sessions: readonly string[], thread: string) => (id: string) => getMako().threadJoin(id, [...sessions], thread)
 const split = (sessions: readonly string[]) => (id: string) => getMako().threadSplit(id, [...sessions])
 
+/**
+ * The last regroup or Session archive in this window, still undoable after
+ * its toast is gone: from the command palette, until it's undone or another
+ * change takes its place. The store keeps a regroup's layouts for a day, and
+ * refuses an undo once the Threads it touched changed again.
+ */
+let lastUndo: { label: string; run: () => Promise<void> } | null = null
+
+export function hasThreadUndo(): boolean {
+  return lastUndo !== null
+}
+
+export async function undoLastThreadChange(): Promise<void> {
+  const undo = lastUndo
+  lastUndo = null
+  if (undo) await undo.run()
+}
+
+function offerUndo(label: string, run: () => Promise<void>, description?: string): void {
+  const entry = { label, run }
+  lastUndo = entry
+  toast(label, {
+    description,
+    duration: ACTION_TOAST_MS,
+    action: {
+      label: "Undo",
+      onClick: () => {
+        if (lastUndo === entry) lastUndo = null
+        void run()
+      },
+    },
+  })
+}
+
 /** Every Session goes back to the Thread and position it had; a carried draft goes back with its Thread. */
 async function undoRegroup(operation: string, draft?: { from: string; to: string }): Promise<void> {
   if (!(await regroup((id) => getMako().threadRegroupUndo(id, operation), "Couldn't undo"))) return
@@ -100,10 +156,7 @@ export async function addToThread(request: AddToThreadRequest, target: { thread:
   if (!operation) return false
   const carried = emptied ? carryDraft(request.from, target.thread) : null
   const draft = carried === "moved" ? { from: target.thread, to: request.from } : undefined
-  toast(`Added to “${target.title}”`, {
-    duration: ACTION_TOAST_MS,
-    action: { label: "Undo", onClick: () => { void undoRegroup(operation, draft) } },
-  })
+  offerUndo(`Added to “${target.title}”`, () => undoRegroup(operation, draft))
   return true
 }
 
@@ -111,10 +164,7 @@ export async function addToThread(request: AddToThreadRequest, target: { thread:
 export async function splitIntoNewThread(sessions: readonly string[]): Promise<boolean> {
   const operation = await regroup(split(sessions), "Couldn't split into a new thread")
   if (!operation) return false
-  toast("Split into a new thread", {
-    duration: ACTION_TOAST_MS,
-    action: { label: "Undo", onClick: () => { void undoRegroup(operation) } },
-  })
+  offerUndo("Split into a new thread", () => undoRegroup(operation))
   return true
 }
 
@@ -140,16 +190,7 @@ export async function archiveSessionTab(tab: Extract<SessionTab, { kind: "sessio
   }
   if (!(await threadLifecycle.archive([target], true, false))) return false
   const running = tab.presence?.status === "running" || tab.presence?.status === "starting"
-  toast("Session archived", {
-    description: running ? "Its run keeps going." : undefined,
-    duration: ACTION_TOAST_MS,
-    action: {
-      label: "Undo",
-      onClick: () => {
-        void threadLifecycle.archive([target], false, false)
-      },
-    },
-  })
+  offerUndo("Session archived", async () => { await threadLifecycle.archive([target], false, false) }, running ? "Its run keeps going." : undefined)
   return true
 }
 

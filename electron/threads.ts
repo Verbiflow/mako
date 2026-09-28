@@ -196,7 +196,7 @@ import type {
   ThreadFileContext,
   ThreadInlineContext,
 } from "./shared.js"
-import { THREAD_LIST_CAP, threadList } from "./contracts/thread-list.js"
+import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "./contracts/thread-list.js"
 
 /** Refs other host callers look through; the rail's own list is `threadList`. */
 const LIST_CAP = THREAD_LIST_CAP
@@ -937,11 +937,24 @@ export function listThreads(
   return annotateAll(catalogRefs(filter).slice(0, LIST_CAP))
 }
 
-/** The window's rail list, by the same rule the window applies to every push. */
+/**
+ * The window's rail list, by the same rule the window applies to every push.
+ * The cap is cut before rows are placed, so the rows past it that share a
+ * Thread with a listed row are found here: placements are cached, and only
+ * the rows found are annotated.
+ */
 export function railThreads(
   filter: { cwd?: string; harness?: string } = {}
 ): ThreadRef[] {
-  return annotateAll(threadList(catalogRefs(filter)))
+  const refs = catalogRefs(filter)
+  const listed = annotateAll(threadList(refs))
+  if (!threadStore || refs.length <= listed.length) return listed
+  const missing = unlistedThreadSessions(listed, threadStore.groups())
+  if (!missing.size) return listed
+  const paths = new Set(listed.map((ref) => ref.path))
+  const companions = withThreadPlacements(refs.filter((ref) => !paths.has(ref.path)))
+    .filter((ref) => ref.sessionId !== undefined && missing.has(ref.sessionId))
+  return [...listed, ...annotateAll(companions)]
 }
 
 /** Recovery must not depend on the sidebar's ordering or visible result cap. */

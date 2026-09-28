@@ -3,7 +3,7 @@ import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { ThreadActions } from "@/components/rail/thread-actions"
-import { ROW_ACTIONS, SessionCount } from "@/components/rail/thread-row"
+import { ROW_ACTIONS, ROW_ACTIONS_BESIDE_MARK, SessionCount } from "@/components/rail/thread-row"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { workspaceName } from "@/lib/format"
 import { FOLD_GLYPHS, foldRowHarness, type FoldedThread } from "@/lib/thread-fold"
@@ -93,7 +93,7 @@ export function LiveAgentRow({
       ) : null}
       <span
         data-tip-quiet
-        className={cn("rail-row-actions", ROW_ACTIONS)}
+        className={cn("rail-row-actions", ROW_ACTIONS, (presence.status === "needs-permission" || presence.status === "failed") && ROW_ACTIONS_BESIDE_MARK)}
         onClick={(event) => event.stopPropagation()}
       >
         <ThreadActions
@@ -109,7 +109,7 @@ export function LiveAgentRow({
           archiveTargets={archiveTargets}
         />
       </span>
-      <span title={label} className="flex shrink-0 text-muted-foreground">
+      <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
         <ActivityMark state={state} size={20} />
       </span>
     </div>

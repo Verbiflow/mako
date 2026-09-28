@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
-import { THREAD_LIST_CAP, threadList } from "../electron/contracts/thread-list.ts"
+import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../electron/contracts/thread-list.ts"
 import { applyThreadRef, applyThreads, threadsStore } from "../src/state/threads.ts"
 
 // A catalog larger than the rail's cap (the user's has 1,500 sessions). The
@@ -29,4 +29,20 @@ const flage = () => threadsStore.get().threads.filter((ref) => ref.cwd === "/rep
 const before = flage()
 applyThreads(threadList([...catalog, fresh]))
 assert.equal(flage(), before, "a focus reload keeps the folder's count")
-console.log("Rail list: pushes past the cap, a displacing new session and a focus reload agree on rows and folder counts")
+
+// A Thread whose first Session is older than the cap: its rows stay while any of them is within it.
+const thread = "11111111-1111-4111-8111-111111111111"
+const inThread = (ref: ThreadRef, session: string): ThreadRef => ({ ...ref, threadId: thread, sessionId: session })
+const grouped = [...catalog.slice(1).map((ref) => ref), inThread(catalog[0], "old-session"), inThread({ ...catalog[1499], nativeId: "rail-newest", path: "/sessions/rail-newest.jsonl", updatedAt: "2027-02-01T00:00:00.000Z" }, "new-session")]
+const listed = threadList(grouped).map((ref) => ref.path)
+assert.equal(listed.length, THREAD_LIST_CAP + 1, "one row past the cap")
+assert.ok(listed.includes("/sessions/rail-0.jsonl"), "the old Session of a listed Thread stays in the rail")
+applyThreads(threadList(grouped))
+applyThreadRef(inThread(catalog[0], "old-session"))
+assert.deepEqual(paths(), listed, "and pushes keep it, as a reload would")
+assert.ok(!threadList(grouped.filter((ref) => ref.path !== "/sessions/rail-newest.jsonl")).some((ref) => ref.path === "/sessions/rail-0.jsonl"), "a Thread with no row within the cap isn't pulled in")
+const hostListed = threadList(grouped.map((ref) => (ref.path === "/sessions/rail-0.jsonl" ? { ...ref, threadId: undefined } : ref)))
+assert.deepEqual([...unlistedThreadSessions(hostListed, [{ id: thread, sessions: [{ id: "old-session" }, { id: "new-session" }] }, { id: "other", sessions: [{ id: "elsewhere" }] }])], ["old-session"], "the host finds a listed Thread's Session that the cap cut before placement")
+console.log("Rail list: pushes past the cap, a displacing new session and a focus reload agree on rows and folder counts; a listed Thread keeps its older Sessions, and the host finds them")
+// The window's stores keep timers alive.
+process.exit(0)
