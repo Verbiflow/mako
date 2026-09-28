@@ -129,9 +129,14 @@ const motionLayers = new Set([
   ".ocean-grain",
   ".ocean-fin-glint",
 ])
+// Loops that exist only while work is in flight. Each names what stops it
+// under reduced motion: a rule of its own, or the global one-iteration rule.
 const stateFeedback = new Map([
-  ["[data-commit-box][data-busy] .commit-editor::after", "git-progress"],
-  ['[data-push-state="pushing"] > svg', "git-upload"],
+  ["[data-commit-box][data-busy]:not([data-drafting]) .commit-editor::after", { animation: "git-progress", reduced: /\[data-commit-box\]\[data-busy\] \.commit-editor::after[^{]*\{\s*animation:\s*none;/ }],
+  ['[data-push-state="pushing"] > svg', { animation: "git-upload", reduced: /\[data-push-state="pushing"\] > svg[^{]*\{\s*animation:\s*none;/ }],
+  [".skeleton::after", { animation: "mako-skeleton-glint", reduced: "global" }],
+  [".shimmer-chars > span", { animation: "mako-glyph", reduced: "global" }],
+  [".control-preview-rim > span", { animation: "control-preview-sweep", reduced: /\.control-preview-rim\s*\{\s*display:\s*none;/ }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
@@ -142,7 +147,7 @@ for (const [, selector, declarations] of rules) {
     continue
   const feedback = stateFeedback.get(selector!.trim())
   if (feedback) {
-    assert.ok(declarations!.includes(`animation: ${feedback} `))
+    assert.ok(declarations!.includes(`animation: ${feedback.animation} `))
     continue
   }
   assert.ok(
@@ -156,8 +161,10 @@ const reducedMotion = [
     /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/g
   ),
 ]
-for (const selector of stateFeedback.keys()) {
-  assert.ok(reducedMotion.some(([, body]) => body!.includes(selector) && /animation:\s*none\s*;/.test(body!)), `${selector} respects reduced motion`)
+const globalReduced = /\*::after\s*\{[^}]*animation-iteration-count:\s*1\s*!important;/
+for (const [selector, { reduced }] of stateFeedback) {
+  const stops = reduced === "global" ? globalReduced : reduced
+  assert.ok(reducedMotion.some(([, body]) => stops.test(body!)), `${selector} respects reduced motion`)
 }
 for (const layer of motionLayers) {
   assert.ok(
@@ -207,7 +214,7 @@ assert.match(
   oceanSource,
   /motion && visible && !document\.hidden && !media\.matches/
 )
-assert.match(threadViewerSource, /Loading messages…/)
+assert.match(threadViewerSource, /Loading the conversation…/)
 assert.doesNotMatch(threadViewerSource, /Opening \{opening/)
 assert.match(threadViewingSource, /Showing saved messages/)
 assert.equal(composerActionKind({ running: false, hasContent: false }), "send")

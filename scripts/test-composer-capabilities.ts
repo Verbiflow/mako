@@ -137,7 +137,6 @@ const mcpSnapshot: McpRegistrySnapshot = {
   generatedAt: 0,
   providers: [],
   servers: [
-    server("mako-control", [["mako", "managed"]]),
     server("mako-backend", [["mako", "managed"]], { transport: "http", url: "https://mako.example/api/mcp", portable: false }),
     server("blocked-managed", [["mako", "managed"]], { blockReason: "Dependency is not installed" }),
     server("github", [["codex", "user"]]),
@@ -152,13 +151,13 @@ const mcpSnapshot: McpRegistrySnapshot = {
 const projectedForClaude = projectedMcpServers(mcpSnapshot, "claude", ["stdio", "http"]).map((entry) => entry.name)
 assert.deepEqual(
   projectedForClaude,
-  ["mako-control", "mako-backend", "github"],
+  ["mako-backend", "github"],
   "projection adds managed runtime servers and other providers' portable ones only"
 )
 const reachableForClaude = reachableMcpServers(mcpSnapshot, "claude", ["stdio", "http"]).map((entry) => entry.name)
 assert.deepEqual(
   reachableForClaude,
-  ["mako-control", "mako-backend", "github", "linear", "drifted"],
+  ["mako-backend", "github", "linear", "drifted"],
   "reach is the provider's own servers plus the projection"
 )
 assert.ok(!reachableForClaude.includes("gone"), "an unavailable native server is not reachable")
@@ -171,7 +170,7 @@ assert.ok(
 )
 assert.deepEqual(
   projectedMcpServers(mcpSnapshot, "codex", ["stdio", "http"]).map((entry) => entry.name),
-  ["mako-control", "mako-backend", "linear"],
+  ["mako-backend", "linear"],
   "codex loads github and secretive natively, so neither is projected twice"
 )
 
@@ -263,7 +262,6 @@ assert.deepEqual(
   claudeServers.map((item) => [item.name, item.builtIn, item.badge ?? null, item.from ?? null]),
   [
     ["mako-backend", true, "built in", null],
-    ["mako-control", true, "built in", null],
     ["drifted", false, null, null],
     ["github", false, null, "codex"],
     ["linear", false, "project", null],
@@ -272,7 +270,7 @@ assert.deepEqual(
 )
 assert.equal(claudeServers.find((item) => item.name === "mako-backend")?.description, "Mako skills, integrations, and Slack")
 assert.equal(claudeServers.find((item) => item.name === "github")?.description, "npx -y github")
-assert.ok(isMakoServerName("mako-control"))
+assert.ok(isMakoServerName("mako-control"), "a chip naming the per-conversation control server still reads as built in")
 assert.ok(!isMakoServerName("mako-conversations"), "the retired conversation tools are nobody's now")
 assert.ok(!isMakoServerName("github"))
 
@@ -283,7 +281,7 @@ assert.ok(
 )
 assert.ok(mcpItems(mcpSnapshot, "grok", mcpTransportsFor("acp")).some((item) => item.name === "events" && item.from === "cursor"))
 const browse = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, "")
-assert.deepEqual(browse.groups.map((group) => [group.label, group.matches.length, group.total]), [["Skills", 6, 6], ["MCP servers", 6, 6]])
+assert.deepEqual(browse.groups.map((group) => [group.label, group.matches.length, group.total]), [["Skills", 6, 6], ["MCP servers", 4, 4]])
 const many: SkillRegistrySnapshot = { ...skillsSnapshot, skills: Array.from({ length: 9 }, (_, at) => skill(`skill-${at}`, [["agents", "user"]])) }
 const capped = capabilityCatalog(many, mcpSnapshot, "claude", CLAUDE, "")
 assert.deepEqual([capped.groups[0]?.matches.length, capped.groups[0]?.total], [6, 9], "browsing caps the list but reports the whole")
@@ -294,22 +292,22 @@ const search = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, 
 assert.deepEqual(search.groups.map((group) => group.label), ["MCP servers"], "an empty group is dropped")
 assert.deepEqual(
   search.groups[0]?.matches.map((match) => match.item.name),
-  ["mako-backend", "mako-control"]
+  ["mako-backend"]
 )
 assert.deepEqual(search.groups[0]?.matches[0]?.indices, [0, 1, 2, 3], "name hits carry glyph positions for highlighting")
 
 const byDescription = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, "slack")
 assert.deepEqual(byDescription.groups[0]?.matches.map((match) => [match.item.name, match.indices]), [["mako-backend", []]], "a description hit lists without highlighting")
 
-const skillsFirst: SkillRegistrySnapshot = { ...skillsSnapshot, skills: [...skillsSnapshot.skills, skill("browser-tips", [["agents", "user"]], { description: "Notes on mako-control sessions" })] }
+const skillsFirst: SkillRegistrySnapshot = { ...skillsSnapshot, skills: [...skillsSnapshot.skills, skill("browser-tips", [["agents", "user"]], { description: "Notes on mako-backend skills" })] }
 assert.deepEqual(
-  capabilityCatalog(skillsFirst, mcpSnapshot, "claude", CLAUDE, "mako-c").groups.map((group) => group.label),
+  capabilityCatalog(skillsFirst, mcpSnapshot, "claude", CLAUDE, "mako-b").groups.map((group) => group.label),
   ["MCP servers", "Skills"],
   "a name hit leads a description hit across groups"
 )
 assert.deepEqual(
-  capabilityCatalog(skillsFirst, mcpSnapshot, "claude", CLAUDE, "mcp:mako-control").groups.map((group) => [group.label, group.matches.map((match) => match.item.name)]),
-  [["MCP servers", ["mako-control"]]],
+  capabilityCatalog(skillsFirst, mcpSnapshot, "claude", CLAUDE, "mcp:mako-backend").groups.map((group) => [group.label, group.matches.map((match) => match.item.name)]),
+  [["MCP servers", ["mako-backend"]]],
   "an mcp: prefix narrows to servers and matches the remainder"
 )
 const fuzzyHit = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, "fd")
