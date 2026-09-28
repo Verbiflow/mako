@@ -166,11 +166,8 @@ async function mcpServers(options: ProviderStartOptions): Promise<Array<{ name: 
     }
   }
   const tools = options.conversationTools
-  if (tools) {
-    const headers = { Authorization: `Bearer ${tools.token}` }
-    servers.push({ name: "mako-conversations", config: { type: "remote", url: tools.url, headers, oauth: false } })
-    if (tools.controlUrl) servers.push({ name: "mako-control", config: { type: "remote", url: tools.controlUrl, headers, oauth: false } })
-  }
+  if (tools)
+    servers.push({ name: "mako-control", config: { type: "remote", url: tools.controlUrl, headers: { Authorization: `Bearer ${tools.token}` }, oauth: false } })
   return servers
 }
 

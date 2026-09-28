@@ -13,7 +13,6 @@ import {
   mkdtemp,
   writeFile,
   readFile,
-  realpath,
   rm,
   symlink,
   unlink,
@@ -188,8 +187,6 @@ async function runElectron() {
     ? await controlFixture.started()
     : undefined
   const authentications = new Map()
-  const delegationParents = new Set()
-  const delegationChildren = new Set()
   const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
   const drivers = providerHost.liveDrivers
     .list()
@@ -235,28 +232,12 @@ async function runElectron() {
             reads.some((block) =>
               grantedFiles.some((file) => block.input?.includes(file))
             )
-          const capabilitiesRead =
-            permission.title ===
-            "mcp__mako-conversations__mako_conversation_capabilities"
           const fixtureControl =
             controlMode &&
             /mako-control|mako_control_/i.test(permission.title)
-          const fixtureDelegation =
-            delegationParents.has(id) &&
-            permission.title ===
-              'mako-conversations: Allow the mako-conversations MCP server to run tool "mako_delegate_task"?'
-          const fixtureChildWrite =
-            delegationChildren.has(id) &&
-            permission.title ===
-              `Write ${join(await realpath(snapshot.session.cwd), "proof.txt")}`
           if (
             !once ||
-            (!fixtureRead &&
-              !fixtureAuthentication &&
-              !capabilitiesRead &&
-              !fixtureControl &&
-              !fixtureDelegation &&
-              !fixtureChildWrite)
+            (!fixtureRead && !fixtureAuthentication && !fixtureControl)
           )
             throw new Error(
               `Permission outside the fixture read grant: ${permission.title}`
@@ -934,79 +915,6 @@ async function runElectron() {
       )
       await owner.close(id)
     }
-    if (process.argv.includes("--delegate")) {
-      const cwd = join(root, "delegation-fixture")
-      await mkdir(cwd)
-      const parentValue = randomUUID()
-      const childValue = randomUUID()
-      await writeFile(join(cwd, "proof.txt"), parentValue)
-      const id = randomUUID()
-      const childId = randomUUID()
-      await owner.start("codex", cwd, {
-        conversationId: id,
-        title: "Mako model delegation fixture",
-      })
-      await waitFor(id, (snapshot) => snapshot?.session.status === "ready")
-      delegationParents.add(id)
-      delegationChildren.add(childId)
-      owner.submit(
-        id,
-        randomUUID(),
-        `This is an explicitly authorized delegation integration test. Call mako_delegate_task with id ${childId}, provider claude, and task: "Read proof.txt. Replace its contents with ${childValue}. Report the original and new value. This is your isolated disposable workspace." Do not perform the child task yourself. After delegating, end your response. When the child's result arrives, report both values.`
-      )
-      await waitFor(id, () => Boolean(owner.snapshot(childId)))
-      const child = await waitFor(childId, (snapshot) =>
-        snapshot?.requests.some((request) => request.status === "completed")
-      )
-      if (child.session.cwd === cwd)
-        throw new Error("Delegated child shared the parent workspace")
-      if ((await readFile(join(cwd, "proof.txt"), "utf8")) !== parentValue)
-        throw new Error("Child modified the parent workspace")
-      if (
-        (
-          await readFile(join(child.session.cwd, "proof.txt"), "utf8")
-        ).trim() !== childValue
-      )
-        throw new Error("Child did not perform its isolated write")
-      const completed = await waitFor(
-        id,
-        (snapshot) =>
-          snapshot?.control.children.some(
-            (child) => child.id === childId && child.delivery === "delivered"
-          ) && snapshot.session.status === "ready"
-      )
-      const reply = completed.blocks
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n")
-      if (!reply.includes(childValue) || !reply.includes(parentValue))
-        throw new Error("Parent did not receive the actual child result")
-      const calls = completed.blocks.filter((block) => block.type === "tool")
-      if (!JSON.stringify(calls).includes("mako_delegate_task"))
-        throw new Error("Parent did not call the delegation tool")
-      results.push({
-        flow: "model-delegation",
-        status: "passed",
-        parent: id,
-        child: childId,
-        parentValue,
-        childValue,
-        workspace: child.session.cwd,
-      })
-      console.log(
-        "Real model delegation, isolated child write and parent result delivery passed"
-      )
-      await writeFile(
-        join(root, "delegation.json"),
-        JSON.stringify({ parent: completed, child }, null, 2)
-      )
-      await writeFile(
-        join(root, "results.json"),
-        JSON.stringify(results, null, 2)
-      )
-      await owner.close(id)
-      await owner.close(childId)
-    }
     if (process.argv.includes("--restart")) {
       // The restart runs on the first requested provider whose driver can
       // reopen a session (Cursor's SDK resume, Grok's session/load, Codex's thread resume);
@@ -1294,36 +1202,6 @@ async function runElectron() {
           JSON.stringify(completed, null, 2)
         )
       }
-      const beforeMcp = owner.snapshot(id).blocks.length
-      const mcpRequest = randomUUID()
-      owner.submit(
-        id,
-        mcpRequest,
-        "Call the mako_conversation_capabilities MCP tool now. Return the provider IDs it reports. This is an explicitly authorized integration check."
-      )
-      const completed = await waitFor(id, (snapshot) =>
-        snapshot?.requests.some(
-          (request) =>
-            request.id === mcpRequest && request.status === "completed"
-        )
-      )
-      const calls = completed.blocks
-        .slice(beforeMcp)
-        .filter((block) => block.type === "tool")
-      if (!JSON.stringify(calls).includes("mako_conversation_capabilities"))
-        throw new Error(
-          "The model did not invoke the real conversation MCP tool"
-        )
-      results.push({
-        flow: "model-mcp-call",
-        status: "passed",
-        tools: calls.map((block) => block.title),
-      })
-      console.log("Actual model MCP call passed")
-      await writeFile(
-        join(root, "transfer.json"),
-        JSON.stringify(completed, null, 2)
-      )
       await writeFile(
         join(root, "results.json"),
         JSON.stringify(results, null, 2)

@@ -47,10 +47,10 @@ export type BackgroundStop =
   | { kind: "ends-on-stop"; how: string }
   | { kind: "ends-with-turn"; evidence: string }
 
+/** A running agent's grant to Mako's control tools: the `mako-control` MCP server and, when it started, the control CLI. */
 export interface ConversationTools {
-  url: string
   token: string
-  controlUrl?: string
+  controlUrl: string
   control?: ControlLaunch
 }
 

@@ -502,13 +502,11 @@ async function testManagedCommandIsolation(): Promise<void> {
 
 async function testMakoRuntimeProjection(): Promise<void> {
   const snapshot: McpRegistrySnapshot = {cwd:tmpdir(),generatedAt:1,providers:[],servers:[]}
-  const url = "http://127.0.0.1:43123/mcp"
   const controlUrl = "http://127.0.0.1:43123/control"
-  assert.deepEqual(codexMcpConfig(snapshot, url, controlUrl), {mcp_servers:{
-    "mako-conversations":{url,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN"},
+  assert.deepEqual(codexMcpConfig(snapshot, controlUrl), {mcp_servers:{
     "mako-control":{url:controlUrl,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN"},
   }})
-  assert.deepEqual(codexMcpConfig(snapshot,url), {mcp_servers:{"mako-conversations":{url,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN"}}})
+  assert.deepEqual(codexMcpConfig(snapshot), {}, "no grant, no Mako server")
 }
 
 async function testMakoBackendProjection(): Promise<void> {

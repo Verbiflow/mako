@@ -85,7 +85,6 @@ type Live = {
   access: AccessTier | null
   state: LiveSessionState
   tuning?: Tuning
-  conversationToolsUrl?: string
   controlUrl?: string
   mcpSnapshot: McpRegistrySnapshot
   nextRequestId: number
@@ -180,7 +179,6 @@ async function startCodex(
     },
     tuning: options.tuning,
     emit: (event) => emit(event),
-    conversationToolsUrl: options.conversationTools?.url,
     controlUrl: options.conversationTools?.controlUrl,
     mcpSnapshot,
     nextRequestId: 0,
@@ -481,11 +479,7 @@ async function openThread(
   sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
   const tuning = threadTuning(
     live.tuning,
-    codexMcpConfig(
-      live.mcpSnapshot,
-      live.conversationToolsUrl,
-      live.controlUrl
-    )
+    codexMcpConfig(live.mcpSnapshot, live.controlUrl)
   )
   if (fork)
     return trace.step("session-fork", () => watch.step("thread/fork", rpcRequest(live, "thread/fork", {

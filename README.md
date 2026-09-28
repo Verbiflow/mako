@@ -47,9 +47,10 @@ window that replaces them.
   different agent.
 - Gives every launched agent browser and computer control on your machine.
   A Control surface shows what the agent last observed.
-- Lets an agent delegate a bounded subtask to a different provider. The child
-  works in an isolated copy of the workspace and its result returns to the
-  parent conversation.
+- Keeps related work together as sessions in one thread. Fork after any
+  answer into a new tab, or continue in a worktree of its own: the thread's
+  uncommitted changes move with it, and the branch merges back into main when
+  that's safe.
 - Shows the working tree next to the conversation: changed files, diffs,
   history, a commit-message drafter with Fast and Deep modes, and push.
 - Turns every prompt into a rewind point. Rewinding restores the files as they

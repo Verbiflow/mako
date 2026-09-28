@@ -1,5 +1,4 @@
 import {
-  MAKO_CONVERSATIONS_SERVER,
   MAKO_RUNTIME_SERVERS,
   isMakoManagedServer,
   reachableMcpServers,
@@ -81,11 +80,10 @@ export interface SkillReach {
 const BUILT_IN_DESCRIPTIONS = new Map<string, string>([
   ["mako-backend", "Mako skills, integrations, and Slack"],
   ["mako-control", "Drive pages, native windows, and system tasks"],
-  [MAKO_CONVERSATIONS_SERVER, "Delegate bounded tasks to other agents"],
 ])
 
 export function isMakoServerName(name: string): boolean {
-  return MAKO_RUNTIME_SERVERS.has(name) || name === MAKO_CONVERSATIONS_SERVER
+  return MAKO_RUNTIME_SERVERS.has(name) || BUILT_IN_DESCRIPTIONS.has(name)
 }
 
 /**
@@ -202,15 +200,6 @@ export function mcpItems(
       items.push(item)
     }
   }
-  // The conversation tools are attached at launch rather than discovered, so
-  // the registry never lists them; every provider still gets them.
-  items.push({
-    kind: "mcp",
-    name: MAKO_CONVERSATIONS_SERVER,
-    description: BUILT_IN_DESCRIPTIONS.get(MAKO_CONVERSATIONS_SERVER) ?? "",
-    builtIn: true,
-    badge: "built in",
-  })
   // Mako's own servers lead: they are the ones a user new to the menu is
   // least likely to know are there.
   return items.sort(

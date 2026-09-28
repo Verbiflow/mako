@@ -86,7 +86,6 @@ function codexDefinition(
 
 export function codexMcpConfig(
   snapshot: McpRegistrySnapshot,
-  conversationToolsUrl?: string,
   controlUrl?: string
 ): JsonObject {
   const servers: JsonObject = {}
@@ -97,11 +96,6 @@ export function codexMcpConfig(
     const projected = codexDefinition(definition)
     if (projected) servers[definition.name] = projected
   }
-  if (conversationToolsUrl)
-    servers["mako-conversations"] = {
-      url: conversationToolsUrl,
-      bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN",
-    }
   if (controlUrl)
     servers["mako-control"] = {
       url: controlUrl,

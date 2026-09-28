@@ -151,12 +151,6 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
     }
   }
   if (options.conversationTools)
-    servers["mako-conversations"] = {
-      type: "http",
-      url: options.conversationTools.url,
-      headers: { Authorization: `Bearer ${options.conversationTools.token}` },
-    }
-  if (options.conversationTools?.controlUrl)
     servers["mako-control"] = {
       type: "http",
       url: options.conversationTools.controlUrl,

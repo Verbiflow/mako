@@ -1,11 +1,7 @@
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
-import type {
-  DelegateInput,
-  ForkInput,
-  TransferInput,
-} from "../../electron/shared"
+import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
 import { reduceLiveUpdates } from "../../electron/contracts/live-content"
 import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
@@ -1079,38 +1075,6 @@ export function installMockBridge() {
       }
       nativeRequests.push(request)
       return request
-    },
-    liveDelegate: async (id: string, input: DelegateInput) => {
-      const parent = liveSnapshots.get(id)
-      if (!parent) throw new Error("Missing mock parent")
-      const control = parent.control ?? {
-        children: [],
-        merges: [],
-        activeBindingId: id,
-        bindings: [],
-        transfers: [],
-      }
-      const next: LiveSnapshot = {
-        ...parent,
-        revision: parent.revision + 1,
-        control: {
-          ...control,
-          children: [
-            ...control.children,
-            {
-              id: input.id,
-              task: input.task,
-              provider: input.provider,
-              parentRequestId: parent.requests.at(-1)?.id ?? id,
-              status: "completed",
-              delivery: "delivered",
-              deliveryId: crypto.randomUUID(),
-            },
-          ],
-        },
-      }
-      liveSnapshots.set(id, next)
-      return next
     },
     liveCancelChild: async (id: string, childId: string) => {
       const parent = liveSnapshots.get(id)

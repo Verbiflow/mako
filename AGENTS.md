@@ -861,10 +861,9 @@ that menu and may dismiss it before capture. Typing `$` anywhere or `/` at the
 start of an empty draft opens one capability menu listing every installed
 skill and the MCP servers the _selected_ provider will have: servers from the
 same reach predicate the host projects into a launch
-(`electron/contracts/mcp-reach.ts`, plus the launch-attached conversation
-tools). Mako's managed servers wear the fin. A pick inserts plain text in the
-sigil typed (`$name`, `/name`, `$mcp:server`); sentence punctuation after a
-token stays prose. `scripts/test-composer-capabilities.ts` covers the tokens,
+(`electron/contracts/mcp-reach.ts`). Mako's managed servers wear the fin. A
+pick inserts plain text in the sigil typed (`$name`, `/name`, `$mcp:server`);
+sentence punctuation after a token stays prose. `scripts/test-composer-capabilities.ts` covers the tokens,
 reach, and ranking.
 
 A `$skill` reaches whichever provider answers. `electron/contracts/skill-reach.ts`
@@ -1252,9 +1251,9 @@ logs a conflict and keeps both. Paths are compared through `realNativePath`.
 journal's own Session. `createSession` and `renameThread` take a
 caller-minted operation ID: a replay returns the first result and the same
 ID with different content is refused. Every journaled request records its
-`actor` (a person for the desk and socket, the parent agent for delegation,
-the child for its delivery, or the `relay` or `auto-continue` service); the
-host assigns it and never reads it from caller input. A store with a newer
+`actor` (a person for the desk and socket, a delegated child for its result's
+delivery, or the `relay` or `auto-continue` service); the host assigns it and
+never reads it from caller input. A store with a newer
 schema is refused without writing. `npm run test:thread-store` covers the
 rules, six-harness migration across a restart and actors.
 
@@ -1564,12 +1563,16 @@ writing, and that request is `uncertain` because the provider may have
 finished it. The exchange footer reads "Interrupted when Mako quit" or
 "closed unexpectedly", and on the newest such turn while the session is idle
 offers Continue turn (`turnStops`, `continueTurn`), which sends one plain
-prompt through the ordinary send path; a user's Stop offers nothing. A
-delegated child cut short by a host exit settles as `failed` in its parent,
-never `canceled`, so the parent may delegate again; `stop()` flushes every
-resident before it closes any journal because a child's verdict lands in
-its parent's. `test-live-conversations.ts` covers the reasons,
-`test-live-controls.tsx` the footer and the recovery rows.
+prompt through the ordinary send path; a user's Stop offers nothing. Delegate
+is retired: nothing creates a child task, and related work is a Session in
+the same Thread (a fork into a tab, or Continue in a worktree). `LiveChildren`
+keeps the children older journals hold settling, delivering their result
+once and cancelable, and one cut short by a host exit settles as `failed` in
+its parent, never `canceled`; `stop()` flushes every resident before it
+closes any journal because a child's verdict lands in its parent's.
+`test-live-conversations.ts` covers the reasons, `test-live-controls.tsx` the
+footer and the recovery rows, and `test-conversation-transfers.ts` the older
+journals' children.
 
 The fourth reason, `connection-lost`, is a turn the agent ended on its own
 dropped backend connection. It was found on `cursor-agent acp`, which ran

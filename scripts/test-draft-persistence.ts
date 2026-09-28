@@ -78,18 +78,18 @@ console.log(
 )
 
 const { clearSubmittedDraft } = await import("../src/state/drafts.ts")
-rememberDraft("delegation:one", "original task")
-rememberDraft("delegation:two", "other conversation")
-rememberDraft("delegation:one", "new task typed before acceptance")
-clearSubmittedDraft("delegation:one", "original task")
-assert.equal(draftText("delegation:one"), "new task typed before acceptance")
-assert.equal(draftText("delegation:two"), "other conversation")
-clearSubmittedDraft("delegation:one", "new task typed before acceptance")
-assert.equal(draftText("delegation:one"), "")
-assert.equal(draftText("delegation:two"), "other conversation")
+rememberDraft("queue:one:edit", "original task")
+rememberDraft("queue:two:edit", "other conversation")
+rememberDraft("queue:one:edit", "new task typed before acceptance")
+clearSubmittedDraft("queue:one:edit", "original task")
+assert.equal(draftText("queue:one:edit"), "new task typed before acceptance")
+assert.equal(draftText("queue:two:edit"), "other conversation")
+clearSubmittedDraft("queue:one:edit", "new task typed before acceptance")
+assert.equal(draftText("queue:one:edit"), "")
+assert.equal(draftText("queue:two:edit"), "other conversation")
 assert.ok(saved.get("mako.session-drafts.v1")?.includes("other conversation"))
 console.log(
-  "Delegation drafts persist per conversation; late acceptance preserves newer text"
+  "Edit drafts persist per key; late acceptance preserves newer text"
 )
 writeDraftStorage("preview-proof", "main draft")
 Object.assign(globalThis, { location: { search: "?preview=one" } })

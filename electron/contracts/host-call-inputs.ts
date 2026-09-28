@@ -233,10 +233,6 @@ export const hostCallInputs = {
       })
       .optional(),
   ]),
-  "mako:live-delegate": z.tuple([
-    z.string(),
-    z.object({ id: z.string(), provider: z.string(), task: z.string() }),
-  ]),
   "mako:live-earlier": z.tuple([z.string()]),
   "mako:live-edit-queued": z.tuple([
     z.string(),

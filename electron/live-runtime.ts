@@ -4,7 +4,6 @@ import type {
   LiveSnapshot,
   LiveBatch,
   LiveSessionState,
-  LiveStartOptions,
   HostEvent,
   LiveDriverEvent,
   McpRegistrySnapshot,
@@ -124,13 +123,6 @@ export interface LiveAccess {
   close(id: string): Promise<void>
   pending(resident: Resident): ContextTransfer | undefined
   storageFailed(resident: Resident, boundary: FailureBoundary): void
-  open(
-    provider: string,
-    cwd: string,
-    options: LiveStartOptions,
-    ancestry?: ConversationControl["ancestry"],
-    actor?: Actor
-  ): Promise<LiveSessionState>
   /** A conversation acting through Mako's tools, named by its Session. */
   agentActor(conversationId: string): Actor | undefined
 }

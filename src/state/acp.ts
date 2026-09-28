@@ -406,28 +406,6 @@ export const acp = {
     return acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, prefsStore.get().newThreadsInWorktree)
   },
 
-  async delegate(provider: string, task: string): Promise<boolean> {
-    const parent = activeLiveAcp(acpStore.get())
-    if (!parent || !hasBridge()) return false
-    const id = crypto.randomUUID()
-    try {
-      applyLiveSnapshot(
-        await getMako().liveDelegate(parent.key, { id, provider, task })
-      )
-      return true
-    } catch (error) {
-      const snapshot = await getMako()
-        .liveSnapshot(parent.key)
-        .catch(() => null)
-      if (snapshot?.control?.children.some((child) => child.id === id)) {
-        applyLiveSnapshot(snapshot)
-        return true
-      }
-      toast.error(error instanceof Error ? error.message : String(error))
-      return false
-    }
-  },
-
   async cancelChild(childId: string): Promise<void> {
     const parent = activeLiveAcp(acpStore.get())
     if (!parent || !hasBridge()) return

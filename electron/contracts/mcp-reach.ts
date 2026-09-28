@@ -20,9 +20,6 @@ export const MAKO_RUNTIME_SERVERS: ReadonlySet<string> = new Set([
   "mako-backend",
 ])
 
-/** Every provider also receives Mako's conversation tools at launch. */
-export const MAKO_CONVERSATIONS_SERVER = "mako-conversations"
-
 const ALL_TRANSPORTS: readonly McpTransport[] = ["stdio", "http", "sse"]
 const LOCAL_AND_HTTP: readonly McpTransport[] = ["stdio", "http"]
 

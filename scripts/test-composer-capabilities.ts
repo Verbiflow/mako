@@ -264,7 +264,6 @@ assert.deepEqual(
   [
     ["mako-backend", true, "built in", null],
     ["mako-control", true, "built in", null],
-    ["mako-conversations", true, "built in", null],
     ["drifted", false, null, null],
     ["github", false, null, "codex"],
     ["linear", false, "project", null],
@@ -273,7 +272,8 @@ assert.deepEqual(
 )
 assert.equal(claudeServers.find((item) => item.name === "mako-backend")?.description, "Mako skills, integrations, and Slack")
 assert.equal(claudeServers.find((item) => item.name === "github")?.description, "npx -y github")
-assert.ok(isMakoServerName("mako-conversations"))
+assert.ok(isMakoServerName("mako-control"))
+assert.ok(!isMakoServerName("mako-conversations"), "the retired conversation tools are nobody's now")
 assert.ok(!isMakoServerName("github"))
 
 const CLAUDE = mcpTransportsFor("sdk")
@@ -294,7 +294,7 @@ const search = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, 
 assert.deepEqual(search.groups.map((group) => group.label), ["MCP servers"], "an empty group is dropped")
 assert.deepEqual(
   search.groups[0]?.matches.map((match) => match.item.name),
-  ["mako-backend", "mako-control", "mako-conversations"]
+  ["mako-backend", "mako-control"]
 )
 assert.deepEqual(search.groups[0]?.matches[0]?.indices, [0, 1, 2, 3], "name hits carry glyph positions for highlighting")
 
@@ -315,7 +315,7 @@ assert.deepEqual(
 const fuzzyHit = capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, "fd")
 assert.equal(fuzzyHit.groups[0]?.matches[0]?.item.name, "frontend-design")
 
-assert.deepEqual(capabilityCatalog(null, null, "claude", CLAUDE, "").groups.map((group) => [group.label, group.matches.map((match) => match.item.name)]), [["MCP servers", ["mako-conversations"]]], "before discovery only the launch-attached conversation tools are known")
+assert.deepEqual(capabilityCatalog(null, null, "claude", CLAUDE, "").groups, [], "before discovery nothing is known")
 assert.equal(capabilityCatalog(skillsSnapshot, mcpSnapshot, "claude", CLAUDE, "zzzz").groups.length, 0)
 
 console.log("composer capabilities ok")

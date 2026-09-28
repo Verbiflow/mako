@@ -137,8 +137,6 @@ export class LiveConversations {
       residencyChanged: (resident) => this.scheduleHibernation(resident),
       driverEvents: (resident, bindingId) =>
         this.driverEvents(resident, bindingId),
-      open: (provider, cwd, options, ancestry, actor) =>
-        this.open(provider, cwd, options, ancestry, actor),
       agentActor: (conversationId) => this.agentActor(conversationId),
     }
     this.checkpoints = new LiveCheckpoints(access, (id, input) =>
@@ -687,7 +685,7 @@ export class LiveConversations {
         )
       return Promise.resolve(existing.snapshot.session)
     }
-    const start = this.open(provider, cwd, options, undefined, actor)
+    const start = this.open(provider, cwd, options, actor)
     this.starts.set(options.conversationId, start)
     void start
       .finally(() => this.starts.delete(options.conversationId))
@@ -699,7 +697,6 @@ export class LiveConversations {
     provider: string,
     cwd: string,
     options: LiveStartOptions,
-    ancestry?: ConversationControl["ancestry"],
     actor?: Actor
   ): Promise<LiveSessionState> {
     const driver = this.dependencies.driver(provider)
@@ -731,7 +728,6 @@ export class LiveConversations {
       control: {
         children: [],
         merges: [],
-        ancestry,
         session,
         activeBindingId: id,
         bindings: [

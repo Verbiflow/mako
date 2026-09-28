@@ -77,7 +77,6 @@ if (!worker) {
       assert.equal(conversation, "packaged-mcp")
       assert.equal(binding, "fixture")
     },
-    availableProviders: () => [], delegate: async () => {}, childTasks: () => [], cancelChild: () => {},
   }, (binding, operation, signal) => sessions.request(binding, operation, signal))
   let client = new Client({ name: "packaged-acceptance", version: "1" })
   let fixture, sampler

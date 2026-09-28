@@ -115,7 +115,6 @@ async function check() {
         assert.equal(selected, profile.id, "the picker took the selection")
         assert.ok(header.includes(profile.label), `header names the selected provider: ${header}`)
         assert.ok(listed.some((row) => row.builtIn && row.group === "MCP servers"), "a built-in Mako server wears the fin")
-        assert.ok(listed.some((row) => row.title === "mako-conversations"), "the launch-attached conversation tools are listed")
         report[`${theme}:${profile.id}`] = listed
         await clearInput()
       }

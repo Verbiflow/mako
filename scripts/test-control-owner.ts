@@ -22,7 +22,6 @@ const sessions = new ControlSessions(async () => undefined)
 const reasons: string[] = []
 const grants = await startConversationMcp({
   authorizeAgent: (conversationId, bindingId) => { assert.equal(conversationId, "conversation"); assert.equal(bindingId, "binding") },
-  availableProviders: () => [], delegate: async () => {}, childTasks: () => [], cancelChild: () => {},
 }, (bindingId, operation, signal) => sessions.request(bindingId, operation, signal))
 const agent = new Client({ name: "desktop-agent", version: "1" })
 try {

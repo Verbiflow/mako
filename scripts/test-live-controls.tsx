@@ -243,7 +243,7 @@ control.ancestry = {
 }
 publish()
 const relations = renderToStaticMarkup(<ConversationRelations />)
-assert.match(relations, />Delegate</)
+assert.match(relations, />Forked</)
 assert.doesNotMatch(relations, /<textarea|<form|<select/)
 console.log(
   "Rendered controls: completed receipts are on demand; pending/uncertain actions and saved input remain visible; the closed task dialog adds no form to the transcript"

@@ -260,15 +260,8 @@ async function startAcp(
   const executable = resolveExecutable(spec.command, env)
   if (!executable) throw new Error(`${harness} is not installed`)
 
-  const conversationMcp: McpServer | null = options.conversationTools ? {
-    type: "http",
-    name: "mako-conversations",
-    url: options.conversationTools.url,
-    headers: [{ name: "Authorization", value: `Bearer ${options.conversationTools.token}` }],
-  } : null
   const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
-  if (conversationMcp) preparedServers.push(conversationMcp)
-  const controlMcp: McpServer | null = options.conversationTools?.controlUrl ? {
+  const controlMcp: McpServer | null = options.conversationTools ? {
     type: "http", name: "mako-control", url: options.conversationTools.controlUrl,
     headers: [{ name: "Authorization", value: `Bearer ${options.conversationTools.token}` }],
   } : null
@@ -495,7 +488,6 @@ async function startAcp(
           transports
         )
       : []
-    if (conversationMcp && mcpCapabilities?.http) live.mcpServers.push(conversationMcp)
     if (controlMcp && mcpCapabilities?.http) live.mcpServers.push(controlMcp)
     const resume = options.resume
     const session = await openAuthenticatedSession({

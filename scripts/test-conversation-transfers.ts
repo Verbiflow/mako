@@ -22,6 +22,7 @@ import type {
   HostEvent,
   TransferInput,
 } from "../electron/shared.ts"
+import type { ConversationControl } from "../electron/contracts/conversation-control.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-transfers-"))
 const livePids = new Set([41, 42])
@@ -376,133 +377,44 @@ try {
     readFileSync(mergeContext.file, "utf8"),
     /Original answer with the decision/
   )
-  const childInput = {
-    id: randomUUID(),
-    provider: "alpha",
-    task: "Inspect just the parser boundary",
-  }
-  mcp = await startConversationMcp(owner)
+  mcp = await startConversationMcp(owner, async () => ({ content: [{ type: "text", text: "control ran" }] }))
   const credential = mcp.mint(beta.id, id)
-  const unauthenticated = await fetch(credential.url, {
+  const unauthenticated = await fetch(credential.controlUrl, {
     method: "POST",
     body: "{}",
   })
   assert.equal(unauthenticated.status, 401)
   const revokedCredential = mcp.mint(beta.id, id)
   mcp.revoke(beta.id, id)
-  const revoked = await fetch(revokedCredential.url, {
+  const revoked = await fetch(revokedCredential.controlUrl, {
     method: "POST",
     headers: { Authorization: `Bearer ${revokedCredential.token}` },
     body: "{}",
   })
   assert.equal(revoked.status, 401)
   const activeCredential = mcp.mint(beta.id, id)
+  const retired = await fetch(activeCredential.controlUrl.replace(/\/control$/, "/mcp"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${activeCredential.token}` },
+    body: "{}",
+  })
+  assert.equal(retired.status, 405, "the retired conversation tools answer nothing")
   mcpClient = new Client({ name: "mako-transfer-test", version: "1.0.0" })
   await mcpClient.connect(
-    new StreamableHTTPClientTransport(new URL(activeCredential.url), {
+    new StreamableHTTPClientTransport(new URL(activeCredential.controlUrl), {
       requestInit: {
         headers: { Authorization: `Bearer ${activeCredential.token}` },
       },
     })
   )
   const listed = await mcpClient.listTools()
-  assert.ok(listed.tools.some((tool) => tool.name === "mako_delegate_task"))
-  const parentRunning = sessions.get(beta.id)!
-  owner.observe({
-    type: "live-session",
-    session: { ...parentRunning, currentMode: "restricted" },
-  })
-  const refused = await mcpClient.callTool({
-    name: "mako_delegate_task",
-    arguments: childInput,
-  })
-  assert.equal(
-    refused.isError,
-    true,
-    "provider-specific restrictions cannot silently expand through delegation"
-  )
-  assert.equal(owner.snapshot(childInput.id), null)
-  owner.observe({
-    type: "live-session",
-    session: { ...parentRunning, currentMode: null },
-  })
+  assert.deepEqual(listed.tools.map((tool) => tool.name), ["js", "js_reset"], "a grant reaches only Mako's control tools")
+  const ran = await mcpClient.callTool({ name: "js", arguments: { code: "1" } })
+  assert.equal(ran.isError, undefined, JSON.stringify(ran))
   assert.throws(() => owner.authorizeAgent(id, randomUUID()), /no longer owns/)
-  const delegated = await mcpClient.callTool({
-    name: "mako_delegate_task",
-    arguments: childInput,
-  })
-  assert.equal(delegated.isError, undefined, JSON.stringify(delegated))
-  assert.equal(JSON.stringify(delegated).includes(activeCredential.token), false)
-  assert.equal(
-    JSON.stringify(owner.snapshot(id)).includes(activeCredential.token),
-    false
-  )
-  await assert.rejects(
-    owner.delegate(id, { ...childInput, id }),
-    /another conversation/
-  )
-  assert.equal(owner.snapshot(id)?.session.id, id)
-  await owner.delegate(id, childInput)
-  await until(() => owner.snapshot(childInput.id)?.session.status === "running")
-  assert.equal(
-    sent.filter((dispatch) => dispatch.id === childInput.id).length,
-    1
-  )
-  assert.equal(
-    sent.at(-1)?.text,
-    childInput.task,
-    "delegation gives only the explicit task, not hidden parent history"
-  )
-  owner.observe({
-    type: "live-permission",
-    request: {
-      id: "child-permission",
-      sessionId: childInput.id,
-      title: "May I read the fixture?",
-      options: [],
-    },
-  })
-  assert.equal(
-    owner.snapshot(id)?.control?.children[0]?.status,
-    "needs-permission"
-  )
-  assert.equal(owner.snapshot(id)?.control?.children[0]?.delivery, "pending")
-  const sentBeforeChild = sent.length
-  finish(childInput.id, "Child found the missing guard")
-  await until(
-    () => owner.snapshot(id)?.control?.children[0]?.delivery === "queued"
-  )
-  assert.equal(
-    sent.length,
-    sentBeforeChild,
-    "child result waits behind the active parent run"
-  )
-  assert.equal(
-    owner.snapshot(id)?.session.status,
-    "running",
-    "child terminal cannot complete parent"
-  )
   finish(beta.id, "Parent work completed")
-  await until(() => sent.length === sentBeforeChild + 1)
-  assert.match(sent.at(-1)?.text ?? "", /Use the child's result/)
-  assert.equal(owner.snapshot(id)?.control?.children[0]?.delivery, "delivered")
-  finish(beta.id, "Incorporated the child result")
-  const canceled = {
-    id: randomUUID(),
-    provider: "alpha",
-    task: "Canceled task",
-  }
-  await owner.delegate(id, canceled)
-  await until(() => owner.snapshot(canceled.id)?.session.status === "running")
-  owner.cancelChild(id, canceled.id)
-  finish(canceled.id, "Late canceled child output")
-  assert.equal(
-    owner
-      .snapshot(id)
-      ?.control?.children.find((child) => child.id === canceled.id)?.delivery,
-    "dismissed"
-  )
-  assert.throws(() => owner.cancelChild(id, randomUUID()), /not a child/)
+  const afterGrant = await mcpClient.callTool({ name: "js", arguments: { code: "1" } })
+  assert.equal(afterGrant.isError, true, "a grant stops working once its turn ends")
 
   // A failed activation write must neither dispatch nor replace the working source.
   const durableFailure = command(
@@ -627,34 +539,59 @@ try {
   )
   const idleForkId = randomUUID()
   owner.fork(id, { ...forkInput, id: idleForkId })
-  const interruptedChild = {
-    id: randomUUID(),
-    provider: "beta",
-    task: "Interrupted child fixture",
+  // Child tasks delegated before Delegate was retired, as journals from then hold them.
+  const parentRequest = owner.snapshot(id)?.requests.findLast((candidate) => candidate.status === "completed")?.id
+  assert.ok(parentRequest)
+  const answered = randomUUID()
+  const cutShort = randomUUID()
+  const dismissed = randomUUID()
+  const oldChildren = [answered, cutShort, dismissed]
+  for (const child of oldChildren) {
+    await owner.start("alpha", root, { conversationId: child })
+    await until(() => owner.snapshot(child)?.session.status === "ready")
+    owner.submit(child, child, `Old delegated task ${child}`)
+    await until(() => owner.snapshot(child)?.session.status === "running")
   }
-  await owner.delegate(id, interruptedChild)
-  await until(
-    () => owner.snapshot(interruptedChild.id)?.session.status === "running"
-  )
+  finish(answered, "The old child found the guard")
+  finish(dismissed, "Output nobody wants now")
+  await until(() => [answered, dismissed].every((child) => owner.snapshot(child)?.requests.every((candidate) => candidate.status === "completed") === true))
   const count = sent.length
   owner.stop()
+  const seed = (conversation: string, change: (control: ConversationControl) => Partial<ConversationControl>) => {
+    const journal = new LiveJournal(root, conversation)
+    const previous = journal.read()
+    assert.ok(previous?.control)
+    journal.commit({ ...previous, control: { ...previous.control, ...change(previous.control) } }, previous)
+    journal.close()
+  }
+  for (const child of oldChildren)
+    seed(child, () => ({ ancestry: { kind: "delegation", parentId: id, sourceRevision: 1, point: parentRequest } }))
+  seed(id, (control) => ({
+    children: [
+      ...control.children,
+      ...oldChildren.map((child) => ({
+        id: child,
+        parentRequestId: parentRequest,
+        provider: "alpha",
+        task: `Old delegated task ${child}`,
+        status: "working" as const,
+        delivery: "pending" as const,
+        deliveryId: randomUUID(),
+      })),
+    ],
+  }))
   owner = createOwner()
   assert.equal(owner.snapshot(closingId)?.session.status, "closed")
   assert.equal(owner.snapshot(idleForkId)?.session.status, "ready")
   const recovered = owner.snapshot(id)
   assert.equal(recovered?.session.connection, "disconnected")
-  assert.equal(
-    recovered?.control?.children.find(
-      (child) => child.id === interruptedChild.id
-    )?.status,
-    "failed"
-  )
-  await owner.delegate(id, interruptedChild)
-  assert.equal(
-    sent.length,
-    count,
-    "recovered child intent never replays execution"
-  )
+  const oldChild = (child: string) => owner.snapshot(id)?.control?.children.find((candidate) => candidate.id === child)
+  assert.equal(oldChild(answered)?.status, "completed")
+  assert.equal(oldChild(cutShort)?.status, "failed", "a child the host exit cut short failed; nobody canceled it")
+  assert.equal(oldChild(dismissed)?.status, "completed")
+  owner.cancelChild(id, dismissed)
+  assert.equal(oldChild(dismissed)?.delivery, "dismissed")
+  assert.equal(sent.length, count, "recovering old children runs nothing")
   assert.deepEqual(
     recovered?.control?.bindings.map((binding) => binding.provider).sort(),
     ["alpha", "beta"],
@@ -669,6 +606,18 @@ try {
   assert.ok(
     events.some((event) => event.type === "live-batch" && event.batch.control)
   )
+  owner.submit(id, randomUUID(), "Carry on after the upgrade")
+  await until(() => sent.at(-1)?.text.includes("Carry on after the upgrade") === true)
+  finish(owner.snapshot(id)!.control!.activeBindingId, "Carried on")
+  await until(() => oldChildren.every((child) => oldChild(child)?.delivery !== "pending"))
+  const deliveries = sent.filter((dispatch) => /The delegated task/.test(dispatch.text))
+  assert.equal(deliveries.length, 1, "results reach the parent one turn at a time")
+  assert.match(deliveries[0]?.text ?? "", new RegExp(`The delegated task ${answered} is completed`))
+  finish(owner.snapshot(id)!.control!.activeBindingId, "Used the old result")
+  await until(() => sent.filter((dispatch) => /The delegated task/.test(dispatch.text)).length === 2)
+  assert.match(sent.at(-1)?.text ?? "", new RegExp(`The delegated task ${cutShort} is failed`))
+  finish(owner.snapshot(id)!.control!.activeBindingId, "Noted the failed one")
+  assert.equal(sent.some((dispatch) => /The delegated task/.test(dispatch.text) && dispatch.text.includes(dismissed)), false, "a dismissed result never reaches the parent")
   const retainedId = randomUUID()
   await owner.start("alpha", root, { conversationId: retainedId })
   await until(() => owner.snapshot(retainedId)?.session.status === "ready")
@@ -760,7 +709,7 @@ try {
   assert.equal(sent.filter((item) => item.text.includes("Cold current binding")).length, 1, "cold current-binding retries retain their command fingerprint")
 
   console.log(
-    "Transfers verified: stable identity, exact attachments, A→B→A delta, duplicate receipts, late events, busy ordering, startup refusal, close-during-start, lazy forks, merge-back, child permission/delivery/cancel, real MCP authorization, and restart recovery"
+    "Transfers verified: stable identity, exact attachments, A→B→A delta, duplicate receipts, late events, busy ordering, startup refusal, close-during-start, lazy forks, merge-back, control grant authorization, children from the retired Delegate flow (settle, deliver once, dismiss), and restart recovery"
   )
 } finally {
   await mcpClient?.close()
