@@ -351,18 +351,17 @@ function openThreadStore(): ThreadStore | null {
 installThreadStore(threadStore)
 const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
 /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
+const conversationsIn = (path: string, status: (value: string) => boolean) => liveConversations
+  .summaries()
+  .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
+  .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
 const threadWorktrees = threadStore
   ? new ThreadWorktreeService(join(realpathSync(dirname(threadStore.path)), "worktrees"), threadStore, async (path) => {
-      const inside = (cwd: string) => cwd === path || cwd.startsWith(`${path}/`)
-      const conversations = liveConversations
-        .summaries()
-        .filter(({ session }) => session.status !== "closed" && inside(session.cwd))
-        .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
       const shells = (await terminalClients?.runningShells().catch(() => []) ?? [])
-        .filter((shell) => inside(shell.cwd))
+        .filter((shell) => shell.cwd === path || shell.cwd.startsWith(`${path}/`))
         .map((shell) => `the terminal “${shell.title}”`)
-      return [...conversations, ...shells]
-    })
+      return [...conversationsIn(path, (status) => status !== "closed"), ...shells]
+    }, async (path) => conversationsIn(path, (status) => status === "running"))
   : null
 hostLog("host", "starting", {
   pid: process.pid,
@@ -1539,6 +1538,8 @@ function bindIpc() {
       try {
         await liveConversations.start(harness, startCwd, { ...options, worktree: undefined, tuning })
       } catch (error) {
+        // A refused start gives its worktree back; one with anything in it stays, listed in Settings.
+        if (worktree) await threadWorktrees?.abandon(options.conversationId).catch(() => undefined)
         if (!(error instanceof SessionHeldError) || !options.threadPath) throw error
         const resolved = await continuation.resolve(options.threadPath)
         if (resolved.transport !== "attached") throw error
@@ -2082,8 +2083,11 @@ app.whenReady().then(async () => {
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
   installThreadGroupsIpc(threadStore, liveConversations)
   installThreadWorktreesIpc(threadWorktrees)
-  void threadWorktrees?.tidy().catch((error) =>
+  const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>
     hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))
+  tidyWorktrees()
+  // Spares a project stopped wanting go after a day even while the host keeps running.
+  setInterval(tidyWorktrees, 60 * 60_000).unref()
   installCheckoutHeadsIpc(checkoutHeads)
   application = installApplicationIpc({
     live: liveConversations,

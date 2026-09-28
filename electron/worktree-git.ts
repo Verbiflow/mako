@@ -71,3 +71,13 @@ export function succeeds(cwd: string, args: string[]): Promise<boolean> {
  */
 const CHECKOUT_WORKERS = Math.min(process.platform === "darwin" ? 4 : 8, availableParallelism())
 export const PARALLEL_CHECKOUT = ["-c", `checkout.workers=${CHECKOUT_WORKERS}`, "-c", "checkout.thresholdForParallelism=100"]
+
+let mergesInMemory: Promise<boolean> | undefined
+/** Whether this Git has `merge-tree --write-tree` (2.38 and later), which merges without touching a checkout. */
+export function mergesWithoutCheckout(): Promise<boolean> {
+  mergesInMemory ??= git(process.cwd(), ["version"]).then((text) => {
+    const [major = 0, minor = 0] = (/(\d+)\.(\d+)/.exec(text) ?? []).slice(1).map(Number)
+    return major > 2 || (major === 2 && minor >= 38)
+  }, () => false)
+  return mergesInMemory
+}

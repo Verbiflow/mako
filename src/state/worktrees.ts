@@ -6,6 +6,7 @@ import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview 
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
+import { confirmAction } from "@/state/confirm"
 import { createHook, createStore } from "@/state/store"
 
 /**
@@ -115,8 +116,16 @@ export function readWorktreeReviewDiffs(path: string): Promise<{ diffs: GitDiff[
   return getMako().worktreeReviewDiffs(path)
 }
 
-/** Merge the worktree's branch into the main checkout's branch; once it's in, removing the worktree is one click. */
-export async function mergeWorktree(worktree: ThreadWorktree): Promise<boolean> {
+/** Merge the worktree's branch into the main checkout's branch, once asked; once it's in, removing the worktree is one click. */
+export async function mergeWorktree(worktree: ThreadWorktree, review: Pick<WorktreeReview, "commits" | "into">, onConfirmed?: () => void): Promise<boolean> {
+  const into = review.into ?? "the project's branch"
+  const confirmed = await confirmAction({
+    title: `Merge ${worktree.branch} into ${into}?`,
+    body: `${review.commits === 1 ? "Its commit goes" : `Its ${review.commits} commits go`} into ${into} in the project checkout now.`,
+    confirm: `Merge into ${into}`,
+  })
+  if (!confirmed) return false
+  onConfirmed?.()
   try {
     const { branch, into } = await getMako().mergeWorktree(worktree.path)
     toast(`Merged into ${into}`, {
@@ -143,8 +152,18 @@ export function wantSpareWorktrees(cwd: string): void {
   void getMako().wantWorktree(cwd).catch(() => wanted.delete(cwd))
 }
 
-/** Remove a worktree; its branch keeps whatever was committed there. */
-export async function removeWorktree(worktree: ThreadWorktree): Promise<void> {
+type RemovableWorktree = Pick<ThreadWorktree, "path" | "branch">
+const folderOf = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
+
+/** Remove a worktree once asked; its branch keeps whatever was committed there. */
+export async function removeWorktree(worktree: RemovableWorktree): Promise<void> {
+  const confirmed = await confirmAction({
+    title: `Remove the worktree ${folderOf(worktree.path)}?`,
+    body: `Its folder is deleted, with the files Git ignores there, such as .env copies and installed packages. ${worktree.branch} keeps its commits.`,
+    confirm: "Remove worktree",
+    tone: "negative",
+  })
+  if (!confirmed) return
   try {
     const { worktrees } = await getMako().removeWorktree(worktree.path)
     reads += 1
@@ -163,14 +182,23 @@ export async function readWorktreeInventory(): Promise<WorktreeInventory> {
 
 /** Nothing would be lost and nothing stopped: its work is on the main checkout's branch, or it never had any. */
 export function removable(worktree: WorktreeDetail): boolean {
-  return worktree.changes === 0 && worktree.users.length === 0 && (worktree.landing.kind === "merged" || worktree.landing.kind === "empty")
+  return !worktree.held && worktree.users.length === 0 && (worktree.landing.kind === "merged" || worktree.landing.kind === "empty")
 }
 
-/** Remove every worktree whose work landed or never started; their branches stay. */
+/** Remove every worktree whose work landed or never started, once asked; their branches stay. */
 export async function removeLandedWorktrees(worktrees: readonly WorktreeDetail[]): Promise<void> {
+  const going = worktrees.filter(removable)
+  if (!going.length) return
+  const confirmed = await confirmAction({
+    title: going.length === 1 ? `Remove the worktree ${folderOf(going[0]?.path ?? "")}?` : `Remove ${going.length} worktrees?`,
+    body: "Their work is on the project's branch or they never made a commit. Their folders are deleted, with the files Git ignores there; their branches stay.",
+    confirm: going.length === 1 ? "Remove worktree" : `Remove ${going.length} worktrees`,
+    tone: "negative",
+  })
+  if (!confirmed) return
   const failed: string[] = []
   let removed = 0
-  for (const worktree of worktrees.filter(removable)) {
+  for (const worktree of going) {
     try {
       const { worktrees: left } = await getMako().removeWorktree(worktree.path)
       reads += 1

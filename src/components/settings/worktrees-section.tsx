@@ -21,7 +21,7 @@ function Landing({ worktree }: { worktree: WorktreeDetail }) {
 /** Why the Remove button is off, or what it does. */
 function removeHint(worktree: WorktreeDetail): string {
   if (worktree.users.length) return `In use by ${worktree.users.join(", ")}`
-  if (worktree.changes) return "Commit or discard its uncommitted changes first"
+  if (worktree.held) return worktree.held
   return `Remove the folder; ${worktree.branch} keeps its commits`
 }
 
@@ -37,7 +37,9 @@ function WorktreeRow({ worktree, onRemove }: { worktree: WorktreeDetail; onRemov
           <span className="truncate font-mono text-ui text-foreground">{worktree.branch}</span>
           <Landing worktree={worktree} />
           {worktree.changes ? <Chip tone="caution">{worktree.changes} uncommitted</Chip> : null}
+          {worktree.held && !worktree.changes ? <Chip tone="caution">Work under way</Chip> : null}
           {worktree.users.length ? <Chip tone="caution">In use</Chip> : null}
+          {worktree.thread ? null : <Chip>No Thread</Chip>}
         </div>
         <div className="mt-0.5 truncate text-label text-faint">
           {place}
@@ -52,7 +54,7 @@ function WorktreeRow({ worktree, onRemove }: { worktree: WorktreeDetail; onRemov
         label={removeHint(worktree)}
         size="xs"
         className="hover:not-disabled:bg-negative/12 hover:not-disabled:text-negative"
-        disabled={worktree.changes > 0 || worktree.users.length > 0}
+        disabled={Boolean(worktree.held) || worktree.users.length > 0}
         onClick={() => onRemove(worktree)}
       >
         <Trash2Icon />
@@ -109,7 +111,7 @@ export function WorktreesSection() {
               tone="outline"
               size="xs"
               disabled={busy || landed.length === 0}
-              title="Removes worktrees whose work is on their project's branch, or that never made a commit, when nothing is uncommitted and no Thread is running in them"
+              title="Removes worktrees whose work is on their project's branch, or that never made a commit, when removing them loses nothing and nothing runs in them"
               onClick={() => void act(() => removeLandedWorktrees(landed))}
             >
               <Trash2Icon className="size-3" />

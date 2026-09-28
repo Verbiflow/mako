@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Actor } from "../electron/contracts/thread-identity.js"
@@ -47,8 +47,9 @@ function repository(name: string, commit = true): string {
 }
 
 const busy = new Map<string, string[]>()
+const working = new Map<string, string[]>()
 const threads = new ThreadStore(join(root, "threads.sqlite"))
-const service = () => new ThreadWorktreeService(join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [])
+const service = () => new ThreadWorktreeService(join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [], async (path) => working.get(path) ?? [])
 
 function started(conversationId: string) {
   return threads.registerJournal({ conversationId, createdAt: Date.now(), bindings: [], harness: "codex" }, migration)
@@ -340,6 +341,97 @@ assert.equal(git(shop, "branch", "--list", refused.branch), "")
 assert.equal(existsSync(join(root, "worktrees", "receipts", `${refusedId}.json`)), false)
 await worktrees.abandon(refusedId)
 
+// Two hosts starting Threads with the same words at once never share a folder,
+// and giving one back leaves the other's work alone.
+const [twinA, twinB] = [randomUUID(), randomUUID()]
+const [madeA, madeB] = await Promise.all([worktrees.prepare(twinA, shop, "Same words"), service().prepare(twinB, shop, "Same words")])
+assert.notEqual(madeA.path, madeB.path)
+assert.notEqual(madeA.branch, madeB.branch)
+writeFileSync(join(madeA.path, "mine.txt"), "A's work\n")
+await worktrees.abandon(twinB)
+assert.equal(existsSync(madeB.path), false)
+assert.equal(readFileSync(join(madeA.path, "mine.txt"), "utf8"), "A's work\n")
+// A folder with work in it is never given back; Settings lists it in no Thread, and it can be removed from there.
+await worktrees.abandon(twinA)
+assert.equal(existsSync(join(madeA.path, "mine.txt")), true, "abandon keeps a worktree with uncommitted work")
+const loose = (await worktrees.inventory()).worktrees.find((worktree) => worktree.path === madeA.path)
+assert.equal(loose?.thread, null)
+assert.match(loose?.held ?? "", /changes that aren't committed/)
+await assert.rejects(worktrees.remove(madeA.path), /changes that aren't committed/)
+rmSync(join(madeA.path, "mine.txt"))
+await worktrees.remove(madeA.path)
+assert.equal(existsSync(madeA.path), false)
+
+// Removal never loses commits: not from a detached HEAD no branch has, nor mid-rebase.
+const detachId = randomUUID()
+started(detachId)
+const detached = await worktrees.prepare(detachId, shop, "Detached work")
+await worktrees.attach(detachId)
+git(detached.path, "checkout", "-q", "--detach")
+writeFileSync(join(detached.path, "only-here.txt"), "x\n")
+git(detached.path, "add", ".")
+git(detached.path, "commit", "-q", "-m", "on no branch")
+await assert.rejects(worktrees.remove(detached.path), /on a commit no branch has/)
+assert.match((await worktrees.inventory()).worktrees.find((worktree) => worktree.path === detached.path)?.held ?? "", /no branch has/)
+git(detached.path, "branch", "kept-from-detached")
+// A failing `--exec` stops the rebase with a clean tree, so only Git's own marker says it's under way.
+assert.throws(() => git(detached.path, "rebase", "-q", "--exec", "false", "HEAD~1"))
+await assert.rejects(worktrees.remove(detached.path), /in the middle of a rebase/)
+git(detached.path, "rebase", "--abort")
+await worktrees.remove(detached.path)
+assert.equal(existsSync(detached.path), false)
+assert.equal(git(shop, "log", "-1", "--format=%s", "kept-from-detached"), "on no branch")
+
+// A move cut short after its stash was made finds the stash again and finishes.
+const cutId = randomUUID()
+const cut = await worktrees.prepare(cutId, shop, "Cut short move")
+writeFileSync(join(shop, "web", "draft.ts"), "halfway\n")
+const cutReceipt = join(root, "worktrees", "receipts", `${cutId}.json`)
+const cutMessage = `Mako: moving to ${cut.branch}`
+writeFileSync(cutReceipt, JSON.stringify({ ...JSON.parse(readFileSync(cutReceipt, "utf8")), moving: { stash: cutMessage, files: 1 } }))
+git(shop, "stash", "push", "--include-untracked", "--message", cutMessage)
+assert.equal(await worktrees.moveChanges(cutId), 1)
+assert.equal(readFileSync(join(cut.path, "web", "draft.ts"), "utf8"), "halfway\n")
+assert.equal(git(shop, "stash", "list"), "", "the stash is dropped once its changes are in the worktree")
+assert.equal(git(shop, "status", "--porcelain"), "")
+
+// Nothing moves or merges under a turn running in the project checkout.
+const quietSource = randomUUID()
+started(quietSource)
+working.set(shop, ["“Busy”"])
+await assert.rejects(worktrees.prepareFork(quietSource, randomUUID(), shop, "Under a turn"), /“Busy” is working in shop/)
+const mergingId = randomUUID()
+started(mergingId)
+const mergeable = await worktrees.prepare(mergingId, shop, "Ready to merge")
+await worktrees.attach(mergingId)
+writeFileSync(join(mergeable.path, "feature.txt"), "done\n")
+git(mergeable.path, "add", ".")
+git(mergeable.path, "commit", "-q", "-m", "feature")
+assert.deepEqual((await worktrees.review(mergeable.path)).merge, { ok: false, reason: "“Busy” is working in the project checkout. Merge once it stops." })
+working.delete(shop)
+assert.deepEqual((await worktrees.review(mergeable.path)).merge, { ok: true, into: "main" })
+
+// A `.env` folder is a virtualenv, not settings: it stays behind. Dependency clones are
+// staged beside the checkout, where Git can't see them, and ones a stopped host left go.
+mkdirSync(join(shop, ".env.venv", "bin"), { recursive: true })
+writeFileSync(join(shop, ".env.venv", "bin", "python"), "#!/bin/sh\n")
+const venvId = randomUUID()
+const venv = await worktrees.prepare(venvId, shop, "Virtualenv left behind")
+assert.equal(existsSync(join(venv.path, ".env")), true)
+assert.equal(existsSync(join(venv.path, ".env.venv")), false)
+await worktrees.dependencies(venvId)
+assert.deepEqual(readdirSync(venv.path).filter((name) => name.includes("mako-")), [], "nothing half-made is left in the checkout")
+const staging = join(venv.path, "..", ".carrying")
+const stale = join(staging, "left-by-a-stopped-host")
+mkdirSync(stale, { recursive: true })
+utimesSync(stale, new Date(Date.now() - 2 * 60 * 60_000), new Date(Date.now() - 2 * 60 * 60_000))
+mkdirSync(join(staging, "in-flight"))
+await worktrees.tidy()
+for (let tries = 0; existsSync(stale) && tries < 100; tries += 1) await new Promise((resolve) => setTimeout(resolve, 20))
+assert.equal(existsSync(stale), false, "a clone staged over an hour ago is deleted")
+assert.equal(existsSync(join(staging, "in-flight")), true, "one being made now stays")
+rmSync(join(shop, ".env.venv"), { recursive: true })
+
 // Folders that can't have one say what to do instead.
 const plain = join(root, "plain")
 mkdirSync(plain)
@@ -350,4 +442,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, abandoned), refusals")
+console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, .env folders, stale staging, refusals")

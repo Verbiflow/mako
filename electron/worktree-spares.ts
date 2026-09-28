@@ -4,7 +4,7 @@ import { mkdir, open, readFile, readdir, rename, rm, stat, statfs, writeFile } f
 import { basename, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { carryDependencies, lockDigest, removeBelowAgents } from "./worktree-dependencies.js"
+import { CARRYING, CARRYING_STALE_MS, carryDependencies, lockDigest, removeBelowAgents } from "./worktree-dependencies.js"
 import { git, PARALLEL_CHECKOUT } from "./worktree-git.js"
 
 /** Enough for two new Threads in a row without waiting; the one after that waits for a refill. */
@@ -55,12 +55,14 @@ function alive(pid: number): boolean {
  * only one process can do.
  */
 export class WorktreeSpares {
+  private readonly root: string
   private readonly records: string
   private readonly trash: string
   private readonly projectFolder: (repoRoot: string) => string
   private filling: Promise<void> = Promise.resolve()
 
   constructor(root: string, projectFolder: (repoRoot: string) => string) {
+    this.root = root
     this.records = join(root, "spares")
     this.trash = join(root, "trash")
     this.projectFolder = projectFolder
@@ -117,6 +119,14 @@ export class WorktreeSpares {
       if (claimed && age > FILL_LOCK_MS) {
         if (existsSync(claimed.path)) await this.discard(claimed)
         await rm(path, { force: true })
+      }
+    }
+    for (const project of await readdir(this.root).catch(() => [])) {
+      const staging = join(this.root, project, CARRYING)
+      for (const name of await readdir(staging).catch(() => [])) {
+        const path = join(staging, name)
+        const age = now - ((await stat(path).catch(() => null))?.mtimeMs ?? now)
+        if (age > CARRYING_STALE_MS) void removeBelowAgents(path)
       }
     }
     for (const name of await readdir(this.trash).catch(() => [])) void emptyTrash(join(this.trash, name))
@@ -278,11 +288,12 @@ export async function setAside(repoRoot: string, path: string, trash: string): P
 }
 
 /**
- * Turn a claimed spare into the worktree at `path` on a new `branch` from
- * `base`. The reset writes only what changed since the spare was made.
+ * Turn a claimed spare into the worktree at `path` on `branch`, which the
+ * start has already created at `base`. The reset writes only what changed
+ * since the spare was made.
  */
 export async function placeSpare(spare: Spare, path: string, branch: string, base: string): Promise<void> {
   if (spare.base !== base) await git(spare.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", base])
   await git(spare.repoRoot, ["worktree", "move", "-f", "-f", spare.path, path])
-  await Promise.all([git(spare.repoRoot, ["worktree", "unlock", path]).catch(() => {}), git(path, ["checkout", "-q", "-b", branch])])
+  await Promise.all([git(spare.repoRoot, ["worktree", "unlock", path]).catch(() => {}), git(path, ["checkout", "-q", branch])])
 }

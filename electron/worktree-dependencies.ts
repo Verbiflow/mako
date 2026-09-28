@@ -12,6 +12,10 @@ const execute = promisify(execFile)
 /** Whichever of these a project has decides whether its installed packages still fit a checkout. */
 const LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]
 const DEPENDENCY_FOLDERS = new Set(["node_modules"])
+/** Beside a project's checkouts: dependency clones being made, renamed into place when whole. */
+export const CARRYING = ".carrying"
+/** A clone takes seconds; one staged longer ago than this was left by a host that stopped. */
+export const CARRYING_STALE_MS = 60 * 60_000
 
 /**
  * One `clonefile(2)` per folder: APFS clones the whole tree in the kernel.
@@ -126,8 +130,11 @@ export async function carryDependencies(repoRoot: string, checkout: string, back
   const differs = await differingLockfile(repoRoot, checkout)
   if (differs) return { carried: [], skipped: `${differs} differs from the main checkout's` }
   if (!(await sharesBlocks(repoRoot, checkout))) return { carried: [], skipped: "this volume can't share files between copies, so each would cost its full size" }
-  const staged = folders.map((entry) => ({ entry, from: join(repoRoot, entry), to: join(checkout, entry), temporary: join(checkout, dirname(entry), `.${basename(entry)}.mako-${randomUUID().slice(0, 8)}`) }))
-  await Promise.all(staged.map(({ temporary }) => mkdir(dirname(temporary), { recursive: true })))
+  // Staged beside the checkout, on its volume: inside it, Git would list the half-made clone as a change.
+  const staging = join(dirname(checkout), CARRYING)
+  const staged = folders.map((entry) => ({ entry, from: join(repoRoot, entry), to: join(checkout, entry), temporary: join(staging, randomUUID()) }))
+  await mkdir(staging, { recursive: true, mode: 0o700 })
+  await Promise.all(staged.map(({ to }) => mkdir(dirname(to), { recursive: true })))
   const cloned = await cloneTrees(staged.map(({ from, temporary }) => [from, temporary]), background)
   const carried: string[] = []
   for (const [index, { entry, to, temporary }] of staged.entries()) {

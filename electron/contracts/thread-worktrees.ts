@@ -31,9 +31,13 @@ export type WorktreeLanding =
   /** The main checkout isn't on a branch, or Git couldn't tell. */
   | { kind: "unknown" }
 
-export interface WorktreeDetail extends ThreadWorktree {
+export interface WorktreeDetail extends Omit<ThreadWorktree, "thread"> {
+  /** Null for a worktree whose start failed or was cut short, so no Thread runs in it. */
+  thread: ThreadId | null
   /** Files with uncommitted changes, untracked ones included. */
   changes: number
+  /** Why removing it now would lose work, when it would. */
+  held: string | null
   landing: WorktreeLanding
   /** What runs inside it: conversations and shells. */
   users: string[]

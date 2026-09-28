@@ -32,8 +32,7 @@ export function WorktreeReview() {
     })
   }
   const merge = async () => {
-    setMerging(true)
-    await mergeWorktree(worktree)
+    await mergeWorktree(worktree, review, () => setMerging(true))
     setMerging(false)
     reread()
   }

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
-import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
@@ -10,7 +10,7 @@ import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contrac
 import type { GitDiff } from "./contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile } from "./contracts/thread-worktrees.js"
 import { carryDependencies, ignoredEntries, lockDigest, ownBytes, removeBelowAgents, type DependencyCarry } from "./worktree-dependencies.js"
-import { git, GitError, gitExecutable, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
+import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
 import { placeSpare, setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 
 const execute = promisify(execFile)
@@ -19,6 +19,11 @@ const execute = promisify(execFile)
  * not another tool's file: a project's setup recipe will extend it.
  */
 const CARRIED = /^\.env(\..+)?$/
+/** Git's own markers for work under way, which a removal would throw away. */
+const UNDER_WAY: readonly (readonly [string, string])[] = [
+  ["rebase-merge", "rebase"], ["rebase-apply", "rebase"], ["MERGE_HEAD", "merge"],
+  ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["BISECT_LOG", "bisect"],
+]
 const CLONE_FROM_BYTES = 1024 * 1024
 const MAX_REMEMBERED_CARRIES = 64
 
@@ -38,6 +43,8 @@ const ReceiptSchema = z.object({
   spare: z.boolean().optional(),
   /** What moving the source checkout's uncommitted changes here did, so a repeated request answers the same. */
   moved: z.union([z.object({ files: z.number() }), z.object({ stash: z.string() })]).optional(),
+  /** Written before the changes are stashed, so a start cut short after that finds the stash and finishes the move. */
+  moving: z.object({ stash: z.string(), files: z.number() }).optional(),
 })
 type Receipt = z.infer<typeof ReceiptSchema>
 
@@ -105,6 +112,33 @@ async function shown(cwd: string, revision: string, path: string): Promise<strin
 }
 
 /** `map` with at most `limit` running at once, results in order. */
+/**
+ * Why removing the worktree at `path` would lose work, if it would:
+ * uncommitted files, a rebase or merge under way, or a detached HEAD on a
+ * commit no branch or tag has. Anything committed on a branch stays with it.
+ */
+async function removalBlocker(path: string, status?: string): Promise<string | undefined> {
+  const name = basename(path)
+  let changes: string
+  let gitDir: string
+  try {
+    ;[changes, gitDir] = await Promise.all([
+      status ?? git(path, ["status", "--porcelain", "--untracked-files=normal"]),
+      git(path, ["rev-parse", "--absolute-git-dir"]),
+    ])
+  } catch (error) {
+    return `Git couldn't read ${name}: ${error instanceof Error ? error.message : String(error)}`
+  }
+  if (changes) return `${name} has changes that aren't committed. Commit or discard them, then remove the worktree.`
+  const underWay = UNDER_WAY.find(([marker]) => existsSync(join(gitDir, marker)))
+  if (underWay) return `${name} is in the middle of a ${underWay[1]}. Finish or abort it, then remove the worktree.`
+  if (!(await succeeds(path, ["symbolic-ref", "-q", "HEAD"]))) {
+    const kept = await git(path, ["for-each-ref", "--count=1", "--contains", "HEAD", "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes"]).catch(() => "")
+    if (!kept) return `${name} is on a commit no branch has. Create a branch there, then remove the worktree.`
+  }
+  return undefined
+}
+
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
   // One iterator shared by every worker: each takes the next value as it frees up.
@@ -131,9 +165,11 @@ async function carryIgnored(repoRoot: string, destination: string): Promise<numb
     if (existsSync(to)) continue
     await mkdir(dirname(to), { recursive: true })
     const info = await lstat(from)
+    // A `.env` folder is a virtualenv: thousands of files whose scripts name the main checkout's path.
+    if (info.isDirectory()) continue
     if (info.isSymbolicLink()) await symlink(await readlink(from), to)
     else if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(from, to, constants.COPYFILE_EXCL)
-    else await cloneEntry(from, to, info.isDirectory())
+    else await cloneEntry(from, to, false)
     copied += 1
   }
   return copied
@@ -154,16 +190,26 @@ export class ThreadWorktreeService {
   readonly root: string
   private readonly threads: ThreadStore
   private readonly inUse: (path: string) => Promise<string[]>
+  private readonly working: (path: string) => Promise<string[]>
   private readonly pending = new Map<string, Promise<Receipt>>()
   private readonly carrying = new Map<string, Promise<DependencyCarry>>()
   private readonly wanting = new Set<Promise<void>>()
   private readonly spares: WorktreeSpares
 
-  /** `inUse` names what runs inside a folder: conversations and shells. */
-  constructor(root: string, threads: ThreadStore, inUse: (path: string) => Promise<string[]> = async () => []) {
+  /**
+   * `inUse` names what is open inside a folder, conversations and shells;
+   * `working`, the conversations there that are in the middle of a turn.
+   */
+  constructor(
+    root: string,
+    threads: ThreadStore,
+    inUse: (path: string) => Promise<string[]> = async () => [],
+    working: (path: string) => Promise<string[]> = async () => [],
+  ) {
     this.root = root
     this.threads = threads
     this.inUse = inUse
+    this.working = working
     this.spares = new WorktreeSpares(root, (repoRoot) => this.projectFolder(repoRoot))
   }
 
@@ -195,6 +241,10 @@ export class ThreadWorktreeService {
       const placed = this.threads.journalPlacement(sourceId)
       const current = placed && this.threads.worktrees().find((worktree) => worktree.thread === placed.thread)
       if (current) throw new Error(`This Thread already works in its own worktree, on ${current.branch}. Continue in that tab.`)
+      const repoRoot = await git(await realpath(cwd), ["rev-parse", "--show-toplevel"]).catch(() => "")
+      const busy = repoRoot ? await this.working(repoRoot) : []
+      if (busy.length)
+        throw new Error(`${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in ${basename(repoRoot)}. Moving its changes would pull files from under ${busy.length === 1 ? "it" : "them"}; continue once ${busy.length === 1 ? "it stops" : "they stop"}.`)
     }
     return this.prepare(forkId, cwd, name)
   }
@@ -226,14 +276,23 @@ export class ThreadWorktreeService {
    */
   async inventory(): Promise<WorktreeInventory> {
     const { worktrees } = await this.list()
-    const detailed = await mapLimited(worktrees, 4, async (worktree): Promise<WorktreeDetail> => {
+    const attached = new Set(worktrees.map((worktree) => worktree.path))
+    // Starts that failed or were cut short after their worktree was made: no Thread lists these.
+    const loose = new Map<string, Omit<WorktreeDetail, "changes" | "held" | "landing" | "users" | "bytes">>()
+    for (const { receipt, createdAt } of await this.receiptsList()) {
+      if (receipt.state !== "ready" || attached.has(receipt.path) || !existsSync(join(receipt.path, ".git"))) continue
+      const { path, repoRoot, branch, base } = receipt
+      loose.set(path, { path, thread: null, repoRoot, project: receipt.source, branch, base, createdAt })
+    }
+    const detailed = await mapLimited([...worktrees, ...loose.values()], 4, async (worktree): Promise<WorktreeDetail> => {
       const [status, landing, users, bytes] = await Promise.all([
-        git(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => ""),
+        git(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => null),
         this.landing(worktree),
         this.inUse(worktree.path),
         ownBytes(worktree.path),
       ])
-      return { ...worktree, changes: status ? status.split("\n").length : 0, landing, users, bytes }
+      const held = await removalBlocker(worktree.path, status ?? undefined) ?? null
+      return { ...worktree, changes: status ? status.split("\n").length : 0, held, landing, users, bytes }
     })
     const spares = await this.spares.recorded()
     const spareBytes = await mapLimited(spares, 4, (spare) => ownBytes(spare.path))
@@ -247,13 +306,15 @@ export class ThreadWorktreeService {
    * a squash doesn't, so a branch whose merge would leave the target's tree
    * as it is has landed too.
    */
-  private async landing(worktree: ThreadWorktree): Promise<WorktreeLanding> {
+  private async landing(worktree: Pick<ThreadWorktree, "repoRoot" | "branch" | "base">): Promise<WorktreeLanding> {
     const into = await git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
     if (!into) return { kind: "unknown" }
     try {
       const commits = Number(await git(worktree.repoRoot, ["rev-list", "--count", `${worktree.base}..${worktree.branch}`]))
       if (commits === 0) return { kind: "empty" }
       if (await succeeds(worktree.repoRoot, ["merge-base", "--is-ancestor", worktree.branch, into])) return { kind: "merged", into }
+      // A squash merge shows only through an in-memory merge, which older Git can't do.
+      if (!await mergesWithoutCheckout()) return { kind: "open", into, commits }
       const [merged, target] = await Promise.all([
         git(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]).catch(() => ""),
         git(worktree.repoRoot, ["rev-parse", `${into}^{tree}`]),
@@ -308,8 +369,11 @@ export class ThreadWorktreeService {
     if (commits === 0) return { ok: false, reason: `Nothing is committed here that ${into} doesn't have.` }
     const main = await git(worktree.repoRoot, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable")
     if (main) return { ok: false, reason: `The project checkout has uncommitted changes on ${into}.` }
-    // Merged in memory first: a conflict is found without touching either checkout.
-    if (!await succeeds(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]))
+    const busy = await this.working(worktree.repoRoot)
+    if (busy.length) return { ok: false, reason: `${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in the project checkout. Merge once ${busy.length === 1 ? "it stops" : "they stop"}.` }
+    // Merged in memory first: a conflict is found without touching either checkout. Older Git
+    // can't, and then the merge itself finds it and is aborted.
+    if (await mergesWithoutCheckout() && !await succeeds(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]))
       return { ok: false, reason: `It conflicts with ${into}. Merge ${into} into this branch and resolve it here, or open a pull request.` }
     return { ok: true, into }
   }
@@ -410,28 +474,22 @@ export class ThreadWorktreeService {
    * installed files don't hold the answer up.
    */
   async remove(path: string): Promise<ThreadWorktreeList> {
-    const worktree = this.threads.worktrees().find((candidate) => candidate.path === path)
-    if (!worktree) throw new Error("Mako didn't make this worktree, so it won't remove it.")
+    const attached = this.threads.worktrees().find((candidate) => candidate.path === path)
+    const receipts = (await this.receiptsList()).filter(({ receipt }) => receipt.path === path)
+    const repoRoot = attached?.repoRoot ?? receipts[0]?.receipt.repoRoot
+    if (!repoRoot) throw new Error("Mako didn't make this worktree, so it won't remove it.")
     const users = await this.inUse(path)
     if (users.length)
       throw new Error(`${basename(path)} is in use by ${users.join(", ")}. Stop ${users.length === 1 ? "it" : "them"}, then remove the worktree.`)
     if (existsSync(path)) {
-      let changes: string
-      try {
-        changes = await git(path, ["status", "--porcelain", "--untracked-files=normal"])
-      } catch (error) {
-        throw new Error(`Git couldn't read the worktree: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
-      }
-      if (changes) throw new Error(`${basename(path)} has changes that aren't committed. Commit or discard them, then remove the worktree.`)
-      await setAside(worktree.repoRoot, path, this.trash())
+      const blocker = await removalBlocker(path)
+      if (blocker) throw new Error(blocker)
+      await setAside(repoRoot, path, this.trash())
     } else {
-      await git(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
+      await git(repoRoot, ["worktree", "prune"]).catch(() => {})
     }
-    this.threads.detachWorktree(path)
-    for (const file of await readdir(this.receipts()).catch(() => [])) {
-      const receipt = file.endsWith(".json") ? await this.receipt(file.slice(0, -5)) : undefined
-      if (receipt?.path === path) await rm(join(this.receipts(), file), { force: true })
-    }
+    if (attached) this.threads.detachWorktree(path)
+    for (const { id } of receipts) await rm(join(this.receipts(), `${id}.json`), { force: true })
     return this.list()
   }
 
@@ -450,34 +508,55 @@ export class ThreadWorktreeService {
       return receipt.moved.files
     }
     const { repoRoot, path, branch } = receipt
-    const changed = (await git(repoRoot, ["status", "--porcelain", "--untracked-files=all"])).split("\n").filter(Boolean).length
-    if (!changed) {
-      await this.save({ ...receipt, moved: { files: 0 } })
-      return 0
-    }
-    const [head, base] = await Promise.all([git(repoRoot, ["rev-parse", "HEAD"]), git(path, ["rev-parse", "HEAD"])])
-    if (head !== base) throw new Error("The project checkout moved to another commit while the worktree was made, so its changes stayed where they are.")
     const message = `Mako: moving to ${branch}`
-    await git(repoRoot, ["stash", "push", "--include-untracked", "--message", message])
-    const stash = await git(repoRoot, ["rev-parse", "--verify", "refs/stash"])
-    try {
-      // `--index` keeps what was staged staged; Git refuses it before touching anything when it can't.
-      await git(path, ["stash", "apply", "--index", stash]).catch(() => git(path, ["stash", "apply", stash]))
-    } catch (error) {
-      await this.save({ ...receipt, moved: { stash: message } })
-      throw kept(message, error)
+    const stashes = async () => (await git(repoRoot, ["stash", "list", "--format=%H%x09%gs"])).split("\n").filter(Boolean).map((line) => line.split("\t"))
+    // A move cut short after the stash was made finds it again by its name.
+    let stash = receipt.moving ? (await stashes()).find(([, subject]) => subject?.endsWith(`: ${message}`))?.[0] : undefined
+    let changed = receipt.moving?.files ?? 0
+    if (stash && await git(path, ["status", "--porcelain", "--untracked-files=all"]).then(Boolean, () => false)) {
+      // Applied before it was cut short: the worktree already has the changes.
+    } else {
+      if (!stash) {
+        changed = (await git(repoRoot, ["status", "--porcelain", "--untracked-files=all"])).split("\n").filter(Boolean).length
+        if (!changed) {
+          await this.save({ ...receipt, moving: undefined, moved: { files: 0 } })
+          return 0
+        }
+        const [head, base] = await Promise.all([git(repoRoot, ["rev-parse", "HEAD"]), git(path, ["rev-parse", "HEAD"])])
+        if (head !== base) throw new Error("The project checkout moved to another commit while the worktree was made, so its changes stayed where they are.")
+        await this.save({ ...receipt, moving: { stash: message, files: changed } })
+        await git(repoRoot, ["stash", "push", "--include-untracked", "--message", message])
+        stash = await git(repoRoot, ["rev-parse", "--verify", "refs/stash"])
+      }
+      const applying = stash
+      try {
+        // `--index` keeps what was staged staged; Git refuses it before touching anything when it can't.
+        await git(path, ["stash", "apply", "--index", applying]).catch(() => git(path, ["stash", "apply", applying]))
+      } catch (error) {
+        await this.save({ ...receipt, moving: undefined, moved: { stash: message } })
+        throw kept(message, error)
+      }
     }
-    await this.save({ ...receipt, moved: { files: changed } })
-    const index = (await git(repoRoot, ["stash", "list", "--format=%H"])).split("\n").indexOf(stash)
+    await this.save({ ...receipt, moving: undefined, moved: { files: changed } })
+    const index = (await stashes()).findIndex(([hash]) => hash === stash)
     if (index >= 0) await git(repoRoot, ["stash", "drop", "--quiet", `stash@{${index}}`])
     return changed
   }
 
-  /** Take back a worktree made for a conversation that didn't start: its folder, its receipt, and its still-empty branch. */
+  /**
+   * Take back a worktree made for a conversation that didn't start: its
+   * folder, its receipt, and its still-empty branch. A folder that isn't
+   * exactly as the start left it (another branch, or anything a removal would
+   * lose) stays, listed in Settings as in no Thread.
+   */
   async abandon(conversationId: string): Promise<void> {
     const receipt = await this.receipt(conversationId)
     if (!receipt) return
-    if (existsSync(receipt.path)) await setAside(receipt.repoRoot, receipt.path, this.trash())
+    if (existsSync(receipt.path)) {
+      const on = await git(receipt.path, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
+      if (on !== receipt.branch || (await this.inUse(receipt.path)).length || await removalBlocker(receipt.path)) return
+      await setAside(receipt.repoRoot, receipt.path, this.trash())
+    }
     const commits = await git(receipt.repoRoot, ["rev-list", "--count", `${receipt.base}..${receipt.branch}`]).then(Number, () => 1)
     if (commits === 0) await git(receipt.repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
     await rm(join(this.receipts(), `${conversationId}.json`), { force: true })
@@ -494,6 +573,18 @@ export class ThreadWorktreeService {
 
   private trash(): string {
     return join(this.root, "trash")
+  }
+
+  private async receiptsList(): Promise<{ id: string; receipt: Receipt; createdAt: number }[]> {
+    const found: { id: string; receipt: Receipt; createdAt: number }[] = []
+    for (const file of await readdir(this.receipts()).catch(() => [])) {
+      const id = file.endsWith(".json") ? file.slice(0, -5) : ""
+      const receipt = await this.receipt(id).catch(() => undefined)
+      if (!receipt) continue
+      const createdAt = await stat(join(this.receipts(), file)).then(({ birthtimeMs, mtimeMs }) => Math.round(birthtimeMs || mtimeMs), () => Date.now())
+      found.push({ id, receipt, createdAt })
+    }
+    return found
   }
 
   private async receipt(conversationId: string): Promise<Receipt | undefined> {
@@ -516,9 +607,6 @@ export class ThreadWorktreeService {
     let receipt = await this.receipt(conversationId)
     if (receipt && receipt.source !== source) throw new Error("This conversation's worktree was made from another folder")
     if (receipt?.state === "ready" && existsSync(receipt.path)) return receipt
-    const branches = async (repoRoot: string) =>
-      new Set((await git(repoRoot, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${BRANCH_PREFIX}`])).split("\n").filter(Boolean))
-    let taken: Set<string> | undefined
     if (!receipt) {
       let repoRoot: string
       let base: string
@@ -530,8 +618,7 @@ export class ThreadWorktreeService {
         throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or switch to Local.", { cause: error })
       }
       const parent = this.projectFolder(repoRoot)
-      taken = await branches(repoRoot)
-      const slug = this.freeSlug(taken, parent, worktreeSlug(name))
+      const slug = await this.reserveSlug(repoRoot, parent, worktreeSlug(name), base)
       const path = join(parent, slug)
       const inside = relative(repoRoot, source)
       receipt = {
@@ -547,24 +634,25 @@ export class ThreadWorktreeService {
       await this.save(receipt)
     }
     let spare: Spare | undefined
-    const branched = (taken ?? await branches(receipt.repoRoot)).has(receipt.branch)
-    const existed = existsSync(receipt.path) && await succeeds(receipt.path, ["rev-parse", "--git-dir"])
+    // A receipt from before names were held by their branch may not have one yet.
+    if (!(await succeeds(receipt.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${receipt.branch}`])))
+      await git(receipt.repoRoot, ["branch", "--no-track", receipt.branch, receipt.base])
+    // `.git` rather than asking Git, which would answer for a repository around an empty folder.
+    const existed = existsSync(join(receipt.path, ".git"))
     if (!existed) {
-      spare = branched ? undefined : await this.fromSpare(receipt)
+      spare = await this.fromSpare(receipt)
       if (!spare) {
         await mkdir(dirname(receipt.path), { recursive: true, mode: 0o700 })
         try {
-          await git(receipt.repoRoot, branched
-            ? [...PARALLEL_CHECKOUT, "worktree", "add", receipt.path, receipt.branch]
-            : [...PARALLEL_CHECKOUT, "worktree", "add", "-b", receipt.branch, receipt.path, receipt.base])
+          await git(receipt.repoRoot, [...PARALLEL_CHECKOUT, "worktree", "add", receipt.path, receipt.branch])
         } catch (error) {
           throw new Error(`Git couldn't create the worktree: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
         }
       }
     }
-    // A start cut short between placing a spare and branching it finishes here.
+    // A start cut short between placing a spare and checking out its branch finishes here.
     if (existed && !(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"])))
-      await git(receipt.path, branched ? ["checkout", "-q", receipt.branch] : ["checkout", "-q", "-b", receipt.branch])
+      await git(receipt.path, ["checkout", "-q", receipt.branch])
     const copied = await carryIgnored(receipt.repoRoot, receipt.path)
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true
@@ -585,8 +673,8 @@ export class ThreadWorktreeService {
     } catch {
       await this.spares.discard(spare)
       if (!existsSync(receipt.path)) return undefined
-      // Moved but not branched: branch it here rather than leave it detached.
-      if (!(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"]))) await git(receipt.path, ["checkout", "-q", "-b", receipt.branch])
+      // Moved but not on its branch: check it out here rather than leave it detached.
+      if (!(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"]))) await git(receipt.path, ["checkout", "-q", receipt.branch])
     }
     await this.spares.used(spare)
     // Its dependencies were cloned for the lockfiles of that moment; if either side's changed since, they go.
@@ -615,11 +703,24 @@ export class ThreadWorktreeService {
     }
   }
 
-  private freeSlug(branches: ReadonlySet<string>, parent: string, slug: string): string {
-    for (let n = 1; n <= 50; n += 1) {
-      const candidate = n === 1 ? slug : `${slug}-${n}`
-      if (!existsSync(join(parent, candidate)) && !branches.has(`${BRANCH_PREFIX}${candidate}`)) return candidate
+  /**
+   * A name no other worktree has, held by creating its branch at `base`. Git
+   * creates a branch only when it doesn't exist, so two starts, in this host
+   * or another sharing the folder, never get the same name and folder.
+   */
+  private async reserveSlug(repoRoot: string, parent: string, slug: string, base: string): Promise<string> {
+    const taken = new Set((await git(repoRoot, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${BRANCH_PREFIX}`])).split("\n").filter(Boolean))
+    const candidates = Array.from({ length: 50 }, (_, index) => index === 0 ? slug : `${slug}-${index + 1}`)
+    candidates.push(`${slug}-${randomUUID().slice(0, 6)}`)
+    for (const candidate of candidates) {
+      if (taken.has(`${BRANCH_PREFIX}${candidate}`) || existsSync(join(parent, candidate))) continue
+      try {
+        await git(repoRoot, ["branch", "--no-track", `${BRANCH_PREFIX}${candidate}`, base])
+        return candidate
+      } catch (error) {
+        if (!(error instanceof GitError && /already exists/i.test(error.stderr))) throw error
+      }
     }
-    return `${slug}-${randomUUID().slice(0, 6)}`
+    throw new Error(`Every name for this worktree is taken in ${basename(repoRoot)}. Remove some mako/ branches, then try again.`)
   }
 }

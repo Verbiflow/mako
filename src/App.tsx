@@ -4,6 +4,7 @@ import { bindNotifications } from "@/state/notifications-desk"
 import { AppShell } from "@/components/shell/app-shell"
 import { showNotificationToast } from "@/components/notifications/notification-toast"
 import { Toaster } from "@/components/ui/sonner"
+import { ConfirmHost } from "@/components/ui/confirm-host"
 
 /** The titlebar is a 38px drag region; a toast on it would drag the window. */
 const TOAST_OFFSET = { top: 46, right: 12 }
@@ -22,6 +23,7 @@ export function App() {
     <>
       <AppShell />
       <Toaster position="top-right" offset={TOAST_OFFSET} duration={TOAST_MS} />
+      <ConfirmHost />
     </>
   )
 }
