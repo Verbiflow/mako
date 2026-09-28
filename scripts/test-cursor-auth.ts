@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -21,6 +21,7 @@ import {
 import { authenticationFailure } from "../electron/providers/cursor/sdk/driver.ts"
 import { cursorConnection, cursorConnectionState } from "../electron/providers/cursor/connection.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
+import { electronSecretEncryption, keychainReachable } from "../electron/secure-storage.ts"
 
 /**
  * Cursor's SDK sign-in: which key a child runs under, how a pasted or minted
@@ -279,8 +280,24 @@ try {
     assert.deepEqual(projected, { status: "signed-in", source: "env", account: "a@b", expiresAt: "2027-01-01T00:00:00Z" })
   }
 
+  // A temporary HOME has no login keychain; asking Electron there opens a macOS dialog.
+  {
+    const home = join(root, "home")
+    mkdirSync(home)
+    if (process.platform === "darwin") assert.equal(keychainReachable(home), false)
+    mkdirSync(join(home, "Library", "Keychains"), { recursive: true })
+    assert.equal(keychainReachable(home), true)
+    const realHome = process.env.HOME
+    process.env.HOME = join(root, "keychainless")
+    try {
+      if (process.platform === "darwin") assert.equal(await electronSecretEncryption().available(), false)
+    } finally {
+      process.env.HOME = realHome
+    }
+  }
+
   console.log(
-    "Cursor auth: env, Mako, CLI and SDK-file keys in that order; pasted keys verified before saving; browser mint stored with expiry; rejections named by source and re-asked sooner; live rejections flip every listener; snapshots never carry the key"
+    "Cursor auth: env, Mako, CLI and SDK-file keys in that order; pasted keys verified before saving; browser mint stored with expiry; rejections named by source and re-asked sooner; live rejections flip every listener; snapshots never carry the key; a home without a keychain is never asked"
   )
 } finally {
   rmSync(root, { recursive: true, force: true })

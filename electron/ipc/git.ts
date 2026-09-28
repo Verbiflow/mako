@@ -1,5 +1,6 @@
-import { app, safeStorage } from "electron"
+import { app } from "electron"
 import { join } from "node:path"
+import { electronSecretEncryption } from "../secure-storage.js"
 import { COMMIT_PROMPT, type AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
 import { CommitGeneration } from "../commit-generation.js"
@@ -107,18 +108,7 @@ export function installGitIpc(context: GitIpcContext): void {
       })
     }
   )
-  const models = new UtilityModelStore(
-    directory,
-    {
-      available: () => process.platform === "darwin" ? safeStorage.isAsyncEncryptionAvailable() :
-        safeStorage.isEncryptionAvailable() &&
-        (process.platform !== "linux" ||
-          safeStorage.getSelectedStorageBackend() !== "basic_text"),
-      encrypt: (value) => process.platform === "darwin" ? safeStorage.encryptStringAsync(value) : safeStorage.encryptString(value),
-      decrypt: async (value) => process.platform === "darwin" ? (await safeStorage.decryptStringAsync(value)).result : safeStorage.decryptString(value),
-    },
-    { ready: migration }
-  )
+  const models = new UtilityModelStore(directory, electronSecretEncryption(), { ready: migration })
   const generation = new CommitGeneration(models)
   const catalog = new UtilityModelCatalog(models)
   registerIpc("mako:utility-model-settings", () => models.settings())

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { z } from "zod"
+import type { SecretEncryption } from "../../../secure-storage.js"
 
 /**
  * Mako's own record of the Cursor API key the SDK runs under.
@@ -15,11 +16,7 @@ import { z } from "zod"
  * here ever reaches the renderer, a log, or a settings snapshot: the row in
  * Settings shows the account and the key's name, never its value.
  */
-export interface CursorKeyEncryption {
-  available(): Promise<boolean>
-  encrypt(value: string): Promise<Buffer>
-  decrypt(value: Buffer): Promise<string>
-}
+export type CursorKeyEncryption = SecretEncryption
 
 /** How a key came to be stored: minted by a browser sign-in, or pasted from the dashboard. */
 export const CURSOR_CREDENTIAL_METHODS = ["browser", "pasted"] as const
@@ -130,31 +127,5 @@ export class CursorCredentialStore {
     const task = this.writing.then(() => rm(this.path, { force: true }))
     this.writing = task.catch(() => undefined)
     await task
-  }
-}
-
-/**
- * Electron's `safeStorage`, reached lazily so this module also loads in a
- * plain Node test. A `basic_text` backend is not encryption and is refused.
- */
-export function electronKeyEncryption(): CursorKeyEncryption {
-  const electron = import("electron")
-  return {
-    async available() {
-      const { safeStorage } = await electron
-      if (process.platform === "darwin") return safeStorage.isAsyncEncryptionAvailable()
-      return (
-        safeStorage.isEncryptionAvailable() &&
-        (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")
-      )
-    },
-    async encrypt(value) {
-      const { safeStorage } = await electron
-      return process.platform === "darwin" ? safeStorage.encryptStringAsync(value) : safeStorage.encryptString(value)
-    },
-    async decrypt(value) {
-      const { safeStorage } = await electron
-      return process.platform === "darwin" ? (await safeStorage.decryptStringAsync(value)).result : safeStorage.decryptString(value)
-    },
   }
 }

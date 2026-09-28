@@ -7,15 +7,12 @@ import { cursorMcpSource } from "./mcp.js"
 import { cursorProcessProbe } from "./process-probe.js"
 import { createCursorProfileLoader } from "./profile.js"
 import { CursorSdkAuth } from "./sdk/auth.js"
-import {
-  CursorCredentialStore,
-  cursorCredentialPath,
-  electronKeyEncryption,
-} from "./sdk/credentials.js"
+import { CursorCredentialStore, cursorCredentialPath } from "./sdk/credentials.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
 import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../executable.js"
+import { electronSecretEncryption } from "../../secure-storage.js"
 
 async function openExternal(url: string): Promise<void> {
   const { shell } = await import("electron")
@@ -33,7 +30,7 @@ async function openExternal(url: string): Promise<void> {
 export const installCursor: ProviderModule = (host) => {
   const env = () => accountEnv("cursor", process.env)
   const stateRoot = () => cursorSdkStateRoot()
-  const credentials = new CursorCredentialStore(cursorCredentialPath(stateRoot()), electronKeyEncryption())
+  const credentials = new CursorCredentialStore(cursorCredentialPath(stateRoot()), electronSecretEncryption())
   const auth = new CursorSdkAuth({ env, openUrl: openExternal, credentials })
   host.artifactPreviews.register(cursorCanvasPreview)
   const modelCache = createCursorModelCache()
