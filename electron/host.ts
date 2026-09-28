@@ -32,6 +32,15 @@ function unavailable(operation: string): never {
   )
 }
 
+/**
+ * How long a background tab keeps hearing its folder. Linux builds a watch
+ * by reading the whole tree and adding one inotify watch per folder, so a
+ * tab coming back within this reuses it; on macOS a watch is an FSEvents
+ * stream that starts without reading anything, and a stream nobody reads is
+ * better closed.
+ */
+const BACKGROUND_WATCH_MS = process.platform === "linux" ? 5 * 60_000 : 0
+
 export class AgentHost {
   readonly id: string
   private emit: (event: HostEvent) => void
@@ -43,6 +52,7 @@ export class AgentHost {
   private workspaceWatcherGeneration = 0
   private gitPushGeneration = 0
   private gitRefreshTimer: NodeJS.Timeout | null = null
+  private backgroundStop: NodeJS.Timeout | null = null
   private sessionId = crypto.randomUUID()
   private sessionName: string | undefined
 
@@ -69,10 +79,18 @@ export class AgentHost {
   setForeground(value: boolean): void {
     if (this.foreground === value) return
     this.foreground = value
+    if (this.backgroundStop) clearTimeout(this.backgroundStop)
+    this.backgroundStop = null
     if (value) {
       this.startWorkspaceWatcher()
       this.pushState()
       void this.pushGit()
+    } else if (BACKGROUND_WATCH_MS) {
+      this.backgroundStop = setTimeout(() => {
+        this.backgroundStop = null
+        if (!this.foreground) this.stopWorkspaceWatcher()
+      }, BACKGROUND_WATCH_MS)
+      this.backgroundStop.unref()
     } else {
       this.stopWorkspaceWatcher()
     }
@@ -98,10 +116,16 @@ export class AgentHost {
         if (this.workspaceWatcherGeneration !== generation) return
         let moves = false
         for (const path of paths) if (this.workspaceGit.noteChange(path)) moves = true
-        if (moves) this.scheduleGitRefresh(generation)
+        // A background tab only notes what changed; coming forward reads Git once.
+        if (moves && this.foreground) this.scheduleGitRefresh(generation)
       },
       () => {
         if (this.workspaceWatcherGeneration === generation) this.stopWorkspaceWatcher()
+      },
+      () => {
+        if (this.workspaceWatcherGeneration !== generation) return
+        this.workspaceGit.noteChange(undefined)
+        if (this.foreground) this.scheduleGitRefresh(generation)
       }
     ) ?? null
     if (!this.workspaceWatcher) return
@@ -109,7 +133,7 @@ export class AgentHost {
     this.gitDirWatch = watchOutsideGitDir(this.workspace, () => {
       if (this.workspaceWatcherGeneration !== generation) return
       this.workspaceGit.noteChange(undefined)
-      this.scheduleGitRefresh(generation)
+      if (this.foreground) this.scheduleGitRefresh(generation)
     })
   }
 
@@ -123,6 +147,8 @@ export class AgentHost {
   }
 
   private stopWorkspaceWatcher(): void {
+    if (this.backgroundStop) clearTimeout(this.backgroundStop)
+    this.backgroundStop = null
     this.workspaceWatcherGeneration += 1
     this.workspaceGit.trackChanges(false)
     this.workspaceWatcher?.close()

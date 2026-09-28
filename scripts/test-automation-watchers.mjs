@@ -8,7 +8,8 @@ import parcel from "@parcel/watcher"
 const subscriptions = []
 const original = parcel.subscribe
 parcel.subscribe = async (path, callback, options) => {
-  const watcher = { path, options, closed: 0, change: (file) => callback(null, [{ type: "update", path: join(path, file) }]) }
+  const watcher = { path, options, closed: 0, change: (file) => callback(null, [{ type: "update", path: join(path, file) }]),
+    drop: () => callback(new Error("Events were dropped by the FSEvents client. File system must be re-scanned."), []) }
   subscriptions.push(watcher)
   return { unsubscribe: async () => { watcher.closed += 1 } }
 }
@@ -61,6 +62,8 @@ try {
   mock.timers.tick(1201)
   await Promise.resolve()
   assert.deepEqual(fired, ["second", "first"], "re-enabling restores file-change execution")
+  replacement.drop()
+  assert.equal(replacement.closed, 0, "dropped events leave the watch running")
 
   await saveAutomations(root, [rule("manual", "manual"), rule("commit", "commit")])
   await settled()
@@ -81,7 +84,7 @@ try {
   mock.timers.tick(1201)
   await Promise.resolve()
   assert.equal(fired.length, 3)
-  console.log("Automation watcher ownership: no idle subscription, one active subscription, dependency folders excluded, disable/remove cleanup, stale callback fences and manual execution passed")
+  console.log("Automation watcher ownership: no idle subscription, one active subscription, dependency folders excluded, disable/remove cleanup, dropped events survived, stale callback fences and manual execution passed")
 } finally {
   stopWatching()
   mock.timers.reset()

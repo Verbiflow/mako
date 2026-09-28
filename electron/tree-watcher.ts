@@ -60,8 +60,12 @@ export function quietFoldersOf(root: string): string[] {
  * A quiet folder created after the watch starts (the first install) makes it
  * start over so the folder is excluded too. The filesystem root and the home
  * folder aren't watched: a whole disk's churn is never one project's.
+ *
+ * `onError` means the watch couldn't start or went away. When the system
+ * drops events instead (FSEvents under load says "must be re-scanned"), the
+ * watch keeps going and `onDropped` says anything may have changed.
  */
-export function watchTree(root: string, onChange: (paths: string[]) => void, onError: () => void): TreeWatch | undefined {
+export function watchTree(root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
   const target = resolve(root)
   if (target === sep || target === resolve(homedir())) return undefined
   let real: string
@@ -83,7 +87,7 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
       .subscribe(real, (error, events) => {
         if (closed) return
         if (error) {
-          onError()
+          onDropped?.()
           return
         }
         const paths: string[] = []
