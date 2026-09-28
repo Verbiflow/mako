@@ -1565,7 +1565,7 @@ finished it. The exchange footer reads "Interrupted when Mako quit" or
 offers Continue turn (`turnStops`, `continueTurn`), which sends one plain
 prompt through the ordinary send path; a user's Stop offers nothing. Delegate
 is retired: nothing creates a child task, and related work is a Session in
-the same Thread (a fork into a tab, or Continue in a worktree). `LiveChildren`
+the same Thread (a fork into a tab, or a switch into the Thread's worktree). `LiveChildren`
 keeps the children older journals hold settling, delivering their result
 once and cancelable, and one cut short by a host exit settles as `failed` in
 its parent, never `canceled`; `stop()` flushes every resident before it

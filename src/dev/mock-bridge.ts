@@ -1157,7 +1157,7 @@ export function installMockBridge() {
         session: {
           ...parent.session,
           id: input.id,
-          title: "Fork",
+          title: input.move ? parent.session.title : "Fork",
           harness: input.provider,
           connection: "disconnected",
         },

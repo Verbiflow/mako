@@ -331,6 +331,13 @@ assert.ok(lonePlacement)
 threads.attachWorktree({ path: forked.path, thread: lonePlacement.thread, repoRoot: shop, project: shop, branch: forked.branch, base: git(shop, "rev-parse", "HEAD") })
 assert.equal((await worktrees.prepareFork(loneId, loneFork, shop, "Fork elsewhere")).path, forked.path, "a repeated request finds its first worktree")
 await assert.rejects(worktrees.prepareFork(loneId, randomUUID(), shop, "Another"), /already works in its own worktree/)
+// Another of that Thread's Sessions moving in joins its worktree, in the same folder.
+assert.equal(await worktrees.joinFolder(loneId, randomUUID(), join(shop, "web")), join(forked.path, "web"))
+assert.equal(await worktrees.joinFolder(loneId, randomUUID(), shop), forked.path)
+assert.equal(await worktrees.joinFolder(loneId, loneFork, shop), undefined, "the fork that made the worktree finishes the way it started")
+const unplaced = randomUUID()
+started(unplaced)
+assert.equal(await worktrees.joinFolder(unplaced, randomUUID(), shop), undefined, "a Thread without a worktree makes one")
 
 // A worktree made for a fork that was refused goes, branch and all.
 const refusedId = randomUUID()
@@ -442,4 +449,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, .env folders, stale staging, refusals")
+console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, .env folders, stale staging, refusals")

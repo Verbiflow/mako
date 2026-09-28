@@ -337,6 +337,10 @@ try {
   const elsewhere = owner.fork(id, { ...forkInput, id: randomUUID() }, "/tmp/mako-fork-worktree")
   assert.equal(elsewhere.session.cwd, "/tmp/mako-fork-worktree")
   assert.equal(elsewhere.control?.ancestry?.nativeFork, undefined, "a native session belongs to the folder it ran in")
+  const sourceTitle = owner.snapshot(id)?.session.title
+  assert.equal(fork.session.title, sourceTitle ? `${sourceTitle} — fork` : "Fork")
+  const moved = owner.fork(id, { ...forkInput, id: randomUUID(), move: true }, "/tmp/mako-fork-worktree")
+  assert.equal(moved.session.title, sourceTitle, "a Session that moves keeps its title")
   assert.equal(fork.session.cwd, owner.snapshot(id)?.session.cwd)
   assert.throws(
     () => owner.fork(id, { ...forkInput, provider: "beta" }),

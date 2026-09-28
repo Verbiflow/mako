@@ -1,12 +1,11 @@
 import { useEffect } from "react"
 import { toast } from "sonner"
 import { DropdownMenu } from "radix-ui"
-import { ArrowUpIcon, CopyIcon, DiffIcon, FolderGit2Icon, FolderInputIcon, FolderOpenIcon, GitBranchIcon, SquareArrowOutUpRightIcon, Trash2Icon } from "lucide-react"
+import { ArrowUpIcon, CopyIcon, DiffIcon, FolderGit2Icon, FolderOpenIcon, GitBranchIcon, SquareArrowOutUpRightIcon, Trash2Icon } from "lucide-react"
 import { CheckoutLabel } from "@/components/rail/checkout-label"
 import { workspaceName } from "@/lib/format"
 import { homeRelative } from "@/lib/skill-matrix"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
-import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { desktop } from "@/state/desktop"
 import { prefsStore } from "@/state/prefs"
 import { useSession } from "@/state/session"
@@ -43,14 +42,6 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
   const sinceStart = useWorktreeAhead(worktree?.path, git?.head)
   const changed = git?.files.length
   const ahead = worktree ? sinceStart : git?.upstream ? git.ahead : undefined
-  // Only the chat on screen can move, once it has an answer to fork after, and only while its Thread has no worktree.
-  const worktrees = useWorktrees((state) => state.worktrees)
-  const movable = useAcp((state) => {
-    const live = activeLiveAcp(state)
-    if (worktree || !cwd || live?.session.cwd !== cwd || !live.requests?.some((request) => request.status === "completed")) return undefined
-    if (worktrees.some((candidate) => candidate.thread === live.threadId)) return undefined
-    return live.session.status === "running" ? "running" : "idle"
-  })
   if (!folder || !head) return null
   const where = worktree ? `Worktree of ${workspaceName(worktree.repoRoot)}` : workspaceName(folder)
   const branch = head.kind === "detached" ? undefined : head.name
@@ -110,25 +101,6 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
             <DropdownMenu.Item className={item} onSelect={() => copy(branch, "Branch name")}>
               <GitBranchIcon className="size-3.5" />Copy branch name
             </DropdownMenu.Item>
-          ) : null}
-          {movable ? (
-            <>
-              <DropdownMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
-              <DropdownMenu.Item
-                data-checkout-action="continue-in-worktree"
-                className={`${item} data-[disabled]:opacity-50`}
-                disabled={movable === "running"}
-                onSelect={() => { void acp.continueInWorktree(changed ?? 0) }}
-              >
-                <FolderInputIcon className="size-3.5" />
-                <span className="flex min-w-0 flex-col">
-                  Continue in a worktree
-                  <span className="text-label text-faint">
-                    {movable === "running" ? "After this answer finishes" : changed ? `Takes the ${plural(changed, "changed file", "changed files")} along` : "On a new branch from here"}
-                  </span>
-                </span>
-              </DropdownMenu.Item>
-            </>
           ) : null}
           {worktree ? (
             <>

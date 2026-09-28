@@ -1605,7 +1605,10 @@ function bindIpc() {
     if (!input.worktree) return liveConversations.fork(id, input)
     if (!threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
     const source = liveConversations.snapshot(id)
-    if (!source) throw new Error("Open the conversation before continuing it in a worktree.")
+    if (!source) throw new Error("Open the conversation before moving it into a worktree.")
+    // A Thread has one worktree: a Session moving in once it exists joins it, and nothing moves with it.
+    const joined = await threadWorktrees.joinFolder(id, input.id, source.session.cwd)
+    if (joined) return liveConversations.fork(id, input, joined)
     const worktree = await threadWorktrees.prepareFork(id, input.id, source.session.cwd, source.session.title)
     let snapshot: LiveSnapshot
     try {

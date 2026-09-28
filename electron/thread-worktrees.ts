@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
 import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
-import { basename, dirname, join, relative } from "node:path"
+import { basename, dirname, isAbsolute, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { ThreadStore } from "./thread-store.js"
@@ -240,13 +240,29 @@ export class ThreadWorktreeService {
     if (!this.pending.has(forkId) && !(await this.receipt(forkId))) {
       const placed = this.threads.journalPlacement(sourceId)
       const current = placed && this.threads.worktrees().find((worktree) => worktree.thread === placed.thread)
-      if (current) throw new Error(`This Thread already works in its own worktree, on ${current.branch}. Continue in that tab.`)
+      if (current) throw new Error(`This Thread already works in its own worktree, on ${current.branch}. Move the Session into that one instead.`)
       const repoRoot = await git(await realpath(cwd), ["rev-parse", "--show-toplevel"]).catch(() => "")
       const busy = repoRoot ? await this.working(repoRoot) : []
       if (busy.length)
         throw new Error(`${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in ${basename(repoRoot)}. Moving its changes would pull files from under ${busy.length === 1 ? "it" : "them"}; continue once ${busy.length === 1 ? "it stops" : "they stop"}.`)
     }
     return this.prepare(forkId, cwd, name)
+  }
+
+  /**
+   * Where a fork of `sourceId` works when the source's Thread has its
+   * worktree already: the same folder inside it. Undefined when the Thread
+   * has none, or when this fork made it, so a repeated request finishes the
+   * way the first one started.
+   */
+  async joinFolder(sourceId: string, forkId: string, cwd: string): Promise<string | undefined> {
+    if (this.pending.has(forkId) || (await this.receipt(forkId))) return undefined
+    const placed = this.threads.journalPlacement(sourceId)
+    const current = placed && this.threads.worktrees().find((worktree) => worktree.thread === placed.thread)
+    if (!current) return undefined
+    const inside = relative(await realpath(current.repoRoot).catch(() => current.repoRoot), await realpath(cwd).catch(() => cwd))
+    const folder = inside && !inside.startsWith("..") && !isAbsolute(inside) ? join(current.path, inside) : current.path
+    return existsSync(folder) ? folder : current.path
   }
 
   /**

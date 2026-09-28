@@ -183,5 +183,7 @@ export const ForkInputSchema = z.object({
   thread: z.enum(["parent", "new"]).optional(),
   /** The fork runs in a new worktree of its parent's checkout, and the checkout's uncommitted changes move there. */
   worktree: z.boolean().optional(),
+  /** The Session moves rather than branches off, so the fork keeps its parent's title. */
+  move: z.boolean().optional(),
 })
 export type ForkInput = z.infer<typeof ForkInputSchema>

@@ -2046,7 +2046,7 @@ export class LiveConversations {
         nativePath: undefined,
         nativeRunId: undefined,
         nativeForkId: undefined,
-        title: source.session.title ? `${source.session.title} — fork` : "Fork",
+        title: command.move ? source.session.title : source.session.title ? `${source.session.title} — fork` : "Fork",
         status: "ready",
         connection: "disconnected",
         modes: [],
