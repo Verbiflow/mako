@@ -120,6 +120,10 @@ export function hasThreadUndo(): boolean {
   return lastUndo !== null
 }
 
+export function threadUndoLabel(): string | undefined {
+  return lastUndo?.label
+}
+
 export async function undoLastThreadChange(): Promise<void> {
   const undo = lastUndo
   lastUndo = null

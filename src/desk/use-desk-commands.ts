@@ -29,7 +29,7 @@ import {
   threadHasTabs,
   type SessionTab,
 } from "@/state/thread-sessions"
-import { archiveSessionTab, hasThreadUndo, openAddToThread, splitIntoNewThread, undoLastThreadChange } from "@/state/thread-regroup"
+import { archiveSessionTab, hasThreadUndo, openAddToThread, splitIntoNewThread, threadUndoLabel, undoLastThreadChange } from "@/state/thread-regroup"
 import { chatPanes, engageWorkbenchPane, splitOnScreenSession } from "@/state/session-panes"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
@@ -233,7 +233,9 @@ const DESK_COMMANDS: DeskCommand[] = [
     id: "thread.undo",
     title: "Undo the last thread change",
     section: "Session",
-    hint: "Adding to a thread, splitting one, or archiving a session",
+    get hint() {
+      return threadUndoLabel()
+    },
     keywords: "undo regroup split add archive restore",
     when: hasThreadUndo,
     run: undoLastThreadChange,
