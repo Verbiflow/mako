@@ -17,7 +17,7 @@
  *     costs one positional read of only the appended bytes per flush.
  */
 
-import { existsSync, realpathSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
+import { existsSync, realpathSync, watchFile, unwatchFile, type Stats } from "node:fs"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { dirname, join, sep } from "node:path"
 import {
@@ -45,6 +45,7 @@ import type {
   SessionUpdate,
 } from "./providers/types.js"
 import { SessionArchive, type EvictionPolicy } from "./archive.js"
+import { watchRoot, type RootWatch } from "./root-watch.js"
 
 export type CatalogEvent =
   | { type: "added"; ref: ThreadRef }
@@ -266,7 +267,7 @@ export class SessionCatalog {
   private cacheLoaded = false
   private preparation: Promise<void> | null = null
   private saveTimer: NodeJS.Timeout | null = null
-  private watchers = new Map<string, FSWatcher>()
+  private watchers = new Map<string, RootWatch>()
   private polls = new Map<string, (current: Stats, previous: Stats) => void>()
   private discovering: Promise<void> | null = null
   private watching = false
@@ -662,11 +663,9 @@ export class SessionCatalog {
     for (const root of roots) {
       if (this.watchers.has(root) || !existsSync(root)) continue
       try {
-        const watcher = watch(root, { recursive: true }, (_event, filename) => {
-          if (this.watchers.get(root) !== watcher || !filename) return
-          this.noticed(`${root}/${filename.toString()}`)
-        })
-        watcher.on("error", () => {
+        const watcher = watchRoot(root, (path) => {
+          if (this.watchers.get(root) === watcher) this.noticed(path)
+        }, () => {
           if (this.watchers.get(root) !== watcher) return
           this.watchers.delete(root)
           watcher.close()
