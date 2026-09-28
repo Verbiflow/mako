@@ -37,6 +37,7 @@ import { ThreadGroupSchema, type ThreadGroup } from "./contracts/thread-groups.j
 import type { ThreadWorktree } from "./contracts/thread-worktrees.js"
 import type { ThreadEnvironmentValues } from "./contracts/thread-environments.js"
 import { hostWarn } from "./host-log.js"
+import { enableSharedWal } from "./sqlite-wal.js"
 
 /**
  * The per-user Thread store: which Session every journal and native session
@@ -439,7 +440,9 @@ export class ThreadStore {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     try {
-      this.db.exec(`PRAGMA busy_timeout=${OPEN_WAIT_MS}; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
+      this.db.exec(`PRAGMA busy_timeout=${OPEN_WAIT_MS}`)
+      enableSharedWal(this.db, OPEN_WAIT_MS)
+      this.db.exec(`PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
         CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
       // Lock before reading the version so two hosts creating the store at
       // once cannot both mint a device and a principal.

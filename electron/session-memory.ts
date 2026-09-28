@@ -11,6 +11,7 @@ import {
 } from "@mako/sessions/settings"
 import { heldReason } from "./contracts/session-hold.js"
 import { hostWarn } from "./host-log.js"
+import { enableSharedWal } from "./sqlite-wal.js"
 
 /**
  * What Mako knows about a native session that its provider's store does not
@@ -162,7 +163,9 @@ export class SessionMemory {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     try {
-      this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+      this.db.exec("PRAGMA busy_timeout=5000")
+      enableSharedWal(this.db, 5000)
+      this.db.exec(`PRAGMA synchronous=NORMAL;
       CREATE TABLE IF NOT EXISTS runtime_hosts (socket TEXT PRIMARY KEY, launch TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_journals (conversation_id TEXT PRIMARY KEY, socket TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_routes (

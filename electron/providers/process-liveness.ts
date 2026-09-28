@@ -89,9 +89,11 @@ export async function processIdentityMatches({
   try {
     process.kill(pid, 0)
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ESRCH")
-      return false
-    throw error
+    const code = error instanceof Error && "code" in error ? error.code : undefined
+    if (code === "ESRCH") return false
+    // Another user's process (a recycled PID) refuses the signal, but its
+    // start time is still readable and settles whether it is the recorded one.
+    if (code !== "EPERM" || startedAt === undefined) throw error
   }
   if (startedAt === undefined) return true
   if (process.platform === "win32")

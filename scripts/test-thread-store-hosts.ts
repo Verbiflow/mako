@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -12,8 +13,8 @@ import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA, type SourceRef } fro
  * Hosts sharing one Thread store: a Session one moves reaches the other's
  * windows, a host waiting on another's write lock gives up within a second
  * and keeps the placements it already had, a whole catalog is placed in
- * short batches with forks still joining their parents, and a damaged store
- * starts over and says so.
+ * short batches with forks still joining their parents, a damaged store
+ * starts over and says so, and hosts launched together all open a new store.
  */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-store-hosts-")))
@@ -91,7 +92,30 @@ try {
   assert.equal(refused.store, null, "a store from a newer Mako is left alone")
   assert.match(refused.problem ?? "", /^Threads are off: .*newer Mako/, "and the reason is kept for the window")
   assert.ok(existsSync(newer))
-  console.log("thread store hosts: moved Sessions reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, damaged stores start over, newer stores refused with a reason")
+
+  // Hosts launched together all create the store at the same moment.
+  const opener = `import { existsSync } from "node:fs";
+    import { ThreadStore } from ${JSON.stringify(new URL("../electron/thread-store.ts", import.meta.url).href)};
+    process.stdout.write("ready\\n");
+    while (!existsSync(process.argv[2])) {}
+    new ThreadStore(process.argv[1], { realPath: (path) => path }).close();`
+  for (let round = 0; round < 2; round++) {
+    const created = join(root, `together-${round}`, "threads.sqlite")
+    const go = join(root, `together-${round}.go`)
+    let ready = 0
+    const failures = await Promise.all(Array.from({ length: 8 }, () => new Promise<string>((resolve) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", opener, created, go], { stdio: ["ignore", "pipe", "pipe"] })
+      let errors = ""
+      child.stdout.once("data", () => { if (++ready === 8) writeFileSync(go, "") })
+      child.stderr.on("data", (chunk: Buffer) => { errors += chunk.toString() })
+      child.on("exit", (code) => {
+        writeFileSync(go, "")
+        resolve(code === 0 ? "" : errors.trim().split("\n").find((line) => line.includes("Error")) ?? `exit ${code}`)
+      })
+    })))
+    assert.deepEqual(failures.filter(Boolean), [], "every host opening a new store at once gets it")
+  }
+  console.log("thread store hosts: moved Sessions reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, damaged stores start over, newer stores refused with a reason, eight hosts create one store at once")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { createServer } from "node:http"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
@@ -287,7 +288,11 @@ try {
   const restartLocation = runtimeLocation(restartRoot)
   const restartId = randomUUID()
   writeFileSync(join(restartRoot, "fixture.json"), JSON.stringify({ id: restartId, ledger: db }))
-  const registration = new SessionMemory(db, { pid: 404, startedAt: 4, label: "dev3", socket: restartLocation.socket, launch: {
+  // The woken fixture checks this host's liveness for real, so its PID must
+  // belong to a process that has exited, not a number some daemon may hold.
+  const gonePid = spawnSync(process.execPath, ["-e", ""]).pid
+  assert.ok(gonePid > 0)
+  const registration = new SessionMemory(db, { pid: gonePid, startedAt: 4, label: "dev3", socket: restartLocation.socket, launch: {
     dataRoot: restartRoot, executable: process.execPath, cwd: process.cwd(), profile: "dev3",
     args: ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("./fixtures/shared-conversation-owner.mjs", import.meta.url))],
   } }, { alive: () => false })
