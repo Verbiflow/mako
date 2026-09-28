@@ -57,7 +57,7 @@ import {
   type StartingAcpConversation,
 } from "@/state/acp-state"
 import { prefsStore } from "@/state/prefs"
-import { refreshWorktrees } from "@/state/worktrees"
+import { refreshWorktrees, worktreeAt, worktreesStore } from "@/state/worktrees"
 import {
   markThreadReviewed,
   setThreadAttention,
@@ -468,6 +468,42 @@ export const acp = {
       })
       applyLiveSnapshot(snapshot)
       acp.activate(snapshot.session.id)
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
+  },
+
+  /**
+   * The conversation goes on in a new worktree of its checkout: a fork after
+   * its last answer, in this Thread, with the checkout's uncommitted changes
+   * moved along; `changed` counts them for the announcement. The Local
+   * session stays in the Thread as it was.
+   */
+  async continueInWorktree(changed: number): Promise<boolean> {
+    const current = activeLiveAcp(acpStore.get())
+    if (!current || !hasBridge()) return false
+    const last = current.requests?.findLast((request) => request.status === "completed")
+    if (!last || current.session.status === "running") {
+      toast.error("Wait for the answer to finish, then continue in a worktree.")
+      return false
+    }
+    try {
+      const snapshot = await getMako().liveFork(current.key, {
+        id: crypto.randomUUID(),
+        provider: current.harness,
+        point: { kind: "run", requestId: last.id },
+        thread: "parent",
+        worktree: true,
+      })
+      applyLiveSnapshot(snapshot)
+      acp.activate(snapshot.session.id)
+      await refreshWorktrees()
+      const branch = worktreeAt(worktreesStore.get().worktrees, snapshot.session.cwd)?.worktree.branch
+      toast(`Continuing on ${branch ?? "a new branch"} in its own worktree`, {
+        description: changed ? `${changed} changed ${changed === 1 ? "file" : "files"} moved with it.` : undefined,
+      })
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
