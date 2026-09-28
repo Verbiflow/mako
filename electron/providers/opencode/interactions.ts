@@ -23,8 +23,14 @@ interface Pending { request: LivePermissionRequest; kind: "form" | "permission";
 const MAX_COMPLETED = 2000
 const MAX_PENDING = 256
 
+/** The native calls that list, read and answer requests. */
+export interface OpenCodeRequestClient {
+  form: Pick<OpenCodeClient["form"], "list" | "state" | "reply" | "cancel">
+  permission: Pick<OpenCodeClient["permission"], "list" | "reply">
+}
+
 interface InteractionsInput {
-  client: OpenCodeClient; root: string; conversationId: string;
+  client: OpenCodeRequestClient; root: string; conversationId: string;
   owns(sessionID: string): boolean; emit(event: LiveDriverEvent): void
   /** The live row title of the tool that asked, and a child session's label. */
   describe?(sessionID: string, toolID: string | undefined): { title?: string; prefix?: string }

@@ -14,6 +14,7 @@ import type { AccessTier } from "../../contracts/access.js"
 import type { LiveActionResult } from "../../contracts/live-actions.js"
 import type { LiveSessionState, McpRegistrySnapshot, PromptAttachment } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
+import type { FailureBoundary } from "../../live-runtime.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
@@ -108,6 +109,8 @@ interface Live {
 }
 
 type Engine = LiveEngineApi<Live>
+const SessionScopeSchema = z.object({ sessionID: z.string() })
+type ConnectedLive = Live & { root: string; catalog: OpenCodeCatalog; model: OpenCodeModelRef; interactions: OpenCodeInteractions }
 
 export interface OpenCodeDriverDependencies {
   env(): Promise<NodeJS.ProcessEnv>
@@ -175,7 +178,7 @@ function contextTokens(tokens: { input: number; output: number; reasoning: numbe
   return tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
 }
 
-function errorText(error: unknown): string {
+function errorText({ error }: FailureBoundary): string {
   return error instanceof Error ? error.message : String(error)
 }
 
@@ -189,11 +192,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   const engine: Engine = createLiveEngine<Live>()
   const sessions = engine.sessions
 
-  function requireLive(id: string): Live & { root: string; catalog: OpenCodeCatalog; model: OpenCodeModelRef; interactions: OpenCodeInteractions } {
+  function connected(live: Live | undefined): live is ConnectedLive {
+    return !!live && !live.closed && !!live.root && !!live.catalog && !!live.model && !!live.interactions
+  }
+
+  function requireLive(id: string): ConnectedLive {
     const live = sessions.get(id)
-    if (!live || live.closed || !live.root || !live.catalog || !live.model || !live.interactions)
-      throw new Error("This OpenCode session is disconnected")
-    return live as Live & { root: string; catalog: OpenCodeCatalog; model: OpenCodeModelRef; interactions: OpenCodeInteractions }
+    if (!connected(live)) throw new Error("This OpenCode session is disconnected")
+    return live
   }
 
   const owns = (live: Live, sessionID: string) => sessionID === live.root || live.children.has(sessionID)
@@ -222,7 +228,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       engine.patch(live, { commands: catalog.commands, modes, ...openCodeReportedSettings(catalog, live.model) })
       usage(live)
     }).catch(error => {
-      if (!live.closed) hostWarn("opencode", "the refreshed catalog could not be read", { conversation: live.state.id, error: errorText(error) })
+      if (!live.closed) hostWarn("opencode", "the refreshed catalog could not be read", { conversation: live.state.id, error: errorText({ error }) })
     }).finally(() => { live.catalogRefresh = undefined })
   }
 
@@ -373,7 +379,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.turn?.inboxId === event.data.inboxID) live.turn.delivered = true
         if (live.stopNotices.delete(event.data.inboxID) && live.turn?.kind === "provider")
           live.api.client.session.interrupt({ sessionID: root }).catch(error =>
-            hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText(error) }))
+            hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText({ error }) }))
         return
       case "session.execution.started":
         if (event.data.sessionID === root && !live.turn && (live.state.status === "ready" || live.state.status === "failed"))
@@ -425,12 +431,13 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       case "permission.asked":
       case "permission.replied":
         live.queue = live.queue.then(() => live.interactions?.observe(event)).catch(error =>
-          hostWarn("opencode", "a native request could not be shown", { conversation: live.state.id, error: errorText(error) }))
+          hostWarn("opencode", "a native request could not be shown", { conversation: live.state.id, error: errorText({ error }) }))
         return
       default:
         break
     }
-    if (!("sessionID" in event.data) || typeof event.data.sessionID !== "string" || !owns(live, event.data.sessionID) || !live.content) return
+    const scope = SessionScopeSchema.safeParse(event.data).data
+    if (!scope || !owns(live, scope.sessionID) || !live.content) return
     if (!live.projection && !unnamedCall(live, event)) { project(live, event); return }
     // Later content waits behind a native name lookup so rows keep their order.
     const projection: Promise<void> = (live.projection ?? Promise.resolve()).then(async () => {
@@ -440,7 +447,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (name && !live.closed) engine.emitUpdates(live, live.content!.open(event.data.sessionID, event.data.id, name))
       }
       if (!live.closed) project(live, event)
-    }).catch(error => hostWarn("opencode", "a native event could not be applied", { conversation: live.state.id, type: event.type, error: errorText(error) }))
+    }).catch(error => hostWarn("opencode", "a native event could not be applied", { conversation: live.state.id, type: event.type, error: errorText({ error }) }))
       .finally(() => { if (live.projection === projection) live.projection = undefined })
     live.projection = projection
   }
@@ -460,7 +467,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       for (const part of message.content) if (part.type === "tool" && part.id === event.data.id) return part.name
       return undefined
     } catch (error) {
-      hostWarn("opencode", "a resumed tool call's name could not be read", { conversation: live.state.id, error: errorText(error) })
+      hostWarn("opencode", "a resumed tool call's name could not be read", { conversation: live.state.id, error: errorText({ error }) })
       return undefined
     }
   }
@@ -536,17 +543,17 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           attempts = 0
           if (first) { first = false; connected() }
           else live.queue = live.queue.then(() => reconcile(live)).catch(error =>
-            hostWarn("opencode", "reconnect reconciliation failed", { conversation: live.state.id, error: errorText(error) }))
+            hostWarn("opencode", "reconnect reconciliation failed", { conversation: live.state.id, error: errorText({ error }) }))
           for (;;) {
             const next = await iterator.next()
             if (next.done) break
             try { receive(live, next.value) } catch (error) {
-              hostWarn("opencode", "a native event could not be applied", { conversation: live.state.id, type: next.value.type, error: errorText(error) })
+              hostWarn("opencode", "a native event could not be applied", { conversation: live.state.id, type: next.value.type, error: errorText({ error }) })
             }
           }
         } catch (error) {
           if (live.closed || live.api.signal.aborted) return
-          hostWarn("opencode", "event stream ended", { conversation: live.state.id, error: errorText(error) })
+          hostWarn("opencode", "event stream ended", { conversation: live.state.id, error: errorText({ error }) })
         }
         if (live.closed || live.api.signal.aborted) return
         if (++attempts > 5) {
@@ -582,8 +589,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     } catch (error) {
       if (live.turn === turn && !turn.enqueued) {
         live.turn = null
-        live.emit({ type: "live-action-result", id: live.state.id, actionId, result: { kind: "uncertain", reason: errorText(error) } })
-        engine.patch(live, { status: "failed", lastStop: "failed", error: errorText(error) })
+        live.emit({ type: "live-action-result", id: live.state.id, actionId, result: { kind: "uncertain", reason: errorText({ error }) } })
+        engine.patch(live, { status: "failed", lastStop: "failed", error: errorText({ error }) })
       }
       throw error
     }
@@ -654,7 +661,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const loadedAt = live.catalogGeneration
         await trace.step("mcp-preparation", () => Promise.all(servers.map(server =>
           api.client.mcp.add({ server: server.name, location, config: server.config }).catch(error =>
-            hostWarn("opencode", "an MCP server could not be added", { conversation: live.state.id, server: server.name, error: errorText(error) })))))
+            hostWarn("opencode", "an MCP server could not be added", { conversation: live.state.id, server: server.name, error: errorText({ error }) })))))
         const modes = openCodeSessionModes(catalog.agents)
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE
         const agent = openCodeAgentForMode(requested, launchAccess)
@@ -760,7 +767,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         // A lost response is not a lost send. Native state decides; the host never resends.
         if (live.turn === turn && !turn.enqueued && !(await admitted(live, turn))) {
           live.turn = null
-          engine.patch(live, { status: "failed", lastStop: "failed", error: errorText(error) })
+          engine.patch(live, { status: "failed", lastStop: "failed", error: errorText({ error }) })
         }
         throw error
       }
@@ -787,7 +794,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const end = () => {
         if (live.closed) return
         endBackground(live).catch(error =>
-          hostWarn("opencode", "Background work was not ended", { conversation: live.state.id, error: errorText(error) }))
+          hostWarn("opencode", "Background work was not ended", { conversation: live.state.id, error: errorText({ error }) }))
       }
       if (live.state.status !== "running" || !turn) {
         end()

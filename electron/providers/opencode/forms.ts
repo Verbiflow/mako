@@ -13,8 +13,8 @@ const Field = z.object({
 })
 export const NativeForm = z.object({ id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), title: z.string(), fields: z.array(Field).min(1).max(100) })
 export const NativeFormAnswer = z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.array(z.string())]))
-export function openCodeQuestions(raw: unknown): LiveInputQuestion[] {
-  return NativeForm.parse(raw).fields.map(field => {
+export function openCodeQuestions(form: z.infer<typeof NativeForm>): LiveInputQuestion[] {
+  return form.fields.map(field => {
     const options = field.type === "boolean" ? [{ value: "true", label: "Yes" }, { value: "false", label: "No" }] : field.options ?? []
     return {
       id: field.key, header: field.title ?? field.key, question: field.description ?? field.title ?? field.key,
@@ -47,7 +47,7 @@ export function openCodeFormAnswer(questions: readonly LiveInputQuestion[], resp
   }
   return result
 }
-export function openCodeAnswerDigest(raw: unknown): string {
+export function openCodeAnswerDigest(raw: z.input<typeof NativeFormAnswer>): string {
   const answer = NativeFormAnswer.parse(raw)
   return approvalAnswerDigest({ kind: "answers", answers: Object.fromEntries(Object.entries(answer).map(([key, value]) => [key, Array.isArray(value) ? value : [String(value)]])) })
 }

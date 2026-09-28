@@ -2,6 +2,7 @@ import type { OpenCodeClient } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { LiveSessionCommand } from "../../shared.js"
+import { z } from "zod"
 
 export interface OpenCodeModelRef { id: string; providerID: string; variant?: string }
 
@@ -59,21 +60,26 @@ export async function loadOpenCodeCatalog(client: OpenCodeClient, directory: str
   }
 }
 
+/** The effort a request names; other setting values aren't an effort. */
+function requestedEffort(settings: SessionSettings | undefined): string | undefined {
+  return z.string().safeParse(settings?.options?.effort).data
+}
+
 /** `provider/model` and an effort variant, resolved against the catalog. */
 export function openCodeModelRef(catalog: Pick<OpenCodeCatalog, "models">, settings: SessionSettings | undefined, fallback: OpenCodeModelRef | undefined): OpenCodeModelRef {
   const requested = settings?.model
   if (!requested) {
     if (!fallback) throw new Error("OpenCode reported no default model. Choose a model for this conversation.")
-    const effort = settings?.options?.effort
-    return typeof effort === "string" && effort !== NATIVE_DEFAULT_VARIANT ? { ...fallback, variant: effort } : fallback
+    const effort = requestedEffort(settings)
+    return effort !== undefined && effort !== NATIVE_DEFAULT_VARIANT ? { ...fallback, variant: effort } : fallback
   }
   const model = catalog.models.find(candidate => candidate.id === requested)
   if (!model) throw new Error(`OpenCode does not offer the model "${requested}" in this workspace`)
   const separator = requested.indexOf("/")
   const ref: OpenCodeModelRef = { providerID: requested.slice(0, separator), id: requested.slice(separator + 1) }
-  const effort = settings?.options?.effort
+  const effort = requestedEffort(settings)
   const option = model.options.find(candidate => candidate.id === "effort")
-  if (typeof effort === "string" && effort !== NATIVE_DEFAULT_VARIANT && option?.kind === "select" && option.values.some(value => value.value === effort))
+  if (effort !== undefined && effort !== NATIVE_DEFAULT_VARIANT && option?.kind === "select" && option.values.some(value => value.value === effort))
     ref.variant = effort
   return ref
 }
@@ -88,17 +94,20 @@ export function openCodeRequestedModel(catalog: Pick<OpenCodeCatalog, "models">,
   if (model === undefined || catalog.models.some(candidate => candidate.id === model)) return openCodeModelRef(catalog, { ...settings, model }, current)
   const separator = model.indexOf("/")
   if (separator <= 0 || separator === model.length - 1) throw new Error(`"${model}" is not an OpenCode provider/model id`)
-  const effort = settings?.options?.effort
-  const variant = typeof effort === "string" ? effort : current && model === openCodeLaunchId(current) ? current.variant : undefined
-  return { providerID: model.slice(0, separator), id: model.slice(separator + 1), ...(variant && variant !== "default" ? { variant } : {}) }
+  const variant = requestedEffort(settings) ?? (current && model === openCodeLaunchId(current) ? current.variant : undefined)
+  const ref: OpenCodeModelRef = { providerID: model.slice(0, separator), id: model.slice(separator + 1) }
+  if (variant && variant !== NATIVE_DEFAULT_VARIANT) ref.variant = variant
+  return ref
 }
 
 export function openCodeLaunchId(ref: Pick<OpenCodeModelRef, "id" | "providerID">): string {
   return `${ref.providerID}/${ref.id}`
 }
 
+export interface OpenCodeReportedSettings { settings: SessionSettings; configOptions: SessionModel["options"] }
+
 /** The settings and composer options a native model selection means. */
-export function openCodeReportedSettings(catalog: Pick<OpenCodeCatalog, "models">, ref: OpenCodeModelRef): { settings: SessionSettings; configOptions: SessionModel["options"] } {
+export function openCodeReportedSettings(catalog: Pick<OpenCodeCatalog, "models">, ref: OpenCodeModelRef): OpenCodeReportedSettings {
   const model = catalog.models.find(candidate => candidate.id === openCodeLaunchId(ref))
   const variant = ref.variant && ref.variant !== NATIVE_DEFAULT_VARIANT ? ref.variant : undefined
   const configOptions = (model?.options ?? []).map(option =>

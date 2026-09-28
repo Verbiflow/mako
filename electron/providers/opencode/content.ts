@@ -11,8 +11,9 @@ const Titled = z.object({ command: z.string().optional(), path: z.string().optio
   questions: z.array(z.object({ question: z.string() })).optional() })
 const MAX_OPEN_TOOLS = 4096
 
-interface Tool { sessionID: string; name: string; title: string; input: Record<string, unknown> }
 type ToolEvent = Extract<OpenCodeEvent, { type: `session.tool.${string}` }>
+type ToolInput = Extract<ToolEvent, { type: "session.tool.called" }>["data"]["input"]
+interface Tool { sessionID: string; name: string; title: string; input: ToolInput }
 
 /** Native names become the transcript's shared vocabulary; unknown names stay themselves. */
 export function openCodeToolKind(name: string): string {
@@ -25,7 +26,7 @@ export function openCodeToolKind(name: string): string {
   }
 }
 
-function toolTitle(name: string, input: Record<string, unknown>): string {
+function toolTitle(name: string, input: ToolInput): string {
   const value = Titled.safeParse(input)
   if (!value.success) return name
   const { command, path, filePath, pattern, url, query, description, questions } = value.data
