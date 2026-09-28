@@ -60,6 +60,13 @@ try {
   await catalog.scan()
   catalog.startWatching()
   await drained()
+  // A backlogged fseventsd can deliver the store's creation, written before
+  // watching began, after it; that event's own rescan belongs to the baseline.
+  if (seen.has("store.db"))
+    for (let waited = 0; discoveries < 2; waited += 50) {
+      assert.ok(waited < 60_000, "the store's late creation event is rescanned")
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
   const afterScan = peeks
   const scanned = discoveries
   assert.equal(afterScan, 1, "the scan peeks once")
