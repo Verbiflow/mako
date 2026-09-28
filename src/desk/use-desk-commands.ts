@@ -29,7 +29,7 @@ import {
   threadHasTabs,
   type SessionTab,
 } from "@/state/thread-sessions"
-import { archiveSessionTab, hasThreadUndo, openAddSessionHere, openAddToThread, splitIntoNewThread, threadUndoLabel, undoLastThreadChange } from "@/state/thread-regroup"
+import { archiveSessionTab, hasThreadUndo, threadUndoLabel, undoLastThreadChange } from "@/state/session-archive"
 import { chatPanes, engageWorkbenchPane, splitOnScreenSession } from "@/state/session-panes"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
@@ -206,35 +206,6 @@ const DESK_COMMANDS: DeskCommand[] = [
     },
   },
   {
-    id: "thread.add-session",
-    title: "Add an existing session to this thread…",
-    section: "Session",
-    hint: "It becomes this thread's last tab and keeps its own history",
-    when: () => Boolean(currentOnScreen().thread),
-    run: () => void openAddSessionHere(),
-  },
-  {
-    id: "thread.add-to-thread",
-    title: "Add this session to a thread…",
-    section: "Session",
-    hint: "It becomes the last tab of the thread you pick",
-    when: () => onScreenSessionTab() !== null,
-    run: () => {
-      const found = onScreenSessionTab()
-      if (found) openAddToThread({ sessions: [found.tab.id], from: found.thread, title: found.title, cwd: currentOnScreen().cwd })
-    },
-  },
-  {
-    id: "thread.split-session",
-    title: "Split this session into a new thread",
-    section: "Session",
-    when: () => threadHasTabs() && onScreenSessionTab() !== null,
-    run: () => {
-      const found = onScreenSessionTab()
-      if (found) void splitIntoNewThread([found.tab.id])
-    },
-  },
-  {
     id: "thread.archive-session",
     title: "Archive this session",
     section: "Session",
@@ -247,12 +218,12 @@ const DESK_COMMANDS: DeskCommand[] = [
   },
   {
     id: "thread.undo",
-    title: "Undo the last thread change",
+    title: "Undo archiving the session",
     section: "Session",
     get hint() {
       return threadUndoLabel()
     },
-    keywords: "undo regroup split add archive restore",
+    keywords: "undo archive restore",
     when: hasThreadUndo,
     run: undoLastThreadChange,
   },
