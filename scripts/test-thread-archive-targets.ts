@@ -3,7 +3,7 @@ import type { ThreadRef } from "@mako/sessions"
 import { railAnnouncement } from "../src/lib/rail-announcement.ts"
 import { acpStore } from "../src/state/acp-state.ts"
 import { threadGroupsStore } from "../src/state/thread-groups.ts"
-import { wholeThreadTargets } from "../src/state/thread-regroup.ts"
+import { wholeThreadTargets } from "../src/state/session-archive.ts"
 import { threadsStore } from "../src/state/threads.ts"
 
 // Archiving a Thread's row puts every Session of it away, not only the rows

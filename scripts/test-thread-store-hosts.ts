@@ -10,7 +10,7 @@ import { followOtherHosts } from "../electron/thread-groups-follow.js"
 import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA, type SourceRef } from "../electron/thread-store.js"
 
 /**
- * Hosts sharing one Thread store: a regroup in one reaches the other's
+ * Hosts sharing one Thread store: a Session one moves reaches the other's
  * windows, a host waiting on another's write lock gives up within a second
  * and keeps the placements it already had, a whole catalog is placed in
  * short batches with forks still joining their parents, and a damaged store
@@ -37,18 +37,17 @@ try {
 
   const events: HostEvent[] = []
   const stop = followOtherHosts(development, (event) => events.push(event), 20)
-  installed.joinThread({ operationId: randomUUID(), sessions: [second.session], thread: first.thread, actor: installed.person() })
-  assert.equal(installed.takeExternalChanges(), undefined, "a host's own regroup isn't another host's")
+  const adopter = new ThreadStore(path, options)
+  const adopted = adopter.place(ref("second", "first"), actor)
+  assert.equal(adopted.thread, first.thread, "a harness fork found alone joins its parent's Thread once its row names the parent")
+  assert.equal(adopter.takeExternalChanges(), undefined, "a host's own change isn't another host's")
+  adopter.close()
   for (let tries = 0; tries < 100 && events.length < 2; tries++) await delay(20)
   stop()
-  const regroup = events.find((event) => event.type === "thread-regroup")
-  assert.ok(regroup?.type === "thread-regroup")
-  assert.ok(regroup.regroup.placements.some((placed) => placed.session === second.session && placed.thread === first.thread), "the other host's windows learn where the Session went")
-  const group = events.find((event) => event.type === "thread-group")
+  const group = events.find((event) => event.type === "thread-group" && event.change.thread === first.thread)
   assert.ok(group?.type === "thread-group")
-  assert.equal(group.change.thread, first.thread)
-  assert.deepEqual(group.change.group?.sessions.map((member) => member.id), [first.session, second.session], "and what the Thread's tabs are")
-  assert.deepEqual(development.place(ref("second"), actor), { thread: first.thread, session: second.session }, "and serve the row in its new Thread")
+  assert.deepEqual(group.change.group?.sessions.map((member) => member.id), [first.session, second.session], "the other host's windows learn the Thread's tabs")
+  assert.deepEqual(development.place(ref("second", "first"), actor), { thread: first.thread, session: second.session }, "and serve the row in its new Thread")
   development.place(ref("first"), actor)
 
   // Another host holds the write lock, as a stuck one would.
@@ -93,7 +92,7 @@ try {
   assert.equal(refused.store, null, "a store from a newer Mako is left alone")
   assert.match(refused.problem ?? "", /^Threads are off: .*newer Mako/, "and the reason is kept for the window")
   assert.ok(existsSync(newer))
-  console.log("thread store hosts: regroups reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, damaged stores start over, newer stores refused with a reason")
+  console.log("thread store hosts: moved Sessions reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, damaged stores start over, newer stores refused with a reason")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

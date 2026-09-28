@@ -60,9 +60,10 @@ async function stableAndApart(): Promise<void> {
   assert.deepEqual(await other.forLaunch(first.conversationId), one, "another host sharing the store hands out the same values")
   reopened.close()
 
-  const later = started(store)
-  store.joinThread({ operationId: randomUUID(), sessions: [later.session], thread: first.thread, actor })
-  assert.equal((await environments.forLaunch(later.conversationId))?.port, one.port, "Sessions in one Thread share its values")
+  const tab = store.createSession({ operationId: randomUUID(), thread: first.thread, actor })
+  const later = randomUUID()
+  store.registerJournal({ conversationId: later, harness: "codex", createdAt: clock, bindings: [], session: tab.session }, actor)
+  assert.equal((await environments.forLaunch(later))?.port, one.port, "Sessions in one Thread share its values")
   store.close()
 }
 

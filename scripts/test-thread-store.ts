@@ -358,35 +358,35 @@ function membership(): void {
   const person = threads.person()
   const home = threads.registerJournal(journal({ harness: "claude" }), migration)
   const tab = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
-  const loose = threads.registerJournal(journal({ harness: "codex" }), migration)
+  const later = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
   const other = threads.registerJournal(journal({ harness: "grok" }), migration)
-
-  const operationId = randomUUID()
-  const changed = threads.joinThread({ operationId, sessions: [loose.session], thread: home.thread, actor: person })
-  assert.deepEqual(changed, [home.thread, loose.thread])
-  assert.deepEqual(threads.joinThread({ operationId, sessions: [loose.session], thread: home.thread, actor: person }), changed, "a repeated join returns its first result")
-  assert.deepEqual(threads.thread(home.thread)?.sessions, [home.session, tab.session, loose.session], "a joining Session becomes the last tab")
-  assert.equal(threads.thread(loose.thread)?.id, home.thread, "the Thread it left empty follows the one it joined")
-  assert.deepEqual(threads.sessionPlacement(loose.session), { thread: home.thread, session: loose.session })
-  assert.deepEqual(threads.joinThread({ operationId: randomUUID(), sessions: [loose.session], thread: home.thread, actor: person }), [], "joining a Thread a Session is already in changes nothing")
-  assert.throws(() => threads.joinThread({ operationId, sessions: [other.session], thread: home.thread, actor: person }), ThreadOperationConflictError)
-
-  const split = threads.splitSessions({ operationId: randomUUID(), sessions: [loose.session, tab.session], actor: person })
-  const [from, created] = split
-  assert.equal(from, home.thread)
-  assert.ok(created && created !== home.thread)
-  assert.deepEqual(threads.thread(home.thread)?.sessions, [home.session])
-  assert.deepEqual(threads.thread(created)?.sessions, [tab.session, loose.session], "split Sessions keep their order")
-  assert.throws(() => threads.splitSessions({ operationId: randomUUID(), sessions: [home.session], actor: person }), /at least one session/)
-  assert.throws(() => threads.splitSessions({ operationId: randomUUID(), sessions: [home.session, tab.session], actor: person }), /one thread/)
+  assert.deepEqual(threads.thread(home.thread)?.sessions, [home.session, tab.session, later.session], "a new tab's Session is the last tab")
   threads.close()
 
   const reopened = new ThreadStore(path, { now })
-  assert.deepEqual(reopened.thread(created)?.sessions, [tab.session, loose.session], "membership survives a restart")
+  assert.deepEqual(reopened.thread(home.thread)?.sessions, [home.session, tab.session, later.session], "membership survives a restart")
   reopened.beginMove({ move: MoveIdSchema.parse(randomUUID()), thread: other.thread, target: { kind: "cloud", runtime: RuntimeIdSchema.parse(randomUUID()) }, actor: person })
-  assert.throws(() => reopened.joinThread({ operationId: randomUUID(), sessions: [other.session], thread: home.thread, actor: person }), /is moving/, "a moving Thread gives up no Sessions")
-  assert.throws(() => reopened.joinThread({ operationId: randomUUID(), sessions: [home.session], thread: other.thread, actor: person }), /is moving/, "a moving Thread takes no Sessions")
-  assert.deepEqual(reopened.thread(home.thread)?.sessions, [home.session], "a refused join changes nothing")
+  assert.throws(() => reopened.createSession({ operationId: randomUUID(), thread: other.thread, actor: person }), /moving/, "a moving Thread takes no new tab")
+  assert.deepEqual(reopened.thread(other.thread)?.sessions, [other.session], "a refused tab changes nothing")
+  reopened.close()
+}
+
+/** A Thread has one worktree per device, even where two Threads with one each became one. */
+function oneWorktreePerThread(): void {
+  const path = join(root, "worktrees.sqlite")
+  const threads = new ThreadStore(path, { now })
+  const kept = threads.registerJournal(journal({ harness: "claude" }), migration)
+  const merged = threads.registerJournal(journal({ harness: "codex" }), migration)
+  const worktree = (thread: typeof kept.thread, name: string) => ({ path: `/repo/.worktrees/${name}`, thread, repoRoot: "/repo", project: "/repo", branch: `mako/${name}`, base: "main" })
+  threads.attachWorktree(worktree(kept.thread, "first"))
+  threads.attachWorktree(worktree(merged.thread, "second"))
+  threads.close()
+  const raw = new DatabaseSync(path)
+  raw.prepare("UPDATE threads SET merged_into = ? WHERE id = ?").run(kept.thread, merged.thread)
+  raw.close()
+
+  const reopened = new ThreadStore(path, { now })
+  assert.deepEqual(reopened.worktrees().map((found) => [found.path, found.thread]), [["/repo/.worktrees/first", kept.thread]], "the first worktree stays the merged Thread's own")
   reopened.close()
 }
 
@@ -440,57 +440,7 @@ function harnessForks(): void {
   assert.ok(home2 && oldThread && adoptedFork)
   assert.equal(adoptedFork.thread, home2, "an earlier harness fork joins its parent's Thread")
   assert.equal(later.thread(oldThread)?.id, home2, "its old Thread follows")
-  later.splitSessions({ operationId: randomUUID(), sessions: [adoptedFork.session], actor: later.person() })
   later.close()
-  const again = new ThreadStore(join(root, "harness-forks-earlier.sqlite"), { now })
-  assert.notEqual(again.resolveRefs([fork("codex", "af", "a")], catalog).get("/codex/af")?.thread, home2, "a fork split out once stays out")
-  again.close()
-}
-
-/** Undo puts every Session back in its Thread and position, or refuses. */
-function undoRegroups(): void {
-  const path = join(root, "undo.sqlite")
-  const threads = new ThreadStore(path, { now })
-  const person = threads.person()
-  const home = threads.registerJournal(journal({ harness: "claude" }), migration)
-  const middle = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
-  const last = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
-  const lone = threads.registerJournal(journal({ harness: "codex" }), migration)
-  const order = [home.session, middle.session, last.session]
-
-  const split = randomUUID()
-  const [, created] = threads.splitSessions({ operationId: split, sessions: [middle.session], actor: person })
-  assert.ok(created)
-  const undoSplit = randomUUID()
-  assert.deepEqual(threads.undoRegroup({ operationId: undoSplit, undoing: split, actor: person }), [home.thread, created])
-  assert.deepEqual(threads.thread(home.thread)?.sessions, order, "an undone split puts the Session back where it was, not last")
-  assert.equal(threads.thread(created)?.id, home.thread, "the split's Thread follows the one its Session returned to")
-  assert.deepEqual(threads.undoRegroup({ operationId: undoSplit, undoing: split, actor: person }), [home.thread, created], "a repeated undo returns its first result")
-  assert.throws(() => threads.undoRegroup({ operationId: randomUUID(), undoing: split, actor: person }), /no longer be undone/, "a change is undone once")
-
-  const partial = randomUUID()
-  threads.joinThread({ operationId: partial, sessions: [middle.session], thread: lone.thread, actor: person })
-  threads.undoRegroup({ operationId: randomUUID(), undoing: partial, actor: person })
-  assert.deepEqual(threads.thread(home.thread)?.sessions, order, "an undone add returns the Session to its own Thread and position")
-  assert.deepEqual(threads.thread(lone.thread)?.sessions, [lone.session])
-
-  const emptying = randomUUID()
-  threads.joinThread({ operationId: emptying, sessions: [lone.session], thread: home.thread, actor: person })
-  assert.equal(threads.thread(lone.thread)?.id, home.thread)
-  threads.close()
-
-  const reopened = new ThreadStore(path, { now })
-  assert.deepEqual(reopened.undoRegroup({ operationId: randomUUID(), undoing: emptying, actor: person }), [home.thread, lone.thread], "undo survives a restart")
-  assert.equal(reopened.thread(lone.thread)?.id, lone.thread, "an emptied Thread comes back under its own ID")
-  assert.deepEqual(reopened.thread(lone.thread)?.sessions, [lone.session])
-  assert.deepEqual(reopened.sessionPlacement(lone.session), { thread: lone.thread, session: lone.session })
-  assert.deepEqual(reopened.thread(home.thread)?.sessions, order)
-
-  const stale = randomUUID()
-  reopened.splitSessions({ operationId: stale, sessions: [last.session], actor: person })
-  reopened.createSession({ operationId: randomUUID(), thread: home.thread, actor: person })
-  assert.throws(() => reopened.undoRegroup({ operationId: randomUUID(), undoing: stale, actor: person }), /changed since/, "undo refuses once a Thread it touched has changed")
-  reopened.close()
 }
 
 try {
@@ -508,7 +458,7 @@ try {
   twoHosts()
   placementLog()
   membership()
-  undoRegroups()
+  oneWorktreePerThread()
   harnessForks()
   console.log("thread store: ok")
 } finally {

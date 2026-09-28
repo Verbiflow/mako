@@ -25,7 +25,6 @@ const { renderToStaticMarkup } = await import("react-dom/server")
 const { EMPTY_FOLD, foldThreads, foldedThreadStatus, presenceThreadStatus } = await import("../src/lib/thread-fold")
 const { sessionTabTitle, threadSessionTabs } = await import("../src/state/thread-sessions")
 const { discardSessionDraft, leaveSessionDraft, putSessionDraft, rowThread, sessionDraftKey, threadGroupsStore } = await import("../src/state/thread-groups")
-const { sessionChoices, threadChoices } = await import("../src/state/thread-regroup")
 const { threadArchiveKey } = await import("../electron/contracts/thread-lifecycle")
 const { rememberDraft } = await import("../src/state/drafts")
 const { SessionTabList } = await import("../src/components/stage/session-tabs")
@@ -123,74 +122,11 @@ assert.deepEqual(threadSessionTabs({ thread, group, refs: [parent], presences: [
 assert.deepEqual(threadSessionTabs({ thread, group, refs: [parent], presences: [fork], archived: archivedFork, shown: second }).map((tab) => tab.id), [first, second], "unless it is on screen")
 
 const elsewhere = randomUUID()
-const regrouped = { [first]: thread, [second]: elsewhere }
-assert.deepEqual(threadSessionTabs({ thread, refs: [parent], presences: [fork], threadOf: regrouped }).map((tab) => tab.id), [first], "a Session split away leaves before its row is listed again")
-assert.deepEqual(threadSessionTabs({ thread: elsewhere, refs: [parent], presences: [fork], threadOf: regrouped }).map((tab) => tab.id), [second], "and shows in the Thread it went to")
-assert.equal(rowThread(fork, regrouped), elsewhere)
-assert.equal(rowThread(fork, {}), thread, "a Session nobody regrouped keeps the Thread it was listed with")
-
-/* Add to thread ------------------------------------------------------------- */
-
-const [near, far, older] = [randomUUID(), randomUUID(), randomUUID()]
-const choices = threadChoices({
-  refs: [
-    parent,
-    { harness: "codex", nativeId: "far", path: "/codex/far", title: "Elsewhere", cwd: "/other", threadId: far, sessionId: randomUUID(), updatedAt: "2026-09-26T10:00:00Z" },
-    { harness: "grok", nativeId: "near", path: "/grok/near", title: "Same project", cwd: "/repo", threadId: near, sessionId: randomUUID(), updatedAt: "2026-09-25T10:00:00Z" },
-    { harness: "claude", nativeId: "old", path: "/claude/old", title: "Older", cwd: "/repo", threadId: older, sessionId: randomUUID(), updatedAt: "2026-09-01T10:00:00Z" },
-  ],
-  presences: [fork],
-  groups,
-  threadOf,
-  archived: new Set([threadArchiveKey({ kind: "file", path: "/claude/old" })]),
-  overrides: { "/grok/near": "Renamed" },
-  exclude: thread,
-  cwd: "/repo",
-})
-assert.deepEqual(choices.map((choice) => choice.title), ["Renamed", "Elsewhere"], "the same project first, then the newest; never itself or an archived Thread")
-const itself = threadChoices({ refs: [parent], presences: [fork], groups, threadOf, archived: new Set(), overrides: {}, exclude: randomUUID() })
-assert.deepEqual(itself.map((choice) => [choice.title, choice.sessions, choice.harnesses]), [["Fix rail flicker", 2, ["claude", "codex"]]], "a Thread is one choice, named by its first Session")
-const liveFirst = threadChoices({ refs: [parent], presences: [fork], groups, threadOf, archived: new Set(), overrides: {}, exclude: randomUUID(), cwd: "/repo" })
-const untitled = threadChoices({ refs: [], presences: [presence("solo", "grok", randomUUID())], groups: {}, threadOf: {}, archived: new Set(), overrides: {}, exclude: randomUUID() })
-assert.deepEqual(liveFirst.map((choice) => choice.harnesses), [["claude", "codex"]], "agents in tab order, whichever row was read first")
-assert.deepEqual(untitled.map((choice) => choice.title), ["New Grok conversation"], "an untitled live conversation is named as the rail names it")
-
-/* Add existing session ------------------------------------------------------ */
-
-const pair = randomUUID()
-const [lead, follower] = [randomUUID(), randomUUID()]
-const pairGroup: ThreadGroup = {
-  id: ThreadIdSchema.parse(pair),
-  sessions: [
-    { id: SessionIdSchema.parse(lead), origin: "native", started: true },
-    { id: SessionIdSchema.parse(follower), origin: "new", started: true },
-  ],
-}
-const sessions = sessionChoices({
-  refs: [
-    parent,
-    { harness: "claude", nativeId: "lead", path: "/claude/lead", title: "Pair lead", cwd: "/repo", threadId: pair, sessionId: lead, updatedAt: "2026-09-24T10:00:00Z" },
-    { harness: "codex", nativeId: "follower", path: "/codex/follower", title: "Pair second", cwd: "/repo", threadId: pair, sessionId: follower, updatedAt: "2026-09-27T10:00:00Z" },
-    { harness: "codex", nativeId: "far", path: "/codex/far", title: "Elsewhere", cwd: "/other", threadId: far, sessionId: randomUUID(), updatedAt: "2026-09-26T10:00:00Z" },
-    { harness: "grok", nativeId: "near", path: "/grok/near", title: "Same project", cwd: "/repo", threadId: near, sessionId: randomUUID(), updatedAt: "2026-09-25T10:00:00Z" },
-    { harness: "claude", nativeId: "old", path: "/claude/old", title: "Older", cwd: "/repo", threadId: older, sessionId: randomUUID(), updatedAt: "2026-09-01T10:00:00Z" },
-  ],
-  presences: [fork],
-  groups: { ...groups, [pair]: pairGroup },
-  threadOf: { ...threadOf, [lead]: pair, [follower]: pair },
-  archived: new Set([threadArchiveKey({ kind: "file", path: "/claude/old" })]),
-  overrides: { "/grok/near": "Renamed" },
-  into: thread,
-  cwd: "/repo",
-})
-assert.deepEqual(
-  sessions.map((choice) => choice.title),
-  ["Pair second", "Renamed", "Pair lead", "Elsewhere"],
-  "one choice per Session, the same project first, then the newest; never this Thread's own or an archived one"
-)
-assert.deepEqual(sessions[0]?.leaves, { title: "Pair lead", sessions: 1 }, "a Session from a Thread of several says which Thread it leaves")
-assert.equal(sessions[1]?.leaves, undefined, "a lone Session's Thread goes with it, so there's nothing to say")
-assert.equal(sessions[0]?.thread, pair, "each choice knows the Thread it comes from")
+const moved = { [first]: thread, [second]: elsewhere }
+assert.deepEqual(threadSessionTabs({ thread, refs: [parent], presences: [fork], threadOf: moved }).map((tab) => tab.id), [first], "a Session another Thread's group names leaves before its row is listed again")
+assert.deepEqual(threadSessionTabs({ thread: elsewhere, refs: [parent], presences: [fork], threadOf: moved }).map((tab) => tab.id), [second], "and shows in that Thread")
+assert.equal(rowThread(fork, moved), elsewhere)
+assert.equal(rowThread(fork, {}), thread, "a Session no group names keeps the Thread it was listed with")
 
 assert.deepEqual(
   whileStarting.map((tab) => sessionTabTitle(tab, {})),
