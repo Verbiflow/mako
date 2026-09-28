@@ -49,7 +49,7 @@ export function StageStrip({
   const shownTab = sessionTabs.find((tab) => tab.id === onScreenTab(here))
   const checkoutCwd =
     here.cwd ??
-    (shownTab?.kind === "draft" ? shownTab.draft.cwd : shownTab?.ref?.cwd ?? shownTab?.presence?.cwd) ??
+    (shownTab?.kind === "draft" ? shownTab.draft.cwd : shownTab?.ref?.currentCwd ?? shownTab?.ref?.cwd ?? shownTab?.presence?.cwd) ??
     (bound ? undefined : workspaceCwd)
 
   if (!pane) return null

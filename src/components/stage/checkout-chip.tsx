@@ -43,7 +43,9 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
   const changed = git?.files.length
   const ahead = worktree ? sinceStart : git?.upstream ? git.ahead : undefined
   if (!folder || !head) return null
-  const where = worktree ? `Worktree of ${workspaceName(worktree.repoRoot)}` : workspaceName(folder)
+  const outside = worktree ? undefined : head.linked
+  const madeFrom = worktree?.repoRoot ?? outside?.repoRoot
+  const where = madeFrom ? `Worktree of ${workspaceName(madeFrom)}` : workspaceName(folder)
   const branch = head.kind === "detached" ? undefined : head.name
   const counts = [
     changed ? plural(changed, "changed file", "changed files") : "",
@@ -54,11 +56,12 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          data-checkout-chip={worktree ? "worktree" : "checkout"}
-          aria-label={`${where}, on ${checkoutSentence(head)}${counts ? `, ${counts}` : ""}`}
+          data-checkout-chip={worktree || outside ? "worktree" : "checkout"}
+          data-worktree-origin={outside ? "outside" : undefined}
+          aria-label={`${where}${outside ? " made outside Mako" : ""}, on ${checkoutSentence(head)}${counts ? `, ${counts}` : ""}`}
           className="pressable flex h-6 min-w-0 max-w-[40%] shrink items-center gap-1 rounded-md px-1.5 text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
         >
-          {worktree ? <FolderGit2Icon className="size-3 shrink-0" /> : <GitBranchIcon className="size-3 shrink-0" />}
+          {worktree || outside ? <FolderGit2Icon className="size-3 shrink-0" /> : <GitBranchIcon className="size-3 shrink-0" />}
           <CheckoutLabel head={head} />
           {changed || ahead ? (
             <span data-checkout-counts className="flex shrink-0 items-center gap-1.5 pl-0.5 tabular-nums">
@@ -82,6 +85,7 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
         <DropdownMenu.Content align="end" sideOffset={4} className="overlay-panel z-50 w-72 p-1 text-ui">
           <div className="px-2 pt-1 pb-1.5">
             <p className="truncate text-label text-muted-foreground">{where} · {checkoutSentence(head)}</p>
+            {outside ? <p className="truncate text-label text-faint">Made outside Mako</p> : null}
             {counts ? <p className="truncate text-label text-faint">{counts}</p> : null}
             {/* Right-to-left so a long path gives up its start, not the folder's own name. */}
             <p dir="rtl" className="truncate text-left font-mono text-label text-faint" title={folder}>

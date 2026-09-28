@@ -3,8 +3,12 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CheckoutHeadService } from "../electron/checkout-heads.js"
+import { CheckoutHeadService, locateCheckout } from "../electron/checkout-heads.js"
 import type { CheckoutHead, CheckoutHeads } from "../electron/contracts/checkout-heads.js"
+import { moveablePlace } from "../electron/workspace-tools.js"
+
+const unused = () => Promise.reject(new Error("not called"))
+const noWorktrees = { ofConversation: () => undefined, ahead: unused, merge: unused, remove: unused }
 
 /**
  * Checkout heads against real repositories: what HEAD reads as in each state
@@ -72,11 +76,20 @@ try {
   assert.deepEqual((await heads.read([repo]))[repo], { kind: "branch", name: "feature/login" })
 
   git(repo, "worktree", "add", "-q", "-b", "mako/fix-redirect", worktree)
-  assert.deepEqual((await heads.read([worktree]))[worktree], { kind: "branch", name: "mako/fix-redirect" },
-    "a linked worktree reads its own HEAD through its .git file")
+  mkdirSync(join(worktree, "web"))
+  const linked = { path: worktree, repoRoot: repo }
+  const inWorktree = await heads.read([worktree, join(worktree, "web")])
+  assert.deepEqual(inWorktree[worktree], { kind: "branch", name: "mako/fix-redirect", linked },
+    "a linked worktree reads its own HEAD through its .git file, and says whose worktree it is")
+  assert.deepEqual(inWorktree[join(worktree, "web")], { kind: "branch", name: "mako/fix-redirect", linked }, "so does a folder inside it")
+  assert.equal((await locateCheckout(repo))?.linked, undefined, "the main checkout is no linked worktree")
+  const refusal = await moveablePlace(noWorktrees, "conversation", join(worktree, "web"))
+  assert.match("refused" in refusal ? refusal.refused : "", /made outside Mako/, "a Session already in a worktree made outside Mako isn't moved into another")
   await expectEvent(worktree, () => git(worktree, "checkout", "-q", "--detach"),
     (head) => head?.kind === "detached", "detaching a linked worktree")
   assert.deepEqual((await heads.read([repo]))[repo], { kind: "branch", name: "feature/login" }, "the main checkout is unaffected")
+  await expectEvent(worktree, () => git(repo, "worktree", "remove", "--force", worktree),
+    (head) => head === null, "removing a linked worktree")
 
   // A rebase stopped on a conflict leaves HEAD detached; the branch being rebased is what it reads as.
   commit("a.txt", "feature\n", "feature change")
@@ -107,7 +120,7 @@ try {
   heads.close()
   git(repo, "checkout", "-q", "-b", "after-close")
   assert.deepEqual(await heads.read([repo]), { [repo]: null }, "a closed service follows nothing")
-  console.log("checkout heads: branch, subfolder, no checkout, switch event, linked worktree, detached, rebasing, index quiet, close")
+  console.log("checkout heads: branch, subfolder, no checkout, switch event, linked worktree and whose, no move from it, detached, removed, rebasing, index quiet, close")
   console.log(`events arrived ${latencies.map((ms) => ms.toFixed(1)).join(", ")} ms after Git returned`)
 } finally {
   heads.close()

@@ -76,6 +76,7 @@ export const ThreadRefSchema = z.object({
   nativeId: z.string(),
   path: z.string(),
   cwd: z.string().optional(),
+  currentCwd: z.string().optional(),
   workspace: z.string().optional(),
   title: z.string().optional(),
   model: z.string().optional(),

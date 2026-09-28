@@ -57,7 +57,7 @@ export function applyCheckoutHeads(heads: CheckoutHeads): void {
 }
 
 function sameHead(a: CheckoutHead | null | undefined, b: CheckoutHead | null): boolean {
-  return a !== undefined && a?.kind === b?.kind && checkoutLabel(a) === checkoutLabel(b)
+  return a !== undefined && a?.kind === b?.kind && checkoutLabel(a) === checkoutLabel(b) && a?.linked?.path === b?.linked?.path
 }
 
 /** How a head reads in a line of text: the branch, or a short commit. */

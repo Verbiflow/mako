@@ -89,3 +89,20 @@ await writeFile(grown, assistant("<synthetic>", "a3"), { flag: "a" })
 const refined = await new ClaudeProvider(home).refine(synthetic, before)
 assert.equal(refined.model, "claude-fable-5-1", "an appended synthetic message does not move the model")
 console.log("Claude titles: synthetic assistant messages never become the row's model")
+
+// EnterWorktree moves a session into a worktree mid-conversation; every line
+// after it records the new folder. The row starts where it started (that's
+// where it resumes) and says where it works now; ExitWorktree brings it back.
+const worktree = join(home, ".claude", "worktrees", "fix-login")
+const at = (cwd, text, uuid) => user(text, uuid).replace(JSON.stringify(home), JSON.stringify(cwd))
+assert.equal(synthetic?.currentCwd, undefined, "a session that never moved has no current folder of its own")
+const moved = await peek("moved.jsonl", user("fix the login redirect", "u1") + at(worktree, "go on", "u2"))
+assert.equal(moved?.cwd, home)
+assert.equal(moved?.currentCwd, worktree)
+const movedPath = join(home, "moved.jsonl")
+const movedBytes = (await stat(movedPath)).size
+await writeFile(movedPath, user("back in the project", "u3"), { flag: "a" })
+const back = await new ClaudeProvider(home).refine(moved, movedBytes)
+assert.equal(back.currentCwd, undefined, "back in the folder it started in")
+assert.equal(back.cwd, home)
+console.log("Claude titles: a session moved into a worktree says where it works now")

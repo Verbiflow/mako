@@ -315,6 +315,8 @@ export class ClaudeProvider implements SessionProvider {
    * not when the thread was last used; its newest message is.
    */
   activityFromContent = true
+  /** 1: rows carry `currentCwd`, the folder a session moved to (EnterWorktree). */
+  peekVersion = 1
   private root: string
   private home: string
   private configDir: string | undefined
@@ -478,6 +480,7 @@ export class ClaudeProvider implements SessionProvider {
       }
       const model = sessionModel(line)
       if (model) next.model = model
+      followCwd(next, line.cwd)
     })
     if (lastMessageAt !== undefined && lastMessageAt > (next.updatedAt ?? ""))
       next.updatedAt = lastMessageAt
@@ -711,6 +714,13 @@ function sessionModel(line: ClaudeLine): string | undefined {
   return model && !model.startsWith("<") ? model : undefined
 }
 
+/** Claude Code records the folder on every line; EnterWorktree moves it into a worktree mid-session, ExitWorktree back. */
+function followCwd(ref: ThreadRef, cwd: string | undefined): void {
+  if (cwd === undefined) return
+  if (cwd === ref.cwd) delete ref.currentCwd
+  else ref.currentCwd = cwd
+}
+
 function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (line.isSidechain) return
   if (!ref.nativeId && line.sessionId !== undefined)
@@ -718,6 +728,7 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (!ref.parentNativeId && line.forkedFrom && line.forkedFrom !== ref.nativeId)
     ref.parentNativeId = line.forkedFrom
   if (!ref.cwd && line.cwd !== undefined) ref.cwd = line.cwd
+  followCwd(ref, line.cwd)
   if (!ref.startedAt && line.timestamp !== undefined)
     ref.startedAt = line.timestamp
   if (!ref.model) {

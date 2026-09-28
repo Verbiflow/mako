@@ -1,13 +1,14 @@
 import { watch, type FSWatcher } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
-import type { CheckoutHead, CheckoutHeads } from "./contracts/checkout-heads.js"
+import { basename, dirname, join, resolve } from "node:path"
+import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "./contracts/checkout-heads.js"
 
 /** Checkouts followed at once; the one asked about longest ago is let go first. */
 const MAX_CHECKOUTS = 48
 
 interface Checkout {
   gitDir: string
+  linked: LinkedCheckout | undefined
   folders: Set<string>
   head: CheckoutHead | null
   watcher: FSWatcher | null
@@ -41,18 +42,42 @@ function headKey(head: CheckoutHead | null): string {
   return head === null ? "" : head.kind === "detached" ? `detached:${head.commit}` : `${head.kind}:${head.name}`
 }
 
-/** The Git directory of the checkout holding `folder`: `.git` itself, or where a linked worktree's `.git` file points. */
-export async function locateGitDir(folder: string): Promise<string | null> {
+interface CheckoutLocation {
+  gitDir: string
+  linked?: LinkedCheckout
+}
+
+/**
+ * The checkout holding `folder`: its Git directory (`.git` itself, or where a
+ * `.git` file points), and for a linked worktree where it sits and whose it
+ * is. Only a linked worktree's Git directory has a `commondir` file; a
+ * submodule's `.git` file points too, without one.
+ */
+export async function locateCheckout(folder: string): Promise<CheckoutLocation | null> {
   for (let dir = resolve(folder); ; dir = dirname(dir)) {
     const dotGit = join(dir, ".git")
     const info = await stat(dotGit).catch(() => null)
-    if (info?.isDirectory()) return dotGit
+    if (info?.isDirectory()) return { gitDir: dotGit }
     if (info?.isFile()) {
       const pointer = await readText(dotGit)
-      return pointer?.startsWith("gitdir: ") ? resolve(dir, pointer.slice("gitdir: ".length)) : null
+      if (!pointer?.startsWith("gitdir: ")) return null
+      const gitDir = resolve(dir, pointer.slice("gitdir: ".length))
+      const common = await readText(join(gitDir, "commondir"))
+      if (!common) return { gitDir }
+      const commonDir = resolve(gitDir, common)
+      return { gitDir, linked: { path: dir, repoRoot: basename(commonDir) === ".git" ? dirname(commonDir) : commonDir } }
     }
     if (dirname(dir) === dir) return null
   }
+}
+
+export async function locateGitDir(folder: string): Promise<string | null> {
+  return (await locateCheckout(folder))?.gitDir ?? null
+}
+
+function shown(checkout: Checkout): CheckoutHead | null {
+  if (!checkout.head || !checkout.linked) return checkout.head
+  return { ...checkout.head, linked: checkout.linked }
 }
 
 /**
@@ -62,7 +87,7 @@ export async function locateGitDir(folder: string): Promise<string | null> {
  */
 export class CheckoutHeadService {
   private readonly checkouts = new Map<string, Checkout>()
-  private readonly gitDirs = new Map<string, string>()
+  private readonly locations = new Map<string, CheckoutLocation>()
   private readonly changed: (heads: CheckoutHeads) => void
   private closed = false
 
@@ -74,14 +99,14 @@ export class CheckoutHeadService {
     const usedAt = Date.now()
     const entries = await Promise.all(
       folders.map(async (folder): Promise<[string, CheckoutHead | null]> => {
-        const gitDir = this.gitDirs.get(folder) ?? (await locateGitDir(folder))
-        if (!gitDir || this.closed) return [folder, null]
-        this.gitDirs.set(folder, gitDir)
-        const checkout = this.follow(gitDir)
+        const location = this.locations.get(folder) ?? (await locateCheckout(folder))
+        if (!location || this.closed) return [folder, null]
+        this.locations.set(folder, location)
+        const checkout = this.follow(location)
         checkout.folders.add(folder)
         checkout.usedAt = usedAt
         await (checkout.reading ?? Promise.resolve())
-        return [folder, checkout.head]
+        return [folder, shown(checkout)]
       })
     )
     this.trim()
@@ -92,13 +117,13 @@ export class CheckoutHeadService {
     this.closed = true
     for (const checkout of this.checkouts.values()) checkout.watcher?.close()
     this.checkouts.clear()
-    this.gitDirs.clear()
+    this.locations.clear()
   }
 
-  private follow(gitDir: string): Checkout {
+  private follow({ gitDir, linked }: CheckoutLocation): Checkout {
     const known = this.checkouts.get(gitDir)
     if (known) return known
-    const checkout: Checkout = { gitDir, folders: new Set(), head: null, watcher: null, usedAt: 0, reading: null, stale: false, announce: false }
+    const checkout: Checkout = { gitDir, linked, folders: new Set(), head: null, watcher: null, usedAt: 0, reading: null, stale: false, announce: false }
     this.checkouts.set(gitDir, checkout)
     this.watchHead(checkout)
     this.refresh(checkout, false)
@@ -146,7 +171,7 @@ export class CheckoutHeadService {
       const tell = checkout.announce && headKey(checkout.head) !== before
       checkout.announce = false
       if (this.closed || this.checkouts.get(checkout.gitDir) !== checkout) return
-      if (tell) this.changed(Object.fromEntries([...checkout.folders].map((folder) => [folder, checkout.head])))
+      if (tell) this.changed(Object.fromEntries([...checkout.folders].map((folder) => [folder, shown(checkout)])))
       // A checkout that is gone is found again, or not, on the next read.
       if (checkout.head === null) this.forget(checkout)
     })()
@@ -156,7 +181,7 @@ export class CheckoutHeadService {
     checkout.watcher?.close()
     checkout.watcher = null
     if (this.checkouts.get(checkout.gitDir) === checkout) this.checkouts.delete(checkout.gitDir)
-    for (const folder of checkout.folders) if (this.gitDirs.get(folder) === checkout.gitDir) this.gitDirs.delete(folder)
+    for (const folder of checkout.folders) if (this.locations.get(folder)?.gitDir === checkout.gitDir) this.locations.delete(folder)
   }
 
   private trim(): void {

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { realpath } from "node:fs/promises"
 import { isAbsolute, relative } from "node:path"
 import { z } from "zod"
+import { locateCheckout } from "./checkout-heads.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 import type { WorkspaceMoves } from "./workspace-moves.js"
 import { git } from "./worktree-git.js"
@@ -17,10 +18,11 @@ interface Deps {
 }
 
 export interface WorkspaceStatus {
-  makesChangesIn: "its own branch" | "the project folder" | "a folder outside Git"
+  makesChangesIn: "its own branch" | "a worktree made outside Mako" | "the project folder" | "a folder outside Git"
   folder: string
   branch?: string
   uncommittedFiles?: number
+  outsideWorktree?: { worktree: string; project: string }
   threadBranch?: { branch: string; worktree: string; project: string; commitsSinceBranching?: number }
   move?: "asking" | "allowed" | "declined" | "moving"
 }
@@ -48,6 +50,8 @@ export async function moveablePlace(worktrees: Worktrees | null, conversationId:
   const current = worktrees.ofConversation(conversationId)
   if (current && (await within(current.path, cwd)))
     return { refused: `This Session already works on its own branch, ${current.branch}, in ${current.path}.` }
+  const linked = (await locateCheckout(cwd))?.linked
+  if (linked) return { refused: `This Session already works in a worktree of ${linked.repoRoot}, at ${linked.path}, made outside Mako.` }
   const project = await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")
   if (!project) return { refused: "This folder isn't in a Git repository, so there's no branch to move onto." }
   return current
@@ -71,15 +75,17 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const cwd = cwdOf(conversationId)
       const worktree = deps.worktrees?.ofConversation(conversationId)
       const onIt = worktree ? await within(worktree.path, cwd) : false
-      const [project, branch, changed] = await Promise.all([
+      const [project, branch, changed, checkout] = await Promise.all([
         git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => ""),
         git(cwd, ["branch", "--show-current"]).catch(() => ""),
         uncommitted(cwd),
+        onIt ? null : locateCheckout(cwd),
       ])
       const status: WorkspaceStatus = {
-        makesChangesIn: onIt ? "its own branch" : project ? "the project folder" : "a folder outside Git",
+        makesChangesIn: onIt ? "its own branch" : checkout?.linked ? "a worktree made outside Mako" : project ? "the project folder" : "a folder outside Git",
         folder: cwd,
       }
+      if (checkout?.linked) status.outsideWorktree = { worktree: checkout.linked.path, project: checkout.linked.repoRoot }
       if (branch) status.branch = branch
       if (changed !== undefined) status.uncommittedFiles = changed
       if (worktree) {
@@ -126,7 +132,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "workspace_status",
     {
       description:
-        "Where this Session makes changes: the project folder itself, or its Thread's own branch (a Git worktree Mako made). Returns the folder, branch, uncommitted files, the Thread's branch and its commits, and the answer to a move you asked for.",
+        "Where this Session makes changes: the project folder itself, its Thread's own branch (a Git worktree Mako made), or a worktree made outside Mako. Returns the folder, branch, uncommitted files, the Thread's branch and its commits, and the answer to a move you asked for.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

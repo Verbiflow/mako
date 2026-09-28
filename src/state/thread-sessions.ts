@@ -65,31 +65,38 @@ export interface OnScreen {
 }
 
 /** The same choice `ConversationSurface` makes between the viewer and a live panel. */
-function onScreen(view: ViewSlot | null, live: LiveSlot | null, draft: SessionDraft | null, threadOf: Readonly<Record<string, string>>): OnScreen {
+function onScreen(view: ViewSlot | null, live: LiveSlot | null, draft: SessionDraft | null, threadOf: Readonly<Record<string, string>>, liveMovedTo: string | undefined): OnScreen {
   const viewerShown = view && (!live || view.viewingPath !== live.threadPath || (live.starting && view.viewingPath !== undefined))
   if (viewerShown) {
     const { ref } = view
-    return { thread: rowThread(ref, threadOf), session: ref.sessionId, cwd: ref.cwd, title: prefsStore.get().titleOverrides[ref.path] ?? ref.title }
+    return { thread: rowThread(ref, threadOf), session: ref.sessionId, cwd: ref.currentCwd ?? ref.cwd, title: prefsStore.get().titleOverrides[ref.path] ?? ref.title }
   }
   if (live) {
     const title = (live.threadPath ? prefsStore.get().titleOverrides[live.threadPath] : undefined) ?? live.title
-    return { thread: rowThread(live, threadOf), session: live.sessionId, cwd: live.cwd, title }
+    return { thread: rowThread(live, threadOf), session: live.sessionId, cwd: liveMovedTo ?? live.cwd, title }
   }
   if (draft) return { thread: draft.thread, draft, cwd: draft.cwd, title: draft.title }
   return {}
 }
 
+/** Where the live conversation's catalog row says it moved to since it started, if anywhere. */
+function movedTo(state: ThreadsState, live: LiveSlot | null): string | undefined {
+  return live?.threadPath ? state.threads.find((ref) => ref.path === live.threadPath)?.currentCwd : undefined
+}
+
 export function currentOnScreen(): OnScreen {
   const groups = threadGroupsStore.get()
-  return onScreen(viewSlot(threadsStore.get()), liveSlot(acpStore.get()), openSessionDraft(groups), groups.threadOf)
+  const live = liveSlot(acpStore.get())
+  return onScreen(viewSlot(threadsStore.get()), live, openSessionDraft(groups), groups.threadOf, movedTo(threadsStore.get(), live))
 }
 
 export function useOnScreen(): OnScreen {
   const view = useThreads(viewSlot, shallowEqual)
   const live = useAcp(liveSlot, shallowEqual)
+  const liveMovedTo = useThreads((state) => movedTo(state, live))
   const draft = useThreadGroups(openSessionDraft)
   const threadOf = useThreadGroups((state) => state.threadOf)
-  return onScreen(view, live, draft, threadOf)
+  return onScreen(view, live, draft, threadOf, liveMovedTo)
 }
 
 /** One tab of a Thread's strip: a Session, or the Thread's new tab. */
@@ -327,7 +334,7 @@ export function watchThreadSessions(): () => void {
     attached = tabsStore.get().activeId
     if (threadGroupsStore.get().open !== null && (view || live || switched)) leaveSessionDraft()
     const { groups, lastViewed, threadOf } = threadGroupsStore.get()
-    const here = onScreen(view, live, null, threadOf)
+    const here = onScreen(view, live, null, threadOf, undefined)
     if (here.thread && here.session && groups[here.thread] && lastViewed[here.thread] !== here.session)
       threadGroupsStore.set({ lastViewed: { ...lastViewed, [here.thread]: here.session } })
   }

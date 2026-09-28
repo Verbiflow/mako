@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
@@ -10,6 +10,7 @@ import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
+import { followCheckouts } from "@/state/checkout-heads"
 import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { workspaceName } from "@/lib/format"
@@ -150,7 +151,12 @@ export const ThreadRow = memo(function ThreadRow({
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
-  const branch = useWorktrees((state) => worktreeAt(state.worktrees, ref.cwd)?.worktree.branch)
+  const workingIn = ref.currentCwd ?? ref.cwd
+  // Only a Session that moved has a folder the rail doesn't already follow.
+  useEffect(() => {
+    if (ref.currentCwd) followCheckouts([ref.currentCwd])
+  }, [ref.currentCwd])
+  const branch = useWorktrees((state) => worktreeAt(state.worktrees, workingIn)?.worktree.branch ?? worktreeAt(state.outside, workingIn)?.worktree.branch)
   const project = useWorktrees((state) => (ref.cwd ? state.folderMap(ref.cwd) : undefined))
   const active = useSession((state) => state.meta?.sessionFile === ref.path)
   const selectedPath = useThreads(

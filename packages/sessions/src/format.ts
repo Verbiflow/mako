@@ -77,6 +77,8 @@ export interface ThreadRef {
   /** The native file (or directory) holding the full session. */
   path: string
   cwd?: string
+  /** Where its latest turn ran, when that isn't `cwd`: a harness moved it, as Claude Code's EnterWorktree does. `cwd` stays where it started, which is where it resumes. */
+  currentCwd?: string
   workspace?: string
   title?: string
   model?: string

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
+import type { CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
 import type { GitStatus } from "@/lib/types"
 import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview } from "../../electron/contracts/thread-worktrees.ts"
@@ -7,6 +8,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
+import { checkoutHeadsStore } from "@/state/checkout-heads"
 import { confirmAction } from "@/state/confirm"
 import { createHook, createStore } from "@/state/store"
 
@@ -19,30 +21,55 @@ import { createHook, createStore } from "@/state/store"
  */
 interface WorktreesState {
   worktrees: readonly ThreadWorktree[]
+  /**
+   * Worktrees made outside Mako that a folder on screen is in: an agent's own
+   * `git worktree add`, a harness's worktree mode, the user's. They come
+   * with the checkout heads, so finding them costs no Git call.
+   */
+  outside: readonly OutsideWorktree[]
   /** New with every list and every change to the chats, so what groups by folder regroups. */
   folderMap: FolderMap
 }
 
+export interface OutsideWorktree extends LinkedCheckout {
+  branch: string | undefined
+}
+
 /** The worktree holding `path`, and the rest of the path inside it ("" or "/web"). */
-export function worktreeAt(
-  worktrees: readonly ThreadWorktree[],
+export function worktreeAt<Worktree extends { path: string }>(
+  worktrees: readonly Worktree[],
   path: string | undefined
-): { worktree: ThreadWorktree; inside: string } | undefined {
+): { worktree: Worktree; inside: string } | undefined {
   if (!path) return undefined
   for (const worktree of worktrees)
     if (path === worktree.path || path.startsWith(`${worktree.path}/`)) return { worktree, inside: path.slice(worktree.path.length) }
   return undefined
 }
 
+function outsideOf(heads: CheckoutHeads, worktrees: readonly ThreadWorktree[]): OutsideWorktree[] {
+  const found = new Map<string, OutsideWorktree>()
+  for (const head of Object.values(heads)) {
+    if (!head?.linked || found.has(head.linked.path) || worktrees.some((worktree) => worktree.path === head.linked?.path)) continue
+    found.set(head.linked.path, { ...head.linked, branch: head.kind === "detached" ? undefined : head.name })
+  }
+  return [...found.values()]
+}
+
 function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
   const chats = chatFoldersStore.get()
+  const outside = outsideOf(checkoutHeadsStore.get().heads, worktrees)
   return {
     worktrees,
+    outside,
     folderMap: (path) => {
-      const found = worktreeAt(worktrees, path)
+      const found = worktreeAt(worktrees, path) ?? worktreeAt(outside, path)
       return found ? `${found.worktree.repoRoot}${found.inside}` : chatGroupOf(path, chats)
     },
   }
+}
+
+function outsideKey(outside: readonly OutsideWorktree[]): string {
+  return outside.map((worktree) => `${worktree.path}\n${worktree.branch ?? ""}`).join("\n")
 }
 
 export const worktreesStore = createStore<WorktreesState>(stateOf([]))
@@ -50,6 +77,11 @@ export const useWorktrees = createHook(worktreesStore)
 
 mapWorktreeFolders((path) => worktreesStore.get().folderMap(path))
 chatFoldersStore.subscribe(() => worktreesStore.set(stateOf(worktreesStore.get().worktrees)))
+checkoutHeadsStore.subscribe(() => {
+  const current = worktreesStore.get()
+  const next = stateOf(current.worktrees)
+  if (outsideKey(next.outside) !== outsideKey(current.outside)) worktreesStore.set(next)
+})
 
 let reads = 0
 

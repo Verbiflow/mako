@@ -1,5 +1,4 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"

@@ -6,7 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { homeRelative } from "@/lib/skill-matrix"
 import { acpStore, useAcp } from "@/state/acp"
 import { titleFromPrompt } from "@/state/acp-start"
-import { followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
+import { checkoutLabel, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { projectDraftKey, useDrafts } from "@/state/drafts"
 import { setPref, usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
@@ -118,6 +118,9 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
     if (folder) followCheckouts([folder])
   }, [folder])
   const head = useCheckoutHead(folder)
+  // A worktree made outside Mako (the agent's own, a harness's worktree mode) is its own branch too.
+  const outside = worktree ? undefined : head?.linked
+  const outsideBranch = outside && head ? checkoutLabel(head) : undefined
   const changed = useSession((state) => (cwd && state.git?.cwd === cwd ? state.git.files.length : 0))
   // Either store can change the answer; each hook wakes the control, and the render reads both.
   useAcp((acp) => moveReadiness(acp, threadsStore.get()))
@@ -139,20 +142,26 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
               : changed
                 ? `Moves it to a worktree on a new branch. The conversation and the ${plural(changed, "changed file", "changed files")} come along`
                 : "Moves it to a worktree on a new branch. The conversation comes along"
+  const branch = worktree?.branch ?? outsideBranch
   const choices: Record<Workspace, Choice> = worktree
     ? {
         "project-folder": { detail: "Its work comes back through Merge into main or a pull request", disabled: true },
         "own-branch": { detail: `${worktree.branch}, in ${homeRelative(worktree.path)}` },
       }
-    : {
-        "project-folder": { detail: `Edits ${homeRelative(folder)} directly, beside you and anything else running there` },
-        "own-branch": { detail: moveDetail, disabled: ready !== "ready" },
-      }
-  const label = moving ? "Moving…" : worktree ? branchLabel(worktree.branch) : "Project folder"
+    : outside
+      ? {
+          "project-folder": { detail: `Its work comes back to ${homeRelative(outside.repoRoot)} through a merge or a pull request`, disabled: true },
+          "own-branch": { detail: `${outsideBranch}, in ${homeRelative(outside.path)}, a worktree made outside Mako` },
+        }
+      : {
+          "project-folder": { detail: `Edits ${homeRelative(folder)} directly, beside you and anything else running there` },
+          "own-branch": { detail: moveDetail, disabled: ready !== "ready" },
+        }
+  const label = moving ? "Moving…" : branch ? branchLabel(branch) : "Project folder"
   return (
     <WorkspaceMenu
       heading="Where this thread makes changes"
-      value={worktree ? "own-branch" : "project-folder"}
+      value={branch ? "own-branch" : "project-folder"}
       choices={choices}
       onChoose={(value) => {
         if (value !== "own-branch") return
@@ -162,13 +171,14 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
       trigger={
         <button
           type="button"
-          data-workspace={worktree ? "own-branch" : "project-folder"}
+          data-workspace={branch ? "own-branch" : "project-folder"}
+          data-worktree-origin={outside ? "outside" : undefined}
           disabled={moving}
-          aria-label={moving ? "Moving to its own branch" : worktree ? `Makes changes on its own branch, ${worktree.branch}` : "Makes changes in the project folder"}
-          title={worktree ? worktree.branch : "Makes changes in the project folder"}
+          aria-label={moving ? "Moving to its own branch" : branch ? `Makes changes on its own branch, ${branch}${outside ? ", in a worktree made outside Mako" : ""}` : "Makes changes in the project folder"}
+          title={branch ?? "Makes changes in the project folder"}
           className={triggerClass}
         >
-          {moving ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : worktree ? <GitBranchIcon className="size-3 shrink-0" /> : <FolderIcon className="size-3 shrink-0" />}
+          {moving ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : branch ? <GitBranchIcon className="size-3 shrink-0" /> : <FolderIcon className="size-3 shrink-0" />}
           <span data-collapse="1" className="truncate">
             {label}
           </span>
