@@ -11,8 +11,21 @@ import { ThreadIdSchema, type ThreadPlacement } from "../contracts/thread-identi
  * the first attempt created. Adding Sessions to a Thread and splitting them
  * out are receipted the same way.
  */
-export function installThreadGroupsIpc(store: ThreadStore | null, live: LiveConversations) {
-  registerIpc("mako:thread-groups", (): ThreadGroup[] => store?.groups() ?? [])
+export function installThreadGroupsIpc(store: ThreadStore | null, live: LiveConversations, problem?: string, notify?: (message: string) => void) {
+  // Every window asks for groups as it loads: without a store each says why,
+  // and a store started over after damage is told once.
+  let told = false
+  registerIpc("mako:thread-groups", (): ThreadGroup[] => {
+    if (!store) {
+      if (problem) throw new Error(problem)
+      return []
+    }
+    if (problem && !told) {
+      told = true
+      notify?.(problem)
+    }
+    return store.groups()
+  })
   registerIpc("mako:thread-create-session", (_event, operationId: string, thread: string): ThreadPlacement => {
     if (!store) throw new Error("This Mako couldn't open its Thread store, so it can't add a session to a Thread.")
     const placed = store.createSession({ operationId, thread: ThreadIdSchema.parse(thread), actor: store.person() })

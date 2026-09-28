@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { mkdirSync, realpathSync } from "node:fs"
+import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, join, resolve, sep } from "node:path"
 import { DatabaseSync, type StatementSync } from "node:sqlite"
@@ -61,6 +61,16 @@ export const THREAD_STORE_SCHEMA = 1
  */
 export const THREAD_STORE_MIGRATION = 2
 
+/**
+ * The store is synchronous on the host's main thread. Opening waits as long
+ * as another host's migration could take; after that no host holds the write
+ * lock for more than one batch of `PLACE_BATCH` rows (about 25 ms), so a
+ * longer wait means a host is stuck, and freezing this one helps nobody.
+ */
+const OPEN_WAIT_MS = 5000
+const WRITE_WAIT_MS = 1000
+const PLACE_BATCH = 500
+
 /** What an operation acts on; its digest tells a replay from a conflict. */
 interface OperationContent {
   thread?: ThreadId
@@ -105,6 +115,41 @@ export function threadStorePath(input: { dataRoot: string; appData: string; home
   const isProfile = root === appData || root.startsWith(appData + sep)
   if (!isProfile) return join(root, "threads.sqlite")
   return join(input.home ?? homedir(), ".mako", "threads.sqlite")
+}
+
+/** SQLite's codes for a file that is damaged or isn't a database at all. */
+const DAMAGED_CODES = new Set([11, 26])
+const SqliteErrorSchema = z.object({ errcode: z.number() })
+
+/** The store, or why Threads are off; a store started over after damage has both. */
+export interface OpenedThreadStore {
+  store: ThreadStore | null
+  problem?: string
+}
+
+/**
+ * Open the store, or say why Threads are off. A damaged file is kept beside
+ * the store under a dated name and a new store starts: Sessions come back
+ * from their journals and the catalog, and only the groupings made before
+ * are lost, still readable in the kept file.
+ */
+export function openThreadStore(path: string, options: ThreadStoreOptions = {}): OpenedThreadStore {
+  try {
+    return { store: new ThreadStore(path, options) }
+  } catch (error) {
+    const sqlite = SqliteErrorSchema.safeParse(error)
+    if (error instanceof ThreadStoreVersionError || !sqlite.success || !DAMAGED_CODES.has(sqlite.data.errcode))
+      return { store: null, problem: `Threads are off: ${error instanceof Error ? error.message : String(error)}` }
+    const kept = `${path}.damaged-${new Date(options.now?.() ?? Date.now()).toISOString().replaceAll(":", "-")}`
+    for (const suffix of ["", "-wal", "-shm"])
+      if (existsSync(path + suffix)) renameSync(path + suffix, kept + suffix)
+    hostWarn("threads", "the Thread store was damaged; a new one was started", { kept })
+    try {
+      return { store: new ThreadStore(path, options), problem: `Mako's Thread store was damaged, so it started a new one. Sessions keep their history, but Threads grouped before are separate again. The old store is kept at ${kept}.` }
+    } catch (retry) {
+      return { store: null, problem: `Threads are off: ${retry instanceof Error ? retry.message : String(retry)}` }
+    }
+  }
 }
 
 export type SessionOrigin = "imported" | "started" | "captured" | "fork" | "delegation" | "new"
@@ -374,6 +419,9 @@ export class ThreadStore {
   private readonly executions = new Map<string, SessionExecution>()
   private dataVersion = -1
   private changeSeq = 0
+  /** Sessions whose Thread another host changed since `takeExternalChanges` last ran. */
+  private readonly external = new Set<string>()
+  private externalAll = false
   private readonly reported = new Set<string>()
   private readonly statements = new Map<string, StatementSync>()
   readonly conflicts: StoreConflict[] = []
@@ -385,7 +433,7 @@ export class ThreadStore {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     try {
-      this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
+      this.db.exec(`PRAGMA busy_timeout=${OPEN_WAIT_MS}; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
         CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
       // Lock before reading the version so two hosts creating the store at
       // once cannot both mint a device and a principal.
@@ -413,6 +461,7 @@ export class ThreadStore {
       this.changeSeq = CountSchema.parse(this.db.prepare("SELECT coalesce(max(seq), 0) AS count FROM placement_changes").get()).count
       this.localPrincipal = PrincipalIdSchema.parse(this.meta("principal"))
       this.self = ExecutionOwnerSchema.parse(JSON.parse(z.string().parse(this.meta("self"))))
+      this.db.exec(`PRAGMA busy_timeout=${WRITE_WAIT_MS}`)
     } catch (error) {
       this.db.close()
       throw error
@@ -562,7 +611,9 @@ export class ThreadStore {
   /**
    * Rows served together, checked against other hosts' commits once. Only
    * rows never placed, or whose Session changed Thread, touch the database,
-   * all in one transaction.
+   * in transactions of `PLACE_BATCH` rows, parents before their forks. When
+   * a batch fails, the rows placed so far are still returned; the rest are
+   * placed the next time they're served.
    */
   placeMany(refs: readonly SourceRef[], actor: Actor): Map<string, ThreadPlacement> {
     this.syncVersion()
@@ -573,8 +624,35 @@ export class ThreadStore {
       if (cached) placed.set(ref.path, cached)
       else missing.push(ref)
     }
-    if (missing.length) for (const [path, found] of this.resolveRefs(missing, actor)) placed.set(path, found)
+    const ordered = parentsFirst(missing.map((ref) => ({ ref }))).map(({ ref }) => ref)
+    for (let start = 0; start < ordered.length; start += PLACE_BATCH) {
+      try {
+        for (const [path, found] of this.resolveRefs(ordered.slice(start, start + PLACE_BATCH), actor)) placed.set(path, found)
+      } catch (error) {
+        if (!placed.size) throw error
+        hostWarn("threads", "some rows were served without their Thread", { unplaced: ordered.length - start, error: error instanceof Error ? error.message : String(error) })
+        break
+      }
+    }
     return placed
+  }
+
+  /**
+   * Sessions whose Thread another host changed since the last call, or
+   * `"all"` when this host fell further behind than the change log keeps.
+   * Reads `PRAGMA data_version`, which costs a look at shared memory.
+   */
+  takeExternalChanges(): SessionId[] | "all" | undefined {
+    this.syncVersion()
+    if (this.externalAll) {
+      this.externalAll = false
+      this.external.clear()
+      return "all"
+    }
+    if (!this.external.size) return undefined
+    const sessions = [...this.external].map((session) => SessionIdSchema.parse(session))
+    this.external.clear()
+    return sessions
   }
 
   /** Where a Session belongs now, following merges. */
@@ -1536,17 +1614,24 @@ export class ThreadStore {
     if (version === this.dataVersion) return
     this.dataVersion = version
     this.executions.clear()
-    this.consumeChanges()
+    this.consumeChanges(true)
   }
 
-  private consumeChanges(): void {
+  private consumeChanges(external: boolean): void {
     const rows = this.sql("SELECT seq, session_id FROM placement_changes WHERE seq > ? ORDER BY seq").all(this.changeSeq)
       .map((row) => PlacementChangeRowSchema.parse(row))
     const first = rows[0]
     if (!first) return
     // Rows are consecutive unless an open pruned past this host's position.
-    if (first.seq !== this.changeSeq + 1) this.forgetPlacements()
-    else for (const row of rows) this.forgetSession(row.session_id)
+    if (first.seq !== this.changeSeq + 1) {
+      this.forgetPlacements()
+      if (external) this.externalAll = true
+    } else {
+      for (const row of rows) {
+        this.forgetSession(row.session_id)
+        if (external) this.external.add(row.session_id)
+      }
+    }
     this.changeSeq = rows.at(-1)?.seq ?? this.changeSeq
   }
 
@@ -1572,9 +1657,11 @@ export class ThreadStore {
     this.db.exec("BEGIN IMMEDIATE")
     this.depth += 1
     try {
+      // Other hosts' commits before this one are theirs; the rest are this write's.
+      this.syncVersion()
       const result = work()
       this.db.exec("COMMIT")
-      this.consumeChanges()
+      this.consumeChanges(false)
       return result
     } catch (error) {
       this.db.exec("ROLLBACK")

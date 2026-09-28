@@ -59,7 +59,8 @@ import type { RewindInput } from "./contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "./contracts/live-actions.js"
 import { LiveConversations } from "./live-conversations.js"
 import { SessionMemory, SessionHeldError, sessionMemoryPath } from "./session-memory.js"
-import { ThreadStore, threadStorePath } from "./thread-store.js"
+import { openThreadStore, threadStorePath } from "./thread-store.js"
+import { followOtherHosts } from "./thread-groups-follow.js"
 import { ThreadArchives } from "./thread-archives.js"
 import { ThreadLifecycle } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
@@ -339,16 +340,10 @@ installSessionMemory(sessionMemory)
  * native session belongs to, so every host names a conversation alike. A
  * fixture root keeps its own store.
  */
-const threadStore = openThreadStore()
-function openThreadStore(): ThreadStore | null {
-  try {
-    return new ThreadStore(threadStorePath({ dataRoot: app.getPath("userData"), appData: app.getPath("appData") }))
-  } catch (error) {
-    hostWarn("threads", "Thread store unavailable", { error: error instanceof Error ? error.message : String(error) })
-    return null
-  }
-}
+const { store: threadStore, problem: threadStoreProblem } = openThreadStore(threadStorePath({ dataRoot: app.getPath("userData"), appData: app.getPath("appData") }))
+if (threadStoreProblem) hostWarn("threads", "Thread store problem", { problem: threadStoreProblem })
 installThreadStore(threadStore)
+const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event) => emit(event)) : () => {}
 const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
 /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
 const conversationsIn = (path: string, status: (value: string) => boolean) => liveConversations
@@ -2081,7 +2076,7 @@ app.whenReady().then(async () => {
     external: (path) => Boolean(threadActivitySnapshot()[path]),
   })
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
-  installThreadGroupsIpc(threadStore, liveConversations)
+  installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
   installThreadWorktreesIpc(threadWorktrees)
   const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>
     hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))
@@ -2277,6 +2272,7 @@ const quitLifecycle = backgroundLifecycle({
       conversationMcp?.close()
       sessionMemory?.close()
       installThreadStore(null)
+      stopFollowingThreads()
       threadStore?.close()
       threadArchives?.close()
       checkoutHeads.close()
