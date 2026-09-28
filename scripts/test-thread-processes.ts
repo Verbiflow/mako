@@ -14,7 +14,7 @@ import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { environmentTools } from "../electron/environment-tools.js"
 import { applyThreadEnvironment, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { readRecipe, recipeValues, RECIPE_PATH } from "../electron/thread-recipe.js"
+import { overridePath, readRecipe, recipeValues, RECIPE_PATH } from "../electron/thread-recipe.js"
 import { ThreadStore } from "../electron/thread-store.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 
@@ -109,7 +109,35 @@ try {
   await invalid(JSON.stringify({ values: { PORT: "{prot}" } }), /\{prot\} isn't one of Mako's values/)
   await invalid(JSON.stringify({ values: { PORT: "{port+10}" } }), /past this Thread's 10 ports/)
   await invalid(JSON.stringify({ values: { PATH: "/tmp" } }), /agent's own shell needs this one/)
-  await invalid(JSON.stringify({ values: { MAKO_THREAD_PORT: "1" } }), /MAKO_ names are Mako's own/)
+  await invalid(JSON.stringify({ values: { MAKO_THREAD_PORT: "1" } }), /MAKO_THREAD_PORT is Mako's own/)
+  assert.equal((await recipeIn(JSON.stringify({ processes: { web: { command: "npm run web", values: { MAKO_PROFILE: "thread-{thread}" } } } }))).kind, "ready", "a project's own MAKO_ names, such as Mako's MAKO_PROFILE, are the project's")
+  await invalid(JSON.stringify({ prepare: [{ command: "npm ci", inputs: ["../package-lock.json"] }] }), /outside the checkout/)
+
+  // A person's overrides, outside the checkout: alone they're a recipe; with the team's file they merge over it.
+  const overrides = join(root, "recipes")
+  const personalFolder = mkdtempSync(join(root, "personal-"))
+  const personalFile = await overridePath(overrides, personalFolder)
+  mkdirSync(overrides, { recursive: true })
+  writeFileSync(personalFile, JSON.stringify({ processes: { web: { command: "node server.mjs", port: "{port}" } } }))
+  const personal = await readRecipe(personalFolder, fixture, overrides)
+  assert.equal(personal.kind, "ready")
+  if (personal.kind === "ready") assert.deepEqual(personal.sources, [personalFile])
+  mkdirSync(join(personalFolder, ".mako"))
+  writeFileSync(join(personalFolder, RECIPE_PATH), JSON.stringify({ values: { PORT: "{port}" }, processes: { web: { command: "npm run dev", port: "{port}" }, worker: { command: "npm run worker" } }, checks: { quick: "npm test" } }))
+  writeFileSync(personalFile, JSON.stringify({ values: { DATABASE_URL: "postgres://localhost/{thread}" }, processes: { web: { command: "npm run dev -- --turbo" } } }))
+  const merged = await readRecipe(personalFolder, fixture, overrides)
+  assert.equal(merged.kind, "ready")
+  if (merged.kind === "ready") {
+    assert.deepEqual(merged.sources, [join(personalFolder, RECIPE_PATH), personalFile])
+    assert.equal(merged.recipe.processes.web?.command, "npm run dev -- --turbo", "a person's field wins")
+    assert.equal(merged.recipe.processes.web?.port, "{port}", "the team's other fields stay")
+    assert.ok(merged.recipe.processes.worker)
+    assert.deepEqual(Object.keys(merged.recipe.values), ["PORT", "DATABASE_URL"])
+  }
+  writeFileSync(personalFile, JSON.stringify({ processes: { api: { port: "{port+1}" } } }))
+  const incomplete = await readRecipe(personalFolder, fixture, overrides)
+  assert.equal(incomplete.kind, "invalid")
+  if (incomplete.kind === "invalid") assert.match(incomplete.message, /with .*recipes\/personal-.*\.json: processes\.api\.command/, "an override that leaves a process without a command is named with its file")
   await invalid(JSON.stringify({ processes: { web: { command: "x", port: "3000" } } }), /a process's port is \{port\} or \{port\+N\}/)
   await invalid(JSON.stringify({ processes: { web: { command: "x", cwd: "../elsewhere" } } }), /doesn't exist in this checkout|outside the checkout/)
   await invalid(JSON.stringify({ processes: { web: { command: "x", cwd: "/tmp" } } }), /relative to the checkout/)
@@ -185,6 +213,11 @@ try {
   await processes.start(thread, [{ kind: "process", name: "boom", command: "echo second run", cwd: root, env: process.env }])
   await processes.settle(thread, ["process-boom"], settle)
   assert.match(readFileSync(join(records, thread, "process-boom.log.1"), "utf8"), /broken config/, "the previous run's log is kept once")
+  const flakyPort = base + 6
+  const flaky = `require("node:http").createServer((_, response) => response.end("up")).listen(${flakyPort}, "127.0.0.1", () => setTimeout(() => { console.error("The development renderer must use a loopback URL"); process.exit(1) }, 300))`
+  await processes.start(thread, [{ kind: "process", name: "flaky", command: `node -e '${flaky}'`, cwd: root, env: process.env, port: flakyPort }])
+  const [flakyStatus] = await processes.settle(thread, ["process-flaky"], settle)
+  assert.equal(flakyStatus?.state.kind === "exited" && flakyStatus.state.code, 1, "a server that answers on its port and dies a moment later isn't reported running")
   await processes.start(thread, [{ kind: "process", name: "sleeper", command: "sleep 300", cwd: root, env: process.env }])
   const [sleeper] = await processes.settle(thread, ["process-sleeper"], settle)
   process.kill(-sleeper!.pid!, "SIGKILL")
@@ -275,8 +308,9 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   }
   const agent = await connect(conversation)
   const listed = (await agent.listTools()).tools.map((tool) => tool.name)
-  assert.deepEqual(listed.filter((name) => name.startsWith("environment_")), ["environment_status", "environment_start", "environment_stop", "environment_restart", "environment_logs", "environment_check", "environment_port"])
+  assert.deepEqual(listed.filter((name) => name.startsWith("environment_")), ["environment_status", "environment_start", "environment_stop", "environment_restart", "environment_logs", "environment_check", "environment_guide", "environment_port"])
   assert.match(JSON.stringify(await agent.callTool({ name: "environment_status", arguments: {} })), /running on port/)
+  assert.match(JSON.stringify(await agent.callTool({ name: "environment_guide", arguments: {} })), /Setting up this project's recipe/)
   const both = await agent.callTool({ name: "environment_logs", arguments: { process: "web", check: "quick" } })
   assert.equal(both.isError, true, "logs names one process or one check")
   await agent.close()
@@ -293,6 +327,56 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
   assert.match(await tools.stop(conversation), /Stopped (web, api|api, web)/)
   assert.equal(await portListening(toolBase + 1), false)
+
+  // Install and catch up: each step runs in a fresh copy and again only when its inputs change.
+  const installs = join(root, "installs.txt")
+  writeFileSync(join(project, "package-lock.json"), "{\"v\": 1}\n")
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, prepare: [{ command: `echo installed >> ${installs}`, inputs: ["package-lock.json"] }] }))
+  const count = () => existsSync(installs) ? readFileSync(installs, "utf8").split("\n").filter(Boolean).length : 0
+  assert.match(await tools.start(conversation), /web: running/)
+  assert.equal(count(), 1, "a fresh copy is prepared before its app starts")
+  await tools.stop(conversation)
+  await tools.start(conversation)
+  assert.equal(count(), 1, "unchanged inputs don't prepare again")
+  assert.match(await tools.status(conversation), /"state": "up to date"/)
+  await tools.stop(conversation)
+  writeFileSync(join(project, "package-lock.json"), "{\"v\": 2}\n")
+  assert.match(await tools.status(conversation), /runs before the next start or check/)
+  assert.match(await tools.check(conversation, "quick"), /passed/)
+  assert.equal(count(), 2, "a changed lockfile catches up, before a quick check too")
+  writeFileSync(join(project, "package-lock.json"), "{\"v\": 3}\n")
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, prepare: [{ command: "echo resolving; echo 'npm ERR! missing peer' >&2; exit 1", inputs: ["package-lock.json"] }] }))
+  const failedPrepare = await tools.start(conversation)
+  assert.match(failedPrepare, /Preparing this checkout failed \(crashed \(exit 1\)\), so nothing started\. It runs again on the next start\.\nLast lines of its log:\nresolving\nnpm ERR! missing peer/)
+  assert.equal(await portListening(toolBase), false)
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
+
+  // Room: under memory pressure another Thread's quiet app goes first; a Mac that stays critical makes the start wait.
+  const quietThread = ThreadIdSchema.parse(randomUUID())
+  title.set(quietThread, "Old experiment")
+  cleanups.push(() => processes.discard(quietThread))
+  await processes.start(quietThread, [{ kind: "process", name: "idle", command: "sleep 300", cwd: root, env: process.env }])
+  await processes.touch(quietThread)
+  writeFileSync(join(records, quietThread, "used"), String(Date.now() - 60 * 60 * 1000))
+  // Short of memory until the quiet app is gone.
+  const roomTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, title: (id) => title.get(id), pressure: async () =>
+    (await processes.active()).some((entry) => entry.thread === quietThread) ? "warning" : "normal" })
+  const roomy = await roomTools.start(conversation)
+  assert.match(roomy, /Stopped the quiet app of "Old experiment" \(\d+ MB, unused for 1 hour\) to make room\.\nweb: running/)
+  assert.equal((await processes.active()).some((entry) => entry.thread === quietThread), false)
+  const measured = JSON.parse(await roomTools.status(conversation))
+  assert.match(measured.processes[0].memory, /^\d+ MB$/, "each running process's memory is measured")
+  await roomTools.stop(conversation)
+  const critical = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, pressure: async () => "critical" })
+  await processes.start(quietThread, [{ kind: "process", name: "busy", command: "sleep 300", cwd: root, env: process.env }])
+  await processes.touch(quietThread)
+  assert.match(await critical.start(conversation), /^Waiting for room: this Mac is critically short of memory, with these Threads' apps running: "\S+" \(\d+ MB, used 0 min ago\)\. Nothing was started\./)
+  assert.equal(await portListening(toolBase), false)
+
+  // After a long quiet an app stops by itself; its files and data stay.
+  writeFileSync(join(records, quietThread, "used"), String(Date.now() - 7 * 60 * 60 * 1000))
+  assert.deepEqual(await processes.stopIdle(6 * 60 * 60 * 1000), [quietThread])
+  assert.deepEqual(await processes.active(), [])
 
   // Removing the Thread's worktree stops its app first and deletes its data after.
   const worktrees = new ThreadWorktreeService(join(root, "worktrees"), store, async () => [], async () => [], {
@@ -319,7 +403,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: recipe checked and resolved; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: recipe checked and resolved, personal overrides merged, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })
