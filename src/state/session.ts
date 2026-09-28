@@ -1070,7 +1070,8 @@ export const actions = {
   ): Promise<boolean> {
     try {
       if (attachments.length) {
-        const payload = { ...promptClipboard(text, attachments), ...(plainText === undefined ? {} : { text: plainText }) }
+        const payload = promptClipboard(text, attachments)
+        if (plainText !== undefined) payload.text = plainText
         try {
           await navigator.clipboard.write([new ClipboardItem({
             "text/plain": new Blob([payload.text], { type: "text/plain" }),

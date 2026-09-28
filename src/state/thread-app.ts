@@ -1,3 +1,4 @@
+import { z } from "zod"
 import { attachmentReference } from "@/lib/attachment-references"
 import type { Attachment } from "@/lib/attachments"
 import { getMako } from "@/lib/bridge"
@@ -83,8 +84,8 @@ const HIDDEN_KEY = "mako.thread-app-hidden.v1"
 
 function readHidden(): string[] {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]")
-    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []
+    const parsed = z.array(z.string()).safeParse(JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]"))
+    return parsed.success ? parsed.data : []
   } catch {
     return []
   }
