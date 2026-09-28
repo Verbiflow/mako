@@ -29,6 +29,9 @@ try {
     return { path: store, bytes: info.size, mtimeMs: info.mtimeMs, revision: String(wal?.mtimeMs ?? "missing") }
   }
   let discoveries = 0
+  // Periodic discovery sweeps run too, so the rescans a write causes are
+  // counted by the events the provider accepts.
+  const accepted = []
   // One database for every session, like OpenCode and Devin: any write
   // under the root re-runs discovery and drops the provider's cached reads.
   const provider = {
@@ -39,8 +42,11 @@ try {
     rescanDebounceMs: 50,
     // Like OpenCode and Devin: only the database and its sidecars count.
     watchTarget(path) {
-      seen.add(path.slice(root.length + 1))
-      return path.startsWith(store) ? path : null
+      const name = path.slice(root.length + 1)
+      seen.add(name)
+      if (!path.startsWith(store)) return null
+      accepted.push(name)
+      return path
     },
     async discover() {
       discoveries++
@@ -59,33 +65,30 @@ try {
   const catalog = new SessionCatalog([provider])
   await catalog.scan()
   catalog.startWatching()
-  await drained()
   // A backlogged fseventsd can deliver the store's creation, written before
-  // watching began, after it; that event's own rescan belongs to the baseline.
-  if (seen.has("store.db"))
-    for (let waited = 0; discoveries < 2; waited += 50) {
-      assert.ok(waited < 60_000, "the store's late creation event is rescanned")
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
+  // watching began, after it; the marker proves it has arrived by now.
+  await drained()
   const afterScan = peeks
   const scanned = discoveries
+  const before = accepted.length
   assert.equal(afterScan, 1, "the scan peeks once")
 
   await writeFile(`${store}-shm`, "reader")
   await drained()
   assert.equal(seen.has("store.db-shm"), false, "-shm events never reach the provider")
-  assert.equal(discoveries, scanned, "a -shm write, a reader's or the catalog's own, re-runs no discovery")
+  assert.deepEqual(accepted.slice(before), [], "a -shm write, a reader's or the catalog's own, re-runs no discovery")
   assert.equal(peeks, afterScan)
 
   await writeFile(`${store}-wal`, "commit")
   await drained()
   for (let waited = 0; peeks === afterScan && waited < 5_000; waited += 50)
     await new Promise((resolve) => setTimeout(resolve, 50))
-  assert.ok(discoveries > scanned, "a -wal write re-runs discovery")
+  assert.ok(accepted.slice(before).includes("store.db-wal") && discoveries > scanned, "a -wal write re-runs discovery")
   assert.equal(peeks, afterScan + 1, "and refreshes the changed session")
-  const settled = discoveries
+  const settled = accepted.length
   await drained()
-  assert.equal(discoveries, settled, "the peek's own -shm write does not start another")
+  assert.deepEqual(accepted.slice(settled), [], "the peek's own -shm write does not start another")
+  assert.equal(peeks, afterScan + 1)
   await catalog.stop()
   console.log("SQLite -shm writes: ignored by the watcher, so a read never re-triggers itself; -wal writes still refresh")
 } finally {
