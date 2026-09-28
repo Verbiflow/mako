@@ -1,5 +1,6 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
+import "@/index.css"
 import { Gallery } from "./app-chip-check"
 
 if (new URLSearchParams(location.search).has("light")) document.documentElement.classList.add("light")
