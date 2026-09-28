@@ -44,7 +44,7 @@ const CrashCodeSchema = z.object({
 
 /** Says where a fatal error was thrown, never what it said: a message can quote provider input. */
 export function crashSummary(cause: unknown): string {
-  if (!(cause instanceof Error)) return `a thrown ${cause === null ? "null" : typeof cause}`
+  if (!(cause instanceof Error)) return `a thrown ${Object.prototype.toString.call(cause).slice(8, -1).toLowerCase()}`
   const named = CrashCodeSchema.safeParse(cause).data?.code
   const causes = networkCauses(cause)
   const frames = (cause.stack ?? "")
