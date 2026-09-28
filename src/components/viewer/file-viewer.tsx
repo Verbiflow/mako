@@ -15,6 +15,7 @@ import { Divider } from "@/components/shell/divider"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { GitLoading } from "@/components/inspector/git-loading"
 import { StageStrip } from "@/components/stage/stage-strip"
+import { TranscriptControls } from "@/components/viewer/transcript-controls"
 import { engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
 import { useTabDrag, type DropSide } from "@/state/tab-drag"
 import { desktop } from "@/state/desktop"
@@ -298,17 +299,22 @@ function PaneDropOverlay({ paneId }: { paneId: string }) {
 
 function DocumentView({ document }: { document: ViewerDocument }) {
   const previewable =
-    document.kind === "file" &&
-    (hasRichPreview(document.path) || Boolean(document.file?.artifactPreview))
+    document.kind === "transcript" ||
+    (document.kind === "file" &&
+      (hasRichPreview(document.path) || Boolean(document.file?.artifactPreview)))
   return (
     <>
       <div className="flex h-8 shrink-0 items-center gap-1 border-b border-hairline px-2">
-        <span
-          className="min-w-0 flex-1 truncate px-1 font-mono text-label text-faint"
-          title={document.path}
-        >
-          {document.path}
-        </span>
+        {document.kind === "transcript" ? (
+          <TranscriptControls document={document} />
+        ) : (
+          <span
+            className="min-w-0 flex-1 truncate px-1 font-mono text-label text-faint"
+            title={document.path}
+          >
+            {document.path}
+          </span>
+        )}
         {document.file?.truncated ? (
           <span className="shrink-0 rounded bg-raised px-1.5 py-px text-label text-caution">
             first 2 MB
@@ -382,11 +388,11 @@ function DocumentView({ document }: { document: ViewerDocument }) {
         {document.error ? (
           <p className="p-4 text-ui text-removed">{document.error}</p>
         ) : document.loading ? (
-          <GitLoading kind="diff" label={`Reading ${document.path}`} />
+          <GitLoading kind="diff" label={`Reading ${document.kind === "transcript" ? document.title : document.path}`} />
         ) : document.kind === "diff" && document.diff ? (
           <CenterDiff diffs={document.diff.diffs} note={document.diff.note} />
-        ) : document.kind === "file" && document.file ? (
-          <Suspense fallback={<GitLoading kind="diff" label={`Opening ${document.path}`} />}>
+        ) : (document.kind === "file" || document.kind === "transcript") && document.file ? (
+          <Suspense fallback={<GitLoading kind="diff" label={`Opening ${document.title}`} />}>
             <View
               file={document.file}
               line={document.line}

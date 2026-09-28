@@ -35,6 +35,7 @@ const reads = [
   "mako:thread-page",
   "mako:thread-preview",
   "mako:thread-block",
+  "mako:transcript-document",
   "mako:thread-archives",
   "mako:thread-groups",
   "mako:worktrees",

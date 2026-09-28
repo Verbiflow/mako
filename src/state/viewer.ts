@@ -1,6 +1,8 @@
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { acpStore } from "@/state/acp-state"
 import type { FileContents, GitDiff } from "@/lib/types"
+import type { TranscriptDepth, TranscriptSource } from "../../electron/contracts/transcript-document.ts"
 
 /**
  * Files open for reading in the renderer workbench.
@@ -13,15 +15,27 @@ import type { FileContents, GitDiff } from "@/lib/types"
 export type ViewerSplit = "right" | "down"
 export type ViewerRenderMode = "source" | "preview"
 
+/**
+ * The Session a transcript tab reads: its conversation while that is open
+ * here, else its native record. Either can come or go while the tab is open.
+ */
+export interface TranscriptOf {
+  live?: string
+  path?: string
+  depth: TranscriptDepth
+  harness?: string
+}
+
 export interface ViewerDocument {
   id: string
-  kind: "file" | "diff"
+  kind: "file" | "diff" | "transcript"
   path: string
   liveId?: string
   threadPath?: string
   title: string
   file?: FileContents
   diff?: { title: string; diffs: GitDiff[]; note?: string }
+  transcript?: TranscriptOf
   loading: boolean
   error?: string
   line?: number
@@ -363,6 +377,69 @@ export const viewer = {
     }
   },
 
+  /**
+   * A Session's transcript as a document tab, read again as the Session
+   * goes on; see `readTranscript`.
+   */
+  async openTranscript(of: Omit<TranscriptOf, "depth">, title: string) {
+    if (!hasBridge() || (!of.live && !of.path)) return
+    const key = `transcript:${of.path ?? of.live}`
+    const document = placeDocument(
+      (id, previous) => ({
+        id,
+        kind: "transcript",
+        path: key,
+        title,
+        transcript: { ...previous?.transcript, ...of, depth: previous?.transcript?.depth ?? "concise" },
+        file: previous?.file,
+        loading: !previous?.file,
+        error: undefined,
+        pinned: previous?.pinned ?? false,
+        renderMode: previous?.renderMode ?? "preview",
+      }),
+      (candidate) => candidate.kind === "transcript" && (candidate.path === key || (of.live !== undefined && candidate.transcript?.live === of.live))
+    )
+    void watchActiveFile()
+    await viewer.readTranscript(document.id)
+  },
+
+  /**
+   * Read a transcript tab's Session as it is now: from its conversation
+   * while that is open here, else from its native record. A read that fails
+   * after one succeeded keeps what the tab shows.
+   */
+  async readTranscript(id: string, live?: boolean): Promise<void> {
+    const document = viewerStore.get().documents[id]
+    const of = document?.transcript
+    if (!document || !of) return
+    const source: TranscriptSource | undefined =
+      of.live && live !== false && acpStore.get().conversations[of.live] ? { kind: "live", id: of.live } : of.path ? { kind: "file", path: of.path } : undefined
+    if (!source) return
+    const mine = beginRequest(id)
+    try {
+      const read = await getMako().transcriptDocument(source, of.depth)
+      if (!requestIsCurrent(id, mine)) return
+      updateDocument(id, {
+        file: { path: "transcript.md", contents: read.markdown, size: read.markdown.length, binary: false, truncated: false },
+        title: read.title ?? document.title,
+        transcript: { ...of, harness: read.harness },
+        loading: false,
+        error: undefined,
+      })
+    } catch (error) {
+      if (!requestIsCurrent(id, mine)) return
+      if (source.kind === "live" && of.path) return viewer.readTranscript(id, false)
+      updateDocument(id, document.file ? { loading: false } : { loading: false, error: error instanceof Error ? error.message : String(error) })
+    }
+  },
+
+  setTranscriptDepth(id: string, depth: TranscriptDepth) {
+    const of = viewerStore.get().documents[id]?.transcript
+    if (!of || of.depth === depth) return
+    updateDocument(id, { transcript: { ...of, depth } })
+    void viewer.readTranscript(id)
+  },
+
   showAgent() {
     const state = viewerStore.get()
     const holds = (candidate: ViewerPane) => candidate.tabIds.includes(AGENT_TAB_ID)
@@ -400,6 +477,7 @@ export const viewer = {
     void watchActiveFile()
     const document = state.documents[id]
     if (document?.kind === "file") void viewer.refresh(document.path)
+    if (document?.kind === "transcript") void viewer.readTranscript(document.id)
   },
 
   focusPane(paneId: string) {
@@ -414,6 +492,7 @@ export const viewer = {
     const pane = state.panes.find((candidate) => candidate.id === paneId)
     const document = pane?.activeId ? state.documents[pane.activeId] : undefined
     if (document?.kind === "file") void viewer.refresh(document.path)
+    if (document?.kind === "transcript") void viewer.readTranscript(document.id)
   },
 
   pin(id: string) {

@@ -24,6 +24,8 @@ const fixtureReads = [
   "mako:thread-page",
   "mako:thread-preview",
   "mako:thread-block",
+  /** Formats a fixture Session's history from memory or the profile's own record. */
+  "mako:transcript-document",
   "mako:thread-archives",
   "mako:thread-groups",
   "mako:worktrees",

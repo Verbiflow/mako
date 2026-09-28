@@ -129,7 +129,7 @@
     "test:web": "node scripts/generate-host-inputs.mjs --check && tsx scripts/test-host-inputs.ts && tsx scripts/test-file-response.ts && npm run build:electron && node scripts/test-web-proxy.mjs && node scripts/test-web-delivery.mjs && node scripts/test-preload.mjs",
     "test:browser-extension": "npm run build:electron && npm run build:browser-extension && node scripts/test-browser-extension.mjs && node scripts/test-browser-extension-router.mjs && node scripts/test-browser-extension-activity.mjs && node scripts/test-browser-extension-lifecycle.mjs && node scripts/test-browser-extension-downloads.mjs",
     "test:browser-extension-e2e": "npm run test:browser-extension && node scripts/test-browser-extension-e2e.mjs",
-    "test:transcript": "tsx scripts/test-transcript-tools.ts && tsx scripts/test-content-contract.ts && tsx scripts/test-transcript-persistence.ts && tsx scripts/test-canvas-preview.ts",
+    "test:transcript": "tsx scripts/test-transcript-tools.ts && tsx scripts/test-transcript-document.ts && tsx scripts/test-content-contract.ts && tsx scripts/test-transcript-persistence.ts && tsx scripts/test-canvas-preview.ts",
     "test:workspace-snapshots": "tsx scripts/test-workspace-snapshots.ts && tsx scripts/test-live-snapshots.ts && tsx scripts/test-snapshot-retention.ts && tsx scripts/test-snapshot-budget.ts",
     "benchmark:control": "node --import tsx scripts/benchmark-control-runtime.ts",
     "benchmark:snapshots": "node --max-old-space-size=256 --import tsx scripts/benchmark-snapshots.ts",

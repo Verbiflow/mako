@@ -1,6 +1,7 @@
 // Generated from host handler parameter types by scripts/generate-host-inputs.mjs.
 // Regenerate after changing a handler's arguments; never edit this table by hand.
 import { z } from "zod"
+import { TranscriptDepthSchema, TranscriptSourceSchema } from "./transcript-document.js"
 
 export const hostCallInputs = {
   "mako:abort": z.tuple([]),
@@ -761,6 +762,7 @@ export const hostCallInputs = {
   ]),
   "mako:thread-groups": z.tuple([]),
   "mako:thread-open": z.tuple([z.string()]),
+  "mako:transcript-document": z.tuple([TranscriptSourceSchema, TranscriptDepthSchema]),
   "mako:thread-owner-resolve": z.tuple([z.string()]),
   "mako:thread-page": z.tuple([
     z.string(),

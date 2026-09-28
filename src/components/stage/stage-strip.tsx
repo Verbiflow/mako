@@ -12,7 +12,7 @@ import { useSession } from "@/state/session"
 import { useThreads } from "@/state/threads"
 import { AGENT_TAB_ID, viewer, useViewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
-import { Columns2Icon, Rows2Icon, XIcon } from "lucide-react"
+import { Columns2Icon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
 
 export function StageStrip({
   paneId,
@@ -89,6 +89,7 @@ export function StageStrip({
             )
           const title = agent ? agentTitle : document.title
           const pinned = agent || document.pinned
+          const named = !agent && document.kind === "transcript" ? `Transcript of ${document.title}` : document?.path
           return (
             <div
               key={id}
@@ -110,8 +111,8 @@ export function StageStrip({
                   agent
                     ? title
                     : pinned
-                      ? document.path
-                      : `${document.path} · preview, double-click to pin`
+                      ? named
+                      : `${named} · preview, double-click to pin`
                 }
                 onMouseDown={(event) => {
                   if (event.button === 0 && event.detail > 0) {
@@ -167,6 +168,8 @@ export function StageStrip({
                   ) : (
                     <MakoMark className="size-4 text-foreground/75" />
                   )
+                ) : document.kind === "transcript" ? (
+                  <ScrollTextIcon className="size-3.5 shrink-0" />
                 ) : null}
                 <span className="truncate">{title}</span>
               </button>

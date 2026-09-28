@@ -753,6 +753,12 @@ export function installMockBridge() {
       }
     },
     previewThread: async () => null,
+    transcriptDocument: async (source, depth) => {
+      const thread = source.kind === "file" ? await window.mako?.openThread(source.path) : null
+      if (!thread) throw new Error("The mock desk has no running session to read")
+      const { formatTranscript } = await import("@mako/sessions/transcript")
+      return { title: thread.ref.title, harness: thread.ref.harness, markdown: `# ${thread.ref.title ?? "Untitled session"}\n\n${formatTranscript(thread.entries, depth)}\n` }
+    },
     threadBlock: async (path: string, at: { entry: number; block: number }) => {
       const thread = await window.mako?.openThread(path)
       const entry = thread?.entries[at.entry]

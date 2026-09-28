@@ -206,6 +206,18 @@ const DESK_COMMANDS: DeskCommand[] = [
     },
   },
   {
+    id: "session.open-transcript",
+    title: "Open this session's transcript",
+    section: "Session",
+    hint: "A document tab that updates while it runs",
+    keywords: "transcript markdown read conversation document",
+    when: () => onScreenSessionTab() !== null,
+    run: () => {
+      const found = onScreenSessionTab()
+      if (found) void viewer.openTranscript({ live: found.tab.presence?.key, path: found.tab.ref?.path ?? found.tab.presence?.threadPath }, found.title)
+    },
+  },
+  {
     id: "thread.archive-session",
     title: "Archive this session",
     section: "Session",

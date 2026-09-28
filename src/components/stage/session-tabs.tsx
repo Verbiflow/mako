@@ -1,5 +1,5 @@
 import { memo, useState, type KeyboardEvent, type ReactNode } from "react"
-import { ArchiveIcon, Columns2Icon, PencilLineIcon, PlusIcon, Rows2Icon, XIcon } from "lucide-react"
+import { ArchiveIcon, Columns2Icon, PencilLineIcon, PlusIcon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { IconAction } from "@/components/ui/kit"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, MenuItem, MenuSeparator } from "@/components/ui/menu"
@@ -21,7 +21,7 @@ import { archiveSessionTab } from "@/state/session-archive"
 import { openInPane, openTabInPane } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { sameThreadStatus, threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
-import { AGENT_TAB_ID } from "@/state/viewer"
+import { AGENT_TAB_ID, viewer } from "@/state/viewer"
 
 /** A tab that mounts this long after its Thread's strip did joined while you watched. */
 const ARRIVAL_MS = 32
@@ -66,9 +66,10 @@ function moveFocus(event: KeyboardEvent<HTMLButtonElement>) {
  * A Session tab's own actions. They act on this Session alone; the rail
  * row's menu acts on the whole Thread.
  */
-function SessionTabMenu({ tab, thread, alone, children }: {
+function SessionTabMenu({ tab, thread, title, alone, children }: {
   tab: Extract<SessionTab, { kind: "session" }>
   thread: string
+  title: string
   alone: boolean
   children: ReactNode
 }) {
@@ -76,6 +77,10 @@ function SessionTabMenu({ tab, thread, alone, children }: {
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-52">
+        <MenuItem data-session-action="open-transcript" onSelect={() => { void viewer.openTranscript({ live: tab.presence?.key, path: tab.ref?.path ?? tab.presence?.threadPath }, title) }}>
+          <ScrollTextIcon className="size-3.5" />Open transcript
+        </MenuItem>
+        <MenuSeparator />
         <MenuItem onSelect={() => { openInPane(tab, thread, "right") }}>
           <Columns2Icon className="size-3.5" />Open to the right
         </MenuItem>
@@ -185,7 +190,7 @@ function SessionTabButton({
     </div>
   )
   return tab.kind === "session" && thread ? (
-    <SessionTabMenu tab={tab} thread={thread} alone={!closable}>{body}</SessionTabMenu>
+    <SessionTabMenu tab={tab} thread={thread} title={title} alone={!closable}>{body}</SessionTabMenu>
   ) : body
 }
 

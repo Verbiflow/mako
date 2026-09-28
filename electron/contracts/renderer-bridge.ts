@@ -103,6 +103,7 @@ import type {
 } from "../shared.js"
 
 import type { CrashReport } from "../crash.js"
+import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./transcript-document.js"
 import type { ProviderResidencySnapshot } from "./provider-residency.js"
 import type {
   AccountHarness,
@@ -208,6 +209,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       }>("mako:threads", filter),
     openThread: (path: string) =>
       invokeTrustedHost<Thread | null>("mako:thread-open", path),
+    transcriptDocument: (source: TranscriptSource, depth: TranscriptDepth) =>
+      invokeTrustedHost<TranscriptDocument>("mako:transcript-document", source, depth),
     readThreadFile: (threadPath: string, filePath: string) =>
       invokeTrustedHost<FileContents>("mako:thread-file", threadPath, filePath),
     pageThread: (path: string, before?: number, limit?: number) =>

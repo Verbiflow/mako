@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import { Prose } from "../src/components/transcript/markdown"
-import { threadToken } from "../src/lib/mentions"
+import { hasThreadToken, threadToken, toggleThreadToken } from "../src/lib/mentions"
 import {
   parseThreadReferenceAppendix,
   restoreThreadReferences,
@@ -83,5 +83,15 @@ assert.match(legacyProse, /<\/span> with <span/, "in order")
 
 const plain = renderToStaticMarkup(<Prose text="Literally [Referenced conversation 9]" references={[]} threads={[]} />)
 assert.match(plain, /\[Referenced conversation 9\]/, "text that only looks like a placeholder is left alone")
+
+/* A new tab's transcript chips add and remove the token --------------------- */
+
+const added = toggleThreadToken("Pick up where", referenced.harness, referenced.nativeId)
+assert.equal(added, `Pick up where ${token} `, "a chip adds the token at the end, spaced")
+assert.ok(hasThreadToken(added, referenced.harness, referenced.nativeId))
+assert.equal(toggleThreadToken(added, referenced.harness, referenced.nativeId), "Pick up where ", "and takes it out again with its space")
+const other = threadToken(referenced.harness, `${referenced.nativeId}0`)
+assert.equal(hasThreadToken(`${other} `, referenced.harness, referenced.nativeId), false, "a longer id with the same start is another conversation")
+assert.equal(toggleThreadToken(`${token} then ${token} and ${other}`, referenced.harness, referenced.nativeId), `then and ${other}`, "every copy of the token goes, and only that one")
 
 console.log("thread reference ui ok")

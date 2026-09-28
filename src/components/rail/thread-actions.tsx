@@ -1,12 +1,13 @@
 import { useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, SquareIcon, Trash2Icon } from "lucide-react"
+import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, ScrollTextIcon, SquareIcon, Trash2Icon } from "lucide-react"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { desktop } from "@/state/desktop"
 import { threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
 import { offerWorktreeRemoval, removeWorktree, useWorktrees, worktreeAt } from "@/state/worktrees"
 import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { wholeThreadTargets } from "@/state/session-archive"
+import { viewer } from "@/state/viewer"
 
 export interface ThreadMenuProps {
   target: ThreadTarget
@@ -62,7 +63,7 @@ function useThreadMenu(props: ThreadMenuProps) {
 }
 
 function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
-  const { target, archived, running, path, thread, cwd, archiveTargets, pinned, onPin, onRename } = props
+  const { target, title, archived, running, path, thread, cwd, archiveTargets, pinned, onPin, onRename } = props
   const { controls, error } = menu
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
   // An archived row of a Thread whose other Sessions are still out is one Session of it.
@@ -89,8 +90,13 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
           <PencilLineIcon className="size-3.5" />Rename
         </MenuItem>
       ) : null}
+      {path || target.kind === "live" ? <MenuSeparator /> : null}
+      {path || target.kind === "live" ? (
+        <MenuItem data-thread-action="open-transcript" onSelect={() => { void viewer.openTranscript({ live: target.kind === "live" ? target.id : undefined, path }, title) }}>
+          <ScrollTextIcon className="size-3.5" />Open transcript
+        </MenuItem>
+      ) : null}
       {path ? <>
-        <MenuSeparator />
         <MenuItem onSelect={() => { void threadLifecycle.copyTranscript(path, "concise") }}><ClipboardListIcon className="size-3.5" />Copy concise transcript</MenuItem>
         <MenuItem onSelect={() => { void threadLifecycle.copyTranscript(path, "full") }}><ClipboardCopyIcon className="size-3.5" />Copy full transcript</MenuItem>
       </> : null}

@@ -71,6 +71,7 @@ import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { installChatFoldersIpc } from "./ipc/chat-folders.js"
 import { installWorkspaceMovesIpc } from "./ipc/workspace-moves.js"
+import { installTranscriptDocumentIpc } from "./ipc/transcript-document.js"
 import { WorkspaceMoves, type MoveSource } from "./workspace-moves.js"
 import { moveablePlace, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
@@ -2205,6 +2206,7 @@ app.whenReady().then(async () => {
       ...(webHost?.clients() ?? []),
       ...[...rendererWindows].map(
         (renderer) => `renderer:${renderer.webContents.id}`
+  installTranscriptDocumentIpc({ snapshot: (id) => liveConversations.snapshot(id), openThread })
       ),
     ],
     quitClient: () => {
