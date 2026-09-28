@@ -18,7 +18,7 @@ export function TranscriptAttachment({
   if (source.kind === "file")
     return (
       <button
-        className="pressable rounded border border-hairline px-2 py-1 text-ui text-foreground"
+        className="pressable ref-token px-1 text-ui"
         onClick={() =>
           void viewer.open(
             source.path,

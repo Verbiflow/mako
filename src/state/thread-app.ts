@@ -189,7 +189,6 @@ export function sendToAgent(cwd: string, failed: { process: AppProcessView } | {
   const plain = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "")
   const tail = plain.trimEnd().split("\n").slice(-400).join("\n")
   const name = "process" in failed ? failed.process.name : checkTitle(failed.check.tier)
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-")
   let text: (references: string) => string
   if ("process" in failed) {
     const exit = failed.process.exit
@@ -201,7 +200,7 @@ export function sendToAgent(cwd: string, failed: { process: AppProcessView } | {
   }
   window.dispatchEvent(new CustomEvent("mako:attach", {
     detail: {
-      files: [{ file: new File([`${tail}\n`], `${slug}-output.txt`, { type: "text/plain" }), contextLabel: `${name} output` }],
+      files: [{ file: new File([`${tail}\n`], `${name} output.txt`, { type: "text/plain" }), contextLabel: `${name} output` }],
       text,
     },
   }))

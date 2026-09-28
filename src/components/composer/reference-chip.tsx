@@ -1,11 +1,7 @@
-import { capabilityToken, fileKind, threadToken } from "@/lib/mentions"
+import { capabilityToken, threadToken } from "@/lib/mentions"
 import { isMakoServerName } from "@/lib/composer-capabilities"
 import { fileName } from "@/lib/format"
-import {
-  MISSING_SKILL_CHIP_CLASS,
-  skillChipTitle,
-  type SkillAppendixEntry,
-} from "@/lib/skill-references"
+import { skillChipTitle, type SkillAppendixEntry } from "@/lib/skill-references"
 import { findThreadReference } from "@/lib/thread-references"
 import type { SkillDelivery } from "@/lib/types"
 import { UNIVERSAL_SKILL_PROVIDER } from "../../../electron/contracts/skill-reach"
@@ -14,33 +10,16 @@ import { useThreads } from "@/state/threads"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { cn } from "@/lib/utils"
-import {
-  BookOpenIcon,
-  BracesIcon,
-  FileCodeIcon,
-  FileIcon,
-  FileTextIcon,
-  GlobeIcon,
-  ImageIcon,
-  MessagesSquareIcon,
-  PaletteIcon,
-  PlugIcon,
-} from "lucide-react"
-
-const KIND_ICON = {
-  code: FileCodeIcon,
-  style: PaletteIcon,
-  config: BracesIcon,
-  doc: FileTextIcon,
-  image: ImageIcon,
-  file: FileIcon,
-}
+import { GlobeIcon } from "lucide-react"
 
 /**
- * The inline form of a reference. The same chip renders in the composer and in
- * the transcript, which is what makes `@` feel like it produced an object
- * rather than decorated some text.
+ * The transcript's form of a reference: the composer's `.ref-token` with real
+ * padding, so a file, a conversation or a skill reads the same before and
+ * after it is sent. Words, not glyphs: a conversation keeps its agent's mark,
+ * a built-in server keeps Mako's, and nothing else wears an icon.
  */
+const chip = "ref-token inline-flex max-w-[20rem] items-baseline gap-1 px-1 align-baseline [&_svg]:translate-y-[2px]"
+
 export function FileChip({
   path,
   name,
@@ -50,22 +29,10 @@ export function FileChip({
   name?: string
   interactive?: boolean
 }) {
-  const Icon = KIND_ICON[fileKind(path)]
-  const body = (
-    <>
-      <Icon className="size-3 shrink-0 text-faint" />
-      <span className="truncate">{name ?? fileName(path)}</span>
-    </>
-  )
-  const className = cn(
-    "inline-flex max-w-[18rem] items-baseline gap-1 rounded bg-raised px-1 align-baseline",
-    "font-mono text-[0.92em] leading-[1.35] text-foreground/85 ring-1 ring-hairline ring-inset",
-    "[&_svg]:translate-y-[1.5px]"
-  )
-
+  const body = <span className="truncate">{name ?? fileName(path)}</span>
   if (!interactive) {
     return (
-      <span className={className} title={path} data-copy-file={path} data-copy-reference={`@${path}`}>
+      <span className={chip} title={path} data-copy-file={path} data-copy-reference={`@${path}`}>
         {body}
       </span>
     )
@@ -73,14 +40,11 @@ export function FileChip({
   return (
     <button
       type="button"
-      title={`Open ${path}`}
+      title={`Show ${path} in Finder`}
       data-copy-file={path}
       data-copy-reference={`@${path}`}
       onClick={() => void desktop.revealPath(path)}
-      className={cn(
-        className,
-        "pressable hover:bg-accent hover:text-foreground"
-      )}
+      className={cn(chip, "pressable")}
     >
       {body}
     </button>
@@ -114,27 +78,13 @@ export function ThreadChip({
     <span
       title={thread?.title ?? title ?? `${harness ?? "referenced"} conversation`}
       data-copy-reference={harness && id ? threadToken(harness, id) : undefined}
-      className={cn(
-        "inline-flex max-w-[18rem] items-baseline gap-1 rounded bg-raised px-1 align-baseline",
-        "text-[0.92em] leading-[1.35] text-foreground ring-1 ring-hairline ring-inset",
-        "[&_svg]:translate-y-[1.5px]"
-      )}
+      className={chip}
     >
-      {harness ? (
-        <HarnessIcon harness={harness} className="size-3 shrink-0 text-faint" />
-      ) : (
-        <MessagesSquareIcon className="size-3 shrink-0 text-faint" />
-      )}
+      {harness ? <HarnessIcon harness={harness} className="size-3.5 shrink-0" /> : null}
       <span className="truncate">{label}</span>
     </span>
   )
 }
-
-const capabilityChipClass = cn(
-  "inline-flex items-baseline gap-1 rounded bg-fill-selected px-1 align-baseline",
-  "font-mono text-[0.92em] leading-[1.35] text-foreground ring-1 ring-border ring-inset",
-  "[&_svg]:translate-y-[1.5px]"
-)
 
 /**
  * How a `$skill` reached the provider, in the transcript. `undefined` is a
@@ -174,24 +124,19 @@ export function SkillChip({
   sent?: SkillChipSent
 }) {
   const delivery = sentDelivery(sent)
-  const kind = delivery?.kind
   return (
     <span
       title={skillChipTitle(name, delivery)}
       data-copy-reference={capabilityToken("$", "skill", name)}
-      data-skill-delivery={kind}
-      className={cn(
-        capabilityChipClass,
-        kind === "missing" && "ring-0",
-        kind === "missing" && MISSING_SKILL_CHIP_CLASS
-      )}
+      data-skill-delivery={delivery?.kind}
+      className={cn(chip, "gap-0")}
     >
-      <BookOpenIcon className="size-3 shrink-0 text-muted-foreground" />
+      <span className="ref-sigil">$</span>
       {name}
       {delivery?.kind === "handover" ? (
         <SkillSourceMark
           from={delivery.from}
-          className="size-2.5 shrink-0 self-center text-faint"
+          className="ml-1 size-2.5 shrink-0 self-center text-faint"
         />
       ) : null}
     </span>
@@ -205,13 +150,9 @@ export function McpChip({ name }: { name: string }) {
     <span
       title={builtIn ? `Built-in Mako MCP server: ${name}` : `MCP server: ${name}`}
       data-copy-reference={capabilityToken("$", "mcp", name)}
-      className={capabilityChipClass}
+      className={chip}
     >
-      {builtIn ? (
-        <MakoMark className="size-3 shrink-0 text-foreground" />
-      ) : (
-        <PlugIcon className="size-3 shrink-0 text-muted-foreground" />
-      )}
+      {builtIn ? <MakoMark className="size-3 shrink-0 text-foreground" /> : null}
       {name}
     </span>
   )

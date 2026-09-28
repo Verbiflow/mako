@@ -87,14 +87,6 @@ export function skillChipTitle(
   return `Skill: ${name} · handed over from ${skillSourceLabel(delivery.from)}`
 }
 
-/**
- * A skill nothing Mako can see is installed: the token goes out as typed.
- * Shared by the composer overlay and the transcript chip; the overlay needs
- * it to take no width, so it is edge and ink only.
- */
-export const MISSING_SKILL_CHIP_CLASS =
-  "bg-transparent text-muted-foreground outline-1 outline-dashed -outline-offset-1 outline-border"
-
 /** The chip's reading of a reference before it is sent. */
 export function draftSkillDelivery(
   snapshot: SkillRegistrySnapshot | null,

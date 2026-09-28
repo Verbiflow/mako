@@ -179,6 +179,9 @@
    */
   --fill-hover: color-mix(in oklab, var(--foreground) 7%, transparent);
   --fill-selected: color-mix(in oklab, var(--foreground) 10%, transparent);
+  /* A reference in running text: a file, a conversation, an attachment, a skill. */
+  --ref-fill: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --ref-fill-hover: color-mix(in oklab, var(--foreground) 16%, transparent);
 
   /* Placeholder bars and the glint that crosses them: lighter in both modes. */
   --skeleton: color-mix(in oklab, var(--foreground) 7%, transparent);
@@ -277,6 +280,8 @@
 
   --fill-hover: color-mix(in oklab, var(--foreground) 4%, transparent);
   --fill-selected: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --ref-fill: color-mix(in oklab, var(--foreground) 7.5%, transparent);
+  --ref-fill-hover: color-mix(in oklab, var(--foreground) 12%, transparent);
 
   --skeleton: color-mix(in oklab, var(--foreground) 6%, transparent);
   --skeleton-glint: oklch(1 0 0 / 65%);
@@ -938,6 +943,44 @@ diffs-container {
   transition-duration: var(--duration-tooltip-out);
   transition-timing-function: var(--ease-swift);
 }
+
+/*
+ * A reference in running text, in the composer and the transcript alike. The
+ * composer's copy sits behind a textarea and may not take one pixel of width
+ * the typed characters don't, so its air comes from a spread shadow in the
+ * fill colour, which paints outside the box without moving a glyph. The
+ * transcript's copy uses the same class and adds real padding.
+ */
+.ref-token {
+  border-radius: 5px;
+  background: var(--ref-fill);
+  box-shadow: 0 0 0 2px var(--ref-fill);
+  color: var(--foreground);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+button.ref-token:hover {
+  background: var(--ref-fill-hover);
+  box-shadow: 0 0 0 2px var(--ref-fill-hover);
+}
+/* A skill nothing has installed: an outline where the fill would be. */
+.ref-token[data-skill-delivery="missing"] {
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted-foreground);
+  outline: 1px dashed var(--border);
+  outline-offset: 1px;
+}
+.ref-token[data-error] {
+  color: var(--negative);
+  background: color-mix(in oklab, var(--negative) 14%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--negative) 14%, transparent);
+}
+.ref-token[data-pending] { opacity: 0.6; }
+/* A sigil or bracket the reference was typed with, kept for the caret's sake but not read. */
+.ref-token .ref-sigil { color: var(--faint); }
+.ref-token .ref-bracket { color: transparent; }
 
 /*
  * Loading text. A crest of light runs through the glyphs, rests, and runs
