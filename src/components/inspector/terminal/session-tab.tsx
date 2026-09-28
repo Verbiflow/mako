@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { TerminalIcon, XIcon } from "lucide-react"
+import { XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { prefsStore, setPref } from "@/state/prefs"
 import type { TerminalSession } from "@/lib/types"
@@ -9,6 +9,7 @@ export function SessionTab({
   session,
   title,
   ordinal,
+  shown,
   active,
   onSelect,
   onClose,
@@ -17,6 +18,8 @@ export function SessionTab({
   title: string
   /** Set when an earlier tab has the same title. */
   ordinal?: number
+  /** Its pane is on screen: the tab is focused, or shares the visible split. */
+  shown: boolean
   active: boolean
   onSelect: () => void
   onClose: () => void
@@ -40,21 +43,18 @@ export function SessionTab({
   }
   const failed = session.status === "exited" && Boolean(session.exitCode)
   return (
-    <div data-dock-tab className={cn(dockTab(active), "max-w-52 min-w-16 pr-1")}>
-      <TerminalIcon
-        className={cn(
-          "size-3.5 shrink-0",
-          session.status === "interrupted"
-            ? "text-caution"
-            : failed
-              ? "text-negative"
-              : session.status === "exited"
-                ? "text-faint/60"
-                : active
-                  ? "text-muted-foreground"
-                  : "text-faint"
-        )}
-      />
+    <div
+      data-dock-tab
+      className={cn(
+        dockTab(shown, active),
+        "max-w-56 min-w-20 pr-1",
+        session.status === "interrupted"
+          ? "text-caution hover:text-caution"
+          : failed
+            ? "text-negative hover:text-negative"
+            : session.status === "exited" && "text-faint"
+      )}
+    >
       {editing ? (
         <input
           autoFocus
@@ -70,7 +70,7 @@ export function SessionTab({
           }}
           onBlur={save}
           aria-label="Terminal name"
-          className="h-6 min-w-0 flex-1 rounded bg-raised px-1.5 text-ui text-foreground focus:outline-none"
+          className="-ml-1.5 h-7 min-w-0 flex-1 bg-raised px-1.5 text-ui text-foreground shadow-[inset_0_0_0_1px_var(--border)] focus:outline-none"
         />
       ) : (
         <button
@@ -100,11 +100,11 @@ export function SessionTab({
         aria-label={`Close ${title}`}
         onClick={onClose}
         className={cn(
-          "pressable flex size-5 shrink-0 items-center justify-center rounded text-faint group-hover:opacity-100 hover:bg-fill-hover hover:text-foreground focus:opacity-100",
+          "pressable flex size-6 shrink-0 items-center justify-center text-faint transition-[opacity,background-color,color] duration-150 group-hover:opacity-100 hover:bg-fill-selected hover:text-foreground focus-visible:opacity-100",
           !active && "opacity-0"
         )}
       >
-        <XIcon className="size-3" />
+        <XIcon className="size-3.5" />
       </button>
     </div>
   )

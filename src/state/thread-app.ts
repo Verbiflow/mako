@@ -176,24 +176,33 @@ export function checkTitle(tier: "quick" | "full"): string {
   return tier === "quick" ? "Quick check" : "Full check"
 }
 
-/** Put the end of a crashed process's or failed check's output into the composer, for the Thread's agent. */
+/**
+ * Hand a crashed process's or failed check's output to the Thread's agent: the
+ * output goes in as an attached file, the composer gets one sentence that
+ * names it, and nothing is sent until the person sends it.
+ */
 export function sendToAgent(cwd: string, failed: { process: AppProcessView } | { check: AppCheckView }): void {
   const key = "process" in failed ? processKey(failed.process.name) : (`check:${failed.check.tier}` as const)
   const output = driver?.output(cwd, key) ?? ""
   // Terminal colours and cursor codes mean nothing to the agent.
   // eslint-disable-next-line no-control-regex
   const plain = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "")
-  const tail = plain.trimEnd().split("\n").slice(-12).join("\n")
-  let what: string
-  let ask: string
+  const tail = plain.trimEnd().split("\n").slice(-400).join("\n")
+  const name = "process" in failed ? failed.process.name : checkTitle(failed.check.tier)
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+  let text: (references: string) => string
   if ("process" in failed) {
     const exit = failed.process.exit
-    what = `The app's ${failed.process.name} process stopped with code ${exit?.code ?? "unknown"}${exit ? `, ${formatDuration(exit.afterMs)} after it started` : ""}.`
-    ask = "Find out why, fix it, and start the app again to show it stays up."
+    const what = `The app's ${name} process stopped with code ${exit?.code ?? "unknown"}${exit ? `, ${formatDuration(exit.afterMs)} after it started` : ""}.`
+    text = (output) => `${what} What it printed is in ${output}. Find out why, fix it, and start the app again to show it stays up.`
   } else {
-    what = `The ${checkTitle(failed.check.tier).toLowerCase()} (\`${failed.check.command}\`) failed.`
-    ask = "Fix what it found and run the check again to show it passes."
+    const what = `The ${name.toLowerCase()} (\`${failed.check.command}\`) failed.`
+    text = (output) => `${what} What it printed is in ${output}. Fix what it found and run the check again to show it passes.`
   }
-  const text = `${what} The end of what it printed:\n\n\`\`\`\n${tail}\n\`\`\`\n\n${ask}`
-  window.dispatchEvent(new CustomEvent("mako:insert", { detail: text }))
+  window.dispatchEvent(new CustomEvent("mako:attach", {
+    detail: {
+      files: [{ file: new File([`${tail}\n`], `${slug}-output.txt`, { type: "text/plain" }), contextLabel: `${name} output` }],
+      text,
+    },
+  }))
 }

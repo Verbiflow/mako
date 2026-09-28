@@ -1,5 +1,4 @@
 import { useRef } from "react"
-import { Columns2Icon, Rows2Icon } from "lucide-react"
 import { useCompactRow } from "@/components/composer/use-compact-row"
 import type { TerminalGroup } from "@/lib/terminal-layout"
 import type { TerminalSession } from "@/lib/types"
@@ -8,8 +7,8 @@ import { hideAppOutput } from "@/state/thread-app"
 import { SessionTab } from "./session-tab"
 
 /**
- * One tab per shell, left to right. Panes of a split sit between two
- * hairlines behind the split's mark, so a split reads as one place with
+ * One tab per shell, left to right. While a split is on screen every one of
+ * its panes' tabs opens into the page, so a split reads as one place with
  * several shells in it.
  */
 export function TerminalTabs({
@@ -69,8 +68,9 @@ export function TerminalTabs({
       }}
       className="terminal-tabs flex h-full min-w-0 items-stretch overflow-x-auto [scrollbar-width:none]"
     >
-      {groups.map((group) => {
-        const tabs = group.sessionIds.flatMap((id) => {
+      {groups.flatMap((group) => {
+        const shown = activeId !== undefined && group.sessionIds.includes(activeId)
+        return group.sessionIds.flatMap((id) => {
           const session = sessions.find((entry) => entry.id === id)
           return session
             ? [
@@ -79,6 +79,7 @@ export function TerminalTabs({
                   session={session}
                   title={titles[id] ?? session.title}
                   ordinal={ordinals.get(id)}
+                  shown={shown}
                   active={id === activeId}
                   onSelect={() => {
                     hideAppOutput()
@@ -89,24 +90,6 @@ export function TerminalTabs({
               ]
             : []
         })
-        if (group.sessionIds.length < 2) return tabs
-        const SplitIcon =
-          group.orientation === "vertical" ? Rows2Icon : Columns2Icon
-        return (
-          <div
-            key={group.id}
-            role="presentation"
-            className="flex shrink-0 items-stretch border-x border-hairline first:border-l-0"
-          >
-            <SplitIcon
-              aria-label={
-                group.orientation === "vertical" ? "Stacked" : "Side by side"
-              }
-              className="ml-2.5 size-3 shrink-0 self-center text-faint"
-            />
-            {tabs}
-          </div>
-        )
       })}
     </div>
   )

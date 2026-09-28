@@ -1,24 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import {
-  AppWindowIcon,
-  CheckIcon,
-  HourglassIcon,
-  CopyIcon,
-  EyeOffIcon,
-  LoaderCircleIcon,
-  MessageSquareTextIcon,
-  PlayIcon,
-  PlusIcon,
-  RotateCwIcon,
-  SquareArrowOutUpRightIcon,
-  SquareIcon,
-  TerminalSquareIcon,
-  XIcon,
-} from "lucide-react"
+import { CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react"
 import { ENVIRONMENT_SETUP_PROMPT } from "../../../electron/contracts/thread-environments"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Shimmer } from "@/components/ui/shimmer"
 import { cn } from "@/lib/utils"
 import { desktop } from "@/state/desktop"
 import { actions } from "@/state/session"
@@ -52,7 +37,7 @@ const trigger =
  * Done, failed, working or not yet: the one mark every row of the app uses.
  * A mark that changes arrives rather than swapping in place.
  */
-export function AppMark({ mark, className }: { mark: Mark; className?: string }) {
+function AppMark({ mark, className }: { mark: Mark; className?: string }) {
   const [first] = useState(mark)
   const props = {
     "data-changed": first === mark ? undefined : "",
@@ -97,7 +82,6 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
         className={cn(trigger, "mr-0.5 text-faint hover:text-foreground")}
         onClick={() => threadAppDriver()?.start(cwd)}
       >
-        <PlayIcon className="size-3 shrink-0 fill-current" />
         <span key={state} className="changing-label">Run app</span>
       </button>
     )
@@ -130,33 +114,31 @@ function triggerTone(view: ThreadAppView): string {
 }
 
 function TriggerLabel({ view }: { view: ThreadAppView }) {
-  const [icon, label] = triggerParts(view)
+  const [label, working] = triggerParts(view)
   return (
-    <>
-      {icon}
-      <span key={label} className="changing-label">{label}</span>
-    </>
+    <span key={label} className="changing-label">
+      {working ? <Shimmer text={label} /> : label}
+    </span>
   )
 }
 
-function triggerParts(view: ThreadAppView): [ReactNode, string] {
-  const icon = "size-3.5 shrink-0"
-  const working = <LoaderCircleIcon key="icon" className={cn(icon, "animate-spin")} />
-  if (view.kind === "none") return [<PlayIcon key="icon" className="size-3 shrink-0 fill-current" />, "Run app"]
-  if (view.kind === "setting-up") return [working, "Setting up"]
+/** The words on the control, and whether they name work still under way. */
+function triggerParts(view: ThreadAppView): [string, boolean] {
+  if (view.kind === "none") return ["Run app", false]
+  if (view.kind === "setting-up") return ["Setting up", true]
   switch (view.phase) {
     case "preparing":
-      return [working, "Installing"]
+      return ["Installing", true]
     case "starting":
-      return [working, "Starting"]
+      return ["Starting", true]
     case "running":
-      return [<AppWindowIcon key="icon" className={icon} />, "App running"]
+      return ["App running", false]
     case "crashed":
-      return [<XIcon key="icon" className={icon} strokeWidth={2.5} />, "App crashed"]
+      return ["App crashed", false]
     case "waiting":
-      return [<HourglassIcon key="icon" className={icon} />, "Waiting for memory"]
+      return ["Waiting for memory", false]
     default:
-      return [null, ""]
+      return ["", false]
   }
 }
 
@@ -184,24 +166,19 @@ function Head({ title, aside, children }: { title: string; aside?: string; child
   )
 }
 
-function Action({ icon, children, className, ...props }: { icon: ReactNode; children: ReactNode } & Omit<Parameters<typeof MenuItem>[0], "children">) {
-  return (
-    <MenuItem className={cn("[&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground", className)} {...props}>
-      {icon}
-      {children}
-    </MenuItem>
-  )
+function Action({ children, ...props }: { children: ReactNode } & Omit<Parameters<typeof MenuItem>[0], "children">) {
+  return <MenuItem {...props}>{children}</MenuItem>
 }
 
 function NoneMenu({ view }: { view: Extract<ThreadAppView, { kind: "none" }> }) {
   return (
     <>
       <Head title="Not set up">Mako doesn't know how to run {view.project} yet.</Head>
-      <Action data-app-action="set-up" icon={<PlusIcon />} onSelect={() => void setUp(view.root)}>
+      <Action data-app-action="set-up" onSelect={() => void setUp(view.root)}>
         Set up in a new Thread
       </Action>
       <MenuSeparator />
-      <Action className="text-muted-foreground" icon={<EyeOffIcon />} onSelect={() => hideSetupFor(view.root)}>
+      <Action className="text-muted-foreground" onSelect={() => hideSetupFor(view.root)}>
         Don't offer this for {view.project}
       </Action>
     </>
@@ -232,7 +209,7 @@ function SettingUpMenu({ cwd, view }: { cwd: string; view: Extract<ThreadAppView
         ))}
       </div>
       <MenuSeparator />
-      <Action icon={<HarnessIcon harness={view.thread.harness} className="size-3.5" />} onSelect={() => threadAppDriver()?.openSetupThread(cwd)}>
+      <Action onSelect={() => threadAppDriver()?.openSetupThread(cwd)}>
         Open “{view.thread.title}”
       </Action>
     </>
@@ -257,46 +234,46 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
             <span className="text-foreground">{view.host.split(".")[0]}</span>
             <span className="text-faint">.{view.host.split(".").slice(1).join(".")}:{view.port}</span>
           </span>
-          <CopyIcon className="size-3 shrink-0 text-faint transition-colors group-data-[highlighted]:text-foreground" />
+          <span className="shrink-0 text-faint transition-colors group-data-[highlighted]:text-foreground">Copy</span>
         </MenuItem>
       ) : null}
       {view.phase === "waiting" ? null : <Rows cwd={cwd} view={view} now={now} />}
       <MenuSeparator />
       {view.phase === "running" ? (
         <>
-          <Action data-app-action="open" icon={<SquareArrowOutUpRightIcon />} onSelect={() => void desktop.openUrl(address(view))}>
+          <Action data-app-action="open" onSelect={() => void desktop.openUrl(address(view))}>
             Open in browser
           </Action>
-          <Action data-app-action="restart" icon={<RotateCwIcon />} onSelect={() => driver?.restart(cwd)}>
+          <Action data-app-action="restart" onSelect={() => driver?.restart(cwd)}>
             Restart
           </Action>
-          <Action data-app-action="stop" icon={<SquareIcon />} onSelect={() => driver?.stop(cwd)}>
+          <Action data-app-action="stop" onSelect={() => driver?.stop(cwd)}>
             Stop
           </Action>
         </>
       ) : view.phase === "crashed" && crashed ? (
         <>
-          <Action data-app-action="send-to-agent" icon={<MessageSquareTextIcon />} onSelect={() => sendToAgent(cwd, { process: crashed })}>
+          <Action data-app-action="send-to-agent" onSelect={() => sendToAgent(cwd, { process: crashed })}>
             Ask the agent to fix it
           </Action>
-          <Action data-app-action="show-output" icon={<TerminalSquareIcon />} onSelect={() => showAppOutput(cwd, processKey(crashed.name))}>
+          <Action data-app-action="show-output" onSelect={() => showAppOutput(cwd, processKey(crashed.name))}>
             Show what it printed
           </Action>
-          <Action data-app-action="restart" icon={<RotateCwIcon />} onSelect={() => driver?.restart(cwd)}>
+          <Action data-app-action="restart" onSelect={() => driver?.restart(cwd)}>
             Restart
           </Action>
         </>
       ) : view.phase === "waiting" && view.room ? (
         <>
-          <Action data-app-action="make-room" icon={<SquareIcon />} onSelect={() => driver?.makeRoom(cwd)}>
+          <Action data-app-action="make-room" onSelect={() => driver?.makeRoom(cwd)}>
             Stop the other {view.room.apps === 1 ? "app" : `${view.room.apps} apps`} and start this one
           </Action>
-          <Action data-app-action="retry" icon={<RotateCwIcon />} onSelect={() => driver?.start(cwd)}>
+          <Action data-app-action="retry" onSelect={() => driver?.start(cwd)}>
             Try again
           </Action>
         </>
       ) : (
-        <Action data-app-action="stop" icon={<SquareIcon />} onSelect={() => driver?.stop(cwd)}>
+        <Action data-app-action="stop" onSelect={() => driver?.stop(cwd)}>
           Stop
         </Action>
       )}
@@ -395,14 +372,6 @@ function CheckRow({ check, now, onSelect }: { check: AppCheckView; now: number; 
         : check.at
           ? formatAgo(check.at, now)
           : undefined
-  const hint =
-    check.state === "never" ? (
-      <>
-        <PlayIcon className="size-2.5 fill-current" />
-        Run
-      </>
-    ) : (
-      "Show output"
-    )
+  const hint = check.state === "never" ? "Run" : "Show output"
   return <Row mark={checkMark(check)} title={checkTitle(check.tier)} detail={detail} hint={hint} onSelect={onSelect} />
 }

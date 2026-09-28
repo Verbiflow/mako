@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
-import { RefreshCwIcon, TerminalSquareIcon } from "lucide-react"
+import { TerminalSquareIcon } from "lucide-react"
+import { dockButton } from "./terminal/dock-tab-style"
 import { Blank } from "@/components/ui/kit"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { terminalGroupFor } from "@/lib/terminal-layout"
@@ -11,7 +12,6 @@ import { createHook } from "@/state/store"
 import { stage } from "@/state/stage"
 import { terminalActions, terminalStore } from "@/state/terminal"
 import { TerminalTabs } from "./terminal/terminal-tabs"
-import { DockTabIndicator } from "./terminal/dock-tab-indicator"
 import { AppOutputTabs, AppOutputView } from "./app-output"
 import { outputsOf, useThreadApp } from "@/state/thread-app"
 
@@ -92,13 +92,13 @@ export function TerminalPanel() {
   return (
     <div
       data-terminal-panel
-      className="relative flex h-full min-h-0 min-w-0 flex-col bg-surface"
+      className="relative flex h-full min-h-0 min-w-0 flex-col bg-terminal"
     >
       <header
         onDoubleClick={(event) => {
           if (event.target === event.currentTarget) stage.toggleDockExpanded()
         }}
-        className="relative flex h-9 shrink-0 items-center border-b border-hairline bg-shell pr-1 pl-1"
+        className="relative flex h-9 shrink-0 items-stretch bg-shell shadow-[inset_0_-1px_0_var(--hairline)]"
       >
         <AppOutputTabs cwd={cwd} shown={appOutput} />
         <TerminalTabs
@@ -113,7 +113,6 @@ export function TerminalPanel() {
           onDoubleClick={() => stage.toggleDockExpanded()}
         />
         <TerminalToolbar />
-        <DockTabIndicator />
       </header>
 
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -190,22 +189,21 @@ export function TerminalPanel() {
       {phase === "connecting" && active ? (
         <div
           role="status"
-          className="border-t border-hairline px-3 py-1 text-label text-muted-foreground"
+          className="flex h-8 shrink-0 items-center border-t border-hairline bg-shell px-3 text-ui text-muted-foreground"
         >
           Reconnecting to shell…
         </div>
       ) : null}
       {(fault || phase === "error") && active ? (
-        <div className="flex shrink-0 items-center gap-2 border-t border-negative/30 bg-negative/10 px-2.5 py-1.5 text-label text-negative">
-          <span className="min-w-0 flex-1 truncate">
+        <div className="dock-alert flex h-10 shrink-0 items-center gap-3 border-t border-hairline bg-shell pr-1.5 pl-3 text-ui">
+          <span className="min-w-0 flex-1 truncate text-negative">
             {fault ?? "Terminal connection lost. Reconnecting…"}
           </span>
           <button
             type="button"
             onClick={() => void terminalActions.refresh()}
-            className="pressable flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-negative/10"
+            className={dockButton("plain")}
           >
-            <RefreshCwIcon className="size-3" />
             Reconnect
           </button>
         </div>

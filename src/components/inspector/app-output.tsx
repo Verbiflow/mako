@@ -1,11 +1,10 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
-import { MessageSquareTextIcon, RotateCwIcon, XIcon } from "lucide-react"
-import { AppMark } from "@/components/stage/app-control"
-import { Action } from "@/components/ui/kit"
+import { Shimmer } from "@/components/ui/shimmer"
 import { terminalTheme } from "@/lib/terminal-theme"
+import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
 import {
   checkTitle,
@@ -19,7 +18,7 @@ import {
   type AppOutputKey,
   type ThreadAppView,
 } from "@/state/thread-app"
-import { dockTab } from "./terminal/dock-tab-style"
+import { dockButton, dockTab } from "./terminal/dock-tab-style"
 
 /** The app's outputs as tabs at the head of the terminal dock, before the shells. */
 export function AppOutputTabs({ cwd, shown }: { cwd: string | undefined; shown: AppOutputKey | undefined }) {
@@ -28,26 +27,27 @@ export function AppOutputTabs({ cwd, shown }: { cwd: string | undefined; shown: 
   const outputs = outputsOf(view)
   if (!outputs.length) return null
   return (
-    <>
-      <div role="tablist" aria-label="The app's output" className="flex h-full shrink-0 items-stretch">
-        {outputs.map((output) => (
-          <div key={output.key} data-dock-tab className={dockTab(shown === output.key)}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={shown === output.key}
-              data-app-output={output.key}
-              onClick={() => showAppOutput(cwd, output.key)}
-              className="flex h-full items-center gap-1.5"
-            >
-              <AppMark mark={output.mark} />
-              {output.label}
-            </button>
-          </div>
-        ))}
-      </div>
-      <span aria-hidden className="mx-1 h-4 w-px shrink-0 self-center bg-hairline" />
-    </>
+    <div role="tablist" aria-label="The app's output" className="flex h-full shrink-0 items-stretch">
+      {outputs.map((output) => (
+        <button
+          key={output.key}
+          type="button"
+          role="tab"
+          aria-selected={shown === output.key}
+          data-dock-tab
+          data-app-output={output.key}
+          data-mark={output.mark}
+          onClick={() => showAppOutput(cwd, output.key)}
+          className={cn(
+            dockTab(shown === output.key),
+            output.mark === "failed" && "text-negative hover:text-negative",
+            output.mark === "waiting" && "text-faint"
+          )}
+        >
+          {output.mark === "running" ? <Shimmer text={output.label} /> : output.label}
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -97,7 +97,9 @@ export function AppOutputView({ cwd, outputKey }: { cwd: string; outputKey: AppO
   return (
     <div data-app-output-view={outputKey} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <FailureBar cwd={cwd} view={view} outputKey={outputKey} />
-      <div ref={host} className="terminal-viewport min-h-0 flex-1 bg-surface px-3 py-2.5 font-mono" />
+      <div className="terminal-viewport min-h-0 flex-1 bg-terminal py-2.5 pr-1 pl-3">
+        <div ref={host} className="h-full" />
+      </div>
     </div>
   )
 }
@@ -106,31 +108,48 @@ export function AppOutputView({ cwd, outputKey }: { cwd: string; outputKey: AppO
 function FailureBar({ cwd, view, outputKey }: { cwd: string; view: ThreadAppView | undefined; outputKey: AppOutputKey }) {
   const failure = failureOf(view, outputKey)
   if (!failure) return null
+  return <Failure key={`${outputKey}:${failure.at}`} cwd={cwd} failure={failure} />
+}
+
+function Failure({ cwd, failure }: { cwd: string; failure: NonNullable<ReturnType<typeof failureOf>> }) {
+  const [asked, setAsked] = useState(false)
+  useEffect(() => {
+    if (!asked) return
+    const timer = setTimeout(() => setAsked(false), 2_400)
+    return () => clearTimeout(timer)
+  }, [asked])
   return (
-    <div key={outputKey} role="alert" className="dock-alert flex h-10 shrink-0 items-center gap-2.5 border-b border-hairline bg-surface pr-2 pl-3">
-      <span aria-hidden className="flex size-4.5 shrink-0 items-center justify-center rounded-full bg-negative/15">
-        <XIcon className="size-2.5 text-negative" strokeWidth={3} />
-      </span>
-      <p className="min-w-0 flex-1 truncate text-ui">
-        <span className="font-medium text-foreground">{failure.title}</span>
+    <div role="alert" className="dock-alert flex h-11 shrink-0 items-center gap-2 border-b border-hairline bg-terminal pr-2 pl-3">
+      <p className="mr-2 min-w-0 flex-1 truncate text-ui">
+        <span className="font-medium text-negative">{failure.title}</span>
         <span className="text-muted-foreground"> {failure.detail}</span>
       </p>
-      <Action
-        size="sm"
-        tone="ghost"
+      <button
+        type="button"
         data-app-action="restart"
+        className={dockButton("plain")}
         onClick={() => {
           if ("process" in failure) threadAppDriver()?.restart(cwd)
           else threadAppDriver()?.runCheck(cwd, failure.check.tier)
         }}
       >
-        <RotateCwIcon />
         {"process" in failure ? "Restart" : "Run again"}
-      </Action>
-      <Action size="sm" tone="solid" data-app-action="send-to-agent" onClick={() => sendToAgent(cwd, failure)}>
-        <MessageSquareTextIcon />
-        Ask the agent to fix it
-      </Action>
+      </button>
+      <button
+        type="button"
+        data-app-action="send-to-agent"
+        data-asked={asked || undefined}
+        disabled={asked}
+        className={cn(dockButton("primary"), "disabled:opacity-100 data-asked:bg-fill-selected data-asked:text-foreground")}
+        onClick={() => {
+          sendToAgent(cwd, failure)
+          setAsked(true)
+        }}
+      >
+        <span key={String(asked)} className="changing-label">
+          {asked ? "Added to your message" : "Ask the agent to fix it"}
+        </span>
+      </button>
     </div>
   )
 }
@@ -142,6 +161,7 @@ function failureOf(view: ThreadAppView | undefined, key: AppOutputKey) {
     if (!process?.exit || process.exit.code === 0) return undefined
     return {
       process,
+      at: process.exit.at,
       title: `${process.name} stopped`,
       detail: `with code ${process.exit.code}, ${formatDuration(process.exit.afterMs)} after it started`,
     }
@@ -149,7 +169,7 @@ function failureOf(view: ThreadAppView | undefined, key: AppOutputKey) {
   if (key.startsWith("check:")) {
     const check = view.checks.find((entry) => `check:${entry.tier}` === key)
     if (check?.state !== "failed") return undefined
-    return { check, title: `${checkTitle(check.tier)} failed`, detail: check.at ? formatAgo(check.at, Date.now()) : "" }
+    return { check, at: check.at, title: `${checkTitle(check.tier)} failed`, detail: check.at ? formatAgo(check.at, Date.now()) : "" }
   }
   return undefined
 }

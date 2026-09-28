@@ -96,6 +96,12 @@ type ComposerDraftEvent = CustomEvent<{
   attachments?: Attachment[]
 }>
 
+/** Files to attach, and the words that go with them, given the references they were filed under. */
+type ComposerAttachEvent = CustomEvent<{
+  files: AttachmentInput[]
+  text: (references: string) => string
+}>
+
 interface RestorableDraft {
   plans?: ProposedPlan[]
   text: string
@@ -106,6 +112,7 @@ declare global {
   interface WindowEventMap {
     "mako:compose": ComposerDraftEvent
     "mako:insert": ComposerTextEvent
+    "mako:attach": ComposerAttachEvent
   }
 }
 
@@ -353,6 +360,22 @@ export function Composer() {
       window.removeEventListener("mako:insert", insert)
     }
   }, [reattach])
+
+  const addAttachments = attachments.add
+  useEffect(() => {
+    const attach = (event: ComposerAttachEvent) => {
+      const references = addAttachments(event.detail.files)
+      if (!references) return
+      const body = event.detail.text(references)
+      const current = draftRef.current.trimEnd()
+      const next = current ? `${current}\n\n${body}` : body
+      updateRef.current(next)
+      setMention(null)
+      focusComposerSoon(textarea, next.length)
+    }
+    window.addEventListener("mako:attach", attach)
+    return () => window.removeEventListener("mako:attach", attach)
+  }, [addAttachments])
 
   const submitDraft = useCallback(
     async (mode?: "steer" | "followUp") => {

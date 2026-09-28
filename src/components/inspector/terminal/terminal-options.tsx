@@ -1,14 +1,20 @@
 import { DropdownMenu } from "radix-ui"
 import { CheckIcon, MoreHorizontalIcon } from "lucide-react"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
+import { stage, useStage } from "@/state/stage"
+import { useTabs } from "@/state/tabs"
 import { terminalActions } from "@/state/terminal"
+import { dockTool } from "./dock-tab-style"
 
 const item =
-  "flex cursor-default items-center rounded px-2 py-1.5 text-label outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
-export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
+  "flex cursor-default items-center rounded px-2 py-1.5 text-ui outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
+const keys = "ml-auto pl-4 text-label text-faint"
+export function TerminalOptions({ canSplit, canSearch }: { canSplit: boolean; canSearch: boolean }) {
   const fontSize = usePrefs((prefs) => prefs.terminalFontSize)
   const fontFamily = usePrefs((prefs) => prefs.terminalFontFamily)
   const optionAsMeta = usePrefs((prefs) => prefs.terminalOptionAsMeta)
+  const tabId = useTabs((state) => state.activeId)
+  const expanded = useStage((state) => state.byTab[tabId]?.dockExpanded ?? false)
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
@@ -16,17 +22,29 @@ export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
           type="button"
           aria-label="Terminal options"
           title="Terminal options"
-          className="pressable flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground"
+          className={dockTool}
         >
-          <MoreHorizontalIcon className="size-4" />
+          <MoreHorizontalIcon />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           align="end"
           sideOffset={4}
-          className="overlay-panel z-50 w-56 p-1"
+          className="overlay-panel z-50 w-60 p-1"
         >
+          <DropdownMenu.Item
+            disabled={!canSearch}
+            className={item}
+            onSelect={() => window.dispatchEvent(new CustomEvent("mako:terminal-search"))}
+          >
+            Find
+            <span className={keys}>⌘F</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={item} onSelect={() => stage.toggleDockExpanded()}>
+            {expanded ? "Restore size" : "Maximize"}
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
           <DropdownMenu.Item
             disabled={!canSplit}
             className={item}
@@ -48,7 +66,7 @@ export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
             Close terminal
           </DropdownMenu.Item>
           <DropdownMenu.Separator className="my-1 h-px bg-hairline" />
-          <div className="flex items-center justify-between px-2 py-1.5 text-label">
+          <div className="flex items-center justify-between px-2 py-1.5 text-ui">
             <span>Font size</span>
             <div className="flex items-center gap-2">
               <button
@@ -78,7 +96,7 @@ export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
               </button>
             </div>
           </div>
-          <label className="block px-2 py-1.5 text-label">
+          <label className="block px-2 py-1.5 text-ui">
             Font family
             <input
               aria-label="Terminal font family"
@@ -88,7 +106,7 @@ export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
                 setPref("terminalFontFamily", event.target.value.slice(0, 200))
               }
               onKeyDown={(event) => event.stopPropagation()}
-              className="mt-1 h-7 w-full rounded border border-hairline bg-surface px-2 font-mono text-label outline-none focus:border-border"
+              className="mt-1 h-7 w-full rounded border border-hairline bg-surface px-2 text-label outline-none focus:border-border"
             />
           </label>
           <DropdownMenu.Item

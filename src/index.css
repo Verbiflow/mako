@@ -50,6 +50,7 @@
   /* Product tokens */
   --color-shell: var(--shell);
   --color-surface: var(--surface);
+  --color-terminal: var(--terminal);
   --color-raised: var(--raised);
   --color-hairline: var(--hairline);
   --color-faint: var(--faint);
@@ -223,6 +224,11 @@
   --negative: oklch(0.68 0.14 25);
   --destructive: var(--negative);
   --caution: oklch(0.78 0.09 80);
+  /*
+   * The terminal's page: a neutral grey below the stage's surface. The warm
+   * cast that keeps chrome from reading black turns ANSI colour muddy.
+   */
+  --terminal: oklch(0.196 0.002 60);
   /* ANSI hues encode shell output, independently of the neutral app chrome. */
   --terminal-blue: #89a9de;
   --terminal-bright-blue: #afc8f0;
@@ -297,6 +303,7 @@
   --positive: oklch(0.53 0.095 150);
   --negative: oklch(0.545 0.15 26);
   --caution: oklch(0.59 0.085 75);
+  --terminal: oklch(0.995 0 0);
   --terminal-blue: #365f9e;
   --terminal-bright-blue: #426fac;
   --terminal-cyan: #276d68;
@@ -1531,21 +1538,6 @@ diffs-container {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-/* The dock's one tab indicator glides to whichever tab is selected. */
-.dock-tab-indicator {
-  position: absolute;
-  bottom: -1px;
-  left: 0;
-  height: 1.5px;
-  border-radius: 1px;
-  background: var(--foreground);
-  pointer-events: none;
-  transition:
-    transform 260ms var(--ease-out),
-    width 260ms var(--ease-out),
-    opacity 120ms var(--ease-out);
-}
-.dock-tab-indicator[data-instant] { transition: none; }
 .dock-alert { animation: dock-alert-arrive 220ms var(--ease-out) both; }
 @keyframes dock-alert-arrive {
   from { opacity: 0; transform: translateY(-4px); }
@@ -1559,7 +1551,6 @@ diffs-container {
 }
 @media (prefers-reduced-motion: reduce) {
   .changing-label, .companion-panel, .terminal-panel, .dock-alert, .app-mark[data-changed]:not(.animate-spin) { animation: none; }
-  .dock-tab-indicator { transition: none; }
   [data-sonner-toaster] [data-sonner-toast] { transition: none; }
 }
 
@@ -1593,7 +1584,8 @@ diffs-container {
   -webkit-font-smoothing: auto;
   text-rendering: auto;
 }
-.terminal-viewport .xterm-viewport { overscroll-behavior: contain; }
+/* xterm paints its viewport #000; the part-row below the last line showed as a black band. */
+.terminal-viewport .xterm .xterm-viewport { overscroll-behavior: contain; background-color: transparent; }
 .terminal-viewport .xterm .xterm-scrollable-element > .scrollbar > .slider {
   background: var(--fill-selected);
   border-radius: 4px;

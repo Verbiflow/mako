@@ -2,12 +2,13 @@ import type { ITheme } from "@xterm/xterm"
 
 export function terminalTheme(style: CSSStyleDeclaration): ITheme {
   return {
-    background: style.getPropertyValue("--surface"),
+    background: style.getPropertyValue("--terminal"),
     foreground: style.getPropertyValue("--foreground"),
     cursor: style.getPropertyValue("--foreground"),
-    cursorAccent: style.getPropertyValue("--surface"),
+    cursorAccent: style.getPropertyValue("--terminal"),
     selectionBackground: style.getPropertyValue("--fill-selected"),
-    overviewRulerBorder: "transparent",
+    // xterm draws this down the ruler's left edge and ignores "transparent".
+    overviewRulerBorder: style.getPropertyValue("--terminal"),
     black: style.getPropertyValue("--background"),
     brightBlack: style.getPropertyValue("--faint"),
     white: style.getPropertyValue("--muted-foreground"),

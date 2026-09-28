@@ -1,21 +1,21 @@
 import { ContextMenu } from "radix-ui"
 import { terminalGroupFor } from "@/lib/terminal-layout"
 import { createHook } from "@/state/store"
-import {
-  ChevronDownIcon,
-  ChevronUpIcon,
-  QuoteIcon,
-  SearchIcon,
-  XIcon,
-} from "lucide-react"
+import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { TerminalSession } from "@/lib/types"
 import { terminalActions, terminalStore } from "@/state/terminal"
+import { dockButton } from "./dock-tab-style"
 import { useTerminalRenderer } from "./use-terminal-renderer"
 
 const useTerminal = createHook(terminalStore)
 const menuItem =
-  "cursor-default rounded px-2 py-1.5 text-label outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
+  "cursor-default rounded px-2 py-1.5 text-ui outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
+/** A notice across the foot of the pane, square to its edges. */
+const bar =
+  "absolute inset-x-0 bottom-0 flex h-10 items-center gap-3 border-t border-hairline bg-shell pr-1.5 pl-3 text-ui"
+const searchTool =
+  "pressable flex w-8 shrink-0 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-fill-hover hover:text-foreground [&_svg]:size-4"
 
 export function TerminalViewport({
   session,
@@ -64,12 +64,14 @@ export function TerminalViewport({
       >
         <ContextMenu.Trigger asChild>
           <div
-            ref={hostRef}
             className={cn(
-              "terminal-viewport h-full bg-surface px-3 py-2.5 font-mono transition-opacity duration-150",
+              "terminal-viewport h-full bg-terminal py-2.5 pr-1 pl-3 transition-opacity duration-150",
               split && !focused && "opacity-55"
             )}
-          />
+          >
+            {/* The fit addon measures the host's box without its padding, so the padding lives outside it. */}
+            <div ref={hostRef} className="h-full" />
+          </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Content
@@ -149,36 +151,29 @@ export function TerminalViewport({
         </ContextMenu.Portal>
       </ContextMenu.Root>
       {clipboardError ? (
-        <div
-          role="status"
-          className="absolute inset-x-2 bottom-2 z-20 rounded-md border border-hairline bg-surface px-2 py-1 text-label text-muted-foreground"
-        >
+        <div role="status" className={cn(bar, "z-20 text-muted-foreground")}>
           {clipboardError}
         </div>
       ) : null}
       {fault ? (
-        <div
-          role="alert"
-          className="absolute inset-x-2 bottom-2 z-20 flex items-center gap-2 rounded-md border border-negative/30 bg-surface px-2 py-1 text-label text-negative"
-        >
-          <span className="min-w-0 flex-1">{fault}</span>
+        <div role="alert" className={cn(bar, "z-20")}>
+          <span className="min-w-0 flex-1 truncate text-negative">{fault}</span>
           <button
             type="button"
             onClick={() => terminalActions.resync(session.id)}
-            className="pressable rounded px-2 py-1 hover:bg-fill-hover"
+            className={dockButton("plain")}
           >
             Reconnect
           </button>
         </div>
       ) : null}
       {searching ? (
-        <div className="overlay-panel absolute top-2 right-3 left-3 z-20 ml-auto flex h-9 max-w-96 items-center gap-0.5 rounded-md p-1">
-          <SearchIcon className="mx-1 size-3.5 text-faint" />
+        <div className="dock-alert absolute top-0 right-0 z-20 flex h-9 w-[min(24rem,100%)] items-stretch border-b border-l border-hairline bg-shell">
           <input
             ref={searchInputRef}
             autoFocus
             value={query}
-            placeholder="Find in terminal…"
+            placeholder="Find"
             aria-label="Find in terminal"
             onChange={(event) => search(event.target.value)}
             onKeyDown={(event) => {
@@ -193,31 +188,31 @@ export function TerminalViewport({
                 closeSearch()
               }
             }}
-            className="h-7 min-w-0 flex-1 rounded px-1 text-label text-foreground placeholder:text-faint focus:bg-raised focus:ring-1 focus:ring-hairline focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent px-3 text-ui text-foreground placeholder:text-faint focus:outline-none"
           />
           <button
             type="button"
             aria-label="Previous result"
             onClick={() => findPrevious()}
-            className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+            className={searchTool}
           >
-            <ChevronUpIcon className="size-3.5" />
+            <ChevronUpIcon />
           </button>
           <button
             type="button"
             aria-label="Next result"
             onClick={() => findNext()}
-            className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+            className={searchTool}
           >
-            <ChevronDownIcon className="size-3.5" />
+            <ChevronDownIcon />
           </button>
           <button
             type="button"
             aria-label="Close terminal search"
             onClick={closeSearch}
-            className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+            className={searchTool}
           >
-            <XIcon className="size-3.5" />
+            <XIcon />
           </button>
         </div>
       ) : null}
@@ -231,29 +226,26 @@ export function TerminalViewport({
               })
             )
           }
-          className="pressable overlay-panel absolute right-3 bottom-3 z-10 flex h-7 items-center gap-1.5 rounded-md px-2 text-label text-muted-foreground hover:text-foreground"
+          className={cn(dockButton("plain"), "dock-alert absolute right-3 bottom-3 z-10 bg-shell")}
         >
-          <QuoteIcon className="size-3" />
-          Reference selection
+          Add to message
         </button>
       ) : null}
       {session.status !== "running" ? (
-        <div className="absolute bottom-3 left-3 z-10 flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-lg bg-raised py-1 pr-1 pl-2.5 text-label text-muted-foreground [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
-          <span
-            aria-hidden
-            className={cn(
-              "size-1.5 shrink-0 rounded-full",
-              session.status === "interrupted"
-                ? "bg-caution"
-                : session.exitCode
-                  ? "bg-negative"
-                  : "bg-faint"
+        <div className={cn(bar, "dock-alert z-10")}>
+          <span className="min-w-0 flex-1 truncate">
+            {session.status === "interrupted" ? (
+              <span className="text-caution">Shell stopped. Its scrollback was restored.</span>
+            ) : (
+              <>
+                <span className="text-foreground">Shell exited</span>
+                {session.exitCode === undefined ? null : (
+                  <span className={session.exitCode ? "text-negative" : "text-muted-foreground"}>
+                    {` with code ${session.exitCode}`}
+                  </span>
+                )}
+              </>
             )}
-          />
-          <span className="min-w-0 truncate">
-            {session.status === "interrupted"
-              ? "Shell stopped · scrollback restored"
-              : `Shell exited${session.exitCode === undefined ? "" : ` with code ${session.exitCode}`}`}
           </span>
           <button
             type="button"
@@ -264,7 +256,7 @@ export function TerminalViewport({
                 session.rows
               )
             }
-            className="pressable shrink-0 rounded-md px-2 py-0.5 text-foreground hover:bg-fill-hover"
+            className={dockButton("plain")}
           >
             New shell
           </button>

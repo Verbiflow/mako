@@ -88,7 +88,7 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
             {outside ? <p className="truncate text-label text-faint">Made outside Mako</p> : null}
             {counts ? <p className="truncate text-label text-faint">{counts}</p> : null}
             {/* Right-to-left so a long path gives up its start, not the folder's own name. */}
-            <p dir="rtl" className="truncate text-left font-mono text-label text-faint" title={folder}>
+            <p dir="rtl" className="truncate text-left text-label text-faint" title={folder}>
               <bdi dir="ltr">{homeRelative(folder)}</bdi>
             </p>
           </div>
