@@ -1,153 +1,22 @@
-import { prepareChildWorkspace } from "./child-workspace.js"
-import { randomUUID } from "node:crypto"
 import { join } from "node:path"
-import { DelegateInputSchema } from "./contracts/conversation-control.js"
-import type { DelegateInput } from "./contracts/conversation-control.js"
 import type { LiveSnapshot } from "./shared.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { contextPrompt, prepareLiveContext } from "./live-context.js"
 import { errorMessage } from "./live-runtime.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 
-/** App-owned child tasks and idempotent parent result delivery. */
+/**
+ * Child tasks from the retired Delegate flow, in journals written before it
+ * went: they still settle, their results still reach the parent once, and
+ * they can still be canceled. Nothing creates one now; related work is a
+ * Session in the same Thread.
+ */
 export class LiveChildren {
   private readonly host: LiveAccess
   private readonly delivering = new Set<string>()
   constructor(host: LiveAccess) {
     this.host = host
   }
-  async delegate(id: string, input: DelegateInput): Promise<LiveSnapshot> {
-    const command = DelegateInputSchema.parse(input)
-    const parent = this.host.require(id)
-    const control = this.host.control(parent)
-    const existing = control.children.find((child) => child.id === command.id)
-    if (existing) {
-      if (
-        existing.provider !== command.provider ||
-        existing.task !== command.task
-      )
-        throw new Error(
-          "This child task ID was already accepted with different content"
-        )
-      return parent.snapshot
-    }
-    if (this.host.load(command.id))
-      throw new Error(
-        "This child task ID already belongs to another conversation"
-      )
-    const request = parent.snapshot.requests
-      .filter(
-        (candidate) =>
-          candidate.status === "dispatching" || candidate.status === "completed"
-      )
-      .at(-1)
-    if (!request) throw new Error("Start a parent task before delegating work")
-    if (control.ancestry?.kind === "delegation")
-      throw new Error("Nested app-owned delegation is not enabled")
-    if (
-      control.children.filter(
-        (child) =>
-          child.status === "starting" ||
-          child.status === "working" ||
-          child.status === "needs-permission"
-      ).length >= 4
-    )
-      throw new Error("This conversation already has four active child tasks")
-    if (
-      !this.host.dependencies
-        .driver(command.provider)
-        ?.available(this.host.dependencies.appPath)
-    )
-      throw new Error(
-        "The child provider has no available interactive transport"
-      )
-    const child = {
-      id: command.id,
-      parentRequestId: request.id,
-      provider: command.provider,
-      task: command.task,
-      status: "starting" as const,
-      delivery: "pending" as const,
-      deliveryId: randomUUID(),
-    }
-    const previous = parent.snapshot
-    parent.snapshot = {
-      ...parent.snapshot,
-      control: { ...control, children: [...control.children, child] },
-    }
-    try {
-      this.host.flush(parent)
-    } catch (error) {
-      parent.snapshot = previous
-      throw error
-    }
-    try {
-      const workspace = await prepareChildWorkspace(
-        this.host.dependencies.root,
-        command.id,
-        parent.snapshot.session.cwd
-      )
-      const current = this.host.control(parent)
-      if (
-        current.children.find((candidate) => candidate.id === command.id)
-          ?.status === "canceled"
-      )
-        return parent.snapshot
-      parent.snapshot = {
-        ...parent.snapshot,
-        control: {
-          ...current,
-          children: current.children.map((candidate) =>
-            candidate.id === command.id
-              ? { ...candidate, workspace }
-              : candidate
-          ),
-        },
-      }
-      this.host.flush(parent)
-      await this.host.open(
-        command.provider,
-        workspace.path,
-        {
-          conversationId: command.id,
-          title: command.task.slice(0, 120),
-          initialRequest: {
-            id: command.id,
-            text: command.task,
-            attachments: [],
-          },
-        },
-        {
-          kind: "delegation",
-          parentId: id,
-          sourceRevision: parent.snapshot.revision,
-          point: request.id,
-        },
-        this.host.agentActor(id)
-      )
-    } catch (error) {
-      const current = this.host.control(parent)
-      parent.snapshot = {
-        ...parent.snapshot,
-        control: {
-          ...current,
-          children: current.children.map((candidate) =>
-            candidate.id === command.id
-              ? { ...candidate, status: "failed" }
-              : candidate
-          ),
-        },
-      }
-      this.host.flush(parent)
-      this.host.dependencies.emit({
-        type: "notice",
-        level: "error",
-        message: `Child task could not start: ${errorMessage({ error })}`,
-      })
-    }
-    return parent.snapshot
-  }
-
   recover(parent: Resident): void {
     for (const child of this.host.control(parent).children) {
       if (child.delivery !== "pending") continue
@@ -219,7 +88,7 @@ export class LiveChildren {
         : request?.status === "completed"
           ? "completed"
           : // A Stop is the user's cancel; a turn Mako's own exit cut short
-            // did not do its task, and the parent must be free to delegate again.
+            // did not do its task.
             request?.status === "interrupted" && (request.interruption?.reason ?? "stopped") === "stopped"
             ? "canceled"
             : request?.status === "failed" ||

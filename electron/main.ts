@@ -47,7 +47,7 @@ import { prepareBrowserExtension } from "./browser-extension-setup.js"
 import { ControlSessions } from "./control-sessions.js"
 import { controlLaunchInstructions } from "./control-launch.js"
 import { startControlService } from "./control-service.js"
-import type { DelegateInput, ForkInput, MessageAnchor, TransferInput } from "./shared.js"
+import type { ForkInput, MessageAnchor, TransferInput } from "./shared.js"
 import { TransferInputSchema } from "./contracts/conversation-control.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { WorkspaceGit } from "./host-git.js"
@@ -1570,9 +1570,6 @@ function bindIpc() {
     await continuation.assertNative(input.path)
     return nativeRequests.submit(input)
   })
-  handle("mako:live-delegate", (_event, id: string, input: DelegateInput) =>
-    liveConversations.delegate(id, input)
-  )
   handle("mako:live-child-cancel", (_event, id: string, childId: string) =>
     liveConversations.cancelChild(id, childId)
   )
@@ -2024,8 +2021,6 @@ app.whenReady().then(async () => {
       await controlService?.revoke(conversationId, bindingId)
       await controlSessions.stop(bindingId)
     },
-    providers: () =>
-      providerHost.liveDrivers.list().map((driver) => driver.provider),
     driver: (provider) => providerHost.liveDrivers.get(provider),
     history: pageThread,
     emit,

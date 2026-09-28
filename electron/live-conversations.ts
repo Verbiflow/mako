@@ -41,7 +41,6 @@ import {
 } from "./contracts/conversation-control.js"
 import { resolveAnchor } from "./contracts/message-anchor.js"
 import type {
-  DelegateInput,
   ForkInput,
   TransferInput,
   ConversationControl,
@@ -1842,11 +1841,7 @@ export class LiveConversations {
     }
   }
 
-  authorizeAgent(
-    id: string,
-    bindingId: string,
-    action: "read" | "delegate" = "read"
-  ): void {
+  authorizeAgent(id: string, bindingId: string): void {
     const resident = this.require(id)
     if (
       this.control(resident).activeBindingId !== bindingId ||
@@ -1856,28 +1851,8 @@ export class LiveConversations {
       throw new Error(
         "This provider no longer owns an active turn in this conversation"
       )
-    // Provider-specific modes have no cross-provider ordering. Do not silently
-    // grant another provider its defaults from a restricted parent mode.
-    if (action === "delegate" && resident.snapshot.session.currentMode !== null)
-      throw new Error(
-        "Delegate from the desk when the parent uses a provider-specific mode"
-      )
   }
 
-  childTasks(id: string) {
-    return this.control(this.require(id)).children
-  }
-
-  availableProviders(): string[] {
-    return (this.dependencies.providers?.() ?? []).filter((provider) =>
-      this.dependencies.driver(provider)?.available(this.dependencies.appPath)
-    )
-  }
-
-  delegate(id: string, input: DelegateInput): Promise<LiveSnapshot> {
-    assertLifecycleAdmission()
-    return this.children.delegate(id, input)
-  }
   cancelChild(id: string, childId: string): LiveSnapshot {
     return this.children.cancelChild(id, childId)
   }

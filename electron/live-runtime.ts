@@ -75,7 +75,6 @@ export interface Dependencies {
   ): ConversationTools | undefined | Promise<ConversationTools | undefined>
   controlInstructions?(bindingId: string): string | undefined
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
-  providers?(): string[]
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
   nativePath?(session: LiveSessionState): string | undefined
