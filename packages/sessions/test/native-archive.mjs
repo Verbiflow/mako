@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -91,7 +91,9 @@ try {
   console.log("Native archive: a Codex rollout archived and unarchived follows its file both ways; a deleted one with a saved copy stays as that copy")
 
   // Each Codex archive is its own, even one made while Mako was closed over
-  // a cached row: the move sets the rollout's ctime, though not its mtime.
+  // a cached row, and a rewrite doesn't make a new one. Codex 0.154 sets the
+  // rollout's mtime when it unarchives, keeps it when it archives, and keeps
+  // it when `migrate-rollouts --apply` writes the file anew.
   const again = join(home, "again")
   const againDated = join(again, ".codex", "sessions", "2026", "09", "28")
   const againArchived = join(again, ".codex", "archived_sessions")
@@ -104,18 +106,30 @@ try {
   assert.equal(firstArchive.nativeArchived, true)
   assert.match(firstArchive.nativeArchiveStamp ?? "", /^\d+$/)
   await before.stop()
+  const archivedRollout = join(againArchived, name)
+  const migrated = `${archivedRollout}.migrating`
+  const kept = await stat(archivedRollout)
+  await writeFile(migrated, `${await readFile(archivedRollout, "utf8")}${line("event_msg", { type: "history_mode", mode: "paginated" })}`)
+  await utimes(migrated, kept.atimeMs / 1000, kept.mtimeMs / 1000)
+  await rename(migrated, archivedRollout)
+  const rewritten = new SessionCatalog([new CodexProvider(again)], { cachePath })
+  const [sameArchive] = await rewritten.scan()
+  assert.notEqual(sameArchive.bytes, firstArchive.bytes)
+  assert.equal(sameArchive.nativeArchiveStamp, firstArchive.nativeArchiveStamp, "a rollout rewritten in its archive is still that archive")
+  await rewritten.stop()
   await delay(20)
-  await rename(join(againArchived, name), join(againDated, name))
-  await rename(join(againDated, name), join(againArchived, name))
+  await rename(archivedRollout, join(againDated, name))
+  const unarchivedAt = new Date()
+  await utimes(join(againDated, name), unarchivedAt, unarchivedAt)
+  await rename(join(againDated, name), archivedRollout)
   const after = new SessionCatalog([new CodexProvider(again)], { cachePath })
   const [secondArchive] = await after.scan()
   assert.equal(secondArchive.path, firstArchive.path)
-  assert.equal(secondArchive.bytes, firstArchive.bytes)
   assert.equal(secondArchive.nativeArchived, true)
-  assert.notEqual(secondArchive.nativeArchiveStamp, firstArchive.nativeArchiveStamp, "unarchived and archived again while Mako was closed is a new archive")
-  assert.equal(Number(secondArchive.nativeArchiveStamp) > Number(firstArchive.nativeArchiveStamp), true)
+  assert.notEqual(secondArchive.nativeArchiveStamp, sameArchive.nativeArchiveStamp, "unarchived and archived again while Mako was closed is a new archive")
+  assert.equal(Number(secondArchive.nativeArchiveStamp) > Number(sameArchive.nativeArchiveStamp), true)
   await after.stop()
-  console.log("Native archive: a Codex rollout archived again to the same path, same size and mtime, is a new archive")
+  console.log("Native archive: a Codex rollout rewritten in its archive keeps its archive; one archived again while Mako was closed is a new archive")
 
   // The first archive on a machine makes archived_sessions. The watcher
   // hears the folder appear rather than waiting for the discovery sweep.

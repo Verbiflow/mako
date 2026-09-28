@@ -498,8 +498,8 @@ function rolloutIdentity(path: string): string {
 
 export class CodexProvider implements SessionProvider {
   harness = "codex" as const
-  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. */
-  peekVersion = 3
+  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. */
+  peekVersion = 4
   displayName = "Codex"
   private root: string
   /**
@@ -650,18 +650,11 @@ export class CodexProvider implements SessionProvider {
     return Promise.all([walkFiles(this.root, jsonl), walkFiles(this.archivedRoot, jsonl)]).then((found) => found.flat())
   }
 
-  /**
-   * A rollout's stat facts. The revision carries what changes without
-   * touching the rollout: its thread's name, and for an archived rollout the
-   * ctime its move set, so archiving it again re-reads it.
-   */
+  /** A rollout's stat facts; the revision carries its thread's name, which a rename changes without touching the rollout. */
   private nativeFile(path: string, info: Stats, names: ReadonlyMap<string, string>): NativeFile {
     const file: NativeFile = { path, bytes: info.size, mtimeMs: info.mtimeMs }
     const name = names.get(rolloutIdentity(path))
-    const archived = path.startsWith(`${this.archivedRoot}/`) ? String(Math.floor(info.ctimeMs)) : undefined
-    const facts = [name === undefined ? "" : `name:${name}`, archived === undefined ? "" : `archived:${archived}`]
-    const revision = facts.filter(Boolean).join("\n")
-    return revision ? { ...file, revision } : file
+    return name === undefined ? file : { ...file, revision: `name:${name}` }
   }
 
   async stat(path: string): Promise<NativeFile | null> {
@@ -783,8 +776,9 @@ export class CodexProvider implements SessionProvider {
     followCurrentCwd(next, turnCwd)
     if (file.path.startsWith(`${this.archivedRoot}/`)) {
       next.nativeArchived = true
-      const info = await stat(file.path).catch(() => null)
-      if (info) next.nativeArchiveStamp = String(Math.floor(info.ctimeMs))
+      // Unarchiving sets the rollout's mtime and archiving keeps it, so each
+      // archive has its own; `migrate-rollouts` rewrites the file but keeps it.
+      next.nativeArchiveStamp = String(Math.floor(file.mtimeMs))
     }
     return next
   }

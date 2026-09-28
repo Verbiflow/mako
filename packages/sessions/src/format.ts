@@ -117,8 +117,9 @@ export interface ThreadRef {
   nativeArchived?: boolean
   /**
    * Which archive `nativeArchived` is, digits only, where the harness's
-   * record tells it from a later one: Codex's archived rollout's ctime in ms
-   * (the move sets it), OpenCode's `time_archived`. Cursor records none.
+   * record tells it from a later one: Codex's archived rollout's mtime in ms
+   * (its unarchive sets it, its archive keeps it), OpenCode's
+   * `time_archived`. Cursor records none.
    */
   nativeArchiveStamp?: string
   /** Native history is readable, but its owning control transport cannot resume it. */
