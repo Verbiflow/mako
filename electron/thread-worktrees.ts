@@ -36,6 +36,8 @@ const ReceiptSchema = z.object({
   tookMs: z.number().optional(),
   /** Taken from a checkout made ahead of time. */
   spare: z.boolean().optional(),
+  /** What moving the source checkout's uncommitted changes here did, so a repeated request answers the same. */
+  moved: z.union([z.object({ files: z.number() }), z.object({ stash: z.string() })]).optional(),
 })
 type Receipt = z.infer<typeof ReceiptSchema>
 
@@ -417,6 +419,54 @@ export class ThreadWorktreeService {
       if (receipt?.path === path) await rm(join(this.receipts(), file), { force: true })
     }
     return this.list()
+  }
+
+  /**
+   * Move the uncommitted work of the checkout this conversation's worktree
+   * was made from into the worktree, which starts at the same commit:
+   * staged, unstaged and untracked files, through one stash. When the
+   * worktree can't take it, the stash stays, named, so nothing is lost.
+   */
+  async moveChanges(conversationId: string): Promise<number> {
+    const receipt = await this.receipt(conversationId)
+    if (receipt?.state !== "ready") throw new Error("This conversation has no worktree to move changes into.")
+    const kept = (stash: string, cause?: unknown) => new Error(`The worktree couldn't take the changes, so they're kept in the project checkout's stash as "${stash}".`, { cause })
+    if (receipt.moved) {
+      if ("stash" in receipt.moved) throw kept(receipt.moved.stash)
+      return receipt.moved.files
+    }
+    const { repoRoot, path, branch } = receipt
+    const changed = (await git(repoRoot, ["status", "--porcelain", "--untracked-files=all"])).split("\n").filter(Boolean).length
+    if (!changed) {
+      await this.save({ ...receipt, moved: { files: 0 } })
+      return 0
+    }
+    const [head, base] = await Promise.all([git(repoRoot, ["rev-parse", "HEAD"]), git(path, ["rev-parse", "HEAD"])])
+    if (head !== base) throw new Error("The project checkout moved to another commit while the worktree was made, so its changes stayed where they are.")
+    const message = `Mako: moving to ${branch}`
+    await git(repoRoot, ["stash", "push", "--include-untracked", "--message", message])
+    const stash = await git(repoRoot, ["rev-parse", "--verify", "refs/stash"])
+    try {
+      // `--index` keeps what was staged staged; Git refuses it before touching anything when it can't.
+      await git(path, ["stash", "apply", "--index", stash]).catch(() => git(path, ["stash", "apply", stash]))
+    } catch (error) {
+      await this.save({ ...receipt, moved: { stash: message } })
+      throw kept(message, error)
+    }
+    await this.save({ ...receipt, moved: { files: changed } })
+    const index = (await git(repoRoot, ["stash", "list", "--format=%H"])).split("\n").indexOf(stash)
+    if (index >= 0) await git(repoRoot, ["stash", "drop", "--quiet", `stash@{${index}}`])
+    return changed
+  }
+
+  /** Take back a worktree made for a conversation that didn't start: its folder, its receipt, and its still-empty branch. */
+  async abandon(conversationId: string): Promise<void> {
+    const receipt = await this.receipt(conversationId)
+    if (!receipt) return
+    if (existsSync(receipt.path)) await setAside(receipt.repoRoot, receipt.path, this.trash())
+    const commits = await git(receipt.repoRoot, ["rev-list", "--count", `${receipt.base}..${receipt.branch}`]).then(Number, () => 1)
+    if (commits === 0) await git(receipt.repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
+    await rm(join(this.receipts(), `${conversationId}.json`), { force: true })
   }
 
   private projectFolder(repoRoot: string): string {

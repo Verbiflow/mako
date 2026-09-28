@@ -69,7 +69,7 @@ import { ThreadWorktreeService } from "./thread-worktrees.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
 import { nativeStopToken } from "./drivers.js"
-import type { LiveStartOptions } from "./shared.js"
+import type { LiveSnapshot, LiveStartOptions } from "./shared.js"
 import {
   app,
   BrowserWindow,
@@ -1602,9 +1602,24 @@ function bindIpc() {
     (_event, id: string, actionId: string) =>
       liveConversations.acknowledgeAction(id, actionId)
   )
-  handle("mako:live-fork", (_event, id: string, input: ForkInput) =>
-    liveConversations.fork(id, input)
-  )
+  handle("mako:live-fork", async (_event, id: string, input: ForkInput) => {
+    if (!input.worktree) return liveConversations.fork(id, input)
+    if (!threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
+    const source = liveConversations.snapshot(id)
+    if (!source) throw new Error("Open the conversation before continuing it in a worktree.")
+    const worktree = await threadWorktrees.prepare(input.id, source.session.cwd, source.session.title)
+    let snapshot: LiveSnapshot
+    try {
+      snapshot = liveConversations.fork(id, input, worktree.cwd)
+    } catch (error) {
+      await threadWorktrees.abandon(input.id).catch(() => undefined)
+      throw error
+    }
+    // The fork exists before anything moves, so a refused fork leaves the checkout untouched.
+    await threadWorktrees.moveChanges(input.id)
+    await threadWorktrees.attach(input.id)
+    return snapshot
+  })
   handle("mako:live-capture", (_event, id: string, path: string) =>
     liveConversations.capture(id, path)
   )

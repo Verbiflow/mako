@@ -1954,7 +1954,8 @@ export class LiveConversations {
     return parent.snapshot
   }
 
-  fork(id: string, input: ForkInput): LiveSnapshot {
+  /** `cwd` places the fork's Session in another folder: a worktree the host made for it. */
+  fork(id: string, input: ForkInput, cwd?: string): LiveSnapshot {
     const command = ForkInputSchema.parse(input)
     const parent = this.require(id)
     this.flush(parent)
@@ -1996,7 +1997,9 @@ export class LiveConversations {
           : forkPoint === "run"
             ? request.nativeRun?.runId
             : undefined
+      // A native session is stored against the folder it ran in, so a fork elsewhere starts fresh with the transcript.
       if (
+        cwd === undefined &&
         command.point.kind === "run" &&
         binding?.nativeId &&
         request.nativeRun &&
@@ -2066,6 +2069,7 @@ export class LiveConversations {
       session: {
         ...source.session,
         id: command.id,
+        cwd: cwd ?? source.session.cwd,
         harness: command.provider,
         nativeId: undefined,
         nativePath: undefined,
