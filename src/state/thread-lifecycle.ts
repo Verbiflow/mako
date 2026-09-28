@@ -27,7 +27,7 @@ export function nativeThreadTarget(ref: ThreadRef): ThreadTarget {
 export function archivedThread(ref: ThreadRef, keys: ReadonlySet<string>): boolean {
   const own = [threadArchiveKey(nativeThreadTarget(ref)), threadArchiveKey({ kind: "file", path: ref.path })]
   if (ref.nativeId) own.push(threadArchiveKey({ kind: "native", provider: ref.harness, nativeId: ref.nativeId }))
-  return archivedByKeys(own, keys, ref.nativeArchived)
+  return archivedByKeys(own, keys, ref)
 }
 
 export function archivedLive(presence: AcpPresence, keys: ReadonlySet<string>): boolean {

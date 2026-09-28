@@ -20,15 +20,44 @@ export function threadArchiveKey(target: ThreadTarget): string {
   if (target.kind === "file") return `file:${target.path}`
   return `native:${JSON.stringify([target.provider, target.nativeId])}`
 }
-/** Marks a Session its harness archived as restored in Mako all the same. */
-export function threadShownKey(key: string): string {
-  return `shown:${key}`
+/** A harness's own archive of a Session, as the Session's row reports it. */
+export interface NativeArchive {
+  nativeArchived?: boolean
+  /** Tells this archive from a later one, where the harness records that (digits only). */
+  nativeArchiveStamp?: string
+}
+/**
+ * Marks a Session its harness archived as restored in Mako all the same.
+ * With a stamp the marker covers that one archive: archiving again in the
+ * harness archives it here too, even if Mako never saw it come out.
+ */
+export function threadShownKey(key: string, stamp?: string): string {
+  return stamp ? `shown@${stamp}:${key}` : `shown:${key}`
+}
+/** The archive key a restore marker is for, or undefined for any other key. */
+export function shownKeyOf(marker: string): string | undefined {
+  if (marker.startsWith("shown:")) return marker.slice("shown:".length)
+  return /^shown@\d+:(.+)$/s.exec(marker)?.[1]
 }
 /**
  * Whether a Session sits with the archived ones: Mako archived it, or its
- * harness did and nobody restored it here.
+ * harness did and nobody restored it here since.
  */
-export function archivedByKeys(keys: readonly string[], hidden: ReadonlySet<string>, nativeArchived: boolean | undefined): boolean {
+export function archivedByKeys(keys: readonly string[], hidden: ReadonlySet<string>, archive: NativeArchive | undefined): boolean {
   if (keys.some((key) => hidden.has(key))) return true
-  return Boolean(nativeArchived) && !keys.some((key) => hidden.has(threadShownKey(key)))
+  if (!archive?.nativeArchived) return false
+  return !keys.some((key) => hidden.has(threadShownKey(key, archive.nativeArchiveStamp)))
+}
+/**
+ * Restore markers a Session's current row makes stale: every one once the
+ * harness no longer archives it, and those for an earlier archive when it
+ * does. `markers` maps each archive key to the markers written for it.
+ */
+export function staleShownMarkers(keys: readonly string[], archive: NativeArchive, markers: ReadonlyMap<string, readonly string[]>): string[] {
+  const stale: string[] = []
+  for (const key of keys) {
+    const current = archive.nativeArchived ? threadShownKey(key, archive.nativeArchiveStamp) : undefined
+    for (const marker of markers.get(key) ?? []) if (marker !== current) stale.push(marker)
+  }
+  return stale
 }

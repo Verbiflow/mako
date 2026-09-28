@@ -821,6 +821,34 @@ try {
     console.log("OpenCode native WAL observation delivered without directory events")
   } finally { await catalog.stop() }
 
+  // A store OpenCode 2 created itself has session_v2 and session_message
+  // and none of v1's tables.
+  const freshHome = join(home, "fresh-v2")
+  const freshRoot = join(freshHome, ".local", "share", "opencode")
+  await mkdir(freshRoot, { recursive: true })
+  const fresh = new DatabaseSync(join(freshRoot, "opencode.db"))
+  try {
+    fresh.exec(`
+      CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL, name TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL);
+      CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER);
+      CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+      INSERT INTO project VALUES ('global', '/', NULL, 1, 1);
+      INSERT INTO session_v2 VALUES ('ses_fresh', 'global', NULL, '/work', 'Plan the billing migration', NULL, 1000, 2000, NULL);
+    `)
+    fresh.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      "msg_fresh", "ses_fresh", "user", 1, 1500, 1500,
+      json({ text: "Plan the billing migration", files: [], agents: [], time: { created: 1500 } })
+    )
+    const freshProvider = new OpenCodeProvider(freshHome, {})
+    const [freshFile, ...others] = await freshProvider.discover()
+    assert.equal(others.length, 0)
+    assert.ok(freshFile, "a store OpenCode 2 created lists its sessions")
+    const freshRef = await freshProvider.peek(freshFile)
+    assert.equal(freshRef?.nativeId, "ses_fresh")
+    assert.equal(freshRef.title, "Plan the billing migration")
+    console.log("OpenCode 2 store without v1 tables lists its sessions")
+  } finally { fresh.close() }
+
   console.log("OpenCode provider tests clean: V1, V2, projected sessions, roots, metadata, tools, reasoning, usage, interruption, compaction, isolation, and follower diffs verified.")
 } finally {
   legacy.close()

@@ -65,7 +65,7 @@ import { SessionMemory, SessionHeldError, sessionMemoryPath } from "./session-me
 import { openThreadStore, threadStorePath } from "./thread-store.js"
 import { followOtherHosts } from "./thread-groups-follow.js"
 import { ThreadArchives } from "./thread-archives.js"
-import { ThreadLifecycle } from "./thread-lifecycle.js"
+import { ThreadLifecycle, followNativeArchives } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
@@ -165,6 +165,7 @@ import {
   viewThreadPreview,
   readThreadFile,
   stopThreads,
+  subscribeThreadEvents,
   transcriptArtifactFor,
   transcriptInlineFor,
   unfollowThread,
@@ -2202,6 +2203,7 @@ app.whenReady().then(async () => {
     external: (path) => Boolean(threadActivitySnapshot()[path]),
   })
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
+  followNativeArchives(threadLifecycle, subscribeThreadEvents, emit)
   installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
   installThreadWorktreesIpc(threadWorktrees)
   installChatFoldersIpc()

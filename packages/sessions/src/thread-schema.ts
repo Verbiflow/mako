@@ -89,6 +89,7 @@ export const ThreadRefSchema = z.object({
   active: z.boolean().optional(),
   archived: z.boolean().optional(),
   nativeArchived: z.boolean().optional(),
+  nativeArchiveStamp: z.string().regex(/^\d+$/).optional(),
   resumeUnavailable: z.string().optional(),
   lineage: z
     .array(z.object({ harness: z.string(), title: z.string().optional() }))

@@ -8,7 +8,9 @@ import { ThreadLifecycle } from "../electron/thread-lifecycle.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import type { LiveSessionState, ThreadRef } from "../electron/shared.ts"
-import { archivedByKeys, threadArchiveKey, threadShownKey } from "../electron/contracts/thread-lifecycle.ts"
+import { archivedByKeys, threadArchiveKey, threadShownKey, type ThreadArchiveSnapshot } from "../electron/contracts/thread-lifecycle.ts"
+import { followNativeArchives } from "../electron/thread-lifecycle.ts"
+import type { HostEvent } from "../electron/shared.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-thread-lifecycle-"))
 const archives = new ThreadArchives(join(root, "archives.sqlite"))
@@ -95,7 +97,7 @@ try {
   // A Session its harness archived sits with the archived ones until it's
   // restored here; archiving it again here forgets that restore.
   const refs: ThreadRef[] = [
-    { harness: "codex", nativeId: "archived-in-codex", path: "/home/.codex/archived_sessions/rollout-a.jsonl", nativeArchived: true },
+    { harness: "codex", nativeId: "archived-in-codex", path: "/home/.codex/archived_sessions/rollout-a.jsonl", nativeArchived: true, nativeArchiveStamp: "100" },
     { harness: "claude", nativeId: "plain", path: "/home/.claude/projects/p/plain.jsonl" },
   ]
   const natives = new ThreadLifecycle({live:owner,archives,native:{list:()=>[],editQueued:()=>[]},threads:()=>refs,nativeToken:()=>null,abortNative:()=>{},external:()=>false})
@@ -103,19 +105,92 @@ try {
   assert.equal(natives.controls(codex).archived, true, "archived in Codex is archived here")
   natives.archive({ id: randomUUID(), target: codex, archived: false })
   assert.equal(natives.controls(codex).archived, false, "restored here though Codex still has it archived")
-  assert.ok(archives.snapshot().keys.includes(threadShownKey(threadArchiveKey(codex))))
+  assert.ok(archives.snapshot().keys.includes(threadShownKey(threadArchiveKey(codex), "100")))
   natives.archive({ id: randomUUID(), target: codex, archived: true })
   assert.equal(natives.controls(codex).archived, true)
-  assert.equal(archives.snapshot().keys.includes(threadShownKey(threadArchiveKey(codex))), false, "archiving again forgets the restore")
+  assert.equal(archives.snapshot().keys.some((key) => key.startsWith("shown")), false, "archiving again forgets the restore")
   natives.archive({ id: randomUUID(), target: codex, archived: false })
-  refs[0] = { ...refs[0]!, path: "/home/.codex/sessions/2026/09/28/rollout-a.jsonl", nativeArchived: undefined }
+  refs[0] = { ...refs[0]!, path: "/home/.codex/sessions/2026/09/28/rollout-a.jsonl", nativeArchived: undefined, nativeArchiveStamp: undefined }
   assert.equal(natives.controls(codex).archived, false, "unarchived in Codex, it stays out")
+
+  // A restore holds for the harness's archive it answered, no longer.
+  const shownKeys = () => archives.snapshot().keys.filter((key) => key.startsWith("shown"))
+  const events = new Set<(event: HostEvent) => void>()
+  const emitted: ThreadArchiveSnapshot[] = []
+  const stopFollowing = followNativeArchives(
+    natives,
+    (subscriber) => { events.add(subscriber); return () => events.delete(subscriber) },
+    (event) => { if (event.type === "thread-archives") emitted.push(event.snapshot) }
+  )
+  const observe = (event: HostEvent) => { for (const subscriber of events) subscriber(event) }
+  const archivedPath = "/home/.codex/archived_sessions/rollout-a.jsonl"
+  refs[0] = { ...refs[0]!, path: archivedPath, nativeArchived: true, nativeArchiveStamp: "100" }
+  natives.archive({ id: randomUUID(), target: codex, archived: false })
+  observe({ type: "threads", threads: refs })
+  assert.equal(emitted.length, 0, "the archive a restore answered is no reason to forget it")
+  assert.equal(natives.controls(codex).archived, false)
+  refs[0] = { ...refs[0]!, nativeArchiveStamp: "200" }
+  assert.equal(natives.controls(codex).archived, true, "archived again in Codex, even unseen in between, is archived here")
+  observe({ type: "thread-ref", ref: refs[0]! })
+  assert.deepEqual(shownKeys(), [], "the stale restore is forgotten")
+  assert.equal(emitted.at(-1)?.revision, archives.snapshot().revision, "windows hear the forgetting")
+  natives.archive({ id: randomUUID(), target: codex, archived: false })
+  assert.equal(natives.controls(codex).archived, false)
+  refs[0] = { ...refs[0]!, path: "/home/.codex/sessions/2026/09/28/rollout-a.jsonl", nativeArchived: undefined, nativeArchiveStamp: undefined }
+  observe({ type: "thread-removed", path: archivedPath })
+  observe({ type: "thread-ref", ref: refs[0]! })
+  assert.deepEqual(shownKeys(), [], "unarchived in Codex, which moves the rollout out, the restore is done")
+  refs[0] = { ...refs[0]!, path: archivedPath, nativeArchived: true, nativeArchiveStamp: "200" }
+  assert.equal(natives.controls(codex).archived, true, "unarchived and archived again in Codex, even to the same stamp, is archived here")
+  // Where Mako keeps a copy, unarchiving turns the old path into that copy
+  // rather than a removal; Codex's next archive to it ends the restore.
+  natives.archive({ id: randomUUID(), target: codex, archived: false })
+  observe({ type: "thread-ref", ref: { ...refs[0]!, archived: true } })
+  refs[0] = { ...refs[0]!, path: "/home/.codex/sessions/2026/09/28/rollout-a.jsonl", nativeArchived: undefined, nativeArchiveStamp: undefined }
+  observe({ type: "thread-ref", ref: refs[0]! })
+  assert.deepEqual(shownKeys(), [threadShownKey(threadArchiveKey({ kind: "file", path: archivedPath }), "200")], "only the saved copy's path keeps a marker")
+  refs[0] = { ...refs[0]!, path: archivedPath, nativeArchived: true, nativeArchiveStamp: "300" }
+  assert.equal(natives.controls(codex).archived, true)
+  observe({ type: "thread-ref", ref: refs[0]! })
+  assert.deepEqual(shownKeys(), [])
+
+  // Cursor records no archive time: only a row seen unarchived ends a restore.
+  const cursorRef: ThreadRef = { harness: "cursor-desktop", nativeId: "cursor-chat", path: "/cursor/state.vscdb#cursor-chat", nativeArchived: true }
+  refs.push(cursorRef)
+  const cursor = { kind: "native", provider: "cursor-desktop", nativeId: "cursor-chat" } as const
+  natives.archive({ id: randomUUID(), target: cursor, archived: false })
+  assert.equal(natives.controls(cursor).archived, false)
+  observe({ type: "threads", threads: [{ ...cursorRef, nativeArchived: undefined, archived: true, path: "/mako/kept/cursor-chat.json" }] })
+  assert.equal(natives.controls(cursor).archived, false, "Mako's saved copy says nothing about Cursor's archive")
+  assert.equal(shownKeys().length > 0, true)
+  observe({ type: "thread-ref", ref: { ...cursorRef, nativeArchived: undefined } })
+  assert.deepEqual(shownKeys(), [], "unarchived in Cursor, the restore is done")
+  assert.equal(natives.controls(cursor).archived, true, "archived again in Cursor is archived here")
+  refs.pop()
+
+  // A restore through a live conversation marks its live key; the row the
+  // conversation owns ends that one too.
+  const liveRef: ThreadRef = { harness: "fixture", nativeId: id, path: join(root, `${id}.json`), nativeArchived: true, nativeArchiveStamp: "1" }
+  refs.push(liveRef)
+  const liveTarget = { kind: "native", provider: "fixture", nativeId: id } as const
+  const liveKey = threadArchiveKey({ kind: "live", id })
+  lifecycle.archive({ id: randomUUID(), target: { kind: "live", id }, archived: false })
+  natives.archive({ id: randomUUID(), target: liveTarget, archived: false })
+  assert.ok(shownKeys().includes(threadShownKey(liveKey, "1")))
+  observe({ type: "thread-ref", ref: { ...liveRef, nativeArchived: undefined, nativeArchiveStamp: undefined } })
+  assert.deepEqual(shownKeys(), [], "the owning conversation's marker goes with the row's")
+  refs.pop()
+  stopFollowing()
+  assert.equal(events.size, 0)
   const plain = { kind: "native", provider: "claude", nativeId: "plain" } as const
   natives.archive({ id: randomUUID(), target: plain, archived: true })
   natives.archive({ id: randomUUID(), target: plain, archived: false })
   assert.equal(archives.snapshot().keys.some((key) => key.startsWith("shown:") && key.includes("plain")), false, "restoring a Session only Mako archived records nothing more")
-  assert.equal(archivedByKeys(["file:/x"], new Set(), true), true)
-  assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x"]), true), false)
-  assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x", "file:/x"]), true), true, "Mako's own archive wins over a restore marker")
-  console.log("Thread lifecycle: shared archive/restore receipts, duplicate commands, exact-run Stop, held queue and unrelated-run isolation verified; a Session its harness archived is archived here until restored here")
+  assert.equal(archivedByKeys(["file:/x"], new Set(), { nativeArchived: true }), true)
+  assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x"]), { nativeArchived: true }), false)
+  assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x", "file:/x"]), { nativeArchived: true }), true, "Mako's own archive wins over a restore marker")
+  assert.equal(archivedByKeys(["file:/x"], new Set(["shown@7:file:/x"]), { nativeArchived: true, nativeArchiveStamp: "7" }), false)
+  assert.equal(archivedByKeys(["file:/x"], new Set(["shown@7:file:/x"]), { nativeArchived: true, nativeArchiveStamp: "8" }), true, "a restore of another archive doesn't answer this one")
+  assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x"]), { nativeArchived: true, nativeArchiveStamp: "8" }), true)
+  console.log("Thread lifecycle: shared archive/restore receipts, duplicate commands, exact-run Stop, held queue and unrelated-run isolation verified; a Session its harness archived is archived here until restored here, and archived again once its harness unarchives and re-archives it")
 } finally { owner.stop(); archives.close(); await rm(root,{recursive:true,force:true}) }

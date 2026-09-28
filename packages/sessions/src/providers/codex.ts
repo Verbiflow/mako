@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { existsSync, statSync, type Stats } from "node:fs"
 import {
   codexPrompt,
   codexPromptImages,
@@ -491,10 +491,15 @@ function sqliteNumber(value: SQLOutputValue | undefined): number | undefined {
   return Number.isFinite(number) ? number : undefined
 }
 
+/** The thread id in a rollout's file name. */
+function rolloutIdentity(path: string): string {
+  return basename(path).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0] ?? path
+}
+
 export class CodexProvider implements SessionProvider {
   harness = "codex" as const
-  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. */
-  peekVersion = 2
+  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. */
+  peekVersion = 3
   displayName = "Codex"
   private root: string
   /**
@@ -510,6 +515,7 @@ export class CodexProvider implements SessionProvider {
   private nameLog: string
   private metadataPath: string
   private metadataMtime = -1
+  private namesRead: { stamp: string; names: Promise<Map<string, string>> } | undefined
   private metadata = new Map<string, CodexThreadMetadata>()
   private metadataKnown = new Set<string>()
   private metadataLoads = new Map<
@@ -599,8 +605,22 @@ export class CodexProvider implements SessionProvider {
     return [this.nameLog]
   }
 
-  /** Each named thread's name, so a rename re-reads a rollout it didn't touch. */
-  private async names(): Promise<Map<string, string>> {
+  /**
+   * Each named thread's name, so a rename re-reads a rollout it didn't touch.
+   * Read again only once the name log or the state database changes.
+   */
+  private names(): Promise<Map<string, string>> {
+    const stamp = [this.nameLog, this.metadataPath, `${this.metadataPath}-wal`]
+      .map((path) => {
+        const info = statSync(path, { throwIfNoEntry: false })
+        return info ? `${info.size}:${info.mtimeMs}` : "-"
+      })
+      .join(" ")
+    if (this.namesRead?.stamp !== stamp) this.namesRead = { stamp, names: this.readNames() }
+    return this.namesRead.names
+  }
+
+  private async readNames(): Promise<Map<string, string>> {
     const names = new Map<string, string>()
     const sqlite = existsSync(this.metadataPath) ? await import("node:sqlite").catch(() => null) : null
     if (!sqlite) return names
@@ -630,6 +650,25 @@ export class CodexProvider implements SessionProvider {
     return Promise.all([walkFiles(this.root, jsonl), walkFiles(this.archivedRoot, jsonl)]).then((found) => found.flat())
   }
 
+  /**
+   * A rollout's stat facts. The revision carries what changes without
+   * touching the rollout: its thread's name, and for an archived rollout the
+   * ctime its move set, so archiving it again re-reads it.
+   */
+  private nativeFile(path: string, info: Stats, names: ReadonlyMap<string, string>): NativeFile {
+    const file: NativeFile = { path, bytes: info.size, mtimeMs: info.mtimeMs }
+    const name = names.get(rolloutIdentity(path))
+    const archived = path.startsWith(`${this.archivedRoot}/`) ? String(Math.floor(info.ctimeMs)) : undefined
+    const facts = [name === undefined ? "" : `name:${name}`, archived === undefined ? "" : `archived:${archived}`]
+    const revision = facts.filter(Boolean).join("\n")
+    return revision ? { ...file, revision } : file
+  }
+
+  async stat(path: string): Promise<NativeFile | null> {
+    const info = await stat(path).catch(() => null)
+    return info?.isFile() ? this.nativeFile(path, info, await this.names()) : null
+  }
+
   async discover(): Promise<NativeFile[]> {
     const [paths, names] = await Promise.all([this.rollouts(), this.names()])
     const byIdentity = new Map<string, NativeFile[]>()
@@ -637,7 +676,7 @@ export class CodexProvider implements SessionProvider {
       const batch = await Promise.all(
         paths.slice(index, index + 8).map(async (path) => {
           const info = await stat(path).catch(() => null)
-          return info ? { path, bytes: info.size, mtimeMs: info.mtimeMs } : null
+          return info?.isFile() ? this.nativeFile(path, info, names) : null
         })
       )
       for (const file of batch) {
@@ -645,10 +684,7 @@ export class CodexProvider implements SessionProvider {
         // A resumed thread continues in `<id>_<suffix>.jsonl` with the same
         // session id; the first id names the thread and the group below picks
         // Codex's current file for it.
-        const id =
-          basename(file.path).match(
-            /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i
-          )?.[0] ?? file.path
+        const id = rolloutIdentity(file.path)
         const group = byIdentity.get(id) ?? []
         group.push(file)
         byIdentity.set(id, group)
@@ -665,11 +701,10 @@ export class CodexProvider implements SessionProvider {
             candidates.length > 1
               ? (await this.threadMetadata(id))?.rolloutPath
               : undefined
-          const file =
+          return (
             candidates.find((file) => file.path === current) ??
             candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
-          const name = names.get(id)
-          return file && name !== undefined ? { ...file, revision: `name:${name}` } : file
+          )
         })
       )
       for (const file of batch) if (file) files.push(file)
@@ -746,7 +781,11 @@ export class CodexProvider implements SessionProvider {
         }
       : ref
     followCurrentCwd(next, turnCwd)
-    if (file.path.startsWith(`${this.archivedRoot}/`)) next.nativeArchived = true
+    if (file.path.startsWith(`${this.archivedRoot}/`)) {
+      next.nativeArchived = true
+      const info = await stat(file.path).catch(() => null)
+      if (info) next.nativeArchiveStamp = String(Math.floor(info.ctimeMs))
+    }
     return next
   }
 

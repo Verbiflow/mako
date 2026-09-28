@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite"
 import { createHash } from "node:crypto"
 import { z } from "zod"
-import { threadShownKey, type ArchiveCommand, type ThreadArchiveSnapshot } from "./contracts/thread-lifecycle.js"
+import { shownKeyOf, threadShownKey, type ArchiveCommand, type NativeArchive, type ThreadArchiveSnapshot } from "./contracts/thread-lifecycle.js"
 
 export class ThreadArchives {
   private readonly db: DatabaseSync
@@ -15,10 +15,25 @@ export class ThreadArchives {
     return { revision, keys }
   }
   /**
-   * `natively` says the harness itself archived the target. Restoring such a
-   * Session records that it's shown anyway; archiving it again forgets that.
+   * Restore markers by the archive key each is for. A marker says a Session
+   * its harness archived is shown here anyway (`threadShownKey`).
    */
-  set(command: ArchiveCommand, keys: string[], natively = false): ThreadArchiveSnapshot {
+  shown(): Map<string, string[]> {
+    const markers = new Map<string, string[]>()
+    const rows = this.db.prepare("SELECT key FROM archives WHERE key >= 'shown:' AND key < 'shownA'").all()
+    for (const row of rows) {
+      const marker = z.object({ key: z.string() }).parse(row).key
+      const key = shownKeyOf(marker)
+      if (key !== undefined) markers.set(key, [...(markers.get(key) ?? []), marker])
+    }
+    return markers
+  }
+  /**
+   * `archive` is the harness's own archive of the target. Restoring a Session
+   * it archived records that it's shown anyway, for that archive; archiving
+   * it here forgets every such record.
+   */
+  set(command: ArchiveCommand, keys: string[], archive: NativeArchive = {}): ThreadArchiveSnapshot {
     const digest = createHash("sha256").update(JSON.stringify(command)).digest("hex")
     this.db.exec("BEGIN IMMEDIATE")
     try {
@@ -28,14 +43,13 @@ export class ThreadArchives {
       } else {
         const insert = this.db.prepare("INSERT OR IGNORE INTO archives VALUES (?)")
         const remove = this.db.prepare("DELETE FROM archives WHERE key=?")
+        const shown = this.shown()
         for (const key of new Set(keys)) {
-          if (command.archived) {
-            insert.run(key)
-            remove.run(threadShownKey(key))
-          } else {
-            remove.run(key)
-            if (natively) insert.run(threadShownKey(key))
-          }
+          const marker = archive.nativeArchived && !command.archived ? threadShownKey(key, archive.nativeArchiveStamp) : undefined
+          for (const old of shown.get(key) ?? []) if (old !== marker) remove.run(old)
+          if (command.archived) insert.run(key)
+          else remove.run(key)
+          if (marker) insert.run(marker)
         }
         this.db.prepare("INSERT INTO receipts VALUES (?, ?)").run(command.id, digest)
         this.db.prepare("UPDATE revision SET value=value+1 WHERE id=1").run()
@@ -43,6 +57,19 @@ export class ThreadArchives {
       this.db.exec("COMMIT")
     } catch (error) { this.db.exec("ROLLBACK"); throw error }
     return this.snapshot()
+  }
+  /** Drop restore markers a harness has moved past; unchanged when none of them is held. */
+  forget(markers: readonly string[]): ThreadArchiveSnapshot | null {
+    if (markers.length === 0) return null
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      const remove = this.db.prepare("DELETE FROM archives WHERE key=?")
+      let removed = 0
+      for (const marker of new Set(markers)) removed += Number(remove.run(marker).changes)
+      if (removed > 0) this.db.prepare("UPDATE revision SET value=value+1 WHERE id=1").run()
+      this.db.exec("COMMIT")
+      return removed > 0 ? this.snapshot() : null
+    } catch (error) { this.db.exec("ROLLBACK"); throw error }
   }
   close() { this.db.close() }
 }

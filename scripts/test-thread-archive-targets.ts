@@ -35,6 +35,10 @@ const inCodex: ThreadRef = { harness: "codex", nativeId: "in-codex", path: "/hom
 assert.equal(archivedThread(inCodex, new Set()), true)
 assert.equal(archivedThread(inCodex, new Set([threadShownKey(threadArchiveKey({ kind: "native", provider: "codex", nativeId: "in-codex" }))])), false, "restored here")
 assert.equal(archivedThread({ ...inCodex, nativeArchived: undefined }, new Set()), false)
+const stamped: ThreadRef = { ...inCodex, nativeArchiveStamp: "1790000000000" }
+const stampedShown = threadShownKey(threadArchiveKey({ kind: "native", provider: "codex", nativeId: "in-codex" }), "1790000000000")
+assert.equal(archivedThread(stamped, new Set([stampedShown])), false, "restored here from this archive")
+assert.equal(archivedThread({ ...stamped, nativeArchiveStamp: "1790000009999" }, new Set([stampedShown])), true, "archived again in Codex")
 const asking = new Map([["/a", "needs-permission" as const]])
 assert.equal(railAnnouncement(asking, [{ key: "/a", title: "Fix login", kind: "needs-permission" }]), undefined, "a row still asking isn't announced again")
 assert.equal(railAnnouncement(asking, [{ key: "/a", title: "Fix login", kind: "needs-permission" }, { key: "/b", title: "Ship docs", kind: "failed" }]), "Ship docs failed", "a row that starts asking is")

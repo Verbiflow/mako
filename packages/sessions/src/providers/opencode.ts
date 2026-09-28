@@ -50,6 +50,8 @@ interface SessionRow {
   startedAt?: number
   updatedAt?: number
   archived: boolean
+  /** `time_archived`, which each archive sets anew. */
+  archivedAt?: number
   revision: number
 }
 
@@ -161,7 +163,8 @@ export class OpenCodeProvider implements SessionProvider {
                 database,
                 "current",
                 MAX_SESSIONS,
-                "session_v2"
+                "session_v2",
+                hasTable(database, "session")
               ).map((row) => ({
                 path: sessionPath(path, row.id, true),
                 bytes: row.revision,
@@ -379,10 +382,11 @@ function sessionRows(
   database: DatabaseSync,
   kind: StoreKind,
   limit: number,
-  sessionTable = "session"
+  sessionTable = "session",
+  legacySessions = false
 ): SessionRow[] {
   const rows = database
-    .prepare(sessionQuery(kind, false, sessionTable))
+    .prepare(sessionQuery(kind, false, sessionTable, legacySessions))
     .all(limit)
   return rows
     .map(parseSessionRow)
@@ -401,10 +405,16 @@ function sessionRow(
   return stored ? parseSessionRow(stored) : null
 }
 
+/**
+ * A store OpenCode migrated from v1 keeps its `session` table beside
+ * `session_v2`, and a session in both is listed once, from `session`. A
+ * store OpenCode 2 created has no `session` table at all.
+ */
 function sessionQuery(
   kind: StoreKind,
   one: boolean,
-  sessionTable = "session"
+  sessionTable = "session",
+  legacySessions = false
 ): string {
   const source = kind === "current" ? "session_message" : "message"
   const partRevision =
@@ -418,7 +428,7 @@ function sessionQuery(
   const model = kind === "current" ? ", s.model AS model" : ""
   const where = one
     ? "s.id = ?"
-    : sessionTable === "session_v2"
+    : sessionTable === "session_v2" && legacySessions
       ? "s.parent_id IS NULL AND NOT EXISTS (SELECT 1 FROM session legacy WHERE legacy.id = s.id)"
       : "s.parent_id IS NULL"
   const suffix = one
@@ -452,6 +462,7 @@ function parseSessionRow(fields: SqliteFields): SessionRow | null {
     updatedAt,
     archived:
       fields.time_archived !== null && fields.time_archived !== undefined,
+    archivedAt: sqliteNumber(fields.time_archived),
     revision: revisionOf(
       revisionTime,
       sqliteNumber(fields.revision_count) ?? 0
@@ -485,6 +496,7 @@ function refFrom(
   }
   // Archived in OpenCode, not lost: the row is intact and resumes as it is.
   if (row.archived) ref.nativeArchived = true
+  if (row.archived && row.archivedAt !== undefined) ref.nativeArchiveStamp = String(Math.floor(row.archivedAt))
   if (model?.effort) ref.settings = { model: modelId, options: { effort: model.effort } }
   return ref
 }
@@ -1024,7 +1036,7 @@ function timeCreated(data: JsonObject): number | undefined {
 
 /** Archiving or renaming may leave the row's times alone; the stamp still has to move. */
 function rowState(row: SessionRow): string {
-  return JSON.stringify([row.archived ? "archived" : "open", row.title ?? null, row.directory ?? null])
+  return JSON.stringify([row.archived ? (row.archivedAt ?? "archived") : "open", row.title ?? null, row.directory ?? null])
 }
 
 function revisionOf(timestamp: number, count: number): number {

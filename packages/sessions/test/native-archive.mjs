@@ -45,6 +45,7 @@ try {
   const arrived = events.find((event) => event.type !== "removed" && event.ref.path === archived)
   assert.equal(arrived?.ref.nativeArchived, true, "the rollout in archived_sessions is listed, archived in Codex")
   assert.equal(arrived?.ref.archived, undefined, "archived in Codex is not lost")
+  assert.match(arrived.ref.nativeArchiveStamp ?? "", /^\d+$/, "the archive carries its move's ctime")
   const left = events.find((event) => event.type === "removed" || event.ref.path === live)
   assert.equal(left?.type, "updated", "the old path the archive holds is its saved copy, not a removal")
   assert.equal(left.ref.archived, true)
@@ -88,6 +89,33 @@ try {
   assert.deepEqual(plainEvents.map((event) => event.type), ["removed"])
   await plain.stop()
   console.log("Native archive: a Codex rollout archived and unarchived follows its file both ways; a deleted one with a saved copy stays as that copy")
+
+  // Each Codex archive is its own, even one made while Mako was closed over
+  // a cached row: the move sets the rollout's ctime, though not its mtime.
+  const again = join(home, "again")
+  const againDated = join(again, ".codex", "sessions", "2026", "09", "28")
+  const againArchived = join(again, ".codex", "archived_sessions")
+  await mkdir(againDated, { recursive: true })
+  await mkdir(againArchived, { recursive: true })
+  await writeFile(join(againArchived, name), line("session_meta", { id, cwd: home }))
+  const cachePath = join(again, "catalog-cache.json")
+  const before = new SessionCatalog([new CodexProvider(again)], { cachePath })
+  const [firstArchive] = await before.scan()
+  assert.equal(firstArchive.nativeArchived, true)
+  assert.match(firstArchive.nativeArchiveStamp ?? "", /^\d+$/)
+  await before.stop()
+  await delay(20)
+  await rename(join(againArchived, name), join(againDated, name))
+  await rename(join(againDated, name), join(againArchived, name))
+  const after = new SessionCatalog([new CodexProvider(again)], { cachePath })
+  const [secondArchive] = await after.scan()
+  assert.equal(secondArchive.path, firstArchive.path)
+  assert.equal(secondArchive.bytes, firstArchive.bytes)
+  assert.equal(secondArchive.nativeArchived, true)
+  assert.notEqual(secondArchive.nativeArchiveStamp, firstArchive.nativeArchiveStamp, "unarchived and archived again while Mako was closed is a new archive")
+  assert.equal(Number(secondArchive.nativeArchiveStamp) > Number(firstArchive.nativeArchiveStamp), true)
+  await after.stop()
+  console.log("Native archive: a Codex rollout archived again to the same path, same size and mtime, is a new archive")
 
   // The first archive on a machine makes archived_sessions. The watcher
   // hears the folder appear rather than waiting for the discovery sweep.
@@ -133,12 +161,20 @@ try {
   const openArchived = openEvents.find((event) => event.type === "updated")?.ref
   assert.equal(openArchived?.nativeArchived, true, "archiving without touching time_updated still reaches the row")
   assert.equal(openArchived.archived, undefined, "archived in OpenCode is not lost")
+  assert.equal(openArchived.nativeArchiveStamp, "3000", "the archive carries time_archived")
+  openDb.exec("UPDATE session SET time_archived = NULL WHERE id = 'ses_a'")
+  await openCatalog.scan({ emitChanges: true })
+  assert.equal(openEvents.at(-1)?.ref?.nativeArchived, undefined)
+  assert.equal(openEvents.at(-1)?.ref?.nativeArchiveStamp, undefined)
+  openDb.exec("UPDATE session SET time_archived = 4000 WHERE id = 'ses_a'")
+  await openCatalog.scan({ emitChanges: true })
+  assert.equal(openEvents.at(-1)?.ref?.nativeArchiveStamp, "4000", "archived again, it's a new archive")
   openDb.exec("UPDATE session SET title = 'Parser refactor' WHERE id = 'ses_a'")
   await openCatalog.scan({ emitChanges: true })
   assert.equal(openEvents.at(-1)?.ref?.title, "Parser refactor", "a rename without touching time_updated reaches the row too")
   await openCatalog.stop()
   openDb.close()
-  console.log("Native archive: an OpenCode archive marks the row archived there, still resumable")
+  console.log("Native archive: an OpenCode archive marks the row archived there, still resumable, each archive stamped with its time")
 
   // Cursor's Archive sets a header flag and moves no timestamp.
   const cursorRoot = join(home, process.platform === "darwin" ? "Library/Application Support/Cursor/User/globalStorage" : ".config/Cursor/User/globalStorage")
