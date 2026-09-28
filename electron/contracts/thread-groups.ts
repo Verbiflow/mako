@@ -27,11 +27,3 @@ export interface ThreadGroupChange {
   thread: string
   group: ThreadGroup | null
 }
-
-/**
- * Sessions that changed Thread. A row's `threadId` was stamped when it was
- * listed, so a window reads a Session's Thread from here until the next list.
- */
-export interface ThreadRegroup {
-  placements: { session: string; thread: string }[]
-}

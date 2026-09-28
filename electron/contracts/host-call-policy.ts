@@ -120,12 +120,6 @@ const replays = [
   "mako:thread-remember-mode",
   /** `ThreadStore.createSession`: the operation id is receipted; a repeat returns the first Session. */
   "mako:thread-create-session",
-  /** `ThreadStore.joinThread`: the operation id is receipted; a repeat returns the first result. */
-  "mako:thread-join",
-  /** `ThreadStore.splitSessions`: the operation id is receipted; a repeat returns the first new Thread. */
-  "mako:thread-split",
-  /** `ThreadStore.undoRegroup`: the operation id is receipted; a repeat returns the first result. */
-  "mako:thread-regroup-undo",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
   /** `WorkspaceMoves.answer`: the request id; an answered request ignores a repeat. */

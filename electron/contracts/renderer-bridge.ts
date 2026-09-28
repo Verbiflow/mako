@@ -6,7 +6,7 @@ import type {
   ArchiveCommand,
   StopTarget,
 } from "./thread-lifecycle.js"
-import type { ThreadGroup, ThreadRegroup } from "./thread-groups.js"
+import type { ThreadGroup } from "./thread-groups.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
 import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
@@ -192,12 +192,6 @@ export function createMakoBridge(transport: BridgeTransport) {
     forgetWorkspaceMoves: (project: string) => invokeTrustedHost<void>("mako:workspace-move-forget", project),
     threadCreateSession: (operationId: string, thread: string) =>
       invokeTrustedHost<ThreadPlacement>("mako:thread-create-session", operationId, thread),
-    threadJoin: (operationId: string, sessions: string[], thread: string) =>
-      invokeTrustedHost<ThreadRegroup>("mako:thread-join", operationId, sessions, thread),
-    threadSplit: (operationId: string, sessions: string[]) =>
-      invokeTrustedHost<ThreadRegroup>("mako:thread-split", operationId, sessions),
-    threadRegroupUndo: (operationId: string, undoing: string) =>
-      invokeTrustedHost<ThreadRegroup>("mako:thread-regroup-undo", operationId, undoing),
     threadControls: (target: ThreadTarget) =>
       invokeTrustedHost<ThreadControls>("mako:thread-controls", target),
     archiveThread: (command: ArchiveCommand) =>
