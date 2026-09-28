@@ -1,10 +1,15 @@
 import { existsSync } from "node:fs"
 import {
+  appendFile,
   chmod,
+  lstat,
   mkdir,
   readdir,
   readFile,
+  rename,
   rm,
+  rmdir,
+  symlink,
   writeFile,
 } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -49,14 +54,82 @@ function hasCredentials(contents: string): boolean {
   }
 }
 
-const SHARED_LINKS = [
-  "sessions",
-  "skills",
-  "prompts",
-  "hooks",
-  "config.toml",
-  "AGENTS.md",
-]
+/** An account's own entries in its Codex home; every other entry links to the real home. */
+function isPrivateEntry(name: string): boolean {
+  return (
+    name.startsWith("auth.json") ||
+    ["models_cache.json", "log", "memories", "tmp"].includes(name)
+  )
+}
+/**
+ * Codex creates these on first use, which inside an account would split them
+ * from the watched store: an archive would move its rollout out of Mako's
+ * sight and a rename would land in the account's own log.
+ */
+const SHARED_DIRECTORIES = ["sessions", "archived_sessions"]
+const NAME_LOG = "session_index.jsonl"
+
+/** Links an account's Codex home to the real one, adopting what it archived or named on its own. */
+async function shareHome(realHome: string, dir: string): Promise<void> {
+  await Promise.all(
+    SHARED_DIRECTORIES.map((name) =>
+      mkdir(join(realHome, name), { recursive: true })
+    )
+  )
+  await appendFile(join(realHome, NAME_LOG), "")
+  await adoptArchive(realHome, dir)
+  await adoptNameLog(realHome, dir)
+  const entries = await readdir(realHome)
+  await ensureSharedLinks(
+    realHome,
+    dir,
+    entries.filter((name) => !isPrivateEntry(name))
+  )
+}
+
+/** A rollout archived while the account's own folder stood keeps it until the next launch. */
+async function adoptArchive(realHome: string, dir: string): Promise<void> {
+  const own = join(dir, "archived_sessions")
+  if (!(await lstat(own).catch(() => null))?.isDirectory()) return
+  const shared = join(realHome, "archived_sessions")
+  for (const name of await readdir(own)) {
+    if (!existsSync(join(shared, name)))
+      await rename(join(own, name), join(shared, name))
+  }
+  await rmdir(own).catch(() => {})
+}
+
+/** Appends only the names the real log lacks or holds older, so adopting twice adds nothing. */
+async function adoptNameLog(realHome: string, dir: string): Promise<void> {
+  const own = join(dir, NAME_LOG)
+  if (!(await lstat(own).catch(() => null))?.isFile()) return
+  const shared = join(realHome, NAME_LOG)
+  const named = (line: string) => {
+    try {
+      const fields = jsonFields(line)
+      const id = stringValue(fields.get("id"))
+      const at = Date.parse(stringValue(fields.get("updated_at")) ?? "")
+      return id && !Number.isNaN(at) ? { id, at } : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const latest = new Map<string, number>()
+  for (const line of (await readFile(shared, "utf8")).split("\n")) {
+    const entry = named(line)
+    if (entry && entry.at > (latest.get(entry.id) ?? -Infinity))
+      latest.set(entry.id, entry.at)
+  }
+  const newer = (await readFile(own, "utf8")).split("\n").filter((line) => {
+    const entry = named(line)
+    return entry && entry.at > (latest.get(entry.id) ?? -Infinity)
+  })
+  if (newer.length) await appendFile(shared, `${newer.join("\n")}\n`)
+  const link = `${own}.link`
+  await rm(link, { force: true })
+  await symlink(shared, link)
+  await rename(link, own)
+}
 
 interface CodexAuth {
   idToken?: string
@@ -254,8 +327,8 @@ async function captureAccount(name: string): Promise<void> {
     await writeFile(join(dir, "auth.json"), credentials, { mode: 0o600 })
     await chmod(join(dir, "auth.json"), 0o600)
 
-    // Sessions and skills remain in the one watched store for every account.
-    await ensureSharedLinks(realHome, dir, SHARED_LINKS)
+    // Sessions, archives and names remain in the one watched store for every account.
+    await shareHome(realHome, dir)
   } catch (error) {
     await rm(dir, { recursive: true, force: true })
     throw error
@@ -279,7 +352,7 @@ async function accountEnv(
   let dir = accountDir("codex", selection)
   if (!existsSync(dir)) {
     // A router account file materializes into a Mako home once, then routes
-    // like any captured account with sessions and skills symlinked.
+    // like any captured account with its home shared.
     const routed = (await subrouterAccounts()).find(
       (account) => account.name === selection
     )
@@ -310,7 +383,7 @@ async function accountEnv(
     throw new Error(
       "The selected Codex account has invalid credentials. Sign in with the CLI and capture it again."
     )
-  await ensureSharedLinks(defaultHome(base), dir, SHARED_LINKS)
+  await shareHome(defaultHome(base), dir)
   env.CODEX_HOME = dir
   return env
 }

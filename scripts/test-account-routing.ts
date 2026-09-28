@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import { join } from "node:path"
 import { syncBuiltinESMExports } from "node:module"
@@ -47,11 +48,58 @@ try {
     join(codexDir, "auth.json"),
     JSON.stringify({ OPENAI_API_KEY: "fixture" })
   )
+  const realCodex = join(sandbox, "real-codex")
+  await mkdir(join(realCodex, "sessions"), { recursive: true })
+  for (const name of ["state_5.sqlite", "models_cache.json", "auth.json.bak"])
+    await writeFile(join(realCodex, name), "")
+  const nameLine = (id: string, name: string, at: string) =>
+    JSON.stringify({ id, thread_name: name, updated_at: at })
+  const sharedLog = [
+    nameLine("a", "shared older", "2026-09-28T10:00:00.5Z"),
+    nameLine("c", "shared newer", "2026-09-28T10:00:00.5Z"),
+  ]
+  await writeFile(join(realCodex, "session_index.jsonl"), `${sharedLog.join("\n")}\n`)
+  const ownLog = [
+    nameLine("a", "own newer", "2026-09-28T10:00:00.51Z"),
+    nameLine("b", "own only", "2026-09-28T09:00:00Z"),
+    nameLine("c", "own older", "2026-09-28T10:00:00.41Z"),
+  ]
+  await writeFile(join(codexDir, "session_index.jsonl"), `${ownLog.join("\n")}\n`)
+  const ownArchive = join(codexDir, "archived_sessions")
+  await mkdir(ownArchive)
+  await writeFile(join(ownArchive, "rollout-own.jsonl"), "{}\n")
   const codexEnv = await codexAccountCapability.accountEnv("ready", {
     OPENAI_API_KEY: "other",
-    CODEX_HOME: "/other",
+    CODEX_HOME: realCodex,
   })
   assert.deepEqual(codexEnv, { CODEX_HOME: codexDir })
+  for (const name of [
+    "sessions",
+    "archived_sessions",
+    "session_index.jsonl",
+    "state_5.sqlite",
+  ])
+    assert.equal(
+      await realpath(join(codexDir, name)),
+      await realpath(join(realCodex, name)),
+      `${name} is shared`
+    )
+  for (const name of ["models_cache.json", "auth.json.bak"])
+    assert.equal(existsSync(join(codexDir, name)), false, `${name} stays private`)
+  assert.equal(
+    await readFile(join(realCodex, "archived_sessions", "rollout-own.jsonl"), "utf8"),
+    "{}\n"
+  )
+  assert.equal(
+    await readFile(join(realCodex, "session_index.jsonl"), "utf8"),
+    `${[...sharedLog, ownLog[0], ownLog[1]].join("\n")}\n`
+  )
+  await codexAccountCapability.accountEnv("ready", { CODEX_HOME: realCodex })
+  assert.equal(
+    (await readFile(join(realCodex, "session_index.jsonl"), "utf8")).split("\n").length,
+    5,
+    "adopting again adds nothing"
+  )
   await assert.rejects(
     codexAccountCapability.accountEnv("saved", {}),
     /no credentials/
@@ -135,7 +183,7 @@ try {
     }
   }
   console.log(
-    "Account routing rejects missing identities and traversal, preserves default authentication and existing captures"
+    "Account routing rejects missing identities and traversal, preserves default authentication and existing captures, and shares a Codex account's archive, names and state with the real home"
   )
 } finally {
   mock.restoreAll()
