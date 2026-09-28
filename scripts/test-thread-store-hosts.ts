@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import type { HostEvent } from "../electron/contracts/host-events-boot.js"
 import { followOtherHosts } from "../electron/thread-groups-follow.js"
-import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA } from "../electron/thread-store.js"
+import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA, type SourceRef } from "../electron/thread-store.js"
 
 /**
  * Hosts sharing one Thread store: a regroup in one reaches the other's
@@ -20,7 +20,11 @@ import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA } from "../electron/t
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-store-hosts-")))
 const actor = { kind: "service", name: "catalog" } as const
 const options = { realPath: (path: string) => path }
-const ref = (name: string, parentNativeId?: string) => ({ harness: "codex", nativeId: name, path: `/sessions/${name}.jsonl`, ...(parentNativeId ? { parentNativeId } : {}) })
+const ref = (name: string, parentNativeId?: string): SourceRef => {
+  const source: SourceRef = { harness: "codex", nativeId: name, path: `/sessions/${name}.jsonl` }
+  if (parentNativeId) source.parentNativeId = parentNativeId
+  return source
+}
 
 try {
   const path = join(root, "threads.sqlite")
