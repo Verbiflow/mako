@@ -303,15 +303,21 @@ async function checkWindow() {
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'j',code:'KeyJ',windowsVirtualKeyCode:74,modifiers:4})
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'j',code:'KeyJ',windowsVirtualKeyCode:74,modifiers:4})
   await until(`document.querySelector('[aria-label="Resize terminal dock"]') !== null`)
-  await until(`document.querySelector('[aria-label="Maximize terminal"]') !== null`)
+  await until(`document.querySelector('[aria-label="Terminal options"]') !== null`)
   if (await evaluate(`Boolean(document.querySelector('[data-sonner-toast] [data-close-button]'))`)) {
     await click('[data-sonner-toast] [data-close-button]')
     await until(`document.querySelector('[data-sonner-toast]') === null`)
   }
-  await click('[aria-label="Maximize terminal"]')
-  await until(`document.querySelector('[aria-label="Restore terminal size"]') !== null`)
-  assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="Resize terminal dock"]'))`), false)
-  await click('[aria-label="Restore terminal size"]')
+  // Maximize and its restore live in the dock's options menu.
+  const terminalOption = async (label) => {
+    await click('[aria-label="Terminal options"]')
+    await until(`[...document.querySelectorAll('[role=menuitem]')].some(item => item.textContent === ${JSON.stringify(label)})`)
+    await evaluate(`[...document.querySelectorAll('[role=menuitem]')].find(item => item.textContent === ${JSON.stringify(label)}).setAttribute('data-check-target', '')`)
+    await click('[data-check-target]')
+  }
+  await terminalOption("Maximize")
+  await until(`document.querySelector('[aria-label="Resize terminal dock"]') === null`)
+  await terminalOption("Restore size")
   await until(`document.querySelector('[aria-label="Resize terminal dock"]') !== null`)
 
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'j',code:'KeyJ',windowsVirtualKeyCode:74,modifiers:4})

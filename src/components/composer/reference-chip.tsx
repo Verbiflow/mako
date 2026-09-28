@@ -18,7 +18,7 @@ import { GlobeIcon } from "lucide-react"
  * after it is sent. Words, not glyphs: a conversation keeps its agent's mark,
  * a built-in server keeps Mako's, and nothing else wears an icon.
  */
-const chip = "ref-token inline-flex max-w-[20rem] items-baseline gap-1 px-1 align-baseline [&_svg]:translate-y-[2px]"
+const chip = "ref-token ref-chip [&_svg]:mr-1 [&_svg]:inline-block [&_svg]:align-[-2px]"
 
 export function FileChip({
   path,
@@ -29,7 +29,7 @@ export function FileChip({
   name?: string
   interactive?: boolean
 }) {
-  const body = <span className="truncate">{name ?? fileName(path)}</span>
+  const body = name ?? fileName(path)
   if (!interactive) {
     return (
       <span className={chip} title={path} data-copy-file={path} data-copy-reference={`@${path}`}>
@@ -44,7 +44,7 @@ export function FileChip({
       data-copy-file={path}
       data-copy-reference={`@${path}`}
       onClick={() => void desktop.revealPath(path)}
-      className={cn(chip, "pressable")}
+      className={cn(chip, "pressable leading-[1.25]")}
     >
       {body}
     </button>
@@ -81,7 +81,7 @@ export function ThreadChip({
       className={chip}
     >
       {harness ? <HarnessIcon harness={harness} className="size-3.5 shrink-0" /> : null}
-      <span className="truncate">{label}</span>
+      {label}
     </span>
   )
 }
@@ -129,14 +129,14 @@ export function SkillChip({
       title={skillChipTitle(name, delivery)}
       data-copy-reference={capabilityToken("$", "skill", name)}
       data-skill-delivery={delivery?.kind}
-      className={cn(chip, "gap-0")}
+      className={chip}
     >
       <span className="ref-sigil">$</span>
       {name}
       {delivery?.kind === "handover" ? (
         <SkillSourceMark
           from={delivery.from}
-          className="ml-1 size-2.5 shrink-0 self-center text-faint"
+          className="ml-1 size-2.5 text-faint !mr-0"
         />
       ) : null}
     </span>

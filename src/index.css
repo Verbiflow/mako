@@ -232,6 +232,10 @@
    * cast that keeps chrome from reading black turns ANSI colour muddy.
    */
   --terminal: oklch(0.196 0.002 60);
+  /* A terminal's thumbnail stays a dark screen in either theme, so it reads as a terminal beside a page. */
+  --terminal-face: var(--terminal);
+  --terminal-face-ink: var(--muted-foreground);
+  --terminal-face-alert: var(--negative);
   /* ANSI hues encode shell output, independently of the neutral app chrome. */
   --terminal-blue: #89a9de;
   --terminal-bright-blue: #afc8f0;
@@ -309,6 +313,9 @@
   --negative: oklch(0.545 0.15 26);
   --caution: oklch(0.59 0.085 75);
   --terminal: oklch(0.995 0 0);
+  --terminal-face: oklch(0.196 0.002 60);
+  --terminal-face-ink: oklch(0.722 0.008 58);
+  --terminal-face-alert: oklch(0.68 0.14 25);
   --terminal-blue: #365f9e;
   --terminal-bright-blue: #426fac;
   --terminal-cyan: #276d68;
@@ -947,35 +954,40 @@ diffs-container {
 /*
  * A reference in running text, in the composer and the transcript alike. The
  * composer's copy sits behind a textarea and may not take one pixel of width
- * the typed characters don't, so its air comes from a spread shadow in the
- * fill colour, which paints outside the box without moving a glyph. The
- * transcript's copy uses the same class and adds real padding.
+ * the typed characters don't, so its air comes from shadows in the fill
+ * colour offset to either side, which paint outside the box without moving a
+ * glyph. The air is sideways only: the fill spans the font's content box,
+ * which is shorter than the line, so a token never touches the one above or
+ * below. The transcript's `.ref-chip` trades the shadows for real padding and
+ * must stay inline for the same reason; an inline-block would be as tall as
+ * the line itself.
  */
 .ref-token {
+  --ref-bg: var(--ref-fill);
+  --ref-air: 2px;
   border-radius: 5px;
-  background: var(--ref-fill);
-  box-shadow: 0 0 0 2px var(--ref-fill);
+  background: var(--ref-bg);
+  box-shadow: var(--ref-air) 0 0 var(--ref-bg), calc(var(--ref-air) * -1) 0 0 var(--ref-bg);
   color: var(--foreground);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   transition: background-color 120ms ease, box-shadow 120ms ease;
 }
-button.ref-token:hover {
-  background: var(--ref-fill-hover);
-  box-shadow: 0 0 0 2px var(--ref-fill-hover);
+.ref-chip {
+  --ref-air: 0px;
+  padding: 1px 4px;
 }
+button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 /* A skill nothing has installed: an outline where the fill would be. */
 .ref-token[data-skill-delivery="missing"] {
-  background: transparent;
-  box-shadow: none;
+  --ref-bg: transparent;
   color: var(--muted-foreground);
   outline: 1px dashed var(--border);
-  outline-offset: 1px;
+  outline-offset: 0;
 }
 .ref-token[data-error] {
+  --ref-bg: color-mix(in oklab, var(--negative) 14%, transparent);
   color: var(--negative);
-  background: color-mix(in oklab, var(--negative) 14%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--negative) 14%, transparent);
 }
 .ref-token[data-pending] { opacity: 0.6; }
 /* A sigil or bracket the reference was typed with, kept for the caret's sake but not read. */
@@ -1530,13 +1542,13 @@ button.ref-token:hover {
 
 /* The row hides its scrollbar; the edge that still hides a control fades
    so the cut is visible. */
-:is(.composer-routing, .terminal-tabs)[data-overflow="end"] {
+:is(.composer-routing, .terminal-tabs, .attachment-strip)[data-overflow="end"] {
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
-:is(.composer-routing, .terminal-tabs)[data-overflow="start"] {
+:is(.composer-routing, .terminal-tabs, .attachment-strip)[data-overflow="start"] {
   mask-image: linear-gradient(to right, transparent, black 28px);
 }
-:is(.composer-routing, .terminal-tabs)[data-overflow="both"] {
+:is(.composer-routing, .terminal-tabs, .attachment-strip)[data-overflow="both"] {
   mask-image: linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent);
 }
 

@@ -32,7 +32,13 @@ import {
  * with an appendix that points to their staged contents.
  */
 
-export type AttachmentInput = File | { file: File; context?: string; contextLabel?: string }
+/**
+ * Where Mako made an attachment from, when Mako made it: the tile draws
+ * terminal output as a terminal and a conflict snapshot as a conflict.
+ */
+export type AttachmentOrigin = "terminal" | "git-conflicts"
+
+export type AttachmentInput = File | { file: File; context?: string; contextLabel?: string; origin?: AttachmentOrigin }
 
 export type AttachmentKind = "image" | "text" | "binary"
 
@@ -41,6 +47,7 @@ export interface Attachment {
   reference?: string
   /** Compact, named context instead of a media/file thumbnail. */
   contextLabel?: string
+  origin?: AttachmentOrigin
   /** 1-based, matching the `[Attachment N]` marker in the draft. */
   index: number
   name: string
@@ -215,6 +222,7 @@ export function useAttachments(key = "default") {
         const file = input instanceof File ? input : input.file
         const context = input instanceof File ? undefined : input.context
         const contextLabel = input instanceof File ? undefined : input.contextLabel
+        const origin = input instanceof File ? undefined : input.origin
         if (file.size > MAX_BYTES) {
           toast.error(`${file.name} is larger than 256 MB`)
           continue
@@ -233,6 +241,7 @@ export function useAttachments(key = "default") {
             index,
             name: file.name,
             contextLabel,
+            origin,
             reference: namedAttachmentReference(contextLabel ?? file.name, index, [
               ...(live.current.get(key) ?? []).map(attachmentReference),
               ...(removed.current.get(key) ?? []).map(attachmentReference),

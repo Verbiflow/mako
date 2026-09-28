@@ -1,7 +1,30 @@
+import { z } from "zod"
 import type { GitStatus } from "@/lib/types"
 
 /** Menu action, replaced by an ordinary portable attachment when picked. */
 export const GIT_CONFLICT_CONTEXT = "mako:git-conflicts"
+
+const GitConflictSnapshotSchema = z.object({
+  repository: z.string(),
+  branch: z.string().nullish(),
+  operation: z.string().nullish(),
+  conflictedPaths: z.array(z.string()),
+  blocker: z.object({ message: z.string(), detail: z.string().optional() }).nullish(),
+})
+
+export type GitConflictSnapshot = z.infer<typeof GitConflictSnapshotSchema>
+
+/** The snapshot `gitConflictContext` wrote, read back for its tile; null for anything else. */
+export function readGitConflictContext(text: string): GitConflictSnapshot | null {
+  const start = text.indexOf("\n{\n")
+  const end = text.indexOf("\n}\n", start)
+  if (start < 0 || end < 0) return null
+  try {
+    return GitConflictSnapshotSchema.safeParse(JSON.parse(text.slice(start + 1, end + 2))).data ?? null
+  } catch {
+    return null
+  }
+}
 
 export function gitConflictContext(status: GitStatus | null | undefined, capturedAt = new Date().toISOString(), blocker?: { message: string; detail?: string }) {
   const paths = status?.files.filter(file => file.status === "conflicted").map(file => file.path) ?? []

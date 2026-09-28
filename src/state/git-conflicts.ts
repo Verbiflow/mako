@@ -8,7 +8,7 @@ import { actions, store } from "@/state/session"
 export function gitConflictAttachment(): AttachmentInput | null {
   const status = store.get().git
   const context = gitConflictContext(status, undefined, gitPullBlocker(status?.root ?? "", status?.branch ?? ""))
-  return context ? { file: new File([context.text], context.name, { type: "text/markdown" }), contextLabel: context.label } : null
+  return context ? { file: new File([context.text], context.name, { type: "text/markdown" }), contextLabel: context.label, origin: "git-conflicts" } : null
 }
 
 export async function copyGitConflictContext(): Promise<boolean> {
@@ -19,7 +19,7 @@ export async function copyGitConflictContext(): Promise<boolean> {
   const data = btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(""))
   const staged = await getMako().stageFile(context.name, data)
   const attachment: Attachment = {
-    id: crypto.randomUUID(), index: 1, name: context.name, contextLabel: context.label,
+    id: crypto.randomUUID(), index: 1, name: context.name, contextLabel: context.label, origin: "git-conflicts",
     mimeType: "text/markdown", kind: "text", size: bytes.length, stagedPath: staged.path,
   }
   return actions.copy(attachmentReference(attachment), { attachments: [attachment], notify: false })

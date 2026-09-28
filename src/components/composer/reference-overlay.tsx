@@ -4,7 +4,6 @@ import { attachmentRanges } from "@/lib/attachment-references"
 import type { Attachment } from "@/lib/attachments"
 import { draftSkillDelivery, isSkillName, skillChipTitle } from "@/lib/skill-references"
 import { findThreadReference } from "@/lib/thread-references"
-import { cn } from "@/lib/utils"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useSession } from "@/state/session"
 import { skills, useSkills } from "@/state/skills"
@@ -113,10 +112,11 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
             >
               <span className="ref-sigil">{segment.raw.slice(0, 1)}</span>
               <span
-                className={cn(
-                  delivery?.kind === "handover" &&
-                    "underline decoration-dotted decoration-muted-foreground underline-offset-[3px]"
-                )}
+                className={
+                  delivery?.kind === "handover"
+                    ? "underline decoration-dotted decoration-muted-foreground underline-offset-[3px]"
+                    : undefined
+                }
               >
                 {segment.raw.slice(1)}
               </span>

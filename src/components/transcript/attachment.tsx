@@ -18,7 +18,7 @@ export function TranscriptAttachment({
   if (source.kind === "file")
     return (
       <button
-        className="pressable ref-token px-1 text-ui"
+        className="pressable ref-token ref-chip leading-[1.25] text-ui"
         onClick={() =>
           void viewer.open(
             source.path,

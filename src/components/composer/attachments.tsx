@@ -1,5 +1,9 @@
 import { FileIcon, FilmIcon, XIcon } from "lucide-react"
+import { useRef } from "react"
 import { cn } from "@/lib/utils"
+import { useCompactRow } from "@/components/composer/use-compact-row"
+import { fileDir, fileName } from "@/lib/format"
+import { readGitConflictContext, type GitConflictSnapshot } from "@/lib/git-conflict-context"
 import {
   formatBytes,
   useAttachmentPreview,
@@ -24,9 +28,15 @@ export function AttachmentStrip({
   items: Attachment[]
   onRemove(id: string): void
 }) {
-  if (items.length === 0) return null
+  return items.length === 0 ? null : <Strip items={items} onRemove={onRemove} />
+}
+
+/** The row scrolls without a scrollbar; the edge still hiding a tile fades. */
+function Strip({ items, onRemove }: { items: Attachment[]; onRemove(id: string): void }) {
+  const strip = useRef<HTMLDivElement>(null)
+  useCompactRow(strip, 0)
   return (
-    <div className="flex shrink-0 gap-2 overflow-x-auto px-4 pt-4 pb-1" aria-label="Attachments">
+    <div ref={strip} className="attachment-strip flex shrink-0 gap-2 overflow-x-auto px-4 pt-4 pb-1 [scrollbar-width:none]" aria-label="Attachments">
       {items.map((item) =>
         /^(image|video|audio)\//.test(item.mimeType) ? (
           <Thumbnail key={item.id} item={item} onRemove={onRemove} />
@@ -55,24 +65,99 @@ function RemoveButton({ label, onRemove }: { label: string; onRemove(): void }) 
   )
 }
 
-/** A text or other file: its name, how much there is, and, for text, a look inside. */
+const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`
+
+/** A line a person scanning output would read as the failure. */
+const FAILURE_LINE = /\b(error|failed|fatal|exception|panic)\b|✗|✘/i
+
+/**
+ * The tile's left square, drawn from what the file is: terminal output as the
+ * foot of a terminal, a conflict snapshot as conflict markers, other text as
+ * the top of a page, anything else as its extension. It is a thumbnail: laid
+ * out at the type scale and shrunk by half, so the lines are texture and the
+ * popover is where the file is read.
+ */
+function Face({ item }: { item: Attachment }) {
+  const surface = item.origin === "terminal" ? "bg-[var(--terminal-face)]" : "bg-background"
+  const extension = item.name.includes(".") ? item.name.split(".").pop()?.toUpperCase().slice(0, 4) : undefined
+  return (
+    <span aria-hidden className={cn("relative h-full w-18 shrink-0 overflow-hidden border-r border-hairline", surface)}>
+      {item.text === undefined && item.origin !== "terminal" ? (
+        <span className="absolute inset-0 flex items-center justify-center text-label font-medium text-faint">
+          {extension ?? "FILE"}
+        </span>
+      ) : (
+        <span className="absolute top-0 left-0 flex h-[200%] w-[200%] origin-top-left scale-50 flex-col p-3 font-mono text-label leading-[17px]">
+          <Miniature item={item} />
+        </span>
+      )}
+    </span>
+  )
+}
+
+function Miniature({ item }: { item: Attachment }) {
+  const line = "overflow-hidden whitespace-pre"
+  if (item.origin === "terminal") {
+    const lines = (item.text ?? "").split("\n").filter((text) => text.trim()).slice(-5)
+    return (
+      <span className="mt-auto flex flex-col">
+        {(lines.length ? lines : ["$"]).map((text, index) => (
+          <span key={index} className={cn(line, FAILURE_LINE.test(text) ? "text-[var(--terminal-face-alert)]" : "text-[var(--terminal-face-ink)]")}>
+            {text}
+          </span>
+        ))}
+      </span>
+    )
+  }
+  if (item.origin === "git-conflicts") {
+    const band = "h-1.5 shrink-0 rounded-[2px]"
+    const ours = "bg-[color-mix(in_oklab,var(--added)_60%,transparent)]"
+    const theirs = "bg-[color-mix(in_oklab,var(--terminal-blue)_60%,transparent)]"
+    return (
+      <span className="my-auto flex flex-col gap-[3px] leading-[14px] text-faint">
+        <span>{"<<<<<<<"}</span>
+        <span className={cn(band, ours, "w-20")} />
+        <span className={cn(band, ours, "w-14")} />
+        <span>{"======="}</span>
+        <span className={cn(band, theirs, "w-16")} />
+        <span className={cn(band, theirs, "w-22")} />
+        <span>{">>>>>>>"}</span>
+      </span>
+    )
+  }
+  return (
+    <>
+      {(item.text ?? "").split("\n").slice(0, 6).map((text, index) => (
+        <span key={index} className={cn(line, "text-faint")}>{text || " "}</span>
+      ))}
+    </>
+  )
+}
+
+/** A text or other file: what it is at a glance, its name and size, and, for text, a look inside. */
 function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): void }) {
   const label = item.contextLabel ?? item.name
+  const conflict = item.origin === "git-conflicts" && item.text ? readGitConflictContext(item.text) : null
   const lines = item.text === undefined ? undefined : item.text.replace(/\n$/, "").split("\n").length
   const detail =
     item.error ??
     (item.pending
       ? "Adding…"
-      : [lines === undefined ? undefined : `${lines} ${lines === 1 ? "line" : "lines"}`, formatBytes(item.size)]
-          .filter(Boolean)
-          .join(" · "))
+      : conflict
+        ? conflict.blocker
+          ? "Incoming changes blocked"
+          : [plural(conflict.conflictedPaths.length, "file"), conflict.branch].filter(Boolean).join(" · ")
+        : [lines === undefined ? undefined : plural(lines, "line"), formatBytes(item.size)].filter(Boolean).join(" · "))
   const body = (
     <>
-      <span className="truncate text-ui font-medium text-foreground">{label}</span>
-      <span className={cn("truncate text-label", item.error ? "text-negative" : "text-faint")}>{detail}</span>
+      <Face item={item} />
+      <span className="flex min-w-0 flex-col justify-center gap-0.5 px-3">
+        <span className="truncate text-ui font-medium text-foreground">{label}</span>
+        <span className={cn("truncate text-label", item.error ? "text-negative" : "text-faint")}>{detail}</span>
+      </span>
     </>
   )
-  const face = cn(tile, "w-48 flex-col justify-center gap-0.5 px-3 text-left", item.error && "ring-negative/40")
+  const face = cn(tile, "w-60 text-left", item.error && "ring-negative/40")
   return (
     <div title={label === item.name ? item.name : `${label} · ${item.name}`} className={cn("group relative shrink-0", item.pending && "opacity-60")}>
       {item.text ? (
@@ -87,21 +172,50 @@ function FileTile({ item, onRemove }: { item: Attachment; onRemove(id: string): 
               <span className="truncate font-medium text-foreground">{label}</span>
               <span className="ml-auto shrink-0 text-faint">{detail}</span>
             </div>
-            <pre
-              // Logs and pasted output matter at their end, so the view opens there.
-              ref={(node) => {
-                if (node) node.scrollTop = node.scrollHeight
-              }}
-              className="max-h-[50vh] overflow-y-auto px-3 py-2.5 font-mono text-label leading-relaxed whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
-            >
-              {item.text}
-            </pre>
+            {conflict ? (
+              <ConflictList snapshot={conflict} />
+            ) : (
+              <pre
+                // Logs and pasted output matter at their end, so the view opens there.
+                ref={(node) => {
+                  if (node) node.scrollTop = node.scrollHeight
+                }}
+                className={cn(
+                  "max-h-[50vh] overflow-y-auto px-3 py-2.5 font-mono text-label leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]",
+                  item.origin === "terminal" ? "bg-terminal text-foreground" : "text-muted-foreground"
+                )}
+              >
+                {item.text}
+              </pre>
+            )}
           </PopoverContent>
         </Popover>
       ) : (
         <div className={face}>{body}</div>
       )}
-      <RemoveButton label={label} onRemove={() => onRemove(item.id)} />
+      <RemoveButton label={item.name} onRemove={() => onRemove(item.id)} />
+    </div>
+  )
+}
+
+/** A conflict snapshot as the files it names, not the JSON the agent reads. */
+function ConflictList({ snapshot }: { snapshot: GitConflictSnapshot }) {
+  return (
+    <div className="max-h-[50vh] overflow-y-auto py-1.5 text-ui">
+      {snapshot.blocker ? (
+        <p className="px-3 py-1 text-muted-foreground">{snapshot.blocker.message}</p>
+      ) : null}
+      {snapshot.conflictedPaths.map((path) => (
+        <div key={path} className="flex min-w-0 items-baseline gap-2 px-3 py-1">
+          <span className="shrink-0 text-foreground">{fileName(path)}</span>
+          <span className="truncate text-label text-faint">{fileDir(path)}</span>
+        </div>
+      ))}
+      <p className="border-t border-hairline px-3 pt-2 pb-1 text-label text-faint first-letter:uppercase">
+        {[snapshot.operation ? `${snapshot.operation} in progress` : undefined, snapshot.branch ? `on ${snapshot.branch}` : undefined, "as it was when attached"]
+          .filter(Boolean)
+          .join(" · ")}
+      </p>
     </div>
   )
 }
@@ -131,6 +245,8 @@ function Thumbnail({
               <img src={preview} alt={item.name} className="attachment-preview size-full object-cover" decoding="async" />
             ) : preview && video ? (
               <video src={preview} muted playsInline preload="metadata" className="attachment-preview size-full object-cover" />
+            ) : loaded?.kind === "unavailable" ? (
+              <span className="px-2 text-center text-label leading-tight text-muted-foreground">Preview unavailable</span>
             ) : (
               <>
                 {video ? <FilmIcon className="size-4 text-muted-foreground" /> : <FileIcon className="size-4 text-muted-foreground" />}

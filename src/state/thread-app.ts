@@ -200,7 +200,7 @@ export function sendToAgent(cwd: string, failed: { process: AppProcessView } | {
   }
   window.dispatchEvent(new CustomEvent("mako:attach", {
     detail: {
-      files: [{ file: new File([`${tail}\n`], `${name} output.txt`, { type: "text/plain" }), contextLabel: `${name} output` }],
+      files: [{ file: new File([`${tail}\n`], `${name} output.txt`, { type: "text/plain" }), contextLabel: `${name} output`, origin: "terminal" }],
       text,
     },
   }))

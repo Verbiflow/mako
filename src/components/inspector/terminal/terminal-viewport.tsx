@@ -17,6 +17,19 @@ const bar =
 const searchTool =
   "pressable flex w-8 shrink-0 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-fill-hover hover:text-foreground [&_svg]:size-4"
 
+/** What the person selected, handed to the draft as a terminal attachment beside what they have written. */
+function attachSelection(session: TerminalSession, selection: string): void {
+  const label = `${session.title || "Terminal"} selection`
+  window.dispatchEvent(
+    new CustomEvent("mako:attach", {
+      detail: {
+        files: [{ file: new File([`${selection}\n`], `${label}.txt`, { type: "text/plain" }), contextLabel: label, origin: "terminal" }],
+        text: (reference: string) => reference,
+      },
+    })
+  )
+}
+
 export function TerminalViewport({
   session,
   active,
@@ -101,13 +114,7 @@ export function TerminalViewport({
             <ContextMenu.Item
               disabled={!selection}
               className={menuItem}
-              onSelect={() =>
-                window.dispatchEvent(
-                  new CustomEvent("mako:compose", {
-                    detail: { text: `\n\`\`\`text\n${selection}\n\`\`\`\n` },
-                  })
-                )
-              }
+              onSelect={() => attachSelection(session, selection)}
             >
               Reference selection
             </ContextMenu.Item>
@@ -219,13 +226,7 @@ export function TerminalViewport({
       {selection ? (
         <button
           type="button"
-          onClick={() =>
-            window.dispatchEvent(
-              new CustomEvent("mako:compose", {
-                detail: { text: `\n\`\`\`text\n${selection}\n\`\`\`\n` },
-              })
-            )
-          }
+          onClick={() => attachSelection(session, selection)}
           className={cn(dockButton("plain"), "dock-alert absolute right-3 bottom-3 z-10 bg-shell")}
         >
           Add to message
