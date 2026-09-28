@@ -109,6 +109,30 @@ export function threadToken(harness: string, id: string): string {
   return `@thread:${encodeURIComponent(harness)}:${encodeURIComponent(id)}`
 }
 
+export function hasThreadToken(text: string, harness: string, id: string): boolean {
+  return tokenize(text).some((segment) => segment.kind === "thread" && segment.harness === harness && segment.id === id)
+}
+
+/** `text` with a token for this conversation added at the end, or, when it has one, without any. */
+export function toggleThreadToken(text: string, harness: string, id: string): string {
+  if (!hasThreadToken(text, harness, id)) {
+    const gap = text === "" || /\s$/.test(text) ? "" : " "
+    return `${text}${gap}${threadToken(harness, id)} `
+  }
+  let next = ""
+  let dropSpace = false
+  for (const segment of tokenize(text)) {
+    if (segment.kind === "thread" && segment.harness === harness && segment.id === id) {
+      dropSpace = true
+      continue
+    }
+    const piece = segment.kind === "text" ? segment.text : segment.raw
+    next += dropSpace && piece.startsWith(" ") ? piece.slice(1) : piece
+    dropSpace = false
+  }
+  return next
+}
+
 /** The text a picked skill or MCP server inserts, in the sigil the user typed. */
 export function capabilityToken(
   sigil: CapabilitySigil,

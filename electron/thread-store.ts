@@ -336,15 +336,6 @@ CREATE TRIGGER IF NOT EXISTS placement_thread_merged AFTER UPDATE OF merged_into
 const PLACEMENT_LOG_KEEP = 10_000
 
 /**
- * Each regroup's Thread layouts before and after it, so undoing it puts every
- * Session back in its Thread and position, and an emptied Thread comes back
- * under its own ID. Only needed while an Undo can still be pressed.
- */
-const REGROUP_LOG = `
-CREATE TABLE IF NOT EXISTS regroups (
-  operation_id TEXT PRIMARY KEY, before TEXT NOT NULL, after TEXT NOT NULL, created_at INTEGER NOT NULL);
-`
-/**
  * Worktrees Mako made for a Thread on a device. A Thread has at most one per
  * device; its Sessions run in `path` or a folder under it, and `project` is
  * the folder in the main checkout that the Thread was started from.
@@ -377,10 +368,6 @@ class EnvironmentTaken extends Error {}
 function environmentValues(row: z.infer<typeof EnvironmentRowSchema>): ThreadEnvironmentValues {
   return { thread: ThreadIdSchema.parse(row.thread_id), host: row.host, port: row.port, usedAt: row.used_at }
 }
-const REGROUP_KEEP_MS = 24 * 60 * 60 * 1000
-const LayoutSchema = z.record(z.string(), z.array(z.string()))
-type Layout = z.infer<typeof LayoutSchema>
-const RegroupRowSchema = z.object({ before: z.string(), after: z.string() })
 
 const SCHEMA = `
 CREATE TABLE principals (
@@ -769,130 +756,8 @@ export class ThreadStore {
     }, PlacementSchema))
   }
 
-  /**
-   * Sessions join another Thread after its own, in the order given. A Thread
-   * they leave empty follows the one they joined, so anything holding its ID
-   * finds them. Returns every Thread whose Sessions changed.
-   */
-  joinThread(input: { operationId: string; sessions: readonly SessionId[]; thread: ThreadId; actor: Actor }): ThreadId[] {
-    return this.write(() => this.receipt(input.operationId, "join-thread", { sessions: [...input.sessions], thread: input.thread }, input.actor, () => {
-      const target = this.thread(input.thread)
-      if (!target) throw new Error("That thread no longer exists.")
-      const joining = this.members(input.sessions).filter((session) => !target.sessions.includes(SessionIdSchema.parse(session)))
-      if (!joining.length) return []
-      const sources = [...new Set(joining.map((session) => this.placeSession(session).thread))]
-      this.requireHere([target.id, ...sources])
-      const before = this.layout([target.id, ...sources])
-      let position = CountSchema.parse(this.sql("SELECT coalesce(max(position) + 1, 0) AS count FROM memberships WHERE thread_id = ?").get(target.id)).count
-      for (const session of joining)
-        this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(target.id, position++, session)
-      for (const source of sources) {
-        const left = this.thread(source)
-        if (left && !left.sessions.length) this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(target.id, source)
-      }
-      this.bumpRevisions([target.id, ...sources])
-      this.recordRegroup(input.operationId, before, this.layout([target.id, ...sources]))
-      return [target.id, ...sources]
-    }, z.array(ThreadIdSchema)))
-  }
-
-  /**
-   * Sessions of one Thread leave it for a new Thread of their own, keeping
-   * their order. The Thread must keep at least one Session. Returns the old
-   * Thread and the new one.
-   */
-  splitSessions(input: { operationId: string; sessions: readonly SessionId[]; actor: Actor }): ThreadId[] {
-    return this.write(() => this.receipt(input.operationId, "split-sessions", { sessions: [...input.sessions] }, input.actor, () => {
-      const leaving = this.members(input.sessions)
-      const threads = [...new Set(leaving.map((session) => this.placeSession(session).thread))]
-      const from = threads[0]
-      if (!from || threads.length > 1) throw new Error("Only sessions from one thread can be split off together.")
-      const thread = this.thread(from)
-      if (!thread || thread.sessions.every((session) => leaving.includes(session)))
-        throw new Error("A thread keeps at least one session; this one already stands alone.")
-      this.requireHere([from])
-      const before = this.layout([from])
-      const created = ThreadIdSchema.parse(randomUUID())
-      this.sql("INSERT INTO threads (id, owner_id, created_at, created_by) VALUES (?, ?, ?, ?)")
-        .run(created, this.localPrincipal, this.now(), JSON.stringify(input.actor))
-      for (const [position, session] of thread.sessions.filter((member) => leaving.includes(member)).entries())
-        this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(created, position, session)
-      this.bumpRevisions([from])
-      this.recordRegroup(input.operationId, before, this.layout([from, created]))
-      return [from, created]
-    }, z.array(ThreadIdSchema)))
-  }
-
-  /**
-   * Put every Session a join or split moved back in its Thread and position.
-   * A Thread the join emptied comes back under its own ID, and a Thread the
-   * split created follows the one its Sessions return to. Refused once any of
-   * those Threads has changed since, rather than guessing. Returns every
-   * Thread whose Sessions changed.
-   */
-  undoRegroup(input: { operationId: string; undoing: string; actor: Actor }): ThreadId[] {
-    return this.write(() => this.receipt(input.operationId, "undo-regroup", { undoing: input.undoing }, input.actor, () => {
-      const found = this.sql("SELECT before, after FROM regroups WHERE operation_id = ?").get(input.undoing)
-      if (!found) throw new Error("That change can no longer be undone.")
-      const row = RegroupRowSchema.parse(found)
-      const before = LayoutSchema.parse(JSON.parse(row.before))
-      const after = LayoutSchema.parse(JSON.parse(row.after))
-      const touched = Object.keys(after).map((thread) => ThreadIdSchema.parse(thread))
-      const now = this.layout(touched)
-      if (touched.some((thread) => !sameList(now[thread] ?? [], after[thread] ?? [])))
-        throw new Error("Those sessions have changed since, so this can't be undone.")
-      this.requireHere(touched.filter((thread) => now[thread]?.length))
-      for (const [thread, sessions] of Object.entries(before)) {
-        this.sql("UPDATE threads SET merged_into = NULL WHERE id = ?").run(thread)
-        for (const [position, session] of sessions.entries())
-          this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(thread, position, session)
-      }
-      for (const thread of touched) {
-        if (before[thread]?.length) continue
-        const home = Object.entries(before).find(([, sessions]) => sessions.some((session) => after[thread]?.includes(session)))?.[0]
-        if (home) this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(home, thread)
-      }
-      this.bumpRevisions(touched)
-      this.sql("DELETE FROM regroups WHERE operation_id = ?").run(input.undoing)
-      return touched
-    }, z.array(ThreadIdSchema)))
-  }
-
-  /** Each Thread's Sessions in tab order, read from memberships, not following merges. */
-  private layout(threads: readonly ThreadId[]): Layout {
-    const layout: Layout = {}
-    for (const thread of threads)
-      layout[thread] = this.sql("SELECT session_id FROM memberships WHERE thread_id = ? ORDER BY position, session_id").all(thread)
-        .map((member) => SessionRowSchema.parse(member).session_id)
-    return layout
-  }
-
-  private recordRegroup(operationId: string, before: Layout, after: Layout): void {
-    this.sql("INSERT INTO regroups VALUES (?, ?, ?, ?)").run(operationId, JSON.stringify(before), JSON.stringify(after), this.now())
-  }
-
   private bumpRevisions(threads: readonly ThreadId[]): void {
     this.sql(`UPDATE threads SET revision = revision + 1 WHERE id IN (${threads.map(() => "?").join(", ")})`).run(...threads)
-  }
-
-  /** The current Sessions behind the given IDs, following merges, once each. */
-  private members(sessions: readonly SessionId[]): string[] {
-    const found = sessions.map((session) => {
-      const current = this.canonical(session)
-      if (!current) throw new Error("A session in this thread no longer exists. Refresh and try again.")
-      return current
-    })
-    return [...new Set(found)]
-  }
-
-  /** A Thread takes or gives up members only while every Session in it runs here. */
-  private requireHere(threads: readonly ThreadId[]): void {
-    for (const id of threads)
-      for (const member of this.thread(id)?.sessions ?? []) {
-        const execution = this.executionState(member)
-        if (execution.state === "elsewhere") throw new Error("That thread runs on another device, so its sessions can only be regrouped there.")
-        if (execution.state !== "here") throw new Error("That thread is moving. Regroup its sessions once the move ends.")
-      }
   }
 
   renameThread(input: { operationId: string; thread: ThreadId; title: string; actor: Actor }): ThreadRecord {
@@ -1270,6 +1135,7 @@ export class ThreadStore {
     const next = CountSchema.parse(this.sql("SELECT coalesce(max(position) + 1, 0) AS count FROM memberships WHERE thread_id = ?").get(home)).count
     this.sql("UPDATE memberships SET thread_id = ?, position = ?, added_at = ?, added_by = ? WHERE session_id = ?").run(home, next, this.now(), JSON.stringify(actor), current)
     this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(home, own)
+    this.keepOneWorktreePerThread()
     this.bumpRevisions([home])
   }
 
@@ -1363,8 +1229,10 @@ export class ThreadStore {
     this.sql("UPDATE sessions SET merged_into = ? WHERE id = ?").run(winner, loser)
     // A loser that shared its Thread leaves only its tab; the Thread stays.
     const left = CountSchema.parse(this.sql("SELECT count(*) AS count FROM memberships WHERE thread_id = ?").get(membership.thread_id)).count
-    if (!left && membership.thread_id !== winnerThread)
+    if (!left && membership.thread_id !== winnerThread) {
       this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(winnerThread, membership.thread_id)
+      this.keepOneWorktreePerThread()
+    }
     this.sql("INSERT INTO operations VALUES (?, 'merge', ?, ?, ?, ?)")
       .run(randomUUID(), JSON.stringify({ loser, winner, reason }), JSON.stringify(actor), JSON.stringify({ session: winner }), this.now())
     this.forgetPlacements()
@@ -1460,13 +1328,28 @@ export class ThreadStore {
     return result
   }
 
+  /**
+   * A Thread has one worktree per device. Where a merge leaves one with two,
+   * the first stays its own; the later one's folder and branch stay on disk
+   * as a worktree Mako didn't make.
+   */
+  private keepOneWorktreePerThread(): void {
+    const seen = new Set<string>()
+    for (const found of this.db.prepare("SELECT path, thread_id, device_id FROM thread_worktrees ORDER BY created_at").all()) {
+      const row = z.object({ path: z.string(), thread_id: z.string(), device_id: z.string() }).parse(found)
+      const key = `${this.thread(ThreadIdSchema.parse(row.thread_id))?.id ?? row.thread_id}\0${row.device_id}`
+      if (seen.has(key)) this.db.prepare("DELETE FROM thread_worktrees WHERE path = ?").run(row.path)
+      else seen.add(key)
+    }
+  }
+
   private migrate(self: ExecutionOwner | undefined): void {
     this.db.exec(EXECUTION_TABLES)
     this.db.exec(PLACEMENT_LOG)
     this.db.prepare("DELETE FROM placement_changes WHERE seq <= (SELECT max(seq) FROM placement_changes) - ?").run(PLACEMENT_LOG_KEEP)
-    this.db.exec(REGROUP_LOG)
-    this.db.prepare("DELETE FROM regroups WHERE created_at < ?").run(this.now() - REGROUP_KEEP_MS)
+    this.db.exec("DROP TABLE IF EXISTS regroups")
     this.db.exec(WORKTREE_TABLE)
+    this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
     const stored = this.meta("self")
     if (stored === undefined) {
@@ -1771,10 +1654,6 @@ function parentsFirst<T extends { ref: SourceRef }>(entries: readonly T[]): T[] 
   return entries.map((entry, index) => ({ entry, index, depth: measure(entry, 0) }))
     .sort((left, right) => left.depth - right.depth || left.index - right.index)
     .map(({ entry }) => entry)
-}
-
-function sameList(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((item, index) => item === right[index])
 }
 
 function placementKey(ref: SourceRef): string {
