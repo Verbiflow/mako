@@ -14,14 +14,16 @@ async function until(what: string, done: () => boolean, ms = 90_000): Promise<vo
 
 function recorder() {
   const heard: string[] = []
+  const mutes: boolean[] = []
   let dropped = 0
   let gone = 0
   const listener: WatchListener = {
     events: (events: readonly WatchEvent[]) => heard.push(...events.map((event) => event.path)),
     dropped: () => { dropped += 1 },
     gone: () => { gone += 1 },
+    muted: (muted) => { mutes.push(muted) },
   }
-  return { listener, heard, dropped: () => dropped, gone: () => gone }
+  return { listener, heard, mutes, dropped: () => dropped, gone: () => gone }
 }
 
 /** Children of this process running the watcher, by pid. */
@@ -86,6 +88,35 @@ try {
   const started = Date.now()
   await assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/)
   assert.ok(Date.now() - started < 10_000, "within the backoff, not forever")
+
+  // A child whose own canary goes unheard: every watch is told, the child is
+  // restarted once, and the watches hear delivery come back.
+  const deaf = join(root, "deaf")
+  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, withinMs: 1000, deafWhile: deaf })
+  const canaried = childBackend()
+  const c = recorder()
+  const quiet = await canaried(kept, [], c.listener)
+  const [healthy] = watcherChildren().filter((pid) => pid !== second)
+  assert.ok(healthy)
+  await wait(3000)
+  assert.deepEqual(c.mutes, [], "a canary that's heard says nothing")
+  const deafAt = Date.now()
+  writeFileSync(deaf, "")
+  await until("an unheard canary mutes the watch", () => c.mutes.length === 1, 15_000)
+  const detected = Date.now() - deafAt
+  assert.equal(c.mutes[0], true)
+  await until("and restarts the child once, which re-reads", () => c.dropped() === 1, 15_000)
+  const [recycled] = watcherChildren().filter((pid) => pid !== second)
+  assert.ok(recycled && recycled !== healthy, "in a new child")
+  await wait(5000)
+  assert.deepEqual(watcherChildren().filter((pid) => pid !== second), [recycled], "a restart that doesn't help isn't repeated")
+  assert.deepEqual(c.mutes, [true])
+  rmSync(deaf)
+  await until("a canary heard again unmutes it", () => c.mutes.length === 2, 15_000)
+  assert.equal(c.mutes[1], false)
+  await quiet.unsubscribe()
+  delete process.env.MAKO_WATCHER_CANARY_TEST
+  console.log(`watch backend canary: silence detected in ${detected} ms at a 1.2 s beat`)
 
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {

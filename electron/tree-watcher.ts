@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
+import { pollTree, type TreePoll } from "./tree-poll.js"
 import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
 
 /** Folders whose churn is never a change anyone watching a project means: dependencies and build output. */
@@ -68,9 +69,13 @@ export function quietFoldersOf(root: string): string[] {
  * start over so the folder is excluded too. The filesystem root and the home
  * folder aren't watched: a whole disk's churn is never one project's.
  *
- * `onError` means the watch couldn't start or went away. When the system
- * drops events instead (FSEvents under load says "must be re-scanned"), the
- * watch keeps going and `onDropped` says anything may have changed.
+ * When the system drops events (FSEvents under load says "must be
+ * re-scanned"), the watch keeps going and `onDropped` says anything may have
+ * changed. When nothing is delivered at all (a silent fseventsd, a stalled
+ * watcher), or the watch can't start or stops while the folder is still
+ * there (inotify out of watches, the watcher child giving up), changes are
+ * found by polling instead (see `pollTree`), with `onDropped` on the way in
+ * and on the way back out. `onError` means the folder went away.
  */
 export function watchTree(root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
   const target = resolve(root)
@@ -85,6 +90,30 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
   let excluded: string[] = []
   let subscription: Promise<WatchSubscription | undefined> = Promise.resolve(undefined)
   let generation = 0
+  let poll: TreePoll | undefined
+  /** The watch itself is gone, so polling is all there is. */
+  let lost = false
+
+  const fallBack = () => {
+    if (closed || poll) return
+    poll = pollTree(real, QUIET, (paths) => {
+      const heard = paths.filter((path) => !QUIET.test(path))
+      if (!closed && heard.length) onChange(heard)
+    })
+    onDropped?.()
+  }
+  const recover = () => {
+    if (!poll || lost) return
+    poll.close()
+    poll = undefined
+    if (!closed) onDropped?.()
+  }
+  const failed = () => {
+    if (closed) return
+    if (!existsSync(real)) return onError()
+    lost = true
+    fallBack()
+  }
 
   // The next subscription starts before the previous one stops, so nothing
   // written in between is missed; a change heard twice costs one more debounce.
@@ -98,7 +127,11 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
         if (!closed) onDropped?.()
       },
       gone: () => {
-        if (!closed && current === generation) onError()
+        if (current === generation) failed()
+      },
+      muted: (muted) => {
+        if (muted) fallBack()
+        else recover()
       },
       events: (events) => {
         if (closed) return
@@ -120,7 +153,7 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
         await next.unsubscribe()
         return undefined
       }, () => {
-        if (!closed) onError()
+        if (current === generation) failed()
         return undefined
       })
   }
@@ -130,6 +163,8 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
     close() {
       if (closed) return
       closed = true
+      poll?.close()
+      poll = undefined
       void subscription.then((current) => current?.unsubscribe()).catch(() => {})
     },
   }

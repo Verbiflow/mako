@@ -10,6 +10,8 @@ export interface WatchListener {
   dropped(): void
   /** The watch stopped for good, such as its root going away. */
   gone(): void
+  /** Nothing is being delivered, though the watch stands (true), or delivery is back (false). */
+  muted(muted: boolean): void
 }
 
 export interface WatchSubscription {
@@ -48,6 +50,11 @@ interface ChildWatch {
  * restarts it with backoff and subscribes every watch again, each hearing
  * `dropped` since events were missed in between; a watch whose root can't
  * be subscribed again hears `gone`.
+ *
+ * When the child's canary goes unheard every watch hears `muted`, and the
+ * child is restarted once, which ends a deadlock inside parcel. A silent
+ * fseventsd outlives the restart; the watches stay muted until a canary is
+ * heard again.
  */
 export function childBackend(script = defaultChildScript()): WatchBackend {
   const watches = new Map<number, ChildWatch>()
@@ -57,6 +64,9 @@ export function childBackend(script = defaultChildScript()): WatchBackend {
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
   let restart: NodeJS.Timeout | undefined
+  let muted = false
+  /** This silence already cost the child one restart. */
+  let recycled = false
 
   const post = (request: WatcherRequest) => {
     if (child?.connected) child.send(request)
@@ -83,20 +93,39 @@ export function childBackend(script = defaultChildScript()): WatchBackend {
       if (watches.size || !child) return
       const going = child
       child = undefined
+      muted = false
+      recycled = false
       going.kill()
     }, IDLE_MS)
     idle.unref()
   }
 
+  const onDelivery = (ok: boolean) => {
+    if (ok) recycled = false
+    if (muted !== ok) return
+    muted = !ok
+    for (const watch of watches.values()) if (!watch.pending) watch.listener.muted(muted)
+    if (muted && !recycled && child) {
+      recycled = true
+      const stuck = child
+      child = undefined
+      stuck.kill()
+      start()
+    }
+  }
+
   const onReply = (reply: WatcherReply) => {
+    if (reply.t === "delivery") return onDelivery(reply.ok)
     const watch = watches.get(reply.id)
     if (!watch) return
     switch (reply.t) {
       case "ready": {
         const pending = watch.pending
         watch.pending = undefined
-        if (pending) pending.resolve()
-        else watch.listener.dropped()
+        if (pending) {
+          pending.resolve()
+          if (muted) watch.listener.muted(true)
+        } else watch.listener.dropped()
         return
       }
       case "failed":
