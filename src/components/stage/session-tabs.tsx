@@ -1,8 +1,8 @@
-import { memo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
-import { ArchiveIcon, Columns2Icon, ListPlusIcon, PencilLineIcon, PlusIcon, Rows2Icon, SplitIcon, XIcon } from "lucide-react"
+import { memo, useState, type KeyboardEvent, type ReactNode } from "react"
+import { ArchiveIcon, Columns2Icon, PencilLineIcon, PlusIcon, Rows2Icon, XIcon } from "lucide-react"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
-import { IconAction, Keys } from "@/components/ui/kit"
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
+import { IconAction } from "@/components/ui/kit"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger, MenuItem, MenuSeparator } from "@/components/ui/menu"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { formatChord } from "@/extend/commands"
 import { presenceThreadStatus } from "@/lib/thread-fold"
@@ -17,7 +17,7 @@ import {
   type OnScreen,
   type SessionTab,
 } from "@/state/thread-sessions"
-import { archiveSessionTab, openAddSessionHere, openAddToThread, splitIntoNewThread } from "@/state/thread-regroup"
+import { archiveSessionTab } from "@/state/session-archive"
 import { openInPane, openTabInPane } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { sameThreadStatus, threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
@@ -66,10 +66,9 @@ function moveFocus(event: KeyboardEvent<HTMLButtonElement>) {
  * A Session tab's own actions. They act on this Session alone; the rail
  * row's menu acts on the whole Thread.
  */
-function SessionTabMenu({ tab, thread, title, alone, children }: {
+function SessionTabMenu({ tab, thread, alone, children }: {
   tab: Extract<SessionTab, { kind: "session" }>
   thread: string
-  title: string
   alone: boolean
   children: ReactNode
 }) {
@@ -77,13 +76,6 @@ function SessionTabMenu({ tab, thread, title, alone, children }: {
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-52">
-        <MenuItem onSelect={() => openAddToThread({ sessions: [tab.id], from: thread, title, cwd: tab.ref?.cwd ?? tab.presence?.cwd })}>
-          <ListPlusIcon className="size-3.5" />Add to thread…
-        </MenuItem>
-        <MenuItem disabled={alone} onSelect={() => { void splitIntoNewThread([tab.id]) }}>
-          <SplitIcon className="size-3.5" />Split into new thread
-        </MenuItem>
-        <MenuSeparator />
         <MenuItem onSelect={() => { openInPane(tab, thread, "right") }}>
           <Columns2Icon className="size-3.5" />Open to the right
         </MenuItem>
@@ -193,7 +185,7 @@ function SessionTabButton({
     </div>
   )
   return tab.kind === "session" && thread ? (
-    <SessionTabMenu tab={tab} thread={thread} title={title} alone={!closable}>{body}</SessionTabMenu>
+    <SessionTabMenu tab={tab} thread={thread} alone={!closable}>{body}</SessionTabMenu>
   ) : body
 }
 
@@ -230,43 +222,16 @@ export function SessionTabList({
           closable={closable}
         />
       ))}
-      <AddSessionMenu />
+      <AddSessionButton />
     </>
   )
 }
 
-/** The strip's `+`: a new Session in this Thread, or one that exists already, moved here. */
-function AddSessionMenu() {
-  const picked = useRef(false)
-  const choose = (run: () => void) => () => {
-    picked.current = true
-    run()
-  }
+/** The strip's `+`: a new Session in this Thread. */
+function AddSessionButton() {
   return (
-    <Menu modal={false}>
-      <MenuTrigger asChild>
-        <IconAction label="Add a session to this Thread" size="xs" className="shrink-0 data-[state=open]:bg-fill-selected data-[state=open]:text-foreground">
-          <PlusIcon />
-        </IconAction>
-      </MenuTrigger>
-      <MenuContent
-        align="start"
-        className="min-w-56"
-        onCloseAutoFocus={(event) => {
-          if (picked.current) event.preventDefault()
-          picked.current = false
-        }}
-      >
-        <MenuItem data-add-session="new" onSelect={choose(() => { newSessionInThread() })}>
-          <PlusIcon className="size-3.5" />
-          <span className="flex-1">New session</span>
-          <Keys keys={formatChord("mod+t")} />
-        </MenuItem>
-        <MenuItem data-add-session="existing" onSelect={choose(() => { openAddSessionHere() })}>
-          <ListPlusIcon className="size-3.5" />
-          <span className="flex-1">Add existing session…</span>
-        </MenuItem>
-      </MenuContent>
-    </Menu>
+    <IconAction label="New session" keys={formatChord("mod+t")} size="xs" data-add-session="new" className="shrink-0" onClick={() => { newSessionInThread() }}>
+      <PlusIcon />
+    </IconAction>
   )
 }
