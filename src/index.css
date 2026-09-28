@@ -1531,8 +1531,35 @@ diffs-container {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* The dock's one tab indicator glides to whichever tab is selected. */
+.dock-tab-indicator {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--foreground);
+  pointer-events: none;
+  transition:
+    transform 260ms var(--ease-out),
+    width 260ms var(--ease-out),
+    opacity 120ms var(--ease-out);
+}
+.dock-tab-indicator[data-instant] { transition: none; }
+.dock-alert { animation: dock-alert-arrive 220ms var(--ease-out) both; }
+@keyframes dock-alert-arrive {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+/* A mark that changes (working, then passed) arrives rather than swapping in place. */
+.app-mark[data-changed]:not(.animate-spin) { animation: app-mark-arrive 220ms var(--ease-out) both; }
+@keyframes app-mark-arrive {
+  from { opacity: 0; transform: scale(0.55); }
+  to { opacity: 1; transform: none; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .changing-label, .companion-panel, .terminal-panel { animation: none; }
+  .changing-label, .companion-panel, .terminal-panel, .dock-alert, .app-mark[data-changed]:not(.animate-spin) { animation: none; }
+  .dock-tab-indicator { transition: none; }
   [data-sonner-toaster] [data-sonner-toast] { transition: none; }
 }
 
@@ -1559,7 +1586,13 @@ diffs-container {
 }
 
 /* Keep xterm's scrolling inside the dock and match the surrounding chrome. */
-.terminal-viewport .xterm { height: 100%; }
+.terminal-viewport .xterm {
+  height: 100%;
+  /* The desk's `antialiased` turns off macOS stem darkening, which leaves a
+     monospace at 12px spindly and speckled on a dark ground. Terminals keep it. */
+  -webkit-font-smoothing: auto;
+  text-rendering: auto;
+}
 .terminal-viewport .xterm-viewport { overscroll-behavior: contain; }
 .terminal-viewport .xterm .xterm-scrollable-element > .scrollbar > .slider {
   background: var(--fill-selected);

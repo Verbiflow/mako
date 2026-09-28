@@ -4,6 +4,7 @@ import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
 import { useMemo } from "react"
 import { CheckoutChip } from "@/components/stage/checkout-chip"
+import { AppControl } from "@/components/stage/app-control"
 import { onScreenTab, useOnScreen, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
 import { closeWorkbenchPane } from "@/state/session-panes"
 import { activeAcp, useAcp } from "@/state/acp"
@@ -195,6 +196,7 @@ export function StageStrip({
           )
         })}
       </div>
+      <AppControl cwd={checkoutCwd} />
       <CheckoutChip cwd={checkoutCwd} />
       {!canClosePane ? (
         <div className="flex shrink-0 items-center gap-0.5 px-1">

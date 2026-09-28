@@ -1,8 +1,5 @@
 import { RECIPE_PATH } from "./thread-recipe.js"
 
-/** What starts a setup Session; the guide itself comes from `environment_guide`, so it's the same for every agent. */
-export const ENVIRONMENT_SETUP_PROMPT = `Set this project up so every Thread can run and check its own copy of the app at the same time as the others. Call the environment_guide tool first and follow it.`
-
 /**
  * How an agent sets up, or repairs, a project's recipe. Served by the
  * `environment_guide` tool.

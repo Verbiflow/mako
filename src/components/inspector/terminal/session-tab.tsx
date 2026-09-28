@@ -3,6 +3,7 @@ import { TerminalIcon, XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { prefsStore, setPref } from "@/state/prefs"
 import type { TerminalSession } from "@/lib/types"
+import { dockTab } from "./dock-tab-style"
 
 export function SessionTab({
   session,
@@ -39,14 +40,7 @@ export function SessionTab({
   }
   const failed = session.status === "exited" && Boolean(session.exitCode)
   return (
-    <div
-      className={cn(
-        "group flex h-6 max-w-48 min-w-16 shrink-0 items-center gap-1.5 rounded-md pr-0.5 pl-2 text-label",
-        active
-          ? "bg-raised text-foreground"
-          : "text-faint hover:bg-fill-hover hover:text-muted-foreground"
-      )}
-    >
+    <div data-dock-tab className={cn(dockTab(active), "max-w-52 min-w-16 pr-1")}>
       <TerminalIcon
         className={cn(
           "size-3.5 shrink-0",
@@ -76,7 +70,7 @@ export function SessionTab({
           }}
           onBlur={save}
           aria-label="Terminal name"
-          className="h-5 min-w-0 flex-1 rounded bg-background/40 px-1 text-label text-foreground focus:outline-none"
+          className="h-6 min-w-0 flex-1 rounded bg-raised px-1.5 text-ui text-foreground focus:outline-none"
         />
       ) : (
         <button

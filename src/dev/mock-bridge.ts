@@ -208,9 +208,10 @@ export function installMockBridge() {
       const tab = mockTab(`tab-${++tabCount}`)
       const cwd = options?.cwd
       if (!cwd) return tab
+      // A tab opened in a folder is a new Thread there, as the host opens it: nothing said yet.
       return {
         ...tab,
-        session: { ...tab.session, meta: { ...meta, cwd } },
+        session: { meta: { ...meta, cwd, sessionName: undefined }, messages: [], tree: [] },
         git: { ...GIT, cwd, root: cwd },
       }
     },

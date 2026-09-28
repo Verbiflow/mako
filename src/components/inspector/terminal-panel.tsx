@@ -11,6 +11,9 @@ import { createHook } from "@/state/store"
 import { stage } from "@/state/stage"
 import { terminalActions, terminalStore } from "@/state/terminal"
 import { TerminalTabs } from "./terminal/terminal-tabs"
+import { DockTabIndicator } from "./terminal/dock-tab-indicator"
+import { AppOutputTabs, AppOutputView } from "./app-output"
+import { outputsOf, useThreadApp } from "@/state/thread-app"
 
 const useTerminal = createHook(terminalStore)
 
@@ -26,6 +29,14 @@ export function TerminalPanel() {
   const activeId = useTerminal((state) => state.activeId)
   const fault = useTerminal((state) => state.fault)
   const titles = usePrefs((prefs) => prefs.terminalTitles)
+  const appOutput = useThreadApp((state) => {
+    const view = state.byCwd[cwd ?? ""]
+    const key = state.shown?.cwd === cwd ? state.shown?.key : undefined
+    if (!key || view?.kind !== "ready") return undefined
+    // An output that ended (an install that finished) gives way to the app's first process.
+    const outputs = outputsOf(view)
+    return outputs.some((output) => output.key === key) ? key : outputs.find((output) => output.key.startsWith("process:"))?.key
+  })
   const active = sessions.find((session) => session.id === activeId)
   const activeGroup = terminalGroupFor(groups, activeId)
   const workspaceGroups = groups.filter((group) =>
@@ -87,12 +98,13 @@ export function TerminalPanel() {
         onDoubleClick={(event) => {
           if (event.target === event.currentTarget) stage.toggleDockExpanded()
         }}
-        className="flex h-9 shrink-0 items-center gap-2 border-b border-hairline bg-shell pr-1 pl-2"
+        className="relative flex h-9 shrink-0 items-center border-b border-hairline bg-shell pr-1 pl-1"
       >
+        <AppOutputTabs cwd={cwd} shown={appOutput} />
         <TerminalTabs
           groups={workspaceGroups}
           sessions={sessions}
-          activeId={activeId}
+          activeId={appOutput ? undefined : activeId}
           titles={titles}
         />
         <div
@@ -101,10 +113,12 @@ export function TerminalPanel() {
           onDoubleClick={() => stage.toggleDockExpanded()}
         />
         <TerminalToolbar />
+        <DockTabIndicator />
       </header>
 
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {appOutput && cwd ? <AppOutputView cwd={cwd} outputKey={appOutput} /> : null}
           {active ? (
             groups
               .filter((group) => retainedIds.includes(group.id))
@@ -113,11 +127,11 @@ export function TerminalPanel() {
                   key={group.id}
                   group={group}
                   sessions={sessions}
-                  visible={group.id === activeGroup?.id}
+                  visible={!appOutput && group.id === activeGroup?.id}
                   activeId={activeId}
                 />
               ))
-          ) : (
+          ) : appOutput ? null : (
             <Blank
               icon={<TerminalSquareIcon />}
               title="No terminals"

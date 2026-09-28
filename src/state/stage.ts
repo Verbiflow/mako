@@ -87,6 +87,13 @@ export const stage = {
     })
   },
 
+  openDock(surfaceId: string) {
+    const tabId = activeTab()
+    if (!tabId) return
+    const current = stageOf(tabId)
+    if (current.dock !== surfaceId) write(tabId, { ...current, dock: surfaceId })
+  },
+
   toggleDockExpanded() {
     const tabId = activeTab()
     if (!tabId) return

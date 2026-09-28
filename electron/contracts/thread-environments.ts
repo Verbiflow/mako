@@ -30,6 +30,9 @@ export type ThreadRecipeSummary =
   | { kind: "ready"; processes: ThreadRecipeProcess[]; checks: string[] }
   | { kind: "invalid"; message: string }
 
+/** What starts a setup Session; the guide itself comes from `environment_guide`, so it's the same for every agent. */
+export const ENVIRONMENT_SETUP_PROMPT = `Set this project up so every Thread can run and check its own copy of the app at the same time as the others. Call the environment_guide tool first and follow it.`
+
 export const THREAD_PORT_COUNT = 10
 /** Below both macOS's (49152) and Linux's (32768) ephemeral ranges, so the system never hands these out. */
 export const THREAD_PORT_FIRST = 20_000

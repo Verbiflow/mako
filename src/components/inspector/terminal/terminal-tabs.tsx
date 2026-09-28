@@ -4,11 +4,13 @@ import { useCompactRow } from "@/components/composer/use-compact-row"
 import type { TerminalGroup } from "@/lib/terminal-layout"
 import type { TerminalSession } from "@/lib/types"
 import { terminalActions } from "@/state/terminal"
+import { hideAppOutput } from "@/state/thread-app"
 import { SessionTab } from "./session-tab"
 
 /**
- * One tab per shell, left to right. Panes of a split sit inside one joined
- * capsule so a split reads as a single place with several shells in it.
+ * One tab per shell, left to right. Panes of a split sit between two
+ * hairlines behind the split's mark, so a split reads as one place with
+ * several shells in it.
  */
 export function TerminalTabs({
   groups,
@@ -65,7 +67,7 @@ export function TerminalTabs({
           .item(next)
           ?.focus()
       }}
-      className="terminal-tabs flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none]"
+      className="terminal-tabs flex h-full min-w-0 items-stretch overflow-x-auto [scrollbar-width:none]"
     >
       {groups.map((group) => {
         const tabs = group.sessionIds.flatMap((id) => {
@@ -78,7 +80,10 @@ export function TerminalTabs({
                   title={titles[id] ?? session.title}
                   ordinal={ordinals.get(id)}
                   active={id === activeId}
-                  onSelect={() => terminalActions.activate(id)}
+                  onSelect={() => {
+                    hideAppOutput()
+                    terminalActions.activate(id)
+                  }}
                   onClose={() => terminalActions.requestClose(id)}
                 />,
               ]
@@ -91,13 +96,13 @@ export function TerminalTabs({
           <div
             key={group.id}
             role="presentation"
-            className="flex shrink-0 items-center gap-0.5 rounded-lg py-0.5 pr-0.5 pl-1.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
+            className="flex shrink-0 items-stretch border-x border-hairline first:border-l-0"
           >
             <SplitIcon
               aria-label={
                 group.orientation === "vertical" ? "Stacked" : "Side by side"
               }
-              className="mr-0.5 size-3 shrink-0 text-faint"
+              className="ml-2.5 size-3 shrink-0 self-center text-faint"
             />
             {tabs}
           </div>
