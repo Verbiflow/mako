@@ -42,6 +42,15 @@ function headKey(head: CheckoutHead | null): string {
   return head === null ? "" : head.kind === "detached" ? `detached:${head.commit}` : `${head.kind}:${head.name}`
 }
 
+/**
+ * macOS reaches /tmp, /var and /etc through /private. Git records the
+ * /private spelling; harnesses and shells mostly don't. A repository is
+ * named the way the folder asked about names things.
+ */
+function spelledLike(path: string, folder: string): string {
+  return path.startsWith("/private/") && !folder.startsWith("/private/") ? path.slice("/private".length) : path
+}
+
 interface CheckoutLocation {
   gitDir: string
   linked?: LinkedCheckout
@@ -65,7 +74,7 @@ export async function locateCheckout(folder: string): Promise<CheckoutLocation |
       const common = await readText(join(gitDir, "commondir"))
       if (!common) return { gitDir }
       const commonDir = resolve(gitDir, common)
-      return { gitDir, linked: { path: dir, repoRoot: basename(commonDir) === ".git" ? dirname(commonDir) : commonDir } }
+      return { gitDir, linked: { path: dir, repoRoot: spelledLike(basename(commonDir) === ".git" ? dirname(commonDir) : commonDir, dir) } }
     }
     if (dirname(dir) === dir) return null
   }

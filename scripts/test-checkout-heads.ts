@@ -83,6 +83,9 @@ try {
     "a linked worktree reads its own HEAD through its .git file, and says whose worktree it is")
   assert.deepEqual(inWorktree[join(worktree, "web")], { kind: "branch", name: "mako/fix-redirect", linked }, "so does a folder inside it")
   assert.equal((await locateCheckout(repo))?.linked, undefined, "the main checkout is no linked worktree")
+  if (worktree.startsWith("/private/"))
+    assert.equal((await locateCheckout(worktree.slice("/private".length)))?.linked?.repoRoot, repo.slice("/private".length),
+      "asked through /var or /tmp, the repository is named that way too, not the /private way Git records it")
   const refusal = await moveablePlace(noWorktrees, "conversation", join(worktree, "web"))
   assert.match("refused" in refusal ? refusal.refused : "", /made outside Mako/, "a Session already in a worktree made outside Mako isn't moved into another")
   await expectEvent(worktree, () => git(worktree, "checkout", "-q", "--detach"),

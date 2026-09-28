@@ -35,6 +35,11 @@ export interface OutsideWorktree extends LinkedCheckout {
   branch: string | undefined
 }
 
+/** macOS reaches /tmp, /var and /etc through /private, and harnesses record either spelling of one folder. */
+const plain = (path: string) => (path.startsWith("/private/") ? path.slice("/private".length) : path)
+
+const inside = (folder: string, path: string) => plain(path) === plain(folder) || plain(path).startsWith(`${plain(folder)}/`)
+
 /** The worktree holding `path`, and the rest of the path inside it ("" or "/web"). */
 export function worktreeAt<Worktree extends { path: string }>(
   worktrees: readonly Worktree[],
@@ -42,26 +47,34 @@ export function worktreeAt<Worktree extends { path: string }>(
 ): { worktree: Worktree; inside: string } | undefined {
   if (!path) return undefined
   for (const worktree of worktrees)
-    if (path === worktree.path || path.startsWith(`${worktree.path}/`)) return { worktree, inside: path.slice(worktree.path.length) }
+    if (inside(worktree.path, path)) return { worktree, inside: plain(path).slice(plain(worktree.path).length) }
   return undefined
 }
 
-/**
- * Where a Session works now. A harness that moved it into a worktree
- * (Claude's EnterWorktree, a Codex turn in another folder) records the new
- * folder as `currentCwd`; its shell changing into a subfolder or another
- * repository records one too, and that doesn't move the Session. A worktree
- * made outside Mako counts once its checkout head has been read, so callers
- * follow `currentCwd`.
- */
 export type WorktreePlaces = Pick<WorktreesState, "worktrees" | "outside">
 
+function checkoutAt(state: WorktreePlaces, path: string | undefined): Pick<ThreadWorktree, "path" | "repoRoot"> | undefined {
+  return (worktreeAt(state.worktrees, path) ?? worktreeAt(state.outside, path))?.worktree
+}
+
+/**
+ * Where a Session works now. A harness that moves a session between
+ * checkouts of its repository records the new folder as `currentCwd`:
+ * Claude's EnterWorktree and ExitWorktree, a Codex turn started in another
+ * checkout. Its shell changing into a subfolder, around its own checkout or
+ * into another repository records one too, and that doesn't move the
+ * Session. A worktree made outside Mako counts once its checkout head has
+ * been read, so callers follow `currentCwd`.
+ */
 export function workingFolder(state: WorktreePlaces, ref: { cwd?: string; currentCwd?: string }): string | undefined {
-  const moved = ref.currentCwd
-  const into = moved ? (worktreeAt(state.worktrees, moved) ?? worktreeAt(state.outside, moved))?.worktree : undefined
-  if (!moved || !into) return ref.cwd
-  // A `cd` inside the worktree it started in is no move either.
-  return worktreeAt([into], ref.cwd) ? ref.cwd : moved
+  const { cwd, currentCwd: moved } = ref
+  if (!cwd || !moved) return cwd
+  const from = checkoutAt(state, cwd)
+  const to = checkoutAt(state, moved)
+  if (to === from) return cwd
+  if (to) return (from ? from.repoRoot === to.repoRoot : inside(to.repoRoot, cwd)) ? moved : cwd
+  // Out of the worktree it started in, back into that project's own checkout.
+  return from && inside(from.repoRoot, moved) ? moved : cwd
 }
 
 function outsideOf(heads: CheckoutHeads, worktrees: readonly ThreadWorktree[]): OutsideWorktree[] {

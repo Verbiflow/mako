@@ -23,7 +23,7 @@ async function ask(folders: string[]): Promise<void> {
     const heads = await getMako().checkoutHeads(folders)
     applyCheckoutHeads(heads)
   } catch {
-    // A host that can't read them (a fixture desk) leaves the branches unshown.
+    // A host that can't read them leaves the branches unshown.
   }
 }
 

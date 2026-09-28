@@ -24,6 +24,7 @@ for (const channel of fixtureDeskHostCalls) {
 }
 for (const channel of ["mako:live-start", "mako:list-models", "mako:git-status", "mako:terminal-create", "mako:live-read", "mako:browser-control-status", "mako:control-preview"])
   assert.ok(fixtureDeskRefusal(channel), `${channel} is refused`)
+assert.equal(fixtureDeskRefusal("mako:checkout-heads"), undefined, "Branches and outside worktrees show in a fixture desk")
 assert.ok(fixtureDeskRefusal("mako:lifecycle-command"), "Pages never stop the fixture host")
 assert.equal(fixtureDeskRefusal("mako:lifecycle-command", "socket"), undefined, "The launcher may replace an outdated fixture host")
 
