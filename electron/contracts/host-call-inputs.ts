@@ -273,6 +273,7 @@ export const hostCallInputs = {
         }),
       ]),
       thread: z.union([z.literal("new"), z.literal("parent")]).optional(),
+      worktree: z.boolean().optional(),
     }),
   ]),
   "mako:live-locate": z.tuple([z.string(), z.string()]),

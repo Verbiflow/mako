@@ -187,5 +187,7 @@ export const ForkInputSchema = z.object({
   ]),
   /** Where the fork's Session goes. Absent means its parent's Thread, the default since track A3. */
   thread: z.enum(["parent", "new"]).optional(),
+  /** The fork runs in a new worktree of its parent's checkout, and the checkout's uncommitted changes move there. */
+  worktree: z.boolean().optional(),
 })
 export type ForkInput = z.infer<typeof ForkInputSchema>
