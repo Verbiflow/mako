@@ -26,7 +26,8 @@ const work = join(root, "work")
 await mkdir(work)
 await writeFile(join(work, "notes.txt"), "The launch code is 7-alpha-3.\n")
 const STEP_MS = Number(process.env.MAKO_OPENCODE_STEP_MS ?? 180_000)
-const report: { model: string; cases: string[]; passed: boolean } = { model, cases: [], passed: false }
+interface LiveReport { model: string; cases: string[]; passed: boolean }
+const report: LiveReport = { model, cases: [], passed: false }
 /** The native stream's recent text, for a timeout's diagnosis only. */
 let nativeTail = ""
 const driver = createOpenCodeDriver({
@@ -332,7 +333,8 @@ try {
   await driver.close(edits.id)
 
   // Transport faults at the SDK boundary, against the same real server.
-  const faults = { losePrompt: false, prompts: 0, streams: 0, cut: undefined as (() => void) | undefined, hold: Promise.resolve(), sniffed: "" }
+  interface TransportFaults { losePrompt: boolean; prompts: number; streams: number; cut?: () => void; hold: Promise<void>; sniffed: string }
+  const faults: TransportFaults = { losePrompt: false, prompts: 0, streams: 0, hold: Promise.resolve(), sniffed: "" }
   const faulty = createOpenCodeDriver({
     env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals"),
     fetch: async (input, init) => {

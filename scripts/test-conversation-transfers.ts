@@ -333,6 +333,10 @@ try {
     /missing attachment test/
   )
   assert.equal(owner.fork(id, forkInput).session.id, forkId)
+  const elsewhere = owner.fork(id, { ...forkInput, id: randomUUID() }, "/tmp/mako-fork-worktree")
+  assert.equal(elsewhere.session.cwd, "/tmp/mako-fork-worktree")
+  assert.equal(elsewhere.control?.ancestry?.nativeFork, undefined, "a native session belongs to the folder it ran in")
+  assert.equal(fork.session.cwd, owner.snapshot(id)?.session.cwd)
   assert.throws(
     () => owner.fork(id, { ...forkInput, provider: "beta" }),
     /another source point/

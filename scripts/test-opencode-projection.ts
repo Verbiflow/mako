@@ -6,13 +6,17 @@ import { join } from "node:path"
 import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { OpenCodeContent } from "../electron/providers/opencode/content.ts"
-import { OpenCodeInteractions, openCodePermissionReply } from "../electron/providers/opencode/interactions.ts"
+import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "../electron/providers/opencode/interactions.ts"
 import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
 import { openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
-import type { LiveDriverEvent, LiveUpdate } from "../electron/shared.ts"
+import type { LiveDriverEvent } from "../electron/shared.ts"
 import type { ApprovalSubmission } from "../electron/contracts/approval-response.ts"
+import type { JsonValue } from "../electron/codex-app-json.ts"
 
-const event = (type: string, data: Record<string, unknown>) => ({ id: randomUUID(), created: Date.now(), type, data }) as unknown as OpenCodeEvent
+/** Native event data; an `undefined` field is one the native event leaves out. */
+type EventData = Record<string, JsonValue | undefined>
+// SAFETY: each fixture spells out the native fields the projection and interactions read for its `type`.
+const event = (type: string, data: EventData) => ({ id: randomUUID(), created: Date.now(), type, data }) as OpenCodeEvent
 const root = "ses_root"
 const child = "ses_child"
 const cwd = "/work"
@@ -104,19 +108,21 @@ const store = await mkdtemp(join(tmpdir(), "mako-opencode-projection-"))
 try {
   const calls: Array<[string, unknown]> = []
   let openPermissions: unknown[] = []
-  const formStates = new Map<string, unknown>()
+  type FormReply = Parameters<OpenCodeRequestClient["form"]["reply"]>[0]
+  const formStates = new Map<string, { status: "answered"; answer: FormReply["answer"] } | { status: "cancelled" }>()
+  // SAFETY: OpenCodeInteractions calls only these methods; their results follow the native shapes.
   const client = {
     permission: {
-      reply: async (input: unknown) => { calls.push(["permission.reply", input]) },
+      reply: async (input: Parameters<OpenCodeClient["permission"]["reply"]>[0]) => { calls.push(["permission.reply", input]) },
       list: async () => openPermissions,
     },
     form: {
-      reply: async (input: { formID: string; answer: unknown }) => { calls.push(["form.reply", input]); formStates.set(input.formID, { status: "answered", answer: input.answer }) },
+      reply: async (input: FormReply) => { calls.push(["form.reply", input]); formStates.set(input.formID, { status: "answered", answer: input.answer }) },
       cancel: async (input: { formID: string }) => { calls.push(["form.cancel", input]); formStates.set(input.formID, { status: "cancelled" }) },
       list: async () => [],
       state: async (input: { formID: string }) => formStates.get(input.formID) ?? { status: "pending" },
     },
-  } as unknown as OpenCodeClient
+  } as OpenCodeRequestClient
   const emitted: LiveDriverEvent[] = []
   const dispatch = () => {
     const reports: ApprovalSubmission[] = []
@@ -128,7 +134,7 @@ try {
     emit: item => { emitted.push(item) },
     describe: (sessionID, toolID) => ({ title: toolID === "call_1" ? "rm -rf build" : undefined, prefix: sessionID === child ? "Explore: " : "" }),
   })
-  const asked = (id: string, sessionID = root, extra: Record<string, unknown> = {}) => event("permission.asked", {
+  const asked = (id: string, sessionID = root, extra: EventData = {}) => event("permission.asked", {
     id, sessionID, action: "bash", resources: ["rm -rf build"], save: ["rm *", "*"], metadata: {}, source: { type: "tool", messageID: message, id: "call_1" }, ...extra })
   const requests = () => emitted.flatMap(item => item.type === "live-permission" ? [item.request] : [])
 

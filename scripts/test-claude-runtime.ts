@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import { z } from "zod"
 import type { ProviderHost } from "../electron/providers/host.ts"
 import type { ProviderUpdateSource } from "../electron/providers/update-source.ts"
 import { installClaude } from "../electron/providers/claude/index.ts"
@@ -34,9 +35,9 @@ assert.throws(
 )
 assert.equal(spawned, bundled, "Mako reads the executable the SDK spawns")
 
-const sdk = JSON.parse(
+const sdk = z.object({ claudeCodeVersion: z.string() }).parse(JSON.parse(
   readFileSync("node_modules/@anthropic-ai/claude-agent-sdk/package.json", "utf8")
-) as { claudeCodeVersion: string }
+))
 assert.match(
   execFileSync(bundled, ["--version"], { encoding: "utf8" }),
   new RegExp(`^${sdk.claudeCodeVersion.replaceAll(".", "\\.")} `),
@@ -85,6 +86,7 @@ try {
       }),
     }
   )
+  // SAFETY: installClaude only calls `register` on host registries, which this proxy answers for every key.
   installClaude(collect as ProviderHost)
   const [source] = sources
   assert.ok(source)
@@ -100,16 +102,16 @@ try {
     managedBy: "Mako",
   })
 
-  const versions: Record<string, string> = {
-    [bundled]: "2.1.283 (Claude Code)",
-    [terminal]: "2.1.290 (Claude Code)",
-  }
+  const versions = new Map([
+    [bundled, "2.1.283 (Claude Code)"],
+    [terminal, "2.1.290 (Claude Code)"],
+  ])
   const updates = new RuntimeUpdates({
     sources: () => sources,
     path: join(root, "runtime-updates.json"),
     env: () => env,
     emit: () => undefined,
-    version: async (binary) => versions[binary] ?? "",
+    version: async (binary) => versions.get(binary) ?? "",
     latest: async () => "2.1.290",
     stat: async () => ({ mtimeMs: 1, size: 1 }),
     realpath: async (path) =>

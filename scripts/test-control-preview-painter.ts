@@ -308,8 +308,8 @@ try {
 
   const sized = () => {
     const draws: { image: CanvasImageSource; width?: number; height?: number; quality: ImageSmoothingQuality }[] = []
-    const context = {
-      imageSmoothingQuality: "low" as ImageSmoothingQuality,
+    const context: Pick<CanvasRenderingContext2D, "imageSmoothingQuality" | "drawImage"> = {
+      imageSmoothingQuality: "low",
       drawImage: (image: CanvasImageSource, _x: number, _y: number, width?: number, height?: number) => {
         draws.push({ image, width, height, quality: context.imageSmoothingQuality })
       },
