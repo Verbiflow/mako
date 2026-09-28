@@ -7,7 +7,7 @@ import { devHostBuild } from "./dev-host-build.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostCallInputs } from "./contracts/host-call-inputs.js"
 import { runtimeInfo, RuntimeDisconnectedError } from "./runtime-connection.js"
-import { lstat, mkdir, stat, unlink } from "node:fs/promises"
+import { lstat, mkdir, rm, stat, unlink } from "node:fs/promises"
 import { existsSync, realpathSync, rmSync } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { resolveExecutable } from "./executable.js"
@@ -46,7 +46,9 @@ import { adoptDeskOrigin } from "./renderer-storage.js"
 import { prepareBrowserExtension } from "./browser-extension-setup.js"
 import { ControlSessions } from "./control-sessions.js"
 import { launchInstructions } from "./control-launch.js"
-import { ThreadEnvironments } from "./thread-environment.js"
+import { portListening, ThreadEnvironments } from "./thread-environment.js"
+import { ThreadProcesses } from "./thread-processes.js"
+import { environmentTools } from "./environment-tools.js"
 import { startControlService } from "./control-service.js"
 import type { ForkInput, MessageAnchor, TransferInput } from "./shared.js"
 import { TransferInputSchema } from "./contracts/conversation-control.js"
@@ -356,17 +358,27 @@ const conversationsIn = (path: string, status: (value: string) => boolean) => li
   .summaries()
   .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
   .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
+/** Beside the Thread store too, so a Thread keeps one data folder whichever host starts its agents. */
+const threadEnvironments = threadStore
+  ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data") })
+  : null
+/** And its running app's records, so any host sees and stops the processes another host started. */
+const threadProcesses = threadStore
+  ? new ThreadProcesses({ root: join(realpathSync(dirname(threadStore.path)), "thread-environments"), listening: portListening, title: (thread) => threadStore.thread(thread)?.title })
+  : null
 const threadWorktrees = threadStore
   ? new ThreadWorktreeService(join(realpathSync(dirname(threadStore.path)), "worktrees"), threadStore, async (path) => {
       const shells = (await terminalClients?.runningShells().catch(() => []) ?? [])
         .filter((shell) => shell.cwd === path || shell.cwd.startsWith(`${path}/`))
         .map((shell) => `the terminal “${shell.title}”`)
       return [...conversationsIn(path, (status) => status !== "closed"), ...shells]
-    }, async (path) => conversationsIn(path, (status) => status === "running"))
-  : null
-/** Beside the Thread store too, so a Thread keeps one data folder whichever host starts its agents. */
-const threadEnvironments = threadStore
-  ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data") })
+    }, async (path) => conversationsIn(path, (status) => status === "running"), threadProcesses && threadEnvironments ? {
+      stop: async (thread) => { await threadProcesses.stop(thread) },
+      discard: async (thread) => {
+        await threadProcesses.discard(thread)
+        await rm(threadEnvironments.dataDir(thread), { recursive: true, force: true })
+      },
+    } : undefined)
   : null
 hostLog("host", "starting", {
   pid: process.pid,
@@ -2068,8 +2080,8 @@ app.whenReady().then(async () => {
       }
       return tools
     },
-    threadEnvironment: (conversationId, title) =>
-      threadEnvironments?.forLaunch(conversationId, title).catch((error) => {
+    threadEnvironment: (conversationId, title, cwd) =>
+      threadEnvironments?.forLaunch(conversationId, title, cwd).catch((error) => {
         hostWarn("threads", "a Thread's values could not be assigned; its agent starts without them", { conversation: conversationId, error: error instanceof Error ? error.message : String(error) })
         return undefined
       }) ?? Promise.resolve(undefined),
@@ -2143,7 +2155,13 @@ app.whenReady().then(async () => {
       worktrees: threadWorktrees,
       moves,
       removed: () => emit({ type: "worktrees-changed" }),
-    })
+    }),
+    threadEnvironments && threadProcesses ? environmentTools({
+      cwd: (id) => liveConversations.snapshot(id)?.session.cwd,
+      environment: (id, cwd) => threadEnvironments.forConversation(id, liveConversations.snapshot(id)?.session.title, cwd),
+      launchedWith: (id) => threadEnvironments.launchedWith(id),
+      processes: threadProcesses,
+    }) : undefined
   )
   trace("conversation tools ready")
   controlService = await startControlService(

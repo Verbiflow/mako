@@ -11,10 +11,14 @@ import {
   THREAD_PORT_LAST,
   type ThreadEnvironment,
   type ThreadEnvironmentValues,
+  type ThreadRecipeProcess,
 } from "./contracts/thread-environments.js"
 import type { ThreadStore } from "./thread-store.js"
+import { checkoutOf, processPort, readRecipe, recipeValues, RECIPE_PATH } from "./thread-recipe.js"
 
-const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR"] as const
+const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
+/** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
+const RECIPE_NAMES = "MAKO_THREAD_VALUES"
 /** A Thread unused this long gives its ports to a new one when every block is held. */
 const RECLAIM_AFTER_MS = 7 * 24 * 60 * 60 * 1000
 const CLAIM_ATTEMPTS = 3
@@ -26,6 +30,7 @@ const HOST_LABEL_LENGTH = 40
  * inherited from a Mako that was itself started from a Thread.
  */
 export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: ThreadEnvironment): void {
+  for (const name of env[RECIPE_NAMES]?.split(",") ?? []) if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) delete env[name]
   for (const name of VARIABLES) delete env[name]
   if (!environment) return
   env.MAKO_THREAD_ID = environment.thread
@@ -34,12 +39,30 @@ export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: Thr
   env.MAKO_THREAD_PORTS = String(environment.ports)
   env.MAKO_THREAD_URL = threadUrl(environment)
   env.MAKO_THREAD_DATA_DIR = environment.dataDir
+  const values = Object.entries(environment.values ?? {})
+  for (const [name, value] of values) env[name] = value
+  if (values.length) env[RECIPE_NAMES] = values.map(([name]) => name).join(",")
 }
 
 /** One line for the note sent with each prompt; it names only what the process was started with. */
 export function threadEnvironmentInstructions(environment: ThreadEnvironment): string {
   const last = environment.port + environment.ports - 1
-  return `This Thread's own values, already in your shell's environment: ports ${environment.port}-${last} (MAKO_THREAD_PORT, MAKO_THREAD_PORTS), host ${environment.host} (${threadUrl(environment)} is MAKO_THREAD_URL; the name keeps this Thread's cookies apart), and a private data folder (MAKO_THREAD_DATA_DIR). Run anything you start for this Thread on those ports. Other Threads' agents share this machine: never stop a process you didn't start, and if the project needs a fixed port that is taken, say so instead.`
+  const values = `This Thread's own values, already in your shell's environment: ports ${environment.port}-${last} (MAKO_THREAD_PORT, MAKO_THREAD_PORTS), host ${environment.host} (${threadUrl(environment)} is MAKO_THREAD_URL; the name keeps this Thread's cookies apart), and a private data folder (MAKO_THREAD_DATA_DIR). Run anything you start for this Thread on those ports. Other Threads' agents share this machine: never stop a process you didn't start, and if the project needs a fixed port that is taken, say so instead.`
+  return [values, recipeInstructions(environment)].filter(Boolean).join(" ")
+}
+
+function recipeInstructions(environment: ThreadEnvironment): string | undefined {
+  const recipe = environment.recipe
+  if (!recipe || recipe.kind === "none") return undefined
+  if (recipe.kind === "invalid") return `The project's recipe is broken, so its values aren't set and its processes can't start: ${recipe.message}. Tell the user; fixing it is a change to the recipe.`
+  const names = Object.entries(environment.values ?? {}).map(([name, value]) => `${name}=${value}`)
+  const processes = recipe.processes.map((entry) => entry.port === undefined ? entry.name : `${entry.name} on ${entry.port}`)
+  return [
+    names.length ? `The project's recipe also sets ${names.join(", ")} in your shell.` : undefined,
+    processes.length ? `Its processes (${processes.join(", ")}) run through the environment_start, environment_stop, environment_restart, environment_status and environment_logs tools; start them there rather than by hand, so they stay this Thread's and survive your turn.` : undefined,
+    recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with environment_check; a passing full check is the proof to report.` : undefined,
+    "environment_port names whoever holds a port.",
+  ].filter(Boolean).join(" ")
 }
 
 function threadUrl(environment: ThreadEnvironment): string {
@@ -71,25 +94,61 @@ export class ThreadEnvironments {
     this.now = dependencies.now ?? Date.now
   }
 
-  /** The values a conversation's agent process starts with. `title` names the host of a Thread that has no title yet. */
-  async forLaunch(conversationId: string, title?: string): Promise<ThreadEnvironment | undefined> {
+  /**
+   * The values a conversation's agent process starts with, with the names
+   * the recipe in `cwd`'s checkout gives them. `title` names the host of a
+   * Thread that has no title yet.
+   */
+  async forLaunch(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined> {
+    const environment = await this.forConversation(conversationId, title, cwd)
+    if (environment) this.launched.set(conversationId, environment)
+    else this.launched.delete(conversationId)
+    return environment
+  }
+
+  /** The same values, resolved now, for a conversation whose agent is already running. */
+  async forConversation(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined> {
     const { store } = this.dependencies
     const placed = store.journalPlacement(conversationId)
-    if (!placed) {
-      this.launched.delete(conversationId)
-      return undefined
-    }
+    if (!placed) return undefined
     const values = store.useEnvironment(placed.thread) ?? await this.claim(placed.thread, title)
     const environment: ThreadEnvironment = {
       thread: values.thread,
       host: values.host,
       port: values.port,
       ports: THREAD_PORT_COUNT,
-      dataDir: join(this.dependencies.dataRoot, values.thread),
+      dataDir: this.dataDir(values.thread),
     }
     await mkdir(environment.dataDir, { recursive: true, mode: 0o700 })
-    this.launched.set(conversationId, environment)
-    return environment
+    if (!cwd) return environment
+    let read: Awaited<ReturnType<typeof readRecipe>>
+    try {
+      read = await readRecipe(await checkoutOf(cwd), environment)
+    } catch (error) {
+      return { ...environment, recipe: { kind: "invalid", message: `${RECIPE_PATH} couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
+    }
+    if (read.kind === "none") return { ...environment, recipe: { kind: "none" } }
+    if (read.kind === "invalid") return { ...environment, recipe: { kind: "invalid", message: read.message } }
+    return {
+      ...environment,
+      values: recipeValues(read.recipe, environment),
+      recipe: {
+        kind: "ready",
+        processes: Object.entries(read.recipe.processes).map(([name, spec]) => {
+          const entry: ThreadRecipeProcess = { name }
+          const port = processPort(spec, environment)
+          if (port !== undefined) entry.port = port
+          return entry
+        }),
+        checks: Object.keys(read.recipe.checks),
+      },
+    }
+  }
+
+  /** Where a Thread's own data lives; removing the Thread's worktree deletes it. */
+  dataDir(thread: ThreadId): string {
+    if (!/^[A-Za-z0-9-]+$/.test(thread)) throw new Error(`Not a Thread ID: ${thread}`)
+    return join(this.dependencies.dataRoot, thread)
   }
 
   /** What the conversation's running agent process was started with. */
@@ -149,7 +208,7 @@ function hostLabel(text: string): string {
 }
 
 /** Something listening on either loopback address counts. Loopback refuses at once when nothing listens, so a probe with no answer counts as busy. */
-async function portListening(port: number): Promise<boolean> {
+export async function portListening(port: number): Promise<boolean> {
   const answers = await Promise.all(["127.0.0.1", "::1"].map((host) => new Promise<boolean>((resolve) => {
     const socket = connect({ host, port })
     const done = (listening: boolean) => {

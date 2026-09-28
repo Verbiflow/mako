@@ -74,7 +74,7 @@ export interface Dependencies {
     conversationId: string
   ): ConversationTools | undefined | Promise<ConversationTools | undefined>
   /** The Thread's values for an agent process about to start; never blocks the start when they can't be had. */
-  threadEnvironment?(conversationId: string, title?: string): Promise<ThreadEnvironment | undefined>
+  threadEnvironment?(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined>
   /** Mako's note sent ahead of each prompt: Local Control and the values the conversation's process started with. */
   controlInstructions?(bindingId: string, conversationId: string): string | undefined
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>

@@ -835,7 +835,7 @@ export class LiveConversations {
           ? () => this.dependencies.mcpSnapshot!(cwd)
           : undefined,
           conversationTools: await this.dependencies.tools?.(id, id),
-          threadEnvironment: await this.dependencies.threadEnvironment?.(id, options.title),
+          threadEnvironment: await this.dependencies.threadEnvironment?.(id, options.title, cwd),
         })
       )
       .then(async (session) => {
@@ -1297,7 +1297,8 @@ export class LiveConversations {
         ),
         threadEnvironment: await this.dependencies.threadEnvironment?.(
           resident.snapshot.session.id,
-          resident.snapshot.session.title
+          resident.snapshot.session.title,
+          resident.snapshot.session.cwd
         ),
       })
       startedSession = session

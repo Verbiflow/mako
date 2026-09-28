@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { ThreadStore } from "./thread-store.js"
+import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile } from "./contracts/thread-worktrees.js"
@@ -186,11 +187,18 @@ async function carryIgnored(repoRoot: string, destination: string): Promise<numb
  * project's spares are topped up behind it (`WorktreeSpares`). Installed
  * dependencies follow in the background (`carryDependencies`).
  */
+/** A Thread's running app ends with its worktree: its processes stop before the folder goes, and its data after. */
+export interface ThreadEnvironmentEnd {
+  stop(thread: ThreadId): Promise<void>
+  discard(thread: ThreadId): Promise<void>
+}
+
 export class ThreadWorktreeService {
   readonly root: string
   private readonly threads: ThreadStore
   private readonly inUse: (path: string) => Promise<string[]>
   private readonly working: (path: string) => Promise<string[]>
+  private readonly environment: ThreadEnvironmentEnd | undefined
   private readonly pending = new Map<string, Promise<Receipt>>()
   private readonly carrying = new Map<string, Promise<DependencyCarry>>()
   private readonly wanting = new Set<Promise<void>>()
@@ -198,18 +206,21 @@ export class ThreadWorktreeService {
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
-   * `working`, the conversations there that are in the middle of a turn.
+   * `working`, the conversations there that are in the middle of a turn;
+   * `environment`, what ends a Thread's running app with its worktree.
    */
   constructor(
     root: string,
     threads: ThreadStore,
     inUse: (path: string) => Promise<string[]> = async () => [],
     working: (path: string) => Promise<string[]> = async () => [],
+    environment?: ThreadEnvironmentEnd,
   ) {
     this.root = root
     this.threads = threads
     this.inUse = inUse
     this.working = working
+    this.environment = environment
     this.spares = new WorktreeSpares(root, (repoRoot) => this.projectFolder(repoRoot))
   }
 
@@ -504,11 +515,16 @@ export class ThreadWorktreeService {
     if (existsSync(path)) {
       const blocker = await removalBlocker(path)
       if (blocker) throw new Error(blocker)
+      if (attached) await this.environment?.stop(attached.thread)
       await setAside(repoRoot, path, this.trash())
     } else {
+      if (attached) await this.environment?.stop(attached.thread)
       await git(repoRoot, ["worktree", "prune"]).catch(() => {})
     }
-    if (attached) this.threads.detachWorktree(path)
+    if (attached) {
+      this.threads.detachWorktree(path)
+      await this.environment?.discard(attached.thread)
+    }
     for (const { id } of receipts) await rm(join(this.receipts(), `${id}.json`), { force: true })
     return this.list()
   }

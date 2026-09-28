@@ -8,6 +8,7 @@ import { z } from "zod"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationTools } from "./providers/live-driver.js"
 import { registerWorkspaceTools, type WorkspaceTools } from "./workspace-tools.js"
+import { registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 
 type ConversationOwner = Pick<LiveConversations, "authorizeAgent">
 
@@ -42,7 +43,8 @@ async function readMessage(request: IncomingMessage, maxBytes: number) {
 export async function startConversationMcp(
   owner: ConversationOwner,
   control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
-  workspace?: WorkspaceTools
+  workspace?: WorkspaceTools,
+  environment?: EnvironmentTools
 ) {
   const scopes = new Map<string, Scope>()
   const server = createServer((request, response) => {
@@ -91,6 +93,7 @@ export async function startConversationMcp(
         return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
       })
       if (workspace) registerWorkspaceTools(mcp, workspace, authorized)
+      if (environment) registerEnvironmentTools(mcp, environment, authorized)
       response.once("close", () => {
         if (controlRequestId !== undefined) scope.controlRequests.delete(controlRequestId)
         if (!response.writableFinished) disconnected.abort()

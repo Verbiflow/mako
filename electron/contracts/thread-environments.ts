@@ -15,7 +15,20 @@ export interface ThreadEnvironment extends Omit<ThreadEnvironmentValues, "usedAt
   ports: number
   /** Private to the Thread and kept for its life; outside the checkout, so Git never sees it. */
   dataDir: string
+  /** The project recipe's names for these values, such as `PORT`, resolved for this Thread. */
+  values?: Record<string, string>
+  recipe?: ThreadRecipeSummary
 }
+
+export interface ThreadRecipeProcess {
+  name: string
+  port?: number
+}
+
+export type ThreadRecipeSummary =
+  | { kind: "none" }
+  | { kind: "ready"; processes: ThreadRecipeProcess[]; checks: string[] }
+  | { kind: "invalid"; message: string }
 
 export const THREAD_PORT_COUNT = 10
 /** Below both macOS's (49152) and Linux's (32768) ephemeral ranges, so the system never hands these out. */
