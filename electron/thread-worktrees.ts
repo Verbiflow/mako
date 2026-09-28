@@ -630,8 +630,8 @@ export class ThreadWorktreeService {
         ;[repoRoot = "", base = ""] = (await git(source, ["rev-parse", "--show-toplevel", "--verify", "HEAD^{commit}"])).split("\n")
       } catch (error) {
         if (error instanceof GitError && /not a git repository/i.test(error.stderr))
-          throw new Error(`${basename(source)} isn't in a Git repository, so it can't have a worktree. Switch to Local to start in the folder itself.`, { cause: error })
-        throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or switch to Local.", { cause: error })
+          throw new Error(`${basename(source)} isn't in a Git repository, so it can't have a worktree. Choose Project folder to work in the folder itself.`, { cause: error })
+        throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or choose Project folder.", { cause: error })
       }
       const parent = this.projectFolder(repoRoot)
       const slug = await this.reserveSlug(repoRoot, parent, worktreeSlug(name), base)

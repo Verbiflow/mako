@@ -442,7 +442,7 @@ rmSync(join(shop, ".env.venv"), { recursive: true })
 // Folders that can't have one say what to do instead.
 const plain = join(root, "plain")
 mkdirSync(plain)
-await assert.rejects(worktrees.prepare(randomUUID(), plain, "x"), /plain isn't in a Git repository.*Switch to Local/)
+await assert.rejects(worktrees.prepare(randomUUID(), plain, "x"), /plain isn't in a Git repository.*Choose Project folder/)
 const empty = repository("empty", false)
 await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits yet/)
 

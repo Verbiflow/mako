@@ -1520,7 +1520,7 @@ function bindIpc() {
       // existing Thread runs where that Thread already does.
       const fresh = !options.resume && !options.session
       const chat = fresh && standsForNoProject(cwd) ? newChatFolder() : undefined
-      if (options.worktree && !chat && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Switch to Local to start in the folder itself.")
+      if (options.worktree && !chat && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Choose Project folder to work in the folder itself.")
       const worktree = options.worktree && fresh && !chat && threadWorktrees
         ? await threadWorktrees.prepare(options.conversationId, cwd, options.title ?? options.displayPrompt ?? options.initialRequest?.text)
         : undefined

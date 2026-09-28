@@ -10,11 +10,11 @@ export function ConversationSection() {
   return (
     <ListCard>
       <SettingRow
-        title="Start new threads in a worktree"
-        description="Each new Thread in a Git project gets its own checkout and branch, with your .env files. Off works in the project folder. The composer can switch this per thread"
+        title="Start new threads on their own branch"
+        description="Each new Thread in a Git project gets a worktree: its own checkout and branch, with your .env files. Off makes changes in the project folder. The composer can change this per thread"
       >
         <Toggle
-          label="Start new threads in a worktree"
+          label="Start new threads on their own branch"
           on={inWorktree}
           onChange={() => togglePref("newThreadsInWorktree")}
         />

@@ -55,13 +55,13 @@ async function forkIntoWorktree(source: Source): Promise<{ fork: LiveSnapshot; l
   if (source.kind === "live") {
     const { live } = source
     const last = live.requests?.findLast((request) => request.status === "completed")
-    if (!last || live.session.status === "running") throw new Error("Wait for the answer to finish, then move the thread.")
+    if (!last || live.session.status === "running") throw new Error("Wait for the answer to finish, then move it to its own branch.")
     const fork = await getMako().liveFork(live.key, { id, provider: live.harness, point: { kind: "run", requestId: last.id }, thread: "parent", worktree: true, move: true })
     return { fork, leaving: { kind: "live", id: live.key } }
   }
   const { ref } = source.viewing
   const anchor = lastAnswer(source.viewing)
-  if (!anchor) throw new Error("Move the thread after its first answer.")
+  if (!anchor) throw new Error("Move it to its own branch after its first answer.")
   const captured = await getMako().liveCapture(crypto.randomUUID(), ref.path)
   const fork = await getMako().liveFork(captured.session.id, {
     id,
@@ -75,7 +75,8 @@ async function forkIntoWorktree(source: Source): Promise<{ fork: LiveSnapshot; l
 }
 
 /**
- * Moves the Thread on screen into its worktree, making one when it has none.
+ * Moves the Thread on screen onto its own branch: into its worktree, making
+ * one when it has none.
  * The Session on screen goes on there, in the same Thread, from its last
  * answer, and the one it leaves is archived, so the Thread moves rather than
  * splits. A new worktree takes the project folder's uncommitted changes
@@ -95,9 +96,9 @@ export async function moveToWorktree(changed: number): Promise<boolean> {
     await threadLifecycle.archive([leaving], true, false).catch(() => false)
     const worktree = worktreeAt(worktreesStore.get().worktrees, fork.session.cwd)?.worktree
     const joining = Boolean(worktree && before.has(worktree.path))
-    toast(worktree ? `Moved to a worktree on ${worktree.branch}` : "Moved to a worktree", {
+    toast(worktree ? `Now on its own branch, ${worktree.branch}` : "Now on its own branch", {
       description: joining
-        ? "It joined the worktree this thread already had."
+        ? "It joined the branch this thread already had."
         : changed
           ? `${changed} changed ${changed === 1 ? "file" : "files"} came along; the project folder is clean again.`
           : "The conversation came along; the project folder is untouched.",
