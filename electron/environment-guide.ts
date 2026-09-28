@@ -37,7 +37,7 @@ Read in this order, and stop once you know the install, start and check commands
 
 Search the code. Don't guess.
 
-- Fixed ports: listen( calls, port: settings, numbers like 3000, 5173 and 8080.
+- Fixed ports: listen( calls, port: settings, numbers like 3000, 5173 and 8080. A port the system picks (port 0) never collides; leave it alone.
 - Fixed places for data: app data folders, profiles, SQLite files, ~/Library/Application Support/<app>, ~/.config/<app>, caches, sockets, lock and pid files, single-instance locks.
 - Outside services: databases, queues, email, payments, OAuth, production APIs. For each, how does a developer's copy reach it today?
 
@@ -86,7 +86,7 @@ Never run the app with & or nohup in your own shell. Use the tools, so it stays 
 
 1. Call environment_status: the recipe is ready, and the values resolved as you meant.
 2. Call environment_start: every process is running on its port. If one isn't, call environment_logs, fix the cause, and try again.
-3. Fetch the app at MAKO_THREAD_URL, or at 127.0.0.1 on its port, and check that it's this copy answering, such as the page title or a health endpoint.
+3. Fetch the app at MAKO_THREAD_URL, or at 127.0.0.1 on its port, from your shell (curl, or the project's own test script), and check that it's this copy answering, such as the page title or a health endpoint. Don't drive a browser or the desktop for this.
 4. Show it keeps out of the way:
    - With environment_port, the project's usual port (3000, 5173, ...) isn't held by your copy.
    - Nothing was written to the usual data folder or profile.
@@ -115,10 +115,10 @@ Never write to production data, delete data, or stop a process you didn't start.
 ## 8. Finish
 
 1. Commit the recipe, and any small change, on this Thread's branch.
-2. Tell the user in plain sentences:
+2. Tell the user in full, plain sentences, not fragments, someone who hasn't read the code:
    - what every Thread now gets;
    - what stays shared, and the rule for it;
-   - each change to the project, and what it buys;
+   - each change to the project, which rung it used, and what it buys; fixes to things that were already broken, separately;
    - the proof: the processes that ran, their ports, and the check results.
 3. Offer to merge or open a pull request; the user decides.
 
