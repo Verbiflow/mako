@@ -166,8 +166,8 @@ function GitHubSetup({ status }: { status: GitHubStatus }) {
       : "Push this repository to GitHub, then refresh the Changes panel."
 
   return (
-    <div className="shrink-0 border-t border-hairline px-2.5 py-2">
-      <div className="flex items-start gap-2 rounded-md bg-surface px-2 py-2 ring-1 ring-hairline">
+    <div className="shrink-0 border-t border-hairline p-3">
+      <div className="flex items-start gap-2 rounded-lg bg-surface px-2.5 py-2 ring-1 ring-hairline">
         <GitPullRequestIcon className="mt-0.5 size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 flex-1">
           <span className="block text-ui text-foreground/90">{title}</span>

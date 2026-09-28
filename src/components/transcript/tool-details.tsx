@@ -19,7 +19,7 @@ export function ToolDetails({details}: {details: ToolDetail[]}) {
 
 export function PlanSummary({plan}: {plan: Extract<ToolDetail, {type: "plan"}>}) {
   const completed = plan.entries.filter((entry) => /^(?:completed|done)$/i.test(entry.status)).length
-  return <div className="rounded-md border border-hairline px-3 py-2 text-ui">
+  return <div className="rounded-lg border border-hairline px-3 py-2 text-ui">
     <div className="mb-2 flex items-center gap-2 text-muted-foreground"><ListChecksIcon className="size-3.5" /><span>Plan · {completed} of {plan.entries.length} steps complete</span></div>
     <ol className="space-y-1.5">{plan.entries.map((entry, index) => <li key={index} className="flex items-start gap-2">
       {/^(?:completed|done)$/i.test(entry.status) ? <CheckIcon className="mt-1 size-3 shrink-0 text-muted-foreground" /> : /^(?:in_progress|running)$/i.test(entry.status) ? <CircleDotIcon className="mt-1 size-3 shrink-0 text-foreground" /> : <CircleIcon className="mt-1 size-3 shrink-0 text-faint" />}

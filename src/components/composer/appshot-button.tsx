@@ -96,7 +96,7 @@ export function AppshotButton({
         align="start"
         sideOffset={10}
         aria-label="Attach appshot"
-        className="w-96 max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-xl border border-border p-0"
+        className="w-96 max-w-[calc(100vw-2rem)] gap-0 overflow-hidden border border-border p-0"
       >
         <div className="flex items-center gap-2 border-b border-hairline px-3 py-2.5">
           <SearchIcon className="size-3.5 shrink-0 text-faint" />

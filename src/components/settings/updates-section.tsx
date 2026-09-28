@@ -85,7 +85,7 @@ export function UpdatesSection() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-hairline bg-surface">
+      <div className="overflow-hidden rounded-lg border border-hairline bg-surface">
         <div className="flex items-start justify-between gap-4 p-4">
           <div className="min-w-0">
             <h4 className="text-ui font-medium">

@@ -87,7 +87,7 @@ export function Notice({
       className={cn(
         "shrink-0 text-ui text-foreground",
         surface === "card"
-          ? "rounded-[10px] bg-popover [box-shadow:inset_0_0_0_0.5px_var(--hairline)] motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-[var(--ease-out)]"
+          ? "rounded-xl bg-popover [box-shadow:inset_0_0_0_0.5px_var(--hairline)] motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-[var(--ease-out)]"
           : "rounded-md",
         className
       )}

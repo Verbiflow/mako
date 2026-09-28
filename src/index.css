@@ -63,6 +63,16 @@
   --color-added: var(--added);
   --color-removed: var(--removed);
 
+  /*
+   * Corners follow role. Structure is square: panes, the rail, the stage,
+   * the composer dock, tab strips, tables, anything meeting a pane edge.
+   * Everything placed on it is rounded, and the radius shrinks with depth:
+   * floating surfaces (dialogs, menus, popovers, toasts, notice cards) xl;
+   * cards in a pane or the transcript (code, tool output, images, the
+   * commit editor, settings cards) lg; controls, fields and one-line strips
+   * md; marks (keycaps, inline code, badges) sm; pills and dots full. The
+   * prompt bubble keeps its xl with a tighter tail corner.
+   */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;

@@ -158,7 +158,7 @@ export function MediaUnavailable({
 }) {
   return (
     <span
-      className="inline-flex max-w-full items-center gap-2 rounded-[8px] py-1.5 pr-1.5 pl-2.5 text-ui [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
+      className="inline-flex max-w-full items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-2.5 text-ui [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
       data-media-unavailable
     >
       <ImageOffIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
@@ -167,7 +167,7 @@ export function MediaUnavailable({
       {onRetry ? (
         <button
           type="button"
-          className="pressable grid size-6 shrink-0 place-items-center rounded-[6px] text-faint hover:bg-fill-hover hover:text-foreground"
+          className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground"
           aria-label={`Retry preview of ${name}`}
           title="Retry"
           onClick={onRetry}
@@ -178,7 +178,7 @@ export function MediaUnavailable({
       {onOpen ? (
         <button
           type="button"
-          className="pressable shrink-0 rounded-[6px] px-2 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+          className="pressable shrink-0 rounded-md px-2 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
           onClick={onOpen}
         >
           Open
@@ -232,7 +232,7 @@ export function MediaContent({
       <DialogTrigger asChild>
         <button
           type="button"
-          className="pressable group/media relative block max-w-full rounded border border-hairline"
+          className="pressable group/media relative block max-w-full overflow-hidden rounded-lg border border-hairline"
           aria-label={`Expand ${name}`}
         >
           <img
@@ -243,7 +243,7 @@ export function MediaContent({
             onError={onError}
             className="max-h-96 max-w-full object-contain"
           />
-          <span className="absolute right-2 bottom-2 rounded bg-raised p-1 text-faint opacity-0 group-hover/media:opacity-100 group-focus-visible/media:opacity-100">
+          <span className="absolute right-2 bottom-2 rounded-md bg-raised p-1 text-faint opacity-0 group-hover/media:opacity-100 group-focus-visible/media:opacity-100">
             <ExpandIcon className="size-4" />
           </span>
         </button>

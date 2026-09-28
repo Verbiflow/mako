@@ -19,7 +19,7 @@ export function ComposerAdditions({ onAttach, onReference, ...controls }: Compos
           <PlusIcon className="size-4" />
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" sideOffset={8} aria-label="Add to message" className="w-64 gap-0 rounded-xl p-1.5">
+      <PopoverContent side="top" align="start" sideOffset={8} aria-label="Add to message" className="w-64 gap-0 p-1.5">
         <button type="button" className={itemClass} onClick={() => { onAttach(); setOpen(false) }}>
           <PaperclipIcon className="size-4 text-muted-foreground" />Attach a file
         </button>

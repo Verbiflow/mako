@@ -66,7 +66,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-sm border transition-colors duration-150",
+        "overflow-hidden rounded-lg border transition-colors duration-150",
         call.isError
           ? "border-negative/30 bg-negative/[0.04]"
           : open ? "border-hairline bg-surface" : "border-transparent"

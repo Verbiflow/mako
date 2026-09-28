@@ -250,7 +250,7 @@ export function ListCard({ className, children }: ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "rounded-[10px] bg-shell/55 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
+        "rounded-lg bg-shell/55 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
         className
       )}
     >

@@ -391,7 +391,7 @@ function PendingPreview({
 }) {
   const actionable = preview.action === "add" || preview.action === "replace" || preview.action === "remove"
   return (
-    <div className="flex flex-col gap-2 rounded-md bg-raised p-2" data-skill-preview={preview.action}>
+    <div className="flex flex-col gap-2 rounded-lg bg-raised p-2" data-skill-preview={preview.action}>
       <p className="text-label text-foreground/90">{preview.summary}</p>
       {preview.blockReason ? (
         <p className="text-label text-faint">{preview.blockReason}</p>

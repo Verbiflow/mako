@@ -668,7 +668,7 @@ function Response({
       {text ? <Prose text={text} streaming={message.streaming} /> : null}
 
       {message.error ? (
-        <div className="flex items-start gap-2 rounded-md border border-negative/30 bg-negative/[0.06] px-2.5 py-2 text-ui text-negative">
+        <div className="flex items-start gap-2 rounded-lg border border-negative/30 bg-negative/[0.06] px-2.5 py-2 text-ui text-negative">
           <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
           <span className="whitespace-pre-wrap">{message.error}</span>
         </div>
@@ -684,7 +684,7 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
   const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1)
   const summary = lastLine.length > 120 ? `…${lastLine.slice(-119)}` : lastLine
   return (
-    <div className="rounded-sm border border-transparent">
+    <div className="rounded-lg border border-transparent">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}

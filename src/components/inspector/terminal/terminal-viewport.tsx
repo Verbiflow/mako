@@ -151,7 +151,7 @@ export function TerminalViewport({
       {clipboardError ? (
         <div
           role="status"
-          className="absolute inset-x-2 bottom-2 z-20 rounded border border-hairline bg-surface px-2 py-1 text-label text-muted-foreground"
+          className="absolute inset-x-2 bottom-2 z-20 rounded-md border border-hairline bg-surface px-2 py-1 text-label text-muted-foreground"
         >
           {clipboardError}
         </div>
@@ -159,7 +159,7 @@ export function TerminalViewport({
       {fault ? (
         <div
           role="alert"
-          className="absolute inset-x-2 bottom-2 z-20 flex items-center gap-2 rounded border border-negative/30 bg-surface px-2 py-1 text-label text-negative"
+          className="absolute inset-x-2 bottom-2 z-20 flex items-center gap-2 rounded-md border border-negative/30 bg-surface px-2 py-1 text-label text-negative"
         >
           <span className="min-w-0 flex-1">{fault}</span>
           <button

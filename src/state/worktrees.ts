@@ -120,9 +120,14 @@ export function readWorktreeReviewDiffs(path: string): Promise<{ diffs: GitDiff[
 export async function mergeWorktree(worktree: ThreadWorktree, review: Pick<WorktreeReview, "commits" | "into">, onConfirmed?: () => void): Promise<boolean> {
   const into = review.into ?? "the project's branch"
   const confirmed = await confirmAction({
-    title: `Merge ${worktree.branch} into ${into}?`,
+    title: `Merge into ${into}?`,
     body: `${review.commits === 1 ? "Its commit goes" : `Its ${review.commits} commits go`} into ${into} in the project checkout now.`,
     confirm: `Merge into ${into}`,
+    icon: "merge",
+    subjects: [
+      { kind: "branch", name: worktree.branch, detail: review.commits === 1 ? "1 commit" : `${review.commits} commits` },
+      ...(review.into ? [{ kind: "branch" as const, name: review.into, detail: "Receives them" }] : []),
+    ],
   })
   if (!confirmed) return false
   onConfirmed?.()
@@ -153,15 +158,23 @@ export function wantSpareWorktrees(cwd: string): void {
 }
 
 type RemovableWorktree = Pick<ThreadWorktree, "path" | "branch">
+/** A batch removal names this many worktrees and counts the rest. */
+const LISTED = 5
 const folderOf = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
 
 /** Remove a worktree once asked; its branch keeps whatever was committed there. */
 export async function removeWorktree(worktree: RemovableWorktree): Promise<void> {
   const confirmed = await confirmAction({
-    title: `Remove the worktree ${folderOf(worktree.path)}?`,
-    body: `Its folder is deleted, with the files Git ignores there, such as .env copies and installed packages. ${worktree.branch} keeps its commits.`,
+    title: "Remove this worktree?",
+    body: "Its folder is deleted from disk. The branch stays, with every commit made there.",
     confirm: "Remove worktree",
     tone: "negative",
+    icon: "remove",
+    subjects: [
+      { kind: "folder", name: folderOf(worktree.path), detail: "Deleted", lost: true },
+      { kind: "branch", name: worktree.branch, detail: "Kept" },
+    ],
+    note: "Files Git ignores go with the folder, such as .env copies and installed packages.",
   })
   if (!confirmed) return
   try {
@@ -189,11 +202,18 @@ export function removable(worktree: WorktreeDetail): boolean {
 export async function removeLandedWorktrees(worktrees: readonly WorktreeDetail[]): Promise<void> {
   const going = worktrees.filter(removable)
   if (!going.length) return
+  const one = going.length === 1
   const confirmed = await confirmAction({
-    title: going.length === 1 ? `Remove the worktree ${folderOf(going[0]?.path ?? "")}?` : `Remove ${going.length} worktrees?`,
-    body: "Their work is on the project's branch or they never made a commit. Their folders are deleted, with the files Git ignores there; their branches stay.",
-    confirm: going.length === 1 ? "Remove worktree" : `Remove ${going.length} worktrees`,
+    title: one ? "Remove this worktree?" : `Remove ${going.length} worktrees?`,
+    body: one
+      ? "Its work is on the project's branch, or it never made a commit. The folder is deleted; the branch stays."
+      : "Their work is on the project's branch, or they never made a commit. The folders are deleted; the branches stay.",
+    confirm: one ? "Remove worktree" : `Remove ${going.length} worktrees`,
     tone: "negative",
+    icon: "remove",
+    subjects: going.slice(0, LISTED).map((worktree) => ({ kind: "folder" as const, name: folderOf(worktree.path), detail: worktree.branch })),
+    more: Math.max(0, going.length - LISTED),
+    note: "Files Git ignores go with each folder, such as .env copies and installed packages.",
   })
   if (!confirmed) return
   const failed: string[] = []

@@ -48,13 +48,13 @@ function DialogContent({
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
         data-slot="dialog-overlay"
-        className="fixed inset-0 z-40 bg-shell/60 backdrop-blur-[2px] duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+        className="fixed inset-0 z-40 bg-shell/60 backdrop-blur-[2px] duration-200 ease-(--ease-out) data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 data-closed:duration-120 data-closed:ease-(--ease-swift)"
       />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(
-          "overlay-panel fixed top-1/2 left-1/2 z-40 -translate-x-1/2 -translate-y-1/2 rounded-xl outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "overlay-panel fixed top-1/2 left-1/2 z-40 -translate-x-1/2 -translate-y-1/2 rounded-xl outline-hidden duration-200 ease-(--ease-out) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.98] data-closed:duration-120 data-closed:ease-(--ease-swift)",
           sizes[size],
           className
         )}
