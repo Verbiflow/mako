@@ -11,6 +11,10 @@ const run = promisify(execFile)
 const STOP_GRACE_MS = 5_000
 const POLL_MS = 100
 const LOCK_WAIT_MS = 30_000
+/** How long a process must stay up after its port answers before it counts as running. */
+const STEADY_MS = 2_000
+/** Up this long already, it isn't the start being waited on. */
+const LONG_UP_MS = 60_000
 /** Past this a log keeps only its last `LOG_KEEP_BYTES`, in `<name>.log.1`. */
 const LOG_LIMIT_BYTES = 32 * 1024 * 1024
 const LOG_KEEP_BYTES = 1024 * 1024
@@ -21,10 +25,10 @@ const PROCESS_TABLE_BYTES = 16 * 1024 * 1024
  */
 const WRAPPER = 'command=$1; exit_file=$2; shift 2; (eval "$command"); code=$?; printf "%s\\n" "$code" > "$exit_file"; exit "$code"'
 
-export type RunKind = "process" | "check"
+export type RunKind = "process" | "check" | "prepare"
 
 const RunSchema = z.object({
-  kind: z.enum(["process", "check"]),
+  kind: z.enum(["process", "check", "prepare"]),
   name: z.string(),
   command: z.string(),
   cwd: z.string(),
@@ -53,6 +57,8 @@ export interface RunStatus {
   pid?: number
   state: RunState
   startedAt?: number
+  /** What its processes hold in memory now, while any of them runs. */
+  memoryBytes?: number
   log: string
 }
 
@@ -76,9 +82,28 @@ interface Row {
   pid: number
   ppid: number
   pgid: number
+  rssKb: number
   startedMs: number
   command: string
 }
+
+/** A Thread with anything running, for room and idle decisions. */
+export interface ActiveThread {
+  thread: ThreadId
+  usedAt: number
+  memoryBytes: number
+  runs: string[]
+}
+
+export type MemoryPressure = "normal" | "warning" | "critical"
+
+const PreparedSchema = z.object({
+  /** Per checkout: each step's command and the digest of its inputs when it last passed. */
+  done: z.record(z.string(), z.record(z.string(), z.string())),
+  /** The digests the running prepare run will record when it passes. */
+  pending: z.object({ checkout: z.string(), digests: z.record(z.string(), z.string()) }).strict().optional(),
+}).strict()
+export type Prepared = z.infer<typeof PreparedSchema>
 
 export interface ThreadProcessDependencies {
   /** One folder per Thread for its runs' records and logs. */
@@ -121,6 +146,10 @@ export class ThreadProcesses {
         const key = runKey(spec.kind, spec.name)
         const current = runs[key]
         if (current && members(rows, current).length) continue
+        if (spec.kind === "prepare" && Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length)) {
+          refused.push({ name: spec.name, reason: "Stop the running app before preparing the checkout again." })
+          continue
+        }
         if (spec.port !== undefined && (await this.dependencies.listening(spec.port))) {
           refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, thread) })
           continue
@@ -163,17 +192,31 @@ export class ThreadProcesses {
         log: this.file(thread, key, "log"),
       }
       if (record.port !== undefined) status.port = record.port
+      const held = members(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
+      if (held) status.memoryBytes = held
       return status
     }))
   }
 
   /** Waits until every named run is up or over, or until `timeoutMs`; whichever comes first. */
-  async settle(thread: ThreadId, keys: string[], timeoutMs: number): Promise<RunStatus[]> {
+  async settle(thread: ThreadId, keys: string[], timeoutMs: number, steadyMs = STEADY_MS): Promise<RunStatus[]> {
     const deadline = this.now() + timeoutMs
+    const runningSince = new Map<string, number>()
     for (;;) {
+      const now = this.now()
       const statuses = (await this.status(thread)).filter((status) => keys.includes(runKey(status.kind, status.name)))
-      const waiting = statuses.some((status) => status.state.kind === "starting" || (status.kind === "check" && status.state.kind === "running"))
-      if (!waiting || this.now() >= deadline) return statuses
+      // A server can answer on its port and die a moment later; "running" means it stayed up.
+      const unsteady = statuses.some((status) => {
+        const key = runKey(status.kind, status.name)
+        if (status.kind !== "process" || status.state.kind !== "running") {
+          runningSince.delete(key)
+          return false
+        }
+        if (!runningSince.has(key)) runningSince.set(key, (status.startedAt ?? now) < now - LONG_UP_MS ? now - steadyMs : now)
+        return now - (runningSince.get(key) ?? now) < steadyMs
+      })
+      const waiting = unsteady || statuses.some((status) => status.state.kind === "starting" || (status.kind === "check" && status.state.kind === "running"))
+      if (!waiting || now >= deadline) return statuses
       await sleep(250)
     }
   }
@@ -202,6 +245,60 @@ export class ThreadProcesses {
       }
     }
     return { pid: listeners[0]!, command: commandOf(rows, listeners[0]!) }
+  }
+
+  /** An agent or person used the Thread's app; idle stops and room count from here. */
+  async touch(thread: ThreadId): Promise<void> {
+    await mkdir(this.folder(thread), { recursive: true, mode: 0o700 })
+    await writeFile(join(this.folder(thread), "used"), String(this.now()), { mode: 0o600 })
+  }
+
+  async usedAt(thread: ThreadId): Promise<number> {
+    const text = await readFile(join(this.folder(thread), "used"), "utf8").catch(() => "")
+    const at = Number.parseInt(text, 10)
+    return Number.isFinite(at) ? at : 0
+  }
+
+  /** Every Thread on this Mac with a process running, with what it holds and when it was last used. */
+  async active(): Promise<ActiveThread[]> {
+    const rows = await processTable()
+    const found: ActiveThread[] = []
+    for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
+      const thread = ThreadIdSchema.safeParse(folder)
+      if (!thread.success) continue
+      const runs = await this.runs(thread.data).catch(() => ({}))
+      let memoryBytes = 0
+      const alive: string[] = []
+      for (const record of Object.values(runs)) {
+        const held = members(rows, record)
+        if (!held.length) continue
+        alive.push(record.name)
+        memoryBytes += held.reduce((sum, row) => sum + row.rssKb * 1024, 0)
+      }
+      if (alive.length) found.push({ thread: thread.data, usedAt: await this.usedAt(thread.data), memoryBytes, runs: alive })
+    }
+    return found
+  }
+
+  /** Stops every Thread's app unused for `quietMs`; its files and data stay, so the next start is quick. */
+  async stopIdle(quietMs: number): Promise<ThreadId[]> {
+    const cutoff = this.now() - quietMs
+    const idle = (await this.active()).filter((entry) => entry.usedAt < cutoff)
+    for (const entry of idle) await this.stop(entry.thread)
+    return idle.map((entry) => entry.thread)
+  }
+
+  async prepared(thread: ThreadId): Promise<Prepared> {
+    const text = await readFile(join(this.folder(thread), "prepared.json"), "utf8").catch(() => undefined)
+    return text === undefined ? { done: {} } : PreparedSchema.parse(JSON.parse(text))
+  }
+
+  async savePrepared(thread: ThreadId, prepared: Prepared): Promise<void> {
+    await mkdir(this.folder(thread), { recursive: true, mode: 0o700 })
+    const path = join(this.folder(thread), "prepared.json")
+    const temporary = `${path}.${process.pid}.tmp`
+    await writeFile(temporary, JSON.stringify(prepared, null, 2), { mode: 0o600 })
+    await rename(temporary, path)
   }
 
   /** Stops everything the Thread runs and forgets its records and logs. */
@@ -270,7 +367,7 @@ export class ThreadProcesses {
   }
 
   private file(thread: ThreadId, key: string, extension: "log" | "exit"): string {
-    if (!/^(process|check)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
+    if (!/^(process|check|prepare)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
     return join(this.folder(thread), `${key}.${extension}`)
   }
 
@@ -338,16 +435,16 @@ function processExists(pid: number): boolean {
 
 /** Every process on the machine, with when it started; `ps` is on macOS and Linux alike. */
 async function processTable(): Promise<Row[]> {
-  const { stdout } = await run("ps", ["-A", "-o", "pid=,ppid=,pgid=,lstart=,command="], {
+  const { stdout } = await run("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,command="], {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: PROCESS_TABLE_BYTES,
   })
   const rows: Row[] = []
   for (const line of stdout.split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s*(.*)$/.exec(line)
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s*(.*)$/.exec(line)
     if (!match) continue
-    const startedMs = Date.parse(match[4]!)
-    if (Number.isFinite(startedMs)) rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), startedMs, command: match[5]! })
+    const startedMs = Date.parse(match[5]!)
+    if (Number.isFinite(startedMs)) rows.push({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), rssKb: Number(match[4]), startedMs, command: match[6]! })
   }
   return rows
 }
@@ -445,4 +542,18 @@ async function readTail(path: string, bytes: number): Promise<string> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * How short of memory this machine is: macOS's own pressure level, or
+ * Linux's pressure stall figures. Anything unreadable counts as normal.
+ */
+export async function memoryPressure(): Promise<MemoryPressure> {
+  if (process.platform === "darwin") {
+    const level = await run("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).then(({ stdout }) => Number(stdout.trim()), () => 1)
+    return level >= 4 ? "critical" : level >= 2 ? "warning" : "normal"
+  }
+  const text = await readFile("/proc/pressure/memory", "utf8").catch(() => "")
+  const average = (kind: string) => Number(new RegExp(`^${kind} avg10=([\\d.]+)`, "m").exec(text)?.[1] ?? 0)
+  return average("full") > 10 ? "critical" : average("some") > 20 ? "warning" : "normal"
 }

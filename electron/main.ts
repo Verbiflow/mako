@@ -359,14 +359,23 @@ const conversationsIn = (path: string, status: (value: string) => boolean) => li
   .summaries()
   .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
   .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
+/** People's own recipe overrides, one file per repository, outside every checkout. */
+const threadRecipeOverrides = threadStore ? join(realpathSync(dirname(threadStore.path)), "recipes") : undefined
 /** Beside the Thread store too, so a Thread keeps one data folder whichever host starts its agents. */
 const threadEnvironments = threadStore
-  ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data") })
+  ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data"), overridesRoot: threadRecipeOverrides })
   : null
 /** And its running app's records, so any host sees and stops the processes another host started. */
 const threadProcesses = threadStore
   ? new ThreadProcesses({ root: join(realpathSync(dirname(threadStore.path)), "thread-environments"), listening: portListening, title: (thread) => threadStore.thread(thread)?.title })
   : null
+/** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
+const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
+setInterval(() => {
+  void threadProcesses?.stopIdle(THREAD_APP_IDLE_MS).then((stopped) => {
+    if (stopped.length) hostLog("threads", "stopped apps unused for six hours", { threads: stopped.join(", ") })
+  }, (error) => hostWarn("threads", "idle apps couldn't be stopped", { error: error instanceof Error ? error.message : String(error) }))
+}, 10 * 60 * 1000).unref()
 const threadWorktrees = threadStore
   ? new ThreadWorktreeService(join(realpathSync(dirname(threadStore.path)), "worktrees"), threadStore, async (path) => {
       const shells = (await terminalClients?.runningShells().catch(() => []) ?? [])
@@ -2086,8 +2095,11 @@ app.whenReady().then(async () => {
         hostWarn("threads", "a Thread's values could not be assigned; its agent starts without them", { conversation: conversationId, error: error instanceof Error ? error.message : String(error) })
         return undefined
       }) ?? Promise.resolve(undefined),
-    controlInstructions: (bindingId, conversationId) =>
-      launchInstructions(controlSessions.get(bindingId), threadEnvironments?.launchedWith(conversationId)),
+    controlInstructions: (bindingId, conversationId) => {
+      const launched = threadEnvironments?.launchedWith(conversationId)
+      if (launched) void threadProcesses?.touch(launched.thread).catch(() => {})
+      return launchInstructions(controlSessions.get(bindingId), launched)
+    },
     revokeTools: async (bindingId, conversationId) => {
       conversationMcp?.revoke(bindingId, conversationId)
       await controlService?.revoke(conversationId, bindingId)
@@ -2162,6 +2174,8 @@ app.whenReady().then(async () => {
       environment: (id, cwd) => threadEnvironments.forConversation(id, liveConversations.snapshot(id)?.session.title, cwd),
       launchedWith: (id) => threadEnvironments.launchedWith(id),
       processes: threadProcesses,
+      overridesRoot: threadRecipeOverrides,
+      title: (thread) => threadStore?.thread(thread)?.title,
     }) : undefined
   )
   trace("conversation tools ready")
@@ -2192,6 +2206,7 @@ app.whenReady().then(async () => {
   installThreadWorktreesIpc(threadWorktrees)
   installChatFoldersIpc()
   installWorkspaceMovesIpc(moves)
+  installTranscriptDocumentIpc({ snapshot: (id) => liveConversations.snapshot(id), openThread })
   const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>
     hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))
   tidyWorktrees()
@@ -2206,7 +2221,6 @@ app.whenReady().then(async () => {
       ...(webHost?.clients() ?? []),
       ...[...rendererWindows].map(
         (renderer) => `renderer:${renderer.webContents.id}`
-  installTranscriptDocumentIpc({ snapshot: (id) => liveConversations.snapshot(id), openThread })
       ),
     ],
     quitClient: () => {

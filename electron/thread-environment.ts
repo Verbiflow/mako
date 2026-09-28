@@ -53,7 +53,8 @@ export function threadEnvironmentInstructions(environment: ThreadEnvironment): s
 
 function recipeInstructions(environment: ThreadEnvironment): string | undefined {
   const recipe = environment.recipe
-  if (!recipe || recipe.kind === "none") return undefined
+  if (!recipe) return undefined
+  if (recipe.kind === "none") return "This project has no recipe yet for running its app in each Thread; if you're asked to set one up, call environment_guide."
   if (recipe.kind === "invalid") return `The project's recipe is broken, so its values aren't set and its processes can't start: ${recipe.message}. Tell the user; fixing it is a change to the recipe.`
   const names = Object.entries(environment.values ?? {}).map(([name, value]) => `${name}=${value}`)
   const processes = recipe.processes.map((entry) => entry.port === undefined ? entry.name : `${entry.name} on ${entry.port}`)
@@ -73,6 +74,8 @@ export interface ThreadEnvironmentDependencies {
   store: ThreadStore
   /** Threads' data folders, one per Thread ID. */
   dataRoot: string
+  /** People's own recipe overrides, one file per repository. */
+  overridesRoot?: string
   /** Whether anything accepts connections on a local port. */
   listening?: (port: number) => Promise<boolean>
   now?: () => number
@@ -123,7 +126,7 @@ export class ThreadEnvironments {
     if (!cwd) return environment
     let read: Awaited<ReturnType<typeof readRecipe>>
     try {
-      read = await readRecipe(await checkoutOf(cwd), environment)
+      read = await readRecipe(await checkoutOf(cwd), environment, this.dependencies.overridesRoot)
     } catch (error) {
       return { ...environment, recipe: { kind: "invalid", message: `${RECIPE_PATH} couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
     }
