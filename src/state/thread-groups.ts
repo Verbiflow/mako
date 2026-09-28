@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { ThreadGroup, ThreadGroupChange, ThreadRegroup } from "../../electron/contracts/thread-groups.ts"
+import type { ThreadGroup, ThreadGroupChange } from "../../electron/contracts/thread-groups.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { readAttachmentDrafts, readDraftStorage, writeDraftStorage } from "@/lib/draft-persistence"
 import { draftsStore } from "@/state/drafts"
@@ -37,10 +37,8 @@ const SessionDraftSchema = z.object({
 export interface ThreadGroupsState {
   /** Threads with two or more Sessions, by Thread ID. */
   groups: Readonly<Record<string, ThreadGroup>>
-  /** The Thread of every Session in `groups`, and of every Session regrouped since the window opened. */
+  /** The Thread of every Session in `groups`. */
   threadOf: Readonly<Record<string, string>>
-  /** Sessions that changed Thread while this window was open. */
-  placed: Readonly<Record<string, string>>
   /** The Session you last had on screen in each Thread. */
   lastViewed: Readonly<Record<string, string>>
   /** Each Thread's new tab, by Thread ID. */
@@ -73,7 +71,7 @@ function restoredDrafts(): Record<string, SessionDraft> {
   }
 }
 
-export const threadGroupsStore = createStore<ThreadGroupsState>({ groups: {}, threadOf: {}, placed: {}, lastViewed: {}, drafts: restoredDrafts(), open: null })
+export const threadGroupsStore = createStore<ThreadGroupsState>({ groups: {}, threadOf: {}, lastViewed: {}, drafts: restoredDrafts(), open: null })
 export const useThreadGroups = createHook(threadGroupsStore)
 
 let savedDrafts = threadGroupsStore.get().drafts
@@ -120,11 +118,11 @@ export function rememberDraftHarness(harness: string): void {
   if (draft && draft.harness !== harness) putSessionDraft({ ...draft, harness }, false)
 }
 
-function indexSessions(groups: Readonly<Record<string, ThreadGroup>>, placed: Readonly<Record<string, string>>) {
-  return { ...placed, ...Object.fromEntries(Object.values(groups).flatMap((group) => group.sessions.map((session) => [session.id, group.id]))) }
+function indexSessions(groups: Readonly<Record<string, ThreadGroup>>) {
+  return Object.fromEntries(Object.values(groups).flatMap((group) => group.sessions.map((session) => [session.id, group.id])))
 }
 
-/** A row's Thread: the group or regroup this window heard of, else the one stamped when it was listed. */
+/** A row's Thread: the group this window heard of, else the one stamped when it was listed. */
 export function rowThread(row: { threadId?: string; sessionId?: string }, threadOf: Readonly<Record<string, string>>): string | undefined {
   return (row.sessionId === undefined ? undefined : threadOf[row.sessionId]) ?? row.threadId
 }
@@ -144,15 +142,7 @@ export function applyThreadGroupChange(change: ThreadGroupChange): void {
   for (const arrived of loads) arrived.push(change)
   threadGroupsStore.set((state) => {
     const groups = withChange(state.groups, change)
-    return { groups, threadOf: indexSessions(groups, state.placed) }
-  })
-}
-
-export function applyThreadRegroup(regroup: ThreadRegroup): void {
-  threadGroupsStore.set((state) => {
-    const placed = { ...state.placed }
-    for (const { session, thread } of regroup.placements) placed[session] = thread
-    return { placed, threadOf: indexSessions(state.groups, placed) }
+    return { groups, threadOf: indexSessions(groups) }
   })
 }
 
@@ -164,7 +154,7 @@ export async function loadThreadGroups(): Promise<void> {
     const list = await getMako().threadGroups()
     let groups: Record<string, ThreadGroup> = Object.fromEntries(list.map((group) => [group.id, group]))
     for (const change of arrived) groups = withChange(groups, change)
-    threadGroupsStore.set((state) => ({ groups, threadOf: indexSessions(groups, state.placed) }))
+    threadGroupsStore.set({ groups, threadOf: indexSessions(groups) })
   } finally {
     loads.delete(arrived)
   }

@@ -2,6 +2,7 @@ import { toast } from "sonner"
 import type { WorkspaceMoveAnswer, WorkspaceMoveRequest, WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { acpStore } from "@/state/acp-state"
 import { applyLiveSnapshot } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
@@ -36,6 +37,7 @@ export function applyWorkspaceMoves(moves: WorkspaceMoves): void {
     if (known.has(request.id) || request.state !== "asking" || acpStore.get().activeKey === request.conversationId) continue
     toast(`${harnessLabel(request.harness)} wants to work on its own branch`, {
       description: request.title ?? projectName(request.project),
+      duration: ACTION_TOAST_MS,
       action: { label: "Show", onClick: () => void show(request.conversationId) },
     })
   }

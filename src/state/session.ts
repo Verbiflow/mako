@@ -4,7 +4,7 @@ import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
 import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
-import { applyThreadGroupChange, applyThreadRegroup, loadThreadGroups } from "@/state/thread-groups"
+import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { refreshWorktrees } from "@/state/worktrees"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
@@ -227,10 +227,6 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-group") {
     applyThreadGroupChange(event.change)
-    return
-  }
-  if (event.type === "thread-regroup") {
-    applyThreadRegroup(event.regroup)
     return
   }
   if (event.type === "host-reconnected") {
