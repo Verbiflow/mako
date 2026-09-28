@@ -122,27 +122,28 @@ export class LiveChildren {
       parent.snapshot.session.status === "closed"
     )
       return
-    const control = this.host.control(parent)
-    for (const child of control.children) {
-      if (
-        child.delivery !== "pending" ||
-        child.status === "starting" ||
-        child.status === "working" ||
-        child.status === "needs-permission"
-      )
-        continue
-      if (this.delivering.has(child.deliveryId)) continue
-      this.delivering.add(child.deliveryId)
-      void this.deliverChild(parent, child.id)
-        .catch((error) => {
-          this.host.dependencies.emit({
-            type: "notice",
-            level: "error",
-            message: `The child result remains saved but could not be queued: ${errorMessage({ error })}`,
+    const ready = this.host.control(parent).children.filter(
+      (child) =>
+        child.delivery === "pending" &&
+        child.status !== "starting" &&
+        child.status !== "working" &&
+        child.status !== "needs-permission" &&
+        !this.delivering.has(child.deliveryId)
+    )
+    for (const child of ready) this.delivering.add(child.deliveryId)
+    // Prepared one after another so results queue in the order the parent listed them.
+    void (async () => {
+      for (const child of ready)
+        await this.deliverChild(parent, child.id)
+          .catch((error) => {
+            this.host.dependencies.emit({
+              type: "notice",
+              level: "error",
+              message: `The child result remains saved but could not be queued: ${errorMessage({ error })}`,
+            })
           })
-        })
-        .finally(() => this.delivering.delete(child.deliveryId))
-    }
+          .finally(() => this.delivering.delete(child.deliveryId))
+    })()
   }
 
   private async deliverChild(parent: Resident, childId: string): Promise<void> {
