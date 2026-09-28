@@ -87,4 +87,38 @@ worktreesStore.set({ ...worktreesStore.get(), worktrees: [made] })
 applyCheckoutHeads({ [linked.path]: { kind: "branch", name: "mako/fix-login", linked } })
 assert.equal(worktreeAt(worktreesStore.get().outside, linked.path), undefined, "a worktree Mako made isn't also an outside one")
 
-console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, moved by its harness vs a cd, detached, removed, Mako's own excluded")
+// The host names each session's worktree on the ref itself: grouping needs no head, in any view.
+const project = "/Users/you/shop"
+const claudeTree = { path: `${project}/.claude/worktrees/fix-cart`, repoRoot: project }
+const codexTree = { path: "/Users/you/.codex/worktrees/77aa/shop", repoRoot: project }
+const goneTree = { path: "/Users/you/.codex/worktrees/0dd0/shop", repoRoot: project }
+const listed = [
+  { harness: "claude", nativeId: "c-1", path: "/p/c-1.jsonl", cwd: claudeTree.path, worktrees: [claudeTree], updatedAt: "2026-09-28T09:00:03Z" },
+  { harness: "codex", nativeId: "x-1", path: "/p/x-1.jsonl", cwd: codexTree.path, worktrees: [codexTree], updatedAt: "2026-09-28T09:00:02Z" },
+  { harness: "codex", nativeId: "x-2", path: "/p/x-2.jsonl", cwd: goneTree.path, worktrees: [goneTree], updatedAt: "2026-09-28T09:00:01Z" },
+  { harness: "cursor", nativeId: "u-1", path: "/p/u-1", cwd: project, updatedAt: "2026-09-28T09:00:00Z" },
+  { harness: "claude", nativeId: "c-2", path: "/p/c-2.jsonl", cwd: project, currentCwd: `${claudeTree.path}/api`, worktrees: [claudeTree], updatedAt: "2026-09-28T08:59:00Z" },
+]
+const { groupThreadFolders, threadBelongsToWorkspace, threadFolderKey } = await import("@/lib/thread-folders")
+const { applyThreads } = await import("@/state/threads")
+const grouped = groupThreadFolders({ refs: listed, pinnedThreads: [], pinnedFolders: [], sortBy: "recent" })
+assert.deepEqual(grouped.map((folder) => [folder.key, folder.refs.map((entry) => entry.nativeId)]), [[project, ["c-1", "x-1", "x-2", "u-1", "c-2"]]],
+  "Claude's, Codex's (one whose worktree is gone) and the project's own sessions share one project, before any head is read")
+assert.equal(threadFolderKey({ cwd: `${codexTree.path}/web`, worktrees: [codexTree] }), threadFolderKey({ cwd: `${project}/web` }),
+  "a worktree's subfolder files where the project's same subfolder does")
+assert.ok(listed.every((entry) => threadBelongsToWorkspace(entry, project)), "each belongs to the project when the rail shows only it")
+assert.ok(!threadBelongsToWorkspace(listed[0] ?? ref, "/Users/you/other"))
+applyThreads(listed)
+const known = worktreesStore.get()
+assert.deepEqual(known.outside.filter((entry) => entry.repoRoot === project).map((entry) => [entry.path, entry.branch]),
+  [[claudeTree.path, undefined], [codexTree.path, undefined], [goneTree.path, undefined]], "the window knows each worktree from the list, its branch not yet")
+assert.equal(known.folderMap(codexTree.path), project, "so a live conversation there files under the project too")
+assert.equal(workingFolder(known, listed[4] ?? ref), `${claudeTree.path}/api`, "EnterWorktree moves the Session at once, without waiting for a head")
+applyCheckoutHeads({ [claudeTree.path]: { kind: "branch", name: "worktree-fix-cart", linked: claudeTree } })
+assert.equal(worktreeAt(worktreesStore.get().outside, claudeTree.path)?.worktree.branch, "worktree-fix-cart", "the branch arrives with its head")
+assert.equal(worktreesStore.get().outside.filter((entry) => entry.path === claudeTree.path).length, 1, "one entry per worktree, from the list and the head")
+const setsBefore = sets
+applyThreads([...listed])
+assert.equal(sets, setsBefore, "a new list naming the same worktrees changes nothing")
+
+console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, moved by its harness vs a cd, detached, removed, Mako's own excluded; named by the host: one project before any head, project filter, live folder, harness move, branch from head, quiet relist")

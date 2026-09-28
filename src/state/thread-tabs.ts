@@ -20,6 +20,13 @@ export function openThreadTab(path: string) {
   threadTabsStore.set({ tabs: [...tabs, path] })
 }
 
+/** A tab keeps its place when its session's record moves. */
+export function moveThreadTab(from: string, to: string) {
+  const { tabs } = threadTabsStore.get()
+  if (!tabs.includes(from)) return
+  threadTabsStore.set({ tabs: tabs.flatMap((tab) => (tab === from ? [to] : tab === to ? [] : [tab])) })
+}
+
 /** Closing removes the tab; the thread itself stays where it was. */
 export function closeThreadTab(path: string) {
   const { tabs } = threadTabsStore.get()

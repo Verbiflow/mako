@@ -212,10 +212,13 @@ export const acp = {
         .map((conversation) => conversation.threadPath)
         .filter((path): path is string => Boolean(path))
     )
+    const listed = new Set(threadsStore.get().threads.map((ref) => ref.path))
     for (const conversation of Object.values(state.conversations)) {
+      // A bound conversation follows its record when the record moves (Claude
+      // Code entering a worktree), never to another store under the same id.
       if (
         conversation.kind !== "live" ||
-        conversation.threadPath ||
+        (conversation.threadPath && listed.has(conversation.threadPath)) ||
         !conversation.session.nativeId
       )
         continue
@@ -224,7 +227,7 @@ export const acp = {
           candidate.harness === conversation.session.harness &&
           candidate.nativeId === conversation.session.nativeId
       )
-      if (!ref || claimedPaths.has(ref.path)) continue
+      if (!ref || ref.path === conversation.threadPath || claimedPaths.has(ref.path)) continue
       claimedPaths.add(ref.path)
       void getMako()
         .liveBind(conversation.key, ref.path)

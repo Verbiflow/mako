@@ -415,6 +415,7 @@ function applyToActive(event: HostEvent) {
       break
     case "thread-removed":
       applyThreadRemoved(event.path)
+      acp.bindThreads(threadsStore.get().threads)
       break
     case "thread-activity":
       applyThreadActivity(event.path, event.activity)

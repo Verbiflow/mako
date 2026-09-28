@@ -55,6 +55,7 @@ import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { WorkspaceGit } from "./host-git.js"
 import { WorkspaceFiles } from "./host-workspace.js"
+import { WorktreeOrigins } from "./worktree-origins.js"
 import { annotate as annotateLineage, loadLineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
 import type { ThreadStore } from "./thread-store.js"
@@ -90,6 +91,20 @@ function withWorkspacePresence(ref: ThreadRef): ThreadRef {
     workspacePresence.set(cwd, held)
   }
   return held.missing ? { ...ref, workspaceMissing: true } : ref
+}
+
+let worktreeOrigins: WorktreeOrigins | null = null
+
+function withWorktrees(ref: ThreadRef): ThreadRef {
+  const folders = new Set([ref.cwd, ref.workspace, ref.currentCwd].filter((folder): folder is string => Boolean(folder)))
+  if (!folders.size) return ref
+  worktreeOrigins ??= new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json"))
+  const found = new Map<string, { path: string; repoRoot: string }>()
+  for (const folder of folders) {
+    const linked = worktreeOrigins.of(folder)
+    if (linked) found.set(linked.path, linked)
+  }
+  return found.size ? { ...ref, worktrees: [...found.values()] } : ref
 }
 
 let sessionMemory: SessionMemory | null = null
@@ -144,7 +159,7 @@ function placeCatalog(refs: readonly ThreadRef[]): void {
 
 function annotated(ref: ThreadRef): ThreadRef {
   const known = sessionMemory ? sessionMemory.annotate(ref) : ref
-  return withWorkspacePresence(annotateLineage(known))
+  return withWorktrees(withWorkspacePresence(annotateLineage(known)))
 }
 
 function annotate(ref: ThreadRef): ThreadRef {
@@ -917,6 +932,7 @@ export function stopThreads(): void {
   mirror.clear()
   activityIndex = null
   transcriptArtifacts.clear()
+  void worktreeOrigins?.flush()
 }
 
 function catalogRefs(filter: { cwd?: string; harness?: string }): ThreadRef[] {

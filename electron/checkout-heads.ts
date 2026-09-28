@@ -51,16 +51,30 @@ function spelledLike(path: string, folder: string): string {
   return path.startsWith("/private/") && !folder.startsWith("/private/") ? path.slice("/private".length) : path
 }
 
-interface CheckoutLocation {
+export interface CheckoutLocation {
   gitDir: string
   linked?: LinkedCheckout
 }
 
 /**
+ * The checkout a `.git` file at `dir` points to, given its `commondir` file
+ * (null when there is none). Only a linked worktree's Git directory has a
+ * `commondir`; a submodule's `.git` file points too, without one.
+ */
+export function pointedCheckout(dir: string, gitDir: string, common: string | null): CheckoutLocation {
+  if (!common) return { gitDir }
+  const commonDir = resolve(gitDir, common)
+  return { gitDir, linked: { path: dir, repoRoot: spelledLike(basename(commonDir) === ".git" ? dirname(commonDir) : commonDir, dir) } }
+}
+
+export function gitDirPointer(dir: string, pointer: string | null): string | null {
+  return pointer?.startsWith("gitdir: ") ? resolve(dir, pointer.slice("gitdir: ".length)) : null
+}
+
+/**
  * The checkout holding `folder`: its Git directory (`.git` itself, or where a
  * `.git` file points), and for a linked worktree where it sits and whose it
- * is. Only a linked worktree's Git directory has a `commondir` file; a
- * submodule's `.git` file points too, without one.
+ * is.
  */
 export async function locateCheckout(folder: string): Promise<CheckoutLocation | null> {
   for (let dir = resolve(folder); ; dir = dirname(dir)) {
@@ -68,13 +82,8 @@ export async function locateCheckout(folder: string): Promise<CheckoutLocation |
     const info = await stat(dotGit).catch(() => null)
     if (info?.isDirectory()) return { gitDir: dotGit }
     if (info?.isFile()) {
-      const pointer = await readText(dotGit)
-      if (!pointer?.startsWith("gitdir: ")) return null
-      const gitDir = resolve(dir, pointer.slice("gitdir: ".length))
-      const common = await readText(join(gitDir, "commondir"))
-      if (!common) return { gitDir }
-      const commonDir = resolve(gitDir, common)
-      return { gitDir, linked: { path: dir, repoRoot: spelledLike(basename(commonDir) === ".git" ? dirname(commonDir) : commonDir, dir) } }
+      const gitDir = gitDirPointer(dir, await readText(dotGit))
+      return gitDir ? pointedCheckout(dir, gitDir, await readText(join(gitDir, "commondir"))) : null
     }
     if (dirname(dir) === dir) return null
   }

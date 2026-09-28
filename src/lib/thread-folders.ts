@@ -1,5 +1,6 @@
 import { workspaceName } from "@/lib/format"
 import type { ThreadRef } from "@/lib/types"
+import { projectFolder } from "@/lib/worktree-paths"
 import type { RailSortBy } from "@/state/prefs"
 import type { AcpPresence } from "@/state/acp-presence"
 
@@ -95,19 +96,21 @@ function isHomePath(path: string): boolean {
 }
 
 export function threadBelongsToWorkspace(
-  ref: Pick<ThreadRef, "cwd" | "workspace">,
+  ref: Pick<ThreadRef, "cwd" | "workspace" | "worktrees">,
   workspace: string | undefined
 ): boolean {
   const root = normalizedPath(workspace)
   if (!root) return true
-  return [ref.cwd, ref.workspace].some((candidate) => {
+  return [ref.cwd, ref.workspace, projectFolder(ref.worktrees, ref.workspace ?? ref.cwd)].some((candidate) => {
     const path = normalizedPath(candidate)
     return path === root || path.startsWith(`${root}/`)
   })
 }
 
-export function threadFolderKey(ref: Pick<ThreadRef, "cwd" | "workspace">, folderMap?: FolderMap): string {
-  return folderPath(ref.workspace ?? ref.cwd, folderMap)
+/** A session in a linked worktree files under the project it belongs to, as its host found. */
+export function threadFolderKey(ref: Pick<ThreadRef, "cwd" | "workspace" | "worktrees">, folderMap?: FolderMap): string {
+  const folder = ref.workspace ?? ref.cwd
+  return folderPath(projectFolder(ref.worktrees, folder) ?? folder, folderMap)
 }
 
 /**

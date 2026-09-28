@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import type { CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
+import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
-import type { GitStatus } from "@/lib/types"
+import type { GitStatus, ThreadRef } from "@/lib/types"
 import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
+import { pathInside, plainPath, worktreeAt } from "@/lib/worktree-paths"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
 import { checkoutHeadsStore } from "@/state/checkout-heads"
 import { confirmAction } from "@/state/confirm"
 import { createHook, createStore } from "@/state/store"
+import { threadsStore } from "@/state/thread-store"
 
 /**
  * This device's Thread worktrees. A folder inside one stands for the same
@@ -22,9 +24,10 @@ import { createHook, createStore } from "@/state/store"
 interface WorktreesState {
   worktrees: readonly ThreadWorktree[]
   /**
-   * Worktrees made outside Mako that a folder on screen is in: an agent's own
-   * `git worktree add`, a harness's worktree mode, the user's. They come
-   * with the checkout heads, so finding them costs no Git call.
+   * Worktrees made outside Mako: an agent's own `git worktree add`, a
+   * harness's worktree mode, the user's. The host names the ones every
+   * listed session's folders are in; the checkout heads add any other folder
+   * on screen, and the branch. Neither runs Git.
    */
   outside: readonly OutsideWorktree[]
   /** New with every list and every change to the chats, so what groups by folder regroups. */
@@ -32,24 +35,11 @@ interface WorktreesState {
 }
 
 export interface OutsideWorktree extends LinkedCheckout {
+  /** Undefined while detached, or until its head has been read. */
   branch: string | undefined
 }
 
-/** macOS reaches /tmp, /var and /etc through /private, and harnesses record either spelling of one folder. */
-const plain = (path: string) => (path.startsWith("/private/") ? path.slice("/private".length) : path)
-
-const inside = (folder: string, path: string) => plain(path) === plain(folder) || plain(path).startsWith(`${plain(folder)}/`)
-
-/** The worktree holding `path`, and the rest of the path inside it ("" or "/web"). */
-export function worktreeAt<Worktree extends { path: string }>(
-  worktrees: readonly Worktree[],
-  path: string | undefined
-): { worktree: Worktree; inside: string } | undefined {
-  if (!path) return undefined
-  for (const worktree of worktrees)
-    if (inside(worktree.path, path)) return { worktree, inside: plain(path).slice(plain(worktree.path).length) }
-  return undefined
-}
+export { worktreeAt }
 
 export type WorktreePlaces = Pick<WorktreesState, "worktrees" | "outside">
 
@@ -63,8 +53,7 @@ function checkoutAt(state: WorktreePlaces, path: string | undefined): Pick<Threa
  * Claude's EnterWorktree and ExitWorktree, a Codex turn started in another
  * checkout. Its shell changing into a subfolder, around its own checkout or
  * into another repository records one too, and that doesn't move the
- * Session. A worktree made outside Mako counts once its checkout head has
- * been read, so callers follow `currentCwd`.
+ * Session.
  */
 export function workingFolder(state: WorktreePlaces, ref: { cwd?: string; currentCwd?: string }): string | undefined {
   const { cwd, currentCwd: moved } = ref
@@ -72,23 +61,26 @@ export function workingFolder(state: WorktreePlaces, ref: { cwd?: string; curren
   const from = checkoutAt(state, cwd)
   const to = checkoutAt(state, moved)
   if (to === from) return cwd
-  if (to) return (from ? from.repoRoot === to.repoRoot : inside(to.repoRoot, cwd)) ? moved : cwd
+  if (to) return (from ? from.repoRoot === to.repoRoot : pathInside(to.repoRoot, cwd)) ? moved : cwd
   // Out of the worktree it started in, back into that project's own checkout.
-  return from && inside(from.repoRoot, moved) ? moved : cwd
+  return from && pathInside(from.repoRoot, moved) ? moved : cwd
 }
 
-function outsideOf(heads: CheckoutHeads, worktrees: readonly ThreadWorktree[]): OutsideWorktree[] {
+function outsideOf(heads: CheckoutHeads, refs: readonly ThreadRef[], worktrees: readonly ThreadWorktree[]): OutsideWorktree[] {
   const found = new Map<string, OutsideWorktree>()
-  for (const head of Object.values(heads)) {
-    if (!head?.linked || found.has(head.linked.path) || worktrees.some((worktree) => worktree.path === head.linked?.path)) continue
-    found.set(head.linked.path, { ...head.linked, branch: head.kind === "detached" ? undefined : head.name })
+  const add = (linked: LinkedCheckout, head: CheckoutHead | null | undefined) => {
+    const key = plainPath(linked.path)
+    if (found.has(key) || worktrees.some((worktree) => plainPath(worktree.path) === key)) return
+    found.set(key, { path: linked.path, repoRoot: linked.repoRoot, branch: head && head.kind !== "detached" ? head.name : undefined })
   }
+  for (const head of Object.values(heads)) if (head?.linked) add(head.linked, head)
+  for (const ref of refs) for (const linked of ref.worktrees ?? []) add(linked, heads[linked.path])
   return [...found.values()]
 }
 
 function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
   const chats = chatFoldersStore.get()
-  const outside = outsideOf(checkoutHeadsStore.get().heads, worktrees)
+  const outside = outsideOf(checkoutHeadsStore.get().heads, threadsStore.get().threads, worktrees)
   return {
     worktrees,
     outside,
@@ -108,10 +100,18 @@ export const useWorktrees = createHook(worktreesStore)
 
 mapWorktreeFolders((path) => worktreesStore.get().folderMap(path))
 chatFoldersStore.subscribe(() => worktreesStore.set(stateOf(worktreesStore.get().worktrees)))
-checkoutHeadsStore.subscribe(() => {
+function refreshOutside(): void {
   const current = worktreesStore.get()
   const next = stateOf(current.worktrees)
   if (outsideKey(next.outside) !== outsideKey(current.outside)) worktreesStore.set(next)
+}
+checkoutHeadsStore.subscribe(refreshOutside)
+let listed = threadsStore.get().threads
+threadsStore.subscribe(() => {
+  const { threads } = threadsStore.get()
+  if (threads === listed) return
+  listed = threads
+  refreshOutside()
 })
 
 let reads = 0

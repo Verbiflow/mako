@@ -425,10 +425,12 @@ export class ClaudeProvider implements SessionProvider {
       updatedAt: new Date(file.mtimeMs).toISOString(),
       bytes: file.bytes,
     }
+    let spoke = false
     for (const raw of head.split("\n")) {
       const line = parseClaudeLine(raw)
       if (!line) continue
       fillClaudeRef(ref, line)
+      spoke ||= line.type === "user" || line.type === "assistant"
       if (ref.nativeId && ref.model) break
     }
     ref.settings = {}
@@ -436,6 +438,7 @@ export class ClaudeProvider implements SessionProvider {
     await readLines(file.path, Math.max(0, file.bytes - 2 * 1024 * 1024), (raw) => {
       const line = parseClaudeLine(raw)
       if (line) fillClaudeRef(ref, line)
+      spoke ||= line?.type === "user" || line?.type === "assistant"
       lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
       const model = line ? sessionModel(line) : undefined
       if (line && model) {
@@ -451,7 +454,10 @@ export class ClaudeProvider implements SessionProvider {
     // message at all keeps the file's own time rather than claiming none.
     if (lastMessageAt !== undefined) ref.updatedAt = lastMessageAt
     // A session file with no session id yet is a placeholder, not a session.
-    return ref.nativeId ? ref : null
+    // So is one holding only the records Claude Code writes before the first
+    // message (queued prompts, worktree state): it hasn't said where it runs,
+    // and listed now it would file under no project until its next write.
+    return ref.nativeId && (ref.cwd || spoke) ? ref : null
   }
 
   /** Remove a session file; Claude Code keeps no index that names it. */

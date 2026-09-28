@@ -158,6 +158,13 @@ function updateDocument(id: string, update: Partial<ViewerDocument>) {
   )
 }
 
+/** Transcript tabs keep reading a Session whose record moved. */
+export function followMovedTranscripts(from: string, to: string) {
+  for (const document of Object.values(viewerStore.get().documents))
+    if (document.kind === "transcript" && document.transcript?.path === from)
+      updateDocument(document.id, { path: `transcript:${to}`, transcript: { ...document.transcript, path: to } })
+}
+
 function removeUnreferenced(
   documents: Record<string, ViewerDocument>,
   panes: ViewerPane[]

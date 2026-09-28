@@ -33,6 +33,7 @@ import {
   threadViewingActions,
 } from "@/state/thread-viewing"
 import { threadsStore, useThreads } from "@/state/thread-store"
+import { followThreadMoves } from "@/state/thread-moves"
 import { noteOutcome, retireSubject } from "@/state/notifications"
 
 interface ThreadCatalog {
@@ -96,7 +97,10 @@ export function applyThreadRef(ref: ThreadRef) {
     (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")
   )
   applyThreads(next, threadsStore.get().loaded)
-  const viewing = threadsStore.get().viewing
+  const { viewing, opening } = threadsStore.get()
+  // A Session still opening, or whose last read failed, is described by its
+  // newest row too: the composer reads where it works from this ref.
+  if (opening?.ref.path === ref.path) threadsStore.set({ opening: { ...opening, ref } })
   if (viewing?.ref.path === ref.path) {
     const updated = { ...viewing, ref }
     threadsStore.set({ viewing: updated })
@@ -175,9 +179,11 @@ export function applyThreadRemoved(path: string) {
 }
 
 export function applyThreads(list: ThreadRef[], loaded = true) {
-  const initialHydration = loaded && !threadsStore.get().loaded
+  const { threads: previous, loaded: wasLoaded } = threadsStore.get()
+  const initialHydration = loaded && !wasLoaded
   const unique = threadList(list)
   threadsStore.set({ threads: unique, loaded })
+  followThreadMoves(previous, unique)
   if (initialHydration) seedRecentThreadActivity(unique)
 }
 

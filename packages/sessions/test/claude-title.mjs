@@ -106,3 +106,14 @@ const back = await new ClaudeProvider(home).refine(moved, movedBytes)
 assert.equal(back.currentCwd, undefined, "back in the folder it started in")
 assert.equal(back.cwd, home)
 console.log("Claude titles: a session moved into a worktree says where it works now")
+
+// `claude -p` writes its worktree state and queued prompt before the first
+// message; until a line says where it runs, the file isn't listed.
+const early =
+  line({ type: "worktree-state", worktreeSession: { originalCwd: home, worktreePath: worktree, worktreeName: "fix-login" }, sessionId: "session-1" }) +
+  line({ type: "queue-operation", operation: "enqueue", timestamp: "2026-09-08T21:00:00.000Z", sessionId: "session-1", content: "fix it" })
+assert.equal(await peek("early.jsonl", early), null, "not listed before it says where it runs")
+const started = await peek("early.jsonl", early + at(worktree, "fix it", "u1"))
+assert.equal(started?.cwd, worktree, "listed with its folder from the first message on")
+assert.equal(started?.title, "fix it")
+console.log("Claude titles: a session is listed once it says where it runs")

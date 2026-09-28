@@ -97,6 +97,7 @@ export const ThreadRefSchema = z.object({
   parentNativeId: z.string().optional(),
   liveResume: z.boolean().optional(),
   workspaceMissing: z.boolean().optional(),
+  worktrees: z.array(z.object({ path: z.string(), repoRoot: z.string() })).optional(),
   accessMode: z.string().optional(),
   heldBy: z.string().optional(),
   threadId: z.string().optional(),

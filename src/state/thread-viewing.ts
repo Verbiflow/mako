@@ -284,6 +284,24 @@ export async function recoverThreadReader(path: string): Promise<void> {
   }
 }
 
+/**
+ * Keep showing a session whose record moved. What is on screen stays while
+ * the record is read again where it now lives and followed from there.
+ */
+export function followMovedThread(from: string, to: ThreadRef): void {
+  const cached = threadCache.get(from)
+  if (cached) {
+    threadCache.delete(from)
+    rememberThread({ ...cached, ref: to })
+  }
+  const { viewing, opening } = threadsStore.get()
+  if (viewing?.ref.path === from) {
+    threadsStore.set({ viewing: { ...viewing, ref: to } })
+    if (opening?.ref.path === from) threadsStore.set({ opening: { ...opening, ref: to } })
+    void recoverThreadReader(to.path)
+  } else if (opening?.ref.path === from) void threadViewingActions.view(to)
+}
+
 export const threadViewingActions = {
   /** Open a foreign session read-only, translated to the canonical shape. */
   async view(ref: ThreadRef, mode: "conversation" | "native" = "conversation") {

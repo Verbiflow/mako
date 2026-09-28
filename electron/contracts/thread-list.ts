@@ -6,6 +6,15 @@ export const THREAD_LIST_CAP = 600
 type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived" | "updatedAt" | "threadId">
 
 /**
+ * The session a row is, wherever its record lives. A provider may say one
+ * native id names two distinct stores (a Cursor session continued by the CLI
+ * into chats/); those are two sessions.
+ */
+export function listedSession(ref: Pick<ThreadRef, "harness" | "nativeId" | "identity">): string {
+  return `${ref.harness}:${ref.identity ?? ref.nativeId}`
+}
+
+/**
  * The rail's list: one row per session, newest first, capped. The host
  * answers a reload with it and the window applies it after every push, so a
  * reload never shows a different set of rows than the pushes built. A row
@@ -15,9 +24,7 @@ type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived
 export function threadList<Ref extends ListedRef>(list: readonly Ref[]): Ref[] {
   const byIdentity = new Map<string, Ref>()
   for (const ref of list) {
-    // A provider may say one native id names two distinct stores (a Cursor
-    // session continued by the CLI into chats/); those stay separate rows.
-    const key = `${ref.harness}:${ref.identity ?? ref.nativeId}`
+    const key = listedSession(ref)
     const held = byIdentity.get(key)
     if (
       !held ||

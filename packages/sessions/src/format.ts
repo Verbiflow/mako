@@ -134,6 +134,12 @@ export interface ThreadRef {
   /** The session ran in a temporary directory that no longer exists. */
   workspaceMissing?: boolean
   /**
+   * The linked Git worktrees its folders (`cwd`, `workspace`, `currentCwd`)
+   * are in, with the main checkout each belongs to. Set by the host, so a
+   * worktree's sessions file under their project wherever they're listed.
+   */
+  worktrees?: { path: string; repoRoot: string }[]
+  /**
    * The access mode this session last ran under in Mako, as the host that
    * ran it recorded. No provider store records Mako's tier; the host overlays
    * it from its per-user session memory so a reply starts where the last
