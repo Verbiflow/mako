@@ -1,4 +1,5 @@
 import { applyControlEnvironment } from "../../control-launch.js"
+import { applyThreadEnvironment } from "../../thread-environment.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { accountEnv } from "../../accounts.js"
 import { acpMcpServers } from "../../mcp-runtime.js"
@@ -14,6 +15,7 @@ export async function claudeSdkOptions(
 ): Promise<Options> {
   const env = await trace.step("account", () => accountEnv("claude", process.env))
   applyControlEnvironment(env, input.conversationTools?.control)
+  applyThreadEnvironment(env, input.threadEnvironment)
   const runtime = trace.sync("runtime-discovery", () => claudeRuntime(env))
   if (env.CLAUDE_CODE_EXECUTABLE && !runtime)
     throw new Error("The configured Claude Code executable is unavailable")

@@ -1,4 +1,5 @@
 import { applyControlEnvironment } from "./control-launch.js"
+import { applyThreadEnvironment } from "./thread-environment.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "./contracts/approval-response.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
@@ -257,6 +258,7 @@ async function startAcp(
   delete env.CLAUDE_CODE_ENTRYPOINT
   spec.configureEnvironment(env)
   applyControlEnvironment(env, options.conversationTools?.control)
+  applyThreadEnvironment(env, options.threadEnvironment)
   const executable = resolveExecutable(spec.command, env)
   if (!executable) throw new Error(`${harness} is not installed`)
 

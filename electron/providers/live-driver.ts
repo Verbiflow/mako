@@ -16,6 +16,7 @@ import type {
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { ProviderCapability } from "./registry.js"
 import type { ControlLaunch } from "@mako/control-runtime/session"
+import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import { UNAVAILABLE_RECOVERY, type RecoveryCapabilities } from "../contracts/recovery.js"
 
 /** Admission resolves separately from the correlated live-action-result event.
@@ -65,6 +66,8 @@ export interface ProviderStartOptions extends LiveStartOptions {
   mcpSnapshot?: () => Promise<McpRegistrySnapshot>
   fork?: { nativeId: string; runId: string }
   conversationTools?: ConversationTools
+  /** Set on the agent process with `applyThreadEnvironment`, beside the control environment. */
+  threadEnvironment?: ThreadEnvironment
 }
 
 export interface ProviderLiveDriver extends ProviderCapability {

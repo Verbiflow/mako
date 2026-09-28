@@ -835,6 +835,7 @@ export class LiveConversations {
           ? () => this.dependencies.mcpSnapshot!(cwd)
           : undefined,
           conversationTools: await this.dependencies.tools?.(id, id),
+          threadEnvironment: await this.dependencies.threadEnvironment?.(id, options.title),
         })
       )
       .then(async (session) => {
@@ -1293,6 +1294,10 @@ export class LiveConversations {
         conversationTools: await this.dependencies.tools?.(
           binding.id,
           resident.snapshot.session.id
+        ),
+        threadEnvironment: await this.dependencies.threadEnvironment?.(
+          resident.snapshot.session.id,
+          resident.snapshot.session.title
         ),
       })
       startedSession = session
@@ -3073,7 +3078,7 @@ export class LiveConversations {
           this.control(resident).activeBindingId,
           current.context.reduce(
             (text, manifest) => contextPrompt(manifest, text),
-            [this.dependencies.controlInstructions?.(this.control(resident).activeBindingId), request.text].filter(Boolean).join("\n\n")
+            [this.dependencies.controlInstructions?.(this.control(resident).activeBindingId, resident.snapshot.session.id), request.text].filter(Boolean).join("\n\n")
           ),
           request.attachments,
           request.tuning,

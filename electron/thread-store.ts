@@ -35,6 +35,7 @@ import {
 } from "./contracts/thread-execution.js"
 import { ThreadGroupSchema, type ThreadGroup } from "./contracts/thread-groups.js"
 import type { ThreadWorktree } from "./contracts/thread-worktrees.js"
+import type { ThreadEnvironmentValues } from "./contracts/thread-environments.js"
 import { hostWarn } from "./host-log.js"
 
 /**
@@ -358,6 +359,24 @@ const WorktreeRowSchema = z.object({
   path: z.string(), thread_id: z.string(), repo_root: z.string(), project: z.string(),
   branch: z.string(), base: z.string(), created_at: z.number(),
 })
+/**
+ * The values that keep a Thread's running app from colliding with another's
+ * on a device: its hostname and the first of its block of ports. Each is held
+ * by one Thread per device, and a Thread keeps its values for its whole life
+ * unless the device runs out and it has gone unused longest.
+ */
+const ENVIRONMENT_TABLE = `
+CREATE TABLE IF NOT EXISTS thread_environments (
+  thread_id TEXT NOT NULL REFERENCES threads(id), device_id TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, used_at INTEGER NOT NULL, PRIMARY KEY (thread_id, device_id));
+CREATE UNIQUE INDEX IF NOT EXISTS thread_environments_host ON thread_environments(device_id, host);
+CREATE UNIQUE INDEX IF NOT EXISTS thread_environments_port ON thread_environments(device_id, port);
+`
+const EnvironmentRowSchema = z.object({ thread_id: z.string(), host: z.string(), port: z.number(), used_at: z.number() })
+class EnvironmentTaken extends Error {}
+function environmentValues(row: z.infer<typeof EnvironmentRowSchema>): ThreadEnvironmentValues {
+  return { thread: ThreadIdSchema.parse(row.thread_id), host: row.host, port: row.port, usedAt: row.used_at }
+}
 const REGROUP_KEEP_MS = 24 * 60 * 60 * 1000
 const LayoutSchema = z.record(z.string(), z.array(z.string()))
 type Layout = z.infer<typeof LayoutSchema>
@@ -560,6 +579,53 @@ export class ThreadStore {
           createdAt: row.created_at,
         }
       })
+  }
+
+  /** A Thread's values on this device, following merges, marked as used now. */
+  useEnvironment(id: ThreadId): ThreadEnvironmentValues | undefined {
+    const thread = this.thread(id)
+    if (!thread) return undefined
+    return this.write(() => {
+      this.sql("UPDATE thread_environments SET used_at = ? WHERE thread_id = ? AND device_id = ?").run(this.now(), thread.id, this.deviceId)
+      return this.environmentRow(thread.id)
+    })
+  }
+
+  /** Every value held on this device, least recently used first. */
+  heldEnvironments(): ThreadEnvironmentValues[] {
+    return this.sql("SELECT thread_id, host, port, used_at FROM thread_environments WHERE device_id = ? ORDER BY used_at, thread_id")
+      .all(this.deviceId)
+      .map((found) => environmentValues(EnvironmentRowSchema.parse(found)))
+  }
+
+  /**
+   * Hold `host` and `port` for a Thread, first giving up `reclaim`'s values if
+   * named. A Thread that already has values keeps them. Undefined when another
+   * host took the name or the port first; choose again.
+   */
+  claimEnvironment(input: { thread: ThreadId; host: string; port: number; reclaim?: ThreadId }): ThreadEnvironmentValues | undefined {
+    const thread = this.thread(input.thread)
+    if (!thread) throw new Error("This Thread no longer exists")
+    try {
+      return this.write(() => {
+        const held = this.environmentRow(thread.id)
+        if (held) return held
+        if (input.reclaim) this.sql("DELETE FROM thread_environments WHERE thread_id = ? AND device_id = ?").run(input.reclaim, this.deviceId)
+        const inserted = this.sql("INSERT OR IGNORE INTO thread_environments VALUES (?, ?, ?, ?, ?, ?)")
+          .run(thread.id, this.deviceId, input.host, input.port, this.now(), this.now())
+        // Rolls back the reclaim too: its Thread keeps its values when this claim fails.
+        if (!inserted.changes) throw new EnvironmentTaken()
+        return this.environmentRow(thread.id)
+      })
+    } catch (error) {
+      if (error instanceof EnvironmentTaken) return undefined
+      throw error
+    }
+  }
+
+  private environmentRow(thread: ThreadId): ThreadEnvironmentValues | undefined {
+    const found = this.sql("SELECT thread_id, host, port, used_at FROM thread_environments WHERE thread_id = ? AND device_id = ?").get(thread, this.deviceId)
+    return found ? environmentValues(EnvironmentRowSchema.parse(found)) : undefined
   }
 
   detachWorktree(path: string): void {
@@ -1401,6 +1467,7 @@ export class ThreadStore {
     this.db.exec(REGROUP_LOG)
     this.db.prepare("DELETE FROM regroups WHERE created_at < ?").run(this.now() - REGROUP_KEEP_MS)
     this.db.exec(WORKTREE_TABLE)
+    this.db.exec(ENVIRONMENT_TABLE)
     const stored = this.meta("self")
     if (stored === undefined) {
       const owner = self ?? { kind: "device", device: DeviceIdSchema.parse(this.meta("device")) }

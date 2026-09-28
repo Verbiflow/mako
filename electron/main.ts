@@ -45,7 +45,8 @@ import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { prepareBrowserExtension } from "./browser-extension-setup.js"
 import { ControlSessions } from "./control-sessions.js"
-import { controlLaunchInstructions } from "./control-launch.js"
+import { launchInstructions } from "./control-launch.js"
+import { ThreadEnvironments } from "./thread-environment.js"
 import { startControlService } from "./control-service.js"
 import type { ForkInput, MessageAnchor, TransferInput } from "./shared.js"
 import { TransferInputSchema } from "./contracts/conversation-control.js"
@@ -359,6 +360,10 @@ const threadWorktrees = threadStore
         .map((shell) => `the terminal “${shell.title}”`)
       return [...conversationsIn(path, (status) => status !== "closed"), ...shells]
     }, async (path) => conversationsIn(path, (status) => status === "running"))
+  : null
+/** Beside the Thread store too, so a Thread keeps one data folder whichever host starts its agents. */
+const threadEnvironments = threadStore
+  ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data") })
   : null
 hostLog("host", "starting", {
   pid: process.pid,
@@ -2017,10 +2022,13 @@ app.whenReady().then(async () => {
       }
       return tools
     },
-    controlInstructions: bindingId => {
-      const launch = controlSessions.get(bindingId)
-      return launch ? controlLaunchInstructions(launch) : undefined
-    },
+    threadEnvironment: (conversationId, title) =>
+      threadEnvironments?.forLaunch(conversationId, title).catch((error) => {
+        hostWarn("threads", "a Thread's values could not be assigned; its agent starts without them", { conversation: conversationId, error: error instanceof Error ? error.message : String(error) })
+        return undefined
+      }) ?? Promise.resolve(undefined),
+    controlInstructions: (bindingId, conversationId) =>
+      launchInstructions(controlSessions.get(bindingId), threadEnvironments?.launchedWith(conversationId)),
     revokeTools: async (bindingId, conversationId) => {
       conversationMcp?.revoke(bindingId, conversationId)
       await controlService?.revoke(conversationId, bindingId)

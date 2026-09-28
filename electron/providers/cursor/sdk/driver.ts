@@ -1,4 +1,5 @@
 import { applyControlEnvironment } from "../../../control-launch.js"
+import { applyThreadEnvironment } from "../../../thread-environment.js"
 import { preparePrompt } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -387,6 +388,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       const accountEnvironment = await trace.step("account", () => dependencies.auth.childEnv())
       const env = { ...accountEnvironment }
       applyControlEnvironment(env, options.conversationTools?.control)
+      applyThreadEnvironment(env, options.threadEnvironment)
       const agentId = options.resume ?? options.conversationId
       const stateRoot = dependencies.stateRoot()
       const spawn: CursorSdkSpawnOptions = {

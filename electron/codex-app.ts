@@ -1,4 +1,5 @@
 import { applyControlEnvironment } from "./control-launch.js"
+import { applyThreadEnvironment } from "./thread-environment.js"
 import { app } from "electron"
 import { join } from "node:path"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./providers/codex/permission-observer.js"
@@ -144,6 +145,7 @@ async function startCodex(
   if (options.conversationTools)
     env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
   applyControlEnvironment(env, options.conversationTools?.control)
+  applyThreadEnvironment(env, options.threadEnvironment)
   const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
   if (!executable) throw new Error("Codex is not installed")
   const child = trace.sync("spawn", () => spawn(executable, ["app-server"], {

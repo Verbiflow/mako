@@ -8,6 +8,7 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { openCodeNoticeLabel, PROVIDER_TURN_FALLBACK } from "@mako/sessions"
 import { z } from "zod"
 import { applyControlEnvironment } from "../../control-launch.js"
+import { applyThreadEnvironment } from "../../thread-environment.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { traceProviderLaunch } from "../../provider-launch.js"
 import type { AccessTier } from "../../contracts/access.js"
@@ -626,6 +627,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const launchAccess = openCodeLaunchAccess(options.modeId)
       configureOpenCodePermissions(env, launchAccess)
       applyControlEnvironment(env, options.conversationTools?.control)
+      applyThreadEnvironment(env, options.threadEnvironment)
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env))
       const nativePath = options.resume ? await trace.step("session-resume", () => verifyOpenCodeSession(options.resume!, options.threadPath, env)) : undefined
       const cwd = requestedCwd && existsSync(requestedCwd) ? requestedCwd : homedir()

@@ -329,6 +329,10 @@ export class LiveTransfers {
             bindingId,
             source.session.id
           ),
+          threadEnvironment: await this.host.dependencies.threadEnvironment?.(
+            source.session.id,
+            source.session.title
+          ),
           title: source.session.title,
           tuning,
           modeId,
