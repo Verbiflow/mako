@@ -1,5 +1,6 @@
 import { existsSync, realpathSync } from "node:fs"
 import { createRequire } from "node:module"
+import { z } from "zod"
 import { resolveExecutable } from "../../executable.js"
 import { claudeExecutablePath } from "./sdk-process.js"
 
@@ -53,16 +54,18 @@ export function bundledClaudeExecutable(): string | null {
   return (bundled = null)
 }
 
+const ProcessReportSchema = z.object({
+  header: z.object({ glibcVersionRuntime: z.string().optional() }).optional(),
+})
+
 // Must follow the SDK's own lookup order, or Settings and discovery would read
 // a different build than the one sessions launch.
 function bundledPackages(): string[] {
   const { platform, arch } = process
   if (platform === "android") return [`linux-${arch}-android`]
   if (platform !== "linux") return [`${platform}-${arch}`]
-  const report = process.report?.getReport() as
-    | { header?: { glibcVersionRuntime?: string } }
-    | undefined
-  const musl = report !== undefined && report.header?.glibcVersionRuntime === undefined
+  const report = ProcessReportSchema.safeParse(process.report?.getReport())
+  const musl = report.success && report.data.header?.glibcVersionRuntime === undefined
   return musl
     ? [`linux-${arch}-musl`, `linux-${arch}`]
     : [`linux-${arch}`, `linux-${arch}-musl`]
