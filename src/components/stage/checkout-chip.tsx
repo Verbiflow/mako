@@ -88,7 +88,7 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" sideOffset={4} className="overlay-panel z-50 w-72 rounded-lg p-1 text-ui">
+        <DropdownMenu.Content align="end" sideOffset={4} className="overlay-panel z-50 w-72 p-1 text-ui">
           <div className="px-2 pt-1 pb-1.5">
             <p className="truncate text-label text-muted-foreground">{where} · {checkoutSentence(head)}</p>
             {counts ? <p className="truncate text-label text-faint">{counts}</p> : null}

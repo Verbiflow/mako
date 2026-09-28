@@ -74,6 +74,8 @@ export interface Prefs {
   /** Threads kept at the top of both rails, by session path. */
   pinnedThreads: string[]
   pinnedProjects: string[]
+  /** Projects kept out of the rail's project list, by folder; working in one brings it back. */
+  hiddenProjects: string[]
   /** Harnesses shown in the Agents rail. Empty means all of them. */
   agentHarnessFilter: string[]
   /** The composer's chosen agent, kept across launches. */
@@ -148,6 +150,7 @@ const defaults: Prefs = {
   selectedDiffs: {},
   pinnedThreads: [],
   pinnedProjects: [],
+  hiddenProjects: [],
   agentHarnessFilter: [],
   providerSettings: {},
   settingsOverrides: {},
@@ -371,6 +374,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
       value.pinnedProjects,
       defaults.pinnedProjects
     ),
+    hiddenProjects: readStringList(value.hiddenProjects, defaults.hiddenProjects),
     agentHarnessFilter: readStringList(
       value.agentHarnessFilter,
       defaults.agentHarnessFilter
@@ -506,13 +510,20 @@ export function togglePinnedProject(path: string) {
   )
 }
 
+export function setProjectHidden(path: string, hidden: boolean) {
+  const current = prefsStore.get().hiddenProjects
+  if (current.includes(path) === hidden) return
+  setPref("hiddenProjects", hidden ? [path, ...current] : current.filter((entry) => entry !== path))
+}
+
 /** How many folders' last use is remembered; older ones fall back to their threads' times. */
 const FOLDER_USE_LIMIT = 64
 
 /**
  * You worked in `cwd`: a prompt went out or a thread started there. This is
  * the one event that moves a folder in the rail's Projects view, so agent
- * output never reshuffles the list under you.
+ * output never reshuffles the list under you. It also brings a hidden
+ * project back.
  */
 export function noteFolderUse(
   cwd: string | undefined,
@@ -520,6 +531,7 @@ export function noteFolderUse(
 ) {
   const key = threadFolderKey({ cwd })
   if (!key) return
+  setProjectHidden(key, false)
   const current = prefsStore.get().folderUse
   if ((current[key] ?? "") >= at) return
   const kept = Object.entries({ ...current, [key]: at })

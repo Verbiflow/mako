@@ -3,7 +3,7 @@ import { ApplicationDialog, ApplicationNotice } from "@/components/settings/appl
 import { useCallback, useEffect, useRef, useState } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { CommandPalette } from "@/components/palette/command-palette"
-import { AddToThreadDialog } from "@/components/rail/add-to-thread"
+import { AddSessionDialog, AddToThreadDialog } from "@/components/rail/add-to-thread"
 import { Guide } from "@/components/onboarding/guide"
 import { ConversionOverlay } from "@/components/viewer/conversion-overlay"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
@@ -160,6 +160,7 @@ export function AppShell() {
           onSectionChange={setSettingsSection}
         />
         <AddToThreadDialog />
+        <AddSessionDialog />
         <Guide />
         <ConversionOverlay />
         <ApplicationDialog />

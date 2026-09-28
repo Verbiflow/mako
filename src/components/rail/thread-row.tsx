@@ -2,7 +2,7 @@ import { memo, useCallback, useRef, useState } from "react"
 import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
-import { ThreadActions } from "@/components/rail/thread-actions"
+import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { FOLD_GLYPHS, foldedThreadStatus, foldRowHarness, type FoldedThread, type FoldRow } from "@/lib/thread-fold"
@@ -187,182 +187,188 @@ export const ThreadRow = memo(function ThreadRow({
       ? selectedPath === ref.path
       : selectedLive || (focusedPath ? focusedPath === ref.path : active))
   const title = override ?? ref.title ?? "Untitled session"
+  const menu: ThreadMenuProps = {
+    target,
+    title,
+    archived,
+    running: working || activeElsewhere || status.kind === "needs-permission",
+    // A folded row's status may be another Session's run; its stop lives in that tab.
+    controlled: !folded && (target.kind === "live" || working),
+    path: ref.path,
+    thread,
+    session: ref.sessionId,
+    cwd: ref.cwd,
+    archiveTargets: folded?.members.map(foldRowTarget),
+    pinned: isPinned,
+    onPin: () => togglePinned(ref.path),
+    onRename: () => setEditing(override ?? ref.title ?? ""),
+  }
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onPointerDown={(event) => {
-        openedOnPress.current = false
-        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-        if (event.target instanceof Element && event.target.closest("input, [data-tip-quiet]")) return
-        const shown = onScreenSession()
-        openedOnPress.current = true
-        open()
-        // Dragged into the chat, the row opens beside what was there.
-        if (thread) pressTab(event, { thread, title, shown }, event.currentTarget)
-      }}
-      onClick={() => {
-        if (openedOnPress.current) openedOnPress.current = false
-        else open()
-      }}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return
-        if (event.key !== "Enter" && event.key !== " ") return
-        event.preventDefault()
-        open()
-      }}
-      onAuxClick={(event) => {
-        if (event.button === 1) open()
-      }}
-      // The row's full text, shown by the rail's own tip (`rail-tip.tsx`),
-      // never a native `title`: on macOS those arrive late or not at all.
-      data-tip={[
-        title,
-        folded
-          ? `${folded.members.length} sessions: ${folded.members.map((member) => harnessLabel(foldRowHarness(member))).join(", ")}`
-          : undefined,
-        ref.archived
-          ? "Archived: the native store lost this; Mako kept it. Reply to bring it back to life."
-          : undefined,
-        [
-          ...(ref.lineage ?? []).map((origin) => harnessLabel(origin.harness)),
-          harnessLabel(ref.harness),
-        ].join(" → "),
-        ref.model,
-        ref.cwd,
-        branch ? `Worktree on ${branch}` : undefined,
-        "Double-click the title to rename",
-      ]
-        .filter(Boolean)
-        .join("\n")}
-      data-active={lit || undefined}
-      data-thread-row
-      data-flip-key={ref.path}
-      data-conversation-id={target.kind === "live" ? target.id : undefined}
-      data-thread-indent={indent || undefined}
-      className={cn(
-        "group relative flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left",
-        indent ? "pl-2" : "pl-1.5",
-        "transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
-      )}
-    >
-      {/* Where this conversation has lived: earlier harnesses dimmed and
-          tucked behind, the current one in front. One mark when it has
-          only ever been one place — which is most sessions. A Thread with
-          several Sessions shows the agent of each, first Session first. */}
-      <span className="flex shrink-0 items-center -space-x-1">
-        {[
-          ...(folded ? [] : (ref.lineage ?? []).slice(-1).map((origin, index) => (
-            <HarnessIcon
-              key={`lineage:${origin.harness}-${index}`}
-              harness={origin.harness}
-              className="size-3 opacity-40"
-            />
-          ))),
-          ...(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
-            <FoldGlyph
-              key={member?.key ?? ref.path}
-              harness={member && member.key !== ref.path ? foldRowHarness(member) : (liveProvider ?? ref.harness)}
-              live={working || activeElsewhere}
-              rowSince={since}
-            />
-          )),
-        ]}
-      </span>
-      {editing !== null ? (
-        <input
-          autoFocus
-          value={editing}
-          onClick={(event) => event.stopPropagation()}
-          onChange={(event) => setEditing(event.target.value)}
-          onKeyDown={(event) => {
-            event.stopPropagation()
-            if (event.key === "Enter") {
-              const next = editing.trim()
-              const all = { ...prefsStore.get().titleOverrides }
-              if (next && next !== ref.title) all[ref.path] = next
-              else delete all[ref.path]
-              setPref("titleOverrides", all)
-              setEditing(null)
-            }
-            if (event.key === "Escape") setEditing(null)
-          }}
-          onBlur={() => setEditing(null)}
-          className="min-w-0 flex-1 rounded bg-raised px-1 text-ui text-foreground ring-1 ring-hairline focus:outline-none"
-        />
-      ) : (
-        <span
-          onDoubleClick={(event) => {
-            event.stopPropagation()
-            setEditing(override ?? ref.title ?? "")
-          }}
-          className={cn(
-            "min-w-0 flex-[1_1_60%] truncate text-ui",
-            lit ? "font-medium text-foreground" : "text-foreground/85"
-          )}
-        >
-          {title}
-        </span>
-      )}
-      {folded ? <SessionCount count={folded.members.length} /> : null}
-      {/* The branch itself is in the tip and on the chat's strip; the row
-          spends its width on the title. */}
-      {branch ? (
-        <FolderGit2Icon data-thread-worktree={branch} className="size-3 shrink-0 text-faint/80" aria-label={`In a worktree on ${branch}`} />
-      ) : null}
-      {showFolder && ref.cwd ? (
-        <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint/70">
-          {threadFolderKey(ref) ? workspaceName(project ?? ref.cwd) : "tmp"}
-        </span>
-      ) : null}
-      {isPinned ? (
-        <PinIcon className="size-3 shrink-0 fill-current text-foreground/60" aria-label="Pinned" />
-      ) : null}
-      <Attached path={ref.path} />
-      {ref.archived ? (
-        <ArchiveIcon
-          className="size-3 shrink-0 text-faint/70"
-          aria-label="Saved copy: the native session is gone; Mako kept the conversation"
-        />
-      ) : null}
-      {/* The row's controls float over its trailing edge on hover or focus
-          (`.rail-row-actions`), so the title keeps its width. They also stay
-          while a menu inside is open: the menu is portaled, so focus leaves
-          the row. Over the controls the row's tip stands down for their own
-          labels. */}
-      <span
-        data-tip-quiet
-        className={cn("rail-row-actions", ROW_ACTIONS, (status.kind === "needs-permission" || status.kind === "failed") && ROW_ACTIONS_BESIDE_MARK)}
-        onClick={(event) => event.stopPropagation()}
+    <ThreadContextMenu {...menu}>
+      <div
+        role="button"
+        tabIndex={0}
+        onPointerDown={(event) => {
+          openedOnPress.current = false
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          if (event.target instanceof Element && event.target.closest("input, [data-tip-quiet]")) return
+          const shown = onScreenSession()
+          openedOnPress.current = true
+          open()
+          // Dragged into the chat, the row opens beside what was there.
+          if (thread) pressTab(event, { thread, title, shown }, event.currentTarget)
+        }}
+        onClick={() => {
+          if (openedOnPress.current) openedOnPress.current = false
+          else open()
+        }}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return
+          if (event.key !== "Enter" && event.key !== " ") return
+          event.preventDefault()
+          open()
+        }}
+        onAuxClick={(event) => {
+          if (event.button === 1) open()
+        }}
+        // The row's full text, shown by the rail's own tip (`rail-tip.tsx`),
+        // never a native `title`: on macOS those arrive late or not at all.
+        data-tip={[
+          title,
+          folded
+            ? `${folded.members.length} sessions: ${folded.members.map((member) => harnessLabel(foldRowHarness(member))).join(", ")}`
+            : undefined,
+          ref.archived
+            ? "Archived: the native store lost this; Mako kept it. Reply to bring it back to life."
+            : undefined,
+          [
+            ...(ref.lineage ?? []).map((origin) => harnessLabel(origin.harness)),
+            harnessLabel(ref.harness),
+          ].join(" → "),
+          ref.model,
+          ref.cwd,
+          branch ? `Worktree on ${branch}` : undefined,
+          "Double-click the title to rename",
+        ]
+          .filter(Boolean)
+          .join("\n")}
+        data-active={lit || undefined}
+        data-thread-row
+        data-flip-key={ref.path}
+        data-conversation-id={target.kind === "live" ? target.id : undefined}
+        data-thread-indent={indent || undefined}
+        className={cn(
+          "group relative flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left",
+          indent ? "pl-2" : "pl-1.5",
+          "transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
+        )}
       >
-        <button
-          type="button"
-          aria-label={isPinned ? "Unpin" : "Pin"}
-          onClick={(event) => {
-            event.stopPropagation()
-            togglePinned(ref.path)
-          }}
-          className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+        {/* Where this conversation has lived: earlier harnesses dimmed and
+            tucked behind, the current one in front. One mark when it has
+            only ever been one place — which is most sessions. A Thread with
+            several Sessions shows the agent of each, first Session first. */}
+        <span className="flex shrink-0 items-center -space-x-1">
+          {[
+            ...(folded ? [] : (ref.lineage ?? []).slice(-1).map((origin, index) => (
+              <HarnessIcon
+                key={`lineage:${origin.harness}-${index}`}
+                harness={origin.harness}
+                className="size-3 opacity-40"
+              />
+            ))),
+            ...(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
+              <FoldGlyph
+                key={member?.key ?? ref.path}
+                harness={member && member.key !== ref.path ? foldRowHarness(member) : (liveProvider ?? ref.harness)}
+                live={working || activeElsewhere}
+                rowSince={since}
+              />
+            )),
+          ]}
+        </span>
+        {editing !== null ? (
+          <input
+            autoFocus
+            value={editing}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => setEditing(event.target.value)}
+            onKeyDown={(event) => {
+              event.stopPropagation()
+              if (event.key === "Enter") {
+                const next = editing.trim()
+                const all = { ...prefsStore.get().titleOverrides }
+                if (next && next !== ref.title) all[ref.path] = next
+                else delete all[ref.path]
+                setPref("titleOverrides", all)
+                setEditing(null)
+              }
+              if (event.key === "Escape") setEditing(null)
+            }}
+            onBlur={() => setEditing(null)}
+            className="min-w-0 flex-1 rounded bg-raised px-1 text-ui text-foreground ring-1 ring-hairline focus:outline-none"
+          />
+        ) : (
+          <span
+            onDoubleClick={(event) => {
+              event.stopPropagation()
+              setEditing(override ?? ref.title ?? "")
+            }}
+            className={cn(
+              "min-w-0 flex-[1_1_60%] truncate text-ui",
+              lit ? "font-medium text-foreground" : "text-foreground/85"
+            )}
+          >
+            {title}
+          </span>
+        )}
+        {folded ? <SessionCount count={folded.members.length} /> : null}
+        {/* The branch itself is in the tip and on the chat's strip; the row
+            spends its width on the title. */}
+        {branch ? (
+          <FolderGit2Icon data-thread-worktree={branch} className="size-3 shrink-0 text-faint/80" aria-label={`In a worktree on ${branch}`} />
+        ) : null}
+        {showFolder && ref.cwd ? (
+          <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint/70">
+            {threadFolderKey(ref) ? workspaceName(project ?? ref.cwd) : "tmp"}
+          </span>
+        ) : null}
+        {isPinned ? (
+          <PinIcon className="size-3 shrink-0 fill-current text-foreground/60" aria-label="Pinned" />
+        ) : null}
+        <Attached path={ref.path} />
+        {ref.archived ? (
+          <ArchiveIcon
+            className="size-3 shrink-0 text-faint/70"
+            aria-label="Saved copy: the native session is gone; Mako kept the conversation"
+          />
+        ) : null}
+        {/* The row's controls float over its trailing edge on hover or focus
+            (`.rail-row-actions`), so the title keeps its width. They also stay
+            while a menu inside is open: the menu is portaled, so focus leaves
+            the row. Over the controls the row's tip stands down for their own
+            labels. */}
+        <span
+          data-tip-quiet
+          className={cn("rail-row-actions", ROW_ACTIONS, (status.kind === "needs-permission" || status.kind === "failed") && ROW_ACTIONS_BESIDE_MARK)}
+          onClick={(event) => event.stopPropagation()}
         >
-          <PinIcon className={cn("size-3", isPinned && "fill-current")} />
-        </button>
-        <ThreadActions
-          target={target}
-          title={title}
-          archived={archived}
-          running={working || activeElsewhere || status.kind === "needs-permission"}
-          // A folded row's status may be another Session's run; its stop lives in that tab.
-          controlled={!folded && (target.kind === "live" || working)}
-          path={ref.path}
-          thread={thread}
-          session={ref.sessionId}
-          cwd={ref.cwd}
-          archiveTargets={folded?.members.map(foldRowTarget)}
-        />
-        <Detach path={ref.path} />
-      </span>
-      <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
-    </div>
+          <button
+            type="button"
+            aria-label={isPinned ? "Unpin" : "Pin"}
+            onClick={(event) => {
+              event.stopPropagation()
+              togglePinned(ref.path)
+            }}
+            className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+          >
+            <PinIcon className={cn("size-3", isPinned && "fill-current")} />
+          </button>
+          <ThreadActions {...menu} />
+          <Detach path={ref.path} />
+        </span>
+        <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
+      </div>
+    </ThreadContextMenu>
   )
 })

@@ -25,7 +25,7 @@ const { renderToStaticMarkup } = await import("react-dom/server")
 const { EMPTY_FOLD, foldThreads, foldedThreadStatus, presenceThreadStatus } = await import("../src/lib/thread-fold")
 const { sessionTabTitle, threadSessionTabs } = await import("../src/state/thread-sessions")
 const { discardSessionDraft, leaveSessionDraft, putSessionDraft, rowThread, sessionDraftKey, threadGroupsStore } = await import("../src/state/thread-groups")
-const { threadChoices } = await import("../src/state/thread-regroup")
+const { sessionChoices, threadChoices } = await import("../src/state/thread-regroup")
 const { threadArchiveKey } = await import("../electron/contracts/thread-lifecycle")
 const { rememberDraft } = await import("../src/state/drafts")
 const { SessionTabList } = await import("../src/components/stage/session-tabs")
@@ -155,6 +155,43 @@ const untitled = threadChoices({ refs: [], presences: [presence("solo", "grok", 
 assert.deepEqual(liveFirst.map((choice) => choice.harnesses), [["claude", "codex"]], "agents in tab order, whichever row was read first")
 assert.deepEqual(untitled.map((choice) => choice.title), ["New Grok conversation"], "an untitled live conversation is named as the rail names it")
 
+/* Add existing session ------------------------------------------------------ */
+
+const pair = randomUUID()
+const [lead, follower] = [randomUUID(), randomUUID()]
+const pairGroup: ThreadGroup = {
+  id: ThreadIdSchema.parse(pair),
+  sessions: [
+    { id: SessionIdSchema.parse(lead), origin: "native", started: true },
+    { id: SessionIdSchema.parse(follower), origin: "new", started: true },
+  ],
+}
+const sessions = sessionChoices({
+  refs: [
+    parent,
+    { harness: "claude", nativeId: "lead", path: "/claude/lead", title: "Pair lead", cwd: "/repo", threadId: pair, sessionId: lead, updatedAt: "2026-09-24T10:00:00Z" },
+    { harness: "codex", nativeId: "follower", path: "/codex/follower", title: "Pair second", cwd: "/repo", threadId: pair, sessionId: follower, updatedAt: "2026-09-27T10:00:00Z" },
+    { harness: "codex", nativeId: "far", path: "/codex/far", title: "Elsewhere", cwd: "/other", threadId: far, sessionId: randomUUID(), updatedAt: "2026-09-26T10:00:00Z" },
+    { harness: "grok", nativeId: "near", path: "/grok/near", title: "Same project", cwd: "/repo", threadId: near, sessionId: randomUUID(), updatedAt: "2026-09-25T10:00:00Z" },
+    { harness: "claude", nativeId: "old", path: "/claude/old", title: "Older", cwd: "/repo", threadId: older, sessionId: randomUUID(), updatedAt: "2026-09-01T10:00:00Z" },
+  ],
+  presences: [fork],
+  groups: { ...groups, [pair]: pairGroup },
+  threadOf: { ...threadOf, [lead]: pair, [follower]: pair },
+  archived: new Set([threadArchiveKey({ kind: "file", path: "/claude/old" })]),
+  overrides: { "/grok/near": "Renamed" },
+  into: thread,
+  cwd: "/repo",
+})
+assert.deepEqual(
+  sessions.map((choice) => choice.title),
+  ["Pair second", "Renamed", "Pair lead", "Elsewhere"],
+  "one choice per Session, the same project first, then the newest; never this Thread's own or an archived one"
+)
+assert.deepEqual(sessions[0]?.leaves, { title: "Pair lead", sessions: 1 }, "a Session from a Thread of several says which Thread it leaves")
+assert.equal(sessions[1]?.leaves, undefined, "a lone Session's Thread goes with it, so there's nothing to say")
+assert.equal(sessions[0]?.thread, pair, "each choice knows the Thread it comes from")
+
 assert.deepEqual(
   whileStarting.map((tab) => sessionTabTitle(tab, {})),
   ["Fix rail flicker", "Codex", "OpenCode"],
@@ -188,7 +225,8 @@ assert.match(strip, /aria-selected="true"[^>]*data-tab-id="agent"[^>]*data-sessi
 assert.equal((strip.match(/role="tab"/g) ?? []).length, 3)
 assert.match(strip, />Fix rail flicker</)
 assert.match(strip, />Draft</, "a new tab off screen reads as a draft")
-assert.match(strip, /New session in this Thread/, "the + says what it does")
+assert.match(strip, /aria-label="Add a session to this Thread"/, "the + says what it does")
+assert.match(strip, /aria-haspopup="menu"/, "and offers a new Session or an existing one")
 assert.doesNotMatch(strip, /data-new/, "tabs painted with their strip do not animate")
 assert.match(strip, /aria-label="Archive Codex"/, "a Session tab archives that Session alone")
 assert.match(strip, /aria-label="Close new tab"/)

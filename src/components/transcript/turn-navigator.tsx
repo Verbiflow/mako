@@ -159,7 +159,7 @@ function Flyout({
         // Opens inward, and is clamped so it can never reach past the
         // transcript's own column into the pane beside it.
         "absolute top-1/2 right-6 flex max-h-full w-[min(20rem,45vw)] -translate-y-1/2 flex-col overflow-hidden",
-        "overlay-panel rounded-lg bg-popover p-1.5"
+        "overlay-panel bg-popover p-1.5"
       )}
     >
       <div className="px-2 py-1.5 text-label text-faint">

@@ -57,7 +57,20 @@ import {
   selectAcpPresence,
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
-import { setPref, togglePinnedProject, usePrefs } from "@/state/prefs"
+import { prefsStore, setPref, setProjectHidden, togglePinnedProject, usePrefs } from "@/state/prefs"
+import { desktop } from "@/state/desktop"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import { toast } from "sonner"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "@/components/ui/menu"
 import { useWorktrees } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
 import { Blank } from "@/components/ui/kit"
@@ -69,12 +82,20 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
   CheckIcon,
   ChevronRightIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
+  CodeIcon,
+  CopyIcon,
+  EyeIcon,
+  EyeOffIcon,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
   ListFilterIcon,
   MessagesSquareIcon,
+  MoreHorizontalIcon,
   PinIcon,
+  PinOffIcon,
   PlusIcon,
   SearchIcon,
   XIcon,
@@ -151,6 +172,8 @@ export function AgentThreads() {
     [nativeRefs, liveAgents, pinned]
   )
   const pinnedProjects = usePrefs((prefs) => prefs.pinnedProjects)
+  const hiddenProjects = usePrefs((prefs) => prefs.hiddenProjects)
+  const [showHidden, setShowHidden] = useState(false)
   const collapsed = usePrefs((prefs) => prefs.collapsedGroups)
   const scope = usePrefs((prefs) => prefs.railScope)
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
@@ -386,7 +409,10 @@ export function AgentThreads() {
     ? quietPinned
     : quietPinned.slice(0, PINNED_ROWS)
   const hiddenPinned = quietPinned.length - shownPinned.length
-  const workspaceFolders = folders.filter((folder) => folder.cwd !== null)
+  // A hidden project with a run going or waiting on you stays until that's done, so work never vanishes from view.
+  const isHidden = (folder: ThreadFolder) => folder.cwd !== null && hiddenProjects.includes(folder.cwd) && !folder.running && !folder.needsInput
+  const workspaceFolders = folders.filter((folder) => folder.cwd !== null && !isHidden(folder))
+  const hiddenList = folders.filter(isHidden)
   const sessions = folders.find((folder) => folder.cwd === null)
   const priorityFolders = workspaceFolders.filter(
     (folder) => folder.current || folder.pinned
@@ -398,6 +424,36 @@ export function AgentThreads() {
         Math.max(FOLDER_ROWS, priorityFolders)
       )
   const hiddenFolders = workspaceFolders.length - shownFolders.length
+  const folderSection = (folder: ThreadFolder, hidden = false) => (
+    <FolderSection
+      key={folder.key}
+      folder={folder}
+      now={now}
+      fold={fold}
+      liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key)}
+      collapsed={collapsed.includes(`ws:${folder.key}`)}
+      hidden={hidden}
+      onToggle={() => {
+        const key = `ws:${folder.key}`
+        setPref(
+          "collapsedGroups",
+          collapsed.includes(key)
+            ? collapsed.filter((entry) => entry !== key)
+            : [...collapsed, key]
+        )
+      }}
+      onNew={() => {
+        if (folder.cwd) void actions.newConversationIn(folder.cwd)
+      }}
+      onPin={() => {
+        if (folder.cwd) togglePinnedProject(folder.cwd)
+      }}
+      pages={pages[folder.key] ?? 0}
+      onPages={(next) =>
+        setPages((prev) => ({ ...prev, [folder.key]: next }))
+      }
+    />
+  )
   const shownCheckouts = shownFolders.flatMap((folder) => (folder.cwd ? [folder.cwd] : [])).join("\n")
   useEffect(() => {
     if (shownCheckouts) followCheckouts(shownCheckouts.split("\n"))
@@ -552,35 +608,7 @@ export function AgentThreads() {
                   ) : null}
                 </section>
               ) : null}
-              {shownFolders.map((folder) => (
-                <FolderSection
-                  key={folder.key}
-                  folder={folder}
-                  now={now}
-                  fold={fold}
-                  liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key)}
-                  collapsed={collapsed.includes(`ws:${folder.key}`)}
-                  onToggle={() => {
-                    const key = `ws:${folder.key}`
-                    setPref(
-                      "collapsedGroups",
-                      collapsed.includes(key)
-                        ? collapsed.filter((entry) => entry !== key)
-                        : [...collapsed, key]
-                    )
-                  }}
-                  onNew={() => {
-                    if (folder.cwd) void actions.newConversationIn(folder.cwd)
-                  }}
-                  onPin={() => {
-                    if (folder.cwd) togglePinnedProject(folder.cwd)
-                  }}
-                  pages={pages[folder.key] ?? 0}
-                  onPages={(next) =>
-                    setPages((prev) => ({ ...prev, [folder.key]: next }))
-                  }
-                />
-              ))}
+              {shownFolders.map((folder) => folderSection(folder))}
               {hiddenFolders > 0 || showAllFolders ? (
                 <button
                   type="button"
@@ -591,6 +619,26 @@ export function AgentThreads() {
                     ? "Fewer folders"
                     : `${hiddenFolders} more folders`}
                 </button>
+              ) : null}
+              {hiddenList.length > 0 ? (
+                <>
+                  <button
+                    type="button"
+                    aria-expanded={showHidden}
+                    data-rail-hidden-projects
+                    onClick={() => setShowHidden((current) => !current)}
+                    className="group/hidden mb-1 flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+                  >
+                    <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-out", showHidden && "rotate-90")} />
+                    Hidden
+                    <span className="tabular text-faint/60">{hiddenList.length}</span>
+                  </button>
+                  <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", showHidden ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                    <div className="min-h-0 overflow-hidden" inert={!showHidden}>
+                      {hiddenList.map((folder) => folderSection(folder, true))}
+                    </div>
+                  </div>
+                </>
               ) : null}
               {sessions ? (
                 <FolderSection
@@ -888,7 +936,62 @@ function HarnessFilter({
  */
 /** `ROW_ACTIONS` for a folder header, whose group is `group/folder`. */
 const FOLDER_ACTIONS =
-  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-within/folder:pointer-events-auto group-focus-within/folder:opacity-100"
+  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-within/folder:pointer-events-auto group-focus-within/folder:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+
+/** A project's own actions, from right-click on its header or its `…`. */
+function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHide }: {
+  folder: ThreadFolder & { cwd: string }
+  closed: boolean
+  hidden: boolean
+  onToggle: () => void
+  onNew?: () => void
+  onPin?: () => void
+  onHide: (hidden: boolean) => void
+}) {
+  return (
+    <>
+      {onNew ? (
+        <MenuItem onSelect={onNew}>
+          <PlusIcon className="size-3.5" />New thread in {folder.name}
+        </MenuItem>
+      ) : null}
+      {onPin ? (
+        <MenuItem onSelect={onPin}>
+          {folder.pinned ? <PinOffIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}{folder.pinned ? "Unpin project" : "Pin project"}
+        </MenuItem>
+      ) : null}
+      <MenuItem onSelect={onToggle}>
+        {closed ? <ChevronsUpDownIcon className="size-3.5" /> : <ChevronsDownUpIcon className="size-3.5" />}{closed ? "Expand" : "Collapse"}
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onSelect={() => { void desktop.openInEditor(folder.cwd, prefsStore.get().externalEditor) }}>
+        <CodeIcon className="size-3.5" />Open in editor
+      </MenuItem>
+      <MenuItem onSelect={() => { void desktop.revealPath(folder.cwd) }}>
+        <FolderOpenIcon className="size-3.5" />Show the folder
+      </MenuItem>
+      <MenuItem onSelect={() => { void navigator.clipboard.writeText(folder.cwd).then(() => toast("Path copied")) }}>
+        <CopyIcon className="size-3.5" />Copy path
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem data-folder-action={hidden ? "show" : "hide"} onSelect={() => onHide(!hidden)}>
+        {hidden ? <EyeIcon className="size-3.5" /> : <EyeOffIcon className="size-3.5" />}{hidden ? "Show project" : "Hide project"}
+      </MenuItem>
+    </>
+  )
+}
+
+/** Hide takes effect at once, with Undo; showing again is quiet. */
+function hideProject(folder: ThreadFolder & { cwd: string }, hidden: boolean) {
+  setProjectHidden(folder.cwd, hidden)
+  if (!hidden) return
+  toast(`Hid ${folder.name}`, {
+    id: `hide-project:${folder.cwd}`,
+    description: "It's under Hidden at the end of the list. Opening the folder brings it back.",
+    duration: ACTION_TOAST_MS,
+    action: { label: "Undo", onClick: () => setProjectHidden(folder.cwd, false) },
+  })
+}
 
 function FolderSection({
   folder,
@@ -896,6 +999,7 @@ function FolderSection({
   fold,
   liveAgents,
   collapsed,
+  hidden = false,
   onToggle,
   onNew,
   onPin,
@@ -907,6 +1011,8 @@ function FolderSection({
   fold: ThreadFold
   liveAgents: AcpPresence[]
   collapsed: boolean
+  /** Shown from the Hidden row: dimmed, and its menu offers Show. */
+  hidden?: boolean
   onToggle: () => void
   onNew?: () => void
   onPin?: () => void
@@ -927,88 +1033,125 @@ function FolderSection({
   const limit = FOLDER_LEAD_ROWS + pages * PAGE_ROWS
   const shownLive = liveAgents.slice(0, limit)
   const visible = folder.refs.slice(0, Math.max(0, limit - shownLive.length))
-  const hidden = folder.refs.length + liveAgents.length - visible.length - shownLive.length
+  const more = folder.refs.length + liveAgents.length - visible.length - shownLive.length
+  const project = folder.cwd === null ? null : { ...folder, cwd: folder.cwd }
+  const menuItems = project ? (
+    <FolderMenuItems folder={project} closed={closed} hidden={hidden} onToggle={onToggle} onNew={onNew} onPin={onPin} onHide={(next) => hideProject(project, next)} />
+  ) : null
+
+  const header = (
+    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="group/folder relative flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
+      <button
+        type="button"
+        title={[folder.cwd ?? folder.name, head ? `On ${checkoutSentence(head)}` : undefined].filter(Boolean).join("\n")}
+        aria-expanded={!closed}
+        aria-controls={contentId}
+        onClick={onToggle}
+        className={cn("flex min-w-0 flex-1 items-center gap-1.5 self-stretch px-1.5 text-left", hidden && "opacity-55")}
+      >
+        {/* The folder glyph turns into the disclosure chevron under the
+            pointer, so the row carries one leading mark instead of two. */}
+        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-faint">
+          {closed ? (
+            <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
+          ) : (
+            <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
+          )}
+          <ChevronRightIcon
+            className={cn(
+              "absolute size-3.5 opacity-0 transition-[opacity,transform] duration-200 ease-out group-hover/folder:opacity-100 group-focus-within/folder:opacity-100",
+              !closed && "rotate-90"
+            )}
+          />
+        </span>
+        <span
+          className={cn(
+            "min-w-8 shrink truncate text-ui",
+            folder.current
+              ? "font-medium text-foreground"
+              : "text-foreground/80"
+          )}
+        >
+          {folder.name}
+        </span>
+        {/* The main checkout's own branch; it gives way before the name does. */}
+        {head ? <CheckoutLabel head={head} className="min-w-8 shrink-[4] text-label text-faint/80" /> : null}
+        <span className="flex-1" />
+        <FolderActivity folder={folder} />
+        {/* Open, the newest row already shows this time. */}
+        {closed && !folder.priority && folder.latest ? (
+          <span className="tabular shrink-0 pr-0.5 text-label text-faint/60">
+            {formatRelative(folder.latest)}
+          </span>
+        ) : null}
+        {folder.pinned ? (
+          <PinIcon className="size-3 shrink-0 fill-current text-faint/70" />
+        ) : null}
+      </button>
+      <span data-tip-quiet className={cn("rail-row-actions", FOLDER_ACTIONS)}>
+        {onNew ? (
+          <button
+            type="button"
+            aria-label={`New thread in ${folder.name}`}
+            title={`New thread in ${folder.name}`}
+            onClick={onNew}
+            className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          >
+            <PlusIcon className="size-3.5" />
+          </button>
+        ) : null}
+        {hidden && project ? (
+          <button
+            type="button"
+            aria-label={`Show ${folder.name}`}
+            title="Show this project in the list again"
+            onClick={() => hideProject(project, false)}
+            className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          >
+            <EyeIcon className="size-3.5" />
+          </button>
+        ) : onPin ? (
+          <button
+            type="button"
+            aria-label={folder.pinned ? "Unpin folder" : "Pin folder"}
+            title={folder.pinned ? "Unpin folder" : "Pin folder"}
+            onClick={onPin}
+            className={cn(
+              "pressable flex size-6 shrink-0 items-center justify-center rounded transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
+              folder.pinned ? "text-foreground/70" : "text-faint"
+            )}
+          >
+            <PinIcon
+              className={cn("size-3", folder.pinned && "fill-current")}
+            />
+          </button>
+        ) : null}
+        {menuItems ? (
+          <Menu modal={false}>
+            <MenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Actions for ${folder.name}`}
+                className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+              >
+                <MoreHorizontalIcon className="size-3.5" />
+              </button>
+            </MenuTrigger>
+            <MenuContent align="end" sideOffset={4} className="min-w-52">{menuItems}</MenuContent>
+          </Menu>
+        ) : null}
+      </span>
+    </div>
+  )
 
   return (
     <section className="pb-1">
-      <div data-flip-key={`folder:${folder.key}`} className="group/folder relative flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
-        <button
-          type="button"
-          title={[folder.cwd ?? folder.name, head ? `On ${checkoutSentence(head)}` : undefined].filter(Boolean).join("\n")}
-          aria-expanded={!closed}
-          aria-controls={contentId}
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch px-1.5 text-left"
-        >
-          {/* The folder glyph turns into the disclosure chevron under the
-              pointer, so the row carries one leading mark instead of two. */}
-          <span className="relative flex size-3.5 shrink-0 items-center justify-center text-faint">
-            {closed ? (
-              <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
-            ) : (
-              <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
-            )}
-            <ChevronRightIcon
-              className={cn(
-                "absolute size-3.5 opacity-0 transition-[opacity,transform] duration-200 ease-out group-hover/folder:opacity-100 group-focus-within/folder:opacity-100",
-                !closed && "rotate-90"
-              )}
-            />
-          </span>
-          <span
-            className={cn(
-              "min-w-8 shrink truncate text-ui",
-              folder.current
-                ? "font-medium text-foreground"
-                : "text-foreground/80"
-            )}
-          >
-            {folder.name}
-          </span>
-          {/* The main checkout's own branch; it gives way before the name does. */}
-          {head ? <CheckoutLabel head={head} className="min-w-8 shrink-[4] text-label text-faint/80" /> : null}
-          <span className="flex-1" />
-          <FolderActivity folder={folder} />
-          {/* Open, the newest row already shows this time. */}
-          {closed && !folder.priority && folder.latest ? (
-            <span className="tabular shrink-0 pr-0.5 text-label text-faint/60">
-              {formatRelative(folder.latest)}
-            </span>
-          ) : null}
-          {folder.pinned ? (
-            <PinIcon className="size-3 shrink-0 fill-current text-faint/70" />
-          ) : null}
-        </button>
-        <span data-tip-quiet className={cn("rail-row-actions", FOLDER_ACTIONS)}>
-          {onNew ? (
-            <button
-              type="button"
-              aria-label={`New thread in ${folder.name}`}
-              title={`New thread in ${folder.name}`}
-              onClick={onNew}
-              className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-            >
-              <PlusIcon className="size-3.5" />
-            </button>
-          ) : null}
-          {onPin ? (
-            <button
-              type="button"
-              aria-label={folder.pinned ? "Unpin folder" : "Pin folder"}
-              title={folder.pinned ? "Unpin folder" : "Pin folder"}
-              onClick={onPin}
-              className={cn(
-                "pressable flex size-6 shrink-0 items-center justify-center rounded transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
-                folder.pinned ? "text-foreground/70" : "text-faint"
-              )}
-            >
-              <PinIcon
-                className={cn("size-3", folder.pinned && "fill-current")}
-              />
-            </button>
-          ) : null}
-        </span>
-      </div>
+      {menuItems ? (
+        <ContextMenu modal={false}>
+          <ContextMenuTrigger asChild>{header}</ContextMenuTrigger>
+          <ContextMenuContent className="min-w-52">{menuItems}</ContextMenuContent>
+        </ContextMenu>
+      ) : header}
       <div
         id={contentId}
         className={cn(
@@ -1023,7 +1166,7 @@ function FolderSection({
           {visible.map((ref) => (
             <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />
           ))}
-          {hidden > 0 ? (
+          {more > 0 ? (
             <button
               type="button"
               onClick={() => onPages(pages + 1)}
@@ -1031,7 +1174,7 @@ function FolderSection({
             >
               More
               <span className="tabular ml-1 text-label text-faint/60">
-                {hidden}
+                {more}
               </span>
             </button>
           ) : pages > 0 ? (

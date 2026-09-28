@@ -2,7 +2,7 @@ import { useState } from "react"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
-import { ThreadActions } from "@/components/rail/thread-actions"
+import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { ROW_ACTIONS, ROW_ACTIONS_BESIDE_MARK, SessionCount } from "@/components/rail/thread-row"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { workspaceName } from "@/lib/format"
@@ -56,62 +56,65 @@ export function LiveAgentRow({
   const archiveTargets = folded?.members.map((member): ThreadTarget =>
     member.kind === "native" ? nativeThreadTarget(member.ref) : { kind: "live", id: member.key }
   )
+  const menu: ThreadMenuProps = {
+    target: { kind: "live", id: presence.key },
+    title,
+    archived,
+    running: presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission",
+    controlled: true,
+    path: presence.threadPath,
+    thread,
+    session: presence.sessionId,
+    cwd: presence.cwd,
+    archiveTargets,
+  }
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open() } }}
-      aria-label={folded ? `${title}, ${folded.members.length} sessions, ${label}` : `${title}, ${label}`}
-      data-thread-row
-      data-flip-key={presence.key}
-      data-conversation-id={presence.key}
-      data-thread-indent={indent || undefined}
-      onClick={open}
-      className={cn(
-        "pressable group relative flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left transition-colors duration-100 hover:bg-fill-hover",
-        indent ? "pl-2" : "pl-1.5"
-      )}
-    >
-      <span className="flex shrink-0 items-center -space-x-1">
-        {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
-          <FoldGlyph
-            key={member?.key ?? presence.key}
-            harness={member ? foldRowHarness(member) : presence.harness}
-            live={false}
-            rowSince={since}
-          />
-        ))}
-      </span>
-      <span className="min-w-0 flex-[1_1_60%] truncate text-ui text-foreground/85">
-        {title}
-      </span>
-      {folded ? <SessionCount count={folded.members.length} /> : null}
-      {!indent ? (
-        <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">
-          {threadFolderKey(presence) ? workspaceName(presence.cwd) : "tmp"}
-        </span>
-      ) : null}
-      <span
-        data-tip-quiet
-        className={cn("rail-row-actions", ROW_ACTIONS, (presence.status === "needs-permission" || presence.status === "failed") && ROW_ACTIONS_BESIDE_MARK)}
-        onClick={(event) => event.stopPropagation()}
+    <ThreadContextMenu {...menu}>
+      <div
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open() } }}
+        aria-label={folded ? `${title}, ${folded.members.length} sessions, ${label}` : `${title}, ${label}`}
+        data-thread-row
+        data-flip-key={presence.key}
+        data-conversation-id={presence.key}
+        data-thread-indent={indent || undefined}
+        onClick={open}
+        className={cn(
+          "pressable group relative flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover",
+          indent ? "pl-2" : "pl-1.5"
+        )}
       >
-        <ThreadActions
-          target={{ kind: "live", id: presence.key }}
-          title={title}
-          archived={archived}
-          running={presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission"}
-          controlled
-          path={presence.threadPath}
-          thread={thread}
-          session={presence.sessionId}
-          cwd={presence.cwd}
-          archiveTargets={archiveTargets}
-        />
-      </span>
-      <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
-        <ActivityMark state={state} size={20} />
-      </span>
-    </div>
+        <span className="flex shrink-0 items-center -space-x-1">
+          {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
+            <FoldGlyph
+              key={member?.key ?? presence.key}
+              harness={member ? foldRowHarness(member) : presence.harness}
+              live={false}
+              rowSince={since}
+            />
+          ))}
+        </span>
+        <span className="min-w-0 flex-[1_1_60%] truncate text-ui text-foreground/85">
+          {title}
+        </span>
+        {folded ? <SessionCount count={folded.members.length} /> : null}
+        {!indent ? (
+          <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">
+            {threadFolderKey(presence) ? workspaceName(presence.cwd) : "tmp"}
+          </span>
+        ) : null}
+        <span
+          data-tip-quiet
+          className={cn("rail-row-actions", ROW_ACTIONS, (presence.status === "needs-permission" || presence.status === "failed") && ROW_ACTIONS_BESIDE_MARK)}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <ThreadActions {...menu} />
+        </span>
+        <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
+          <ActivityMark state={state} size={20} />
+        </span>
+      </div>
+    </ThreadContextMenu>
   )
 }

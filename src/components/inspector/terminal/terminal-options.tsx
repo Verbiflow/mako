@@ -25,7 +25,7 @@ export function TerminalOptions({ canSplit }: { canSplit: boolean }) {
         <DropdownMenu.Content
           align="end"
           sideOffset={4}
-          className="overlay-panel z-50 w-56 rounded-lg p-1"
+          className="overlay-panel z-50 w-56 p-1"
         >
           <DropdownMenu.Item
             disabled={!canSplit}

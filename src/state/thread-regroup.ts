@@ -18,7 +18,8 @@ import {
   threadGroupsStore,
 } from "@/state/thread-groups"
 import { archivedLive, archivedThread, nativeThreadTarget, threadLifecycle, type ThreadTarget } from "@/state/thread-lifecycle"
-import { currentOnScreen, currentThreadTabs, openSessionTab, type SessionTab } from "@/state/thread-sessions"
+import { prefsStore } from "@/state/prefs"
+import { currentOnScreen, currentThreadTabs, openSessionTab, sessionTabTitle, type SessionTab } from "@/state/thread-sessions"
 
 /** What "Add to thread…" acts on: a whole Thread from its row, or one Session from its tab. */
 export interface AddToThreadRequest {
@@ -38,6 +39,35 @@ export function openAddToThread(request: AddToThreadRequest): void {
 
 export function closeAddToThread(): void {
   addToThreadStore.set({ request: null })
+}
+
+/** What "Add existing session…" adds to: the Thread whose `+` or palette opened it. */
+export interface AddSessionRequest {
+  thread: string
+  /** How the picker names the Thread being added to. */
+  title: string
+  cwd?: string
+}
+
+export const addSessionStore = createStore<{ request: AddSessionRequest | null }>({ request: null })
+export const useAddSession = createHook(addSessionStore)
+
+export function openAddSession(request: AddSessionRequest): void {
+  addSessionStore.set({ request })
+}
+
+export function closeAddSession(): void {
+  addSessionStore.set({ request: null })
+}
+
+/** Open "Add existing session…" for the Thread on screen, named as its rail row is. */
+export function openAddSessionHere(): boolean {
+  const here = currentOnScreen()
+  if (!here.thread) return false
+  const first = currentThreadTabs(here.thread).find((tab) => tab.kind === "session")
+  const title = first ? sessionTabTitle(first, prefsStore.get().titleOverrides) : here.title ?? "this thread"
+  openAddSession({ thread: here.thread, title, cwd: here.cwd })
+  return true
 }
 
 /**
@@ -260,4 +290,56 @@ export function threadChoices(input: {
   }
   const near = (choice: ThreadChoice) => (input.cwd && choice.cwd === input.cwd ? 0 : 1)
   return [...byThread.values()].sort((left, right) => near(left) - near(right) || right.updatedAt - left.updatedAt)
+}
+
+/** A Session "Add existing session…" can pick, with the Thread it would leave. */
+export interface SessionChoice {
+  session: string
+  thread: string
+  harness: string
+  title: string
+  cwd?: string
+  updatedAt: number
+  /** The Thread it leaves, named as the rail names it, when that Thread keeps other Sessions. */
+  leaves?: { title: string; sessions: number }
+}
+
+/**
+ * Every Session outside `into` with something on screen in the rail, one
+ * choice each, newest first, the same project before the rest.
+ */
+export function sessionChoices(input: {
+  refs: readonly ThreadRef[]
+  presences: readonly AcpPresence[]
+  groups: Readonly<Record<string, ThreadGroup>>
+  threadOf: Readonly<Record<string, string>>
+  archived: ReadonlySet<string>
+  overrides: Readonly<Record<string, string>>
+  into: string
+  cwd?: string
+}): SessionChoice[] {
+  const { threadOf, archived, overrides, into } = input
+  const threads = new Map(threadChoices({ ...input, exclude: into, cwd: undefined }).map((choice) => [choice.thread, choice]))
+  const choices: SessionChoice[] = []
+  const seen = new Set<string>()
+  const take = (row: { threadId?: string; sessionId?: string; harness: string; cwd?: string }, title: string, updatedAt: number) => {
+    const thread = rowThread(row, threadOf)
+    const from = thread ? threads.get(thread) : undefined
+    if (!thread || !from || !row.sessionId) return
+    const leaves = from.sessions > 1 ? { title: from.title, sessions: from.sessions - 1 } : undefined
+    choices.push({ session: row.sessionId, thread, harness: row.harness, title, cwd: row.cwd, updatedAt, leaves })
+  }
+  for (const ref of input.refs) {
+    if (!ref.sessionId || seen.has(ref.sessionId) || archivedThread(ref, archived)) continue
+    seen.add(ref.sessionId)
+    take(ref, overrides[ref.path] ?? ref.title ?? "Untitled session", ref.updatedAt ? Date.parse(ref.updatedAt) || 0 : 0)
+  }
+  for (const presence of input.presences) {
+    if (!presence.sessionId || seen.has(presence.sessionId) || archivedLive(presence, archived)) continue
+    seen.add(presence.sessionId)
+    const title = (presence.threadPath ? overrides[presence.threadPath] : undefined) ?? presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
+    take(presence, title, presence.createdAt)
+  }
+  const near = (choice: SessionChoice) => (input.cwd && choice.cwd === input.cwd ? 0 : 1)
+  return choices.sort((left, right) => near(left) - near(right) || right.updatedAt - left.updatedAt)
 }

@@ -1,8 +1,8 @@
-import { memo, useState, type KeyboardEvent, type ReactNode } from "react"
-import { ContextMenu } from "radix-ui"
+import { memo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { ArchiveIcon, Columns2Icon, ListPlusIcon, PencilLineIcon, PlusIcon, Rows2Icon, SplitIcon, XIcon } from "lucide-react"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
-import { IconAction } from "@/components/ui/kit"
+import { IconAction, Keys } from "@/components/ui/kit"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { formatChord } from "@/extend/commands"
 import { presenceThreadStatus } from "@/lib/thread-fold"
@@ -17,7 +17,7 @@ import {
   type OnScreen,
   type SessionTab,
 } from "@/state/thread-sessions"
-import { archiveSessionTab, openAddToThread, splitIntoNewThread } from "@/state/thread-regroup"
+import { archiveSessionTab, openAddSessionHere, openAddToThread, splitIntoNewThread } from "@/state/thread-regroup"
 import { openInPane, openTabInPane } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { sameThreadStatus, threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
@@ -62,9 +62,6 @@ function moveFocus(event: KeyboardEvent<HTMLButtonElement>) {
   next?.click()
 }
 
-const menuItem =
-  "flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
-
 /**
  * A Session tab's own actions. They act on this Session alone; the rail
  * row's menu acts on the whole Thread.
@@ -77,33 +74,28 @@ function SessionTabMenu({ tab, thread, title, alone, children }: {
   children: ReactNode
 }) {
   return (
-    <ContextMenu.Root modal={false}>
-      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Content className="overlay-panel z-50 min-w-52 origin-(--radix-context-menu-content-transform-origin) rounded-lg p-1 text-ui data-open:animate-in data-open:fade-in-0 data-open:zoom-in-98 data-open:duration-140 data-closed:animate-out data-closed:fade-out-0 data-closed:duration-100">
-          <ContextMenu.Item
-            className={menuItem}
-            onSelect={() => openAddToThread({ sessions: [tab.id], from: thread, title, cwd: tab.ref?.cwd ?? tab.presence?.cwd })}
-          >
-            <ListPlusIcon className="size-3.5" />Add to thread…
-          </ContextMenu.Item>
-          <ContextMenu.Item className={menuItem} disabled={alone} onSelect={() => { void splitIntoNewThread([tab.id]) }}>
-            <SplitIcon className="size-3.5" />Split into new thread
-          </ContextMenu.Item>
-          <ContextMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
-          <ContextMenu.Item className={menuItem} onSelect={() => { openInPane(tab, thread, "right") }}>
-            <Columns2Icon className="size-3.5" />Open to the right
-          </ContextMenu.Item>
-          <ContextMenu.Item className={menuItem} onSelect={() => { openInPane(tab, thread, "down") }}>
-            <Rows2Icon className="size-3.5" />Open below
-          </ContextMenu.Item>
-          <ContextMenu.Separator className="mx-1 my-1 h-px bg-hairline" />
-          <ContextMenu.Item className={menuItem} disabled={alone} onSelect={() => { void archiveSessionTab(tab, thread) }}>
-            <ArchiveIcon className="size-3.5" />Archive session
-          </ContextMenu.Item>
-        </ContextMenu.Content>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
+    <ContextMenu modal={false}>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-52">
+        <MenuItem onSelect={() => openAddToThread({ sessions: [tab.id], from: thread, title, cwd: tab.ref?.cwd ?? tab.presence?.cwd })}>
+          <ListPlusIcon className="size-3.5" />Add to thread…
+        </MenuItem>
+        <MenuItem disabled={alone} onSelect={() => { void splitIntoNewThread([tab.id]) }}>
+          <SplitIcon className="size-3.5" />Split into new thread
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onSelect={() => { openInPane(tab, thread, "right") }}>
+          <Columns2Icon className="size-3.5" />Open to the right
+        </MenuItem>
+        <MenuItem onSelect={() => { openInPane(tab, thread, "down") }}>
+          <Rows2Icon className="size-3.5" />Open below
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem disabled={alone} onSelect={() => { void archiveSessionTab(tab, thread) }}>
+          <ArchiveIcon className="size-3.5" />Archive session
+        </MenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -238,23 +230,43 @@ export function SessionTabList({
           closable={closable}
         />
       ))}
-      <NewSessionButton />
+      <AddSessionMenu />
     </>
   )
 }
 
-export function NewSessionButton() {
+/** The strip's `+`: a new Session in this Thread, or one that exists already, moved here. */
+function AddSessionMenu() {
+  const picked = useRef(false)
+  const choose = (run: () => void) => () => {
+    picked.current = true
+    run()
+  }
   return (
-    <IconAction
-      label="New session in this Thread"
-      keys={formatChord("mod+t")}
-      size="xs"
-      className="shrink-0"
-      onClick={() => {
-        newSessionInThread()
-      }}
-    >
-      <PlusIcon />
-    </IconAction>
+    <Menu modal={false}>
+      <MenuTrigger asChild>
+        <IconAction label="Add a session to this Thread" size="xs" className="shrink-0 data-[state=open]:bg-fill-selected data-[state=open]:text-foreground">
+          <PlusIcon />
+        </IconAction>
+      </MenuTrigger>
+      <MenuContent
+        align="start"
+        className="min-w-56"
+        onCloseAutoFocus={(event) => {
+          if (picked.current) event.preventDefault()
+          picked.current = false
+        }}
+      >
+        <MenuItem data-add-session="new" onSelect={choose(() => { newSessionInThread() })}>
+          <PlusIcon className="size-3.5" />
+          <span className="flex-1">New session</span>
+          <Keys keys={formatChord("mod+t")} />
+        </MenuItem>
+        <MenuItem data-add-session="existing" onSelect={choose(() => { openAddSessionHere() })}>
+          <ListPlusIcon className="size-3.5" />
+          <span className="flex-1">Add existing session…</span>
+        </MenuItem>
+      </MenuContent>
+    </Menu>
   )
 }

@@ -29,7 +29,7 @@ import {
   threadHasTabs,
   type SessionTab,
 } from "@/state/thread-sessions"
-import { archiveSessionTab, hasThreadUndo, openAddToThread, splitIntoNewThread, threadUndoLabel, undoLastThreadChange } from "@/state/thread-regroup"
+import { archiveSessionTab, hasThreadUndo, openAddSessionHere, openAddToThread, splitIntoNewThread, threadUndoLabel, undoLastThreadChange } from "@/state/thread-regroup"
 import { chatPanes, engageWorkbenchPane, splitOnScreenSession } from "@/state/session-panes"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
@@ -196,6 +196,14 @@ const DESK_COMMANDS: DeskCommand[] = [
       const other = chatPanes().find((pane) => pane !== viewerStore.get().focusedPaneId)
       if (other) engageWorkbenchPane(other)
     },
+  },
+  {
+    id: "thread.add-session",
+    title: "Add an existing session to this thread…",
+    section: "Session",
+    hint: "It becomes this thread's last tab and keeps its own history",
+    when: () => Boolean(currentOnScreen().thread),
+    run: () => void openAddSessionHere(),
   },
   {
     id: "thread.add-to-thread",

@@ -77,7 +77,7 @@ export function TerminalViewport({
               event.preventDefault()
               focus()
             }}
-            className="overlay-panel z-50 min-w-44 rounded-lg p-1"
+            className="overlay-panel z-50 min-w-44 p-1"
           >
             <ContextMenu.Item
               disabled={!selection}
