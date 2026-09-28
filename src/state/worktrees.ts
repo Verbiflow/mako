@@ -6,17 +6,20 @@ import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview 
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
+import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
 import { confirmAction } from "@/state/confirm"
 import { createHook, createStore } from "@/state/store"
 
 /**
  * This device's Thread worktrees. A folder inside one stands for the same
  * folder of the project it was made from, so a Thread started in a worktree
- * files under its project in the rail, beside the Threads that didn't.
+ * files under its project in the rail, beside the Threads that didn't. A
+ * chat's folder stands for the Chats folder the same way, until it's a
+ * repository.
  */
 interface WorktreesState {
   worktrees: readonly ThreadWorktree[]
-  /** New with every list, so what groups by folder regroups. */
+  /** New with every list and every change to the chats, so what groups by folder regroups. */
   folderMap: FolderMap
 }
 
@@ -32,11 +35,12 @@ export function worktreeAt(
 }
 
 function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
+  const chats = chatFoldersStore.get()
   return {
     worktrees,
     folderMap: (path) => {
       const found = worktreeAt(worktrees, path)
-      return found && `${found.worktree.repoRoot}${found.inside}`
+      return found ? `${found.worktree.repoRoot}${found.inside}` : chatGroupOf(path, chats)
     },
   }
 }
@@ -45,6 +49,7 @@ export const worktreesStore = createStore<WorktreesState>(stateOf([]))
 export const useWorktrees = createHook(worktreesStore)
 
 mapWorktreeFolders((path) => worktreesStore.get().folderMap(path))
+chatFoldersStore.subscribe(() => worktreesStore.set(stateOf(worktreesStore.get().worktrees)))
 
 let reads = 0
 

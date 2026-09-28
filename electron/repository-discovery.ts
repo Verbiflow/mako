@@ -1,5 +1,7 @@
 import { opendir, lstat } from "node:fs/promises"
-import { join } from "node:path"
+import { homedir } from "node:os"
+import { join, resolve, sep } from "node:path"
+import { chatsRoot } from "./chat-folders.js"
 
 const excluded = new Set([".git", "node_modules", "vendor", "target", "dist", "build", ".next", ".cache", ".venv", "venv"])
 export interface RepositoryDiscovery { roots: string[]; limited: boolean }
@@ -7,6 +9,9 @@ export interface RepositoryDiscovery { roots: string[]; limited: boolean }
 /** Workspace discovery, not Git's upward lookup. Never walk a repository's
  * contents or follow symlinks into unrelated trees. Worktree .git files count. */
 export async function discoverRepositories(root: string, options: { maxDirectories?: number; maxEntries?: number; maxDepth?: number; maxRepositories?: number } = {}): Promise<RepositoryDiscovery> {
+  // The disk, the home folder and the Chats folder hold other people's and other chats' repositories, never this workspace's.
+  const target = resolve(root)
+  if (target === sep || target === resolve(homedir()) || target === chatsRoot()) return { roots: [], limited: false }
   const maxDirectories = options.maxDirectories ?? 2000
   const maxEntries = options.maxEntries ?? 20000
   const maxDepth = options.maxDepth ?? 8

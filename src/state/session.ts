@@ -6,6 +6,7 @@ import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, applyThreadRegroup, loadThreadGroups } from "@/state/thread-groups"
 import { refreshWorktrees } from "@/state/worktrees"
+import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
 import { watchSessionPanes } from "@/state/session-panes"
@@ -580,6 +581,7 @@ function adoptBoot(boot: BootPayload) {
   void threads.load()
   void loadGroups()
   void loadWorktrees()
+  followChatFolders()
   refollowCheckouts()
   if (!boot.archives) void threadLifecycle.load()
 }
@@ -887,8 +889,17 @@ export const actions = {
   },
 
   async newSession() {
-    const folder = store.get().meta?.cwd
+    const cwd = store.get().meta?.cwd
+    // A chat's folder is its own; a new Thread from a chat is a new chat.
+    const folder = cwd && (chatGroupOf(cwd) ?? cwd)
     return folder ? actions.newConversationIn(folder) : actions.openTab()
+  },
+
+  /** A new Thread outside any project; its first send gives it a folder of its own under Chats. */
+  async newChat() {
+    if (!chatFoldersStore.get().root) await guard(() => refreshChatFolders())
+    const root = chatFoldersStore.get().root
+    return root ? actions.newConversationIn(root) : false
   },
 
   /**

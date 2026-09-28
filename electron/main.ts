@@ -66,6 +66,8 @@ import { ThreadLifecycle } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
+import { installChatFoldersIpc } from "./ipc/chat-folders.js"
+import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
@@ -1513,17 +1515,20 @@ function bindIpc() {
       const remembered = options.resume
         ? sessionMemory?.recall(harness, options.resume)
         : undefined
-      // A new Thread in a worktree starts there; a resume or a new tab of an
+      // A new Thread in a worktree starts there, and a new Thread outside any
+      // project in a chat folder of its own; a resume or a new tab of an
       // existing Thread runs where that Thread already does.
-      if (options.worktree && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Switch to Local to start in the folder itself.")
-      const worktree = options.worktree && !options.resume && !options.session && threadWorktrees
+      const fresh = !options.resume && !options.session
+      const chat = fresh && standsForNoProject(cwd) ? newChatFolder() : undefined
+      if (options.worktree && !chat && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Switch to Local to start in the folder itself.")
+      const worktree = options.worktree && fresh && !chat && threadWorktrees
         ? await threadWorktrees.prepare(options.conversationId, cwd, options.title ?? options.displayPrompt ?? options.initialRequest?.text)
         : undefined
       if (worktree) {
         trace("worktree")
         emit({ type: "worktree-ready", conversationId: options.conversationId })
       }
-      const startCwd = worktree?.cwd ?? cwd
+      const startCwd = worktree?.cwd ?? chat ?? cwd
       const tuning = await resolveHarnessLaunch(
         harness,
         startCwd,
@@ -1535,6 +1540,7 @@ function bindIpc() {
       } catch (error) {
         // A refused start gives its worktree back; one with anything in it stays, listed in Settings.
         if (worktree) await threadWorktrees?.abandon(options.conversationId).catch(() => undefined)
+        if (chat) discardChatFolder(chat)
         if (!(error instanceof SessionHeldError) || !options.threadPath) throw error
         const resolved = await continuation.resolve(options.threadPath)
         if (resolved.transport !== "attached") throw error
@@ -2078,6 +2084,7 @@ app.whenReady().then(async () => {
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
   installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
   installThreadWorktreesIpc(threadWorktrees)
+  installChatFoldersIpc()
   const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>
     hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))
   tidyWorktrees()

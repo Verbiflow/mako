@@ -151,10 +151,7 @@ export const ThreadRow = memo(function ThreadRow({
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
   const branch = useWorktrees((state) => worktreeAt(state.worktrees, ref.cwd)?.worktree.branch)
-  const project = useWorktrees((state) => {
-    const found = worktreeAt(state.worktrees, ref.cwd)
-    return found && `${found.worktree.repoRoot}${found.inside}`
-  })
+  const project = useWorktrees((state) => (ref.cwd ? state.folderMap(ref.cwd) : undefined))
   const active = useSession((state) => state.meta?.sessionFile === ref.path)
   const selectedPath = useThreads(
     (state) => state.opening?.ref.path ?? state.viewing?.ref.path

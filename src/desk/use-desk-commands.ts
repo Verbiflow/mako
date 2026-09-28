@@ -137,6 +137,14 @@ const DESK_COMMANDS: DeskCommand[] = [
     run: () => void actions.newSession(),
   },
   {
+    id: "session.new-chat",
+    title: "New chat",
+    section: "Session",
+    hint: "A thread outside any project, in a folder of its own under ~/Mako/Chats",
+    keys: "mod+shift+n",
+    run: () => void actions.newChat(),
+  },
+  {
     id: "tab.new",
     title: "New tab",
     section: "Session",

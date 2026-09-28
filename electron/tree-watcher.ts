@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
+import { chatsRoot } from "./chat-folders.js"
 import { pollTree, type TreePoll } from "./tree-poll.js"
 import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
 
@@ -66,8 +67,9 @@ export function quietFoldersOf(root: string): string[] {
  * `npm install` delivered every file it wrote, to be filtered here.
  *
  * A quiet folder created after the watch starts (the first install) makes it
- * start over so the folder is excluded too. The filesystem root and the home
- * folder aren't watched: a whole disk's churn is never one project's.
+ * start over so the folder is excluded too. The filesystem root, the home
+ * folder and the Chats folder aren't watched: their churn is never one
+ * project's.
  *
  * When the system drops events (FSEvents under load says "must be
  * re-scanned"), the watch keeps going and `onDropped` says anything may have
@@ -79,7 +81,7 @@ export function quietFoldersOf(root: string): string[] {
  */
 export function watchTree(root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
   const target = resolve(root)
-  if (target === sep || target === resolve(homedir())) return undefined
+  if (target === sep || target === resolve(homedir()) || target === chatsRoot()) return undefined
   let real: string
   try {
     real = realpathSync(target)

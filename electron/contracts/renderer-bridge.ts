@@ -8,6 +8,7 @@ import type {
 } from "./thread-lifecycle.js"
 import type { ThreadGroup, ThreadRegroup } from "./thread-groups.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
+import type { ChatFolders } from "./chat-folders.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
@@ -177,6 +178,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
     worktrees: () => invokeTrustedHost<ThreadWorktrees>("mako:worktrees"),
     checkoutHeads: (folders: string[]) => invokeTrustedHost<CheckoutHeads>("mako:checkout-heads", folders),
+    chatFolders: (paths: string[]) => invokeTrustedHost<ChatFolders>("mako:chat-folders", paths),
     removeWorktree: (path: string) => invokeTrustedHost<ThreadWorktrees>("mako:worktree-remove", path),
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),

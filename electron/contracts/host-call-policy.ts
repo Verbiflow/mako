@@ -43,6 +43,7 @@ const reads = [
   "mako:worktree-review",
   "mako:worktree-review-diffs",
   "mako:checkout-heads",
+  "mako:chat-folders",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
   "mako:thread-continuation-resolve",

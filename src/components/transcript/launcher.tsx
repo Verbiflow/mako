@@ -15,8 +15,16 @@ import {
  *
  * The rows are useful actions on every empty thread. Prompt suggestions fill
  * the composer rather than sending, so the first message is still the user's.
+ * A new chat has no project to explain, review or search, so it offers only
+ * opening one.
  */
-export function Launcher() {
+export function Launcher({ chat = false }: { chat?: boolean }) {
+  if (chat)
+    return (
+      <div className="mt-6 flex flex-col gap-0.5">
+        <LauncherRow index={0} icon={FolderOpenIcon} title="Open a project folder instead" keys={formatChord("mod+o")} onRun={() => runCommand("workspace.open")} />
+      </div>
+    )
   return (
     <div className="mt-6 flex flex-col gap-0.5">
       {SUGGESTIONS.map((suggestion, index) => (

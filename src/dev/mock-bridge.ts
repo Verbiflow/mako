@@ -156,6 +156,7 @@ export function installMockBridge() {
     }),
     threadGroups: async () => [],
     worktrees: async () => ({ root: "/mock/worktrees", worktrees: [] }),
+    chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
       Object.fromEntries(folders.map((folder) => [folder, MOCK_HEADS.get(folder) ?? null])),
     removeWorktree: async () => {

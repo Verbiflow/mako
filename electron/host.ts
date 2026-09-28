@@ -1,5 +1,6 @@
 import type { GitRemoteInput, GitRemoteResult } from "./shared.js"
 import { homedir } from "node:os"
+import { ensureChatsRoot } from "./chat-folders.js"
 import { WorkspaceGit } from "./host-git.js"
 import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"
@@ -439,6 +440,14 @@ If you can accurately express the change in just the subject line, don't include
 
 Only return the commit message in your response.`
 
+/**
+ * Where the first tab opens: the folder Mako was started from, when that's a
+ * folder someone chose. An app opened from the Dock or Finder is started in
+ * `/`, and neither that nor the home folder is a project, so those open the
+ * Chats folder, where a Thread's first send makes it a folder of its own.
+ */
 export function defaultWorkspace(): string {
-  return process.cwd() || homedir()
+  const cwd = process.cwd()
+  if (cwd && cwd !== "/" && cwd !== homedir()) return cwd
+  return ensureChatsRoot()
 }

@@ -6,8 +6,10 @@ import { MakoMark } from "@/components/ui/mako-mark"
 import { Slot } from "@/extend/slot"
 import { toExchanges } from "@/lib/exchanges"
 import { foldTools } from "@/lib/tools"
+import { useChatFolders } from "@/state/chat-folders"
 import { useSession } from "@/state/session"
-import { FolderIcon } from "lucide-react"
+import { chatFolderOf } from "../../../electron/contracts/chat-folders.ts"
+import { FolderIcon, MessageCircleIcon } from "lucide-react"
 
 export function Transcript() {
   const sessionId = useSession((state) => state.meta?.sessionId)
@@ -62,6 +64,7 @@ function SessionTranscript({ sessionId }: { sessionId: string | undefined }) {
 function EmptyTranscript() {
   const cwd = useSession((state) => state.meta?.cwd)
   const model = useSession((state) => state.meta?.model?.name)
+  const chat = useChatFolders((state) => chatFolderOf(cwd, state.root) !== undefined)
 
   return (
     <div className="relative flex min-h-full justify-center px-6">
@@ -71,10 +74,21 @@ function EmptyTranscript() {
           <div className="min-w-0">
             <p className="text-welcome font-medium">What are we working on?</p>
             <p className="mt-1 flex min-w-0 items-center gap-1.5 text-ui text-faint">
-              <FolderIcon className="size-3 shrink-0" />
-              <span className="truncate" title={cwd}>
-                {cwd ?? "no workspace"}
-              </span>
+              {chat ? (
+                <>
+                  <MessageCircleIcon className="size-3 shrink-0" />
+                  <span data-empty-chat className="truncate" title="The first message makes this chat a folder of its own in ~/Mako/Chats. Run git init there to make it a project.">
+                    New chat, with its own folder in ~/Mako/Chats
+                  </span>
+                </>
+              ) : (
+                <>
+                  <FolderIcon className="size-3 shrink-0" />
+                  <span className="truncate" title={cwd}>
+                    {cwd ?? "no workspace"}
+                  </span>
+                </>
+              )}
               {model ? (
                 <>
                   <span className="text-faint/50">·</span>
@@ -85,7 +99,7 @@ function EmptyTranscript() {
           </div>
         </div>
         <Slot name="transcript.empty" meta={undefined} />
-        <Launcher />
+        <Launcher chat={chat} />
       </div>
     </div>
   )
