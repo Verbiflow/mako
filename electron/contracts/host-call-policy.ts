@@ -100,8 +100,6 @@ const replays = [
   /** `LiveActions.submit`: the action id. */
   "mako:live-action",
   "mako:live-steer-queued",
-  /** `LiveChildren.delegate`: the child task id. */
-  "mako:live-delegate",
   /** `LiveConversations.fork`: the fork id and source point. */
   "mako:live-fork",
   /** `LiveConversations.mergeFork`: the merge id. */

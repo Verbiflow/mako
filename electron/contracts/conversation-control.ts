@@ -116,12 +116,6 @@ export const ChildTaskSchema = z.object({
   deliveryId: z.string().uuid(),
 })
 export type ChildTask = z.infer<typeof ChildTaskSchema>
-export const DelegateInputSchema = z.object({
-  id: z.string().uuid(),
-  provider: z.string().min(1),
-  task: z.string().min(1).max(100_000),
-})
-export type DelegateInput = z.infer<typeof DelegateInputSchema>
 export const ConversationControlSchema = z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),

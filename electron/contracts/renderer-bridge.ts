@@ -36,7 +36,6 @@ import type { LiveAction, LiveActionInput } from "./live-actions.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { NativeRequest, NativeRequestInput } from "../shared.js"
 import type {
-  DelegateInput,
   ForkInput,
   TransferInput,
   HarnessDescriptor,
@@ -292,8 +291,6 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<NativeRequest[]>("mako:native-requests"),
     nativeSubmit: (input: NativeRequestInput) =>
       invokeTrustedHost<NativeRequest>("mako:native-submit", input),
-    liveDelegate: (id: string, input: DelegateInput) =>
-      invokeTrustedHost<LiveSnapshot>("mako:live-delegate", id, input),
     liveCancelChild: (id: string, childId: string) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-child-cancel", id, childId),
     liveMergeFork: (id: string, mergeId: string) =>
