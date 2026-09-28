@@ -24,7 +24,7 @@
     "test:window-boot": "tsx --tsconfig tsconfig.app.json scripts/test-window-boot.ts",
     "test:live-refresh": "tsx --tsconfig tsconfig.app.json scripts/test-live-refresh.ts && tsx scripts/test-runtime-read-failure.ts && node scripts/test-live-refresh-ui.mjs",
     "test:live-history": "tsx --tsconfig tsconfig.app.json scripts/test-live-history-paging.ts && tsx scripts/test-live-history-transport.ts --ui",
-    "test:shared-continuation": "tsx scripts/test-session-memory.ts && tsx scripts/test-shared-continuation-upgrade.ts && tsx scripts/test-continuation-plan.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-runtime-transport.ts && tsx scripts/test-runtime-recovery.ts && npm run test:shared-conversations",
+    "test:shared-continuation": "tsx scripts/test-session-memory.ts && tsx scripts/test-shared-continuation-upgrade.ts && tsx scripts/test-continuation-plan.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-closed-record-handoff.ts && tsx scripts/test-runtime-transport.ts && tsx scripts/test-runtime-recovery.ts && npm run test:shared-conversations",
     "test:shared-conversations": "tsx scripts/test-shared-conversations.ts && esbuild scripts/test-shared-thread-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-shared-thread-ui.mjs && node node_modules/.tmp/test-shared-thread-ui.mjs",
     "test:shared-runtime": "npm run build && node scripts/test-shared-runtime.mjs",
     "test:host-signals": "npm run build:electron && node scripts/test-host-signals.mjs",

@@ -492,20 +492,10 @@ async function openThread(
     })))
   if (!resume)
     return trace.step("session-open", () => watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning })))
-  const reopen = () => rpcRequest(live, "thread/resume", { threadId: resume, cwd: live.cwd, ...tuning })
-  const resumed = async () => {
-    try {
-      return await reopen()
-    } catch (error) {
-      // Codex refuses to resume a thread its archive holds. Replying is
-      // asking for it back, so it comes out of the archive the way `codex
-      // unarchive` brings it, rollout and all, and the reply goes on.
-      if (!(error instanceof Error) || !/\bis archived\b/.test(error.message)) throw error
-      await rpcRequest(live, "thread/unarchive", { threadId: resume })
-      return reopen()
-    }
-  }
-  return trace.step("session-resume", () => watch.step("thread/resume", resumed()))
+  // Codex refuses to resume a thread its archive holds, and Mako leaves the
+  // archive to Codex: the catalog marks such a thread closed, so a reply
+  // continues it in a new thread rather than reaching this resume.
+  return trace.step("session-resume", () => watch.step("thread/resume", rpcRequest(live, "thread/resume", { threadId: resume, cwd: live.cwd, ...tuning })))
 }
 
 function threadTuning(

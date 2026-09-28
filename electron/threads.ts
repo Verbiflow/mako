@@ -973,6 +973,13 @@ export function railThreads(
   return [...listed, ...annotateAll(companions)]
 }
 
+/** A catalogued row by path, past the list's cap. */
+export function catalogRef(path: string): ThreadRef | undefined {
+  return daemon
+    ? mirror.get(path)
+    : catalog?.list().find((ref) => ref.path === path)
+}
+
 /** Recovery must not depend on the sidebar's ordering or visible result cap. */
 export function nativePathForSession(
   identity: NativeSourceIdentity

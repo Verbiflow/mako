@@ -111,8 +111,9 @@ export interface ThreadRef {
   /**
    * The harness archived this session itself: Codex's archive (which moves
    * the rollout into `archived_sessions`), Cursor's Archive, an OpenCode
-   * archive. The record is intact. Mako files it with its archived threads;
-   * Codex resumes it only once it is unarchived.
+   * archive. The record is intact. Mako files it with its archived threads
+   * and never changes the harness's archive; Codex resumes it only once
+   * unarchived, so a Codex row also carries `resumeUnavailable`.
    */
   nativeArchived?: boolean
   /**
@@ -122,7 +123,10 @@ export interface ThreadRef {
    * `time_archived`. Cursor records none.
    */
   nativeArchiveStamp?: string
-  /** Native history is readable, but its owning control transport cannot resume it. */
+  /**
+   * Native history is readable, but its owning control transport cannot
+   * resume it: a reply continues it in a new session of the same harness.
+   */
   resumeUnavailable?: string
   /**
    * Dedupe key when one native id names more than one distinct store. Cursor

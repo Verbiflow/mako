@@ -156,6 +156,7 @@ import {
   installSessionMemory,
   installThreads,
   listThreads,
+  catalogRef,
   railThreads,
   rememberThreadMode,
   openThread,
@@ -2064,7 +2065,16 @@ app.whenReady().then(async () => {
         : nativeCheckpoint(path)
     },
     nativePath: nativePathForSession,
-    resumeVerdict: (binding) => {
+    resumeVerdict: async (binding) => {
+      // The catalog knows which records their harness keeps closed; the
+      // binding's path may predate a move, such as Codex archiving its rollout.
+      const current = binding.nativeId
+        ? nativePathForSession({ harness: binding.provider, nativeId: binding.nativeId, nativePath: binding.path })
+        : undefined
+      const closed = [binding.path, current]
+        .map((path) => (path ? catalogRef(path) : undefined))
+        .find((ref) => ref?.harness === binding.provider && ref.resumeUnavailable)
+      if (closed?.resumeUnavailable) return { kind: "closed", reason: closed.resumeUnavailable }
       const driver = providerHost.liveDrivers.get(binding.provider)
       return driver?.resumeVerdict
         ? driver.resumeVerdict(binding)

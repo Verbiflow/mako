@@ -498,8 +498,8 @@ function rolloutIdentity(path: string): string {
 
 export class CodexProvider implements SessionProvider {
   harness = "codex" as const
-  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. */
-  peekVersion = 4
+  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. 5: archived rows carry `resumeUnavailable`. */
+  peekVersion = 5
   displayName = "Codex"
   private root: string
   /**
@@ -779,6 +779,10 @@ export class CodexProvider implements SessionProvider {
       // Unarchiving sets the rollout's mtime and archiving keeps it, so each
       // archive has its own; `migrate-rollouts` rewrites the file but keeps it.
       next.nativeArchiveStamp = String(Math.floor(file.mtimeMs))
+      // Codex resumes an archived thread only once unarchived, and whether it
+      // is archived is Codex's to decide.
+      next.resumeUnavailable =
+        "Codex keeps archived chats closed, so this one continues here in a new Codex session. It stays archived in Codex."
     }
     return next
   }

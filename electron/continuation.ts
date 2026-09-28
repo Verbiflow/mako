@@ -51,6 +51,7 @@ export function createContinuationPlanner<Snapshot>(
       ? await dependencies.assessResume?.(ref) : undefined
     if (assessment?.kind === "held") return { transport: "refused", reason: `This session is open in ${assessment.by}. Wait for it to finish before replying.` }
     if (assessment?.kind === "unavailable") return { transport: "unavailable", reason: assessment.reason }
+    if (assessment?.kind === "closed") return { transport: "handoff", provider: ref.harness, reason: assessment.reason }
     const currentRef = owner?.kind === "unowned" ? { ...ref, heldBy: undefined } : ref
     const plan = planContinuation(assessment?.kind === "resumable" ? { ...currentRef, locked: false } : currentRef, {
       live,

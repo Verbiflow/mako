@@ -47,6 +47,12 @@ export type ResumeVerdict =
   /** Something else has the session open; `by` names it for the user. */
   | { kind: "held"; by: string }
   | { kind: "unavailable"; reason: string }
+  /**
+   * The harness keeps this record closed to resumes (a Codex archive, a
+   * Cursor desktop chat) and the catalog says so; continuing it starts a new
+   * session of the same harness from the conversation, the record untouched.
+   */
+  | { kind: "closed"; reason: string }
 
 /** An absent baseline permits no claim that native history is unchanged. */
 export function compareNativeCheckpoint(previous: string | undefined, current: string): "same" | "moved" | "unknown" {

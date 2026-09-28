@@ -1,5 +1,6 @@
 // A Codex app-server whose thread sits in Codex's archive, answering the way
-// codex 0.154 does: `thread/resume` is refused until `thread/unarchive`.
+// codex 0.154 does: `thread/resume` is refused until `thread/unarchive`, which
+// the test asserts Mako never sends.
 // MAKO_CODEX_ARCHIVED_LOG names a file that receives each method called.
 import { appendFileSync } from "node:fs"
 import { createInterface } from "node:readline"

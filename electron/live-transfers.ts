@@ -26,6 +26,7 @@ import type {
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
 export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {
   if (verdict?.kind === "held") return heldReason(verdict.by)
+  if (verdict?.kind === "closed") return `${verdict.reason} Send the message again to continue.`
   const reason = verdict?.kind === "unavailable" ? verdict.reason : "The saved binding names no session this provider can reopen."
   return `The saved native session cannot be resumed. ${reason} No replacement session was started.`
 }
@@ -243,7 +244,10 @@ export class LiveTransfers {
           }
         }
       }
-      if ((reconnect || target) && !prior) throw new Error(reconnectRefusal(verdict))
+      // A record its harness keeps closed goes on in a new session with the
+      // whole conversation; any other record that won't reopen refuses.
+      if (verdict?.kind === "closed") reconnect = false
+      else if ((reconnect || target) && !prior) throw new Error(reconnectRefusal(verdict))
       const tuning =
         transfer.input.tuning ??
         prior?.tuning ??
@@ -449,7 +453,7 @@ export class LiveTransfers {
           LiveRequestSchema.parse({
             actor: transfer.actor,
             id: transfer.input.id,
-            targetBindingId: transfer.input.bindingId,
+            targetBindingId: transfer.input.bindingId ? bindingId : undefined,
             text: transfer.input.text,
             displayText: transfer.input.displayText ?? transfer.input.text,
             attachments: transfer.input.attachments,

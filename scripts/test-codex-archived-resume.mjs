@@ -7,9 +7,10 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-// Replying to a thread Codex archived: Codex refuses to resume it until it's
-// unarchived, so Mako brings it out of the archive and resumes. Any other
-// refusal still fails the reply.
+// Resuming a thread Codex archived: Codex refuses until it's unarchived, and
+// Mako leaves the archive to Codex. The refusal reaches the caller and no
+// unarchive is ever sent; the catalog routes replies to such a thread into a
+// new session instead.
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-codex-archived-test-"))
   try {
@@ -59,12 +60,11 @@ async function check() {
   }
 
   const archived = await start("archived", false)
-  assert.equal(archived.error, undefined, archived.error?.message)
-  assert.equal(archived.state.nativeId, thread, "the reply goes on in the same thread")
-  assert.deepEqual(archived.calls.filter((call) => call.startsWith("thread/resume") || call === "thread/unarchive"), ["thread/resume", "thread/unarchive", "thread/resume"])
+  assert.match(archived.error?.message ?? "", /is archived/, "Codex's refusal reaches the caller")
+  assert.deepEqual(archived.calls.filter((call) => call === "thread/resume" || call === "thread/unarchive"), ["thread/resume"], "nothing is unarchived")
 
   const missing = await start("missing", true)
-  assert.match(missing.error?.message ?? "", /no rollout found/, "another refusal still fails the reply")
-  assert.equal(missing.calls.includes("thread/unarchive"), false, "and nothing is unarchived for it")
-  console.log("Codex archived resume: a reply to a thread Codex archived unarchives it and resumes the same thread; any other refusal still fails")
+  assert.match(missing.error?.message ?? "", /no rollout found/, "another refusal fails the same way")
+  assert.equal(missing.calls.includes("thread/unarchive"), false)
+  console.log("Codex archived resume: resuming a thread Codex archived fails with Codex's refusal and never unarchives it")
 }
