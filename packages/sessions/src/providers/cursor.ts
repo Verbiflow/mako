@@ -271,7 +271,7 @@ function isStringValue(
   return Object.prototype.toString.call(value) === "[object String]"
 }
 
-function isNumberValue(value: JsonValue | undefined): value is number {
+function isNumberValue(value: JsonValue | SQLOutputValue | undefined): value is number {
   return Object.prototype.toString.call(value) === "[object Number]"
 }
 
@@ -373,7 +373,7 @@ function parseRoot(data: Uint8Array): ParsedRoot {
   const windows: string[] = []
   let cwd: string | undefined
   eachField(data, (field, value) => {
-    if (typeof value === "number") return
+    if (!(value instanceof Uint8Array)) return
     if (field === 1 && value.length === 32) hashes.push(Buffer.from(value).toString("hex"))
     if (field === 13 && value.length === 32) windows.push(Buffer.from(value).toString("hex"))
     if (field === 9) {
@@ -394,9 +394,10 @@ function parsePromptRecord(data: Uint8Array): { text: string; at: number } | nul
   let state = false
   let at: number | undefined
   eachField(data, (field, value) => {
-    if (field === 1 && typeof value !== "number") text = Buffer.from(value).toString("utf8")
-    if (field === 10 && typeof value !== "number" && value.length === 32) state = true
-    if (field === 25 && typeof value === "number") at = value
+    if (value instanceof Uint8Array) {
+      if (field === 1) text = Buffer.from(value).toString("utf8")
+      if (field === 10 && value.length === 32) state = true
+    } else if (field === 25) at = value
   })
   return text?.trim() && state && at !== undefined ? { text: text.trim(), at } : null
 }
@@ -1352,7 +1353,7 @@ export class CursorProvider implements SessionProvider {
         : 0
       const rows = database
         .prepare("SELECT id, data FROM blobs WHERE rowid > ? AND substr(data, 1, 1) = x'0a' ORDER BY rowid")
-        .iterate(typeof start === "number" ? start : 0)
+        .iterate(isNumberValue(start) ? start : 0)
       for (const row of rows) {
         const id = row["id"]
         const data = row["data"]

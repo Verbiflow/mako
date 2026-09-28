@@ -265,7 +265,7 @@ export async function serveControlSession(
                   : "Local Control request failed",
               outcome,
             },
-            ...(partial?.length ? { output: partial } : {}),
+            output: partial?.length ? partial : undefined,
           })
         )
       })

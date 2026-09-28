@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
+import { z } from "zod"
 import type { CursorSdkModelSelection } from "./cursor-sdk-models.js"
 
 /**
@@ -220,30 +221,40 @@ function cancelledRuns(database: DatabaseSync, agentId: string): CursorSdkCancel
     const startRootId = checkpointBlobId(text(row["start_checkpoint_ref_json"]))
     const cancelledAt = text(row["cancelled_at"])
     if (rootId && rootId !== startRootId) {
-      cancelled.push({ recorded: true, runId, rootId, ...(cancelledAt ? { cancelledAt } : {}) })
+      const run: Extract<CursorSdkCancelledRun, { recorded: true }> = { recorded: true, runId, rootId }
+      if (cancelledAt) run.cancelledAt = cancelledAt
+      cancelled.push(run)
       continue
     }
     const startedAt = text(row["started_at"])
-    cancelled.push({
-      recorded: false,
-      runId,
-      ...(startRootId ? { startRootId } : {}),
-      ...(startedAt ? { startedAt } : {}),
-      ...(cancelledAt ? { cancelledAt } : {}),
-    })
+    const run: Extract<CursorSdkCancelledRun, { recorded: false }> = { recorded: false, runId }
+    if (startRootId) run.startRootId = startRootId
+    if (startedAt) run.startedAt = startedAt
+    if (cancelledAt) run.cancelledAt = cancelledAt
+    cancelled.push(run)
   }
   return cancelled
 }
 
-type JsonRecord = { [key: string]: CursorSdkJson | undefined }
-
-function isRecord(value: CursorSdkJson | undefined): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function str(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined
-}
+/** The `run_events` messages history reads; any other message is skipped. */
+const RunEventSchema = z.object({
+  message: z.discriminatedUnion("type", [
+    z.object({ type: z.literal("thinking"), text: z.string().optional().catch(undefined) }),
+    z.object({
+      type: z.literal("assistant"),
+      message: z.object({ content: z.array(z.unknown()) }).optional().catch(undefined),
+    }),
+    z.object({
+      type: z.literal("tool_call"),
+      call_id: z.string().min(1),
+      name: z.string().min(1),
+      status: z.string().optional().catch(undefined),
+      args: z.json().optional(),
+      result: z.json().optional(),
+    }),
+  ]),
+})
+const TextPartSchema = z.object({ type: z.literal("text"), text: z.string() })
 
 /**
  * The run's own event log: what the SDK streamed while it ran. An index
@@ -270,35 +281,29 @@ export function readCursorSdkRunStream(indexPath: string, runId: string): Cursor
       } catch {
         continue
       }
-      const message = isRecord(payload) ? payload["message"] : undefined
-      if (!isRecord(message)) continue
-      switch (message["type"]) {
+      const event = RunEventSchema.safeParse(payload)
+      if (!event.success) continue
+      const message = event.data.message
+      switch (message.type) {
         case "thinking": {
-          const delta = str(message["text"])
-          if (delta) append("thinking", delta)
+          if (message.text) append("thinking", message.text)
           break
         }
         case "assistant": {
-          const content = isRecord(message["message"]) ? message["message"]["content"] : undefined
-          if (!Array.isArray(content)) break
-          for (const part of content) {
-            const delta = isRecord(part) && part["type"] === "text" ? str(part["text"]) : undefined
+          for (const part of message.message?.content ?? []) {
+            const delta = TextPartSchema.safeParse(part).data?.text
             if (delta) append("text", delta)
           }
           break
         }
         case "tool_call": {
-          const callId = str(message["call_id"])
-          const name = str(message["name"])
-          if (!callId || !name) break
-          const status = str(message["status"])
-          const known = tools.get(callId)
-          const tool = known ?? { type: "tool" as const, callId, name }
-          if (status) tool.status = status
-          if (message["args"] !== undefined) tool.args = message["args"]
-          if (message["result"] !== undefined) tool.result = message["result"]
+          const known = tools.get(message.call_id)
+          const tool = known ?? { type: "tool" as const, callId: message.call_id, name: message.name }
+          if (message.status) tool.status = message.status
+          if (message.args !== undefined) tool.args = message.args
+          if (message.result !== undefined) tool.result = message.result
           if (!known) {
-            tools.set(callId, tool)
+            tools.set(message.call_id, tool)
             parts.push(tool)
           }
           break

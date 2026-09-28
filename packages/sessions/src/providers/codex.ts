@@ -209,16 +209,16 @@ function stringValue(value: JsonValue | undefined): string | undefined {
 }
 
 /** Codex's `TurnAbortReason`. A plain Stop is the label alone. */
-const ABORT_DETAILS: Record<string, string | undefined> = {
-  interrupted: undefined,
-  replaced: "replaced by a newer message",
-  review_ended: "review ended",
-  budget_limited: "budget limit reached",
-}
+const ABORT_DETAILS = new Map([
+  ["interrupted", undefined],
+  ["replaced", "replaced by a newer message"],
+  ["review_ended", "review ended"],
+  ["budget_limited", "budget limit reached"],
+])
 
 function abortDetail(reason: string | undefined): string | undefined {
   if (reason === undefined) return undefined
-  return Object.hasOwn(ABORT_DETAILS, reason) ? ABORT_DETAILS[reason] : reason.replaceAll("_", " ")
+  return ABORT_DETAILS.has(reason) ? ABORT_DETAILS.get(reason) : reason.replaceAll("_", " ")
 }
 
 function objectValue(value: JsonValue | undefined): JsonObject | undefined {
