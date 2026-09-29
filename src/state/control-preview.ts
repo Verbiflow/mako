@@ -1,4 +1,9 @@
 import { getMako } from "@/lib/bridge"
+import {
+  controlPreviewDemand,
+  onControlPreviewDemand,
+  type Size,
+} from "@/lib/control-preview-decoder"
 import type { ControlActivity, ControlPreview } from "@/lib/types"
 import { createHook, createStore } from "@/state/store"
 
@@ -50,6 +55,7 @@ function startWatchingControlPreview(conversationId: string): () => void {
   let pending = false
   let refreshRequested = false
   let timer: ReturnType<typeof setTimeout> | undefined
+  let sent: Size | undefined
 
   const poll = async () => {
     timer = undefined
@@ -57,10 +63,12 @@ function startWatchingControlPreview(conversationId: string): () => void {
     if (pending) { refreshRequested = true; return }
     pending = true
     try {
+      sent = controlPreviewDemand()
       const preview = await getMako().controlPreview(
         conversationId,
         true,
-        watcher
+        watcher,
+        sent
       )
       if (!closed) {
         const previous = controlPreviewStore.get().previews[conversationId]
@@ -113,6 +121,15 @@ function startWatchingControlPreview(conversationId: string): () => void {
     if (timer) clearTimeout(timer)
     void poll()
   })
+  // A viewer that grows past the last frame's size gets detail back without
+  // waiting for the page to change.
+  const undemand = onControlPreviewDemand(() => {
+    if (!sent) return
+    const demand = controlPreviewDemand()
+    if (demand && demand.width <= sent.width && demand.height <= sent.height) return
+    if (timer) clearTimeout(timer)
+    void poll()
+  })
   document.addEventListener("visibilitychange", visibility)
   void poll()
   return () => {
@@ -121,6 +138,7 @@ function startWatchingControlPreview(conversationId: string): () => void {
     if (timer) clearTimeout(timer)
     document.removeEventListener("visibilitychange", visibility)
     unsubscribe()
+    undemand()
     release()
     controlPreviewStore.set((state) => ({
       previews: Object.fromEntries(
