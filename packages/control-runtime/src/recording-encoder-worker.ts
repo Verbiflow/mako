@@ -56,7 +56,13 @@ function releasePixels() {
 port.on("message", (input) => {
   const parsed = command.safeParse(input)
   if (!parsed.success) {
-    encoder?.abort("Invalid video worker command")
+    const reason = "Invalid video worker command"
+    encoder?.abort(reason)
+    port.postMessage({
+      kind: "failed",
+      id: z.object({ id: z.number().int() }).safeParse(input).data?.id,
+      reason,
+    })
     return
   }
   const value = parsed.data

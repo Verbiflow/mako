@@ -115,7 +115,7 @@ import {readFile} from 'node:fs/promises';
 const encoder = new RecordingEncoder(${JSON.stringify(stdinRecording)}, () => {});
 await encoder.ready;
 await encoder.initialize(640,480,10);
-await encoder.write({bytes:await readFile(${JSON.stringify(shot.path)}),frame:{width:640,height:480},at:0});
+await encoder.write(0,{bytes:await readFile(${JSON.stringify(shot.path)}),frame:{width:640,height:480}});
 await encoder.finish();
 `], { cwd: directory })
   assert.ok((await readFile(join(stdinRecording, "recording.mp4"))).length > 100,
