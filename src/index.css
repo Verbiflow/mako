@@ -776,12 +776,15 @@ diffs-container {
  * earns a transition where the palette does not. Short and ease-out: the new
  * conversation should look like it arrived, not like it is being presented.
  * Transform and opacity only, so a switch costs the compositor a frame and the
- * main thread nothing while tokens are landing next door.
+ * main thread nothing while tokens are landing next door. It never starts
+ * from invisible: the frame that mounts a long transcript can take a while to
+ * commit, and every frame painted before the animation advances shows its
+ * first keyframe, so a fade from zero read as the column blinking out.
  */
 @keyframes mako-thread {
   from {
-    opacity: 0;
-    transform: translate3d(0, 6px, 0);
+    opacity: 0.7;
+    transform: translate3d(0, 4px, 0);
   }
   to {
     opacity: 1;
@@ -1068,7 +1071,9 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .scroll-fade-scroller[data-preserve-scroll] .contain-turn,
 .scroll-fade-scroller[data-preserve-scroll] [data-estimated-paragraph],
 .contain-turn[data-preserve-height],
-.contain-turn[data-preserve-height] [data-estimated-paragraph] {
+.contain-turn[data-preserve-height] [data-estimated-paragraph],
+.contain-turn[data-settling],
+.contain-turn[data-settling] [data-estimated-paragraph] {
   content-visibility: visible;
 }
 

@@ -19,10 +19,18 @@ import { toast } from "sonner"
 /** The composer harness to give back when the viewer closes. */
 let harnessBeforeViewing: string | null = null
 let viewingGeneration = 0
+/** The transcript the viewer last handed to the live conversation that owns it. */
+let handedOff: string | null = null
+
+/** Whether the live panel takes over a transcript the viewer was just showing, so it continues in place. */
+export function viewerHandedOff(path: string | undefined): boolean {
+  return path !== undefined && path === handedOff
+}
 
 export function leaveViewerForLive(harness: string) {
   viewingGeneration += 1
   harnessBeforeViewing = null
+  handedOff = threadsStore.get().viewing?.ref.path ?? null
   threadsStore.set({
     viewing: null,
     opening: null,
@@ -307,6 +315,7 @@ export const threadViewingActions = {
   async view(ref: ThreadRef, mode: "conversation" | "native" = "conversation") {
     if (!hasBridge()) return
     const generation = ++viewingGeneration
+    handedOff = null
     const { acp, acpStore, activeAcp } = await liveModules
     if (generation !== viewingGeneration) return
     // The saved transcript paints now; a Mako conversation that owns this
@@ -533,6 +542,7 @@ export const threadViewingActions = {
 
   closeViewer() {
     viewingGeneration += 1
+    handedOff = null
     const restore = harnessBeforeViewing
     harnessBeforeViewing = null
     const patch: Partial<ThreadsState> = {

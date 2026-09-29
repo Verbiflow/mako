@@ -2,7 +2,7 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, carriedFailureSeen, replaceAcpConversation, updateAcpConversation } from "@/state/acp-state"
+import { acpStore, carriedFailureSeen, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
 import { syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "../../electron/contracts/live-content"
@@ -11,7 +11,7 @@ import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
-import type { LiveHistoryPage } from "../../electron/contracts/live-history"
+import type { LiveHistoryCursor, LiveHistoryPage } from "../../electron/contracts/live-history"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, LiveBatch[]>()
@@ -34,14 +34,43 @@ function sameEpoch(held: { epoch?: string } | undefined, incoming: { epoch?: str
   return held?.epoch === undefined || incoming.epoch === undefined || held.epoch === incoming.epoch
 }
 
-export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null): void {
+/** Where the history on screen begins, when it is a window the host paged. */
+function windowStart(conversation: AcpConversation | undefined): LiveHistoryCursor | undefined {
+  return conversation?.kind === "live" && conversation.hydrated && conversation.history
+    ? { blocks: conversation.history.blockStart, base: conversation.base?.start ?? 0 }
+    : undefined
+}
+
+function reachesEarlier(left: LiveHistoryCursor, right: LiveHistoryCursor): boolean {
+  return left.blocks < right.blocks || left.base < right.base
+}
+
+/**
+ * Whether taking `snapshot` would drop history the reader has on screen. A
+ * snapshot answering an action carries only the newest window, and a refresh
+ * asked for the window as it stood when it left, before a page the reader
+ * loaded meanwhile. `covers` is the window the read was asked for: history
+ * the host chose not to return for that window is its call to make.
+ */
+function dropsLoadedHistory(existing: AcpConversation | undefined, snapshot: LiveSnapshot, covers?: LiveHistoryCursor): boolean {
+  const held = windowStart(existing)
+  if (!held || !snapshot.history || !sameEpoch(existing, snapshot)) return false
+  const incoming = { blocks: snapshot.history.blockStart, base: snapshot.base?.start ?? held.base }
+  return reachesEarlier(held, incoming) && (!covers || reachesEarlier(held, covers))
+}
+
+export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, covers?: LiveHistoryCursor): void {
   restoredLive(snapshot.session.id)
   for (const request of snapshot.requests) settleMessage(request.id, true)
   for (const transfer of snapshot.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   const id = snapshot.session.id
   const existing = acpStore.get().conversations[id]
-  if (existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision) {
+  const stale = existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision
+  const narrower = !stale && dropsLoadedHistory(existing, snapshot, covers)
+  if (stale || narrower) {
     if (replyBindingId !== undefined) updateAcpConversation(id, (current) => ({ ...current, replyBindingId: replyBindingId ?? undefined }))
+    // The same state, read again over the range on screen, replaces it whole.
+    if (narrower) rereadLive(id)
     return
   }
   const pendingPrompts = existing?.pendingPrompts?.filter(
@@ -108,16 +137,25 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   for (const batch of buffered) applyLiveBatch(batch)
 }
 
+/** Refreshes that must run again once the one in flight lands, over the window on screen by then. */
+const rereads = new Set<string>()
+
+function rereadLive(id: string): void {
+  if (fetching.has(id)) rereads.add(id)
+  else void hydrateLive(id)
+}
+
 export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   if (!hasBridge()) return false
   const existing = fetching.get(id)
   if (existing) return existing
   let restored = false
+  const covers = windowStart(acpStore.get().conversations[id])
   const fetch = readLiveSnapshot(id, true)
     .then((snapshot) => {
       restored = true
       if (snapshot && "kind" in snapshot) restoredLive(id)
-      else if (snapshot) applyLiveSnapshot(snapshot)
+      else if (snapshot) applyLiveSnapshot(snapshot, undefined, covers)
       else {
         pending.delete(id)
         restoredLive(id)
@@ -138,7 +176,7 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
     })
     .finally(() => {
       fetching.delete(id)
-      if (restored && pending.get(id)?.length)
+      if (rereads.delete(id) || (restored && pending.get(id)?.length))
         queueMicrotask(() => {
           void hydrateLive(id)
         })
