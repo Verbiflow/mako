@@ -102,6 +102,7 @@ export const ThreadRefSchema = z.object({
   worktrees: z.array(z.object({ path: z.string(), repoRoot: z.string() })).optional(),
   accessMode: z.string().optional(),
   heldBy: z.string().optional(),
+  ownedElsewhere: z.boolean().optional(),
   threadId: z.string().optional(),
   sessionId: z.string().optional(),
 })

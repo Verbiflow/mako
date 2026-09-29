@@ -172,6 +172,13 @@ export interface ThreadRef {
    */
   heldBy?: string
   /**
+   * A Mako conversation on another running host on this machine owns the
+   * session, so opening the row shows that conversation live rather than
+   * this saved transcript. Set by the host from its per-user session memory;
+   * a hint for how to open the row, never for where a reply goes.
+   */
+  ownedElsewhere?: boolean
+  /**
    * The Thread and Session this native session belongs to, overlaid by the
    * host from the per-user Thread store as it serves the ref. Opaque random
    * IDs; a copy saved inside a journal is a snapshot, not a source of truth.

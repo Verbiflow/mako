@@ -38,11 +38,12 @@ import {
   type ThreadPageOptions,
   type ThreadRef,
 } from "./format.js"
-import type {
-  NativeFile,
-  SessionFollower,
-  SessionProvider,
-  SessionUpdate,
+import {
+  SessionUnreadable,
+  type NativeFile,
+  type SessionFollower,
+  type SessionProvider,
+  type SessionUpdate,
 } from "./providers/types.js"
 import { SessionArchive, type EvictionPolicy } from "./archive.js"
 import { watchRoot, type RootWatch } from "./root-watch.js"
@@ -167,6 +168,26 @@ function withWorkspace(ref: ThreadRef | null): ThreadRef | null {
   if (!ref) return null
   const workspace = workspaceOf(ref.cwd)
   return workspace && workspace !== ref.workspace ? { ...ref, workspace } : ref
+}
+
+const UNREADABLE = Symbol("unreadable")
+
+/**
+ * The provider's peek, or UNREADABLE for a store a writer held. That answer
+ * commits nothing: the row stays as it was and keeps the stale stamp, so
+ * the next write or active sweep reads the file again. Committed as null,
+ * it announced a live session removed, and the archive's copy stood in for
+ * it until the next peek.
+ */
+async function peeked(
+  provider: SessionProvider,
+  file: NativeFile
+): Promise<ThreadRef | null | typeof UNREADABLE> {
+  try {
+    return withWorkspace(await provider.peek(file))
+  } catch (error) {
+    return error instanceof SessionUnreadable ? UNREADABLE : null
+  }
 }
 
 /** A run of entries and the index of its first entry in the thread. */
@@ -411,8 +432,8 @@ export class SessionCatalog {
             if (cached.ref) this.capture(cached.ref)
             return
           }
-          const ref = withWorkspace(await provider.peek(file).catch(() => null))
-          if (!this.commit(file, ref, cached)) return
+          const ref = await peeked(provider, file)
+          if (ref === UNREADABLE || !this.commit(file, ref, cached)) return
           if (ref) this.capture(ref)
           if (options.emitChanges) {
             if (ref) this.emit({ type: cached?.ref ? "updated" : "added", ref })
@@ -578,7 +599,7 @@ export class SessionCatalog {
   ): Promise<ThreadPage | null> {
     const provider = this.ownerOf(path)
     const ref = this.byPath.get(path)?.ref
-    if (!provider?.tail || !ref) return null
+    if (!provider || (!provider.tail && !provider.recent) || !ref) return null
     const stamp = await nativeFileOf(provider, path)
     if (!stamp || stamp.bytes < PREVIEW_MIN_BYTES) return null
     const held = this.threadCache.get(path)
@@ -586,7 +607,10 @@ export class SessionCatalog {
       return null
     for (const window of PREVIEW_WINDOWS) {
       if (window >= stamp.bytes) return null
-      const { entries } = await provider.tail(path, stamp.bytes - window)
+      const entries = provider.recent
+        ? await provider.recent(path, window)
+        : (await provider.tail?.(path, stamp.bytes - window))?.entries
+      if (!entries) return null
       const prompt = entries.findIndex((entry) => entry.kind === "user")
       if (prompt === -1) continue
       const aligned = withLeadingModel(entries.slice(prompt), ref.model)
@@ -1021,8 +1045,8 @@ export class SessionCatalog {
       // A follower may have a finer-grained cursor than the catalog stamp. Plain rereaders do not.
       if (unchanged && (!followed || !follow?.follower)) continue
       if (!unchanged) {
-        const ref = withWorkspace(await provider.peek(file).catch(() => null))
-        if (!this.commit(file, ref, cached)) continue
+        const ref = await peeked(provider, file)
+        if (ref === UNREADABLE || !this.commit(file, ref, cached)) continue
         if (ref) {
           if (refMoved(cached?.ref, ref))
             this.emit({ type: cached?.ref ? "updated" : "added", ref })
@@ -1138,8 +1162,8 @@ export class SessionCatalog {
       const previous = cached.ref
       const ref = previous
         ? await refined(provider, previous, cached.bytes)
-        : withWorkspace(await provider.peek(file).catch(() => null))
-      if (!this.commit(file, ref, cached)) return
+        : await peeked(provider, file)
+      if (ref === UNREADABLE || !this.commit(file, ref, cached)) return
       this.scheduleSave()
       if (ref) {
         const same =
@@ -1182,8 +1206,8 @@ export class SessionCatalog {
               },
           reusable.fromByte
         )
-      : withWorkspace(await provider.peek(file).catch(() => null))
-    if (!this.commit(file, ref, cached)) return
+      : await peeked(provider, file)
+    if (ref === UNREADABLE || !this.commit(file, ref, cached)) return
     this.scheduleSave()
     if (ref) {
       if (refMoved(cached?.ref, ref))
@@ -1211,10 +1235,8 @@ export class SessionCatalog {
       const committed = this.byPath.get(path)
       const update = await follow.follower.next().catch(() => null)
       if (update?.reset && grew && cached.ref) {
-        const resetRef = withWorkspace(
-          await provider.peek(file).catch(() => null)
-        )
-        if (this.commit(file, resetRef, committed) && resetRef)
+        const resetRef = await peeked(provider, file)
+        if (resetRef !== UNREADABLE && this.commit(file, resetRef, committed) && resetRef)
           this.emit({ type: "updated", ref: resetRef })
       }
       if (update && (update.replace || update.entries.length > 0)) {
