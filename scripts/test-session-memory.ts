@@ -379,6 +379,25 @@ try {
   assert.equal(dev.annotate(bare).heldBy, undefined)
   assert.equal(dev.annotate(bare).accessMode, "access:edits")
 
+  // A row names a conversation on another running host, so it opens live.
+  const listening = new Set(["/peer.sock"])
+  const peer = new SessionMemory(ledger, { pid: 100, startedAt: 1, label: "the installed Mako app", socket: "/peer.sock" }, clock)
+  const here = new SessionMemory(ledger, { pid: 200, startedAt: 2, label: "Mako's dev host", socket: "/here.sock" }, { ...clock, listening: (socket) => listening.has(socket) })
+  try {
+    peer.rememberBindings("peer-conversation", [{ provider: "codex", nativeId: "owned-there" }], now)
+    here.rememberBindings("local-conversation", [{ provider: "codex", nativeId: "owned-here" }], now)
+    const there: ThreadRef = { harness: "codex", nativeId: "owned-there", path: "/there.jsonl" }
+    assert.equal(here.annotate(there).ownedElsewhere, true, "a conversation on another running host owns the row")
+    assert.equal(here.annotate({ harness: "codex", nativeId: "owned-here", path: "/here.jsonl" }).ownedElsewhere, undefined, "this host's own conversations open through its live list")
+    assert.equal(here.annotate(unknown).ownedElsewhere, undefined)
+    listening.delete("/peer.sock")
+    now += 2_001
+    assert.equal(here.annotate(there).ownedElsewhere, undefined, "a route to a host that exited promises nothing")
+  } finally {
+    peer.close()
+    here.close()
+  }
+
   // --- Journal keeps the mode ladder -------------------------------------------
   const journalId = randomUUID()
   const journal = new LiveJournal(join(root, "journals"), journalId)

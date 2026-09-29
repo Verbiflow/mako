@@ -87,6 +87,54 @@ await new Promise((resolve) => setTimeout(resolve, 20))
 assert.equal(acpStore.get().activeKey, second.session.id, "a late peer snapshot cannot steal selection from a newer click")
 console.log("Shared thread selection: a stale local binding cannot capture sends, and out-of-order owner replies preserve the selected thread")
 
+// A row another running host owns opens straight into that conversation.
+type LiveSnapshot = import("../electron/shared").LiveSnapshot
+const owned = { ...ref, path: "/fixture/owned.jsonl", nativeId: "native-owned", ownedElsewhere: true }
+const ownedSnapshot: LiveSnapshot = { ...snapshot, session: { ...snapshot.session, id: "019d0011-0000-4000-8000-0000000000a1", nativeId: "native-owned" }, threadPath: owned.path }
+const liveBefore = acpStore.get()
+const pageThread = bridge.pageThread
+const pageReads: string[] = []
+bridge.pageThread = async (...args) => {
+  pageReads.push(args[0])
+  return pageThread(...args)
+}
+const answers = new Map<string, (snapshot: LiveSnapshot | null) => void>()
+bridge.liveAttach = (path) => new Promise((resolve) => { answers.set(path, resolve) })
+const asked = async (path: string) => {
+  while (!answers.has(path)) await new Promise((resolve) => setTimeout(resolve, 1))
+}
+const ownedView = threadViewingActions.view(owned)
+await asked(owned.path)
+await new Promise((resolve) => setTimeout(resolve, 20))
+assert.deepEqual(threadsStore.get().opening, { kind: "loading", ref: owned }, "the row lights and loads while its owner answers")
+assert.deepEqual(pageReads, [], "its saved transcript is not read while the owner is answering")
+answers.get(owned.path)!(ownedSnapshot)
+await ownedView
+assert.equal(acpStore.get().activeKey, ownedSnapshot.session.id, "the owner's conversation takes over")
+assert.equal(threadsStore.get().opening, null)
+assert.equal(threadsStore.get().viewing, null)
+assert.deepEqual(pageReads, [], "the live conversation paints without a saved copy before it")
+
+const unowned = { ...owned, path: "/fixture/unowned.jsonl", nativeId: "native-unowned" }
+const unownedView = threadViewingActions.view(unowned)
+await asked(unowned.path)
+answers.get(unowned.path)!(null)
+await unownedView
+assert.deepEqual(pageReads, [unowned.path], "a row whose owner is gone reads its saved transcript")
+
+const silent = { ...owned, path: "/fixture/silent.jsonl", nativeId: "native-silent" }
+const openedAt = Date.now()
+const silentView = threadViewingActions.view(silent)
+await asked(silent.path)
+await silentView
+assert.ok(Date.now() - openedAt >= 1_000, "a slow owner gets its patience first")
+assert.equal(pageReads.at(-1), silent.path, "a silent owner still lets the saved transcript paint")
+answers.get(silent.path)!(null)
+bridge.pageThread = pageThread
+threadViewingActions.closeViewer()
+acpStore.set(liveBefore)
+console.log("Owned rows: another host's conversation opens without a saved copy first; a missing or silent owner falls back to the transcript")
+
 const bindingId = "019d0011-0000-4000-8000-000000000004"
 const activeBindingId = "019d0011-0000-4000-8000-000000000005"
 const bound = { ...snapshot, revision: 3, session: { ...snapshot.session, harness: "claude" }, control: {
