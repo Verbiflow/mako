@@ -491,8 +491,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     const background = live.shells.reconcile((await live.api.client.shell.list({ location: { directory: live.cwd } })).data)
     if (background !== undefined) engine.patch(live, { backgroundTasks: background })
     const turn = live.turn
-    if (!turn) return
     const active = await live.api.client.session.active()
+    // Busy with nothing bound: the start was among the missed events.
+    if (!turn) {
+      if (active[root] && !live.turn && !live.closed) openProviderTurn(live)
+      return
+    }
     if (active[root] || live.turn !== turn) return
     const session = await live.api.client.session.get({ sessionID: root })
     if (live.turn !== turn) return
@@ -585,7 +589,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       await live.api.client.session.compact({ sessionID: live.root, id: inboxId })
       dispatch?.report({ kind: "accepted", source: "native-response", referenceId: inboxId })
     } catch (error) {
-      if (live.turn === turn && !turn.enqueued) {
+      // As with a prompt, a lost response is not a lost request: native state decides.
+      if (live.turn === turn && !turn.enqueued && !(await admitted(live, turn))) {
         live.turn = null
         live.emit({ type: "live-action-result", id: live.state.id, actionId, result: { kind: "uncertain", reason: errorText({ error }) } })
         engine.patch(live, { status: "failed", lastStop: "failed", error: errorText({ error }) })

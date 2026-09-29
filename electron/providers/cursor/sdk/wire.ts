@@ -309,6 +309,7 @@ export const SdkRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.number(), method: z.literal("send"), params: SdkSendParamsSchema }),
   z.object({ id: z.number(), method: z.literal("steer"), params: z.object({ text: z.string() }) }),
   z.object({ id: z.number(), method: z.literal("cancel") }),
+  z.object({ id: z.number(), method: z.literal("active") }),
   z.object({ id: z.number(), method: z.literal("close") }),
   z.object({ id: z.number(), method: z.literal("models") }),
   z.object({ id: z.number(), method: z.literal("authStatus") }),
@@ -333,6 +334,17 @@ export const SdkResultSchemas = {
   send: z.object({ runId: z.string() }),
   steer: z.object({ outcome: z.enum(["complete_delivered", "revert_to_followup"]) }),
   cancel: z.object({}),
+  /**
+   * The turn the child is running or still starting, if any. Before
+   * answering, the child writes the turn's messages again under its id.
+   * `truncated` says the oldest of them no longer fit the replay budget.
+   */
+  active: z.object({
+    turn: z.string().optional(),
+    runId: z.string().optional(),
+    starting: z.boolean().optional(),
+    truncated: z.boolean().optional(),
+  }),
   close: z.object({}),
   models: z.object({ models: z.array(SdkModelListItemSchema) }),
   authStatus: SdkAuthStatusSchema,

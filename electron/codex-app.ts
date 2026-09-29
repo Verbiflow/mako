@@ -80,6 +80,8 @@ type Live = {
   threadId: string | null
   promptSequence: number
   currentTurnId: string | null
+  /** Stop arrived before turn/start answered: interrupt the turn once its id is known. */
+  interruptWhenStarted: boolean
   /** Waiting for the running turn to settle, or for the app-server to exit. */
   settling: Array<() => void>
   /** The chosen tier; sent with every turn/start and kept by Codex afterwards. */
@@ -164,6 +166,7 @@ async function startCodex(
     threadId: null,
     promptSequence: 0,
     currentTurnId: null,
+    interruptWhenStarted: false,
     // A chosen or remembered tier names a turn/start policy pair; it applies
     // from the first turn. An invalid id fails the start, matching the
     // ledger's "must apply or fail" rule.
@@ -303,6 +306,7 @@ export async function codexAppPrompt(
     return { live, threadId: live.threadId }
   })
   const sequence = ++live.promptSequence
+  live.interruptWhenStarted = false
   updateState(live, {
     status: "running",
     nativeRunId: undefined,
@@ -331,9 +335,15 @@ export async function codexAppPrompt(
         live.currentTurnId = result.turn.id
         updateState(live, { nativeRunId: result.turn.id })
       }
+      if (live.interruptWhenStarted) {
+        live.interruptWhenStarted = false
+        await codexAppCancel(id).catch((error) =>
+          hostWarn("codex", "A turn stopped while starting could not be interrupted", { conversation: id, error: String(error) }))
+      }
     }
   } catch (error) {
     if (live.promptSequence !== sequence) return
+    live.interruptWhenStarted = false
     const message =
       error instanceof Error && error.message
         ? error.message
@@ -373,6 +383,8 @@ export async function codexAppCancel(id: string): Promise<void> {
       hostWarn("codex", "Subagents were not ended", { conversation: id, error: String(error) }))
   }
   if (!live.currentTurnId) {
+    // turn/start has not answered, so its turn may exist without an id yet.
+    if (isRunning(live) && !live.compaction) live.interruptWhenStarted = true
     clean()
     return
   }

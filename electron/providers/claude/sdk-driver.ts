@@ -495,6 +495,22 @@ export function createClaudeSdkDriver(
           throw new Error("Claude changed while preparing the prompt")
       })
       const uuid = dispatch.attemptId
+      live.promptReceipt = { id: uuid, dispatch }
+      // The input queue refuses before holding the message, so a refusal
+      // means Claude never saw it; the turn is marked running only once it
+      // is queued. Its consumer resumes after this synchronous section.
+      try {
+        preparePrompt(dispatch, () => live.input.send({
+          type: "user",
+          uuid,
+          session_id: live.state.nativeId,
+          parent_tool_use_id: null,
+          message: { role: "user", content },
+        }))
+      } catch (error) {
+        live.promptReceipt = undefined
+        throw error
+      }
       live.projection.reset()
       live.transcript.reset()
       engine.patch(live, {
@@ -505,14 +521,6 @@ export function createClaudeSdkDriver(
         error: undefined,
       })
       engine.emitUpdate(live, { kind: "user", text })
-      live.promptReceipt = { id: uuid, dispatch }
-      live.input.send({
-        type: "user",
-        uuid,
-        session_id: live.state.nativeId,
-        parent_tool_use_id: null,
-        message: { role: "user", content },
-      })
       dispatch.report({ kind: "submitted", source: "sdk-input", correlationId: uuid })
     },
     async steer(id, input) {

@@ -1,6 +1,6 @@
 import { applyControlEnvironment } from "../../../control-launch.js"
 import { applyThreadEnvironment } from "../../../thread-environment.js"
-import { preparePrompt } from "../../prompt-dispatch.js"
+import { preparePrompt, preparePromptAsync } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import {
@@ -71,6 +71,8 @@ interface Live {
   models: SessionModel[]
   turn: string | null
   projection: CursorSdkProjection | null
+  /** Turns this driver ended; their late lines are never taken for a turn it lost track of. */
+  settledTurns: Set<string>
   agents: CursorAgents
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
   closed: boolean
@@ -176,13 +178,43 @@ function unfinishedToolNote(outcome: "finished" | "cancelled" | "error", error?:
   }
 }
 
+const MAX_SETTLED_TURNS = 64
+
 /** Ends the turn's projection, closing any tool row the run left open. */
 function settleTurn(engine: Engine, live: Live, outcome: "finished" | "cancelled" | "error", error?: string): void {
   const projection = live.projection
+  if (live.turn) {
+    live.settledTurns.add(live.turn)
+    if (live.settledTurns.size > MAX_SETTLED_TURNS)
+      live.settledTurns.delete(live.settledTurns.values().next().value!)
+  }
   live.turn = null
   live.projection = null
   if (!projection) return
   engine.emitUpdates(live, projection.finish(outcome, unfinishedToolNote(outcome, error)))
+}
+
+/**
+ * Shows a turn the child is running that this driver no longer tracks. The
+ * child runs one turn at a time and answers for it until it ends, so its
+ * lines are that turn's and never belong on another.
+ */
+function adoptTurn(engine: Engine, live: Live, turn: string, reason: string, runId?: string): void {
+  live.turn = turn
+  live.projection = new CursorSdkProjection(turn)
+  hostWarn("cursor-sdk", "showing a turn the host had lost track of", { conversation: live.state.id, turn })
+  engine.patch(live, { status: "running", nativeRunId: runId, lastStop: undefined, error: undefined })
+  engine.emitUpdate(live, { kind: "provider-turn", reason })
+}
+
+const ADOPTED_TURN = "Cursor was already working on this turn when Mako picked it up again."
+
+/** A line for a turn this driver neither runs nor ended: adopt it when nothing else is running. */
+function claimTurn(engine: Engine, live: Live, turn: string): boolean {
+  if (turn === live.turn) return true
+  if (live.turn !== null || live.settledTurns.has(turn)) return false
+  adoptTurn(engine, live, turn, ADOPTED_TURN)
+  return true
 }
 
 function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
@@ -223,7 +255,7 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
   if (live.closed) return
   switch (event.event) {
     case "message": {
-      if (event.turn !== live.turn || !live.projection) return
+      if (!claimTurn(engine, live, event.turn) || !live.projection) return
       if (event.message.type === "system" && event.message.model) {
         live.state = {
           ...live.state,
@@ -237,12 +269,12 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
       return
     }
     case "delta": {
-      if (event.turn !== live.turn || !live.projection) return
+      if (!claimTurn(engine, live, event.turn) || !live.projection) return
       engine.emitUpdates(live, live.projection.delta(event.delta))
       return
     }
     case "result":
-      if (event.turn !== live.turn) return
+      if (!claimTurn(engine, live, event.turn)) return
       finishTurn(engine, live, event.result)
       return
     case "login-url":
@@ -407,6 +439,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         models: [],
         turn: null,
         projection: null,
+        settledTurns: new Set(),
         agents: new CursorAgents(),
         pendingPermissions: new Map(),
         closed: false,
@@ -497,6 +530,22 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       }
     }),
     async prompt(id, text, attachments, settings, dispatch) {
+      await preparePromptAsync(dispatch, async () => {
+        const live = requireLive(id)
+        if (live.state.status === "running") throw new Error("Cursor is already working")
+        // The child runs one turn at a time. One it is still running here
+        // was lost by this driver; it is shown, and this message is refused
+        // before anything is sent so the host keeps it queued behind it.
+        const running = await live.client.request("active", undefined)
+        if (!running.turn) return
+        if (running.starting || live.settledTurns.has(running.turn))
+          throw new Error("Cursor is still ending the previous turn. Send the message again in a moment.")
+        if (live.turn !== running.turn) adoptTurn(engine, live, running.turn, ADOPTED_TURN, running.runId)
+        else engine.patch(live, { nativeRunId: running.runId })
+        throw new Error(running.truncated
+          ? "Cursor was still running an earlier turn. Mako shows it again from where its saved output starts; your message is sent when it finishes."
+          : "Cursor was still running an earlier turn. Mako shows it again; your message is sent when it finishes.")
+      })
       const { live, selection } = preparePrompt(dispatch, () => {
         const live = requireLive(id)
         if (live.state.status === "running") throw new Error("Cursor is already working")

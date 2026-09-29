@@ -678,7 +678,10 @@ function beginRpcRequest<M extends RpcMethod>(
     return Promise.reject(new Error("Codex app-server is not running"))
   const id = ++context.nextRequestId
   return new Promise<RpcResults[M]>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    // A turn/start the app-server has not answered may already be running
+    // its turn; a deadline would call that turn failed and send the next
+    // prompt into it. The app-server answers or exits, and its exit rejects.
+    const timer = method === "turn/start" ? undefined : setTimeout(() => {
       context.pending.delete(rpcKey(id))
       reject(new Error(`Codex app-server did not answer ${method}`))
     }, ["initialize", "thread/start", "thread/resume", "thread/fork"].includes(method)

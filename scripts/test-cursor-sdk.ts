@@ -402,6 +402,9 @@ console.log("cursor sdk projection, modes and wire ok")
   const steer = client
     .request("steer", { text: "hold" })
     .then(() => "answered", () => "failed")
+  const send = client
+    .request("send", { turn: "slow-start", text: "hold", images: [] })
+    .then(() => "answered", () => "failed")
   const cancel = client.request("cancel", undefined).then(
     () => "answered",
     (error: Error) => error.message
@@ -411,6 +414,11 @@ console.log("cursor sdk projection, modes and wire ok")
     await Promise.race([steer, Promise.resolve("pending")]),
     "pending",
     "a steer held by the turn is not a disconnect"
+  )
+  assert.equal(
+    await Promise.race([send, Promise.resolve("pending")]),
+    "pending",
+    "a send the SDK is slow to answer may already be running its turn"
   )
   assert.match(
     await cancel,
@@ -432,4 +440,4 @@ console.log("cursor sdk projection, modes and wire ok")
     await defaultDeadline.exited
   }
 }
-console.log("cursor sdk: steer outlives the request deadline, cancel does not")
+console.log("cursor sdk: steer and send outlive the request deadline, cancel does not")

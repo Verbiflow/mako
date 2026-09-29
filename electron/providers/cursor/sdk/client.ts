@@ -76,8 +76,15 @@ function parseJsonLine(line: string): JsonValue | undefined {
 
 type Params<Method extends SdkMethod> = Extract<SdkRequest, { method: Method }> extends { params: infer P } ? P : undefined
 
-/** Requests that legitimately outlast the ordinary deadline: a browser sign-in, and a steer — the run holds its acknowledgement until the agent takes the text or the turn ends, so a request timeout would kill a steer the child was still legitimately holding. */
-const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login", "steer"])
+/**
+ * Requests that legitimately outlast the ordinary deadline: a browser
+ * sign-in; a steer, whose acknowledgement the run holds until the agent
+ * takes the text or the turn ends; and a send, which the SDK may answer long
+ * after starting the run on a loaded machine. A deadline there turned a
+ * running turn into a "failed" one whose output the host then discarded.
+ * The child answers each of them or exits, and its exit rejects them.
+ */
+const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login", "steer", "send"])
 const STARTUP_METHODS: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["hello", "authStatus", "models", "open"])
 
 export function cursorSdkChildEntry(): string {

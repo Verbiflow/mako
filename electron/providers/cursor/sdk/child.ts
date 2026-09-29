@@ -67,11 +67,21 @@ interface OpenAgent {
 interface ActiveTurn {
   turn: string
   run: Run
+  /** What the host was sent of this turn, so a host that lost track of it can be shown it again (`active`). */
+  replay: SdkChildLine[]
+  replayCharacters: number
+  replayTruncated: boolean
 }
+
+/** A turn's replay keeps its latest lines within this budget; text streamed as deltas is also in its messages. */
+const MAX_REPLAY_CHARACTERS = 16 * 1024 * 1024
 
 let agent: OpenAgent | undefined
 let active: ActiveTurn | undefined
-let sending = false
+/** The turn whose `send` has not returned yet: the SDK may still start its run. */
+let sending: string | undefined
+/** Stop arrived while `sending`: the run is cancelled the moment it exists. */
+let cancelWhileSending = false
 let closing = false
 
 function write(line: SdkChildLine): void {
@@ -104,7 +114,21 @@ function configureRipgrep(): void {
 
 let exiting = false
 
+/**
+ * SDK 1.0.31 aborts an internal controller when a run is cancelled and
+ * leaves the resulting promise unobserved (seen as `AbortError code 20` from
+ * `Object.abort` right after Stop). The run itself settles as cancelled, so
+ * that rejection is not a failure of this process.
+ */
+function isAbandonedAbort(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "AbortError"
+}
+
 function fatal(kind: string, cause: unknown): void {
+  if (kind === "rejection" && isAbandonedAbort(cause)) {
+    log("info", `ignored an unobserved SDK abort: ${crashSummary(cause)}`)
+    return
+  }
   if (exiting) return
   exiting = true
   const deadline = setTimeout(() => process.exit(CURSOR_SDK_EXIT.fatal), 1_000)
@@ -268,13 +292,28 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   return { agentId: handle.agentId, model: handle.model, imported: imported || undefined }
 }
 
+function remember(line: SdkChildLine & { turn: string }): void {
+  const current = active
+  if (current?.turn !== line.turn) return
+  const characters = JSON.stringify(line).length
+  current.replay.push(line)
+  current.replayCharacters += characters
+  while (current.replayCharacters > MAX_REPLAY_CHARACTERS && current.replay.length > 1) {
+    const dropped = current.replay.shift()!
+    current.replayCharacters -= JSON.stringify(dropped).length
+    current.replayTruncated = true
+  }
+}
+
 function forwardMessage(turn: string, message: SDKMessage): void {
   const wire = sdkMessageForWire(message)
   if ("refused" in wire) {
     log("warn", `dropped an SDK message of type ${message.type} the wire does not describe (${wire.refused})`)
     return
   }
-  write({ event: "message", turn, message: wire.message })
+  const line = { event: "message", turn, message: wire.message } as const
+  write(line)
+  remember(line)
 }
 
 async function pump(turn: string, run: Run): Promise<void> {
@@ -321,15 +360,19 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
         write({ event: "delta", turn: params.turn, delta: { type: update.type, text: update.text ?? "" } })
         return
       case "thinking-completed":
-      case "turn-ended":
-        write({ event: "delta", turn: params.turn, delta: { type: update.type } })
+      case "turn-ended": {
+        const line = { event: "delta", turn: params.turn, delta: { type: update.type } } as const
+        write(line)
+        remember(line)
         return
+      }
       default:
         return
     }
   }
   const options = { model: params.model, mode: "agent" as const, onDelta }
-  sending = true
+  sending = params.turn
+  cancelWhileSending = false
   try {
     let run: Run
     try {
@@ -344,12 +387,28 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
       run = await open.handle.send(message, { ...options, local: { force: true } })
       log("warn", "recovered a run left active by an earlier process")
     }
-    active = { turn: params.turn, run }
+    active = { turn: params.turn, run, replay: [], replayCharacters: 0, replayTruncated: false }
     void pump(params.turn, run)
+    if (cancelWhileSending) await run.cancel().catch((cause) => log("warn", `could not stop a run Stop asked for while it started: ${cursorSdkWireError(cause).message}`))
     return { runId: run.id }
   } finally {
-    sending = false
+    sending = undefined
+    cancelWhileSending = false
   }
+}
+
+/**
+ * What this child is running, for a host that may have lost track of it.
+ * The turn's remembered lines are written again first, so the host sees the
+ * turn from its start before anything new arrives.
+ */
+function activeTurn(): SdkResult<"active"> {
+  if (active) {
+    for (const line of active.replay) write(line)
+    return { turn: active.turn, runId: active.run.id, truncated: active.replayTruncated || undefined }
+  }
+  if (sending) return { turn: sending, starting: true }
+  return {}
 }
 
 async function steer(text: string): Promise<SdkResult<"steer">> {
@@ -360,6 +419,7 @@ async function steer(text: string): Promise<SdkResult<"steer">> {
 
 async function cancel(): Promise<SdkResult<"cancel">> {
   if (active) await active.run.cancel()
+  else if (sending) cancelWhileSending = true
   return {}
 }
 
@@ -429,6 +489,8 @@ async function dispatch(request: SdkRequest): Promise<SdkResult<SdkRequest["meth
       return steer(request.params.text)
     case "cancel":
       return cancel()
+    case "active":
+      return activeTurn()
     case "close":
       return close()
     case "models":

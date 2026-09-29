@@ -155,7 +155,7 @@ export type PendingRpc<M extends RpcMethod = RpcMethod> = {
   reject(error: Error): void
   parseResult: RpcResultParser<M>
   settleResult(value: JsonValue | undefined): void
-  timer: ReturnType<typeof setTimeout>
+  timer: ReturnType<typeof setTimeout> | undefined
 }
 
 export type ItemTracker = {

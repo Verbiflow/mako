@@ -2288,6 +2288,7 @@ export class LiveConversations {
           status: "queued",
           text: command.change.text,
           displayText: undefined,
+          nativeDelivery: undefined,
         }
         break
     }
@@ -2980,7 +2981,10 @@ export class LiveConversations {
     }
     const text = request.displayText ?? resident.displayPrompt ?? request.text
     resident.displayPrompt = undefined
-    if (text || request.attachments.length)
+    // A request held back behind a turn the provider was still running
+    // already shows its message from that attempt.
+    const shown = request.nativeDelivery?.evidence.kind === "not-accepted"
+    if (!shown && (text || request.attachments.length))
       resident.updates.push({
         kind: "user",
         provider: resident.snapshot.session.harness,
@@ -3047,14 +3051,42 @@ export class LiveConversations {
       )
       .catch((error) => {
         report({ kind: "uncertain", reason: errorMessage({ error }) })
-        if (
-          generation !== resident.generation ||
-          !resident.snapshot.requests.some(
-            (candidate) =>
-              candidate.id === request.id && candidate.status === "dispatching"
-          )
+        const target = resident.snapshot.requests.find(
+          (candidate) =>
+            candidate.id === request.id && candidate.status === "dispatching"
         )
+        if (generation !== resident.generation || !target) return
+        const session = resident.snapshot.session
+        const refused = target.nativeDelivery?.attemptId === attemptId && target.nativeDelivery.evidence.kind === "not-accepted"
+        if (session.status === "running" && session.connection === "connected") {
+          if (refused) {
+            // The driver refused before sending because the provider was
+            // still running a turn it had lost track of, and is showing that
+            // turn now. Nothing was delivered, so the message waits for it.
+            hostWarn("live", "a message waits for a turn the provider was still running", {
+              conversation: resident.snapshot.session.id,
+              request: request.id,
+            })
+            resident.snapshot = {
+              ...resident.snapshot,
+              requests: resident.snapshot.requests.map((candidate) =>
+                candidate === target ? { ...candidate, status: "queued", error: undefined, snapshots: undefined } : candidate
+              ),
+            }
+            this.dependencies.workspaceSnapshots?.abandonRun(request.id)
+            this.flush(resident)
+            return
+          }
+          // A send that threw without a receipt may still have started the
+          // turn, and the driver still runs it: the request settles when
+          // that turn ends, like any other, and is never sent again.
+          hostWarn("live", "a send failed without a receipt while its turn runs; waiting for the turn", {
+            conversation: resident.snapshot.session.id,
+            request: request.id,
+            error: errorMessage({ error }),
+          })
           return
+        }
         resident.snapshot = {
           ...resident.snapshot,
           session: {

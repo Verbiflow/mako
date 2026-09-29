@@ -13,6 +13,7 @@ import {
 } from "../electron/providers/cursor/sdk/driver.ts"
 import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
 import type {
+  SdkEvent,
   SdkMethod,
   SdkResult,
 } from "../electron/providers/cursor/sdk/wire.ts"
@@ -47,6 +48,7 @@ const client: CursorSdkLiveClient = {
         agentId: "fixture-agent",
         model: { id: "fixture-model" },
       }),
+      active: () => ({}),
       send: () => {
         sends++
         return new Promise<{ runId: string }>((resolve, fail) => {
@@ -170,6 +172,100 @@ try {
   assert.equal(states.at(-1)?.nativeId, nativeId, "process recovery preserves the native session")
   await stalled.close(stalledId)
   console.log("Cursor Stop: failed acknowledgement closes the process and waits for exit before allowing recovery")
+
+  // The host lost track of a turn the child still runs, as when a send
+  // reply was dropped. The next prompt shows that turn instead of failing
+  // against it, and later lines for it keep reaching the transcript.
+  let childEvent: (event: SdkEvent) => void = () => {}
+  let childActive: SdkResult<"active"> = {}
+  let orphanSends = 0
+  const orphanClient: CursorSdkLiveClient = {
+    ...client,
+    request: async (method, params) => {
+      const answers: FixtureAnswers = {
+        active: () => {
+          if (childActive.turn && !childActive.starting) childEvent(assistant(childActive.turn, "replayed work"))
+          return childActive
+        },
+        send: () => {
+          orphanSends++
+          return { runId: "fresh-run" }
+        },
+      }
+      const respond = answers[method]
+      return respond ? respond() : client.request(method, params)
+    },
+  }
+  const assistant = (turn: string, text: string): SdkEvent => ({
+    event: "message",
+    turn,
+    message: {
+      type: "assistant",
+      agent_id: "fixture-agent",
+      run_id: "orphan-run",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    },
+  })
+  const orphanStates: LiveSessionState[] = []
+  const orphanUpdates: string[] = []
+  const orphan = createCursorSdkDriver({
+    auth, stateRoot: () => root, home: root,
+    client: (options) => {
+      childEvent = options.onEvent
+      return orphanClient
+    },
+    models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
+  })
+  const orphanId = randomUUID()
+  await orphan.start(root, { conversationId: orphanId, emit(event) {
+    if (event.type === "live-session") orphanStates.push(event.session)
+    else orphanUpdates.push(JSON.stringify(event))
+  } })
+
+  childActive = { turn: "orphan", runId: "orphan-run" }
+  const refusal: PromptDeliveryEvidence[] = []
+  await assert.rejects(
+    orphan.prompt(orphanId, "what happened?", [], undefined, {
+      operationId: randomUUID(), attemptId: randomUUID(), report: (e) => refusal.push(e),
+    }),
+    /still running an earlier turn/
+  )
+  assert.equal(refusal.at(-1)?.kind, "not-accepted", "the follow-up was never sent, so the host may send it later")
+  assert.equal(orphanSends, 0, "a prompt is never sent into a running turn")
+  assert.equal(orphanStates.at(-1)?.status, "running", "the lost turn shows as working")
+  assert.equal(orphanStates.at(-1)?.nativeRunId, "orphan-run")
+  assert.ok(orphanUpdates.some((line) => line.includes("provider-turn")), "the transcript opens the adopted turn")
+  assert.ok(orphanUpdates.some((line) => line.includes("replayed work")), "the child's replay reaches the transcript")
+
+  childEvent(assistant("orphan", "live work"))
+  assert.ok(orphanUpdates.some((line) => line.includes("live work")), "later lines for the adopted turn are shown live")
+  childEvent({ event: "result", turn: "orphan", result: { runId: "orphan-run", status: "finished" } })
+  assert.equal(orphanStates.at(-1)?.status, "ready", "the adopted turn ends like any other")
+
+  const afterEnd = orphanUpdates.length
+  childEvent(assistant("orphan", "late line"))
+  assert.equal(orphanStates.at(-1)?.status, "ready", "a settled turn's late line cannot reopen it")
+  assert.equal(orphanUpdates.length, afterEnd)
+
+  childEvent(assistant("unseen", "spontaneous"))
+  assert.equal(orphanStates.at(-1)?.status, "running", "a line for a turn the host never saw is adopted while idle")
+  assert.ok(orphanUpdates.some((line) => line.includes("spontaneous")))
+  childEvent({ event: "result", turn: "unseen", result: { runId: "orphan-run", status: "finished" } })
+  assert.equal(orphanStates.at(-1)?.status, "ready")
+
+  childActive = { turn: "starting", starting: true }
+  await assert.rejects(
+    orphan.prompt(orphanId, "too soon", [], undefined, dispatch()),
+    /still ending the previous turn/
+  )
+  assert.equal(evidence.at(-1)?.kind, "not-accepted")
+
+  childActive = {}
+  await orphan.prompt(orphanId, "fresh", [], undefined, dispatch())
+  assert.equal(orphanSends, 1, "with nothing running the prompt is sent")
+  assert.equal(evidence.at(-1)?.kind, "accepted")
+  await orphan.close(orphanId)
+  console.log("Cursor lost turn: the next prompt shows it live without sending; settled turns stay closed")
 } finally {
   await driver.close(id)
   rmSync(root, { recursive: true, force: true })

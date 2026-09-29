@@ -239,6 +239,108 @@ for (const provider of [
   }
 }
 
+// A driver that keeps its turn running after a throw still owns that turn,
+// and one that refuses because the provider was running a turn it had lost
+// shows that turn: neither message fails, and neither is shown twice.
+{
+  const root = mkdtempSync(join(tmpdir(), "mako-delivery-running-"))
+  const id = randomUUID()
+  let emit: (event: LiveDriverEvent) => void = () => {}
+  let state: LiveSessionState
+  const calls: PromptDispatch[] = []
+  let behaviour: "throw-running" | "refuse-running" | "accept" = "throw-running"
+  const driver: ProviderLiveDriver = {
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    provider: "cursor",
+    canResume: true,
+    available: () => true,
+    async start(cwd, options) {
+      emit = options.emit ?? (() => {})
+      state = {
+        id: options.conversationId,
+        nativeId: "fixture-native",
+        harness: "cursor",
+        cwd,
+        status: "ready",
+        connection: "connected",
+        modes: [],
+        currentMode: null,
+        configOptions: [],
+      }
+      return state
+    },
+    async prompt(_id, _text, _attachments, _settings, dispatch) {
+      calls.push(dispatch)
+      const running = () => emit({ type: "live-session", session: { ...state, status: "running" } })
+      if (behaviour === "refuse-running") {
+        preparePrompt(dispatch, () => {
+          running()
+          throw new Error("The provider was still running an earlier turn")
+        })
+      }
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+      running()
+      if (behaviour === "throw-running") throw new Error("The reply was lost; the turn runs on")
+    },
+    async permission() {},
+    async cancel() {},
+    close() {},
+    async setMode() {},
+  }
+  const batches: LiveBatch[] = []
+  const owner = new LiveConversations({
+    root,
+    appPath: root,
+    driver: () => driver,
+    history: async () => null,
+    emit(event: { type: string; batch?: LiveBatch }) {
+      if (event.type === "live-batch" && event.batch) batches.push(event.batch)
+    },
+  })
+  const request = (requestId: string) => owner.snapshot(id)?.requests.find((item) => item.id === requestId)
+  const bubbles = (requestId: string) => batches.flatMap((batch) => batch.updates)
+    .filter((update) => update.kind === "user" && update.requestId === requestId && !update.steeringFor).length
+  try {
+    await owner.start("cursor", root, { conversationId: id })
+    await tick()
+
+    const lost = randomUUID()
+    owner.submit(id, lost, "lost reply")
+    await tick()
+    assert.equal(request(lost)?.status, "dispatching", "a throw while the turn runs is not a failed message")
+    assert.equal(request(lost)?.nativeDelivery?.evidence.kind, "uncertain")
+    assert.equal(owner.snapshot(id)?.session.status, "running", "the session keeps showing the turn")
+    emit({ type: "live-session", session: { ...state!, status: "ready" } })
+    await tick()
+    assert.equal(request(lost)?.status, "completed", "the message settles when its turn ends")
+    assert.equal(calls.length, 1, "an unknown outcome is never sent again")
+
+    behaviour = "refuse-running"
+    const waiting = randomUUID()
+    owner.submit(id, waiting, "what happened?")
+    await tick()
+    assert.equal(request(waiting)?.status, "queued", "a refusal behind a running turn waits for it")
+    assert.equal(request(waiting)?.nativeDelivery?.evidence.kind, "not-accepted")
+    assert.equal(owner.snapshot(id)?.session.status, "running")
+    assert.equal(bubbles(waiting), 1)
+
+    behaviour = "accept"
+    emit({ type: "live-session", session: { ...state!, status: "ready" } })
+    await tick()
+    assert.equal(calls.length, 3, "the waiting message is sent once the turn ends")
+    assert.notEqual(calls[2].attemptId, calls[1].attemptId)
+    assert.equal(request(waiting)?.status, "dispatching")
+    assert.equal(bubbles(waiting), 1, "the waiting message is not shown twice")
+    emit({ type: "live-session", session: { ...state!, status: "ready" } })
+    await tick()
+    assert.equal(request(waiting)?.status, "completed")
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+  console.log("Prompt delivery: a lost reply during a running turn settles with it; a refusal behind a running turn waits and is shown once")
+}
+
 const preflight: PromptDeliveryEvidence[] = []
 assert.throws(
   () =>

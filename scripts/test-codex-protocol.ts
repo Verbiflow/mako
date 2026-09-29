@@ -514,3 +514,23 @@ console.log("PASS: Codex approval missing request, validation refusal and unconf
   terminals.kill("SIGTERM")
   console.log("PASS: Codex background terminals keep the session busy until their items complete")
 }
+
+// A turn/start the app-server is slow to answer may already be running its
+// turn, so it has no deadline; other requests keep theirs.
+{
+  const silent = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "pipe", "pipe"] })
+  const slow: ProtocolContext = { ...context, child: silent, pending: new Map(), stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER) }
+  const started = rpcRequest(slow, "turn/start", { threadId: "thread-1", input: [] }).catch(() => {})
+  const listed = rpcRequest(slow, "thread/backgroundTerminals/list", { threadId: "thread-1" }).catch(() => {})
+  const [turnStart, other] = [...slow.pending.values()]
+  assert.equal(turnStart?.method, "turn/start")
+  assert.equal(turnStart?.timer, undefined, "turn/start waits for the app-server or its exit")
+  assert.ok(other?.timer, "an ordinary request still has a deadline")
+  for (const pending of slow.pending.values()) {
+    clearTimeout(pending.timer)
+    pending.reject(new Error("fixture ended"))
+  }
+  await Promise.all([started, listed])
+  silent.kill("SIGTERM")
+  console.log("PASS: Codex turn/start outlives the request deadline")
+}
