@@ -67,6 +67,26 @@ const selectorHint =
 const selectionHint =
   'Use {role:"button",name:"Save",max:20}; optional keys: text (substring of role, name, value or visibleText), roles, states, refsOnly, includeAncestors. Strings only, no regular expressions.'
 export type ElementSelector = z.infer<typeof selectorSchema>
+
+/** Quotes a CSS or text selector back to the caller: the stock example alone
+ * does not show that accessible names can differ from visible labels. */
+export function controlSelector(value: unknown): ElementSelector {
+  const text =
+    typeof value === "string"
+      ? value
+      : z
+          .union([z.object({ css: z.string() }), z.object({ selector: z.string() })])
+          .transform((input) => ("css" in input ? input.css : input.selector))
+          .safeParse(value).data
+  if (text === undefined)
+    return controlInput(selectorSchema.safeParse(value), "selector", selectorHint)
+  const quoted = /["'](.{1,60}?)["']/.exec(text)?.[1] ?? /^text=(.{1,60})$/.exec(text)?.[1]
+  throw new ControlFault(
+    "invalid-request",
+    `${JSON.stringify(text.slice(0, 80))} is a CSS or text selector; selectors are {role,name,within?} copied from an observation. Observe with ${quoted ? `{query:${JSON.stringify(quoted)},interactive:true}` : "{interactive:true}"} and copy the matching node's role and exact name. A node's visibleText is its label when that differs from its name, and names match the name, not the label. Nothing was dispatched.`,
+    "not-dispatched"
+  )
+}
 const expectationSchema = selectorSchema
   .extend({
     value: z.string().optional(),
@@ -137,11 +157,7 @@ export class ControlObservation {
     return this.data.coverage
   }
   get(selector: ElementSelector): PageObservationNode {
-    const { role, name, within } = controlInput(
-      selectorSchema.safeParse(selector),
-      "selector",
-      selectorHint
-    )
+    const { role, name, within } = controlSelector(selector)
     const matches = scopeControlNodes(this.nodes, {
       within,
       match: { role, name },
@@ -328,7 +344,7 @@ export class ControlHandle {
   locator(selector: ElementSelector) {
     return new ControlLocator(
       this,
-      controlInput(selectorSchema.safeParse(selector), "selector", selectorHint)
+      controlSelector(selector)
     )
   }
   async observe(options: ObserveOptions = {}) {
@@ -456,16 +472,20 @@ export class ControlHandle {
         (node) => node.role === wanted.role && (node.name ?? "") === wanted.name
       )
       if (matches.length > 1)
-        throw new Error(
-          `Assertion ambiguous: ${matches.length} observed ${wanted.role} ${JSON.stringify(wanted.name)}`
+        throw new ControlFault(
+          "target-ambiguous",
+          `Assertion ambiguous: ${matches.length} observed ${wanted.role} ${JSON.stringify(wanted.name)}. Scope it with within:[{role,name}].`,
+          "not-dispatched"
         )
       const node = matches[0]
       if (
         node?.valueExact === false &&
         (wanted.value !== undefined || wanted.states?.value !== undefined)
       )
-        throw new Error(
-          "Exact value unavailable: this native driver returned display-normalized text. An exact-value-capable driver is required; no input was replayed."
+        throw new ControlFault(
+          "unsupported",
+          "Exact value unavailable: this native driver returned display-normalized text. An exact-value-capable driver is required; no input was replayed.",
+          "not-dispatched"
         )
       const matched = wanted.absent
         ? !node && view.coverage.complete && view.coverage.textComplete
@@ -486,8 +506,10 @@ export class ControlHandle {
           coverage: view.coverage,
         }
       if (Date.now() >= deadline)
-        throw new Error(
-          `Assertion not established: ${JSON.stringify(wanted)}; ${JSON.stringify(view)}`
+        throw new ControlFault(
+          "assertion-failed",
+          `Assertion not established: ${JSON.stringify(wanted)}; ${JSON.stringify(view)}`,
+          "not-dispatched"
         )
       await delay(Math.min(timing.everyMs, Math.max(1, deadline - Date.now())))
     }
@@ -505,11 +527,7 @@ export class ControlLocator {
     private readonly selector: ElementSelector
   ) {}
   locator(selector: ElementSelector) {
-    const next = controlInput(
-      selectorSchema.safeParse(selector),
-      "selector",
-      selectorHint
-    )
+    const next = controlSelector(selector)
     return new ControlLocator(this.handle, {
       ...next,
       within: [
@@ -788,15 +806,17 @@ export function controlClient(call: ControlCall) {
           "Use control.window({pid,window_id}) with numeric IDs from control.windows(pid)."
         )
       ),
-    tab: (target: PageTarget) =>
-      new TabHandle(
+    tab: (target: PageTarget | { target: PageTarget }) => {
+      const receipt = z.object({ target: z.unknown() }).safeParse(target)
+      return new TabHandle(
         call,
         controlInput(
-          PageTargetSchema.safeParse(target),
+          PageTargetSchema.safeParse(receipt.success ? receipt.data.target : target),
           "page target",
-          "Use control.tab(target) with the complete target returned by openTab/claimTab; do not guess the generation or lease."
+          "Use control.tab(target) with the complete target returned by openTab/claimTab, or the receipt printed by mako-control open/claim; do not guess the generation or lease."
         )
-      ),
+      )
+    },
     openTab: async (options: OpenTabOptions) => {
       const result = await call("page", { name: "open", args: { ...options } })
       const handle = bindPage(result)

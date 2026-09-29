@@ -32,6 +32,7 @@ export {
 } from "./projection.js"
 export {
   controlClient,
+  controlSelector,
   ControlHandle,
   type ControlSelection,
   type ControlExpectationResult,
