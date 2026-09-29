@@ -226,7 +226,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
           ports: `${environment.port}-${environment.port + environment.ports - 1}`,
           dataFolder: environment.dataDir,
         },
-        recipe: recipeSummary(read, checkout),
+        recipe: recipeSummary(read),
         values,
         yourShell: launched === undefined
           ? "Mako didn't start this agent process with this Thread's values."
@@ -296,21 +296,43 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (!owner) return `Nothing on this Mac listens on port ${port}.`
       return deps.processes.describeHolder(port, environment.thread)
     },
+    async save(conversationId, recipe) {
+      if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
+      const { environment, checkout, read } = await context(conversationId)
+      const saved = await saveRecipe(deps.recipesRoot, checkout, recipe, environment)
+      const after = await readRecipe(checkout, environment, deps.recipesRoot)
+      if (after.kind !== "ready") throw new Error(`Saved to ${saved.file}, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
+      const running = (await deps.processes.status(environment.thread)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
+      return [
+        `Saved as this project's recipe in Mako, ${saved.file}. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that.`,
+        saved.previous ? `The version it replaced is kept at ${saved.previous}.` : read.kind === "none" ? "It's the project's first recipe." : undefined,
+        after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; Mako's saved recipe comes first, so that file is ignored while this one exists.` : undefined,
+        running ? "This Thread's processes are still running as they were started; environment_restart runs them with this recipe." : undefined,
+        "Agents already running keep the values their shell started with; their next Session gets these. Prove it with environment_start and environment_check.",
+      ].filter(Boolean).join("\n")
+    },
   }
 }
 
 interface RecipeSummary {
-  file: string
-  personalOverrides?: string
   state: string
-  from?: string[]
+  /** The file in use, or the one that's broken. */
+  from?: string
+  /** Where Mako keeps this project's recipe; environment_recipe_save writes it. */
+  savedIn?: string
+  ignored?: string
   problem?: string
+  contents?: Recipe
 }
 
-function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>, checkout: string): RecipeSummary {
-  const summary: RecipeSummary = { file: `${checkout}/${RECIPE_PATH}`, state: "ready" }
-  if (read.overrides) summary.personalOverrides = read.overrides
-  if (read.kind === "ready") summary.from = read.sources
+function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSummary {
+  const summary: RecipeSummary = { state: "ready" }
+  if (read.kind !== "none" && read.from) summary.from = read.from
+  if (read.saved) summary.savedIn = read.saved
+  if (read.kind === "ready") {
+    if (read.ignored) summary.ignored = `${read.ignored}: committed with the project, but the recipe saved in Mako comes first`
+    summary.contents = read.recipe
+  }
   if (read.kind === "none") summary.state = "none: agents run things themselves on this Thread's ports; environment_guide says how to set one up"
   if (read.kind === "invalid") {
     summary.state = "broken"
@@ -416,7 +438,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "environment_status",
     {
       description:
-        "This Thread's running app: its address, ports and data folder, how the project's recipe (.mako/environment.json) resolved for this Thread (the values it sets and whether your shell has them), each recipe process's state (running, starting, stopped, crashed with its exit code), and the last quick and full check results.",
+        "This Thread's running app: its address, ports and data folder; the project's recipe (where it's kept, what it says, and the values it sets for this Thread, and whether your shell has them); each recipe process's state (running, starting, stopped, crashed with its exit code); and the last quick and full check results.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -477,11 +499,23 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "environment_guide",
     {
       description:
-        "How to set up, or repair, this project's recipe (.mako/environment.json) so every Thread can run and check its own copy of the app side by side: where to learn how the project runs, what two copies fight over, the file's fields, and how to prove it with the other environment tools. Call it when asked to set up testing, or when environment_status says the recipe is missing or broken.",
+        "How to set up, or repair, this project's recipe so every Thread can run and check its own copy of the app side by side: where to learn how the project runs, what two copies fight over, the recipe's fields, and how to prove it with the other environment tools. Call it when asked to set up testing, or when environment_status says the recipe is missing or broken.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => reply(async () => ENVIRONMENT_GUIDE)
+  )
+  server.registerTool(
+    "environment_recipe_save",
+    {
+      description:
+        "Save this project's recipe in Mako, where every Thread of the project, on every branch, uses it at once; nothing to commit or merge. Checked first against this Thread's ports and this checkout's folders, and refused with the reason if it can't run. The version it replaces is kept. Pass the whole recipe, as environment_guide describes it.",
+      inputSchema: z.object({
+        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks and prepare."),
+      }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    ({ recipe }) => reply(() => tools.save(conversationId(), recipe))
   )
   server.registerTool(
     "environment_port",
