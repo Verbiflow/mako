@@ -24,6 +24,8 @@ export const RuntimeInfoSchema = z.object({
   devBuild: z.string().optional(),
   /** A fixture desk host: every client is limited to the fixture allowlist. */
   fixture: z.literal(true).optional(),
+  /** Preview reads accept the viewers' device-pixel box; older hosts refuse a fourth argument. */
+  previewSizing: z.literal(true).optional(),
   methods: z.array(z.string()),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
