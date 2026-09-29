@@ -114,7 +114,7 @@
     "test:tree-watcher": "tsx scripts/test-tree-watcher.ts && tsx scripts/test-watch-backend.ts && tsx scripts/test-host-background-watch.ts && tsx scripts/test-tree-poll.ts && tsx scripts/test-tree-watcher-fallback.ts",
     "test:checkout-heads": "tsx scripts/test-checkout-heads.ts && tsx scripts/test-worktree-origins.ts && esbuild scripts/test-outside-worktrees.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-outside-worktrees.mjs --log-level=warning && node node_modules/.tmp/test-outside-worktrees.mjs",
     "test:provider-e2e": "npm run build:electron && node scripts/test-provider-e2e.mjs",
-    "test:provider-startup": "tsx scripts/test-provider-child-observation.ts && tsx scripts/test-provider-launch-trace.ts && tsx scripts/test-provider-startup.ts && tsx scripts/test-cursor-startup.ts && tsx scripts/test-cursor-errors.ts && tsx scripts/test-cursor-model-cache.ts",
+    "test:provider-startup": "tsx scripts/test-provider-process.ts && tsx scripts/test-cursor-shell-folder.ts && tsx scripts/test-provider-child-observation.ts && tsx scripts/test-provider-launch-trace.ts && tsx scripts/test-provider-startup.ts && tsx scripts/test-cursor-startup.ts && tsx scripts/test-cursor-errors.ts && tsx scripts/test-cursor-model-cache.ts",
     "clean:fixture-sessions": "tsx scripts/clean-fixture-sessions.ts",
     "test:desk-browser-electron": "npm run build:electron && electron scripts/test-desk-browser-electron.mjs",
     "test:control-api-e2e": "npm run build:electron && node scripts/test-control-api-e2e.mjs",

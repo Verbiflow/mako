@@ -20,10 +20,17 @@ export type AcpCompactionSpec =
       }
     }
 
-/** One explicitly requested operation; notifications can precede the RPC reply. */
+/**
+ * One explicitly requested operation; notifications can precede the RPC reply.
+ * A deadline or a lost reply reports the outcome as unknown but keeps
+ * listening: a Devin compaction that outlived the deadline used to have its
+ * own "Context compacted" ignored, and the session refused every message
+ * until it was ended.
+ */
 export class AcpCompaction {
   private readonly settled: (result: LiveActionResult) => void
   private finished = false
+  private reportedUncertain = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private readonly observeUpdate: (update: SessionNotification["update"]) => LiveActionResult | undefined
   constructor(
@@ -37,11 +44,9 @@ export class AcpCompaction {
   start(send: () => Promise<PromptResponse>): void {
     this.timer = setTimeout(
       () =>
-        this.finish({
-          kind: "uncertain",
-          reason:
-            "The provider did not confirm compaction. End the live session before sending again.",
-        }),
+        this.uncertain(
+          "The provider has not confirmed compaction yet. Its confirmation still completes it; Stop ends it."
+        ),
       COMPACTION_CONFIRMATION_MS
     )
     this.timer.unref?.()
@@ -56,10 +61,7 @@ export class AcpCompaction {
             })
         },
         (error) =>
-          this.finish({
-            kind: "uncertain",
-            reason: error instanceof Error ? error.message : String(error),
-          })
+          this.uncertain(error instanceof Error ? error.message : String(error))
       )
   }
 
@@ -67,6 +69,12 @@ export class AcpCompaction {
     if (this.finished) return
     const result = this.observeUpdate(update)
     if (result) this.finish(result)
+  }
+
+  private uncertain(reason: string): void {
+    if (this.finished || this.reportedUncertain) return
+    this.reportedUncertain = true
+    this.settled({ kind: "uncertain", reason })
   }
 
   private finish(result: LiveActionResult): void {

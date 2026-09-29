@@ -340,7 +340,7 @@ export class LiveActions {
         this.state(resident, input.id, {
           kind: "uncertain",
           reason:
-            "The provider has not confirmed compaction after five minutes. It will not be repeated automatically.",
+            "The provider has not confirmed compaction after five minutes. Its confirmation still completes it; it will not be repeated automatically.",
         })
       }, COMPACTION_CONFIRMATION_MS)
       timer.unref?.()

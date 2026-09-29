@@ -1,9 +1,8 @@
-import { spawn } from "node:child_process"
+import { spawnProviderProcess } from "../provider-process.js"
 import { randomBytes } from "node:crypto"
 import { OpenCode } from "@opencode/client"
 import { z } from "zod"
 import { environmentForExecutable } from "../../executable.js"
-import { trackProviderChild } from "../../provider-children.js"
 import { ProviderStartupWatch } from "../../provider-startup.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
 import { isOpenCodeV2 } from "./version.js"
@@ -34,12 +33,10 @@ export async function startOpenCodeApi(input: {
   input.signal?.throwIfAborted()
   const password = randomBytes(32).toString("base64url")
   const lifetime = new AbortController()
-  const child = input.trace.sync("spawn", () => spawn(input.command, ["serve", "--stdio", "--port", "0"], {
+  const child = input.trace.sync("spawn", () => spawnProviderProcess(input.command, ["serve", "--stdio", "--port", "0"], {
     cwd: input.cwd,
     env: environmentForExecutable(input.command, { ...input.env, OPENCODE_PASSWORD: password }),
-    stdio: "pipe",
-  }))
-  trackProviderChild(child, { kind: "opencode:native-api", owner: input.conversationId })
+  }, { kind: "opencode:native-api", owner: input.conversationId }))
   let stderr = ""
   child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4096) })
   const watch = new ProviderStartupWatch(child, { harness: "OpenCode", stderr: () => stderr })

@@ -63,6 +63,15 @@ for (const [text, kind] of [
   })
   await tick()
   assert.deepEqual(results, [{ kind: "uncertain", reason: "transport lost" }])
+  operation.observe({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "Context compacted" },
+  })
+  assert.deepEqual(
+    results.map((result) => result.kind),
+    ["uncertain", "completed"],
+    "a lost reply does not stop the provider's own confirmation from settling it"
+  )
 }
 {
   const completed: LiveActionResult[] = []
@@ -87,11 +96,36 @@ try {
     "uncertain",
     "missing confirmation is never success"
   )
+  mock.timers.tick(COMPACTION_CONFIRMATION_MS)
+  assert.equal(timedOut.length, 1, "unconfirmed is reported once")
   operation.observe({
     sessionUpdate: "agent_message_chunk",
     content: { type: "text", text: "Context compacted" },
   })
-  assert.equal(timedOut.length, 1)
+  assert.deepEqual(
+    timedOut.map((result) => result.kind),
+    ["uncertain", "completed"],
+    "a compaction that outlives the deadline still completes on its confirmation"
+  )
+  operation.observe({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "Compaction canceled." },
+  })
+  assert.equal(timedOut.length, 2, "a settled compaction stays settled")
+  const stopped: LiveActionResult[] = []
+  const slow = new AcpCompaction(devinCompaction, (result) => stopped.push(result))
+  slow.start(async () => ({ stopReason: "end_turn" }))
+  await tick()
+  mock.timers.tick(COMPACTION_CONFIRMATION_MS)
+  slow.observe({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "Compacting context…Compaction canceled." },
+  })
+  assert.deepEqual(
+    stopped.map((result) => result.kind),
+    ["uncertain", "failed"],
+    "Stop after the deadline settles on the provider's cancellation"
+  )
   const disposed = new AcpCompaction(devinCompaction, () =>
     assert.fail("closed operation emitted a result")
   )
@@ -103,5 +137,5 @@ try {
   mock.timers.reset()
 }
 console.log(
-  "PASS: provider-owned compaction completion, early acknowledgement, split notifications, failure, cancellation and unknown delivery"
+  "PASS: provider-owned compaction completion, early acknowledgement, split notifications, failure, cancellation, unknown delivery, and late confirmation after the deadline"
 )

@@ -1023,8 +1023,22 @@ on macOS it selects Electron's bundled Helper, whose `LSUIElement` policy
 keeps each Cursor SDK process, managed MCP server, browser native host and
 daemon out of the Dock. Never launch a headless script through the main
 Mako/Electron executable when the Helper is available.
-`test-provider-startup.ts`, `test-host-log.ts`, `test-provider-children.ts` and
-`test-composer-settings.ts` cover these.
+Every harness process (agents, app servers, SDK children, model discovery)
+starts through `spawnProviderProcess` (`providers/provider-process.ts`), which
+refuses a folder that no longer exists with `MissingWorkingDirectoryError`
+before spawning. Node reports that case only as `ENOENT` on the executable, and
+a picker left open on a deleted worktree once retried Claude discovery there every
+two minutes; discovery in a missing folder lists the account's models instead.
+Inside the Cursor SDK child, a shell whose remembered folder was deleted
+(`cd x`, then `rm -rf x`) made SDK 1.0.31 throw an unobserved `spawn /bin/zsh
+ENOENT` rejection that ended the turn with exit code 70. Even with that
+rejection tolerated, every later shell call failed. `shell-folder.ts` turns such a call
+into a refusal naming both folders and moves the shell to the workspace. The
+child logs spawn-failure and abort rejections instead of exiting; any other
+rejection is still fatal.
+`test-provider-startup.ts`, `test-provider-process.ts`,
+`test-cursor-shell-folder.ts`, `test-host-log.ts`, `test-provider-children.ts`
+and `test-composer-settings.ts` cover these.
 
 When the host closes for a restart, install or quit it answers every pending
 call with `host-restarting` (`electron/contracts/host-connection.ts`) instead of

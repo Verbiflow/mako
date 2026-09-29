@@ -10,6 +10,7 @@
  * drains without logging because it can carry provider input.
  */
 import { crashSummary, cursorSdkWireError } from "./errors.js"
+import { guardShellFolder } from "./shell-folder.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
 import { existsSync, readFileSync } from "node:fs"
@@ -114,19 +115,24 @@ function configureRipgrep(): void {
 
 let exiting = false
 
+const SpawnFailureSchema = z.object({ syscall: z.string().startsWith("spawn") })
+
 /**
- * SDK 1.0.31 aborts an internal controller when a run is cancelled and
- * leaves the resulting promise unobserved (seen as `AbortError code 20` from
- * `Object.abort` right after Stop). The run itself settles as cancelled, so
- * that rejection is not a failure of this process.
+ * Rejections the SDK leaves unobserved that say nothing about this process's
+ * state. SDK 1.0.31 aborts an internal controller when a run is cancelled
+ * (`AbortError code 20` right after Stop) and its shell tool rejects a
+ * second promise when a command cannot start (`ENOENT` from a deleted
+ * folder); in both the owning run or tool call settles on its own. Ending
+ * the process for either ended the turn with it.
  */
-function isAbandonedAbort(cause: unknown): boolean {
-  return cause instanceof Error && cause.name === "AbortError"
+function containedRejection(cause: unknown): boolean {
+  if (!(cause instanceof Error)) return false
+  return cause.name === "AbortError" || SpawnFailureSchema.safeParse(cause).success
 }
 
 function fatal(kind: string, cause: unknown): void {
-  if (kind === "rejection" && isAbandonedAbort(cause)) {
-    log("info", `ignored an unobserved SDK abort: ${crashSummary(cause)}`)
+  if (kind === "rejection" && containedRejection(cause)) {
+    log("warn", `ignored an unobserved SDK rejection: ${crashSummary(cause)}`)
     return
   }
   if (exiting) return
@@ -568,6 +574,7 @@ function main(): void {
   process.on("uncaughtException", (cause) => fatal("exception", cause))
   process.on("unhandledRejection", (cause) => fatal("rejection", cause))
   configureRipgrep()
+  guardShellFolder(() => agent?.cwd, (message) => log("warn", message))
 }
 
 main()

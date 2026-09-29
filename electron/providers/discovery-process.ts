@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
+import { spawnProviderProcess } from "./provider-process.js"
 import { basename } from "node:path"
 import { environmentForExecutable, resolveExecutable } from "../executable.js"
 
@@ -65,10 +66,9 @@ export async function withDiscoveryProcess<T>(
   let release: (() => Promise<void>) | undefined
   try {
     const grouped = process.platform !== "win32"
-    const child = spawn(executable, options.args, {
+    const child = spawnProviderProcess(executable, options.args, {
       cwd: options.cwd,
       env: environmentForExecutable(executable, options.env),
-      stdio: ["pipe", "pipe", "pipe"],
       detached: grouped,
       windowsHide: true,
     })

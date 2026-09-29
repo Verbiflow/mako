@@ -1,10 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { ProviderStartupWatch, type StartupWatchOptions } from "../../../provider-startup.js"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
 import { hostLog, hostWarn } from "../../../host-log.js"
-import { trackProviderChild } from "../../../provider-children.js"
+import { spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../headless-node.js"
 import {
   CURSOR_SDK_MAX_LINE_BYTES,
@@ -111,13 +111,11 @@ export class CursorSdkClient {
     this.options = options
     const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
     delete env.NODE_OPTIONS
-    this.child = spawn(headlessNodeExecutable(options.execPath), [options.entry ?? cursorSdkChildEntry()], {
+    this.child = spawnProviderProcess(headlessNodeExecutable(options.execPath), [options.entry ?? cursorSdkChildEntry()], {
       cwd: options.cwd,
       env,
-      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-    })
-    trackProviderChild(this.child, { kind: "cursor:sdk", owner: options.owner })
+    }, { kind: "cursor:sdk", owner: options.owner })
     // Diagnostics may contain provider input. Drain without forwarding to host logs.
     this.child.stderr?.resume()
     this.child.stdout?.on("data", (chunk: Buffer) => this.receive(chunk))

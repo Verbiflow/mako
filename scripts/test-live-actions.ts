@@ -246,6 +246,21 @@ try {
     "PASS: compaction recovers a failed session, waits for completion before draining, and never repeats on retry"
   )
   finish()
+  const slowCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
+  await owner.act(id, slowCompact)
+  const waiting = randomUUID()
+  owner.submit(id, waiting, "after a slow compaction")
+  const slowBefore = sent.length
+  owner.observe({ type: "live-action-result", id, actionId: slowCompact.id, result: { kind: "uncertain", reason: "The provider has not confirmed compaction yet." } })
+  assert.equal(owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind, "uncertain")
+  assert.equal(sent.length, slowBefore, "an unconfirmed compaction still holds the queue")
+  finish()
+  assert.equal(sent.length, slowBefore, "an idle session is not a confirmation")
+  owner.observe({ type: "live-action-result", id, actionId: slowCompact.id, result: { kind: "completed" } })
+  assert.equal(owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind, "completed", "a late confirmation settles it")
+  assert.equal(sent.at(-1), "after a slow compaction", "and releases the queued message")
+  console.log("PASS: a compaction reported unconfirmed completes on the provider's late confirmation and releases the queue")
+  finish()
   const failedCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
   await owner.act(id, failedCompact)
   const heldRequest = randomUUID()

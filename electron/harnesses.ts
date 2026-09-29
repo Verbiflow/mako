@@ -166,6 +166,9 @@ async function loadProfile(
         (error.code !== "ENOENT" && error.code !== "ENOTDIR")
       )
         throw error
+      // A deleted folder lists the account's models: discovery cannot start
+      // there, and a picker still open on it retried every two minutes forever.
+      scope = undefined
     }
   }
   const account = `${harness}:${accountKey}:`

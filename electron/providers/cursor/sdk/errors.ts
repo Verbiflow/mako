@@ -42,17 +42,21 @@ const CrashCodeSchema = z.object({
   ]).optional().catch(undefined),
 })
 
+/** A failed process launch names the executable (`spawn /bin/zsh`); Node's message adds nothing more. */
+const CrashSyscallSchema = z.object({ syscall: z.string().max(200) })
+
 /** Says where a fatal error was thrown, never what it said: a message can quote provider input. */
 export function crashSummary(cause: unknown): string {
   if (!(cause instanceof Error)) return `a thrown ${Object.prototype.toString.call(cause).slice(8, -1).toLowerCase()}`
   const named = CrashCodeSchema.safeParse(cause).data?.code
+  const syscall = CrashSyscallSchema.safeParse(cause).data?.syscall
   const causes = networkCauses(cause)
   const frames = (cause.stack ?? "")
     .split("\n")
     .filter((line) => line.trimStart().startsWith("at "))
     .slice(0, STACK_FRAMES)
     .map((line) => line.trim().slice(3).replace(/(?:file:\/\/)?\/[^\s()]*\/((?:node_modules|dist-electron)\/)/g, "$1"))
-  const head = [cause.name, named, causes.length > 0 ? `(${causes.join(", ")})` : undefined].filter(Boolean).join(" ")
+  const head = [cause.name, named, syscall, causes.length > 0 ? `(${causes.join(", ")})` : undefined].filter(Boolean).join(" ")
   return [head, ...frames].join(" | ")
 }
 

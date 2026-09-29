@@ -19,7 +19,8 @@ import type {
 import { resolveCodexExecutable } from "./providers/codex/executable.js"
 import { SHUTDOWN_GRACE_MS, type ProviderStartOptions } from "./providers/live-driver.js"
 import { hostWarn } from "./host-log.js"
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
+import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { setTimeout as delay } from "node:timers/promises"
@@ -67,7 +68,6 @@ import type {
   LiveDriverEvent,
   McpRegistrySnapshot,
 } from "./shared.js"
-import { trackProviderChild } from "./provider-children.js"
 import { createLiveEngine } from "./live-engine.js"
 
 type Live = {
@@ -150,14 +150,12 @@ async function startCodex(
   applyThreadEnvironment(env, options.threadEnvironment)
   const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
   if (!executable) throw new Error("Codex is not installed")
-  const child = trace.sync("spawn", () => spawn(executable, ["app-server"], {
+  const child = trace.sync("spawn", () => spawnProviderProcess(executable, ["app-server"], {
     cwd: workingDir,
     env: environmentForExecutable(executable, codexApprovalEnvironment(env)),
     shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
-  }))
-  trackProviderChild(child, { kind: "codex:app-server", owner: id })
+  }, { kind: "codex:app-server", owner: id }))
   const live: Live = {
     id,
     cwd: workingDir,

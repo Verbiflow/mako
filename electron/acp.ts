@@ -33,7 +33,8 @@ import { accessTierOfModeId, type AccessTier } from "./contracts/access.js"
  * process lifecycle — stays here.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
+import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { pathToFileURL } from "node:url"
@@ -62,7 +63,6 @@ import {
 import { accountEnv } from "./accounts.js"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "./host-log.js"
-import { trackProviderChild } from "./provider-children.js"
 import { errorMessage } from "./live-runtime.js"
 import { basename, join } from "node:path"
 import { acpObservedSettings, applyAcpSettings } from "./acp-config.js"
@@ -274,11 +274,10 @@ async function startAcp(
     previous: options.observedApprovals ?? [],
     publish: decision => send({ type: "live-approval-decision", id, decision }),
   }))
-  const child = trace.sync("spawn", () => spawn(executable, spec.args, {
+  const child = trace.sync("spawn", () => spawnProviderProcess(executable, spec.args, {
     cwd: workingDir,
-    stdio: ["pipe", "pipe", "pipe"],
     env: environmentForExecutable(executable, env),
-  }))
+  }, { kind: `acp:${harness}`, owner: id }))
 
   child.once("close", () => {
     void approvals?.dispose().catch(() => hostWarn("acp", "Approval observation cleanup failed", { harness, conversation: id }))
@@ -320,7 +319,6 @@ async function startAcp(
     stderr = (stderr + chunk.toString()).slice(-4000)
   })
   const watch = new ProviderStartupWatch(child, { harness, stderr: () => stderr })
-  trackProviderChild(child, { kind: `acp:${harness}`, owner: id })
   hostLog("acp", "spawned", {
     harness,
     conversation: id,
@@ -715,7 +713,7 @@ export async function livePrompt(
     if (live.state.status === "running")
       throw new Error("The agent is already working")
     if (live.compaction)
-      throw new Error("Compaction is unconfirmed. End the live session before sending again.")
+      throw new Error("The agent has not confirmed compaction yet. Wait for it, or press Stop, before sending again.")
     return { live, connection: live.connection, sessionId: live.sessionId }
   })
   const compact = providerHost.acpSources.get(live.harness)?.compaction
@@ -775,10 +773,14 @@ export async function liveCompact(id: string, actionId: string): Promise<void> {
   const sessionId = live.sessionId
   const operation = new AcpCompaction(spec, (result) => {
     if (live.compaction !== operation || live.state.connection !== "connected") return
-    if (result.kind !== "uncertain") live.compaction = undefined
-    update(live, { status: result.kind === "completed" ? "ready" : "failed",
-      lastStop: result.kind === "completed" ? "completed" : "failed",
-      error: result.kind === "completed" ? undefined : result.reason })
+    // Unconfirmed is not over: the provider may still be compacting, and its
+    // confirmation or a Stop settles it.
+    if (result.kind !== "uncertain") {
+      live.compaction = undefined
+      update(live, { status: result.kind === "completed" ? "ready" : "failed",
+        lastStop: result.kind === "completed" ? "completed" : "failed",
+        error: result.kind === "completed" ? undefined : result.reason })
+    }
     live.emit({ type: "live-action-result", id, actionId, result })
   })
   live.compaction = operation
