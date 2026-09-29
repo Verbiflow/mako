@@ -982,7 +982,8 @@ export class CursorProvider implements SessionProvider {
       const blobs = database.prepare("SELECT data FROM blobs WHERE id = ?")
       let read = 0
       let start = 0
-      for (let index = input.hashes.length - 1; index > 0 && (read < bytes || !start); index--) {
+      let index = input.hashes.length - 1
+      for (; index >= 0 && (read < bytes || !start); index--) {
         const hash = input.hashes[index]
         if (hash === undefined) continue
         const size = sizes.get(hash)?.["size"]
@@ -991,7 +992,7 @@ export class CursorProvider implements SessionProvider {
         if (message?.role === "user" && (spokenText(message.content) || message.attachments.length))
           start = index
       }
-      if (!start) return null
+      if (index < 0 || !start) return null
       const folded = this.foldHashes(database, input, start)
       return folded.dropped ? null : folded.entries
     } finally {
