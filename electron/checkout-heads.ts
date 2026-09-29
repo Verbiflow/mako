@@ -47,8 +47,10 @@ function headKey(head: CheckoutHead | null): string {
  * /private spelling; harnesses and shells mostly don't. A repository is
  * named the way the folder asked about names things.
  */
-function spelledLike(path: string, folder: string): string {
-  return path.startsWith("/private/") && !folder.startsWith("/private/") ? path.slice("/private".length) : path
+export function spelledLike(path: string, folder: string): string {
+  const privateFolder = folder.startsWith("/private/")
+  if (path.startsWith("/private/")) return privateFolder ? path : path.slice("/private".length)
+  return privateFolder && /^\/(tmp|var|etc)\//.test(path) ? `/private${path}` : path
 }
 
 export interface CheckoutLocation {

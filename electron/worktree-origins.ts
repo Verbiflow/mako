@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
 import type { LinkedCheckout } from "./contracts/checkout-heads.js"
-import { gitDirPointer, pointedCheckout } from "./checkout-heads.js"
+import { gitDirPointer, pointedCheckout, spelledLike } from "./checkout-heads.js"
 
 /** Worktrees remembered after they're gone, at most; the ones seen longest ago go first. */
 const REMEMBERED = 2_000
@@ -142,9 +142,10 @@ export class WorktreeOrigins {
     return found
   }
 
-  /** A folder that's gone: the worktree it was in when some host last saw it, or Claude's layout. */
+  /** A folder that's gone: the worktree it was in when some host last saw it, spelled as the folder is, or Claude's layout. */
   private recalled(folder: string): LinkedCheckout | null {
-    for (const [path, { repoRoot }] of this.remembered) if (inside(path, folder)) return { path, repoRoot }
+    for (const [path, { repoRoot }] of this.remembered)
+      if (inside(path, folder)) return { path: spelledLike(path, folder), repoRoot: spelledLike(repoRoot, folder) }
     const claude = CLAUDE_WORKTREE.exec(folder)
     return claude ? { path: claude[0], repoRoot: claude[1] } : null
   }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -83,6 +84,17 @@ try {
   const restarted = new WorktreeOrigins(memory)
   assert.deepEqual(restarted.of(codex), { path: codex, repoRoot: repo }, "and after a restart, from the remembered file")
   assert.deepEqual(restarted.of(join(codex, "web")), { path: codex, repoRoot: repo }, "so does a folder that was inside it")
+  if (root.startsWith("/private/")) {
+    // Hosts remember whichever spelling they saw; a recalled worktree is named the way it's asked about.
+    const unprivate = (path: string) => path.slice("/private".length)
+    const recall = (spelling: string, asked: string) => {
+      const file = join(root, `recall-${randomUUID()}.json`)
+      writeFileSync(file, JSON.stringify({ worktrees: { [spelling === "private" ? codex : unprivate(codex)]: { repoRoot: spelling === "private" ? repo : unprivate(repo), seenAt: Date.now() } } }))
+      return new WorktreeOrigins(file).of(asked)
+    }
+    assert.deepEqual(recall("plain", codex), { path: codex, repoRoot: repo }, "remembered without /private, asked with it")
+    assert.deepEqual(recall("private", unprivate(codex)), { path: unprivate(codex), repoRoot: unprivate(repo) }, "remembered with /private, asked without it")
+  }
   const neverSeen = new WorktreeOrigins(join(root, "empty.json"))
   assert.deepEqual(neverSeen.of(join(repo, ".claude", "worktrees", "gone", "web")), { path: join(repo, ".claude", "worktrees", "gone"), repoRoot: repo },
     "a Claude worktree removed before any host saw it is named by its path")
@@ -106,7 +118,7 @@ try {
   assert.equal(new WorktreeOrigins(memory).of(join(root, "home", ".codex", "worktrees", "a1b2", "app", "x")), undefined,
     "a torn file starts the memory over without failing")
 
-  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, /private spelling, submodule, removed while running, after restart, removed unseen, two hosts merged, torn file")
+  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, /private spelling, submodule, removed while running, after restart, recalled in the asked spelling, removed unseen, two hosts merged, torn file")
   console.log(`${folders.length} folders: ${cold.toFixed(1)} ms first, ${warm.toFixed(2)} ms again`)
 } finally {
   rmSync(root, { recursive: true, force: true })

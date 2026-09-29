@@ -329,9 +329,12 @@ function placementLog(): void {
   moveRaw(placedA.session, placedC.thread)
   assert.equal(reopened.place(a, catalog).thread, placedC.thread, "a Session another writer moved is read again")
 
-  raw.exec("DROP TRIGGER placement_member_moved")
-  moveRaw(placedB.session, placedC.thread)
-  raw.exec("CREATE TRIGGER placement_member_moved AFTER UPDATE OF thread_id ON memberships WHEN OLD.thread_id IS NOT NEW.thread_id BEGIN INSERT INTO placement_changes (session_id) VALUES (NEW.session_id); END")
+  const moveUnlogged = (session: string, thread: string) => {
+    raw.exec("DROP TRIGGER placement_member_moved")
+    moveRaw(session, thread)
+    raw.exec("CREATE TRIGGER placement_member_moved AFTER UPDATE OF thread_id ON memberships WHEN OLD.thread_id IS NOT NEW.thread_id BEGIN INSERT INTO placement_changes (session_id) VALUES (NEW.session_id); END")
+  }
+  moveUnlogged(placedB.session, placedC.thread)
   moveRaw(placedA.session, placedA.thread)
   assert.equal(reopened.place(a, catalog).thread, placedA.thread)
   assert.equal(reopened.place(b, catalog).thread, placedB.thread, "a foreign commit evicts only the Sessions it logged")
@@ -339,15 +342,26 @@ function placementLog(): void {
   raw.prepare("INSERT INTO placement_changes (seq, session_id) VALUES ((SELECT max(seq) FROM placement_changes) + 50, 'pruned')").run()
   second.place(row("codex", "d", "/codex/d.jsonl"), catalog)
   assert.equal(reopened.place(b, catalog).thread, placedC.thread, "a gap in the log forgets every placement")
-  raw.close()
 
+  // Timed against placing the same rows in this process, so a loaded Mac slows both.
   const refs = Array.from({ length: 5_000 }, (_, index) => row("claude", `bulk-${index}`, `/claude/bulk-${index}.jsonl`))
-  reopened.placeMany(refs, catalog)
+  let started = performance.now()
+  const bulk = reopened.placeMany(refs, catalog)
+  const placing = performance.now() - started
+  const sample = refs[0]?.path ?? ""
+  const kept = bulk.get(sample)
+  assert.ok(kept)
+  moveUnlogged(kept.session, placedC.thread)
+  moveRaw(placedA.session, placedC.thread)
+  raw.close()
   second.place(row("codex", "e", "/codex/e.jsonl"), catalog)
-  const started = performance.now()
-  assert.equal(reopened.placeMany(refs, catalog).size, refs.length)
+  started = performance.now()
+  const served = reopened.placeMany(refs, catalog)
   const ms = performance.now() - started
-  assert.ok(ms < 25, `serving 5,000 placed rows after another host's commit took ${ms.toFixed(1)} ms`)
+  assert.equal(served.size, refs.length)
+  assert.deepEqual(served.get(sample), kept, "5,000 placed rows are served from memory after another host moved one Session")
+  assert.equal(reopened.place(a, catalog).thread, placedC.thread, "while the moved Session is read again")
+  assert.ok(ms < placing / 10, `serving 5,000 placed rows after another host's commit took ${ms.toFixed(1)} ms; placing them took ${placing.toFixed(1)} ms`)
   reopened.close()
   second.close()
 }

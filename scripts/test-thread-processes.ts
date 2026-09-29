@@ -213,6 +213,20 @@ try {
   await processes.start(thread, [{ kind: "process", name: "boom", command: "echo second run", cwd: root, env: process.env }])
   await processes.settle(thread, ["process-boom"], settle)
   assert.match(readFileSync(join(records, thread, "process-boom.log.1"), "utf8"), /broken config/, "the previous run's log is kept once")
+  // A command quicker than reading the process table, as on a loaded Mac, is still recorded and run.
+  const slowTable = join(root, "slow-process-table")
+  mkdirSync(slowTable)
+  writeFileSync(join(slowTable, "ps"), '#!/bin/sh\nsleep 0.5\nexec /bin/ps "$@"\n', { mode: 0o755 })
+  const searchPath = process.env.PATH
+  process.env.PATH = `${slowTable}:${searchPath}`
+  try {
+    await processes.start(thread, [{ kind: "check", name: "instant", command: "echo done; exit 4", cwd: root, env: { ...process.env, PATH: searchPath } }])
+  } finally {
+    process.env.PATH = searchPath
+  }
+  const [instant] = await processes.settle(thread, ["check-instant"], settle)
+  assert.deepEqual(instant?.state.kind === "exited" && instant.state.code, 4, "a command that ends before the table is read keeps its exit code")
+  assert.match(await processes.logs(thread, "check-instant", 5), /done/)
   const flakyPort = base + 6
   const flaky = `require("node:http").createServer((_, response) => response.end("up")).listen(${flakyPort}, "127.0.0.1", () => setTimeout(() => { console.error("The development renderer must use a loopback URL"); process.exit(1) }, 300))`
   await processes.start(thread, [{ kind: "process", name: "flaky", command: `node -e '${flaky}'`, cwd: root, env: process.env, port: flakyPort }])

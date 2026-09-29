@@ -20,10 +20,12 @@ const LOG_LIMIT_BYTES = 32 * 1024 * 1024
 const LOG_KEEP_BYTES = 1024 * 1024
 const PROCESS_TABLE_BYTES = 16 * 1024 * 1024
 /**
- * Runs the command in a subshell, so its own `exit` still leaves the exit
+ * Waits for `go` on stdin, so Mako can read its start time before a quick
+ * command ends, and never runs the command if Mako didn't record it. Then
+ * runs the command in a subshell, so its own `exit` still leaves the exit
  * code behind, and writes that code where the next host can read it.
  */
-const WRAPPER = 'command=$1; exit_file=$2; shift 2; (eval "$command"); code=$?; printf "%s\\n" "$code" > "$exit_file"; exit "$code"'
+const WRAPPER = 'command=$1; exit_file=$2; shift 2; IFS= read -r go || exit 125; [ "$go" = go ] || exit 125; (eval "$command") </dev/null; code=$?; printf "%s\\n" "$code" > "$exit_file"; exit "$code"'
 
 export type RunKind = "process" | "check" | "prepare"
 
@@ -154,7 +156,10 @@ export class ThreadProcesses {
           refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, thread) })
           continue
         }
-        runs[key] = await this.spawn(thread, spec)
+        await this.spawn(thread, spec, async (record) => {
+          runs[key] = record
+          await this.save(thread, runs)
+        })
         started.push(spec.name)
       }
       await this.save(thread, runs)
@@ -332,7 +337,8 @@ export class ThreadProcesses {
     return { kind: "ended" }
   }
 
-  private async spawn(thread: ThreadId, spec: RunSpec): Promise<Run> {
+  /** Starts the run once `record` has saved it, so no host can lose track of it. */
+  private async spawn(thread: ThreadId, spec: RunSpec, record: (run: Run) => Promise<void>): Promise<void> {
     const key = runKey(spec.kind, spec.name)
     const log = this.file(thread, key, "log")
     const exit = this.file(thread, key, "exit")
@@ -344,18 +350,25 @@ export class ThreadProcesses {
         cwd: spec.cwd,
         env: spec.env,
         detached: true,
-        stdio: ["ignore", output.fd, output.fd],
+        stdio: ["pipe", output.fd, output.fd],
       })
       const pid = await new Promise<number>((resolve, reject) => {
         child.once("spawn", () => resolve(child.pid!))
         child.once("error", reject)
       })
       child.unref()
-      const row = (await processTable()).find((candidate) => candidate.pid === pid)
-      if (!row) throw new Error(`${spec.name} exited before Mako could record it; see ${log}`)
-      const record: Run = { kind: spec.kind, name: spec.name, command: spec.command, cwd: spec.cwd, pid, startedMs: row.startedMs, at: this.now() }
-      if (spec.port !== undefined) record.port = spec.port
-      return record
+      const release = child.stdin!
+      release.on("error", () => {})
+      try {
+        const row = (await processTable()).find((candidate) => candidate.pid === pid)
+        if (!row) throw new Error(`${spec.name} ended before it started, stopped by something outside Mako; see ${log}`)
+        const run: Run = { kind: spec.kind, name: spec.name, command: spec.command, cwd: spec.cwd, pid, startedMs: row.startedMs, at: this.now() }
+        if (spec.port !== undefined) run.port = spec.port
+        await record(run)
+        release.end("go\n")
+      } finally {
+        if (!release.writableEnded) release.destroy()
+      }
     } finally {
       await output.close()
     }
