@@ -10,7 +10,6 @@ import {
   threadStatus,
   threads,
   useThreads,
-  type ThreadStatus,
 } from "@/state/threads"
 import { LEAD_EXCHANGE_ID, type Exchange as ExchangeData } from "@/lib/exchanges"
 import type { ThreadRef } from "@/lib/types"
@@ -19,10 +18,6 @@ import { pendingThreadInput, threadToMessages } from "@/lib/foreign-thread"
 import { ShieldQuestionIcon } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
-
-function sameOptionalStatus(left: ThreadStatus | null, right: ThreadStatus | null): boolean {
-  return left === right || (left !== null && right !== null && sameThreadStatus(left, right))
-}
 
 /**
  * A conversation from another harness, opened as a conversation.
@@ -170,6 +165,31 @@ function createExchangeBuilder() {
   }
 }
 
+/**
+ * How long the conversation you left stays on screen while the one you
+ * picked is read. Most reads land well inside it and the column goes straight
+ * from one transcript to the next; a slow one gives way to the skeleton.
+ */
+const HOLD_PREVIOUS_MS = 240
+
+/**
+ * The transcript to paint: the thread itself once it is known, else the one
+ * last shown while the next is still loading, for `HOLD_PREVIOUS_MS`.
+ */
+function useHeldThread(thread: ViewedThread | null, loading: ThreadRef | null): ViewedThread | null {
+  const [last, setLast] = useState(thread)
+  const [expired, setExpired] = useState<string | null>(null)
+  if (thread && thread !== last) setLast(thread)
+  const holding = !thread && loading !== null && last !== null && expired !== loading.path
+  const holdingPath = holding ? loading.path : null
+  useEffect(() => {
+    if (!holdingPath) return
+    const timer = setTimeout(() => setExpired(holdingPath), HOLD_PREVIOUS_MS)
+    return () => clearTimeout(timer)
+  }, [holdingPath])
+  return thread ?? (holding ? last : null)
+}
+
 export function ThreadViewer() {
   const scope = useScopedHistory()
   const viewing = useThreads((state) => state.viewing)
@@ -177,6 +197,7 @@ export function ThreadViewer() {
   const thread = scope ? scope.thread : viewing
   const opening = scope ? (scope.thread ? null : { kind: "loading" as const, ref: scope.ref }) : globalOpening
   const busy = opening?.kind === "loading"
+  const shown = useHeldThread(thread, busy ? opening.ref : null)
 
   useEffect(() => {
     if (scope || (!thread && !globalOpening)) return
@@ -191,22 +212,24 @@ export function ThreadViewer() {
     return () => window.removeEventListener("keydown", onKey)
   }, [globalOpening, scope, thread])
 
-  if (opening && (!thread || opening.kind === "failed"))
+  if (opening && (!shown || opening.kind === "failed"))
     return (
       <ThreadLoadingShell
         opening={opening.ref}
         error={opening.kind === "failed" ? opening.error : undefined}
       />
     )
-  if (!thread) return null
+  if (!shown) return null
+  const held = shown !== thread
 
   return (
     <div
       aria-busy={busy || undefined}
-      className="animate-enter flex min-h-0 flex-1 flex-col bg-surface"
+      inert={held || undefined}
+      className="flex min-h-0 flex-1 flex-col bg-surface"
     >
-      <NativeRequestNotice path={thread.ref.path} />
-      <Conversation key={thread.ref.path} />
+      <NativeRequestNotice path={shown.ref.path} />
+      <Conversation key={shown.ref.path} thread={shown} held={held} />
     </div>
   )
 }
@@ -268,25 +291,23 @@ function ThreadLoadingShell({
  * the same components, the same markdown, the same tool rows as any
  * conversation here.
  */
-function Conversation() {
+function Conversation({ thread, held }: { thread: ViewedThread; held: boolean }) {
   const scope = useScopedHistory()
-  const viewing = useThreads((state) => state.viewing)
   const globalRun = useThreads((state) => state.run)
-  const thread = scope ? scope.thread : viewing
-  const run = scope ? null : globalRun
-  const ref = thread?.ref
+  // The run in the store belongs to the thread being opened, not the one held.
+  const run = scope || held ? null : globalRun
+  const ref = thread.ref
   // Another thread's catalog event must not repaint this transcript: the
   // status is compared by its fields, not by the object each call allocates.
   const status = useThreads(
-    (state) => (ref ? threadStatus(ref, state) : null),
-    sameOptionalStatus
+    (state) => threadStatus(ref, state),
+    sameThreadStatus
   )
   const [buildExchanges] = useState(() => createExchangeBuilder())
   const exchanges = useMemo(
     () => buildExchanges(thread),
     [buildExchanges, thread]
   )
-  if (!thread) return null
 
   const waitingForInput = pendingThreadInput(thread.entries) !== null
   const live =

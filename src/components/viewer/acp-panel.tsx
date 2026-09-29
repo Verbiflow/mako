@@ -20,6 +20,7 @@ import { ConversationTimeline } from "@/components/transcript/conversation-timel
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
+import { viewerHandedOff } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/lib/types"
 import { describePromptRecovery } from "../../../electron/contracts/prompt-recovery"
@@ -55,14 +56,19 @@ export function AcpPanel() {
   const starting = useAcp((state) => scopedAcp(state, scope)?.kind === "starting")
   // The reader was already looking at this conversation's history when it
   // went live: the same turns stay where they are, so the panel does not
-  // arrive as a new surface. Read once, so moving focus between panes never
-  // replays the entrance.
+  // arrive as a new surface. Read once per conversation, so moving focus
+  // between panes never replays the entrance while switching to another
+  // conversation still plays it. The timeline owns the entrance; a second
+  // one on this frame compounded its fade.
+  const identity = useAcp((state) => scopedAcp(state, scope)?.draftKey)
   const inPlace = useContinuedInPlace()
-  const [continued] = useState(inPlace)
+  const [arrival, setArrival] = useState({ identity, continued: inPlace })
+  if (arrival.identity !== identity) setArrival({ identity, continued: inPlace })
+  const continued = arrival.identity === identity ? arrival.continued : inPlace
 
   if (starting) {
     return (
-      <div className={cn(!continued && "animate-enter", "flex min-h-0 flex-1 flex-col bg-surface")}>
+      <div className="flex min-h-0 flex-1 flex-col bg-surface">
         <Blocks starting continued={continued} />
       </div>
     )
@@ -70,7 +76,7 @@ export function AcpPanel() {
   if (!session) return null
 
   return (
-    <div data-live-conversation={session.id} className={cn(!continued && "animate-enter", "flex min-h-0 flex-1 flex-col bg-surface")}>
+    <div data-live-conversation={session.id} className="flex min-h-0 flex-1 flex-col bg-surface">
       <Blocks continued={continued} />
       {scope ? (
         <PaneWaiting />
@@ -93,7 +99,9 @@ function useContinuedInPlace(): boolean {
   const threadPath = useAcp((state) => scopedAcp(state, scope)?.threadPath)
   const viewed = useThreads((state) => threadPath !== undefined && state.viewing?.ref.path === threadPath)
   // A pane opening beside another grows in; its transcript doesn't enter again.
-  return scope !== null || viewed
+  // The viewer may already have let go of the transcript in the same update
+  // that mounted this panel, so its handoff counts as having viewed it.
+  return scope !== null || viewed || viewerHandedOff(threadPath)
 }
 
 /** A pane without focus says the agent is waiting; the answer is given once the pane has focus. */
