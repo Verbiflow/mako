@@ -66,7 +66,7 @@ import type {
   LiveSummary,
 } from "./shared.js"
 import { reduceLiveUpdates, mergeLiveUpdates, changedLiveBlockStart, isTurnStart } from "./contracts/live-content.js"
-import type { InterruptionReason } from "./contracts/live-conversations.js"
+import type { InterruptionReason, TurnContinuation } from "./contracts/live-conversations.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
 import { CONNECTION_LOST_STOP } from "./contracts/providers-acp.js"
 import {
@@ -1750,15 +1750,29 @@ export class LiveConversations {
   }
 
   /**
-   * A turn that just ended on the provider's dropped connection is picked up
-   * by Mako after `AUTO_CONTINUE_DELAY_MS`, once per turn. The interrupted
-   * request is stamped with the moment so the renderer says "continuing
-   * automatically" instead of offering the button; the timer re-checks
-   * eligibility when it fires, because the user may have sent something,
-   * closed the conversation, or the host may be leaving.
+   * The binding a session whose provider process is gone reopens, when its
+   * provider can resume the native session; `undefined` while a driver is
+   * attached or when nothing can be reopened.
+   */
+  private reconnectBinding(resident: Resident): ProviderBinding | undefined {
+    if (resident.driver || resident.snapshot.session.connection !== "disconnected") return undefined
+    const binding = this.activeBinding(resident)
+    const driver = this.dependencies.driver(binding?.provider ?? "")
+    return binding?.nativeId && driver?.canResume && driver.available(this.dependencies.appPath) ? binding : undefined
+  }
+
+  /**
+   * A turn that just ended on the provider's dropped connection or exited
+   * process is picked up by Mako after `AUTO_CONTINUE_DELAY_MS`, once per
+   * turn; a process that is gone is reopened on its native session first,
+   * the same reconnect a user's send makes. The interrupted request is
+   * stamped with the moment so the renderer says "continuing automatically"
+   * instead of offering the button; the timer re-checks eligibility when it
+   * fires, because the user may have sent something, closed the
+   * conversation, or the host may be leaving.
    */
   private scheduleAutoContinue(resident: Resident): void {
-    if (resident.autoContinue || !resident.driver || lifecycleBlocked()) return
+    if (resident.autoContinue || (!resident.driver && !this.reconnectBinding(resident)) || lifecycleBlocked()) return
     const candidate = autoContinueCandidate(resident.snapshot.requests)
     if (!candidate?.interruption) return
     const delay = this.dependencies.autoContinueDelayMs ?? AUTO_CONTINUE_DELAY_MS
@@ -1785,10 +1799,11 @@ export class LiveConversations {
       ...resident.snapshot,
       requests: clearAutoContinue(resident.snapshot.requests, requestId),
     }
+    const reconnect = this.reconnectBinding(resident)
     if (
       source?.id !== requestId ||
       !source.interruption?.autoContinue ||
-      !resident.driver ||
+      (!resident.driver && !reconnect) ||
       resident.rewinding ||
       resident.closing ||
       this.transfers.pending(resident) ||
@@ -1800,24 +1815,30 @@ export class LiveConversations {
       return
     }
     const reason = source.interruption.reason
+    const actor: Actor = { kind: "service", name: "auto-continue" }
+    const continues: TurnContinuation = { requestId, reason, auto: true }
     const request = LiveRequestSchema.parse({
-      actor: { kind: "service", name: "auto-continue" },
+      actor,
       id: randomUUID(),
       text: continueTurnPrompt(reason),
       attachments: [],
       tuning: source.tuning,
       status: "queued",
-      continues: { requestId, reason, auto: true },
+      continues,
     })
     request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
     try {
       assertLifecycleAdmission()
-      this.admit(resident, request)
+      if (reconnect)
+        this.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning: source.tuning }, actor, continues)
+      else this.admit(resident, request)
       hostLog("live", "continued a dropped turn", {
         conversation: id,
         harness: resident.snapshot.session.harness,
         request: request.id,
         continues: requestId,
+        reason,
+        reconnect: Boolean(reconnect),
       })
     } catch (error) {
       // The manual offer stands; the stamp is already gone from the request.
@@ -2163,7 +2184,7 @@ export class LiveConversations {
     return this.checkpoints.recover()
   }
 
-  transfer(id: string, input: TransferInput, actor?: Actor): LiveSnapshot {
+  transfer(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot {
     assertLifecycleAdmission()
     const resident = this.require(id)
     if (resident.rewinding)
@@ -2171,7 +2192,7 @@ export class LiveConversations {
         "Wait for the workspace rewind to finish before switching providers"
       )
     this.moves.assertStarts(resident)
-    return this.transfers.accept(id, input, this.actor(actor))
+    return this.transfers.accept(id, input, this.actor(actor), continues)
   }
 
   private control(resident: Resident): ConversationControl {
@@ -3367,9 +3388,25 @@ function showsActivity(event: LiveDriverEvent, status: LiveSessionState["status"
   }
 }
 
+/**
+ * Why a turn that ended without finishing can be continued rather than sent
+ * again, or `undefined`. The provider's own dropped-connection stop always
+ * qualifies. Otherwise the provider must have accepted the prompt, so its
+ * saved session holds the turn so far: then a process that died under the
+ * turn, or a turn that failed on a dropped connection, is picked up where it
+ * stopped. Without that receipt the outcome is unknown and stays the user's
+ * call.
+ */
+function continuableInterruption(request: LiveRequest, session: LiveSessionState): InterruptionReason | undefined {
+  if (session.lastStop === CONNECTION_LOST_STOP) return "connection-lost"
+  if (session.status === "ready" || request.nativeDelivery?.evidence.kind !== "accepted") return undefined
+  if (session.connection === "disconnected") return "provider-exited"
+  return classifyProviderFailure(session.error).kind === "network" ? "connection-lost" : undefined
+}
+
 function settleRequest(request: LiveRequest, session: LiveSessionState): LiveRequest {
   const stopped = /cancel|interrupt/i.test(session.lastStop ?? "")
-  const dropped = session.lastStop === CONNECTION_LOST_STOP
+  const dropped = stopped ? undefined : continuableInterruption(request, session)
   const status = stopped || dropped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
   const settled: LiveRequest = {
     ...request,
@@ -3384,11 +3421,11 @@ function settleRequest(request: LiveRequest, session: LiveSessionState): LiveReq
         : request.nativeRun,
   }
   if (dropped) {
-    // The provider ended the turn on its own dropped connection: the work so
-    // far stands, so the request is continuable rather than one to re-send,
-    // and the kind is still recorded so the panel can name the connection.
-    settled.interruption = { reason: "connection-lost", at: Date.now() }
-    settled.failure = "network"
+    // The work so far stands on the provider's side, so the request is
+    // continuable rather than one to re-send; the failure kind is still
+    // recorded so the panel can say what ended it.
+    settled.interruption = { reason: dropped, at: Date.now() }
+    settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error).kind
   } else if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
   return settled

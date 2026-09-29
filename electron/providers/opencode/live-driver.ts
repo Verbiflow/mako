@@ -236,7 +236,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     engine.patch(live, openCodeReportedSettings(live.catalog, ref))
   }
 
-  function finish(live: Live, outcome: { kind: "succeeded" } | { kind: "failed"; message: string; type?: string } | { kind: "interrupted"; reason: string }) {
+  function finish(live: Live, outcome: { kind: "succeeded" } | { kind: "failed"; message: string; type?: string; exited?: true } | { kind: "interrupted"; reason: string }) {
     const turn = live.turn
     if (!turn) return
     live.turn = null
@@ -252,7 +252,11 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     else if (outcome.kind === "interrupted") engine.patch(live, { status: "ready", lastStop: "cancelled", error: undefined })
     else {
       hostWarn("opencode", "turn failed", { conversation: live.state.id, type: outcome.type ?? "", error: outcome.message })
-      engine.patch(live, { status: "failed", lastStop: outcome.type === "aborted" ? "cancelled" : "failed", error: outcome.message.slice(0, 2000) })
+      const failure: Partial<LiveSessionState> = { status: "failed", lastStop: outcome.type === "aborted" ? "cancelled" : "failed", error: outcome.message.slice(0, 2000) }
+      // The host tells a process that died under the turn from a turn that
+      // failed by both arriving in one update.
+      if (outcome.exited) failure.connection = "disconnected"
+      engine.patch(live, failure)
     }
     for (const settle of live.settling.splice(0)) settle()
   }
@@ -653,7 +657,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const running = live.state.status === "running"
         const detail = api.stderr().trim().split("\n").slice(-3).join("\n") || `OpenCode exited${signal ? ` on ${signal}` : code === null ? "" : ` with code ${code}`}`
         hostWarn("opencode", "native API process exited during a session", { conversation: live.state.id, code: code ?? "", signal: signal ?? "" })
-        if (running) finish(live, { kind: "failed", message: detail })
+        if (running) finish(live, { kind: "failed", message: detail, exited: true })
         stop(live)
         engine.patch(live, { status: "failed", connection: "disconnected", error: detail })
       })

@@ -448,6 +448,30 @@ try {
   }
   await faulty.close(lossy.id)
 
+  {
+    // The server dies under a turn it accepted. The turn ends failed and
+    // disconnected in one update, so the host continues it on a new server
+    // instead of recording a provider failure while the connection still
+    // read as up.
+    const dying = conversation()
+    chats.push(dying.id)
+    const servers = () => new Set(spawnSync("pgrep", ["-P", String(process.pid)]).stdout.toString().split("\n").filter(Boolean).map(Number))
+    const before = servers()
+    await start(dying, { modeId: accessModeId("full") })
+    const server = [...servers()].find(pid => !before.has(pid))
+    assert.ok(server, "the conversation's OpenCode server is a child of this process")
+    const from = dying.events.length
+    const dispatch = promptDispatch()
+    await driver.prompt(dying.id, `Use the bash tool to run exactly: sleep 30 && echo slept-${marker}`, [], undefined, dispatch)
+    await until("the accepted turn to run", () => dispatch.reports.some(evidence => evidence.kind === "accepted") && dying.state().status === "running")
+    process.kill(server, "SIGKILL")
+    const sessions = () => dying.events.slice(from).flatMap(event => event.type === "live-session" ? [event.session] : [])
+    const ended = await until("the turn to end with its server", () => sessions().slice(sessions().findIndex(session => session.status === "running")).find(session => session.status !== "running"))
+    assert.equal(ended.status, "failed")
+    assert.equal(ended.connection, "disconnected", "the turn ends with the disconnect in the same update")
+    report.cases.push("server killed mid-turn: the accepted turn ends failed and disconnected in one update")
+  }
+
   report.passed = true
 } finally {
   for (const id of chats) await driver.close(id).catch(() => {})

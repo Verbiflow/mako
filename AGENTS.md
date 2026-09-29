@@ -1633,6 +1633,30 @@ prompt and stays one. `test-live-conversations.ts` (`autoContinuedTurn`),
 `test-notifications.ts` cover the send, the bound, the declines, the journal
 and the quiet.
 
+A turn whose provider process dies is continued the same way, for every
+harness. Between 2026-09-26 and 09-28 the Cursor SDK child died mid-turn eight
+times on SDK rejections nobody awaited (`ConnectError`, `AbortError`, `spawn
+ENOENT`). Each turn was recorded `failed` and sat there until the user sent
+again, once for seven hours, while auto-continue never fired: it required a
+live driver and only knew Cursor's own dropped-connection stop.
+`continuableInterruption` in `live-conversations.ts` now decides from the
+delivery receipt. A request the provider `accepted` that ends with the
+session `disconnected` is `interrupted` with reason `provider-exited`. One
+that fails with a `network` failure kind while connected is
+`connection-lost`. Without a receipt the outcome is unknown and stays
+`failed`, the user's call. With no driver, the continuation reopens the native
+session through `LiveTransfers`' reconnect, the path a user's send takes, and
+the transfer carries `continues` beside its actor so the new request is Mako's.
+Drivers owe the receipt early and the death in one update
+(`ProviderLiveDriver.prompt`). ACP answers `session/prompt` only at turn end,
+so the agent's first output for the turn is its receipt. A prompt that fails
+because the connection closed is left to the process exit, which kills a
+process that closed its pipes without exiting. OpenCode's exit handler fails
+the turn and disconnects in one patch. `test-live-conversations.ts`
+(`providerExitContinued`), `test-acp-provider-turn.mjs` (a fixture agent
+that closes its pipe and exits later) and `test-opencode-live.ts` (the real
+server killed mid-turn) cover them.
+
 A failed turn carries a `failure` kind decided once on the host
 (`electron/contracts/provider-failure.ts`, no imports, shared with the
 renderer): `transcript-rejected` (the model API refused the session's saved

@@ -11,6 +11,7 @@ import type {
 } from "./contracts/conversation-control.js"
 import { heldReason } from "./contracts/session-hold.js"
 import type { Actor } from "./contracts/thread-identity.js"
+import type { TurnContinuation } from "./contracts/live-conversations.js"
 import { classifyStartFailure } from "./contracts/provider-failure.js"
 import type { LiveSnapshot } from "./shared.js"
 import { hostLog } from "./host-log.js"
@@ -51,7 +52,7 @@ export class LiveTransfers {
       })
     }
   }
-  accept(id: string, input: TransferInput, actor?: Actor): LiveSnapshot {
+  accept(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot {
     const command = TransferInputSchema.parse(input)
     const inputDigest = createHash("sha256")
       .update(JSON.stringify(command))
@@ -94,12 +95,13 @@ export class LiveTransfers {
     resident.snapshot = {
       ...previous,
       control: {
-        ...retireQuestionsForInput(control, command.id),
+        ...(continues?.auto ? control : retireQuestionsForInput(control, command.id)),
         transfers: [
           ...control.transfers,
           {
             input: command,
             actor,
+            continues,
             inputDigest,
             createdAt: Date.now(),
             state: { kind: "queued" },
@@ -452,6 +454,7 @@ export class LiveTransfers {
           ...previous.requests,
           LiveRequestSchema.parse({
             actor: transfer.actor,
+            continues: transfer.continues,
             id: transfer.input.id,
             targetBindingId: transfer.input.bindingId ? bindingId : undefined,
             text: transfer.input.text,

@@ -6,6 +6,7 @@ import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
 import { autoContinueCandidate } from "../electron/contracts/turn-continuation"
+import { classifyProviderFailure } from "../electron/contracts/provider-failure"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
@@ -206,7 +207,13 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(autoContinueCandidate([dropped, droppedAgain]), undefined, "one attempt per turn: a continuation that drops is the user's")
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "canceled" }]), dropped, "a canceled request after it does not change the candidate")
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "queued" }]), undefined, "a queued prompt behind it is the user's next word")
-  assert.equal(autoContinueCandidate([quit]), undefined, "only a dropped connection earns an automatic continuation")
+  assert.equal(autoContinueCandidate([quit]), undefined, "only a dropped connection or an exited provider earns an automatic continuation")
+  const exited: LiveRequest = { ...dropped, interruption: { reason: "provider-exited", at: 4 }, failure: "unknown", error: "Cursor's SDK process exited (code 70)" }
+  assert.equal(autoContinueCandidate([exited]), exited, "a turn whose provider process died is Mako's to continue")
+  assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")
+  assert.match(continueTurnPrompt("provider-exited"), /process stopped.*restarted/)
+  assert.deepEqual(turnStops([quit, exited], false).get(exited.id), { reason: "provider-exited", continuable: true, automatic: false })
+  assert.equal(classifyProviderFailure("stream disconnected before completion: error sending request for url").kind, "network", "Codex's dropped stream is a dropped connection")
 }
 // The recovery panel lists a stopped turn only when the transcript does not show it.
 {

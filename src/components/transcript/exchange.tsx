@@ -206,7 +206,9 @@ function Continued({ continuation, timestamp }: { continuation: TurnContinuation
       <span>
         {continuation.reason === "connection-lost"
           ? `Mako continued the turn after the connection to ${provider} dropped`
-          : "Mako continued the turn"}
+          : continuation.reason === "provider-exited"
+            ? `Mako restarted ${provider} and continued the turn`
+            : "Mako continued the turn"}
       </span>
       {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
     </div>

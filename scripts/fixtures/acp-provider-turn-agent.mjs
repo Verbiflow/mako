@@ -84,6 +84,16 @@ new AgentSideConnection((connection) => {
     async prompt(params) {
       const name = params.prompt.find((block) => block.type === "text")?.text ?? ""
       await chunk("agent_message_chunk", `Started ${name}.`)
+      // A process that dies mid-turn, after its first output and before the
+      // prompt's response, as the Cursor SDK child did on an unhandled
+      // rejection. Its pipe closes first and the exit follows, as a runtime
+      // flushing its logs on the way out does.
+      if (name === "exits-mid-turn") {
+        await pause(50)
+        process.stdout.end()
+        setTimeout(() => process.exit(70), 300)
+        return new Promise(() => {})
+      }
       if (name.startsWith("devin-")) {
         await subagentStarted()
         await agentStopped("complete")

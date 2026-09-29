@@ -93,6 +93,8 @@ export function turnStopLabel(reason: InterruptionReason, provider: string): str
       return "Interrupted when Mako closed unexpectedly"
     case "connection-lost":
       return `The connection to ${provider} dropped`
+    case "provider-exited":
+      return `${provider} stopped unexpectedly`
   }
 }
 

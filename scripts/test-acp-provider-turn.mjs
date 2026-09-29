@@ -36,6 +36,7 @@ async function check() {
   const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
   const { liveStart, livePrompt, liveCancel, liveClose } = await import(join(repo, "dist-electron/acp.js"))
+  const { advancePromptDelivery } = await import(join(repo, "dist-electron/contracts/prompt-delivery.js"))
   const fixture = (provider, source) => providerHost.acpSources.register({
     provider,
     canResume: false,
@@ -143,4 +144,20 @@ async function check() {
   assert.equal(devin.opened().length, 2, "the ended announcement does not open a later turn")
   console.log("PASS: Stopping Devin's background subagent opens no turn, and leaves no announcement behind")
   await devin.close()
+
+  // The agent's first output is the prompt's receipt, and a process that dies
+  // before answering reports the turn failed and disconnected in one update,
+  // so the host continues it rather than recording a provider failure.
+  const exiting = await conversation("provider-turn-grok")
+  const reports = []
+  const before = exiting.events.length
+  await livePrompt(exiting.session().id, "exits-mid-turn", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: (evidence) => reports.push(evidence) })
+  await exiting.until("the process exit", () => exiting.session()?.connection === "disconnected")
+  assert.deepEqual(reports.slice(0, 2).map((evidence) => evidence.kind), ["submitted", "accepted"], "the first output accepted the prompt")
+  assert.equal(reports[1].source, "native-echo")
+  assert.equal(reports.reduce(advancePromptDelivery, { kind: "prepared" }).kind, "accepted", "the dead connection's late error cannot undo the receipt")
+  const ended = exiting.events.slice(before).flatMap((event) => event.type === "live-session" && event.session.status !== "running" ? [event.session] : [])
+  assert.equal(ended[0]?.status, "failed")
+  assert.equal(ended[0]?.connection, "disconnected", "the turn ends with the disconnect, not as a failure of a connected provider")
+  console.log("PASS: An ACP agent's first output accepts the prompt, and its process dying mid-turn ends the turn disconnected in one update")
 }

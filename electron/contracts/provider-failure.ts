@@ -89,7 +89,7 @@ const rules: Rule[] = [
     // `[canceled] http/2 stream closed with error code CANCEL (0x8)`.
     kind: "network",
     match:
-      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|network (?:error|failure|request)|socket hang up|connection (?:reset|refused|closed|lost|error|stalled|failed)|timed? ?out|terminated|stream (?:ended|closed)|other side closed|http\/2|\[(?:canceled|cancelled|deadline_exceeded)\]/i,
+      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|network (?:error|failure|request)|socket hang up|connection (?:reset|refused|closed|lost|error|stalled|failed)|timed? ?out|terminated|stream (?:ended|closed|disconnected)|other side closed|http\/2|\[(?:canceled|cancelled|deadline_exceeded)\]/i,
   },
   {
     kind: "resume-failed",

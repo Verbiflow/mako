@@ -99,7 +99,15 @@ export interface ProviderLiveDriver extends ProviderCapability {
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   available(appPath: string): boolean
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
-  /** Resolving this call is not a receipt. Report native evidence through the attempt-scoped dispatch. */
+  /**
+   * Resolving this call is not a receipt. Report native evidence through the
+   * attempt-scoped dispatch, and report `accepted` as soon as the provider
+   * shows it is working on the prompt. A turn whose process then dies is
+   * reopened and continued by the host only when it was accepted; report
+   * that death as one session update carrying both `status: "failed"` and
+   * `connection: "disconnected"`, never a failure first and the disconnect
+   * after it, or the host records a provider failure instead.
+   */
   prompt(
     id: string,
     text: string,

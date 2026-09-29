@@ -54,6 +54,12 @@ export const INTERRUPTION_REASONS = [
    * transcript and reports `end_turn`). The work done so far is kept.
    */
   "connection-lost",
+  /**
+   * The provider's process ended mid-turn after it had accepted the prompt.
+   * Its saved session holds the turn so far, so the turn resumes in a new
+   * process rather than being sent again.
+   */
+  "provider-exited",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -64,8 +70,8 @@ export interface Interruption {
    * Mako will pick this turn up itself: the continuation is scheduled for
    * `at` (epoch ms). Present only while it is pending — cleared when the
    * continuation is submitted or when something else (a prompt of the user's,
-   * a close, a host exit) makes it moot. A dropped connection is the one
-   * reason that earns this; the turn's work stands on the provider's side.
+   * a close, a host exit) makes it moot. A dropped connection or an exited
+   * provider process earns this; the turn's work stands on the provider's side.
    */
   autoContinue?: { at: number }
 }

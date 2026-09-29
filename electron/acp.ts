@@ -118,6 +118,13 @@ interface Live {
   configOptions: SessionConfigOption[]
   mcpServers: McpServer[]
   turn: AcpPromptTurn | null
+  /**
+   * Reports the running prompt accepted. ACP answers `session/prompt` only
+   * when the turn ends, so the agent's first output for the turn is the
+   * receipt; a process that dies mid-turn then leaves a turn its saved
+   * session holds, which Mako continues rather than sends again.
+   */
+  turnReceipt?: () => void
   /** A turn the agent started itself is running; the agent's own notification ends it. */
   providerTurn?: boolean
   /**
@@ -426,6 +433,8 @@ async function startAcp(
         engine.emitUpdate(live, { kind: "provider-turn", reason: live.providerTurnCause })
         live.providerTurnCause = undefined
       }
+      if (live.turn && !live.providerTurn && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate))
+        live.turnReceipt?.()
       forward(live, params, live.emit, update, live.state.settings,
         params.update.sessionUpdate === "tool_call" ? source?.toolName?.(params.update) : undefined)
     },
@@ -739,6 +748,14 @@ export async function livePrompt(
   const turn = new AcpPromptTurn((result) => {
     if (live.turn !== turn || live.state.status === "closed" || live.state.connection === "disconnected") return
     const verdict = turnVerdict(result)
+    // A prompt that failed because the connection closed is the process
+    // ending, and its exit reports the turn with the disconnect in one
+    // update. A process that closed its pipes without exiting is ended so
+    // that exit comes.
+    if (verdict.status === "failed" && connection.signal.aborted) {
+      if (live.child.exitCode === null && live.child.signalCode === null) live.child.kill()
+      return
+    }
     if (verdict.status === "failed")
       hostWarn("acp", "prompt failed", {
         harness: live.harness,
@@ -749,6 +766,11 @@ export async function livePrompt(
     update(live, verdict)
   })
   live.turn = turn
+  live.turnReceipt = () => {
+    if (live.turn !== turn) return
+    live.turnReceipt = undefined
+    dispatch.report({ kind: "accepted", source: "native-echo", referenceId: turn.id })
+  }
   live.providerTurn = false
   live.providerTurnCause = undefined
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })

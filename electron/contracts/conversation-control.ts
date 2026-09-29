@@ -7,6 +7,7 @@ import { PromptAttachmentSchema } from "./prompt-attachments.js"
 import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
 import { MessageAnchorSchema } from "./message-anchor.js"
 import { ActorSchema } from "./thread-identity.js"
+import { INTERRUPTION_REASONS } from "./live-conversations.js"
 export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
@@ -94,6 +95,12 @@ export const ContextTransferSchema = z.object({
   input: TransferInputSchema,
   /** Who asked for the handoff; kept beside the caller's input, never read from it. */
   actor: ActorSchema.optional(),
+  /** The cut-short turn a reconnect carries on, set by the host and never by the caller. */
+  continues: z.object({
+    requestId: z.string(),
+    reason: z.enum(INTERRUPTION_REASONS),
+    auto: z.boolean(),
+  }).optional(),
   createdAt: z.number(),
   state: TransferStateSchema,
 })

@@ -1221,9 +1221,153 @@ async function autoContinuedTurn() {
   }
 }
 
+/**
+ * A provider process that dies under a turn it accepted is reopened on its
+ * native session and the turn continued, once, for any harness. A process
+ * that dies before the provider accepted the prompt leaves an unknown
+ * outcome to the user, a turn that fails on a dropped connection continues
+ * in the same process, and any other failure stays a failure.
+ */
+async function providerExitContinued() {
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+  const run = async (accepts: boolean, check: (context: {
+    owner: LiveConversations
+    id: string
+    starts: Array<string | undefined>
+    prompts: string[]
+    end: (patch: Partial<LiveSessionState>) => void
+  }) => Promise<void>) => {
+    const root = mkdtempSync(join(tmpdir(), "mako-live-provider-exit-"))
+    const id = randomUUID()
+    const starts: Array<string | undefined> = []
+    const prompts: string[] = []
+    const emitters: Array<(event: LiveDriverEvent) => void> = []
+    const bindings: string[] = []
+    const session = (bindingId: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
+      id: bindingId,
+      nativeId: "native-exit",
+      nativePath: join(root, "native-exit"),
+      harness: "test-provider",
+      cwd: root,
+      status: "ready",
+      connection: "connected",
+      modes: [],
+      currentMode: null,
+      configOptions: [],
+      ...patch,
+    })
+    const driver: ProviderLiveDriver = {
+      approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      canResume: true,
+      provider: "test-provider",
+      available: () => true,
+      start: async (_cwd, options) => {
+        starts.push(options.resume)
+        bindings.push(options.conversationId)
+        if (options.emit) emitters.push(options.emit)
+        return session(options.conversationId)
+      },
+      prompt: async (bindingId, text, _attachments, _settings, dispatch) => {
+        prompts.push(text)
+        dispatch.report({ kind: "submitted", source: "transport-call" })
+        emitters.at(-1)?.({ type: "live-session", session: session(bindingId, { status: "running" }) })
+        if (accepts) dispatch.report({ kind: "accepted", source: "native-echo" })
+      },
+      permission: async () => {},
+      cancel: async () => {},
+      close: async () => {},
+      setMode: async () => {},
+    }
+    const owner = new LiveConversations({
+      appPath: root,
+      root: join(root, "journals"),
+      driver: () => driver,
+      history: async () => null,
+      emit: () => {},
+      autoContinueDelayMs: 20,
+      resumeVerdict: async () => ({ kind: "resumable", record: "moved" }),
+    })
+    try {
+      await owner.start("test-provider", root, { conversationId: id })
+      await check({
+        owner,
+        id,
+        starts,
+        prompts,
+        end: (patch) => emitters.at(-1)?.({ type: "live-session", session: session(bindings.at(-1) ?? id, patch) }),
+      })
+    } finally {
+      owner.stop()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+  const exited = { status: "failed", connection: "disconnected", error: "The agent process exited with code 70" } as const
+  const dispatched = (owner: LiveConversations, id: string, index: number) =>
+    waitFor(() => owner.snapshot(id)?.requests[index]?.status === "dispatching", `request ${index} was not dispatched`)
+
+  await run(true, async ({ owner, id, starts, prompts, end }) => {
+    const first = randomUUID()
+    owner.submit(id, first, "first")
+    await dispatched(owner, id, 0)
+    end(exited)
+    let requests = owner.snapshot(id)!.requests
+    assert.equal(requests[0]?.status, "interrupted", "an accepted turn whose process died is continuable, not failed")
+    assert.equal(requests[0]?.interruption?.reason, "provider-exited")
+    assert.ok(requests[0]?.interruption?.autoContinue, "Mako schedules the continuation even with the process gone")
+    await waitFor(() => prompts.length === 2, "the continuation was not sent")
+    assert.deepEqual(starts, [undefined, "native-exit"], "the provider was reopened on its native session")
+    requests = owner.snapshot(id)!.requests
+    assert.deepEqual(requests[1]?.continues, { requestId: first, reason: "provider-exited", auto: true })
+    assert.deepEqual(requests[1]?.actor, { kind: "service", name: "auto-continue" })
+    assert.match(prompts[1] ?? "", /process stopped/)
+    await dispatched(owner, id, 1)
+    end(exited)
+    await sleep(60)
+    requests = owner.snapshot(id)!.requests
+    assert.equal(requests[1]?.interruption?.reason, "provider-exited")
+    assert.equal(requests[1]?.interruption?.autoContinue, undefined, "a continuation whose process dies again is the user's")
+    assert.equal(prompts.length, 2, "one attempt per turn")
+    assert.equal(starts.length, 2)
+  })
+
+  await run(false, async ({ owner, id, starts, prompts, end }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    end(exited)
+    await sleep(60)
+    const request = owner.snapshot(id)!.requests[0]
+    assert.equal(request?.status, "failed", "without a receipt the outcome is unknown")
+    assert.equal(request?.interruption, undefined)
+    assert.equal(prompts.length, 1, "an unknown outcome is never sent or continued automatically")
+    assert.equal(starts.length, 1)
+  })
+
+  await run(true, async ({ owner, id, starts, prompts, end }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    end({ status: "failed", error: "stream disconnected before completion: error sending request" })
+    const request = owner.snapshot(id)!.requests[0]
+    assert.equal(request?.interruption?.reason, "connection-lost", "a turn that failed on a dropped connection is continued")
+    await waitFor(() => prompts.length === 2, "the continuation was not sent")
+    assert.equal(starts.length, 1, "a live process is continued in place")
+  })
+
+  await run(true, async ({ owner, id, prompts, end }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    end({ status: "failed", error: "429 Too Many Requests: rate limit exceeded" })
+    await sleep(60)
+    const request = owner.snapshot(id)!.requests[0]
+    assert.equal(request?.status, "failed", "a provider's refusal is a failure, not a continuation")
+    assert.equal(request?.failure, "rate-limited")
+    assert.equal(prompts.length, 1)
+  })
+}
+
 await refusedStartup()
 await settledVerdicts()
 await autoContinuedTurn()
+await providerExitContinued()
 await coalescedToolBursts()
 await quietTurnsCarryLastActivity()
 await failureIsolationAndAssets()
