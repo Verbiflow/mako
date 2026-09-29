@@ -15,6 +15,8 @@ import {
   readRecipe,
   recipeValues,
   RECIPE_PATH,
+  recipeIssues,
+  RecipeSchema,
   saveRecipe,
   type CheckTier,
   type Recipe,
@@ -51,7 +53,7 @@ export interface EnvironmentTools {
   logs(conversationId: string, target: { process: string } | { check: CheckTier }, lines: number): Promise<string>
   check(conversationId: string, tier: CheckTier): Promise<string>
   port(conversationId: string, port: number): Promise<string>
-  save(conversationId: string, recipe: unknown): Promise<string>
+  save(conversationId: string, recipe: Recipe): Promise<string>
 }
 
 interface Context {
@@ -515,7 +517,11 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ recipe }) => reply(() => tools.save(conversationId(), recipe))
+    ({ recipe }) => reply(async () => {
+      const parsed = RecipeSchema.safeParse(recipe)
+      if (!parsed.success) throw new Error(`Not saved: ${recipeIssues(parsed.error)}`)
+      return tools.save(conversationId(), parsed.data)
+    })
   )
   server.registerTool(
     "environment_port",

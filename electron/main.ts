@@ -361,11 +361,11 @@ const conversationsIn = (path: string, status: (value: string) => boolean) => li
   .summaries()
   .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
   .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
-/** People's own recipe overrides, one file per repository, outside every checkout. */
-const threadRecipeOverrides = threadStore ? join(realpathSync(dirname(threadStore.path)), "recipes") : undefined
+/** The recipe Mako keeps for each project, one file per repository, outside every checkout. */
+const threadRecipes = threadStore ? join(realpathSync(dirname(threadStore.path)), "recipes") : undefined
 /** Beside the Thread store too, so a Thread keeps one data folder whichever host starts its agents. */
 const threadEnvironments = threadStore
-  ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data"), overridesRoot: threadRecipeOverrides })
+  ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data"), recipesRoot: threadRecipes })
   : null
 /** And its running app's records, so any host sees and stops the processes another host started. */
 const threadProcesses = threadStore
@@ -2197,7 +2197,7 @@ app.whenReady().then(async () => {
       environment: (id, cwd) => threadEnvironments.forConversation(id, liveConversations.snapshot(id)?.session.title, cwd),
       launchedWith: (id) => threadEnvironments.launchedWith(id),
       processes: threadProcesses,
-      overridesRoot: threadRecipeOverrides,
+      recipesRoot: threadRecipes,
       title: (thread) => threadStore?.thread(thread)?.title,
     }) : undefined
   )

@@ -6,7 +6,7 @@ import { RECIPE_PATH } from "./thread-recipe.js"
  */
 export const ENVIRONMENT_GUIDE = `# Setting up this project's recipe
 
-Mako runs many agents at once, each in its own Thread, usually on its own branch in its own checkout (a Git worktree). Your job: make every Thread able to start this project's app and pass its checks side by side with the others, with the least change to the project. You write one small file, ${RECIPE_PATH}, committed with the project. After that, every Thread uses it automatically.
+Mako runs many agents at once, each in its own Thread, usually on its own branch in its own checkout (a Git worktree). Your job: make every Thread able to start this project's app and pass its checks side by side with the others, with the least change to the project. You write one small recipe and save it in Mako with environment_recipe_save. Every Thread of this project uses it from then on, on every branch, with nothing to commit or merge.
 
 ## What each Thread already has
 
@@ -17,10 +17,11 @@ Mako runs many agents at once, each in its own Thread, usually on its own branch
 
 ## 0. Is there a recipe already?
 
-Call environment_status first.
+Call environment_status first. Its recipe section says where the recipe comes from and shows what it says.
 
 - If the recipe is ready, prove it (step 5). If the proof passes, you're done: say so and stop. Don't rewrite a recipe that works.
-- If it's broken or fails the proof, repair it. Keep what works, and change only what's wrong.
+- If it's broken or fails the proof, repair it. Start from what it says, keep what works, change only what's wrong, and save it again.
+- A recipe committed with the project (${RECIPE_PATH}) is used when Mako has none saved. Start from it; saving one in Mako puts yours first.
 
 ## 1. Learn how the project runs from what it already has
 
@@ -47,7 +48,9 @@ Note which rung each fix used.
 3. A small change to the project, only when the app can't take a port or folder from outside. Keep today's behavior as the default, so nothing changes for anyone not using Mako, for example \`port: Number(process.env.PORT) || 5173\`. Say what the change buys.
 4. Take turns: when nothing else works, leave that one thing shared and say so plainly.
 
-## 4. Write ${RECIPE_PATH}
+## 4. Save the recipe
+
+Pass it to environment_recipe_save as the recipe. Mako checks it against this Thread's ports and this checkout's folders, and refuses it with the reason if it can't run. It keeps the version it replaces.
 
 \`\`\`json
 {
@@ -78,6 +81,8 @@ The fields:
   - Never a clean reinstall, such as npm ci or deleting node_modules first. A new worktree already has the main checkout's installed JavaScript packages copied in when the lockfile matches, and the usual install leaves that copy alone; a clean reinstall throws it away and writes every file again.
 
 Keep it small, and name the project's own scripts. Add a script to the project only when none exists. Nothing Mako-specific goes inside a command, so every command still works without Mako.
+
+Saving it reaches every Thread of the project at once, including ones on other branches. So save it once you've worked it out, not piece by piece. The tools below run the saved recipe, so if the proof fails, fix it and save again.
 
 ## 5. Prove it with the tools, not by hand
 
@@ -113,13 +118,14 @@ Never write to production data, delete data, or stop a process you didn't start.
 
 ## 8. Finish
 
-1. Commit the recipe, and any small change, on this Thread's branch.
+1. The recipe needs no commit: it's saved in Mako. Commit any small change to the project on this Thread's branch.
 2. Tell the user in full, plain sentences, not fragments, someone who hasn't read the code:
    - what every Thread now gets;
    - what stays shared, and the rule for it;
    - each change to the project, which rung it used, and what it buys; fixes to things that were already broken, separately;
    - the proof: the processes that ran, their ports, and the check results.
-3. Offer to merge or open a pull request; the user decides.
+3. If you changed the project, say that other branches run the recipe without that change until it's merged, and what that means for them, such as two copies still sharing one port. Offer to merge or open a pull request; the user decides.
+4. If the user wants teammates to get the recipe through Git, write the same recipe to ${RECIPE_PATH} and commit it too. Offer this; don't do it unasked.
 
 If something needs human eyes, such as a sign-in flow you can't complete or a visual change, you may ask the user to try it on the running app. That's optional, never a gate.
 `

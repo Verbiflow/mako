@@ -123,7 +123,7 @@ async function readJson(path: string): Promise<JsonRead> {
   }
 }
 
-function issues(error: z.ZodError): string {
+export function recipeIssues(error: z.ZodError): string {
   return error.issues.map((issue) => `${issue.path.join(".") || "the file"}: ${issue.message}`).join("; ")
 }
 
@@ -145,33 +145,32 @@ export async function readRecipe(checkout: string, environment: ThreadEnvironmen
   const read = useSaved ? own : team
   if (read.kind === "absent") return { kind: "none", checkout, ...at }
   if (read.kind === "invalid") return { kind: "invalid", checkout, message: `${from}: ${read.message}`, from, ...at }
-  const checked = await checkRecipe(read.value, checkout, environment)
-  if (!checked.ok) return { kind: "invalid", checkout, message: `${from}: ${checked.message}`, from, ...at }
-  const ready: RecipeRead = { kind: "ready", checkout, recipe: checked.recipe, from, ...at }
+  const parsed = RecipeSchema.safeParse(read.value)
+  const problem = parsed.success ? await recipeProblem(parsed.data, checkout, environment) : recipeIssues(parsed.error)
+  if (!parsed.success || problem) return { kind: "invalid", checkout, message: `${from}: ${problem}`, from, ...at }
+  const ready: RecipeRead = { kind: "ready", checkout, recipe: parsed.data, from, ...at }
   if (from === saved && team.kind !== "absent") ready.ignored = committed
   return ready
 }
 
-/** Whether `value` is a recipe this checkout and Thread can run. */
-export async function checkRecipe(value: unknown, checkout: string, environment: ThreadEnvironment): Promise<{ ok: true; recipe: Recipe } | { ok: false; message: string }> {
-  const parsed = RecipeSchema.safeParse(value)
-  if (!parsed.success) return { ok: false, message: issues(parsed.error) }
+/** Why this checkout and Thread can't run `recipe`, if they can't. */
+export async function recipeProblem(recipe: Recipe, checkout: string, environment: ThreadEnvironment): Promise<string | undefined> {
   try {
-    recipeValues(parsed.data, environment)
-    for (const [name, spec] of Object.entries(parsed.data.processes)) {
+    recipeValues(recipe, environment)
+    for (const [name, spec] of Object.entries(recipe.processes)) {
       processPort(spec, environment)
-      processValues(parsed.data, spec, environment)
+      processValues(recipe, spec, environment)
       await processCwd(checkout, name, spec)
     }
-    parsed.data.prepare.forEach((step, index) => {
+    recipe.prepare.forEach((step, index) => {
       for (const input of step.inputs)
         if (isAbsolute(input) || relative(checkout, resolve(checkout, input)).startsWith(".."))
           throw new Error(`prepare.${index}.inputs: ${input} is outside the checkout`)
     })
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    return error instanceof Error ? error.message : String(error)
   }
-  return { ok: true, recipe: parsed.data }
+  return undefined
 }
 
 export interface SavedRecipe {
@@ -185,11 +184,11 @@ export interface SavedRecipe {
  * and branch of it. The version it replaces is kept, the last
  * `RECIPE_HISTORY` of them. Refuses a recipe this checkout can't run.
  */
-export async function saveRecipe(recipesRoot: string, checkout: string, value: unknown, environment: ThreadEnvironment, now = new Date()): Promise<SavedRecipe> {
-  const checked = await checkRecipe(value, checkout, environment)
-  if (!checked.ok) throw new Error(`Not saved: ${checked.message}`)
+export async function saveRecipe(recipesRoot: string, checkout: string, recipe: Recipe, environment: ThreadEnvironment, now = new Date()): Promise<SavedRecipe> {
+  const problem = await recipeProblem(recipe, checkout, environment)
+  if (problem) throw new Error(`Not saved: ${problem}`)
   const file = await recipePath(recipesRoot, checkout)
-  const text = `${JSON.stringify(checked.recipe, null, 2)}\n`
+  const text = `${JSON.stringify(recipe, null, 2)}\n`
   if (Buffer.byteLength(text) > RECIPE_MAX_BYTES) throw new Error(`Not saved: larger than ${RECIPE_MAX_BYTES / 1024} KB`)
   await mkdir(recipesRoot, { recursive: true, mode: 0o700 })
   const saved: SavedRecipe = { file }

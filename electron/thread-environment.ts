@@ -14,7 +14,7 @@ import {
   type ThreadRecipeProcess,
 } from "./contracts/thread-environments.js"
 import type { ThreadStore } from "./thread-store.js"
-import { checkoutOf, processPort, readRecipe, recipeValues, RECIPE_PATH } from "./thread-recipe.js"
+import { checkoutOf, processPort, readRecipe, recipeValues } from "./thread-recipe.js"
 
 const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
@@ -55,7 +55,7 @@ function recipeInstructions(environment: ThreadEnvironment): string | undefined 
   const recipe = environment.recipe
   if (!recipe) return undefined
   if (recipe.kind === "none") return "This project has no recipe yet for running its app in each Thread; if you're asked to set one up, call environment_guide."
-  if (recipe.kind === "invalid") return `The project's recipe is broken, so its values aren't set and its processes can't start: ${recipe.message}. Tell the user; fixing it is a change to the recipe.`
+  if (recipe.kind === "invalid") return `The project's recipe is broken, so its values aren't set and its processes can't start: ${recipe.message}. Tell the user; environment_guide says how to repair it.`
   const names = Object.entries(environment.values ?? {}).map(([name, value]) => `${name}=${value}`)
   const processes = recipe.processes.map((entry) => entry.port === undefined ? entry.name : `${entry.name} on ${entry.port}`)
   return [
@@ -74,8 +74,8 @@ export interface ThreadEnvironmentDependencies {
   store: ThreadStore
   /** Threads' data folders, one per Thread ID. */
   dataRoot: string
-  /** People's own recipe overrides, one file per repository. */
-  overridesRoot?: string
+  /** Where Mako keeps projects' recipes, one file per repository. */
+  recipesRoot?: string
   /** Whether anything accepts connections on a local port. */
   listening?: (port: number) => Promise<boolean>
   now?: () => number
@@ -126,9 +126,9 @@ export class ThreadEnvironments {
     if (!cwd) return environment
     let read: Awaited<ReturnType<typeof readRecipe>>
     try {
-      read = await readRecipe(await checkoutOf(cwd), environment, this.dependencies.overridesRoot)
+      read = await readRecipe(await checkoutOf(cwd), environment, this.dependencies.recipesRoot)
     } catch (error) {
-      return { ...environment, recipe: { kind: "invalid", message: `${RECIPE_PATH} couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
+      return { ...environment, recipe: { kind: "invalid", message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
     }
     if (read.kind === "none") return { ...environment, recipe: { kind: "none" } }
     if (read.kind === "invalid") return { ...environment, recipe: { kind: "invalid", message: read.message } }

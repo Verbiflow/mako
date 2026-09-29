@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -14,7 +14,7 @@ import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { environmentTools } from "../electron/environment-tools.js"
 import { applyThreadEnvironment, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { overridePath, readRecipe, recipeValues, RECIPE_PATH } from "../electron/thread-recipe.js"
+import { readRecipe, recipeHistory, recipePath, RecipeSchema, recipeValues, RECIPE_PATH, saveRecipe } from "../electron/thread-recipe.js"
 import { ThreadStore } from "../electron/thread-store.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 
@@ -113,31 +113,45 @@ try {
   assert.equal((await recipeIn(JSON.stringify({ processes: { web: { command: "npm run web", values: { MAKO_PROFILE: "thread-{thread}" } } } }))).kind, "ready", "a project's own MAKO_ names, such as Mako's MAKO_PROFILE, are the project's")
   await invalid(JSON.stringify({ prepare: [{ command: "npm ci", inputs: ["../package-lock.json"] }] }), /outside the checkout/)
 
-  // A person's overrides, outside the checkout: alone they're a recipe; with the team's file they merge over it.
-  const overrides = join(root, "recipes")
-  const personalFolder = mkdtempSync(join(root, "personal-"))
-  const personalFile = await overridePath(overrides, personalFolder)
-  mkdirSync(overrides, { recursive: true })
-  writeFileSync(personalFile, JSON.stringify({ processes: { web: { command: "node server.mjs", port: "{port}" } } }))
-  const personal = await readRecipe(personalFolder, fixture, overrides)
-  assert.equal(personal.kind, "ready")
-  if (personal.kind === "ready") assert.deepEqual(personal.sources, [personalFile])
-  mkdirSync(join(personalFolder, ".mako"))
-  writeFileSync(join(personalFolder, RECIPE_PATH), JSON.stringify({ values: { PORT: "{port}" }, processes: { web: { command: "npm run dev", port: "{port}" }, worker: { command: "npm run worker" } }, checks: { quick: "npm test" } }))
-  writeFileSync(personalFile, JSON.stringify({ values: { DATABASE_URL: "postgres://localhost/{thread}" }, processes: { web: { command: "npm run dev -- --turbo" } } }))
-  const merged = await readRecipe(personalFolder, fixture, overrides)
-  assert.equal(merged.kind, "ready")
-  if (merged.kind === "ready") {
-    assert.deepEqual(merged.sources, [join(personalFolder, RECIPE_PATH), personalFile])
-    assert.equal(merged.recipe.processes.web?.command, "npm run dev -- --turbo", "a person's field wins")
-    assert.equal(merged.recipe.processes.web?.port, "{port}", "the team's other fields stay")
-    assert.ok(merged.recipe.processes.worker)
-    assert.deepEqual(Object.keys(merged.recipe.values), ["PORT", "DATABASE_URL"])
+  // The recipe Mako keeps for a project comes first; one committed with the project is used when Mako has none.
+  const recipes = join(root, "recipes")
+  const savedFolder = mkdtempSync(join(root, "saved-"))
+  const savedFile = await recipePath(recipes, savedFolder)
+  assert.deepEqual(await readRecipe(savedFolder, fixture, recipes), { kind: "none", checkout: savedFolder, saved: savedFile })
+  await assert.rejects(saveRecipe(recipes, savedFolder, RecipeSchema.parse({ processes: { web: { command: "x", port: "{port+10}" } } }), fixture), /^Error: Not saved: \{port\+10\} is past this Thread's 10 ports/)
+  await assert.rejects(saveRecipe(recipes, savedFolder, RecipeSchema.parse({ processes: { web: { command: "x", cwd: "server" } } }), fixture), /Not saved: processes\.web\.cwd: server doesn't exist in this checkout/, "a recipe this checkout can't run isn't saved")
+  assert.equal(existsSync(savedFile), false)
+  const firstRecipe = RecipeSchema.parse({ processes: { web: { command: "node server.mjs", port: "{port}" } } })
+  assert.deepEqual(await saveRecipe(recipes, savedFolder, firstRecipe, fixture), { file: savedFile }, "the first recipe replaces nothing")
+  const fromSaved = await readRecipe(savedFolder, fixture, recipes)
+  assert.equal(fromSaved.kind === "ready" && fromSaved.from, savedFile)
+  assert.equal(fromSaved.kind === "ready" && fromSaved.ignored, undefined)
+  mkdirSync(join(savedFolder, ".mako"))
+  const committed = { values: { PORT: "{port}" }, processes: { web: { command: "npm run dev", port: "{port}" }, worker: { command: "npm run worker" } }, checks: { quick: "npm test" } }
+  writeFileSync(join(savedFolder, RECIPE_PATH), JSON.stringify(committed))
+  const both = await readRecipe(savedFolder, fixture, recipes)
+  assert.equal(both.kind, "ready")
+  if (both.kind === "ready") {
+    assert.equal(both.from, savedFile)
+    assert.equal(both.ignored, join(savedFolder, RECIPE_PATH), "a committed recipe beside the saved one is named as ignored")
+    assert.deepEqual(Object.keys(both.recipe.processes), ["web"], "the saved recipe is whole: nothing of the committed one is mixed in")
+    assert.deepEqual(both.recipe.values, {})
   }
-  writeFileSync(personalFile, JSON.stringify({ processes: { api: { port: "{port+1}" } } }))
-  const incomplete = await readRecipe(personalFolder, fixture, overrides)
-  assert.equal(incomplete.kind, "invalid")
-  if (incomplete.kind === "invalid") assert.match(incomplete.message, /with .*recipes\/personal-.*\.json: processes\.api\.command/, "an override that leaves a process without a command is named with its file")
+  const secondRecipe = { ...firstRecipe, checks: { quick: "npm test" } }
+  const replaced = await saveRecipe(recipes, savedFolder, secondRecipe, fixture, new Date("2026-09-29T12:00:00.000Z"))
+  assert.equal(replaced.previous, join(recipeHistory(savedFile), "2026-09-29T12-00-00-000Z.json"))
+  assert.deepEqual(JSON.parse(readFileSync(replaced.previous!, "utf8")), firstRecipe, "the version it replaced is kept")
+  assert.deepEqual(await saveRecipe(recipes, savedFolder, secondRecipe, fixture), { file: savedFile }, "saving the same recipe again keeps no copy")
+  for (let index = 0; index < 22; index += 1)
+    await saveRecipe(recipes, savedFolder, { ...secondRecipe, values: { RUN: String(index) } }, fixture, new Date(Date.UTC(2026, 8, 30, 0, 0, index)))
+  assert.equal(readdirSync(recipeHistory(savedFile)).length, 20, "the last 20 versions are kept")
+  writeFileSync(savedFile, "{ broken")
+  const brokenSaved = await readRecipe(savedFolder, fixture, recipes)
+  assert.equal(brokenSaved.kind, "invalid", "a broken saved recipe is loud, not replaced by the committed one")
+  if (brokenSaved.kind === "invalid") assert.match(brokenSaved.message, /recipes\/saved-\S+\.json: not JSON/)
+  rmSync(savedFile)
+  const fromCommitted = await readRecipe(savedFolder, fixture, recipes)
+  assert.equal(fromCommitted.kind === "ready" && fromCommitted.from, join(savedFolder, RECIPE_PATH), "with nothing saved, the committed recipe is used")
   await invalid(JSON.stringify({ processes: { web: { command: "x", port: "3000" } } }), /a process's port is \{port\} or \{port\+N\}/)
   await invalid(JSON.stringify({ processes: { web: { command: "x", cwd: "../elsewhere" } } }), /doesn't exist in this checkout|outside the checkout/)
   await invalid(JSON.stringify({ processes: { web: { command: "x", cwd: "/tmp" } } }), /relative to the checkout/)
@@ -282,11 +296,13 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.deepEqual(launched?.recipe, { kind: "ready", processes: [{ name: "web", port: launched!.port }, { name: "api", port: launched!.port + 1 }], checks: ["quick", "full"] })
   assert.match(threadEnvironmentInstructions(launched!), /The project's recipe also sets PORT=\d+, APP_URL=http:\/\/\S+, API_URL=\S+ in your shell\. Its processes \(web on \d+, api on \d+\) run through the environment_start/)
   cleanups.push(() => processes.discard(placed.thread))
+  const projectRecipes = join(root, "project-recipes")
   const tools = environmentTools({
     cwd: (id) => id === conversation ? project : undefined,
     environment,
     launchedWith: () => undefined,
     processes,
+    recipesRoot: projectRecipes,
     settleMs: settle,
   })
   const before = JSON.parse(await tools.status(conversation))
@@ -322,11 +338,15 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   }
   const agent = await connect(conversation)
   const listed = (await agent.listTools()).tools.map((tool) => tool.name)
-  assert.deepEqual(listed.filter((name) => name.startsWith("environment_")), ["environment_status", "environment_start", "environment_stop", "environment_restart", "environment_logs", "environment_check", "environment_guide", "environment_port"])
+  assert.deepEqual(listed.filter((name) => name.startsWith("environment_")), ["environment_status", "environment_start", "environment_stop", "environment_restart", "environment_logs", "environment_check", "environment_guide", "environment_recipe_save", "environment_port"])
   assert.match(JSON.stringify(await agent.callTool({ name: "environment_status", arguments: {} })), /running on port/)
   assert.match(JSON.stringify(await agent.callTool({ name: "environment_guide", arguments: {} })), /Setting up this project's recipe/)
-  const both = await agent.callTool({ name: "environment_logs", arguments: { process: "web", check: "quick" } })
-  assert.equal(both.isError, true, "logs names one process or one check")
+  const bothTargets = await agent.callTool({ name: "environment_logs", arguments: { process: "web", check: "quick" } })
+  assert.equal(bothTargets.isError, true, "logs names one process or one check")
+  const refusedSave = await agent.callTool({ name: "environment_recipe_save", arguments: { recipe: { processes: { web: { command: "npm run dev", port: "5173" } } } } })
+  assert.equal(refusedSave.isError, true)
+  assert.match(JSON.stringify(refusedSave.content), /Not saved: processes\.web\.port/, "a recipe that can't run is refused with the reason")
+  assert.equal(existsSync(await recipePath(projectRecipes, project)), false)
   await agent.close()
   const stranger = await connect(randomUUID())
   const refusedStatus = await stranger.callTool({ name: "environment_status", arguments: {} })
@@ -336,7 +356,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   // A broken recipe is loud, and the running app is left as it is.
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, extra: 1 }))
   assert.equal(JSON.parse(await tools.status(conversation)).recipe.state, "broken")
-  await assert.rejects(tools.start(conversation), /The project's recipe is broken, so nothing can start: \.mako\/environment\.json: the file: Unrecognized key/)
+  await assert.rejects(tools.start(conversation), /The project's recipe is broken, so nothing can start: \S+\/\.mako\/environment\.json: the file: Unrecognized key/)
   assert.equal(await portListening(toolBase), true)
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
   assert.match(await tools.stop(conversation), /Stopped (web, api|api, web)/)
@@ -408,6 +428,21 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const worktreeTools = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, settleMs: settle })
   assert.match(await worktreeTools.start(conversation), /web: running/)
   assert.equal((await fetchJson(toolBase)).cwd, realpathSync(prepared.path), "a worktree Thread's processes run in its own checkout, from its own recipe")
+  // Saved from a worktree, the recipe reaches the main checkout and every other worktree at once.
+  const saving = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, recipesRoot: projectRecipes, settleMs: settle })
+  const savedNote = await saving.save(conversation, RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" } }))
+  assert.match(savedNote, /^Saved as this project's recipe in Mako, \S+project-recipes\/\S+\.json\. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that\.\nThis checkout also has/)
+  assert.match(savedNote, /also has a committed \.mako\/environment\.json; Mako's saved recipe comes first/)
+  assert.match(savedNote, /This Thread's processes are still running as they were started; environment_restart runs them with this recipe\./)
+  const sharedFile = await recipePath(projectRecipes, project)
+  assert.equal(await recipePath(projectRecipes, prepared.path), sharedFile, "the main checkout and its worktrees share one saved recipe")
+  const mainRead = await readRecipe(project, fixture, projectRecipes)
+  assert.equal(mainRead.kind === "ready" && mainRead.recipe.values.SAVED, "yes")
+  const savedStatus = JSON.parse(await saving.status(conversation))
+  assert.equal(savedStatus.recipe.from, sharedFile)
+  assert.equal(savedStatus.recipe.contents.values.SAVED, "yes", "status shows what the recipe says, to repair from")
+  assert.match(savedStatus.recipe.ignored, /\.mako\/environment\.json: committed with the project, but the recipe saved in Mako comes first/)
+  assert.equal(savedStatus.values.SAVED, "yes")
   const running = (await processes.status(placed.thread)).map((entry) => entry.pid!)
   await worktrees.remove(prepared.path)
   assert.equal(existsSync(prepared.path), false)
@@ -417,7 +452,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: recipe checked and resolved, personal overrides merged, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })
