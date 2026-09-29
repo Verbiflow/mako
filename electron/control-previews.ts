@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto"
+import { imageSize } from "image-size"
+import sharp from "sharp"
 import {
   type BrowserService,
   type BrowserFrame,
@@ -15,6 +17,8 @@ interface PreviewEntry {
   preview: ControlPreview
   generation: number
   watchers: Map<string, number>
+  /** The host client each watcher reads through. */
+  clients: Map<string, string>
   target?: BrowserTarget
   owner?: string
   starting?: Promise<void>
@@ -29,6 +33,11 @@ interface PreviewEntry {
   publish?: NodeJS.Timeout
   oversized?: boolean
 }
+type PreviewFrame = NonNullable<ControlPreview["frame"]>
+export interface PreviewBox {
+  width: number
+  height: number
+}
 
 /** One bounded image per task. Image bytes only cross IPC when its visible preview requests them. */
 export class ControlPreviews {
@@ -36,6 +45,7 @@ export class ControlPreviews {
   private readonly browser: BrowserService
   private readonly thumbnail: (image: ControlImage) => ControlImage | null
   private readonly changed: (activity: ControlActivity) => void
+  private readonly scaled = new WeakMap<PreviewFrame, Map<string, Promise<PreviewFrame>>>()
   constructor(
     browser: BrowserService,
     thumbnail: (image: ControlImage) => ControlImage | null,
@@ -57,6 +67,7 @@ export class ControlPreviews {
       entry = {
         preview: { activity: next, frame: null },
         watchers: new Map(),
+        clients: new Map(),
         generation: 0,
         sourceFrames: 0,
       }
@@ -126,7 +137,8 @@ export class ControlPreviews {
   read(
     conversationId: string,
     watching: boolean,
-    watcher = "panel"
+    watcher = "panel",
+    client = "local"
   ): ControlPreview | null {
     const entry = this.entries.get(conversationId)
     if (!entry) return null
@@ -139,8 +151,12 @@ export class ControlPreviews {
     for (const [id, until] of entry.watchers)
       if (until < Date.now()) entry.watchers.delete(id)
     if (watching) {
-      if (entry.watchers.size < 16 || entry.watchers.has(watcher))
+      if (entry.watchers.size < 16 || entry.watchers.has(watcher)) {
         entry.watchers.set(watcher, Date.now() + 3_000)
+        for (const id of entry.clients.keys())
+          if (!entry.watchers.has(id)) entry.clients.delete(id)
+        entry.clients.set(watcher, client)
+      }
       this.capture(entry)
     } else {
       entry.watchers.delete(watcher)
@@ -153,6 +169,60 @@ export class ControlPreviews {
       Date.now() - entry.preview.activity.updatedAt >= 5_000
       ? { ...entry.preview, window: undefined }
       : entry.preview
+  }
+
+  /** Who keeps a task's live capture running: `client`'s own viewers, other
+   * clients' viewers (another window showing the same task), and whether a
+   * stream is running. A stream with no viewers is a leak. */
+  viewers(conversationId: string, client: string) {
+    const entry = this.entries.get(conversationId)
+    let own = 0, others = 0
+    for (const [id, until] of entry?.watchers ?? [])
+      if (until >= Date.now()) {
+        if (entry!.clients.get(id) === client) own++
+        else others++
+      }
+    return { own, others, capturing: Boolean(entry?.stopStream || entry?.starting) }
+  }
+
+  /**
+   * The preview with its frame scaled once, on the host, to the pixels the
+   * viewers display (`box` covers them, in device pixels), so they draw it
+   * 1:1. Replies cross the host socket in 8 KB chunks that each wait for the
+   * reader to be scheduled, so under load a full 1080p frame takes seconds to
+   * arrive while a viewer-sized one does not. Recordings and screenshots
+   * never read through here.
+   */
+  async sized(preview: ControlPreview, box?: PreviewBox): Promise<ControlPreview> {
+    const frame = preview.frame
+    if (!box || !frame || frame.image.mimeType !== "image/jpeg") return preview
+    let source: { width?: number; height?: number }
+    try { source = imageSize(frame.image.bytes) } catch { return preview }
+    const { width, height } = source
+    if (!width || !height || !(box.width > 0) || !(box.height > 0)) return preview
+    // The same fit the viewer computes, so its canvas is exactly this size.
+    const fit = Math.min(box.width / width, box.height / height, 1)
+    const size = { width: Math.max(1, Math.round(width * fit)), height: Math.max(1, Math.round(height * fit)) }
+    if (size.width * 8 > width * 7) return preview
+    const key = `${size.width}x${size.height}`
+    let bySize = this.scaled.get(frame)
+    if (!bySize) this.scaled.set(frame, (bySize = new Map()))
+    let scaling = bySize.get(key)
+    if (!scaling) {
+      if (bySize.size >= 8) bySize.clear()
+      // Full chroma: at thumbnail sizes 4:2:0 visibly softens coloured text.
+      scaling = sharp(frame.image.bytes)
+        .resize(size.width, size.height, { fit: "fill", kernel: "mks2021" })
+        .jpeg({ quality: 90, chromaSubsampling: "4:4:4" })
+        .toBuffer()
+        .then((bytes) => ({ ...frame, id: `${frame.id}:${key}`, image: { mimeType: "image/jpeg" as const, bytes: new Uint8Array(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength) } }))
+      bySize.set(key, scaling)
+    }
+    try {
+      return { ...preview, frame: await scaling }
+    } catch {
+      return preview
+    }
   }
 
   private frame(entry: PreviewEntry, image: ControlImage | NonNullable<ControlPreview["frame"]>["image"], capturedAt = Date.now(), sequence?: number) {
@@ -266,6 +336,7 @@ export class ControlPreviews {
     if (entry) {
       entry.target = undefined
       entry.watchers.clear()
+      entry.clients.clear()
       this.stop(entry)
     }
     if (entry?.publish) clearTimeout(entry.publish)

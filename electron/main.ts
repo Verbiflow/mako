@@ -1407,10 +1407,19 @@ function bindIpc() {
   )
   handle(
     "mako:control-preview",
-    (_event, conversationId: string, watching: boolean, watcher: string) => {
-      const preview = controlPreviews.read(conversationId, watching, watcher)
-      return watching ? preview : null
+    (
+      _event,
+      conversationId: string,
+      watching: boolean,
+      watcher: string,
+      box?: { width: number; height: number }
+    ) => {
+      const preview = controlPreviews.read(conversationId, watching, watcher, hostClient())
+      return watching && preview ? controlPreviews.sized(preview, box) : null
     }
+  )
+  handle("mako:control-preview-viewers", (_event, conversationId: string) =>
+    controlPreviews.viewers(conversationId, hostClient())
   )
   handle("mako:browser-control-status", () => browserControl.refresh())
   handle("mako:browser-control-prefer", (_event, browser: string | null) =>
@@ -2298,6 +2307,7 @@ app.whenReady().then(async () => {
       version: app.getVersion(),
       devBuild: loadedDevBuild,
       methods: Object.keys(hostCallInputs),
+      previewSizing: true,
     }
     if (fixtureDesk) runtime.fixture = true
     webHost = await startWebHost(
