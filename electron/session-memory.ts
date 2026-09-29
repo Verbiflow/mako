@@ -1,5 +1,5 @@
 import { processIdentityMatches } from "./providers/process-liveness.js"
-import { mkdirSync } from "node:fs"
+import { existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -97,6 +97,8 @@ export interface SessionMemoryHost {
 export interface SessionMemoryOptions {
   now?: () => number
   alive?: (pid: number) => boolean
+  /** Whether a host's runtime socket is there to connect to, without connecting. */
+  listening?: (socket: string) => boolean
   identityCurrent?: (pid: number, startedAt: number, signal: AbortSignal) => Promise<boolean>
 }
 
@@ -147,18 +149,20 @@ export class SessionMemory {
   private readonly host: SessionMemoryHost
   private readonly now: () => number
   private readonly alive: (pid: number) => boolean
+  private readonly listening: (socket: string) => boolean
   private readonly identityCurrent: NonNullable<SessionMemoryOptions["identityCurrent"]>
   private readonly lifecycle = new AbortController()
   private verifying = false
   private holdCheckOffset = 0
   private timer: ReturnType<typeof setInterval> | null = null
-  private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null }>()
+  private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null; elsewhere: boolean }>()
 
   constructor(path: string, host: SessionMemoryHost, options: SessionMemoryOptions = {}) {
     this.path = path
     this.host = host
     this.now = options.now ?? Date.now
     this.alive = options.alive ?? processAlive
+    this.listening = options.listening ?? existsSync
     this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: 1_500 }))
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
@@ -490,11 +494,16 @@ export class SessionMemory {
     const now = this.now()
     let known = this.annotations.get(key)
     if (!known || now - known.at > ANNOTATION_CACHE_MS) {
-      known = { at: now, entry: this.recall(ref.harness, ref.nativeId), hold: this.heldBy(ref.harness, ref.nativeId) }
+      known = {
+        at: now,
+        entry: this.recall(ref.harness, ref.nativeId),
+        hold: this.heldBy(ref.harness, ref.nativeId),
+        elsewhere: this.ownedElsewhere(ref.harness, ref.nativeId),
+      }
       this.annotations.set(key, known)
     }
-    const { entry, hold } = known
-    if (!entry && !hold) return ref
+    const { entry, hold, elsewhere } = known
+    if (!entry && !hold && !elsewhere) return ref
     let next = ref
     if (entry?.settings) {
       const settings = rememberedSettings(ref, entry)
@@ -502,7 +511,19 @@ export class SessionMemory {
     }
     if (entry?.modeId) next = { ...next, accessMode: entry.modeId }
     if (hold) next = { ...next, heldBy: hold.hostLabel }
+    if (elsewhere) next = { ...next, ownedElsewhere: true }
     return next
+  }
+
+  /**
+   * Whether the conversation this session routes to lives on another host
+   * that is running now. A route to a host that exited stays in the ledger
+   * and could only be followed by relaunching that host, so it says nothing
+   * about what opening the row will show.
+   */
+  private ownedElsewhere(provider: string, nativeId: string): boolean {
+    const route = this.routeForSession(provider, nativeId)
+    return route !== null && !this.isLocal(route.socket) && this.listening(route.socket)
   }
 
   close(): void {

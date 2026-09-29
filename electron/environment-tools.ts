@@ -15,6 +15,7 @@ import {
   readRecipe,
   recipeValues,
   RECIPE_PATH,
+  saveRecipe,
   type CheckTier,
   type Recipe,
 } from "./thread-recipe.js"
@@ -33,8 +34,8 @@ interface Deps {
   /** What the conversation's agent process was started with. */
   launchedWith(conversationId: string): ThreadEnvironment | undefined
   processes: ThreadProcesses
-  /** Where people's own recipe overrides live, one file per repository. */
-  overridesRoot?: string
+  /** Where Mako keeps projects' recipes, one file per repository. */
+  recipesRoot?: string
   /** A Thread's title, to name whose app was stopped to make room. */
   title?(thread: ThreadEnvironment["thread"]): string | undefined
   pressure?: () => Promise<MemoryPressure>
@@ -50,6 +51,7 @@ export interface EnvironmentTools {
   logs(conversationId: string, target: { process: string } | { check: CheckTier }, lines: number): Promise<string>
   check(conversationId: string, tier: CheckTier): Promise<string>
   port(conversationId: string, port: number): Promise<string>
+  save(conversationId: string, recipe: unknown): Promise<string>
 }
 
 interface Context {
@@ -66,12 +68,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (!environment) throw new Error("This conversation isn't in a Thread yet, so it has no environment of its own.")
     const checkout = await checkoutOf(cwd)
     await deps.processes.touch(environment.thread)
-    return { environment, checkout, read: await readRecipe(checkout, environment, deps.overridesRoot) }
+    return { environment, checkout, read: await readRecipe(checkout, environment, deps.recipesRoot) }
   }
   const withRecipe = async (conversationId: string): Promise<Context & { recipe: Recipe }> => {
     const { read, ...rest } = await context(conversationId)
     if (read.kind === "none")
-      throw new Error(`This project has no recipe (${RECIPE_PATH} in ${read.checkout}), so Mako has nothing to start or check. Run what you need yourself on this Thread's ports. environment_guide says how to set one up, which gives every Thread this; do that when the user asks.`)
+      throw new Error("This project has no recipe yet, so Mako has nothing to start or check. Run what you need yourself on this Thread's ports. environment_guide says how to set one up, which gives every Thread this; do that when the user asks.")
     if (read.kind === "invalid") throw new Error(`The project's recipe is broken, so nothing can start: ${read.message}`)
     return { ...rest, recipe: read.recipe }
   }

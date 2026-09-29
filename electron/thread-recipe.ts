@@ -1,14 +1,19 @@
-import { createHash } from "node:crypto"
-import { lstat, readdir, readFile, realpath } from "node:fs/promises"
+import { createHash, randomUUID } from "node:crypto"
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { z } from "zod"
 import type { ThreadEnvironment } from "./contracts/thread-environments.js"
 import { git } from "./worktree-git.js"
 
-/** Committed with the project, so each branch carries its own. */
+/**
+ * A recipe committed with the project, for a team that shares one through
+ * Git. The one Mako keeps for the project (`recipePath`) comes first.
+ */
 export const RECIPE_PATH = join(".mako", "environment.json")
 
 const RECIPE_MAX_BYTES = 64 * 1024
+/** Earlier versions of a project's saved recipe kept beside it. */
+const RECIPE_HISTORY = 20
 /** Changing any of these in the agent's shell would break the agent itself. */
 const SHELL_OWNED = new Set(["PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "PWD"])
 const PLACEHOLDER = /\{([a-z][a-z0-9 +]*)\}/g
@@ -65,25 +70,21 @@ export const RecipeSchema = z.object({
   prepare: z.array(prepareSchema).max(10).default([]),
 }).strict()
 
-/** A person's own changes, kept by Mako outside the repository: any field, merged over the team's file. */
-const OverrideSchema = z.object({
-  $schema: z.string().optional(),
-  values: z.record(z.string(), template).optional(),
-  processes: z.record(z.string(), processSchema.partial()).optional(),
-  checks: z.object({ quick: command.optional(), full: command.optional() }).strict().optional(),
-  prepare: z.array(prepareSchema).max(10).optional(),
-}).strict()
-
 export type Recipe = z.infer<typeof RecipeSchema>
 export type RecipeProcess = z.infer<typeof processSchema>
 export type CheckTier = keyof Recipe["checks"]
 
 export type PrepareStep = z.infer<typeof prepareSchema>
 
+/**
+ * `saved` is where Mako keeps this project's recipe, whether or not one is
+ * there yet. `from` is the file in use; `ignored` is a committed file that
+ * isn't, because the saved one comes first.
+ */
 export type RecipeRead =
-  | { kind: "none"; checkout: string; overrides?: string }
-  | { kind: "ready"; checkout: string; recipe: Recipe; sources: string[]; overrides?: string }
-  | { kind: "invalid"; checkout: string; message: string; overrides?: string }
+  | { kind: "none"; checkout: string; saved?: string }
+  | { kind: "ready"; checkout: string; recipe: Recipe; from: string; ignored?: string; saved?: string }
+  | { kind: "invalid"; checkout: string; message: string; from?: string; saved?: string }
 
 /** The Git checkout a folder is in; the folder itself outside Git. */
 export async function checkoutOf(cwd: string): Promise<string> {
@@ -92,10 +93,11 @@ export async function checkoutOf(cwd: string): Promise<string> {
 }
 
 /**
- * Where a person's overrides for a repository live: one file for the main
- * checkout and all its worktrees, named so a person can find it.
+ * Where Mako keeps a project's recipe: one file for the main checkout and
+ * all its worktrees, so saving it reaches every Thread and branch at once.
+ * Named so a person can find it.
  */
-export async function overridePath(root: string, checkout: string): Promise<string> {
+export async function recipePath(root: string, checkout: string): Promise<string> {
   const common = await git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
   const identity = await realpath(common || checkout).catch(() => common || checkout)
   const project = common ? basename(dirname(identity)) : basename(identity)
@@ -126,37 +128,34 @@ function issues(error: z.ZodError): string {
 }
 
 /**
- * The recipe in a checkout, with the person's overrides from `overridesRoot`
- * merged over it, checked against the Thread's values so a bad port offset
- * fails here rather than in a process. Overrides alone are a recipe too.
+ * The recipe for a checkout: the one Mako keeps for the project under
+ * `recipesRoot` when there is one, otherwise one committed in the checkout.
+ * Checked against the Thread's values and the checkout's folders, so a bad
+ * port offset or a folder this branch lacks fails here rather than in a
+ * process.
  */
-export async function readRecipe(checkout: string, environment: ThreadEnvironment, overridesRoot?: string): Promise<RecipeRead> {
-  const overrides = overridesRoot ? await overridePath(overridesRoot, checkout) : undefined
-  const at = overrides ? { overrides } : {}
-  const team = await readJson(join(checkout, RECIPE_PATH))
-  const own = overrides ? await readJson(overrides) : { kind: "absent" as const }
-  if (team.kind === "invalid") return { kind: "invalid", checkout, message: `${RECIPE_PATH}: ${team.message}`, ...at }
-  if (own.kind === "invalid") return { kind: "invalid", checkout, message: `${overrides}: ${own.message}`, ...at }
-  if (team.kind === "absent" && own.kind === "absent") return { kind: "none", checkout, ...at }
-  const base = team.kind === "json" ? RecipeSchema.safeParse(team.value) : RecipeSchema.safeParse({})
-  if (!base.success) return { kind: "invalid", checkout, message: `${RECIPE_PATH}: ${issues(base.error)}`, ...at }
-  const sources = team.kind === "json" ? [join(checkout, RECIPE_PATH)] : []
-  const personal = own.kind === "json" ? OverrideSchema.safeParse(own.value) : undefined
-  if (personal && !personal.success) return { kind: "invalid", checkout, message: `${overrides}: ${issues(personal.error)}`, ...at }
-  const processes = new Map<string, Partial<RecipeProcess>>(Object.entries(base.data.processes))
-  for (const [name, spec] of Object.entries(personal?.data?.processes ?? {})) processes.set(name, { ...processes.get(name), ...spec })
-  const merged = personal?.data ? {
-    ...base.data,
-    values: { ...base.data.values, ...personal.data.values },
-    processes: Object.fromEntries(processes),
-    checks: { ...base.data.checks, ...personal.data.checks },
-    prepare: personal.data.prepare ?? base.data.prepare,
-  } : base.data
-  if (personal && overrides) sources.push(overrides)
-  const label = sources.length > 1 ? `${RECIPE_PATH} with ${overrides}` : sources[0] === overrides ? String(overrides) : RECIPE_PATH
-  const invalid = (message: string): RecipeRead => ({ kind: "invalid", checkout, message: `${label}: ${message}`, ...at })
-  const parsed = RecipeSchema.safeParse(merged)
-  if (!parsed.success) return invalid(issues(parsed.error))
+export async function readRecipe(checkout: string, environment: ThreadEnvironment, recipesRoot?: string): Promise<RecipeRead> {
+  const saved = recipesRoot ? await recipePath(recipesRoot, checkout) : undefined
+  const at = saved ? { saved } : {}
+  const committed = join(checkout, RECIPE_PATH)
+  const own = saved ? await readJson(saved) : { kind: "absent" as const }
+  const team = await readJson(committed)
+  const useSaved = saved !== undefined && own.kind !== "absent"
+  const from = useSaved ? saved : committed
+  const read = useSaved ? own : team
+  if (read.kind === "absent") return { kind: "none", checkout, ...at }
+  if (read.kind === "invalid") return { kind: "invalid", checkout, message: `${from}: ${read.message}`, from, ...at }
+  const checked = await checkRecipe(read.value, checkout, environment)
+  if (!checked.ok) return { kind: "invalid", checkout, message: `${from}: ${checked.message}`, from, ...at }
+  const ready: RecipeRead = { kind: "ready", checkout, recipe: checked.recipe, from, ...at }
+  if (from === saved && team.kind !== "absent") ready.ignored = committed
+  return ready
+}
+
+/** Whether `value` is a recipe this checkout and Thread can run. */
+export async function checkRecipe(value: unknown, checkout: string, environment: ThreadEnvironment): Promise<{ ok: true; recipe: Recipe } | { ok: false; message: string }> {
+  const parsed = RecipeSchema.safeParse(value)
+  if (!parsed.success) return { ok: false, message: issues(parsed.error) }
   try {
     recipeValues(parsed.data, environment)
     for (const [name, spec] of Object.entries(parsed.data.processes)) {
@@ -170,9 +169,53 @@ export async function readRecipe(checkout: string, environment: ThreadEnvironmen
           throw new Error(`prepare.${index}.inputs: ${input} is outside the checkout`)
     })
   } catch (error) {
-    return invalid(error instanceof Error ? error.message : String(error))
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
   }
-  return { kind: "ready", checkout, recipe: parsed.data, sources, ...at }
+  return { ok: true, recipe: parsed.data }
+}
+
+export interface SavedRecipe {
+  file: string
+  /** The version this one replaced, kept in the project's history folder. */
+  previous?: string
+}
+
+/**
+ * Saves the recipe Mako keeps for `checkout`'s project, for every Thread
+ * and branch of it. The version it replaces is kept, the last
+ * `RECIPE_HISTORY` of them. Refuses a recipe this checkout can't run.
+ */
+export async function saveRecipe(recipesRoot: string, checkout: string, value: unknown, environment: ThreadEnvironment, now = new Date()): Promise<SavedRecipe> {
+  const checked = await checkRecipe(value, checkout, environment)
+  if (!checked.ok) throw new Error(`Not saved: ${checked.message}`)
+  const file = await recipePath(recipesRoot, checkout)
+  const text = `${JSON.stringify(checked.recipe, null, 2)}\n`
+  if (Buffer.byteLength(text) > RECIPE_MAX_BYTES) throw new Error(`Not saved: larger than ${RECIPE_MAX_BYTES / 1024} KB`)
+  await mkdir(recipesRoot, { recursive: true, mode: 0o700 })
+  const saved: SavedRecipe = { file }
+  const before = await readFile(file, "utf8").catch(() => undefined)
+  if (before !== undefined && before !== text) {
+    const history = recipeHistory(file)
+    await mkdir(history, { recursive: true, mode: 0o700 })
+    saved.previous = join(history, `${now.toISOString().replace(/[:.]/g, "-")}.json`)
+    await writeFile(saved.previous, before, { mode: 0o600 })
+    const kept = (await readdir(history)).filter((name) => name.endsWith(".json")).sort()
+    await Promise.all(kept.slice(0, Math.max(0, kept.length - RECIPE_HISTORY)).map((name) => rm(join(history, name), { force: true })))
+  }
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, text, { mode: 0o600 })
+    await rename(temporary, file)
+  } catch (error) {
+    await rm(temporary, { force: true })
+    throw error
+  }
+  return saved
+}
+
+/** The folder of a saved recipe's earlier versions. */
+export function recipeHistory(file: string): string {
+  return join(dirname(file), "history", basename(file, ".json"))
 }
 
 /** `{port}`, `{port+N}`, `{host}`, `{url}`, `{data}` and `{thread}`; other braces are left as written. */
