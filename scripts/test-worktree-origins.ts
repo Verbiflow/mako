@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
@@ -100,25 +100,48 @@ try {
     "a Claude worktree removed before any host saw it is named by its path")
   assert.equal(neverSeen.of(join(root, "home", ".codex", "worktrees", "ffff", "app")), undefined, "a removed Codex worktree nobody saw stays unknown")
 
-  // Two hosts that each found a worktree keep both.
+  // Hosts that each found a worktree and save at the same moment keep them all.
+  const SavedSchema = z.object({ worktrees: z.record(z.string(), z.object({ repoRoot: z.string() })) })
   const second = join(root, "second")
   git(other, "worktree", "add", "-q", "-b", "second", second)
   const hostA = new WorktreeOrigins(memory)
   const hostB = new WorktreeOrigins(memory)
   hostA.of(cursor)
   hostB.of(second)
-  await hostA.flush()
-  await hostB.flush()
-  const saved = z.object({ worktrees: z.record(z.string(), z.object({ repoRoot: z.string() })) }).parse(JSON.parse(readFileSync(memory, "utf8")))
+  await Promise.all([hostA.flush(), hostB.flush()])
+  const saved = SavedSchema.parse(JSON.parse(readFileSync(memory, "utf8")))
   assert.equal(saved.worktrees[cursor]?.repoRoot, other, "the first host's worktree")
   assert.equal(saved.worktrees[second]?.repoRoot, other, "the second host's, merged rather than overwritten")
   assert.equal(saved.worktrees[codex]?.repoRoot, repo, "and the one removed earlier")
+  const together = join(root, "together.json")
+  const theirs = Array.from({ length: 6 }, (_, index) => join(root, `together-${index}`))
+  for (const worktree of theirs) git(other, "worktree", "add", "-q", "--detach", worktree)
+  const hosts = theirs.map((worktree) => {
+    const host = new WorktreeOrigins(together)
+    host.of(worktree)
+    return host
+  })
+  await Promise.all(hosts.map((host) => host.flush()))
+  const savedTogether = SavedSchema.parse(JSON.parse(readFileSync(together, "utf8"))).worktrees
+  assert.deepEqual(theirs.filter((worktree) => !savedTogether[worktree]), [], "six hosts saving at once keep every host's worktree")
+  assert.equal(existsSync(`${memory}.lock`) || existsSync(`${together}.lock`), false, "no save leaves its lock behind")
+
+  // A host that died mid-save doesn't stop the others saving.
+  const third = join(root, "third")
+  git(other, "worktree", "add", "-q", "-b", "third", third)
+  writeFileSync(`${memory}.lock`, "")
+  const died = new Date(Date.now() - 60_000)
+  utimesSync(`${memory}.lock`, died, died)
+  const hostC = new WorktreeOrigins(memory)
+  hostC.of(third)
+  await hostC.flush()
+  assert.equal(SavedSchema.parse(JSON.parse(readFileSync(memory, "utf8"))).worktrees[third]?.repoRoot, other, "saved past a lock left by a host that died")
 
   writeFileSync(memory, "{\"worktrees\": {\"torn")
   assert.equal(new WorktreeOrigins(memory).of(join(root, "home", ".codex", "worktrees", "a1b2", "app", "x")), undefined,
     "a torn file starts the memory over without failing")
 
-  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, /private spelling, submodule, removed while running, after restart, recalled in the asked spelling, removed unseen, two hosts merged, torn file")
+  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, /private spelling, submodule, removed while running, after restart, recalled in the asked spelling, removed unseen, hosts saving at once, a dead host's lock, torn file")
   console.log(`${folders.length} folders: ${cold.toFixed(1)} ms first, ${warm.toFixed(2)} ms again`)
 } finally {
   rmSync(root, { recursive: true, force: true })

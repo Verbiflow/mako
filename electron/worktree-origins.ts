@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
 import type { LinkedCheckout } from "./contracts/checkout-heads.js"
@@ -11,6 +11,10 @@ const REMEMBERED = 2_000
 /** A folder that isn't there is looked for again after this long. */
 const MISSING_RECHECK_MS = 60_000
 const SAVE_DELAY_MS = 1_000
+/** A save holds its lock for one small read and write; a lock this old was left by a host that died mid-save. */
+const LOCK_STALE_MS = 10_000
+const LOCK_WAIT_MS = 3_000
+const LOCK_POLL_MS = 20
 /** A worktree still in use has its sighting written again this often, so trimming keeps it. */
 const RESIGHT_MS = 24 * 60 * 60_000
 
@@ -155,6 +159,10 @@ export class WorktreeOrigins {
     const now = Date.now()
     if (before?.repoRoot === linked.repoRoot && now - before.seenAt < RESIGHT_MS) return
     this.remembered.set(linked.path, { repoRoot: linked.repoRoot, seenAt: now })
+    this.scheduleSave()
+  }
+
+  private scheduleSave(): void {
     this.saving ??= setTimeout(() => {
       this.saving = null
       void this.save()
@@ -162,23 +170,58 @@ export class WorktreeOrigins {
     this.saving.unref?.()
   }
 
-  /** Merged with what other hosts wrote since, newest sighting winning, then trimmed. */
+  /**
+   * Merged with what other hosts wrote since, newest sighting winning, then
+   * trimmed. Hosts take turns, or the later write drops what the earlier one
+   * added; a host that can't get its turn tries again later.
+   */
   private async save(): Promise<void> {
-    const onDisk = parseRemembered(await readFile(this.file, "utf8").catch(() => null))
-    for (const [path, entry] of onDisk) {
-      const mine = this.remembered.get(path)
-      if (!mine || mine.seenAt < entry.seenAt) this.remembered.set(path, entry)
-    }
-    const kept = [...this.remembered].sort((a, b) => b[1].seenAt - a[1].seenAt).slice(0, REMEMBERED)
+    const lock = `${this.file}.lock`
     const temporary = `${this.file}.${randomUUID()}.tmp`
+    let locked = false
     try {
       await mkdir(dirname(this.file), { recursive: true })
+      locked = await takeTurn(lock)
+      if (!locked) {
+        this.scheduleSave()
+        return
+      }
+      const onDisk = parseRemembered(await readFile(this.file, "utf8").catch(() => null))
+      for (const [path, entry] of onDisk) {
+        const mine = this.remembered.get(path)
+        if (!mine || mine.seenAt < entry.seenAt) this.remembered.set(path, entry)
+      }
+      const kept = [...this.remembered].sort((a, b) => b[1].seenAt - a[1].seenAt).slice(0, REMEMBERED)
       await writeFile(temporary, JSON.stringify({ worktrees: Object.fromEntries(kept) }), { mode: 0o600 })
       await rename(temporary, this.file)
     } catch {
       // Unsaved, the worktrees are still known in memory and found again on disk.
     } finally {
       await rm(temporary, { force: true })
+      if (locked) await rm(lock, { force: true })
     }
+  }
+}
+
+const EXISTS = z.object({ code: z.literal("EEXIST") })
+
+/** Creates `lock`, waiting out another host's save; false when that takes too long. */
+async function takeTurn(lock: string): Promise<boolean> {
+  const deadline = Date.now() + LOCK_WAIT_MS
+  for (;;) {
+    try {
+      await writeFile(lock, "", { flag: "wx", mode: 0o600 })
+      return true
+    } catch (error) {
+      if (!EXISTS.safeParse(error).success) return false
+    }
+    const age = await stat(lock).then((info) => Date.now() - info.mtimeMs, () => undefined)
+    if (age === undefined) continue
+    if (age > LOCK_STALE_MS) {
+      await rm(lock, { force: true })
+      continue
+    }
+    if (Date.now() >= deadline) return false
+    await new Promise((done) => setTimeout(done, LOCK_POLL_MS))
   }
 }
