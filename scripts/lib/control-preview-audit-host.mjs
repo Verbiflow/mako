@@ -15,6 +15,8 @@ const { startWebHost } = await import(pathToFileURL(join(root, "dist-electron/we
 const { hostCallInputs } = await import(pathToFileURL(join(root, "dist-electron/contracts/host-call-inputs.js")).href)
 
 let close = () => {}
+/** Wall-clock instants the preview route answered, for the audit's per-read split. */
+const served = []
 const eventLoop = monitorEventLoopDelay({ resolution: 20 })
 eventLoop.enable()
 process.once(
@@ -68,15 +70,20 @@ process.once(
       let active = true
       const host = await startWebHost(
         socket,
-        async (channel, args) => {
+        async (channel, args, client) => {
+          if (channel === "mako:control-preview-viewers") {
+            const [id] = hostCallInputs[channel].parse(args)
+            return JSON.stringify({ ok: true, value: previews.viewers(id, client) })
+          }
           if (
             channel === "mako:control-preview" ||
             channel === "mako:audit-preview"
           ) {
-            const [id, watching, watcher] =
+            const [id, watching, watcher, box] =
               hostCallInputs["mako:control-preview"].parse(args)
             assert.equal(id, "preview-audit")
-            const value = previews.read(id, watching, watcher)
+            const read = previews.read(id, watching, watcher, client)
+            const value = read && (await previews.sized(read, box))
             return JSON.stringify({ ok: true, value: watching && value ? { ...value,
                 frame: value.frame ? { ...value.frame, image: { mimeType: value.frame.image.mimeType,
                   data: Buffer.from(value.frame.image.bytes).toString("base64") } } : null } : null })
@@ -99,7 +106,7 @@ process.once(
             eventLoop.reset()
             return JSON.stringify({
               ok: true,
-              value: { ...process.cpuUsage(), memory: process.memoryUsage(), eventLoopMs },
+              value: { ...process.cpuUsage(), memory: process.memoryUsage(), eventLoopMs, served: served.splice(0) },
             })
           }
           assert.equal(channel, "mako:audit-browser")
@@ -149,11 +156,12 @@ process.once(
         },
         async () => new Response("Not found", { status: 404 }),
         undefined, undefined,
-        async (args) => {
-          const [id, watching, watcher] = hostCallInputs["mako:control-preview"].parse(args)
+        async (args, client) => {
+          const [id, watching, watcher, box] = hostCallInputs["mako:control-preview"].parse(args)
           assert.equal(id, "preview-audit")
-          const value = previews.read(id, watching, watcher)
-          return watching ? value : null
+          const value = previews.read(id, watching, watcher, client)
+          if (watching) served.push(performance.timeOrigin + performance.now())
+          return watching && value ? previews.sized(value, box) : null
         }
       )
       let closing = false
