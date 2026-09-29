@@ -95,6 +95,39 @@ function captureAnchor(
   }
 }
 
+/**
+ * Lay the newest turns out for real before scrolling to the end. A turn that
+ * has just mounted has no remembered size, so `content-visibility: auto`
+ * measures it at its placeholder height, and the end of a column of
+ * placeholders is somewhere among the first turns. The turns that fill the
+ * pane render in full until the frame after the first paint has recorded
+ * their sizes; `contain-intrinsic-size: auto` keeps them from then on.
+ */
+function layOutEnd(node: HTMLDivElement): () => void {
+  const turns = node.querySelectorAll<HTMLElement>("[data-exchange]")
+  const settling: HTMLElement[] = []
+  let covered = 0
+  for (
+    let index = turns.length - 1;
+    index >= 0 && covered < node.clientHeight;
+    index -= 1
+  ) {
+    const turn = turns[index]!
+    turn.setAttribute("data-settling", "")
+    settling.push(turn)
+    covered += turn.offsetHeight
+  }
+  let frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => {
+      for (const turn of settling) turn.removeAttribute("data-settling")
+    })
+  })
+  return () => {
+    cancelAnimationFrame(frame)
+    for (const turn of settling) turn.removeAttribute("data-settling")
+  }
+}
+
 function holdPrependedHeights(node: HTMLDivElement, exchangeId?: string) {
   if (!exchangeId) return
   for (const element of node.querySelectorAll("[data-exchange]")) {
@@ -336,7 +369,7 @@ export function ConversationTimeline({
       observer.observe(element)
     }
     return () => observer.disconnect()
-  }, [shown.length, mountedKeys])
+  }, [identity, shown.length, mountedKeys])
 
   useLayoutEffect(() => {
     restore.current = null
@@ -349,12 +382,19 @@ export function ConversationTimeline({
     setLimit(INITIAL_TURNS)
     setEverMore(false)
     setShowJump(false)
+    viewport.current?.removeAttribute("data-preserve-scroll")
+  }, [identity])
+
+  // Before the first paint of a conversation, and of its first turns when it
+  // opened empty: the reader starts at the end, never among the first turns.
+  useLayoutEffect(() => {
     const node = viewport.current
-    if (!node) return
-    node.removeAttribute("data-preserve-scroll")
+    if (!node || isEmpty || !pinned.current) return
+    const release = layOutEnd(node)
     node.scrollTop = node.scrollHeight
     lastScrollTop.current = node.scrollTop
-  }, [identity])
+    return release
+  }, [identity, isEmpty])
 
   useEffect(() => {
     const node = viewport.current
@@ -490,6 +530,11 @@ export function ConversationTimeline({
     const mark = edgeRow.current
     if (!node || !mark || isEmpty || !more) return
     if (awaitingEarlier.current || stalled.current || loadingEarlier) return
+    // A reader following the end of a transcript that fills the pane is not
+    // near its top, whatever the edge measures: turns offscreen still stand
+    // at placeholder heights, so a few long turns read as a short climb and
+    // every open fetched a page nobody asked for.
+    if (pinned.current && node.scrollHeight > node.clientHeight + 1) return
     const distance =
       node.getBoundingClientRect().top - mark.getBoundingClientRect().bottom
     if (distance > LOAD_AHEAD) return
