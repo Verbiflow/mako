@@ -117,14 +117,43 @@ function begin(frame: Frame, eighths: number, size: Size | null): Decoding {
   return { ready, users: 0, close() { closed = true; dispose() } }
 }
 
+const demandListeners = new Set<() => void>()
+
 /** A viewer's current device-pixel box; unmeasured until its first `set`. */
 export function demandControlPreview() {
   const box: Size = { width: -1, height: -1 }
   demands.add(box)
   return {
-    set(width: number, height: number) { box.width = width; box.height = height },
+    set(width: number, height: number) {
+      if (box.width === width && box.height === height) return
+      box.width = width
+      box.height = height
+      for (const listener of demandListeners) listener()
+    },
     release() { demands.delete(box) },
   }
+}
+
+let lastDemand: Size | undefined
+
+/** A box covering every live viewer, for the host to size frames to; none
+ * while a viewer is unmeasured, so it gets full pixels. Before any viewer
+ * has laid out (a preview reopening), the last measured box stands in; a
+ * larger viewer reads again once it is measured. */
+export function controlPreviewDemand(): Size | undefined {
+  let width = 0, height = 0
+  for (const box of demands) {
+    if (box.width < 0 || box.height < 0) return undefined
+    width = Math.max(width, box.width)
+    height = Math.max(height, box.height)
+  }
+  if (width && height) lastDemand = { width, height }
+  return lastDemand
+}
+
+export function onControlPreviewDemand(listener: () => void) {
+  demandListeners.add(listener)
+  return () => { demandListeners.delete(listener) }
 }
 
 /** Inspector and overlay share an immutable frame's decode, sized for the
