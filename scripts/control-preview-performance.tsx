@@ -12,13 +12,14 @@ import "../src/index.css"
 // Stage trace on the wall clock the audit's main process also uses, so a
 // compositor freeze can be attributed to the viewer stage that went quiet.
 const wall = () => performance.timeOrigin + performance.now()
-const stages = {
-  notified: [] as number[],
-  stored: [] as { at: number; id: string; capturedAt: number; publishedAt: number }[],
-  decoded: [] as { at: number; ms: number }[],
-  drawn: [] as number[],
-  lagged: [] as { at: number; ms: number }[],
+interface StageTrace {
+  notified: number[]
+  stored: { at: number; id: string; capturedAt: number; publishedAt: number }[]
+  decoded: { at: number; ms: number }[]
+  drawn: number[]
+  lagged: { at: number; ms: number }[]
 }
+const stages: StageTrace = { notified: [], stored: [], decoded: [], drawn: [], lagged: [] }
 if ("ImageDecoder" in globalThis) {
   const decode = ImageDecoder.prototype.decode
   ImageDecoder.prototype.decode = function (this: ImageDecoder, options) {

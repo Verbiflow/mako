@@ -100,7 +100,8 @@ async function pageLocation(
   target: z.infer<typeof ControlTargetSchema>,
   signal: AbortSignal
 ): Promise<{ url?: string; title?: string }> {
-  const { kind: _kind, ...page } = target
+  if (target.kind !== "page") return {}
+  const page = { browser: target.browser, tab: target.tab, generation: target.generation, lease: target.lease }
   try {
     const reply = await requestControlSession(
       descriptor,
@@ -619,13 +620,8 @@ export async function runControlCli(
         const failed = z
           .object({ fault: z.object({ outcome: z.string() }) })
           .safeParse(opened.navigation)
-        value = {
-          target,
-          ...(await pageLocation(descriptor, target, controller.signal)),
-          ...(failed.success
-            ? { navigation: z.json().parse(opened.navigation) }
-            : {}),
-        }
+        const page = { target, ...(await pageLocation(descriptor, target, controller.signal)) }
+        value = failed.success ? { ...page, navigation: z.json().parse(opened.navigation) } : page
         if (failed.success)
           process.exitCode = failed.data.fault.outcome === "unknown" ? 4 : 5
       }

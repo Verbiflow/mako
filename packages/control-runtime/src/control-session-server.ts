@@ -11,6 +11,8 @@ import {
   controlFaultData,
   ControlFault,
   controlInput,
+  type ControlLocator,
+  type ExecutionReceipt,
   RecordingReceiptSchema,
   TabHandle,
   type ControlTarget,
@@ -27,6 +29,25 @@ import {
 } from "./control-session-protocol.js"
 
 const engineBuild = controlSessionBuild()
+
+/** Dispatch one ref-free `act` step on the element its locator resolves. */
+function act(
+  locator: ControlLocator,
+  step: Extract<SessionOperation, { method: "act" }>["operation"]
+): Promise<ExecutionReceipt> {
+  switch (step.kind) {
+    case "set-text":
+      return locator.setValue(step.text)
+    case "activate":
+      return locator.click()
+    case "press-key":
+      return locator.pressKey(step.key, { modifiers: step.modifiers })
+    case "select-option":
+      return locator.selectOption(
+        step.label === undefined ? { value: step.value! } : { label: step.label }
+      )
+  }
+}
 // Preserve load-time identity; transport startup reports a missing payload.
 void engineBuild.catch(() => {})
 
@@ -132,31 +153,17 @@ export async function serveControlSession(
           ? handle.locator(operation.selector).screenshot(operation.options)
           : handle.screenshot(operation.options)
       }
-      case "act": {
-        const locator = sdkHandle(operation.target, signal).locator(
-          operation.selector
+      case "act":
+        return act(
+          sdkHandle(operation.target, signal).locator(operation.selector),
+          operation.operation
         )
-        const step = operation.operation
-        switch (step.kind) {
-          case "set-text":
-            return locator.setValue(step.text)
-          case "activate":
-            return locator.click()
-          case "press-key":
-            return locator.pressKey(step.key, { modifiers: step.modifiers })
-          case "select-option":
-            return locator.selectOption(
-              step.label === undefined
-                ? { value: step.value! }
-                : { label: step.label }
-            )
-        }
-      }
       case "expect":
         return z
           .json()
           .parse(
             await sdkHandle(operation.target, signal).expect(
+              // SAFETY: `expect` parses the expectation with its own schema and reports a malformed one as invalid-request before anything runs.
               operation.expectation as ElementExpectation,
               operation.options
             )

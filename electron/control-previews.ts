@@ -215,7 +215,11 @@ export class ControlPreviews {
         .resize(size.width, size.height, { fit: "fill", kernel: "mks2021" })
         .jpeg({ quality: 90, chromaSubsampling: "4:4:4" })
         .toBuffer()
-        .then((bytes) => ({ ...frame, id: `${frame.id}:${key}`, image: { mimeType: "image/jpeg" as const, bytes: new Uint8Array(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength) } }))
+        .then((bytes) => {
+          // SAFETY: sharp returns a Node Buffer, which is never backed by a SharedArrayBuffer.
+          const buffer = bytes.buffer as ArrayBuffer
+          return { ...frame, id: `${frame.id}:${key}`, image: { mimeType: "image/jpeg" as const, bytes: new Uint8Array(buffer, bytes.byteOffset, bytes.byteLength) } }
+        })
       bySize.set(key, scaling)
     }
     try {

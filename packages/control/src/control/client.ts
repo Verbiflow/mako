@@ -68,16 +68,17 @@ const selectionHint =
   'Use {role:"button",name:"Save",max:20}; optional keys: text (substring of role, name, value or visibleText), roles, states, refsOnly, includeAncestors. Strings only, no regular expressions.'
 export type ElementSelector = z.infer<typeof selectorSchema>
 
+/** The CSS and text selector spellings callers reach for instead of `{role,name}`. */
+const textSelectorSchema = z.union([
+  z.string(),
+  z.object({ css: z.string() }).transform((input) => input.css),
+  z.object({ selector: z.string() }).transform((input) => input.selector),
+])
+
 /** Quotes a CSS or text selector back to the caller: the stock example alone
  * does not show that accessible names can differ from visible labels. */
-export function controlSelector(value: unknown): ElementSelector {
-  const text =
-    typeof value === "string"
-      ? value
-      : z
-          .union([z.object({ css: z.string() }), z.object({ selector: z.string() })])
-          .transform((input) => ("css" in input ? input.css : input.selector))
-          .safeParse(value).data
+export function controlSelector(value: JsonValue | ElementSelector): ElementSelector {
+  const text = textSelectorSchema.safeParse(value).data
   if (text === undefined)
     return controlInput(selectorSchema.safeParse(value), "selector", selectorHint)
   const quoted = /["'](.{1,60}?)["']/.exec(text)?.[1] ?? /^text=(.{1,60})$/.exec(text)?.[1]
