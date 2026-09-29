@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
+import { clip, CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "../electron/providers/cursor/sdk/modes.ts"
 import {
   SdkChildLineSchema,
@@ -317,6 +317,68 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
   assert.deepEqual(stopped.finish("cancelled", "Stopped before this call finished."), [
     { kind: "tool-update", id: "open", status: "cancelled", output: "Stopped before this call finished." },
   ])
+
+  const crashed = new CursorSdkProjection("t6b")
+  crashed.message(shell("open", "running"))
+  assert.deepEqual(crashed.finish("error", "The process exited."), [
+    { kind: "tool-update", id: "open", status: "failed", output: "The process exited.", unfinished: true },
+  ], "only a run that died leaves its calls without a result; a refused or stopped call is not that")
+}
+
+// A subagent's row is its reply to the parent, not its run. The run carries
+// every call's full result and passed 32 KB in each research call on record,
+// so a head-kept clip showed its opening and lost the conclusion.
+{
+  const projection = new CursorSdkProjection("t7")
+  const bulk = "x".repeat(40_000)
+  projection.message({ ...run, type: "tool_call", call_id: "sub", name: "task", status: "running", args: { description: "Research Tembo environments", prompt: "…" } })
+  const [done] = projection.message({
+    ...run,
+    type: "tool_call",
+    call_id: "sub",
+    name: "task",
+    status: "completed",
+    args: { description: "Research Tembo environments", prompt: "…" },
+    result: {
+      status: "success",
+      value: {
+        isBackground: false,
+        backgroundReason: "unspecified",
+        resultSuffix: "agentId: a-1",
+        conversationSteps: [
+          { thinkingMessage: { text: "Plan the search." } },
+          { assistantMessage: { text: "I'll fetch the docs first." } },
+          { toolCall: { webFetchToolCall: { result: { success: { content: bulk } } } } },
+          { assistantMessage: { text: "## Tembo" } },
+          { assistantMessage: { text: "Setup lives in the app, not in Git." } },
+        ],
+      },
+    },
+  })
+  assert.equal(done?.kind === "tool-update" && done.output, "## Tembo\n\nSetup lives in the app, not in Git.\n\nagentId: a-1")
+
+  const silent = projection.message({
+    ...run,
+    type: "tool_call",
+    call_id: "quiet",
+    name: "task",
+    status: "completed",
+    args: { description: "Quiet" },
+    result: { status: "success", value: { isBackground: false, backgroundReason: "unspecified", conversationSteps: [
+      { assistantMessage: { text: "Looking." } },
+      { toolCall: { shellToolCall: {} } },
+    ] } },
+  }).find((update) => update.kind === "tool-update")
+  assert.equal(silent?.kind === "tool-update" && silent.output, "Looking.", "a run that ends on a call still gives its last words")
+}
+
+// Long text keeps both ends, and says how much was left out.
+{
+  const long = `START${"a".repeat(50_000)}END`
+  const clipped = clip(long)
+  assert.ok(clipped.startsWith("START") && clipped.endsWith("END"))
+  assert.match(clipped, /… 17240 characters left out …/)
+  assert.equal(clip("short"), "short")
 }
 
 // Modes: Cursor is Agent on the full tier and nothing else. Neither the SDK's

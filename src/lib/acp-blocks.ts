@@ -6,7 +6,7 @@ export interface AcpPlanEntry {
   status: string
 }
 
-import type { LiveBlock as AcpBlock } from "../../electron/contracts/live-content"
+import { liveToolFinished, type LiveBlock as AcpBlock } from "../../electron/contracts/live-content"
 export type { LiveBlock as AcpBlock } from "../../electron/contracts/live-content"
 
 export interface AcpConversation {
@@ -86,10 +86,9 @@ export function acpBlocksToMessages(
           },
           absolute
         )
-        const failed = block.status === "failed"
+        const failed = block.status === "failed" && !block.unfinished
         const canceled = /cancel/i.test(block.status)
-        const finished =
-          failed || canceled || /complete|done/i.test(block.status)
+        const finished = liveToolFinished(block.status)
         if (
           finished ||
           block.output !== undefined ||
@@ -104,6 +103,7 @@ export function acpBlocksToMessages(
               text: block.output ?? (failed ? block.title : ""),
               isError: failed,
               isCanceled: canceled,
+              isCutOff: block.unfinished,
               streaming: !finished,
               attachments: block.attachments,
               details: block.details,

@@ -97,6 +97,8 @@ export interface ToolCall {
   details?: ToolDetail[]
   isError?: boolean
   isCanceled?: boolean
+  /** See the `toolResult` block's `isCutOff`. */
+  isCutOff?: boolean
   pending: boolean
   /**
    * Present while `result` is only the head of the output. The row asks for

@@ -590,6 +590,9 @@ function WorkSummary({
       {work.failed > 0 ? (
         <span className="shrink-0 text-negative">{work.failed} failed</span>
       ) : null}
+      {work.cutOff > 0 ? (
+        <span className="shrink-0 text-faint">{work.cutOff} cut off</span>
+      ) : null}
       {elapsed && !troubled ? (
         <span className="shrink-0 text-label text-faint tabular">{elapsed}</span>
       ) : null}

@@ -74,6 +74,26 @@ export interface Interruption {
    * provider process earns this; the turn's work stands on the provider's side.
    */
   autoContinue?: { at: number }
+  /**
+   * The calls the agent has no account of: ones cut off without a result,
+   * and ones that finished after its last step. At most
+   * `MAX_INTERRUPTED_CALLS`; `moreCalls` counts the rest.
+   */
+  calls?: InterruptedCall[]
+  moreCalls?: number
+  /** When the next prompt told the agent about `calls` (epoch ms). It is told once. */
+  told?: number
+}
+
+export const MAX_INTERRUPTED_CALLS = 12
+
+export interface InterruptedCall {
+  id: string
+  title: string
+  /** `none`: it never returned. `unseen`: it returned after the agent's last step. */
+  result: "none" | "unseen"
+  /** Where Mako saved an unseen result in full, for the agent to read. */
+  file?: string
 }
 
 /**

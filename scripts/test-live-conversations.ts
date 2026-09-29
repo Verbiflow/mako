@@ -11,7 +11,7 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import { SessionMemory } from "../electron/session-memory.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
-import { reduceLiveUpdates } from "../electron/contracts/live-content.js"
+import { reduceLiveUpdates, type LiveUpdate } from "../electron/contracts/live-content.js"
 import { CONNECTION_LOST_STOP } from "../electron/contracts/providers-acp.js"
 import type {
   LiveDriverEvent,
@@ -729,6 +729,7 @@ async function durabilityAndBatching() {
       type: "live-session",
       session: { ...f.state, status: "running" },
     })
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "build", title: "Build", status: "running" } })
     f.owner.submit(f.id, randomUUID(), "waiting")
     // A host that dies mid-turn never reaches stop(): the next host finds the
     // request still dispatching in the journal and cannot say whether the
@@ -739,6 +740,10 @@ async function durabilityAndBatching() {
       assert.equal(found.requests[0]?.status, "uncertain")
       assert.equal(found.requests[0]?.interruption?.reason, "host-crashed")
       assert.ok(found.requests[0]?.interruption?.at)
+      assert.deepEqual(found.requests[0]?.interruption?.calls, [{ id: "build", title: "Build", result: "none" }])
+      const build = found.blocks.find((block) => block.type === "tool" && block.id === "build")
+      assert.ok(build?.type === "tool" && build.status === "failed" && build.unfinished, "the dead host's open call is closed")
+      assert.match(build.output ?? "", /Mako closed unexpectedly while this call was running/)
       assert.equal(found.requests[1]?.status, "queued")
     } finally {
       afterCrash.stop()
@@ -752,6 +757,7 @@ async function durabilityAndBatching() {
       assert.equal(saved.requests[0]?.status, "interrupted")
       assert.equal(saved.requests[0]?.interruption?.reason, "host-quit")
       assert.match(saved.requests[0]?.error ?? "", /Mako closed/)
+      assert.deepEqual(saved.requests[0]?.interruption?.calls, [{ id: "build", title: "Build", result: "none" }])
       assert.equal(saved.requests[1]?.status, "queued")
       assert.equal(saved.requests[1]?.text, "waiting")
       assert.equal(
@@ -765,6 +771,14 @@ async function durabilityAndBatching() {
               contextFiles: [],
               text: "running",
               attachments: [],
+            },
+            {
+              type: "tool",
+              id: "build",
+              title: "Build",
+              status: "failed",
+              output: "Mako quit while this call was running, so it never returned a result.",
+              unfinished: true,
             },
           ])
         )
@@ -1172,7 +1186,11 @@ async function autoContinuedTurn() {
     assert.equal(requests.length, 2)
     assert.equal(requests[0]?.interruption?.autoContinue, undefined, "the user's prompt clears the stamp")
     assert.equal(requests[1]?.continues, undefined)
-    assert.equal(f.sent.at(-1), "the user's own follow-up")
+    assert.match(
+      f.sent.at(-1) ?? "",
+      /^<mako-local-control>\nYour previous turn was cut short at [^\n]+\n<\/mako-local-control>\n\nthe user's own follow-up$/,
+      "the user's prompt tells the agent its turn was cut short"
+    )
   } finally {
     f.cleanup()
   }
@@ -1242,7 +1260,9 @@ async function providerExitContinued() {
     starts: Array<string | undefined>
     prompts: string[]
     end: (patch: Partial<LiveSessionState>) => void
+    update: (update: LiveUpdate) => void
     hooks: DriverHooks
+    root: string
   }) => Promise<void>) => {
     const root = mkdtempSync(join(tmpdir(), "mako-live-provider-exit-"))
     const id = randomUUID()
@@ -1303,7 +1323,9 @@ async function providerExitContinued() {
         starts,
         prompts,
         end: (patch) => emitters.at(-1)?.({ type: "live-session", session: session(bindings.at(-1) ?? id, patch) }),
+        update: (update) => emitters.at(-1)?.({ type: "live-update", id: bindings.at(-1) ?? id, update }),
         hooks,
+        root,
       })
     } finally {
       owner.stop()
@@ -1349,6 +1371,60 @@ async function providerExitContinued() {
     assert.equal(request?.interruption, undefined)
     assert.equal(prompts.length, 1, "an unknown outcome is never sent or continued automatically")
     assert.equal(starts.length, 1)
+  })
+
+  // The continuation says what the agent does not know: which calls never
+  // returned, and which returned after its last step, with their results.
+  const parallelCalls = (update: (update: LiveUpdate) => void) => {
+    update({ kind: "text", text: "Starting three researchers." })
+    update({ kind: "tool", id: "done-early", title: "Research Capy", status: "running" })
+    update({ kind: "tool", id: "done-late", title: "Research Tembo", status: "running" })
+    update({ kind: "tool", id: "open", title: "Research Replicas", status: "running" })
+    update({ kind: "tool-update", id: "done-early", status: "completed", output: "Capy keeps setup in the app." })
+    update({ kind: "tool-update", id: "done-late", status: "completed", output: "Tembo keeps setup in the app." })
+  }
+  await run(true, async ({ owner, id, prompts, end, update }) => {
+    const first = randomUUID()
+    owner.submit(id, first, "first")
+    await dispatched(owner, id, 0)
+    update({ kind: "tool", id: "seen", title: "Read notes", status: "running" })
+    update({ kind: "tool-update", id: "seen", status: "completed", output: "notes" })
+    parallelCalls(update)
+    end(exited)
+    const interrupted = owner.snapshot(id)!.requests[0]!
+    assert.deepEqual(
+      interrupted.interruption?.calls?.map((call) => [call.title, call.result]),
+      [["Research Capy", "unseen"], ["Research Tembo", "unseen"], ["Research Replicas", "none"]],
+      "a result the agent read before its next step is not reported"
+    )
+    const open = owner.snapshot(id)!.blocks.find((block) => block.type === "tool" && block.id === "open")
+    assert.ok(open?.type === "tool" && open.status === "failed" && open.unfinished, "the row nothing will report on is closed")
+    assert.match(open.output ?? "", /never returned a result: The agent process exited with code 70\./)
+    await waitFor(() => prompts.length === 2, "the continuation was not sent")
+    const note = prompts[1]!
+    assert.match(note, /^<mako-local-control>\nYour previous turn was cut short at \d\d:\d\d:\d\d: The agent process exited with code 70\./)
+    assert.match(note, /never returned a result[^\n]*\n- Research Replicas\n/)
+    const saved = interrupted.interruption!.calls![1]!.file!
+    assert.ok(note.includes(`- Research Tembo: the full result is saved at ${saved}`))
+    assert.match(readFileSync(saved, "utf8"), /Tembo keeps setup in the app\./)
+    assert.match(note, /that is wrong: the user did not stop it\.\n<\/mako-local-control>\n\nContinue where you left off/)
+    assert.ok(owner.snapshot(id)!.requests[0]?.interruption?.told, "the account is marked told")
+    end({ status: "ready" })
+    owner.submit(id, randomUUID(), "next")
+    await waitFor(() => prompts.length === 3, "the next prompt was not sent")
+    assert.ok(!prompts[2]!.includes("cut short"), "the account is told once")
+  })
+
+  await run(true, async ({ owner, id, prompts, end, update }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    parallelCalls(update)
+    end(exited)
+    owner.submit(id, randomUUID(), "what happened?")
+    await waitFor(() => prompts.length === 2, "the user's prompt was not sent")
+    assert.match(prompts[1]!, /Your previous turn was cut short[\s\S]*- Research Replicas[\s\S]*what happened\?$/, "the user's own send carries the account when it comes first")
+    await sleep(60)
+    assert.equal(prompts.length, 2, "and replaces the continuation")
   })
 
   await run(true, async ({ owner, id, starts, prompts, end }) => {

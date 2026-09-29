@@ -172,7 +172,7 @@ function unfinishedToolNote(outcome: "finished" | "cancelled" | "error", error?:
     case "cancelled":
       return "Stopped before this call finished."
     case "error":
-      return `Cursor ended the turn before this call finished${error ? `: ${error}` : "."}`
+      return `This call was still running when the turn ended, so it never returned a result${error ? `: ${error}` : "."}`
     case "finished":
       return "Cursor did not run this call. A hook in .cursor/hooks.json or the runtime rejected it before it ran and told the agent why; the SDK has no approval prompt."
   }

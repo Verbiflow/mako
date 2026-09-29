@@ -7,6 +7,11 @@ import {
 } from "@mako/sessions/content"
 
 const plan = z.array(z.object({ content: z.string(), status: z.string() }))
+/**
+ * The call never returned a result: its turn ended while it was still
+ * running. `status` and `output` are what closed the row, not the call's own.
+ */
+const unfinished = z.literal(true).optional()
 export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
     kind: z.literal("proposed-plan"),
@@ -48,6 +53,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     output: z.string().optional(),
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
+    unfinished,
   }),
   z.object({
     kind: z.literal("tool-update"),
@@ -58,6 +64,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     output: z.string().optional(),
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
+    unfinished,
   }),
   z.object({ kind: z.literal("plan"), entries: plan }),
   /** The provider started a turn on its own; `reason` is what it reported as the cause. */
@@ -103,11 +110,17 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
     output: z.string().optional(),
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
+    unfinished,
   }),
   z.object({ type: z.literal("plan"), entries: plan }),
   z.object({ type: z.literal("provider-turn"), reason: z.string() }),
 ])
 export type LiveBlock = z.infer<typeof LiveBlockSchema>
+
+/** A call has ended once its status is one of these; providers spell them differently. */
+export function liveToolFinished(status: string): boolean {
+  return status === "failed" || /cancel|complete|done/i.test(status)
+}
 
 /** A block that opens a turn: the user's prompt, or the cause of one the provider started itself. */
 export function isTurnStart(block: LiveBlock | undefined): boolean {
@@ -157,7 +170,7 @@ export function mergeLiveUpdates(
     next.kind === "tool-update" &&
     previous.id === next.id
   ) {
-    return {
+    const merged: LiveUpdate = {
       ...previous,
       title: next.title ?? previous.title,
       status: next.status ?? previous.status,
@@ -166,6 +179,8 @@ export function mergeLiveUpdates(
       details: next.details ?? previous.details,
       attachments: next.attachments ?? previous.attachments,
     }
+    if (next.unfinished) merged.unfinished = true
+    return merged
   }
   return undefined
 }
@@ -274,6 +289,7 @@ export function reduceLiveUpdates(
           details: update.details,
           attachments: update.attachments,
         }
+        if (update.unfinished) block.unfinished = true
         tools.set(update.id, index >= 0 ? index : next.length)
         replace(index, block)
         break
@@ -282,7 +298,7 @@ export function reduceLiveUpdates(
         const index = tools.get(update.id) ?? -1
         const block = next[index]
         if (block?.type !== "tool") break
-        replace(index, {
+        const updated: LiveBlock = {
           ...block,
           title: update.title ?? block.title,
           status: update.status ?? block.status,
@@ -290,7 +306,9 @@ export function reduceLiveUpdates(
           output: update.output ?? block.output,
           details: update.details ?? block.details,
           attachments: update.attachments ?? block.attachments,
-        })
+        }
+        if (update.unfinished) updated.unfinished = true
+        replace(index, updated)
         break
       }
       case "plan": {

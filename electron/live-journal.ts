@@ -21,7 +21,7 @@ import {
   changedLiveBlockStart,
 } from "./contracts/live-content.js"
 import { RunSnapshotsSchema } from "./contracts/workspace-snapshots.js"
-import { INTERRUPTION_REASONS, type LiveSnapshot } from "./contracts/live-conversations.js"
+import { INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "./contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "./contracts/provider-failure.js"
 import { ActorSchema } from "./contracts/thread-identity.js"
 import { ACCESS_TIER_NAMES } from "./contracts/access.js"
@@ -73,6 +73,19 @@ export const LiveRequestSchema = z.object({
       reason: z.enum(INTERRUPTION_REASONS),
       at: z.number(),
       autoContinue: z.object({ at: z.number() }).optional(),
+      calls: z
+        .array(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            result: z.enum(["none", "unseen"]),
+            file: z.string().optional(),
+          })
+        )
+        .max(MAX_INTERRUPTED_CALLS)
+        .optional(),
+      moreCalls: z.number().int().positive().optional(),
+      told: z.number().optional(),
     })
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),

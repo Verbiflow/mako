@@ -93,8 +93,11 @@ const message = "msg_assistant"
   const settled = content.settle(root, "cancelled", "Stopped before this call finished.")
   assert.deepEqual(new Set(settled.map(update => update.id)), new Set([`${root}:w`, `${root}:todo`, `${root}:q`, `${root}:late`]),
     "settling ends every open row in the session, an unanswered question included")
-  assert.ok(settled.every(update => update.kind === "tool-update" && update.status === "cancelled"))
+  assert.ok(settled.every(update => update.kind === "tool-update" && update.status === "cancelled" && !update.unfinished))
   assert.equal(content.name(child, "t1"), "read", "settling one session leaves another's calls open")
+  const cutOff = content.settle(child, "failed", "OpenCode ended the turn before this call finished: exited")
+  assert.ok(cutOff.length > 0 && cutOff.every(update => update.kind === "tool-update" && update.unfinished),
+    "a failed turn's open calls never returned; a stopped one's were stopped")
 
   const bounded = new OpenCodeContent(root, cwd)
   for (let index = 0; index <= 4096; index++)

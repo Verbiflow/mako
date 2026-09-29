@@ -25,6 +25,7 @@ import type { ThreadStore } from "./thread-store.js"
 import type { Actor } from "./contracts/thread-identity.js"
 import type { ThreadEnvironment } from "./contracts/thread-environments.js"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
+import type { TurnSteps } from "./interrupted-turn.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
   session: LiveSessionState
@@ -69,6 +70,8 @@ export interface Resident {
    * result), it settles stopped and is never continued automatically.
    */
   stopping?: string
+  /** The running turn's steps and results in the order they arrived; see `TurnSteps`. */
+  steps?: TurnSteps
 }
 
 export interface Dependencies {
@@ -81,8 +84,12 @@ export interface Dependencies {
   ): ConversationTools | undefined | Promise<ConversationTools | undefined>
   /** The Thread's values for an agent process about to start; never blocks the start when they can't be had. */
   threadEnvironment?(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined>
-  /** Mako's note sent ahead of each prompt: Local Control and the values the conversation's process started with. */
-  controlInstructions?(bindingId: string, conversationId: string): string | undefined
+  /**
+   * The lines of Mako's note sent ahead of each prompt: Local Control and the
+   * values the conversation's process started with. The note wraps them with
+   * anything Mako has to tell about the conversation itself.
+   */
+  controlInstructions?(bindingId: string, conversationId: string): string[]
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>

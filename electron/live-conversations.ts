@@ -67,6 +67,8 @@ import type {
 } from "./shared.js"
 import { reduceLiveUpdates, mergeLiveUpdates, changedLiveBlockStart, isTurnStart } from "./contracts/live-content.js"
 import type { InterruptionReason, TurnContinuation } from "./contracts/live-conversations.js"
+import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, TurnSteps } from "./interrupted-turn.js"
+import { controlNote } from "./control-launch.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
 import { CONNECTION_LOST_STOP } from "./contracts/providers-acp.js"
 import {
@@ -1552,6 +1554,7 @@ export class LiveConversations {
         }
         resident.stopping = undefined
         if (finishedRequest) {
+          this.recordCutOff(resident, finishedRequest.id)
           this.checkpoints.settle(resident, finishedRequest.id)
           this.scheduleAutoContinue(resident, finishedRequest.id)
         }
@@ -1599,6 +1602,7 @@ export class LiveConversations {
       })
       for (const update of prepared) {
         if (dispatching && update.kind === "user") continue
+        resident.steps?.observe(update)
         const last = resident.updates.at(-1)
         const merged = mergeLiveUpdates(last, update)
         if (last && merged) {
@@ -1765,6 +1769,36 @@ export class LiveConversations {
     const binding = this.activeBinding(resident)
     const driver = this.dependencies.driver(binding?.provider ?? "")
     return binding?.nativeId && driver?.canResume && driver.available(this.dependencies.appPath) ? binding : undefined
+  }
+
+  /**
+   * A turn cut short by anything but the user's Stop: closes the calls
+   * nothing will report on now, and keeps on the request what the agent has
+   * no account of, for the next prompt to tell it.
+   */
+  private recordCutOff(resident: Resident, requestId: string): void {
+    const steps = resident.steps
+    resident.steps = undefined
+    const request = resident.snapshot.requests.find((candidate) => candidate.id === requestId)
+    const interruption = request?.interruption
+    if (!interruption || interruption.reason === "stopped") return
+    const blocks = reduceLiveUpdates(resident.snapshot.blocks, resident.updates)
+    const closing = closeCutOffCalls(blocks, requestId, cutOffNote(interruption, request.error))
+    const record = recordCutOffCalls(
+      reduceLiveUpdates(blocks, closing),
+      requestId,
+      steps,
+      join(this.dependencies.root, "context", "interrupted", requestId)
+    )
+    resident.updates.push(...closing)
+    resident.snapshot = {
+      ...resident.snapshot,
+      requests: resident.snapshot.requests.map((candidate) =>
+        candidate.id === requestId && candidate.interruption
+          ? { ...candidate, interruption: { ...candidate.interruption, ...record } }
+          : candidate
+      ),
+    }
   }
 
   /**
@@ -2877,7 +2911,8 @@ export class LiveConversations {
       // journal says so, with the moment, so the next host does not read it
       // as a crash and the transcript can offer to continue the turn. An idle
       // conversation is left as it is, so stopping writes nothing for it.
-      if (resident.snapshot.requests.some((request) => request.status === "dispatching"))
+      const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
+      if (running) {
         resident.snapshot = {
           ...resident.snapshot,
           requests: interruptRequests(
@@ -2886,6 +2921,8 @@ export class LiveConversations {
             "Mako closed while this turn was running"
           ),
         }
+        this.recordCutOff(resident, running.id)
+      }
       // A child's verdict settles into its parent's journal, so every flush
       // runs before any journal closes.
       this.flush(resident)
@@ -2993,6 +3030,8 @@ export class LiveConversations {
         ...pendingMerges.map((merge) => merge.manifest),
       ],
     }
+    const told = pendingInterruption(resident.snapshot.requests, request.id)
+    const toldAt = Date.now()
     resident.snapshot = {
       ...resident.snapshot,
       control: {
@@ -3007,9 +3046,14 @@ export class LiveConversations {
         ),
       },
       requests: resident.snapshot.requests.map((candidate) =>
-        candidate.id === request.id ? current : candidate
+        candidate.id === request.id
+          ? current
+          : candidate.id === told?.requestId && candidate.interruption
+            ? { ...candidate, interruption: { ...candidate.interruption, told: toldAt } }
+            : candidate
       ),
     }
+    resident.steps = new TurnSteps()
     const text = request.displayText ?? resident.displayPrompt ?? request.text
     resident.displayPrompt = undefined
     // A request held back behind a turn the provider was still running
@@ -3073,7 +3117,13 @@ export class LiveConversations {
           this.control(resident).activeBindingId,
           current.context.reduce(
             (text, manifest) => contextPrompt(manifest, text),
-            [this.dependencies.controlInstructions?.(this.control(resident).activeBindingId, resident.snapshot.session.id), request.text].filter(Boolean).join("\n\n")
+            [
+              controlNote([
+                ...(this.dependencies.controlInstructions?.(this.control(resident).activeBindingId, resident.snapshot.session.id) ?? []),
+                ...(told ? [told.account] : []),
+              ]),
+              request.text,
+            ].filter(Boolean).join("\n\n")
           ),
           request.attachments,
           request.tuning,
@@ -3101,7 +3151,11 @@ export class LiveConversations {
             resident.snapshot = {
               ...resident.snapshot,
               requests: resident.snapshot.requests.map((candidate) =>
-                candidate === target ? { ...candidate, status: "queued", error: undefined, snapshots: undefined } : candidate
+                candidate === target
+                  ? { ...candidate, status: "queued", error: undefined, snapshots: undefined }
+                  : candidate.id === told?.requestId && candidate.interruption?.told === toldAt
+                    ? { ...candidate, interruption: { ...candidate.interruption, told: undefined } }
+                    : candidate
               ),
             }
             this.dependencies.workspaceSnapshots?.abandonRun(request.id)
@@ -3347,6 +3401,18 @@ export class LiveConversations {
         )
       ),
     }
+    const crashed = previous.requests.find((request) => request.status === "dispatching")
+    const interruption = snapshot.requests.find((request) => request.id === crashed?.id)?.interruption
+    if (crashed && interruption) {
+      const closing = closeCutOffCalls(snapshot.blocks, crashed.id, cutOffNote(interruption, undefined))
+      snapshot.blocks = reduceLiveUpdates(snapshot.blocks, closing)
+      const record = recordCutOffCalls(snapshot.blocks, crashed.id, undefined, join(this.dependencies.root, "context", "interrupted", crashed.id))
+      snapshot.requests = snapshot.requests.map((request) =>
+        request.id === crashed.id && request.interruption
+          ? { ...request, interruption: { ...request.interruption, ...record } }
+          : request
+      )
+    }
     journal.commit(snapshot, previous)
     const resident: Resident = {
       connections: new Map(),
@@ -3451,7 +3517,9 @@ function settleRequest(request: LiveRequest, session: LiveSessionState, ended: b
 function clearAutoContinue(requests: LiveRequest[], requestId?: string): LiveRequest[] {
   return requests.map((request) => {
     if (!request.interruption?.autoContinue || (requestId !== undefined && request.id !== requestId)) return request
-    return { ...request, interruption: { reason: request.interruption.reason, at: request.interruption.at } }
+    const interruption = { ...request.interruption }
+    delete interruption.autoContinue
+    return { ...request, interruption }
   })
 }
 

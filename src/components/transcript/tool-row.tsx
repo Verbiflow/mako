@@ -212,6 +212,9 @@ function Status({ call }: { call: ToolCall }) {
       </span>
     )
   }
+  if (call.isCutOff) {
+    return <span className="shrink-0 text-label text-faint">cut off</span>
+  }
   return null
 }
 

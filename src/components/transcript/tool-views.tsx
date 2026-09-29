@@ -245,7 +245,9 @@ export function SubagentBody({ call }: ToolViewProps) {
     ? "Failed"
     : call.isCanceled
       ? "Canceled"
-      : stillRunning
+      : call.isCutOff
+        ? "Cut off"
+        : stillRunning
         ? "Running"
         : "Completed"
 
@@ -257,7 +259,7 @@ export function SubagentBody({ call }: ToolViewProps) {
             "size-1.5 rounded-full",
             call.isError
               ? "bg-removed"
-              : call.isCanceled
+              : call.isCanceled || call.isCutOff
                 ? "bg-foreground/25"
                 : stillRunning
                   ? "animate-live bg-ember"
@@ -284,7 +286,7 @@ export function SubagentBody({ call }: ToolViewProps) {
       {result ? (
         <div className="border-t border-hairline pt-2">
           <p className="pb-1 text-label text-faint">
-            {call.isError ? "Error" : "Transcript and result"}
+            {call.isError ? "Error" : call.isCutOff ? "No result" : "Transcript and result"}
           </p>
           <Prose text={result} />
         </div>

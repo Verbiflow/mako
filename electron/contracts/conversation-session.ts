@@ -88,6 +88,8 @@ export type Block =
       text: string
       isError?: boolean
       isCanceled?: boolean
+      /** The turn ended while the call ran, so it never returned; `text` says how. Not the call's failure. */
+      isCutOff?: boolean
       streaming?: boolean
       attachments?: AttachmentContent[]
       details?: ToolDetail[]

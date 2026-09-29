@@ -103,7 +103,9 @@ export class OpenCodeContent {
     for (const [id, tool] of this.tools) {
       if (tool.sessionID !== sessionID) continue
       this.tools.delete(id)
-      updates.push({ kind: "tool-update", id, status, output: note })
+      const update: LiveUpdate = { kind: "tool-update", id, status, output: note }
+      if (status === "failed") update.unfinished = true
+      updates.push(update)
     }
     return updates
   }

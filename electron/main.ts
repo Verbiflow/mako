@@ -45,7 +45,7 @@ import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { prepareBrowserExtension } from "./browser-extension-setup.js"
 import { ControlSessions } from "./control-sessions.js"
-import { launchInstructions } from "./control-launch.js"
+import { launchLines } from "./control-launch.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
 import { environmentTools } from "./environment-tools.js"
@@ -2121,7 +2121,7 @@ app.whenReady().then(async () => {
     controlInstructions: (bindingId, conversationId) => {
       const launched = threadEnvironments?.launchedWith(conversationId)
       if (launched) void threadProcesses?.touch(launched.thread).catch(() => {})
-      return launchInstructions(controlSessions.get(bindingId), launched)
+      return launchLines(controlSessions.get(bindingId), launched)
     },
     revokeTools: async (bindingId, conversationId) => {
       conversationMcp?.revoke(bindingId, conversationId)

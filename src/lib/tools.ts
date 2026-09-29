@@ -251,6 +251,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
       existing.result = block.text
       existing.isError = block.isError
       existing.isCanceled = block.isCanceled
+      existing.isCutOff = block.isCutOff
       existing.pending = block.streaming === true
       existing.rest = block.rest
     } else {
@@ -263,6 +264,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
         details: block.details,
         isError: block.isError,
         isCanceled: block.isCanceled,
+        isCutOff: block.isCutOff,
         pending: block.streaming === true,
         rest: block.rest,
       })
@@ -283,6 +285,8 @@ export interface ToolWorkSummary {
   plans: number
   other: number
   failed: number
+  /** Calls the turn's end left without a result; not counted as failed. */
+  cutOff: number
 }
 
 export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
@@ -296,9 +300,11 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
   let plans = 0
   let other = 0
   let failed = 0
+  let cutOff = 0
   for (const call of calls) {
     const name = call.name.toLowerCase()
     if (call.isError) failed += 1
+    if (call.isCutOff) cutOff += 1
     if (isSubagentLaunch(call)) {
       agents += 1
       continue
@@ -345,6 +351,7 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
     plans,
     other,
     failed,
+    cutOff,
   }
 }
 

@@ -16,6 +16,7 @@ import {
   argAt,
   isSubagentLaunch,
   normalizeToolOutput,
+  pairTools,
   parseToolExecutionOutput,
   subagentResultId,
   subagentResultText,
@@ -474,20 +475,31 @@ assert.deepEqual(
     { id: "skill", name: "skill", pending: false },
     { id: "agent", name: "run_subagent", pending: false },
     { id: "plan", name: "TodoWrite", pending: false, isError: true },
+    { id: "research", name: "task", pending: false, isCutOff: true },
   ]),
   {
-    tools: 8,
+    tools: 9,
     changedFiles: 1,
     commands: 1,
     reads: 1,
     searches: 1,
     skills: 1,
-    agents: 1,
+    agents: 2,
     plans: 1,
     other: 0,
     failed: 1,
+    cutOff: 1,
   }
 )
+{
+  const [cutOff] = pairTools(acpBlocksToMessages([
+    { type: "user", text: "Research" },
+    { type: "tool", id: "sub", title: "Research Tembo", toolKind: "task", status: "failed", output: "never returned", unfinished: true },
+  ]).messages.flatMap((message) => message.blocks))
+  assert.equal(cutOff?.isCutOff, true)
+  assert.equal(cutOff?.isError, false, "a call the turn's end cut off did not fail")
+  assert.equal(cutOff?.pending, false)
+}
 
 const acpConversation = acpBlocksToMessages(
   [

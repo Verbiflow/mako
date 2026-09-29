@@ -176,12 +176,16 @@ export class CursorSdkProjection {
   finish(outcome: "finished" | "cancelled" | "error", note: string): LiveUpdate[] {
     const updates: LiveUpdate[] = []
     for (const id of this.tools.keys()) {
-      updates.push({
+      const update: LiveUpdate = {
         kind: "tool-update",
         id,
         status: outcome === "cancelled" ? "cancelled" : "failed",
         output: note,
-      })
+      }
+      // A run that errored stopped its calls midway; one that finished had
+      // refused them before they ran, and one the user stopped says so.
+      if (outcome === "error") update.unfinished = true
+      updates.push(update)
     }
     this.tools.clear()
     return updates
@@ -285,8 +289,33 @@ function numberOf(value: JsonValue | undefined): number | undefined {
   return parsed.success ? parsed.data : undefined
 }
 
-function clip(value: string): string {
-  return value.length > MAX_TOOL_TEXT ? `${value.slice(0, MAX_TOOL_TEXT)}\n…` : value
+/** Long text keeps both ends: a command's error and a report's conclusion come last. */
+export function clip(value: string): string {
+  if (value.length <= MAX_TOOL_TEXT) return value
+  const half = MAX_TOOL_TEXT / 2
+  return `${value.slice(0, half)}\n\n… ${value.length - 2 * half} characters left out …\n\n${value.slice(-half)}`
+}
+
+/**
+ * A subagent's reply to its parent: the messages it wrote after its last
+ * call. `conversationSteps` is its whole run, one `{ thinkingMessage }`,
+ * `{ assistantMessage }` or `{ toolCall }` per step, every call's full result
+ * included; a research run passes 32 KB within a few calls, so the run
+ * itself is no row output. `resultSuffix` is what Cursor adds to the reply
+ * it hands the parent.
+ */
+function subagentReply(value: { [key: string]: JsonValue }): string | undefined {
+  const steps = Array.isArray(value.conversationSteps) ? value.conversationSteps : []
+  const said = (step: JsonValue) =>
+    isObject(step) && isObject(step.assistantMessage) ? text(step.assistantMessage.text) : undefined
+  const calls = (step: JsonValue | undefined) => isObject(step) && step.toolCall !== undefined
+  let lastCall = steps.length - 1
+  while (lastCall >= 0 && !calls(steps[lastCall])) lastCall--
+  let reply = steps.slice(lastCall + 1).flatMap((step) => said(step) ?? []).join("\n\n")
+  if (!reply) reply = steps.map(said).filter((message) => message !== undefined).at(-1) ?? ""
+  const suffix = text(value.resultSuffix)
+  const whole = [reply, suffix].filter(Boolean).join("\n\n")
+  return whole || undefined
 }
 
 /** The SDK's tool vocabulary as a transcript row title. */
@@ -388,6 +417,10 @@ function toolOutput(name: string, result: JsonValue | undefined): string | undef
           // texts are the answer, the wrapping is not.
           const texts = mcpTexts(value.content)
           return texts === undefined ? clip(JSON.stringify(value, null, 2)) : clip(texts)
+        }
+        case "task": {
+          const reply = subagentReply(value)
+          return clip(reply ?? JSON.stringify(value, null, 2))
         }
         default:
           return clip(JSON.stringify(value, null, 2))

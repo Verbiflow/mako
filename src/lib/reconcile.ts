@@ -97,6 +97,7 @@ function sameBlock(a: Block, b: Block): boolean {
         a.text === b.text &&
         a.isError === b.isError &&
         a.isCanceled === b.isCanceled &&
+        a.isCutOff === b.isCutOff &&
         a.streaming === b.streaming &&
         JSON.stringify(a.attachments) === JSON.stringify(b.attachments) &&
         JSON.stringify(a.details) === JSON.stringify(b.details)
