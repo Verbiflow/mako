@@ -13,6 +13,7 @@ import {
   ControlFault,
   controlFaultData,
   controlInputMessage,
+  controlSelector,
   ControlTargetSchema,
   ControlOperationSchema,
   ControlObserveRequestSchema,
@@ -91,6 +92,37 @@ function execBlocks(value: z.infer<ReturnType<typeof z.json>>) {
       }
       return block
     })
+}
+
+/** Where an opened or claimed tab now is. The tab already exists, so a failed lookup leaves the location out instead of failing the command. */
+async function pageLocation(
+  descriptor: Awaited<ReturnType<typeof readControlSession>>,
+  target: z.infer<typeof ControlTargetSchema>,
+  signal: AbortSignal
+): Promise<{ url?: string; title?: string }> {
+  const { kind: _kind, ...page } = target
+  try {
+    const reply = await requestControlSession(
+      descriptor,
+      SessionOperationSchema.parse({
+        method: "call",
+        command: {
+          action: "page",
+          name: "cdp",
+          args: { target: page, method: "Target.getTargetInfo", params: {} },
+        },
+      }),
+      signal
+    )
+    const info = z
+      .object({ targetInfo: z.object({ url: z.string(), title: z.string() }) })
+      .safeParse(reply.ok ? reply.value : undefined)
+    return info.success
+      ? { url: info.data.targetInfo.url, title: info.data.targetInfo.title }
+      : {}
+  } catch {
+    return {}
+  }
 }
 
 async function writeImage(
@@ -319,6 +351,16 @@ export async function runControlCli(
         )
       return target
     }
+    const flagSelector = () => {
+      if (values.role === undefined && values.name === undefined) return undefined
+      if (values.role === undefined || values.name === undefined)
+        throw new ControlFault(
+          "invalid-request",
+          "Pass both --role and --name, exactly as an observation lists them.",
+          "not-dispatched"
+        )
+      return { role: values.role, name: values.name }
+    }
     let operation: SessionOperation
     switch (command) {
       case "session":
@@ -424,15 +466,46 @@ export async function runControlCli(
           },
         }
         break
-      case "act":
-        operation = {
-          method: "call",
-          command: {
-            action: "dispatch",
-            target: requiredTarget(),
-            operation: ControlOperationSchema.parse(payload),
-          },
+      case "act": {
+        const { selector, ...step } = payload
+        if (values.role === undefined && values.name === undefined && selector === undefined) {
+          operation = {
+            method: "call",
+            command: {
+              action: "dispatch",
+              target: requiredTarget(),
+              operation: ControlOperationSchema.parse(payload),
+            },
+          }
+          break
         }
+        const kind = z.string().safeParse(step.kind).data
+        if (!["set-text", "activate", "press-key", "select-option"].includes(kind ?? ""))
+          throw new ControlFault(
+            "invalid-request",
+            `A selector works with kind set-text, activate, press-key or select-option${kind ? `; ${kind} takes a ref or coordinates from observe or shot` : ""}. Nothing was dispatched.`,
+            "not-dispatched"
+          )
+        operation = SessionOperationSchema.parse({
+          method: "act",
+          target: requiredTarget(),
+          selector: controlSelector(flagSelector() ?? selector),
+          operation: step,
+        })
+        break
+      }
+      case "expect": {
+        const { timeoutMs, everyMs, ...expectation } = payload
+        operation = SessionOperationSchema.parse({
+          method: "expect",
+          target: requiredTarget(),
+          expectation: { ...expectation, ...flagSelector() },
+          options: { timeoutMs, everyMs },
+        })
+        break
+      }
+      case "close":
+        operation = { method: "close", target: requiredTarget() }
         break
       case "shot":
         if (!values.output)
@@ -463,11 +536,9 @@ export async function runControlCli(
             target: requiredTarget(),
             options,
           }
-          if (values.role || values.name)
-            payload.selector = {
-              role: z.string().parse(values.role),
-              name: z.string().parse(values.name),
-            }
+          const flags = flagSelector()
+          if (flags) payload.selector = flags
+          if (payload.selector !== undefined) controlSelector(payload.selector)
           operation = SessionOperationSchema.parse({
             ...request,
             ...payload,
@@ -548,9 +619,13 @@ export async function runControlCli(
         const failed = z
           .object({ fault: z.object({ outcome: z.string() }) })
           .safeParse(opened.navigation)
-        value = failed.success
-          ? { target, navigation: z.json().parse(opened.navigation) }
-          : target
+        value = {
+          target,
+          ...(await pageLocation(descriptor, target, controller.signal)),
+          ...(failed.success
+            ? { navigation: z.json().parse(opened.navigation) }
+            : {}),
+        }
         if (failed.success)
           process.exitCode = failed.data.fault.outcome === "unknown" ? 4 : 5
       }
@@ -610,7 +685,7 @@ if (isMainModule(import.meta.url))
         ? 130
         : outcome === "unknown"
           ? 4
-          : outcome === "rejected"
+          : outcome === "rejected" || code === "assertion-failed"
             ? 5
             : /session|unavailable|target|connect|observation|stale-/.test(code)
               ? 3

@@ -73,6 +73,7 @@ import {
 } from "@mako/control/control"
 import { BROWSER_ACTIONS, type BrowserCall } from "./browser-tools-runtime.js"
 import { browserProtocolHelp } from "./browser-protocol-help.js"
+import { CONTROL_HELP_TOPICS } from "./control-session-protocol.js"
 import { browserControlClient } from "./browser-control-client.js"
 import {
   BrowserCommandSchema,
@@ -163,19 +164,7 @@ export const controlHelpInputSchema = z
   .object({
     syntax: z.enum(["script", "repl"]).optional(),
     topic: z
-      .enum([
-        "discovery",
-        "connection",
-        "handles",
-        "actions",
-        "observations",
-        "assertions",
-        "recording",
-        "page",
-        "native",
-        "output",
-        "examples",
-      ])
+      .enum(CONTROL_HELP_TOPICS)
       .optional()
       .describe("Return only the relevant API section."),
     tool: z
@@ -2694,7 +2683,7 @@ export function createControlSession(
       connection:
         `await control.connectBrowser(id) explicitly connects an exact discovered browser and returns its connection state. A disconnected desk is ready to connect without an extension or remote-debugging setup. Choose the dev desk by origin/sourceRoot; open a hidden task tab there to inspect or capture Mako. This is a separate view, not a screenshot of the user’s visible window. Chromium profiles still require their installed extension. Example: const {browsers} = await control.browsers(); await control.connectBrowser(browsers.find(b => b.id === chosenId).id); state.tab = await control.openTab({browser:chosenId}); ${result}await state.tab.observe(); No implicit reconnect or action replay.`,
       handles:
-        "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}), await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across exec commands. App windows are selected explicitly; no implicit first window.",
+        "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}) or control.tab(receipt) with a whole CLI open/claim receipt, await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across exec commands. App windows are selected explicitly; no implicit first window.",
       actions:
         "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); Native window.observe also accepts maxDepth:1..25 (e.g. 5 for outer dialog controls); depth-limited reads remain incomplete when descendants are omitted and cannot prove absence or uniqueness. handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?,focus_change?}; focus_change reports an observed native focus interruption (even if restored); reobserve before another action, never replay it. Missing focus_change is not proof of continuous focus isolation. native settling reports notification quiet/deadline/unavailable, never action success. Refs expire after mutation or observation.",
       observations:
@@ -2702,7 +2691,7 @@ export function createControlSession(
       assertions:
         "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial.",
       recording:
-        "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}) starts explicit video capture of this tab or window. Keep the returned handle and receipt. After a program reset, await handle.recording(id) binds the existing recording from its exact receipt; it never starts another capture. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video, timeline paths and encoded dimensions when ready. The receipt’s frames field counts source frames (or retained samples when a source count is unavailable); browser video holds unchanged images using timestamps, so encoded frame count differs. Browser frameRate reports requestedFps, encodedFps (not distinct visual FPS), skippedFrameSlots under scheduling/encoder pressure, and unchangedFrameSlots saved by holding identical pixels. droppedFrames counts source queue evictions. Under contention, recording continues at reduced temporal sampling with original sharpness and duration; a stalled or failed encoder still reports interruption. encodedFrames/encodedDurationMs report retained playable output; a crash prefix can be shorter than capture duration. fps caps browser sampling and output (browser default/max 60; native defaults to the driver-advertised maximum, up to 60). maxSide caps output size; it does not fabricate source detail or alter devicePixelRatio. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
+        "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}) starts explicit video capture of this tab or window. Keep the returned handle and receipt. After a program reset, await handle.recording(id) binds the existing recording from its exact receipt; it never starts another capture. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video, timeline paths and encoded dimensions when ready. While capture runs, timeline names timeline.jsonl, an append-only journal; once finished it names timeline.json, the complete timeline to read. The journal stays beside it as the raw log. The receipt’s frames field counts source frames (or retained samples when a source count is unavailable); browser video holds unchanged images using timestamps, so encoded frame count differs. Browser frameRate reports requestedFps, encodedFps (not distinct visual FPS), skippedFrameSlots under scheduling/encoder pressure, and unchangedFrameSlots saved by holding identical pixels. droppedFrames counts source queue evictions. Under contention, recording continues at reduced temporal sampling with original sharpness and duration; a stalled or failed encoder still reports interruption. encodedFrames/encodedDurationMs report retained playable output; a crash prefix can be shorter than capture duration. fps caps browser sampling and output (browser default/max 60; native defaults to the driver-advertised maximum, up to 60). maxSide caps output size; it does not fabricate source detail or alter devicePixelRatio. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
       page: "tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot({ref?,region?:{x,y,width,height},fullPage?,format?:png|jpeg,quality?,maxSide?}), upload(ref,files), dialog({auto?:'ask'|'accept'|'dismiss',respond?:'accept'|'dismiss',promptText?:string}), children(), retain(name), download({directory,ref?|url?,timeoutMs?}), downloadStatus(id,{timeoutMs?}), close(), release(), cdp(method,params?). tab.raw(name,args?) is the explicit page escape hatch; run mako-control api --domain DOMAIN --method METHOD for pinned CDP schemas. tab.locator({role,name}).screenshot({maxSide:2048}) reads and captures one exact element; emitImage(await ...) writes an image artifact; CLI output includes its receipt. dialog({}) reads pending without answering; respond answers only the current dialog, while auto changes future handling. A dialog-triggering click may already have run: inspect and answer it without repeating the click. Screenshot coordinates report actual image pixels and viewport CSS geometry; do not infer coordinates from a resized chat thumbnail. A Mako desk is a live client of the real app, not a side-effect-free sandbox, and refuses URLs outside its own origin. Profile/task/background defaults. name labels the task group; retain(name) keeps a result after task cleanup. children() returns {children:[{browser,tab,title,url}],note}; pass a child to control.claimTab(child). Extension downloads accept an explicit http(s) URL, await the browser-issued ID, and copy the completed file into a unique subdirectory of directory; browserPath retains the original. In-progress results have an id for downloadStatus, never repeat the start. Ref-triggered download routing and isolated contexts require direct CDP.",
       native:
         "window.screenshot({format?,quality?,maxSide?,screenshot_out_file?}) returns actual image geometry and a view token; coordinates use the returned image pixels with {x,y,view}, including resized captures, window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
@@ -2713,7 +2702,7 @@ export function createControlSession(
     }
     return args.topic
       ? { version: reference.version, [args.topic]: reference[args.topic] }
-      : reference
+      : { ...reference, topics: CONTROL_HELP_TOPICS }
   }
   let controlTail: Promise<unknown> = Promise.resolve()
   const commands: Array<{

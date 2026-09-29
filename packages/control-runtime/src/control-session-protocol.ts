@@ -22,7 +22,53 @@ export const ControlJsInputSchema = z.object({
   timeout_ms: z.number().int().min(1).max(60_000).default(30_000).describe("Execution deadline in milliseconds, 1–60000. Timeout resets program bindings; never replay an uncertain action."),
   title: z.string().min(1).max(100).optional().describe("Short description of the operation for the user."),
 }).strict()
+export const CONTROL_HELP_TOPICS = [
+  "discovery",
+  "connection",
+  "handles",
+  "actions",
+  "observations",
+  "assertions",
+  "recording",
+  "page",
+  "native",
+  "output",
+  "examples",
+] as const
 const jsonObject = z.record(z.string(), z.json())
+const elementSelectorSchema = z
+  .object({
+    role: z.string(),
+    name: z.string(),
+    within: z
+      .array(z.object({ role: z.string(), name: z.string() }).strict())
+      .optional(),
+  })
+  .strict()
+/** The ref-free forms of dispatch operations; the locator supplies the ref. */
+const locatorOperationSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("set-text"), text: z.string().max(100_000) }).strict(),
+  z.object({ kind: z.literal("activate") }).strict(),
+  z
+    .object({
+      kind: z.literal("press-key"),
+      key: z.string().min(1).max(32),
+      modifiers: z.array(z.string().min(1).max(32)).max(4).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("select-option"),
+      value: z.string().max(4096).optional(),
+      label: z.string().max(4096).optional(),
+    })
+    .strict()
+    .refine(
+      (operation) =>
+        (operation.value === undefined) !== (operation.label === undefined),
+      { message: "Pass exactly one of value or label" }
+    ),
+])
 export const SessionOperationSchema = z.discriminatedUnion("method", [
   z.object({ method: z.literal("status") }).strict(),
   ControlJsInputSchema.extend({ method: z.literal("js") }),
@@ -43,16 +89,7 @@ export const SessionOperationSchema = z.discriminatedUnion("method", [
     .object({
       method: z.literal("shot"),
       target: ControlTargetSchema,
-      selector: z
-        .object({
-          role: z.string(),
-          name: z.string(),
-          within: z
-            .array(z.object({ role: z.string(), name: z.string() }).strict())
-            .optional(),
-        })
-        .strict()
-        .optional(),
+      selector: elementSelectorSchema.optional(),
       options: z
         .object({
           format: z.enum(["png", "jpeg"]).optional(),
@@ -73,6 +110,29 @@ export const SessionOperationSchema = z.discriminatedUnion("method", [
       wait: z.boolean().default(false),
     })
     .strict(),
+  z
+    .object({
+      method: z.literal("act"),
+      target: ControlTargetSchema,
+      selector: elementSelectorSchema,
+      operation: locatorOperationSchema,
+    })
+    .strict(),
+  z
+    .object({
+      method: z.literal("expect"),
+      target: ControlTargetSchema,
+      expectation: jsonObject,
+      options: z
+        .object({
+          timeoutMs: z.number().int().optional(),
+          everyMs: z.number().int().optional(),
+        })
+        .strict()
+        .default({}),
+    })
+    .strict(),
+  z.object({ method: z.literal("close"), target: ControlTargetSchema }).strict(),
 ])
 export type SessionOperation = z.infer<typeof SessionOperationSchema>
 export const SessionRequestSchema = z

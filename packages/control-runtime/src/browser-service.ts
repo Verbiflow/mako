@@ -1862,21 +1862,21 @@ export class BrowserService {
         const area = geometry.clip
         const inViewport = !command.fullPage && area.x >= visible.pageX && area.y >= visible.pageY &&
           area.x + area.width <= visible.pageX + visible.clientWidth && area.y + area.height <= visible.pageY + visible.clientHeight
-        const result = z
-          .object({ data: z.string().max(24 * 1024 * 1024) })
-          .parse(
-            await (inViewport ? send("Page.captureScreenshot", {
+        const ScreenshotSchema = z.object({ data: z.string().max(24 * 1024 * 1024) })
+        const clipped = async () => ScreenshotSchema.parse(await binding.capture.screenshot(() => send("Page.captureScreenshot", {
+          format: command.format,
+          ...(command.format === "jpeg"
+            ? { quality: command.quality }
+            : { optimizeForSpeed: true }),
+          captureBeyondViewport:
+            command.fullPage || Boolean(box || command.region),
+          clip: geometry.clip,
+        })))
+        let result = inViewport
+          ? ScreenshotSchema.parse(await send("Page.captureScreenshot", {
               format: "png", optimizeForSpeed: true, captureBeyondViewport: false,
-            }) : binding.capture.screenshot(() => send("Page.captureScreenshot", {
-              format: command.format,
-              ...(command.format === "jpeg"
-                ? { quality: command.quality }
-                : { optimizeForSpeed: true }),
-              captureBeyondViewport:
-                command.fullPage || Boolean(box || command.region),
-              clip: geometry.clip,
-            })))
-          )
+            }))
+          : await clipped()
         if (inViewport) {
           // CDP clips resize Chromium's capture surface and can leak those pixels
           // into a concurrent screencast. Crop the returned full-view pixels instead.
@@ -1887,17 +1887,24 @@ export class BrowserService {
           const sx = size.width / geometry.captureWidth, sy = size.height / geometry.captureHeight
           if (Math.abs(size.width * geometry.captureHeight - size.height * geometry.captureWidth) > 2 * Math.max(size.width, size.height, geometry.captureWidth, geometry.captureHeight))
             fault("invalid-request", "The viewport changed during capture. Read its geometry again before using screenshot coordinates.")
-          const left = Math.floor((area.x - visible.pageX) * sx), top = Math.floor((area.y - visible.pageY) * sy)
-          const right = Math.min(size.width, Math.ceil((area.x + area.width - visible.pageX) * sx))
-          const bottom = Math.min(size.height, Math.ceil((area.y + area.height - visible.pageY) * sy))
-          let image = sharp(pixels, { limitInputPixels: 16_000_000 }).extract({ left, top, width: right - left, height: bottom - top }).resize({
-            width: Math.max(1, Math.round(area.width * area.scale * geometry.devicePixelRatio)),
-            height: Math.max(1, Math.round(area.height * area.scale * geometry.devicePixelRatio)),
-            fit: "inside", withoutEnlargement: true,
-          })
-          image = command.format === "png" ? image.png() : image.jpeg({ quality: command.quality })
-          result.data = (await image.toBuffer()).toString("base64")
-          geometry.clip = { ...area, x: visible.pageX + left / sx, y: visible.pageY + top / sy, width: (right - left) / sx, height: (bottom - top) / sy }
+          // Chromium can return the view with fewer pixels than its CSS size says
+          // (seen on a 1971-px background tab); a crop would shrink what was asked
+          // for. The clipped capture pauses any screencast around it instead.
+          const wanted = area.scale * geometry.devicePixelRatio
+          if (Math.min(sx, sy) < wanted * 0.995) result = await clipped()
+          else {
+            const left = Math.floor((area.x - visible.pageX) * sx), top = Math.floor((area.y - visible.pageY) * sy)
+            const right = Math.min(size.width, Math.ceil((area.x + area.width - visible.pageX) * sx))
+            const bottom = Math.min(size.height, Math.ceil((area.y + area.height - visible.pageY) * sy))
+            let image = sharp(pixels, { limitInputPixels: 16_000_000 }).extract({ left, top, width: right - left, height: bottom - top }).resize({
+              width: Math.max(1, Math.round(area.width * wanted)),
+              height: Math.max(1, Math.round(area.height * wanted)),
+              fit: "inside", withoutEnlargement: true,
+            })
+            image = command.format === "png" ? image.png() : image.jpeg({ quality: command.quality })
+            result.data = (await image.toBuffer()).toString("base64")
+            geometry.clip = { ...area, x: visible.pageX + left / sx, y: visible.pageY + top / sy, width: (right - left) / sx, height: (bottom - top) / sy }
+          }
         }
         const { width, height } = imageSize(Buffer.from(result.data, "base64"))
         const coordinates = {

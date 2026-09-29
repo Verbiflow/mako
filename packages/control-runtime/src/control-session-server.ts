@@ -12,6 +12,9 @@ import {
   ControlFault,
   controlInput,
   RecordingReceiptSchema,
+  TabHandle,
+  type ControlTarget,
+  type ElementExpectation,
 } from "@mako/control/control"
 import { ControlProgramError, spillImage, type ControlProgramOutput } from "@mako/control/program"
 import type { ControlSession } from "./control-session.js"
@@ -55,6 +58,12 @@ export async function serveControlSession(
   }> = []
   let closing: Promise<void> | undefined
   let stopped = false
+  function sdkHandle(target: ControlTarget, signal: AbortSignal) {
+    const client = controlClient((action, args) =>
+      session.call({ action, ...args }, signal)
+    )
+    return target.kind === "page" ? client.tab(target) : client.window(target)
+  }
   async function invoke(operation: SessionOperation, signal: AbortSignal) {
     switch (operation.method) {
       case "status":
@@ -118,16 +127,49 @@ export async function serveControlSession(
       case "call":
         return session.call(operation.command, signal)
       case "shot": {
-        const client = controlClient((action, args) =>
-          session.call({ action, ...args }, signal)
-        )
-        const handle =
-          operation.target.kind === "page"
-            ? client.tab(operation.target)
-            : client.window(operation.target)
+        const handle = sdkHandle(operation.target, signal)
         return operation.selector
           ? handle.locator(operation.selector).screenshot(operation.options)
           : handle.screenshot(operation.options)
+      }
+      case "act": {
+        const locator = sdkHandle(operation.target, signal).locator(
+          operation.selector
+        )
+        const step = operation.operation
+        switch (step.kind) {
+          case "set-text":
+            return locator.setValue(step.text)
+          case "activate":
+            return locator.click()
+          case "press-key":
+            return locator.pressKey(step.key, { modifiers: step.modifiers })
+          case "select-option":
+            return locator.selectOption(
+              step.label === undefined
+                ? { value: step.value! }
+                : { label: step.label }
+            )
+        }
+      }
+      case "expect":
+        return z
+          .json()
+          .parse(
+            await sdkHandle(operation.target, signal).expect(
+              operation.expectation as ElementExpectation,
+              operation.options
+            )
+          )
+      case "close": {
+        const handle = sdkHandle(operation.target, signal)
+        if (!(handle instanceof TabHandle))
+          throw new ControlFault(
+            "unsupported",
+            "close closes a task-owned browser tab. Native windows stay open; nothing was dispatched.",
+            "not-dispatched"
+          )
+        return handle.close()
       }
       case "record": {
         const command: Omit<
