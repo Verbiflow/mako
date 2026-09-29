@@ -187,10 +187,10 @@ async function carryIgnored(repoRoot: string, destination: string): Promise<numb
  * project's spares are topped up behind it (`WorktreeSpares`). Installed
  * dependencies follow in the background (`carryDependencies`).
  */
-/** A Thread's running app ends with its worktree: its processes stop before the folder goes, and its data after. */
+/** A Worktree Thread's running app ends with its worktree: its processes stop before the folder goes, and its data after. */
 export interface ThreadEnvironmentEnd {
   stop(thread: ThreadId): Promise<void>
-  discard(thread: ThreadId): Promise<void>
+  discard(thread: ThreadId, path: string): Promise<void>
 }
 
 export class ThreadWorktreeService {
@@ -523,7 +523,7 @@ export class ThreadWorktreeService {
     }
     if (attached) {
       this.threads.detachWorktree(path)
-      await this.environment?.discard(attached.thread)
+      await this.environment?.discard(attached.thread, path)
     }
     for (const { id } of receipts) await rm(join(this.receipts(), `${id}.json`), { force: true })
     return this.list()

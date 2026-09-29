@@ -1,14 +1,16 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { connect } from "node:net"
 import { basename, join } from "node:path"
 import type { ThreadId } from "./contracts/thread-identity.js"
 import { worktreeSlug } from "./contracts/thread-worktrees.js"
 import {
+  AppKeySchema,
   THREAD_HOST_SUFFIX,
   THREAD_PORT_COUNT,
   THREAD_PORT_FIRST,
   THREAD_PORT_LAST,
+  type AppKey,
   type ThreadEnvironment,
   type ThreadEnvironmentValues,
   type ThreadRecipeProcess,
@@ -82,8 +84,8 @@ export interface ThreadEnvironmentDependencies {
 }
 
 /**
- * Hands each Thread the values that keep its running app apart from other
- * Threads' on this device, and keeps them for the Thread's life.
+ * Hands each Thread the values that keep its folder's running app apart
+ * from other folders' on this device, and keeps them for the folder's life.
  */
 export class ThreadEnvironments {
   private readonly launched = new Map<string, ThreadEnvironment>()
@@ -114,19 +116,22 @@ export class ThreadEnvironments {
     const { store } = this.dependencies
     const placed = store.journalPlacement(conversationId)
     if (!placed) return undefined
-    const values = store.useEnvironment(placed.thread) ?? await this.claim(placed.thread, title)
+    const checkout = cwd ? await checkoutOf(cwd) : undefined
+    const owner = this.appFor(placed.thread, checkout)
+    const values = store.useEnvironment(owner.app) ?? await this.claim(owner.app, owner.name ?? worktreeSlug(store.thread(placed.thread)?.title ?? title))
     const environment: ThreadEnvironment = {
-      thread: values.thread,
+      thread: placed.thread,
+      app: values.app,
       host: values.host,
       port: values.port,
       ports: THREAD_PORT_COUNT,
-      dataDir: this.dataDir(values.thread),
+      dataDir: this.dataDir(values.app),
     }
     await mkdir(environment.dataDir, { recursive: true, mode: 0o700 })
-    if (!cwd) return environment
+    if (!checkout) return environment
     let read: Awaited<ReturnType<typeof readRecipe>>
     try {
-      read = await readRecipe(await checkoutOf(cwd), environment, this.dependencies.recipesRoot)
+      read = await readRecipe(checkout, environment, this.dependencies.recipesRoot)
     } catch (error) {
       return { ...environment, recipe: { kind: "invalid", message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
     }
@@ -148,10 +153,27 @@ export class ThreadEnvironments {
     }
   }
 
-  /** Where a Thread's own data lives; removing the Thread's worktree deletes it. */
-  dataDir(thread: ThreadId): string {
-    if (!/^[A-Za-z0-9-]+$/.test(thread)) throw new Error(`Not a Thread ID: ${thread}`)
-    return join(this.dependencies.dataRoot, thread)
+  /**
+   * Whose app a checkout runs, resolved: its Worktree Thread's, or else the
+   * folder's own, shared by every Thread in it. A Thread with no folder has
+   * one of its own. `name` names its host.
+   */
+  appFor(thread: ThreadId, checkout: string | undefined): AppOwner {
+    if (!checkout) return { app: AppKeySchema.parse(thread) }
+    const worktree = this.dependencies.store.worktrees().find((candidate) => candidate.path === checkout)
+    if (worktree) return { app: AppKeySchema.parse(worktree.thread), name: basename(worktree.path) }
+    return { app: folderApp(checkout), name: basename(checkout) }
+  }
+
+  /** What an app holds on this device, if it has claimed anything, without claiming or marking it used. */
+  held(app: AppKey): Omit<ThreadEnvironment, "thread"> | undefined {
+    const values = this.dependencies.store.environment(app)
+    return values && { app, host: values.host, port: values.port, ports: THREAD_PORT_COUNT, dataDir: this.dataDir(app) }
+  }
+
+  /** Where an app's own data lives; removing its worktree deletes it. */
+  dataDir(app: AppKey): string {
+    return join(this.dependencies.dataRoot, AppKeySchema.parse(app))
   }
 
   /** What the conversation's running agent process was started with. */
@@ -159,39 +181,37 @@ export class ThreadEnvironments {
     return this.launched.get(conversationId)
   }
 
-  private async claim(thread: ThreadId, title: string | undefined): Promise<ThreadEnvironmentValues> {
+  private async claim(app: AppKey, name: string): Promise<ThreadEnvironmentValues> {
     const { store } = this.dependencies
     for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt += 1) {
       const held = store.heldEnvironments()
-      const host = this.chooseHost(thread, title, new Set(held.map((values) => values.host)))
+      const host = this.chooseHost(app, name, new Set(held.map((values) => values.host)))
       const heldPorts = new Set(held.map((values) => values.port))
       let port: number | undefined
       for (let base = THREAD_PORT_FIRST; base + THREAD_PORT_COUNT - 1 <= THREAD_PORT_LAST && port === undefined; base += THREAD_PORT_COUNT)
         if (!heldPorts.has(base) && !(await this.blockBusy(base))) port = base
-      let reclaim: ThreadId | undefined
+      let reclaim: AppKey | undefined
       if (port === undefined) {
         const cutoff = this.now() - RECLAIM_AFTER_MS
         for (const stale of held) {
           if (stale.usedAt >= cutoff) break
           if (await this.blockBusy(stale.port)) continue
           port = stale.port
-          reclaim = stale.thread
+          reclaim = stale.app
           break
         }
       }
       if (port === undefined)
         throw new Error("Every block of ports for Threads on this Mac is held by a Thread used in the last week")
-      const claimed = store.claimEnvironment({ thread, host, port, reclaim })
+      const claimed = store.claimEnvironment({ app, host, port, reclaim })
       if (claimed) return claimed
     }
     throw new Error("Other Mako hosts kept taking the ports chosen for this Thread")
   }
 
-  private chooseHost(thread: ThreadId, title: string | undefined, held: ReadonlySet<string>): string {
-    const { store } = this.dependencies
-    const worktree = store.worktrees().find((candidate) => candidate.thread === thread)
-    const named = worktree ? hostLabel(basename(worktree.path)) : hostLabel(worktreeSlug(store.thread(thread)?.title ?? title))
-    const label = named && named !== "thread" ? named : `t-${thread.slice(0, 8)}`
+  private chooseHost(app: AppKey, name: string, held: ReadonlySet<string>): string {
+    const named = hostLabel(name)
+    const label = named && named !== "thread" ? named : `t-${app.replace(/^folder-/, "").slice(0, 8)}`
     const candidates = Array.from({ length: 50 }, (_, index) => index === 0 ? label : `${label}-${index + 1}`)
     candidates.push(`${label}-${randomUUID().slice(0, 6)}`)
     const free = candidates.find((candidate) => !held.has(`${candidate}${THREAD_HOST_SUFFIX}`))
@@ -203,6 +223,17 @@ export class ThreadEnvironments {
     const ports = Array.from({ length: THREAD_PORT_COUNT }, (_, index) => base + index)
     return (await Promise.all(ports.map((port) => this.listening(port)))).some(Boolean)
   }
+}
+
+/** Whose app a checkout runs, and the name its host is given. */
+export interface AppOwner {
+  app: AppKey
+  name?: string
+}
+
+/** The app of a folder no Worktree Thread owns, from its resolved path. */
+export function folderApp(checkout: string): AppKey {
+  return AppKeySchema.parse(`folder-${createHash("sha256").update(checkout).digest("hex").slice(0, 16)}`)
 }
 
 /** A DNS label: lowercase letters, digits and inner hyphens. */

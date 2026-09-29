@@ -6,16 +6,21 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { userTextFrom, withoutControlEnvelope } from "../packages/sessions/src/format.ts"
-import type { Actor } from "../electron/contracts/thread-identity.js"
-import { THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "../electron/contracts/thread-environments.js"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, realpathSync } from "node:fs"
+import { DatabaseSync } from "node:sqlite"
+import { ThreadIdSchema, type Actor } from "../electron/contracts/thread-identity.js"
+import { AppKeySchema, THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "../electron/contracts/thread-environments.js"
 import { launchInstructions } from "../electron/control-launch.js"
-import { ThreadEnvironments, applyThreadEnvironment } from "../electron/thread-environment.js"
+import { ThreadEnvironments, applyThreadEnvironment, folderApp } from "../electron/thread-environment.js"
 import { ThreadStore } from "../electron/thread-store.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-environment-"))
 const actor: Actor = { kind: "service", name: "migration" }
 let clock = 1_000_000_000
 const now = () => clock
+
+const app = (thread: string) => AppKeySchema.parse(thread)
 
 function started(store: ThreadStore) {
   const conversationId = randomUUID()
@@ -86,8 +91,8 @@ async function reclaimed(): Promise<void> {
   await environments.forLaunch(owners[0]!.conversationId)
   const taken = await environments.forLaunch(extra.conversationId)
   assert.equal(taken?.port, owners[1]!.port, "a new Thread takes the ports of the Thread unused longest")
-  assert.equal(store.heldEnvironments().some((values) => values.thread === owners[1]!.thread), false, "that Thread no longer holds them")
-  assert.ok(store.heldEnvironments().some((values) => values.thread === owners[0]!.thread), "a Thread used since keeps its ports")
+  assert.equal(store.heldEnvironments().some((values) => values.app === owners[1]!.thread), false, "that Thread no longer holds them")
+  assert.ok(store.heldEnvironments().some((values) => values.app === owners[0]!.thread), "a Thread used since keeps its ports")
   store.close()
 }
 
@@ -96,14 +101,14 @@ async function claimRace(): Promise<void> {
   const first = started(store)
   const second = started(store)
   const stale = started(store)
-  const claimed = store.claimEnvironment({ thread: first.thread, host: "race.thread.localhost", port: THREAD_PORT_FIRST })
+  const claimed = store.claimEnvironment({ app: app(first.thread), host: "race.thread.localhost", port: THREAD_PORT_FIRST })
   assert.ok(claimed)
-  assert.ok(store.claimEnvironment({ thread: stale.thread, host: "stale.thread.localhost", port: THREAD_PORT_FIRST + 10 }))
-  assert.equal(store.claimEnvironment({ thread: second.thread, host: "race.thread.localhost", port: THREAD_PORT_FIRST + 20 }), undefined, "a host another Thread holds is refused")
-  assert.equal(store.claimEnvironment({ thread: second.thread, host: "race-2.thread.localhost", port: THREAD_PORT_FIRST, reclaim: stale.thread }), undefined, "a port another Thread holds is refused")
-  assert.ok(store.heldEnvironments().some((values) => values.thread === stale.thread), "a refused claim gives nothing up, even what it meant to reclaim")
-  assert.equal(store.claimEnvironment({ thread: second.thread, host: "race-2.thread.localhost", port: THREAD_PORT_FIRST + 10, reclaim: stale.thread })?.port, THREAD_PORT_FIRST + 10, "a reclaimed Thread's ports go to the claimant")
-  assert.deepEqual(store.claimEnvironment({ thread: first.thread, host: "else.thread.localhost", port: THREAD_PORT_FIRST + 20 }), claimed, "a Thread that has values keeps them")
+  assert.ok(store.claimEnvironment({ app: app(stale.thread), host: "stale.thread.localhost", port: THREAD_PORT_FIRST + 10 }))
+  assert.equal(store.claimEnvironment({ app: app(second.thread), host: "race.thread.localhost", port: THREAD_PORT_FIRST + 20 }), undefined, "a host another Thread holds is refused")
+  assert.equal(store.claimEnvironment({ app: app(second.thread), host: "race-2.thread.localhost", port: THREAD_PORT_FIRST, reclaim: app(stale.thread) }), undefined, "a port another Thread holds is refused")
+  assert.ok(store.heldEnvironments().some((values) => values.app === stale.thread), "a refused claim gives nothing up, even what it meant to reclaim")
+  assert.equal(store.claimEnvironment({ app: app(second.thread), host: "race-2.thread.localhost", port: THREAD_PORT_FIRST + 10, reclaim: app(stale.thread) })?.port, THREAD_PORT_FIRST + 10, "a reclaimed Thread's ports go to the claimant")
+  assert.deepEqual(store.claimEnvironment({ app: app(first.thread), host: "else.thread.localhost", port: THREAD_PORT_FIRST + 20 }), claimed, "a Thread that has values keeps them")
   store.close()
 }
 
@@ -122,7 +127,8 @@ async function listeningProbe(): Promise<void> {
 }
 
 function processEnvironment(): void {
-  const environment = { thread: randomUUID(), host: "fix-login.thread.localhost", port: 20_010, ports: 10, dataDir: "/tmp/fix-login" }
+  const thread = ThreadIdSchema.parse(randomUUID())
+  const environment = { thread, app: app(thread), host: "fix-login.thread.localhost", port: 20_010, ports: 10, dataDir: "/tmp/fix-login" }
   const env: NodeJS.ProcessEnv = { MAKO_THREAD_ID: "inherited", MAKO_THREAD_PORT: "1", PATH: "/bin" }
   applyThreadEnvironment(env, environment)
   assert.equal(env.MAKO_THREAD_ID, environment.thread)
@@ -145,8 +151,64 @@ function processEnvironment(): void {
   assert.equal(launchInstructions(undefined, undefined), undefined, "no note when there is nothing to say")
 }
 
+/** One app per folder: Threads sharing a folder share its values; a Worktree Thread's app is its own. */
+async function onePerFolder(): Promise<void> {
+  const store = new ThreadStore(join(root, "folders.sqlite"), { now })
+  const environments = new ThreadEnvironments({ store, dataRoot: join(root, "folders-data"), listening: async () => false, now })
+  const project = realpathSync(mkdtempSync(join(root, "folders-")))
+  const shop = join(project, "shop")
+  mkdirSync(join(shop, "web"), { recursive: true })
+  execFileSync("git", ["init", "-q", shop])
+  const first = started(store)
+  const second = started(store)
+  const one = await environments.forConversation(first.conversationId, "Fix the cart", shop)
+  const two = await environments.forConversation(second.conversationId, "Add coupons", join(shop, "web"))
+  assert.ok(one && two)
+  assert.equal(one.app, folderApp(shop), "a folder no Worktree Thread owns has its own app")
+  assert.equal(two.app, one.app, "two Threads in one folder, even from a subfolder, share its app")
+  assert.equal(two.port, one.port)
+  assert.equal(two.dataDir, one.dataDir)
+  assert.equal(one.host, "shop.thread.localhost", "the folder's app is named after the folder")
+  assert.notEqual(two.thread, one.thread, "each agent still knows its own Thread")
+
+  const owner = started(store)
+  const worktree = join(project, "shop-coupons")
+  mkdirSync(worktree)
+  execFileSync("git", ["init", "-q", worktree])
+  store.attachWorktree({ path: worktree, thread: owner.thread, repoRoot: shop, project: "shop", branch: "mako/coupons", base: "main" })
+  const own = await environments.forConversation(owner.conversationId, "Coupons", worktree)
+  assert.equal(own?.app, owner.thread, "a Worktree Thread's app is keyed by the Thread")
+  assert.equal(own?.host, "shop-coupons.thread.localhost", "and named after its worktree")
+  assert.notEqual(own?.port, one.port)
+  const visitor = started(store)
+  assert.equal((await environments.forConversation(visitor.conversationId, "Look around", worktree))?.app, owner.thread, "another Thread's Session in that worktree shares its app")
+  assert.deepEqual(environments.held(one.app), { app: one.app, host: one.host, port: one.port, ports: THREAD_PORT_COUNT, dataDir: one.dataDir })
+  assert.equal(environments.held(folderApp(join(project, "elsewhere"))), undefined, "a folder that never claimed holds nothing")
+  store.close()
+}
+
+/** Values held per Thread before apps were one per folder move over, so Worktree Threads keep their ports. */
+async function heldBefore(): Promise<void> {
+  const path = join(root, "before.sqlite")
+  const store = new ThreadStore(path, { now })
+  const thread = started(store)
+  store.close()
+  const db = new DatabaseSync(path)
+  const device = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM store_meta WHERE key = 'device'").get()).value
+  db.prepare("INSERT INTO thread_environments VALUES (?, ?, ?, ?, ?, ?)").run(thread.thread, device, "old.thread.localhost", THREAD_PORT_FIRST + 40, clock, clock)
+  db.close()
+  const reopened = new ThreadStore(path, { now })
+  assert.deepEqual(reopened.environment(app(thread.thread)), { app: thread.thread, host: "old.thread.localhost", port: THREAD_PORT_FIRST + 40, usedAt: clock })
+  reopened.close()
+  const raw = new DatabaseSync(path)
+  assert.equal(z.object({ count: z.number() }).parse(raw.prepare("SELECT count(*) AS count FROM thread_environments").get()).count, 0, "moved, not copied")
+  raw.close()
+}
+
 try {
   await stableAndApart()
+  await onePerFolder()
+  await heldBefore()
   await reclaimed()
   await claimRace()
   await listeningProbe()

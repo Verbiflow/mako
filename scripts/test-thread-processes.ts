@@ -9,10 +9,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { z } from "zod"
 import { ThreadIdSchema, type Actor } from "../electron/contracts/thread-identity.js"
-import type { ThreadEnvironment } from "../electron/contracts/thread-environments.js"
+import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { environmentTools } from "../electron/environment-tools.js"
-import { applyThreadEnvironment, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
+import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { readRecipe, recipeHistory, recipePath, RecipeSchema, recipeValues, RECIPE_PATH, saveRecipe } from "../electron/thread-recipe.js"
 import { ThreadStore } from "../electron/thread-store.js"
@@ -31,7 +31,7 @@ if (mode === "host") {
   const [, root, thread, port, server] = process.argv.slice(2)
   const processes = new ThreadProcesses({ root: root!, listening: portListening })
   const env = { ...process.env, PORT: port }
-  const result = await processes.start(ThreadIdSchema.parse(thread), [{ kind: "process", name: "api", command: `node ${server}`, cwd: tmpdir(), env, port: Number(port) }])
+  const result = await processes.start(AppKeySchema.parse(thread), [{ kind: "process", name: "api", command: `node ${server}`, cwd: tmpdir(), env, port: Number(port) }])
   assert.deepEqual(result.started, ["api"])
   process.exit(0)
 }
@@ -39,7 +39,7 @@ if (mode === "host") {
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-processes-")))
 const records = join(root, "thread-environments")
 const title = new Map<string, string>()
-const host = () => new ThreadProcesses({ root: records, listening: portListening, title: (thread) => title.get(thread) })
+const host = () => new ThreadProcesses({ root: records, listening: portListening, whose: (app) => title.get(app) })
 const processes = host()
 const settle = 15_000
 
@@ -88,7 +88,8 @@ process.on("SIGTERM", () => { console.log("stopping"); process.exit(0) })
 const cleanups: (() => Promise<void>)[] = []
 try {
   // The recipe: strict, loud, and resolved against the Thread's own values.
-  const fixture: ThreadEnvironment = { thread: ThreadIdSchema.parse(randomUUID()), host: "fix-login.thread.localhost", port: 41_000, ports: 10, dataDir: join(root, "data", "fixture") }
+  const fixtureThread = ThreadIdSchema.parse(randomUUID())
+  const fixture: ThreadEnvironment = { thread: fixtureThread, app: AppKeySchema.parse(fixtureThread), host: "fix-login.thread.localhost", port: 41_000, ports: 10, dataDir: join(root, "data", "fixture") }
   const recipeIn = async (text: string) => {
     const folder = mkdtempSync(join(root, "recipe-"))
     mkdirSync(join(folder, ".mako"))
@@ -170,10 +171,10 @@ try {
   assert.equal(env.MAKO_THREAD_VALUES, undefined)
 
   // Process trees, from real processes.
-  const thread = ThreadIdSchema.parse(randomUUID())
-  const other = ThreadIdSchema.parse(randomUUID())
-  title.set(thread, "Fix login")
-  title.set(other, "Tidy settings")
+  const thread = AppKeySchema.parse(randomUUID())
+  const other = AppKeySchema.parse(randomUUID())
+  title.set(thread, 'the Thread "Fix login"')
+  title.set(other, 'the Thread "Tidy settings"')
   cleanups.push(() => processes.discard(thread), () => processes.discard(other))
   const base = await freeBlock(41_000)
   const grandchildFile = join(root, "grandchild.pid")
@@ -201,9 +202,9 @@ try {
   // A port something holds is refused, naming the holder, never taken over.
   const refused = await processes.start(other, [{ kind: "process", name: "web", command: `node ${server}`, cwd: root, env: webEnv, port: base }])
   assert.deepEqual(refused.started, [])
-  assert.match(refused.refused[0]!.reason, new RegExp(`Port ${base} belongs to the Thread "Fix login": its process web \\(pid \\d+\\)`))
+  assert.match(refused.refused[0]!.reason, new RegExp(`Port ${base} belongs to the app of the Thread "Fix login": its process web \\(pid \\d+\\)`))
   const owner = await processes.portOwner(base)
-  assert.equal(owner?.thread, thread)
+  assert.equal(owner?.app, thread)
   assert.deepEqual(owner?.run, { kind: "process", name: "web" })
   const outsider = await import("node:net").then(({ createServer }) => new Promise<import("node:net").Server>((resolve) => {
     const listener = createServer().listen(base + 5, "127.0.0.1", () => resolve(listener))
@@ -295,7 +296,8 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(launched?.values?.APP_URL, `http://${launched?.host}:${launched?.port}`)
   assert.deepEqual(launched?.recipe, { kind: "ready", processes: [{ name: "web", port: launched!.port }, { name: "api", port: launched!.port + 1 }], checks: ["quick", "full"] })
   assert.match(threadEnvironmentInstructions(launched!), /The project's recipe also sets PORT=\d+, APP_URL=http:\/\/\S+, API_URL=\S+ in your shell\. Its processes \(web on \d+, api on \d+\) run through the environment_start/)
-  cleanups.push(() => processes.discard(placed.thread))
+  const shopApp = folderApp(realpathSync(project))
+  cleanups.push(() => processes.discard(shopApp), () => processes.discard(AppKeySchema.parse(placed.thread)))
   const projectRecipes = join(root, "project-recipes")
   const tools = environmentTools({
     cwd: (id) => id === conversation ? project : undefined,
@@ -312,8 +314,13 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
 
   const started = await tools.start(conversation)
   assert.match(started, new RegExp(`web: running on port ${toolBase}\\napi: running on port ${toolBase + 1}\\nApp: http://${launched!.host}:${toolBase}`))
+  const neighbour = randomUUID()
+  store.registerJournal({ conversationId: neighbour, createdAt: Date.now(), bindings: [], harness: "claude" }, service)
+  const neighbourTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle })
+  assert.match(await neighbourTools.start(neighbour), /web: running on port \d+ \(it was already running\)\napi: running on port \d+ \(it was already running\)/, "another Thread in the same folder shares its app instead of starting a second")
+  assert.equal((await environments.forConversation(neighbour, "Other", project))?.app, shopApp)
   const apiBody = await fetchJson(toolBase + 1)
-  assert.equal(apiBody.home, join(root, "thread-data", placed.thread, "home"), "a process-only HOME points into the Thread's data folder")
+  assert.equal(apiBody.home, join(root, "thread-data", shopApp, "home"), "a process-only HOME points into the app's data folder")
   assert.equal(apiBody.api, `http://${launched!.host}:${toolBase + 1}`, "every process gets the recipe's shared values")
   assert.equal(apiBody.cwd, realpathSync(project))
   assert.match(await tools.check(conversation, "quick"), /The quick check \(.*\) passed\.\nquick ok/)
@@ -386,25 +393,25 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
 
   // Room: under memory pressure another Thread's quiet app goes first; a Mac that stays critical makes the start wait.
-  const quietThread = ThreadIdSchema.parse(randomUUID())
-  title.set(quietThread, "Old experiment")
+  const quietThread = AppKeySchema.parse(randomUUID())
+  title.set(quietThread, 'the Thread "Old experiment"')
   cleanups.push(() => processes.discard(quietThread))
   await processes.start(quietThread, [{ kind: "process", name: "idle", command: "sleep 300", cwd: root, env: process.env }])
   await processes.touch(quietThread)
   writeFileSync(join(records, quietThread, "used"), String(Date.now() - 60 * 60 * 1000))
   // Short of memory until the quiet app is gone.
-  const roomTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, title: (id) => title.get(id), pressure: async () =>
-    (await processes.active()).some((entry) => entry.thread === quietThread) ? "warning" : "normal" })
+  const roomTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, whose: (id) => title.get(id), pressure: async () =>
+    (await processes.active()).some((entry) => entry.app === quietThread) ? "warning" : "normal" })
   const roomy = await roomTools.start(conversation)
-  assert.match(roomy, /Stopped the quiet app of "Old experiment" \(\d+ MB, unused for 1 hour\) to make room\.\nweb: running/)
-  assert.equal((await processes.active()).some((entry) => entry.thread === quietThread), false)
+  assert.match(roomy, /Stopped the quiet app of the Thread "Old experiment" \(\d+ MB, unused for 1 hour\) to make room\.\nweb: running/)
+  assert.equal((await processes.active()).some((entry) => entry.app === quietThread), false)
   const measured = JSON.parse(await roomTools.status(conversation))
   assert.match(measured.processes[0].memory, /^\d+ MB$/, "each running process's memory is measured")
   await roomTools.stop(conversation)
   const critical = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, pressure: async () => "critical" })
   await processes.start(quietThread, [{ kind: "process", name: "busy", command: "sleep 300", cwd: root, env: process.env }])
   await processes.touch(quietThread)
-  assert.match(await critical.start(conversation), /^Waiting for room: this Mac is critically short of memory, with these Threads' apps running: "\S+" \(\d+ MB, used 0 min ago\)\. Nothing was started\./)
+  assert.match(await critical.start(conversation), /^Waiting for room: this Mac is critically short of memory, with these apps running: \S+ \(\d+ MB, used 0 min ago\)\. Nothing was started\./)
   assert.equal(await portListening(toolBase), false)
 
   // After a long quiet an app stops by itself; its files and data stay.
@@ -443,7 +450,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(savedStatus.recipe.contents.values.SAVED, "yes", "status shows what the recipe says, to repair from")
   assert.match(savedStatus.recipe.ignored, /\.mako\/environment\.json: committed with the project, but the recipe saved in Mako comes first/)
   assert.equal(savedStatus.values.SAVED, "yes")
-  const running = (await processes.status(placed.thread)).map((entry) => entry.pid!)
+  const running = (await processes.status(AppKeySchema.parse(placed.thread))).map((entry) => entry.pid!)
   await worktrees.remove(prepared.path)
   assert.equal(existsSync(prepared.path), false)
   assert.ok(running.every((pid) => !alive(pid)), "its processes stopped")
@@ -452,7 +459,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: one app per folder, shared by the Threads in it; recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })

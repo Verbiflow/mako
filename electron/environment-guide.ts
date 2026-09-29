@@ -67,7 +67,7 @@ Pass it to environment_recipe_save as the recipe. Mako checks it against this Th
 The fields:
 
 - values: names the app reads. Mako sets them in every agent's shell and in every process.
-  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}.
+  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}. {thread} names this copy of the app, for a profile or database name; Threads that share one folder share one copy, so they get the same values.
   - PATH, HOME, SHELL, USER, TMPDIR and PWD can't be set here, because the agent's own shell needs them.
   - MAKO_THREAD_* and MAKO_CONTROL_* are Mako's own. The project's own MAKO_ names are fine.
 - processes: what runs the app, as the project's own commands.

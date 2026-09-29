@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { childProcessEnv } from "./accounts-common.js"
 import { applyControlEnvironment } from "./control-launch.js"
-import type { ThreadEnvironment } from "./contracts/thread-environments.js"
+import type { AppKey, ThreadEnvironment } from "./contracts/thread-environments.js"
 import { applyThreadEnvironment } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { memoryPressure, runKey, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
@@ -38,8 +38,8 @@ interface Deps {
   processes: ThreadProcesses
   /** Where Mako keeps projects' recipes, one file per repository. */
   recipesRoot?: string
-  /** A Thread's title, to name whose app was stopped to make room. */
-  title?(thread: ThreadEnvironment["thread"]): string | undefined
+  /** Whose app it is, in words, such as `the Thread "Fix login"`, to name whose app was stopped to make room. */
+  whose?(app: AppKey): string | undefined
   pressure?: () => Promise<MemoryPressure>
   settleMs?: number
   now?: () => number
@@ -69,7 +69,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const environment = await deps.environment(conversationId, cwd)
     if (!environment) throw new Error("This conversation isn't in a Thread yet, so it has no environment of its own.")
     const checkout = await checkoutOf(cwd)
-    await deps.processes.touch(environment.thread)
+    await deps.processes.touch(environment.app, checkout)
     return { environment, checkout, read: await readRecipe(checkout, environment, deps.recipesRoot) }
   }
   const withRecipe = async (conversationId: string): Promise<Context & { recipe: Recipe }> => {
@@ -112,59 +112,57 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const prepare = async (current: Context & { recipe: Recipe }): Promise<string | undefined> => {
     const steps = current.recipe.prepare
     if (!steps.length) return undefined
-    const thread = current.environment.thread
+    const { app } = current.environment
+    const { checkout } = current
     const settled = async (): Promise<string | undefined> => {
-      const status = (await deps.processes.status(thread)).find((entry) => entry.kind === "prepare")
-      const record = await deps.processes.prepared(thread)
+      const status = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")
+      const record = await deps.processes.prepared(checkout)
       if (status?.state.kind === "running") return `Preparing this checkout (${status.command}); it keeps going. Call again to wait for it, or environment_logs with process "prepare" to watch it.`
       if (!record.pending) return undefined
-      const { checkout, digests } = record.pending
-      delete record.pending
-      if (status?.state.kind === "exited" && status.state.code === 0) record.done[checkout] = { ...record.done[checkout], ...digests }
-      await deps.processes.savePrepared(thread, record)
-      if (status?.state.kind === "exited" && status.state.code === 0) return undefined
-      const tail = await deps.processes.logs(thread, PREPARE_KEY, FAILURE_LINES).catch(() => "")
+      const passed = status?.state.kind === "exited" && status.state.code === 0
+      await deps.processes.savePrepared(checkout, { done: passed ? { ...record.done, ...record.pending } : record.done })
+      if (passed) return undefined
+      const tail = await deps.processes.logs(app, PREPARE_KEY, FAILURE_LINES).catch(() => "")
       return `Preparing this checkout failed (${status ? describe(status) : "no record of the run"}), so nothing started. It runs again on the next start.\nLast lines of its log:\n${tail}`
     }
     const earlier = await settled()
     if (earlier) return earlier
-    const record = await deps.processes.prepared(thread)
-    const done = record.done[current.checkout] ?? {}
-    const digests = await Promise.all(steps.map((step) => inputsDigest(current.checkout, step.inputs)))
-    const due = steps.flatMap((step, index) => done[step.command] === digests[index] ? [] : [{ command: step.command, digest: digests[index]! }])
+    const record = await deps.processes.prepared(checkout)
+    const digests = await Promise.all(steps.map((step) => inputsDigest(checkout, step.inputs)))
+    const due = steps.flatMap((step, index) => record.done[step.command] === digests[index] ? [] : [{ command: step.command, digest: digests[index]! }])
     if (!due.length) return undefined
-    await deps.processes.savePrepared(thread, { ...record, pending: { checkout: current.checkout, digests: Object.fromEntries(due.map((step) => [step.command, step.digest])) } })
+    await deps.processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((step) => [step.command, step.digest])) })
     const command = due.map((step) => step.command).join(" && ")
-    const result = await deps.processes.start(thread, [{ kind: "prepare", name: "checkout", command, cwd: current.checkout, env: env(current, current.recipe) }])
+    const result = await deps.processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: env(current, current.recipe) }])
     if (result.refused.length) {
-      await deps.processes.savePrepared(thread, record)
+      await deps.processes.savePrepared(checkout, record)
       return `This checkout needs preparing (${command}), and ${result.refused[0]!.reason.toLowerCase()}`
     }
-    await deps.processes.settle(thread, [PREPARE_KEY], settleMs)
+    await deps.processes.settle(app, [PREPARE_KEY], settleMs)
     return settled()
   }
   /** Under memory pressure, stops other Threads' quiet apps first; refuses only while the machine stays critical. */
-  const makeRoom = async (thread: ThreadEnvironment["thread"]): Promise<{ refused?: string; notes: string[] }> => {
+  const makeRoom = async (app: AppKey): Promise<{ refused?: string; notes: string[] }> => {
     const pressure = deps.pressure ?? memoryPressure
     const notes: string[] = []
     if ((await pressure()) === "normal") return { notes }
     const now = (deps.now ?? Date.now)()
-    const others = (await deps.processes.active()).filter((entry) => entry.thread !== thread)
+    const others = (await deps.processes.active()).filter((entry) => entry.app !== app)
     for (const quiet of others.filter((entry) => entry.usedAt < now - EVICT_QUIET_MS).sort((a, b) => a.usedAt - b.usedAt)) {
-      await deps.processes.stop(quiet.thread)
-      notes.push(`Stopped the quiet app of "${deps.title?.(quiet.thread) || quiet.thread}" (${bytes(quiet.memoryBytes)}, unused for ${minutes(now - quiet.usedAt)}) to make room.`)
+      await deps.processes.stop(quiet.app)
+      notes.push(`Stopped the quiet app of ${deps.whose?.(quiet.app) || quiet.app} (${bytes(quiet.memoryBytes)}, unused for ${minutes(now - quiet.usedAt)}) to make room.`)
       if ((await pressure()) === "normal") return { notes }
     }
     if ((await pressure()) !== "critical") return { notes: [...notes, "This Mac is short of memory; the app starts anyway."] }
-    const running = (await deps.processes.active()).filter((entry) => entry.thread !== thread)
-      .map((entry) => `"${deps.title?.(entry.thread) || entry.thread}" (${bytes(entry.memoryBytes)}, used ${minutes(now - entry.usedAt)} ago)`)
+    const running = (await deps.processes.active()).filter((entry) => entry.app !== app)
+      .map((entry) => `${deps.whose?.(entry.app) || entry.app} (${bytes(entry.memoryBytes)}, used ${minutes(now - entry.usedAt)} ago)`)
     return {
       notes,
-      refused: `Waiting for room: this Mac is critically short of memory${running.length ? `, with these Threads' apps running: ${running.join(", ")}` : ""}. Nothing was started. Ask the user whether to stop one, or try again later.`,
+      refused: `Waiting for room: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing was started. Ask the user whether to stop one, or try again later.`,
     }
   }
-  const prepareSummary = async (thread: ThreadEnvironment["thread"], recipe: Recipe, checkout: string) => {
-    const done = (await deps.processes.prepared(thread)).done[checkout] ?? {}
+  const prepareSummary = async (recipe: Recipe, checkout: string) => {
+    const { done } = await deps.processes.prepared(checkout)
     return Promise.all(recipe.prepare.map(async (step) => ({
       command: step.command,
       inputs: step.inputs,
@@ -175,25 +173,25 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const current = await withRecipe(conversationId)
     const picked = chosen(current.recipe, names)
     if (!picked.length) return "The recipe names no processes to start."
-    const thread = current.environment.thread
-    const before = await deps.processes.status(thread)
+    const { app } = current.environment
+    const before = await deps.processes.status(app)
     const idle = picked.filter((name) => !before.some((entry) => entry.kind === "process" && entry.name === name && (entry.state.kind === "running" || entry.state.kind === "starting")))
     let notes: string[] = []
     if (idle.length) {
       const preparing = await prepare(current)
       if (preparing) return preparing
-      const room = await makeRoom(thread)
+      const room = await makeRoom(app)
       if (room.refused) return [...room.notes, room.refused].join("\n")
       notes = room.notes
     }
-    const result = await deps.processes.start(thread, await processSpecs(current, current.recipe, picked))
-    const statuses = await deps.processes.settle(thread, picked.map((name) => runKey("process", name)), settleMs)
+    const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
+    const statuses = await deps.processes.settle(app, picked.map((name) => runKey("process", name)), settleMs)
     const lines = await Promise.all(picked.map(async (name) => {
       const refused = result.refused.find((entry) => entry.name === name)
       if (refused) return `${name}: not started. ${refused.reason}`
       const status = statuses.find((entry) => entry.name === name)
       const already = !result.started.includes(name)
-      return `${name}: ${describe(status)}${already && status?.state.kind === "running" ? " (it was already running)" : ""}${await failureTail(deps.processes, thread, status)}`
+      return `${name}: ${describe(status)}${already && status?.state.kind === "running" ? " (it was already running)" : ""}${await failureTail(deps.processes, app, status)}`
     }))
     const waiting = statuses.some((status) => status.state.kind === "starting")
     return [
@@ -206,17 +204,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const stop = async (conversationId: string, names?: string[]) => {
     const { environment, read } = await context(conversationId)
     if (names?.length && read.kind === "ready") chosen(read.recipe, names)
-    const runs = await deps.processes.status(environment.thread)
+    const runs = await deps.processes.status(environment.app)
     const up = (status: RunStatus) => status.state.kind === "running" || status.state.kind === "starting"
     const picked = runs.filter((status) => names?.length ? status.kind === "process" && names.includes(status.name) : status.kind === "process" || up(status))
-    await deps.processes.stop(environment.thread, picked.map((status) => runKey(status.kind, status.name)))
+    await deps.processes.stop(environment.app, picked.map((status) => runKey(status.kind, status.name)))
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.name)
     return were.length ? `Stopped ${were.join(", ")}, with every process each had started.` : "Nothing was running."
   }
   return {
     async status(conversationId) {
       const { environment, checkout, read } = await context(conversationId)
-      const runs = await deps.processes.status(environment.thread)
+      const runs = await deps.processes.status(environment.app)
       const launched = deps.launchedWith(conversationId)
       const values = read.kind === "ready" ? recipeValues(read.recipe, environment) : {}
       const shellValues = launched?.values ?? {}
@@ -243,7 +241,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
           ...runs.filter((entry) => entry.kind === "process" && !processNames.includes(entry.name))
             .map((entry) => ({ ...summary(entry.name, entry.command, entry.port, entry), note: "no longer in the recipe; environment_stop with its name stops it" })),
         ],
-        prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(environment.thread, read.recipe, checkout) : undefined,
+        prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(read.recipe, checkout) : undefined,
         room: { memory: await (deps.pressure ?? memoryPressure)(), appsRunningOnThisMac: (await deps.processes.active()).length },
         checks: (["quick", "full"] as const).flatMap((tier) => {
           const command = read.kind === "ready" ? read.recipe.checks[tier] : undefined
@@ -258,24 +256,24 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async restart(conversationId, names) {
       const current = await withRecipe(conversationId)
       const picked = chosen(current.recipe, names)
-      await deps.processes.stop(current.environment.thread, picked.map((name) => runKey("process", name)))
+      await deps.processes.stop(current.environment.app, picked.map((name) => runKey("process", name)))
       return start(conversationId, picked)
     },
     async logs(conversationId, target, lines) {
       const { environment } = await context(conversationId)
       const key = "check" in target ? runKey("check", target.check) : target.process === "prepare" ? PREPARE_KEY : runKey("process", target.process)
-      return deps.processes.logs(environment.thread, key, lines)
+      return deps.processes.logs(environment.app, key, lines)
     },
     async check(conversationId, tier) {
       const current = await withRecipe(conversationId)
       const command = current.recipe.checks[tier]
       if (!command) throw new Error(`The recipe has no ${tier} check.`)
-      const thread = current.environment.thread
+      const { app } = current.environment
       if (tier === "full") {
         const names = Object.keys(current.recipe.processes)
         if (names.length) {
           const running = await start(conversationId, names)
-          const statuses = await deps.processes.status(thread)
+          const statuses = await deps.processes.status(app)
           const down = names.filter((name) => statuses.find((entry) => entry.kind === "process" && entry.name === name)?.state.kind !== "running")
           if (down.length) return `The full check needs the app running, and ${down.join(", ")} isn't up yet:\n${running}`
         }
@@ -285,18 +283,18 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         if (preparing) return preparing
       }
       const key = runKey("check", tier)
-      await deps.processes.start(thread, [{ kind: "check", name: tier, command, cwd: current.checkout, env: env(current, current.recipe) }])
-      const [status] = await deps.processes.settle(thread, [key], settleMs)
+      await deps.processes.start(app, [{ kind: "check", name: tier, command, cwd: current.checkout, env: env(current, current.recipe) }])
+      const [status] = await deps.processes.settle(app, [key], settleMs)
       const result = checkResult(status)
       if (status?.state.kind === "running") return `The ${tier} check (${command}) is still running after ${Math.round(settleMs / 1000)} seconds. Call environment_check with the same tier to keep waiting for this run, or environment_logs with check "${tier}" to watch it.`
-      const output = await deps.processes.logs(thread, key, status?.state.kind === "exited" && status.state.code === 0 ? 15 : 60).catch(() => "")
+      const output = await deps.processes.logs(app, key, status?.state.kind === "exited" && status.state.code === 0 ? 15 : 60).catch(() => "")
       return `The ${tier} check (${command}) ${result}.\n${output}`
     },
     async port(conversationId, port) {
       const { environment } = await context(conversationId)
       const owner = await deps.processes.portOwner(port)
       if (!owner) return `Nothing on this Mac listens on port ${port}.`
-      return deps.processes.describeHolder(port, environment.thread)
+      return deps.processes.describeHolder(port, environment.app)
     },
     async save(conversationId, recipe) {
       if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
@@ -304,7 +302,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const saved = await saveRecipe(deps.recipesRoot, checkout, recipe, environment)
       const after = await readRecipe(checkout, environment, deps.recipesRoot)
       if (after.kind !== "ready") throw new Error(`Saved to ${saved.file}, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
-      const running = (await deps.processes.status(environment.thread)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
+      const running = (await deps.processes.status(environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
       return [
         `Saved as this project's recipe in Mako, ${saved.file}. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that.`,
         saved.previous ? `The version it replaced is kept at ${saved.previous}.` : read.kind === "none" ? "It's the project's first recipe." : undefined,
@@ -412,10 +410,10 @@ function checkResult(status: RunStatus | undefined): string {
   return "not run yet"
 }
 
-async function failureTail(processes: ThreadProcesses, thread: ThreadEnvironment["thread"], status: RunStatus | undefined): Promise<string> {
+async function failureTail(processes: ThreadProcesses, app: AppKey, status: RunStatus | undefined): Promise<string> {
   if (!status || status.state.kind === "running" || status.state.kind === "starting") return ""
   if (status.state.kind === "exited" && status.state.code === 0) return ""
-  const tail = await processes.logs(thread, runKey(status.kind, status.name), FAILURE_LINES).catch(() => "")
+  const tail = await processes.logs(app, runKey(status.kind, status.name), FAILURE_LINES).catch(() => "")
   return tail ? `\nLast lines of its log:\n${tail}` : ""
 }
 

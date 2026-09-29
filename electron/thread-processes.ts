@@ -1,9 +1,11 @@
 import { execFile, spawn } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { mkdir, open, readdir, readFile, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
-import { ThreadIdSchema, type ThreadId } from "./contracts/thread-identity.js"
+import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 
 const run = promisify(execFile)
 
@@ -76,7 +78,7 @@ export interface RunSpec {
 export interface PortOwner {
   pid: number
   command: string
-  thread?: ThreadId
+  app?: AppKey
   run?: { kind: RunKind; name: string }
 }
 
@@ -89,9 +91,9 @@ interface Row {
   command: string
 }
 
-/** A Thread with anything running, for room and idle decisions. */
-export interface ActiveThread {
-  thread: ThreadId
+/** An app with anything running, for room and idle decisions. */
+export interface ActiveApp {
+  app: AppKey
   usedAt: number
   memoryBytes: number
   runs: string[]
@@ -99,29 +101,35 @@ export interface ActiveThread {
 
 export type MemoryPressure = "normal" | "warning" | "critical"
 
+/** What a checkout's install steps last did, kept per checkout so it stays with the files it describes. */
 const PreparedSchema = z.object({
-  /** Per checkout: each step's command and the digest of its inputs when it last passed. */
-  done: z.record(z.string(), z.record(z.string(), z.string())),
+  /** The checkout it describes, for a person reading the file. */
+  checkout: z.string().optional(),
+  /** Each step's command, and the digest of its inputs when it last passed. */
+  done: z.record(z.string(), z.string()),
   /** The digests the running prepare run will record when it passes. */
-  pending: z.object({ checkout: z.string(), digests: z.record(z.string(), z.string()) }).strict().optional(),
+  pending: z.record(z.string(), z.string()).optional(),
 }).strict()
 export type Prepared = z.infer<typeof PreparedSchema>
 
 export interface ThreadProcessDependencies {
-  /** One folder per Thread for its runs' records and logs. */
+  /** One folder per app for its runs' records and logs, and `checkouts/` for what each checkout's install did. */
   root: string
   listening(port: number): Promise<boolean>
-  /** A Thread's title, to name the owner of a port. */
-  title?: (thread: ThreadId) => string | undefined
+  /** Whose app it is, in words, such as `the Thread "Fix login"`, to name the owner of a port. */
+  whose?: (app: AppKey) => string | undefined
   now?: () => number
 }
+
+/** Beside the apps' folders: what each checkout's install steps last did. */
+const CHECKOUTS = "checkouts"
 
 export function runKey(kind: RunKind, name: string): string {
   return `${kind}-${name}`
 }
 
 /**
- * Each Thread's running app: processes Mako starts for it, each in its own
+ * Each folder's running app: processes Mako starts for it, each in its own
  * process group, detached from the host, logging to a file. The records are
  * on disk, so any host sharing the Thread store (the installed app, a
  * development build, the next version after an update) sees and stops the
@@ -138,11 +146,11 @@ export class ThreadProcesses {
   }
 
   /** Starts each run that isn't already running; a run whose port something else holds is refused with its owner. */
-  async start(thread: ThreadId, specs: RunSpec[]): Promise<{ started: string[]; refused: { name: string; reason: string }[] }> {
+  async start(app: AppKey, specs: RunSpec[]): Promise<{ started: string[]; refused: { name: string; reason: string }[] }> {
     const started: string[] = []
     const refused: { name: string; reason: string }[] = []
-    await this.locked(thread, async () => {
-      const runs = await this.runs(thread)
+    await this.locked(app, async () => {
+      const runs = await this.runs(app)
       const rows = await processTable()
       for (const spec of specs) {
         const key = runKey(spec.kind, spec.name)
@@ -153,48 +161,48 @@ export class ThreadProcesses {
           continue
         }
         if (spec.port !== undefined && (await this.dependencies.listening(spec.port))) {
-          refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, thread) })
+          refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, app) })
           continue
         }
-        await this.spawn(thread, spec, async (record) => {
+        await this.spawn(app, spec, async (record) => {
           runs[key] = record
-          await this.save(thread, runs)
+          await this.save(app, runs)
         })
         started.push(spec.name)
       }
-      await this.save(thread, runs)
+      await this.save(app, runs)
     })
     return { started, refused }
   }
 
   /** Stops the named runs, or all of them, with their whole process trees. */
-  async stop(thread: ThreadId, keys?: string[]): Promise<string[]> {
-    return this.locked(thread, async () => {
-      const runs = await this.runs(thread)
+  async stop(app: AppKey, keys?: string[]): Promise<string[]> {
+    return this.locked(app, async () => {
+      const runs = await this.runs(app)
       const chosen = Object.entries(runs).filter(([key]) => !keys || keys.includes(key))
       await Promise.all(chosen.map(([, record]) => stopTree(record)))
       for (const [key] of chosen) {
         delete runs[key]
-        await rm(this.file(thread, key, "exit"), { force: true })
+        await rm(this.file(app, key, "exit"), { force: true })
       }
-      await this.save(thread, runs)
+      await this.save(app, runs)
       return chosen.map(([, record]) => record.name)
     })
   }
 
-  async status(thread: ThreadId): Promise<RunStatus[]> {
-    const runs = await this.runs(thread)
+  async status(app: AppKey): Promise<RunStatus[]> {
+    const runs = await this.runs(app)
     const rows = await processTable()
     return Promise.all(Object.entries(runs).map(async ([key, record]): Promise<RunStatus> => {
-      await trimLog(this.file(thread, key, "log"))
+      await trimLog(this.file(app, key, "log"))
       const status: RunStatus = {
         kind: record.kind,
         name: record.name,
         command: record.command,
         pid: record.pid,
         startedAt: record.at,
-        state: await this.state(thread, key, record, rows),
-        log: this.file(thread, key, "log"),
+        state: await this.state(app, key, record, rows),
+        log: this.file(app, key, "log"),
       }
       if (record.port !== undefined) status.port = record.port
       const held = members(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
@@ -204,12 +212,12 @@ export class ThreadProcesses {
   }
 
   /** Waits until every named run is up or over, or until `timeoutMs`; whichever comes first. */
-  async settle(thread: ThreadId, keys: string[], timeoutMs: number, steadyMs = STEADY_MS): Promise<RunStatus[]> {
+  async settle(app: AppKey, keys: string[], timeoutMs: number, steadyMs = STEADY_MS): Promise<RunStatus[]> {
     const deadline = this.now() + timeoutMs
     const runningSince = new Map<string, number>()
     for (;;) {
       const now = this.now()
-      const statuses = (await this.status(thread)).filter((status) => keys.includes(runKey(status.kind, status.name)))
+      const statuses = (await this.status(app)).filter((status) => keys.includes(runKey(status.kind, status.name)))
       // A server can answer on its port and die a moment later; "running" means it stayed up.
       const unsteady = statuses.some((status) => {
         const key = runKey(status.kind, status.name)
@@ -227,51 +235,61 @@ export class ThreadProcesses {
   }
 
   /** The last `lines` lines a run wrote, stdout and stderr together. */
-  async logs(thread: ThreadId, key: string, lines: number): Promise<string> {
-    const path = this.file(thread, key, "log")
+  async logs(app: AppKey, key: string, lines: number): Promise<string> {
+    const path = this.file(app, key, "log")
     const text = await readTail(path, Math.max(64 * 1024, lines * 400)).catch(() => undefined)
-    if (text === undefined) throw new Error(`Nothing has run as ${key} in this Thread yet.`)
+    if (text === undefined) throw new Error(`Nothing has run as ${key} in this app yet.`)
     return text.split("\n").slice(-lines - 1).join("\n")
   }
 
-  /** Who listens on a port: one of a Thread's runs, or a process Mako didn't start. */
+  /** Who listens on a port: one of an app's runs, or a process Mako didn't start. */
   async portOwner(port: number): Promise<PortOwner | undefined> {
     const listeners = await listeningPids(port)
     if (!listeners.length) return undefined
     const rows = await processTable()
     const folders = await readdir(this.dependencies.root).catch(() => [])
     for (const folder of folders) {
-      const thread = ThreadIdSchema.safeParse(folder)
-      if (!thread.success) continue
-      const runs = await this.runs(thread.data).catch(() => ({}))
+      const app = AppKeySchema.safeParse(folder)
+      if (!app.success) continue
+      const runs = await this.runs(app.data).catch(() => ({}))
       for (const record of Object.values(runs)) {
         const pid = members(rows, record).find((row) => listeners.includes(row.pid))?.pid
-        if (pid !== undefined) return { pid, command: commandOf(rows, pid), thread: thread.data, run: { kind: record.kind, name: record.name } }
+        if (pid !== undefined) return { pid, command: commandOf(rows, pid), app: app.data, run: { kind: record.kind, name: record.name } }
       }
     }
     return { pid: listeners[0]!, command: commandOf(rows, listeners[0]!) }
   }
 
-  /** An agent or person used the Thread's app; idle stops and room count from here. */
-  async touch(thread: ThreadId): Promise<void> {
-    await mkdir(this.folder(thread), { recursive: true, mode: 0o700 })
-    await writeFile(join(this.folder(thread), "used"), String(this.now()), { mode: 0o600 })
+  /** An agent or person used the app in `checkout`; idle stops and room count from here. */
+  async touch(app: AppKey, checkout?: string): Promise<void> {
+    await mkdir(this.folder(app), { recursive: true, mode: 0o700 })
+    await writeFile(join(this.folder(app), "used"), String(this.now()), { mode: 0o600 })
+    if (checkout && this.checkoutOf(app) !== checkout) await writeFile(join(this.folder(app), "checkout"), checkout, { mode: 0o600 })
   }
 
-  async usedAt(thread: ThreadId): Promise<number> {
-    const text = await readFile(join(this.folder(thread), "used"), "utf8").catch(() => "")
+  /** The folder an app last ran in, to name it. */
+  checkoutOf(app: AppKey): string | undefined {
+    try {
+      return readFileSync(join(this.folder(app), "checkout"), "utf8") || undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  async usedAt(app: AppKey): Promise<number> {
+    const text = await readFile(join(this.folder(app), "used"), "utf8").catch(() => "")
     const at = Number.parseInt(text, 10)
     return Number.isFinite(at) ? at : 0
   }
 
-  /** Every Thread on this Mac with a process running, with what it holds and when it was last used. */
-  async active(): Promise<ActiveThread[]> {
+  /** Every app on this Mac with a process running, with what it holds and when it was last used. */
+  async active(): Promise<ActiveApp[]> {
     const rows = await processTable()
-    const found: ActiveThread[] = []
+    const found: ActiveApp[] = []
     for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
-      const thread = ThreadIdSchema.safeParse(folder)
-      if (!thread.success) continue
-      const runs = await this.runs(thread.data).catch(() => ({}))
+      const app = AppKeySchema.safeParse(folder)
+      if (!app.success) continue
+      const runs = await this.runs(app.data).catch(() => ({}))
       let memoryBytes = 0
       const alive: string[] = []
       for (const record of Object.values(runs)) {
@@ -280,68 +298,73 @@ export class ThreadProcesses {
         alive.push(record.name)
         memoryBytes += held.reduce((sum, row) => sum + row.rssKb * 1024, 0)
       }
-      if (alive.length) found.push({ thread: thread.data, usedAt: await this.usedAt(thread.data), memoryBytes, runs: alive })
+      if (alive.length) found.push({ app: app.data, usedAt: await this.usedAt(app.data), memoryBytes, runs: alive })
     }
     return found
   }
 
-  /** Stops every Thread's app unused for `quietMs`; its files and data stay, so the next start is quick. */
-  async stopIdle(quietMs: number): Promise<ThreadId[]> {
+  /** Stops every app unused for `quietMs`; its files and data stay, so the next start is quick. */
+  async stopIdle(quietMs: number): Promise<AppKey[]> {
     const cutoff = this.now() - quietMs
     const idle = (await this.active()).filter((entry) => entry.usedAt < cutoff)
-    for (const entry of idle) await this.stop(entry.thread)
-    return idle.map((entry) => entry.thread)
+    for (const entry of idle) await this.stop(entry.app)
+    return idle.map((entry) => entry.app)
   }
 
-  async prepared(thread: ThreadId): Promise<Prepared> {
-    const text = await readFile(join(this.folder(thread), "prepared.json"), "utf8").catch(() => undefined)
-    return text === undefined ? { done: {} } : PreparedSchema.parse(JSON.parse(text))
+  async prepared(checkout: string): Promise<Prepared> {
+    const text = await readFile(this.preparedFile(checkout), "utf8").catch(() => undefined)
+    return text === undefined ? { done: {} } : PreparedSchema.catch({ done: {} }).parse(JSON.parse(text))
   }
 
-  async savePrepared(thread: ThreadId, prepared: Prepared): Promise<void> {
-    await mkdir(this.folder(thread), { recursive: true, mode: 0o700 })
-    const path = join(this.folder(thread), "prepared.json")
+  async savePrepared(checkout: string, prepared: Prepared): Promise<void> {
+    const path = this.preparedFile(checkout)
+    await mkdir(join(this.dependencies.root, CHECKOUTS), { recursive: true, mode: 0o700 })
     const temporary = `${path}.${process.pid}.tmp`
-    await writeFile(temporary, JSON.stringify(prepared, null, 2), { mode: 0o600 })
+    await writeFile(temporary, JSON.stringify({ ...prepared, checkout }, null, 2), { mode: 0o600 })
     await rename(temporary, path)
   }
 
-  /** Stops everything the Thread runs and forgets its records and logs. */
-  async discard(thread: ThreadId): Promise<void> {
-    await this.stop(thread)
-    await this.locked(thread, () => rm(this.folder(thread), { recursive: true, force: true }))
+  /** Forgets what a removed checkout's install did. */
+  async forgetPrepared(checkout: string): Promise<void> {
+    await rm(this.preparedFile(checkout), { force: true })
+  }
+
+  /** Stops everything the app runs and forgets its records and logs. */
+  async discard(app: AppKey): Promise<void> {
+    await this.stop(app)
+    await this.locked(app, () => rm(this.folder(app), { recursive: true, force: true }))
   }
 
   /** Names what holds a port, for an agent that expected it free. */
-  async describeHolder(port: number, thread?: ThreadId): Promise<string> {
+  async describeHolder(port: number, app?: AppKey): Promise<string> {
     const owner = await this.portOwner(port).catch(() => undefined)
     if (!owner) return `Port ${port} is taken, and Mako couldn't see by what.`
-    if (owner.thread && owner.run) {
-      const whose = owner.thread === thread ? "this Thread" : `the Thread "${this.dependencies.title?.(owner.thread) || owner.thread}"`
+    if (owner.app && owner.run) {
+      const whose = owner.app === app ? "this Thread" : `the app of ${this.dependencies.whose?.(owner.app) || owner.app}`
       return `Port ${port} belongs to ${whose}: its ${owner.run.kind} ${owner.run.name} (pid ${owner.pid}).`
     }
     return `Port ${port} is held by pid ${owner.pid} (${owner.command}), which Mako didn't start. If you started it, stop it and try again; otherwise leave it alone and tell the user.`
   }
 
-  private async state(thread: ThreadId, key: string, record: Run, rows: Row[]): Promise<RunState> {
+  private async state(app: AppKey, key: string, record: Run, rows: Row[]): Promise<RunState> {
     if (members(rows, record).length) {
       if (record.port === undefined || (await this.dependencies.listening(record.port))) return { kind: "running" }
       return { kind: "starting" }
     }
-    const exit = await readFile(this.file(thread, key, "exit"), "utf8").catch(() => undefined)
+    const exit = await readFile(this.file(app, key, "exit"), "utf8").catch(() => undefined)
     const code = exit === undefined ? Number.NaN : Number.parseInt(exit, 10)
     if (Number.isInteger(code)) {
-      const at = (await stat(this.file(thread, key, "exit")).catch(() => undefined))?.mtimeMs ?? record.at
+      const at = (await stat(this.file(app, key, "exit")).catch(() => undefined))?.mtimeMs ?? record.at
       return { kind: "exited", code, at }
     }
     return { kind: "ended" }
   }
 
   /** Starts the run once `record` has saved it, so no host can lose track of it. */
-  private async spawn(thread: ThreadId, spec: RunSpec, record: (run: Run) => Promise<void>): Promise<void> {
+  private async spawn(app: AppKey, spec: RunSpec, record: (run: Run) => Promise<void>): Promise<void> {
     const key = runKey(spec.kind, spec.name)
-    const log = this.file(thread, key, "log")
-    const exit = this.file(thread, key, "exit")
+    const log = this.file(app, key, "log")
+    const exit = this.file(app, key, "exit")
     await rm(exit, { force: true })
     await rename(log, `${log}.1`).catch(() => {})
     const output = await open(log, "a", 0o600)
@@ -374,34 +397,37 @@ export class ThreadProcesses {
     }
   }
 
-  private folder(thread: ThreadId): string {
-    if (!/^[A-Za-z0-9-]+$/.test(thread)) throw new Error(`Not a Thread ID: ${thread}`)
-    return join(this.dependencies.root, thread)
+  private folder(app: AppKey): string {
+    return join(this.dependencies.root, AppKeySchema.parse(app))
   }
 
-  private file(thread: ThreadId, key: string, extension: "log" | "exit"): string {
+  private preparedFile(checkout: string): string {
+    return join(this.dependencies.root, CHECKOUTS, `${createHash("sha256").update(checkout).digest("hex").slice(0, 16)}.json`)
+  }
+
+  private file(app: AppKey, key: string, extension: "log" | "exit"): string {
     if (!/^(process|check|prepare)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
-    return join(this.folder(thread), `${key}.${extension}`)
+    return join(this.folder(app), `${key}.${extension}`)
   }
 
-  private async runs(thread: ThreadId): Promise<Record<string, Run>> {
-    const text = await readFile(join(this.folder(thread), "runs.json"), "utf8").catch(() => undefined)
+  private async runs(app: AppKey): Promise<Record<string, Run>> {
+    const text = await readFile(join(this.folder(app), "runs.json"), "utf8").catch(() => undefined)
     return text === undefined ? {} : RunsSchema.parse(JSON.parse(text)).runs
   }
 
-  private async save(thread: ThreadId, runs: Record<string, Run>): Promise<void> {
-    const path = join(this.folder(thread), "runs.json")
+  private async save(app: AppKey, runs: Record<string, Run>): Promise<void> {
+    const path = join(this.folder(app), "runs.json")
     const temporary = `${path}.${process.pid}.tmp`
     await writeFile(temporary, JSON.stringify({ runs }, null, 2), { mode: 0o600 })
     await rename(temporary, path)
   }
 
-  /** One change at a time per Thread, across every host on this Mac. */
-  private async locked<T>(thread: ThreadId, work: () => Promise<T>): Promise<T> {
-    const previous = this.queues.get(thread) ?? Promise.resolve()
+  /** One change at a time per app, across every host on this Mac. */
+  private async locked<T>(app: AppKey, work: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(app) ?? Promise.resolve()
     const next = previous.catch(() => {}).then(async () => {
-      await mkdir(this.folder(thread), { recursive: true, mode: 0o700 })
-      const lock = join(this.folder(thread), "lock")
+      await mkdir(this.folder(app), { recursive: true, mode: 0o700 })
+      const lock = join(this.folder(app), "lock")
       await acquire(lock, this.now)
       try {
         return await work()
@@ -409,11 +435,11 @@ export class ThreadProcesses {
         await rm(lock, { force: true })
       }
     })
-    this.queues.set(thread, next)
+    this.queues.set(app, next)
     try {
       return await next
     } finally {
-      if (this.queues.get(thread) === next) this.queues.delete(thread)
+      if (this.queues.get(app) === next) this.queues.delete(app)
     }
   }
 }
@@ -432,7 +458,7 @@ async function acquire(lock: string, now: () => number): Promise<void> {
       await rm(lock, { force: true })
       continue
     }
-    if (now() >= deadline) throw new Error("Another Mako has been changing this Thread's environment for 30 seconds; try again.")
+    if (now() >= deadline) throw new Error("Another Mako has been changing this app for 30 seconds; try again.")
     await sleep(POLL_MS)
   }
 }

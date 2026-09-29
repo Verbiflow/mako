@@ -86,10 +86,10 @@ export type RecipeRead =
   | { kind: "ready"; checkout: string; recipe: Recipe; from: string; ignored?: string; saved?: string }
   | { kind: "invalid"; checkout: string; message: string; from?: string; saved?: string }
 
-/** The Git checkout a folder is in; the folder itself outside Git. */
+/** The Git checkout a folder is in, or the folder itself outside Git; resolved, so one folder has one name. */
 export async function checkoutOf(cwd: string): Promise<string> {
-  const top = await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")
-  return top || cwd
+  const top = (await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")) || cwd
+  return realpath(top).catch(() => top)
 }
 
 /**
@@ -230,7 +230,7 @@ export function expandTemplate(text: string, environment: ThreadEnvironment): st
     if (name === "host") return environment.host
     if (name === "url") return `http://${environment.host}:${environment.port}`
     if (name === "data") return environment.dataDir
-    if (name === "thread") return environment.thread
+    if (name === "thread") return environment.app
     throw new Error(`${whole} isn't one of Mako's values: {port}, {port+N}, {host}, {url}, {data}, {thread}`)
   })
 }

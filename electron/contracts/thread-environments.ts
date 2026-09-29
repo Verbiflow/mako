@@ -1,16 +1,30 @@
+import { z } from "zod"
 import type { ThreadId } from "./thread-identity.js"
 
-/** What a device holds for one Thread: its hostname and the first of its ports. */
+/**
+ * Whose running app a set of values belongs to: one per folder, since two
+ * apps on the same files would fight over their build output and data. A
+ * Worktree Thread's app is keyed by the Thread's ID, and Threads sharing
+ * any other folder share `folder-<digest of its path>`.
+ */
+export const AppKeySchema = z.string()
+  .regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|folder-[0-9a-f]{16})$/, "not an app key")
+  .brand<"AppKey">()
+export type AppKey = z.infer<typeof AppKeySchema>
+
+/** What a device holds for one app: its hostname and the first of its ports. */
 export interface ThreadEnvironmentValues {
-  thread: ThreadId
+  app: AppKey
   /** A `.localhost` name: every such name reaches this machine, and each keeps its own cookies. */
   host: string
   port: number
   usedAt: number
 }
 
-/** A Thread's values as its agents receive them. */
+/** A Thread's values as its agents receive them: its folder's app's. */
 export interface ThreadEnvironment extends Omit<ThreadEnvironmentValues, "usedAt"> {
+  /** The agent's own Thread; every Thread in the app's folder shares its values. */
+  thread: ThreadId
   /** `THREAD_PORT_COUNT` ports from `port`. */
   ports: number
   /** Private to the Thread and kept for its life; outside the checkout, so Git never sees it. */

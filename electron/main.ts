@@ -97,6 +97,8 @@ import { spawn } from "node:child_process"
 import { watch } from "node:fs"
 import { homedir, hostname } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
+import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
+import { ThreadIdSchema } from "./contracts/thread-identity.js"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { AgentHost } from "./host.js"
 import {
@@ -367,9 +369,19 @@ const threadRecipes = threadStore ? join(realpathSync(dirname(threadStore.path))
 const threadEnvironments = threadStore
   ? new ThreadEnvironments({ store: threadStore, dataRoot: join(realpathSync(dirname(threadStore.path)), "thread-data"), recipesRoot: threadRecipes })
   : null
+/** Whose app a key is, in words: a Worktree Thread's, or a folder's that Threads share. */
+function whoseApp(app: AppKey): string | undefined {
+  const thread = ThreadIdSchema.safeParse(app)
+  if (thread.success) {
+    const title = threadStore?.thread(thread.data)?.title
+    return title ? `the Thread "${title}"` : undefined
+  }
+  const folder = threadProcesses?.checkoutOf(app)
+  return folder ? `the ${basename(folder)} folder` : undefined
+}
 /** And its running app's records, so any host sees and stops the processes another host started. */
 const threadProcesses = threadStore
-  ? new ThreadProcesses({ root: join(realpathSync(dirname(threadStore.path)), "thread-environments"), listening: portListening, title: (thread) => threadStore.thread(thread)?.title })
+  ? new ThreadProcesses({ root: join(realpathSync(dirname(threadStore.path)), "thread-environments"), listening: portListening, whose: (app) => whoseApp(app) })
   : null
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
@@ -385,10 +397,11 @@ const threadWorktrees = threadStore
         .map((shell) => `the terminal “${shell.title}”`)
       return [...conversationsIn(path, (status) => status !== "closed"), ...shells]
     }, async (path) => conversationsIn(path, (status) => status === "running"), threadProcesses && threadEnvironments ? {
-      stop: async (thread) => { await threadProcesses.stop(thread) },
-      discard: async (thread) => {
-        await threadProcesses.discard(thread)
-        await rm(threadEnvironments.dataDir(thread), { recursive: true, force: true })
+      stop: async (thread) => { await threadProcesses.stop(AppKeySchema.parse(thread)) },
+      discard: async (thread, path) => {
+        await threadProcesses.discard(AppKeySchema.parse(thread))
+        await threadProcesses.forgetPrepared(path)
+        await rm(threadEnvironments.dataDir(AppKeySchema.parse(thread)), { recursive: true, force: true })
       },
     } : undefined)
   : null
@@ -2120,7 +2133,7 @@ app.whenReady().then(async () => {
       }) ?? Promise.resolve(undefined),
     controlInstructions: (bindingId, conversationId) => {
       const launched = threadEnvironments?.launchedWith(conversationId)
-      if (launched) void threadProcesses?.touch(launched.thread).catch(() => {})
+      if (launched) void threadProcesses?.touch(launched.app).catch(() => {})
       return launchLines(controlSessions.get(bindingId), launched)
     },
     revokeTools: async (bindingId, conversationId) => {
@@ -2198,7 +2211,7 @@ app.whenReady().then(async () => {
       launchedWith: (id) => threadEnvironments.launchedWith(id),
       processes: threadProcesses,
       recipesRoot: threadRecipes,
-      title: (thread) => threadStore?.thread(thread)?.title,
+      whose: whoseApp,
     }) : undefined
   )
   trace("conversation tools ready")

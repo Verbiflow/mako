@@ -35,7 +35,7 @@ import {
 } from "./contracts/thread-execution.js"
 import { ThreadGroupSchema, type ThreadGroup } from "./contracts/thread-groups.js"
 import type { ThreadWorktree } from "./contracts/thread-worktrees.js"
-import type { ThreadEnvironmentValues } from "./contracts/thread-environments.js"
+import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "./contracts/thread-environments.js"
 import { hostWarn } from "./host-log.js"
 import { enableSharedWal } from "./sqlite-wal.js"
 
@@ -352,10 +352,12 @@ const WorktreeRowSchema = z.object({
   branch: z.string(), base: z.string(), created_at: z.number(),
 })
 /**
- * The values that keep a Thread's running app from colliding with another's
- * on a device: its hostname and the first of its block of ports. Each is held
- * by one Thread per device, and a Thread keeps its values for its whole life
- * unless the device runs out and it has gone unused longest.
+ * The values that keep one folder's running app from colliding with
+ * another's on a device: its hostname and the first of its block of ports.
+ * Each is held by one app per device, and an app keeps its values for its
+ * folder's whole life unless the device runs out and it has gone unused
+ * longest. `thread_environments`, keyed by Thread before apps were one per
+ * folder, stays for hosts that still write it; its rows move here on open.
  */
 const ENVIRONMENT_TABLE = `
 CREATE TABLE IF NOT EXISTS thread_environments (
@@ -363,11 +365,18 @@ CREATE TABLE IF NOT EXISTS thread_environments (
   created_at INTEGER NOT NULL, used_at INTEGER NOT NULL, PRIMARY KEY (thread_id, device_id));
 CREATE UNIQUE INDEX IF NOT EXISTS thread_environments_host ON thread_environments(device_id, host);
 CREATE UNIQUE INDEX IF NOT EXISTS thread_environments_port ON thread_environments(device_id, port);
+CREATE TABLE IF NOT EXISTS app_environments (
+  app TEXT NOT NULL, device_id TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, used_at INTEGER NOT NULL, PRIMARY KEY (app, device_id));
+CREATE UNIQUE INDEX IF NOT EXISTS app_environments_host ON app_environments(device_id, host);
+CREATE UNIQUE INDEX IF NOT EXISTS app_environments_port ON app_environments(device_id, port);
+INSERT OR IGNORE INTO app_environments SELECT thread_id, device_id, host, port, created_at, used_at FROM thread_environments;
+DELETE FROM thread_environments;
 `
-const EnvironmentRowSchema = z.object({ thread_id: z.string(), host: z.string(), port: z.number(), used_at: z.number() })
+const EnvironmentRowSchema = z.object({ app: z.string(), host: z.string(), port: z.number(), used_at: z.number() })
 class EnvironmentTaken extends Error {}
 function environmentValues(row: z.infer<typeof EnvironmentRowSchema>): ThreadEnvironmentValues {
-  return { thread: ThreadIdSchema.parse(row.thread_id), host: row.host, port: row.port, usedAt: row.used_at }
+  return { app: AppKeySchema.parse(row.app), host: row.host, port: row.port, usedAt: row.used_at }
 }
 
 const SCHEMA = `
@@ -571,41 +580,42 @@ export class ThreadStore {
       })
   }
 
-  /** A Thread's values on this device, following merges, marked as used now. */
-  useEnvironment(id: ThreadId): ThreadEnvironmentValues | undefined {
-    const thread = this.thread(id)
-    if (!thread) return undefined
+  /** An app's values on this device, marked as used now. */
+  useEnvironment(app: AppKey): ThreadEnvironmentValues | undefined {
     return this.write(() => {
-      this.sql("UPDATE thread_environments SET used_at = ? WHERE thread_id = ? AND device_id = ?").run(this.now(), thread.id, this.deviceId)
-      return this.environmentRow(thread.id)
+      this.sql("UPDATE app_environments SET used_at = ? WHERE app = ? AND device_id = ?").run(this.now(), app, this.deviceId)
+      return this.environmentRow(app)
     })
+  }
+
+  /** An app's values on this device, without marking them used, for a view. */
+  environment(app: AppKey): ThreadEnvironmentValues | undefined {
+    return this.environmentRow(app)
   }
 
   /** Every value held on this device, least recently used first. */
   heldEnvironments(): ThreadEnvironmentValues[] {
-    return this.sql("SELECT thread_id, host, port, used_at FROM thread_environments WHERE device_id = ? ORDER BY used_at, thread_id")
+    return this.sql("SELECT app, host, port, used_at FROM app_environments WHERE device_id = ? ORDER BY used_at, app")
       .all(this.deviceId)
       .map((found) => environmentValues(EnvironmentRowSchema.parse(found)))
   }
 
   /**
-   * Hold `host` and `port` for a Thread, first giving up `reclaim`'s values if
-   * named. A Thread that already has values keeps them. Undefined when another
+   * Hold `host` and `port` for an app, first giving up `reclaim`'s values if
+   * named. An app that already has values keeps them. Undefined when another
    * host took the name or the port first; choose again.
    */
-  claimEnvironment(input: { thread: ThreadId; host: string; port: number; reclaim?: ThreadId }): ThreadEnvironmentValues | undefined {
-    const thread = this.thread(input.thread)
-    if (!thread) throw new Error("This Thread no longer exists")
+  claimEnvironment(input: { app: AppKey; host: string; port: number; reclaim?: AppKey }): ThreadEnvironmentValues | undefined {
     try {
       return this.write(() => {
-        const held = this.environmentRow(thread.id)
+        const held = this.environmentRow(input.app)
         if (held) return held
-        if (input.reclaim) this.sql("DELETE FROM thread_environments WHERE thread_id = ? AND device_id = ?").run(input.reclaim, this.deviceId)
-        const inserted = this.sql("INSERT OR IGNORE INTO thread_environments VALUES (?, ?, ?, ?, ?, ?)")
-          .run(thread.id, this.deviceId, input.host, input.port, this.now(), this.now())
-        // Rolls back the reclaim too: its Thread keeps its values when this claim fails.
+        if (input.reclaim) this.sql("DELETE FROM app_environments WHERE app = ? AND device_id = ?").run(input.reclaim, this.deviceId)
+        const inserted = this.sql("INSERT OR IGNORE INTO app_environments VALUES (?, ?, ?, ?, ?, ?)")
+          .run(input.app, this.deviceId, input.host, input.port, this.now(), this.now())
+        // Rolls back the reclaim too: its app keeps its values when this claim fails.
         if (!inserted.changes) throw new EnvironmentTaken()
-        return this.environmentRow(thread.id)
+        return this.environmentRow(input.app)
       })
     } catch (error) {
       if (error instanceof EnvironmentTaken) return undefined
@@ -613,8 +623,8 @@ export class ThreadStore {
     }
   }
 
-  private environmentRow(thread: ThreadId): ThreadEnvironmentValues | undefined {
-    const found = this.sql("SELECT thread_id, host, port, used_at FROM thread_environments WHERE thread_id = ? AND device_id = ?").get(thread, this.deviceId)
+  private environmentRow(app: AppKey): ThreadEnvironmentValues | undefined {
+    const found = this.sql("SELECT app, host, port, used_at FROM app_environments WHERE app = ? AND device_id = ?").get(app, this.deviceId)
     return found ? environmentValues(EnvironmentRowSchema.parse(found)) : undefined
   }
 
