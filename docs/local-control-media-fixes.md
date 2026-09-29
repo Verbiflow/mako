@@ -800,5 +800,8 @@ In the same work, an invalid command to the video encoder worker used to be
 dropped silently, and its caller waited out the response timeout. It now fails
 at once with "Invalid video worker command" (`7e38f89`).
 
-Included in candidate `13a82042e7e655bd`, queued September 28 to install when the
-default host is idle (`release/rollout-20260928`).
+Included in candidate `973fabfc73ce3aa3`, queued September 28 to install when the
+default host is idle (`release/rollout-20260928b`). After the source recovered
+(22:00 local), host-sized frames passed both gates in source mode at four load
+workers, and so did full frames. At that load the machine was not contended
+enough to separate them ([rerun](audits/2026-09-28/preview-sizing/README.md)).
