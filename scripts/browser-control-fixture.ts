@@ -54,6 +54,7 @@ export async function browserFixture() {
     history: string[]
     selectorPresent: boolean
     inflight: number
+    coarseView: boolean
   }
   const page: FixturePage = {
     editable: true,
@@ -70,6 +71,7 @@ export async function browserFixture() {
     history: ["https://example.test/one", "https://example.test/two"],
     selectorPresent: false,
     inflight: 0,
+    coarseView: false,
   }
   let delayed: (() => void) | undefined
   let holdStop = false
@@ -373,11 +375,21 @@ export async function browserFixture() {
             })
           break
         }
-        case "Page.captureScreenshot":
-          reply({
-            data: screenshotPixels,
-          })
+        case "Page.captureScreenshot": {
+          if (!page.coarseView) {
+            reply({ data: screenshotPixels })
+            break
+          }
+          // The 800×600 CSS view returned 2.5% below one pixel per CSS pixel;
+          // clips honour their requested scale.
+          const clip = z.object({ width: z.number(), height: z.number(), scale: z.number() }).optional().parse(command.params.clip)
+          const [width, height] = clip
+            ? [Math.round(clip.width * clip.scale * 2), Math.round(clip.height * clip.scale * 2)]
+            : [780, 585]
+          void sharp({ create: { width, height, channels: 3, background: "white" } }).png().toBuffer()
+            .then((bytes) => reply({ data: bytes.toString("base64") }))
           break
+        }
         case "Page.handleJavaScriptDialog":
           page.dialogAnswers.push(command.params)
           if (page.nextDialog) {

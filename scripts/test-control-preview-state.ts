@@ -3,7 +3,7 @@ import { mock } from "node:test"
 import type { ControlPreview } from "../electron/shared.js"
 
 const visibility = Object.assign(new EventTarget(), { hidden: false })
-const calls: { id: string; watching: boolean }[] = []
+const calls: { id: string; watching: boolean; box?: { width: number; height: number } }[] = []
 const previews = new Map<string, ControlPreview>()
 let requestGate: Promise<void> | undefined
 let streamStarts = 0, streamStops = 0
@@ -21,8 +21,8 @@ Object.defineProperty(globalThis, "window", {
     mako: {
       nativeWindowVideo: true,
       controlPreviewSource: async () => "window:42",
-      controlPreview: async (id: string, watching: boolean) => {
-        calls.push({ id, watching })
+      controlPreview: async (id: string, watching: boolean, _watcher: string, box?: { width: number; height: number }) => {
+        calls.push({ id, watching, box })
         if (watching) await requestGate
         const preview = previews.get(id)
         return preview
@@ -40,6 +40,7 @@ Object.defineProperty(globalThis, "window", {
 })
 const { controlPreviewStore, receiveControlActivity, watchControlPreview, controlPreviewStream } =
   await import("../src/state/control-preview.js")
+const { demandControlPreview } = await import("../src/lib/control-preview-decoder.js")
 mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 })
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
 const cleanups: (() => void)[] = []
@@ -116,6 +117,44 @@ try {
   streamB!.release()
   await flush()
   assert.equal(streamStops, 1, "Last consumer stops capture exactly once")
+
+  const reads = () => calls.filter((call) => call.id === "one" && call.watching)
+  const panel = demandControlPreview()
+  receiveControlActivity({ ...preview.activity })
+  await flush()
+  assert.equal(reads().at(-1)!.box, undefined, "An unmeasured viewer asks for full pixels")
+  const unsized = reads().length
+  panel.set(576, 324)
+  await flush()
+  assert.equal(reads().length, unsized, "Measuring a viewer that already has full pixels makes no read")
+  const overlay = demandControlPreview()
+  overlay.set(300, 600)
+  receiveControlActivity({ ...preview.activity })
+  await flush()
+  assert.deepEqual(reads().at(-1)!.box, { width: 576, height: 600 }, "One box covers every viewer")
+  const covered = reads().length
+  panel.set(400, 200)
+  await flush()
+  assert.equal(reads().length, covered, "A shrinking viewer keeps the frame it has")
+  panel.set(1200, 700)
+  await flush()
+  assert.equal(reads().length, covered + 1, "A viewer that outgrows its frame reads again at once")
+  assert.deepEqual(reads().at(-1)!.box, { width: 1200, height: 700 })
+  const zoomed = demandControlPreview()
+  zoomed.set(1600, 900)
+  await flush()
+  assert.equal(reads().length, covered + 2, "A larger viewer opening reads again once it is measured")
+  assert.deepEqual(reads().at(-1)!.box, { width: 1600, height: 900 })
+  for (const viewer of [panel, overlay, zoomed]) viewer.release()
+  receiveControlActivity({ ...preview.activity })
+  await flush()
+  assert.deepEqual(reads().at(-1)!.box, { width: 1600, height: 900 },
+    "Before a reopened viewer lays out, the last measured box stands in")
+  const reopened = demandControlPreview()
+  receiveControlActivity({ ...preview.activity })
+  await flush()
+  assert.equal(reads().at(-1)!.box, undefined, "Once it exists but is unmeasured, it gets full pixels")
+  reopened.release()
   visibility.hidden = true
   visibility.dispatchEvent(new Event("visibilitychange"))
   await flush()
@@ -128,7 +167,7 @@ try {
     "Hidden documents make zero polling calls"
   )
   console.log(
-    "Preview state: independent tasks, consumer cleanup, idle shutdown, event wakeup and zero hidden polling passed"
+    "Preview state: independent tasks, consumer cleanup, idle shutdown, event wakeup, viewer-sized reads and zero hidden polling passed"
   )
 } finally {
   for (const cleanup of cleanups) cleanup()

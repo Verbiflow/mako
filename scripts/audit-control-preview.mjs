@@ -152,7 +152,7 @@ if (process.versions.electron) {
 async function audit() {
   const machine = { logicalCpus: availableParallelism(), loadAverageAtStart: loadavg(),
     cpuProfiled: process.env.MAKO_PREVIEW_CPU_PROFILE === "1" }
-  const { app, BrowserWindow, ipcMain } = await import("electron")
+  const { app, BrowserWindow, ipcMain, powerSaveBlocker } = await import("electron")
   const { DeskBrowser } = await import("../dist-electron/desk-browser.js")
   const { deskPageForWindow } =
     await import("../dist-electron/desk-browser-window.js")
@@ -161,8 +161,9 @@ async function audit() {
     await import("../dist-electron/control-previews.js")
   const { BrowserCommandSchema } =
     await import("@mako/control-runtime/contracts")
-  const { invokeRuntime, invokeRuntimePreview, subscribeRuntime } =
+  const { invokeRuntime, invokeRuntimePreview, runtimeInfo, subscribeRuntime } =
     await import("../dist-electron/runtime-connection.js")
+  let sizing
   const installedSession = process.env.MAKO_PREVIEW_INSTALLED_SESSION
   const installed = installedSession
     ? await (await import("./lib/installed-control-audit.mjs")).installedControlAudit(installedSession)
@@ -176,6 +177,9 @@ async function audit() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   if (process.platform === "darwin") app.setActivationPolicy("prohibited")
+  // A windowless app is an App Nap candidate: macOS coalesces its timers and
+  // lowers its priority, which reads as viewer freezes. A visible Mako window is not napped.
+  const appNap = process.env.MAKO_PREVIEW_APP_NAP === "1" ? undefined : powerSaveBlocker.start("prevent-app-suspension")
   const durationMs = Number(process.env.MAKO_PREVIEW_SECONDS ?? 4) * 1000
   const watchdog = setTimeout(() => app.exit(2), durationMs + 90_000)
   const viewer = new BrowserWindow({
@@ -227,6 +231,15 @@ async function audit() {
     : new BrowserService(() => [desk.definition])
   const socket = installed?.socket ?? join(root, "preview.sock"),
     client = installed?.client ?? randomUUID()
+  // Same wall clock as the viewer page's stage trace (see previewAudit.trace).
+  const wall = () => performance.timeOrigin + performance.now()
+  const mainStages = { notified: [], reads: [], painted: [], lagged: [], served: [] }
+  let lagTick = performance.now()
+  const lagTimer = setInterval(() => {
+    const now = performance.now()
+    if (now - lagTick > 60) mainStages.lagged.push({ at: wall(), ms: now - lagTick - 20 })
+    lagTick = now
+  }, 20)
   let worker,
     unsubscribe = () => {},
     fixtureServer,
@@ -291,8 +304,10 @@ async function audit() {
               packet.payload.type === "control-activity"
             ) {
               notifications++
-              if (!installed || packet.payload.activity.conversationId === process.env.MAKO_PREVIEW_CONVERSATION)
+              if (!installed || packet.payload.activity.conversationId === process.env.MAKO_PREVIEW_CONVERSATION) {
+                mainStages.notified.push(wall())
                 viewer.webContents.send("mako:event", installed ? { ...packet.payload, activity: { ...packet.payload.activity, conversationId: "preview-audit" } } : packet.payload)
+              }
             }
           },
           () => {},
@@ -324,6 +339,7 @@ async function audit() {
           (image) => image,
           (activity) => {
             notifications++
+            mainStages.notified.push(wall())
             viewer.webContents.send("mako:event", {
               type: "control-activity",
               activity,
@@ -332,20 +348,33 @@ async function audit() {
         )
     ipcMain.handle(
       "mako:control-preview",
-      async (_event, id, watching, watcher) => {
+      async (_event, id, watching, watcher, box) => {
         const countTransfer = (transfer) => {
           wireBytes += transfer.wireBytes
           decodedBytes += transfer.decodedBytes
         }
-        const value = shared
-          ? process.env.MAKO_PREVIEW_IDENTITY === "1"
-            ? await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher], 1, { onTransfer: countTransfer })
-            : await invokeRuntimePreview(socket, client, [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher], countTransfer)
-          : previews.read(id, watching, watcher)
+        const readStarted = wall()
+        // The same capability rule as the desktop client: older installed
+        // hosts refuse a fourth argument.
+        sizing ??= installed
+          ? runtimeInfo(socket).then((info) => info?.previewSizing === true)
+          : Promise.resolve(true)
+        const sized = box && process.env.MAKO_PREVIEW_FULL_FRAMES !== "1" && (await sizing)
+        const args = [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher, ...(sized ? [box] : [])]
+        let value
+        if (!shared) {
+          value = previews.read(id, watching, watcher)
+          if (value && sized) value = await previews.sized(value, box)
+        } else if (process.env.MAKO_PREVIEW_IDENTITY === "1")
+          value = await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher, ...args.slice(3)], 1, { onTransfer: countTransfer })
+        else value = await invokeRuntimePreview(socket, client, args, countTransfer)
         if (value?.frame?.image.data) {
           value.frame.image = { mimeType: value.frame.image.mimeType, bytes: Buffer.from(value.frame.image.data, "base64") }
         }
         if (!watching) return null
+        mainStages.reads.push({ started: readStarted, ended: wall(), id: value?.frame?.id,
+          capturedAt: value?.frame?.capturedAt, publishedAt: value?.frame?.publishedAt,
+          bytes: value?.frame?.image.bytes.byteLength ?? 0, box: sized ? box : undefined })
         reads++
         bytes += (value?.frame?.image.bytes.byteLength ?? 0) + JSON.stringify({ ...value, frame: value?.frame ? { ...value.frame, image: { mimeType: value.frame.image.mimeType } } : null }).length
         return value
@@ -388,12 +417,16 @@ async function audit() {
         words[4] !== 165 ||
         words[5] !== (words[0] ^ words[1] ^ words[2] ^ words[3] ^ 165)
       ) {
-        invalid++
+        if (!invalid++) {
+          console.error("First invalid paint:", { width, height, rectangle, words })
+          void writeFile(join(root, "invalid-paint.png"), image.toPNG())
+        }
         return
       }
       const sequence = words[0] * 256 + words[1],
         ack = words[2] * 256 + words[3]
       if (sequence !== lastSequence) {
+        mainStages.painted.push(performance.timeOrigin + now)
         samples.push({ sequence, at: now })
         lastSequence = sequence
       }
@@ -499,13 +532,32 @@ async function audit() {
     await until(async () => {
       rectangle = await viewer.webContents.executeJavaScript(
         // The painter sets the source aspect ratio on its first paint; canvas pixels now follow the displayed box.
-        `(()=>{const image=document.querySelector('canvas, img');if(!image || !(image.style.aspectRatio || image.naturalWidth))return null;const r=image.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,pixels:image.width ? [image.width,image.height] : undefined}})()`
+        // The card arrives with a scale/opacity animation; its box is final only once that has finished.
+        `(()=>{const image=document.querySelector('canvas, img');if(!image || !(image.style.aspectRatio || image.naturalWidth))return null;const card=image.closest('.control-preview-card');if(card?.getAnimations().some(a=>a.playState!=='finished'))return null;const r=image.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,pixels:image.width ? [image.width,image.height] : undefined}})()`
       )
       return rectangle
     }, "production preview image")
+    // Startup is not what is measured; under load it may take longer than the
+    // steady state it precedes.
+    const startupAt = performance.now()
     await delay(2000)
-    if (process.env.MAKO_PREVIEW_BASELINE !== "1")
-      assert.ok(samples.length > 10, "Valid composited pixel sequence")
+    while (samples.length <= 10 && performance.now() - startupAt < 15_000) await delay(100)
+    const startupMs = Math.round(performance.now() - startupAt)
+    if (process.env.MAKO_PREVIEW_BASELINE !== "1" && samples.length <= 10) {
+      const page = await viewer.webContents.executeJavaScript(
+        "(()=>{const t=previewAudit.trace();return {demand:previewAudit.demand(),canvases:[...document.querySelectorAll('canvas')].map(c=>[c.width,c.height,c.clientWidth,c.clientHeight]),visibility:document.visibilityState,notified:t.notified.length,stored:t.stored.length,decoded:t.decoded.length,drawn:t.drawn.length,lagged:t.lagged.length}})()"
+      )
+      await writeFile(join(root, "failure.png"), (await viewer.webContents.capturePage()).toPNG())
+      const served = shared && !installed ? (await invokeRuntime(socket, client, "mako:audit-cpu", [])).served : []
+      const origin = mainStages.reads[0]?.started ?? 0
+      console.error("Reads (start ms, duration ms, KB, box, host answered at ms):", mainStages.reads.slice(-20).map((read) =>
+        [Math.round(read.started - origin), Math.round(read.ended - read.started), Math.round(read.bytes / 1024),
+          read.box ? `${read.box.width}x${read.box.height}` : "full",
+          ...served.filter((at) => at >= read.started && at <= read.ended).map((at) => Math.round(at - origin))]))
+      console.error("Host answered (ms):", served.map((at) => Math.round(at - origin)))
+      console.error("Audit main-process stalls (at ms, stalled ms):", mainStages.lagged.map((lag) => [Math.round(lag.at - origin), Math.round(lag.ms)]))
+      assert.fail(`Valid composited pixel sequence: ${samples.length} distinct, ${paints} paints, ${invalid} invalid, ${reads} reads, ${notifications} notifications, viewer ${JSON.stringify(page)}`)
+    }
     let recording =
       process.env.MAKO_PREVIEW_RECORDING === "1"
         ? await run({
@@ -550,6 +602,7 @@ async function audit() {
       const host = shared && !installed
         ? await invokeRuntime(socket, client, "mako:audit-cpu", [])
         : undefined
+      if (host?.served) mainStages.served.push(...host.served)
       memory.push({
         loadAverage: loadavg(),
         atMs: performance.now() - started,
@@ -674,8 +727,16 @@ async function audit() {
     const gaps = animated
       .slice(1)
       .map((frame, index) => frame.at - animated[index].at)
+    const stageTrace = await viewer.webContents.executeJavaScript("previewAudit.trace()")
+    const stageWindow = [performance.timeOrigin + started, performance.timeOrigin + started + elapsed]
+    const stalls = attributeStalls(mainStages, stageTrace, stageWindow)
+    await writeFile(join(root, "stages.json"), JSON.stringify({ window: stageWindow, main: mainStages, viewer: stageTrace, stalls }))
+    const windowReads = mainStages.reads.filter((read) => read.started >= stageWindow[0] && read.ended <= stageWindow[1])
     const animation = {
       elapsedMs: elapsed,
+      startupMs,
+      reads: { count: windowReads.length, sized: windowReads.filter((read) => read.box).length,
+        kilobytes: stats(windowReads.map((read) => read.bytes / 1024)) },
       memory,
       resourceSamples,
       resources: summarizeProcessResources(resourceSamples, elapsed),
@@ -683,6 +744,8 @@ async function audit() {
       distinctFrames: animated.length,
       fps: (animated.length * 1000) / elapsed,
       gapsMs: stats(gaps),
+      stages: summarizeStages(mainStages, stageTrace, stageWindow),
+      stalls,
       ...transfer,
       cpuCoreEquivalent: (cpuSeconds * 1000) / elapsed,
       viewerCores,
@@ -749,8 +812,21 @@ async function audit() {
       3_000
     )
     const rateClearedAfterStillMs = performance.now() - stillAt
+    // Scaled frames are judged against the full capture they came from, not
+    // only against themselves.
+    let capture
+    if (mainStages.reads.some((read) => read.box)) {
+      const conversation = installed ? process.env.MAKO_PREVIEW_CONVERSATION : "preview-audit"
+      const read = (watching) => shared
+        ? invokeRuntimePreview(socket, client, [conversation, watching, "fidelity"])
+        : previews.read("preview-audit", watching, "fidelity")
+      const full = (await read(true))?.frame
+      await read(false)
+      assert.ok(full && !full.id.includes(":"), "A read without a box returns the full capture")
+      capture = full.image.data ?? Buffer.from(full.image.bytes).toString("base64")
+    }
     const fidelity = await viewer.webContents.executeJavaScript(
-      "previewAudit.fidelity()"
+      `previewAudit.fidelity(${capture ? JSON.stringify(capture) : ""})`
     )
     assert.equal(
       fidelity.length,
@@ -761,7 +837,20 @@ async function audit() {
         : 1
     )
     for (const image of fidelity) {
-      if (extension) {
+      // A sizing host scales the capture to the viewers' displayed pixels and
+      // names that size in the frame id.
+      const scaled = image.frameId.split(":")[1]
+      if (scaled) {
+        assert.equal(scaled, `${image.sourceWidth}x${image.sourceHeight}`, "A scaled frame is the size its id names")
+        assert.ok(
+          image.sourceWidth >= image.box[0] - 1 || image.sourceHeight >= image.box[1] - 1,
+          `A viewer-sized frame fills its viewer: ${scaled} for ${image.box.join("x")}`
+        )
+        assert.ok(
+          Math.abs(image.sourceWidth * 1080 - image.sourceHeight * 1920) <= 1500,
+          "Scaling preserves the viewport aspect ratio"
+        )
+      } else if (extension) {
         assert.ok(
           image.sourceWidth >= 1920 && image.sourceHeight >= 1080,
           "Browser capture must retain at least the requested viewport resolution"
@@ -781,6 +870,14 @@ async function audit() {
         image.psnr >= 35 && image.meanAbsolute <= 2,
         `Viewer matches a high-quality downscale of the retained frame: ${image.psnr.toFixed(1)} dB, mean ${image.meanAbsolute.toFixed(2)}`
       )
+      // Against Chromium's own downscale, the viewer decoding a full 1080p
+      // capture itself scores 33.1 dB at a 576-pixel card; host scaling must
+      // not fall below that.
+      if (image.capture)
+        assert.ok(
+          image.capture.psnr >= 33 && image.capture.meanAbsolute <= 2.5,
+          `Viewer matches a high-quality downscale of the full capture: ${image.capture.psnr.toFixed(1)} dB, mean ${image.capture.meanAbsolute.toFixed(2)}`
+        )
       assert.equal(image.bytes, image.width * image.height * 4)
     }
     await writeFile(
@@ -840,6 +937,9 @@ async function audit() {
       process.env.MAKO_PREVIEW_LEASE_FOCUS !== "1" &&
       process.env.MAKO_PREVIEW_WINDOW !== "1"
     ) {
+      // The installed task's own conversation may also be open in a Mako
+      // window, whose live preview is a viewer this audit does not own.
+      let viewers
       try {
         await until(async () => {
           restoredPage = await source.webContents.executeJavaScript(
@@ -849,13 +949,24 @@ async function audit() {
           // This fixture explicitly opened a background tab; capture must release
           // its emulated visibility after the fixture consumers stop. hasFocus
           // is reported separately; it is not an internal ownership receipt.
-          return installed
-            ? restoredPage.visibility === "hidden"
-            : restoredPage.visibility === initialPage.visibility
+          if (!installed) return restoredPage.visibility === initialPage.visibility
+          viewers = await invokeRuntime(socket, client, "mako:control-preview-viewers", [process.env.MAKO_PREVIEW_CONVERSATION])
+            .catch((error) => ({ unavailable: error instanceof Error ? error.message : String(error) }))
+          if (viewers.own === 0 && viewers.others > 0) return true
+          return restoredPage.visibility === "hidden"
         }, "last consumer restores hidden page visibility")
+        if (viewers?.others > 0)
+          console.error("Capture continues for another client's viewer of this task:", viewers)
+      } catch (error) {
+        if (installed && error instanceof Error)
+          error.message += viewers?.unavailable
+            ? " (this host does not report preview viewers)"
+            : ` with ${viewers?.own} own and ${viewers?.others} other viewers, capture ${viewers?.capturing ? "running" : "stopped"}`
+        throw error
       } finally {
         if (installed) {
-          await writeFile(join(root, "restoration.json"), JSON.stringify({ initialPage, restoredPage, internalOwnership: "Not exposed by the installed API; no inference from private fixture counters" }, null, 2))
+          await writeFile(join(root, "restoration.json"), JSON.stringify({ initialPage, restoredPage,
+            viewers: viewers ?? "Not reported by this host", heldByAnotherViewer: viewers?.others > 0 }, null, 2))
         } else {
         const ownership = await invokeRuntime(
           socket,
@@ -878,10 +989,13 @@ async function audit() {
           false,
           "Browser acknowledged emulation reset"
         )
-        console.error("Capture restoration:", { restoredPage, ownership })
+        viewers = await invokeRuntime(socket, client, "mako:control-preview-viewers", ["preview-audit"])
+        assert.deepEqual(viewers, { own: 0, others: 0, capturing: false },
+          "The host's viewer report agrees with the released capture")
+        console.error("Capture restoration:", { restoredPage, ownership, viewers })
         await writeFile(
           join(root, "restoration.json"),
-          JSON.stringify({ initialPage, restoredPage, ownership }, null, 2)
+          JSON.stringify({ initialPage, restoredPage, ownership, viewers }, null, 2)
         )
         }
       }
@@ -980,6 +1094,92 @@ async function audit() {
     viewer.destroy()
     ipcMain.removeHandler("mako:control-preview")
     clearTimeout(watchdog)
+    clearInterval(lagTimer)
+  }
+}
+
+// Viewer path in delivery order. A freeze belongs to the earliest stage that
+// was also silent for most of it: everything after that stage had nothing to do.
+function stageEvents(main, viewer) {
+  let previous
+  const newFrames = main.reads.filter((read) => {
+    const fresh = read.id && read.id !== previous
+    previous = read.id ?? previous
+    return fresh
+  })
+  return [
+    ["host notification reaches audit", main.notified],
+    ["read returns a new frame", newFrames.map((read) => read.ended)],
+    ["notification reaches viewer", viewer.notified],
+    ["viewer stores frame", viewer.stored.map((frame) => frame.at)],
+    ["decode completes", viewer.decoded.map((decode) => decode.at)],
+    ["canvas draws", viewer.drawn],
+    ["compositor paints", main.painted],
+  ]
+}
+
+function longestSilence(times, from, to) {
+  let last = from,
+    longest = 0
+  for (const at of times) {
+    if (at <= from) continue
+    if (at >= to) break
+    longest = Math.max(longest, at - last)
+    last = at
+  }
+  return Math.max(longest, to - last)
+}
+
+function attributeStalls(main, viewer, [start, end]) {
+  const stages = stageEvents(main, viewer)
+  const painted = main.painted.filter((at) => at >= start && at <= end)
+  const stalls = []
+  for (let i = 1; i < painted.length; i++) {
+    const from = painted[i - 1],
+      to = painted[i],
+      duration = to - from
+    if (duration <= 250) continue
+    const silences = Object.fromEntries(
+      stages.map(([name, times]) => [name, Math.round(longestSilence(times, from, to))])
+    )
+    const overlapping = main.reads.filter((read) => read.started < to && read.ended > from)
+    const lag = (entries) => Math.round(Math.max(0, ...entries.filter((entry) => entry.at > from && entry.at - entry.ms < to).map((entry) => entry.ms)))
+    const published = [...main.reads, ...viewer.stored].filter((frame) => frame.publishedAt > from && frame.publishedAt < to)
+    stalls.push({
+      atMs: Math.round(from - start),
+      durationMs: Math.round(duration),
+      cause: stages.find(([name]) => silences[name] >= duration * 0.8)?.[0] ?? "no single stage",
+      silencesMs: silences,
+      longestOverlappingReadMs: Math.round(Math.max(0, ...overlapping.map((read) => read.ended - read.started))),
+      framesPublishedInside: new Set(published.map((frame) => frame.publishedAt)).size,
+      mainLagMs: lag(main.lagged),
+      viewerLagMs: lag(viewer.lagged),
+    })
+  }
+  return stalls.sort((a, b) => b.durationMs - a.durationMs).slice(0, 20)
+}
+
+function summarizeStages(main, viewer, [start, end]) {
+  const inside = (at) => at >= start && at <= end
+  const reads = main.reads.filter((read) => inside(read.started))
+  const stored = viewer.stored.filter((frame) => inside(frame.at))
+  const round = (value) => value === undefined ? value : Math.round(value * 10) / 10
+  const rounded = (values) => Object.fromEntries(Object.entries(stats(values)).map(([key, value]) => [key, round(value)]))
+  // The owned fixture host stamps when its preview route answered (installed hosts do not).
+  const split = reads.flatMap((read) => {
+    const served = main.served.find((at) => at >= read.started && at <= read.ended)
+    return served === undefined ? [] : [[served - read.started, read.ended - served]]
+  })
+  return {
+    readMs: rounded(reads.map((read) => read.ended - read.started)),
+    readRequestToHostMs: rounded(split.map(([request]) => request)),
+    readHostToViewerMs: rounded(split.map(([, response]) => response)),
+    hostCaptureToPublishMs: rounded(stored.map((frame) => frame.publishedAt - frame.capturedAt)),
+    publishToViewerStoreMs: rounded(stored.map((frame) => frame.at - frame.publishedAt)),
+    decodeMs: rounded(viewer.decoded.filter((decode) => inside(decode.at)).map((decode) => decode.ms)),
+    silenceMs: Object.fromEntries(stageEvents(main, viewer).map(([name, times]) => [name, round(longestSilence(times.filter(inside), start, end))])),
+    mainLagMs: rounded(main.lagged.filter((entry) => inside(entry.at)).map((entry) => entry.ms)),
+    viewerLagMs: rounded(viewer.lagged.filter((entry) => inside(entry.at)).map((entry) => entry.ms)),
   }
 }
 

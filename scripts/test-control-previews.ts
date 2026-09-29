@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
 import { mock } from "node:test"
+import sharp from "sharp"
 import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import { ControlPreviews } from "../electron/control-previews.js"
 import {
@@ -107,6 +108,13 @@ try {
     0,
     "Closing one consumer preserves the other"
   )
+  previews.read("task", true, "desktop", "renderer:7")
+  assert.deepEqual(previews.viewers("task", "local"), { own: 1, others: 1, capturing: true },
+    "Another client's viewer of the same task is reported as someone else's")
+  assert.deepEqual(previews.viewers("task", "renderer:7"), { own: 1, others: 1, capturing: true })
+  previews.read("task", false, "desktop", "renderer:7")
+  assert.deepEqual(previews.viewers("task", "local"), { own: 1, others: 0, capturing: true })
+  assert.deepEqual(previews.viewers("other", "local"), { own: 0, others: 0, capturing: false })
   emit(Buffer.concat([Buffer.from(png, "base64"), Buffer.alloc(2 * 1024 * 1024)]).toString("base64"))
   await delay(50)
   assert.throws(() => previews.read("task", true, "overlay"), /size limit/,
@@ -126,6 +134,8 @@ try {
   assert.equal(previews.read("task", true, "overlay")?.frame?.sequence, counted + 6,
     "Frames within one 60 fps slot count once, so a faster source is not a shortfall")
   previews.read("task", false, "overlay")
+  assert.deepEqual(previews.viewers("task", "local"), { own: 0, others: 0, capturing: false },
+    "The last viewer leaving stops the stream")
   previews.observe({
     ...activity,
     kind: "computer",
@@ -164,8 +174,39 @@ try {
   for (let index = 0; index < 65; index++)
     previews.observe({ ...activity, conversationId: `task-${index}` })
   assert.equal(previews.read("task", false), null, "Retention is bounded")
+
+  const noise = Buffer.alloc(1920 * 1080 * 3)
+  for (let i = 0; i < noise.length; i++) noise[i] = (i * 2654435761) >>> 24
+  const jpeg = await sharp(noise, { raw: { width: 1920, height: 1080, channels: 3 } }).jpeg({ quality: 90 }).toBuffer()
+  const full = {
+    activity: { ...activity, updatedAt: Date.now() },
+    frame: { id: "frame", image: { mimeType: "image/jpeg" as const, bytes: new Uint8Array(jpeg) }, capturedAt: 1, publishedAt: 2, sequence: 3 },
+  }
+  const dimensions = async (preview: typeof full) => {
+    const { width, height } = await sharp(preview.frame.image.bytes).metadata()
+    return [preview.frame.id, width, height]
+  }
+  const card = await previews.sized(full, { width: 576, height: 324 })
+  assert.deepEqual(await dimensions(card), ["frame:576x324", 576, 324],
+    "A 576-pixel viewer gets exactly the pixels it displays")
+  assert.ok(card.frame!.image.bytes.byteLength < jpeg.byteLength / 3, "The scaled frame is a fraction of the capture's bytes")
+  assert.deepEqual([card.frame!.capturedAt, card.frame!.publishedAt, card.frame!.sequence, card.activity], [1, 2, 3, full.activity],
+    "Scaling keeps the frame's timing, sequence and activity")
+  assert.equal((await previews.sized(full, { width: 576, height: 324 })).frame!.image.bytes, card.frame!.image.bytes,
+    "Viewers of one frame share one scaling")
+  assert.deepEqual(await dimensions(await previews.sized(full, { width: 576, height: 100 })), ["frame:178x100", 178, 100],
+    "A wide, short viewer is fitted by height, as the viewer fits it")
+  assert.deepEqual(await dimensions(await previews.sized(full, { width: 1200, height: 700 })), ["frame:1200x675", 1200, 675],
+    "A larger viewer gets a larger frame under a new id")
+  for (const box of [undefined, { width: 1700, height: 960 }, { width: 1920, height: 1080 }, { width: 4000, height: 3000 }, { width: 0, height: 324 }, { width: -1, height: -1 }])
+    assert.equal(await previews.sized(full, box), full, `No box, one saving under an eighth, a covering box or an unmeasured one keeps full pixels: ${JSON.stringify(box)}`)
+  const pngFrame = { ...full, frame: { ...full.frame, image: { mimeType: "image/png" as const, bytes: full.frame.image.bytes } } }
+  assert.equal(await previews.sized(pngFrame, { width: 100, height: 100 }), pngFrame, "Only JPEG frames are rescaled")
+  const corrupt = { ...full, frame: { ...full.frame, id: "corrupt", image: { mimeType: "image/jpeg" as const, bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 4, 56, 7, 128, 3, 1, 0x11, 0]) } } }
+  assert.equal(await previews.sized(corrupt, { width: 100, height: 100 }), corrupt, "A frame that cannot be scaled is sent as captured")
+  assert.equal(full.frame.image.bytes.byteLength, jpeg.byteLength, "The retained capture stays full size")
   console.log(
-    "Control previews: hidden capture suppression, one shared stream, task isolation, event coalescing, target invalidation and bounded retention passed"
+    "Control previews: hidden capture suppression, one shared stream, task isolation, viewer ownership, event coalescing, target invalidation, bounded retention and viewer-sized frames passed"
   )
 } finally {
   previews.close()

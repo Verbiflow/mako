@@ -384,6 +384,21 @@ try {
     }),
     /earlier visual view/
   )
+  fixture.page.coarseView = true
+  const coarseStart = fixture.calls.length
+  const detailed = z
+    .object({ coordinates: z.object({ imageWidth: z.number(), imageHeight: z.number(), imageScaleX: z.number() }) })
+    .parse(await run("task-a", { action: "screenshot", target: a, region: { x: 10, y: 20, width: 100, height: 50 } }))
+  assert.deepEqual(
+    [detailed.coordinates.imageWidth, detailed.coordinates.imageHeight, detailed.coordinates.imageScaleX],
+    [100, 50, 1],
+    "a view returned below its CSS resolution does not shrink an element capture"
+  )
+  assert.ok(
+    fixture.calls.slice(coarseStart).some((call) => call.method === "Page.captureScreenshot" && call.params.clip),
+    "the element is captured with a clip instead of cropped from the coarse view"
+  )
+  fixture.page.coarseView = false
   await assert.rejects(
     run("task-a", {
       action: "screenshot",

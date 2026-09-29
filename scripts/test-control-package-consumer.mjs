@@ -75,7 +75,7 @@ try {
   }
   await command(["connect", "--browser", "fixture"])
   const target = await command(["open", "--browser", "fixture"])
-  assert.equal(target.kind, "page")
+  assert.equal(target.target.kind, "page")
   const code = `state.tab = control.tab(${JSON.stringify(target)}); state.count = 41; return (await state.tab.observe()).select({text:'Proof'})`
   await command(["exec", "--source-file", "-"], code)
   const before = fixture.calls.length

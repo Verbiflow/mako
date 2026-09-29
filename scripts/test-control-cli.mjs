@@ -63,9 +63,12 @@ try {
   assert.ok(await command(["api"]))
   assert.equal((await stat(sessionFile)).mode & 0o777, 0o600)
   await command(["connect", "--browser", "fixture"])
-  const target = await command(["open", "--browser", "fixture"])
+  const opened = await command(["open", "--browser", "fixture"])
+  const { target } = opened
+  assert.deepEqual(opened, { target, url: "about:blank", title: target.tab },
+    "open reports where the new tab is")
   const targetFile = join(directory, "exact target.json")
-  await writeFile(targetFile, JSON.stringify(target))
+  await writeFile(targetFile, JSON.stringify(opened))
   assert.equal(target.kind, "page")
   assert.equal(fixture.connections(), 1)
   const observation = await command(["observe", "--target-file", "-"], {
@@ -157,7 +160,7 @@ try {
     1
   )
   const imageResult = await command(["exec", "--source-file", "-"], {
-    stdin: `emitImage(await control.tab(${JSON.stringify(target)}).screenshot())`,
+    stdin: `emitImage(await control.tab(${JSON.stringify(opened)}).screenshot())`,
   })
   assert.ok(!JSON.stringify(imageResult).includes("base64"))
   const artifact = imageResult.find((block) => block.value?.path)?.value
@@ -217,6 +220,53 @@ try {
     ).outcome,
     "not-dispatched"
   )
+  const inputs = () =>
+    fixture.calls.filter((call) => call.method.startsWith("Input.")).length
+  const typed = await command(
+    ["act", "--target-file", targetFile, "--role", "textbox", "--name", "Proof", "--input", "-"],
+    { stdin: '{"kind":"set-text","text":"Ada"}' }
+  )
+  assert.equal(typed.status, "dispatched", JSON.stringify(typed))
+  const quiet = inputs()
+  const css = 'section button:has-text("Generate")'
+  const cssRefusal = await command(["act", "--target-file", targetFile, "--input", "-"], {
+    stdin: JSON.stringify({ kind: "activate", selector: css }),
+    code: 2,
+  })
+  assert.equal(cssRefusal.outcome, "not-dispatched")
+  assert.ok(cssRefusal.message.startsWith(`${JSON.stringify(css)} is a CSS or text selector`), cssRefusal.message)
+  assert.match(cssRefusal.message, /\{query:"Generate",interactive:true\}/,
+    "A quoted label becomes the query to observe with")
+  const bare = await command(["act", "--target-file", targetFile, "--input", "-"], {
+    stdin: JSON.stringify({ kind: "activate", selector: { css: "section button" } }),
+    code: 2,
+  })
+  assert.match(bare.message, /^"section button" is a CSS[^]*Observe with \{interactive:true\}/)
+  const scrollBySelector = await command(["act", "--target-file", targetFile, "--input", "-"], {
+    stdin: JSON.stringify({ kind: "scroll", deltaY: 10, selector: { role: "textbox", name: "Proof" } }),
+    code: 2,
+  })
+  assert.match(scrollBySelector.message, /scroll takes a ref or coordinates/)
+  assert.match(
+    (await command(["act", "--target-file", targetFile, "--role", "textbox", "--input", "-"], {
+      stdin: '{"kind":"activate"}',
+      code: 2,
+    })).message,
+    /Pass both --role and --name/
+  )
+  assert.equal(inputs(), quiet, "Refused selectors dispatch nothing")
+  fixture.axNodes[0].value = { value: "Ada" }
+  const met = await command(["expect", "--target-file", targetFile, "--input", "-"], {
+    stdin: JSON.stringify({ role: "textbox", name: "Proof", value: "Ada", timeoutMs: 0 }),
+  })
+  assert.equal(met.status, "matched", JSON.stringify(met))
+  const unmet = await command(
+    ["expect", "--target-file", targetFile, "--role", "textbox", "--name", "Proof", "--input", "-"],
+    { stdin: '{"value":"Grace","timeoutMs":0}', code: 5 }
+  )
+  assert.deepEqual([unmet.code, unmet.outcome], ["assertion-failed", "not-dispatched"])
+  delete fixture.axNodes[0].value
+  assert.equal(inputs(), quiet, "Assertions never dispatch input")
   const diagnostics = await command(["diagnostics"])
   assert.ok(diagnostics.requests.some((request) => request.method === "exec"))
   assert.ok(
@@ -311,6 +361,8 @@ try {
   ])
   const receiptFile = join(directory, "recording.json")
   await writeFile(receiptFile, JSON.stringify(recording))
+  // Opened before the held stop: capture stop times out after 2 s.
+  const peer = await command(["open", "--browser", "fixture"])
   fixture.holdNextRecordingStop()
   const waiter = spawn(
     process.execPath,
@@ -350,7 +402,6 @@ try {
     (await command(["record", "stop", "--input", receiptFile])).id,
     recording.id
   )
-  const peer = await command(["open", "--browser", "fixture"])
   await command(["observe", "--target-file", "-"], {
     stdin: JSON.stringify(peer),
   })
@@ -381,6 +432,12 @@ try {
       .length,
     1,
     "Waiter cancellation and repeated stop never repeat capture shutdown"
+  )
+  await command(["close", "--target-file", "-"], { stdin: JSON.stringify(peer) })
+  assert.equal(fixture.targets.has(peer.target.tab), false, "close closes the exact tab")
+  assert.equal(
+    (await command(["observe", "--target-file", "-"], { stdin: JSON.stringify(peer), code: 3 })).code,
+    "target-closed"
   )
   await command(["session", "stop"])
   assert.equal(
