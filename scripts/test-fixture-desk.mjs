@@ -46,7 +46,9 @@ const url = server.resolvedUrls.local[0]
 const origin = new URL(url).origin
 const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_PROFILE: profile, MAKO_FIXTURE_DESK: "1", MAKO_HOST_ONLY: "1", MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: location.socket, MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp", MAKO_BACKEND_TOKEN: "" }
 for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL", "MAKO_RELAY"]) delete env[key]
-const electron = createRequire(import.meta.url)("electron")
+// --app=<Mako.app> runs the same checks against a packaged bundle's own main process.
+const app = process.argv.find((arg) => arg.startsWith("--app="))?.slice("--app=".length)
+const [command, args] = app ? [join(app, "Contents", "MacOS", "Mako"), ["--background"]] : [createRequire(import.meta.url)("electron"), [root, "--background"]]
 let host
 let removeRenderer = () => {}
 let cdp
@@ -79,7 +81,8 @@ const pageCall = async (body) => {
 }
 
 try {
-  host = spawn(electron, [root, "--background"], { env, stdio: ["ignore", "pipe", "pipe"] })
+  host = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] })
+  if (app) console.log(`Fixture host from ${app}`)
   let output = ""
   const trace = process.env.MAKO_TEST_TRACE === "1"
   host.stdout.on("data", (chunk) => { output += chunk; if (trace) process.stdout.write(chunk) })
@@ -120,53 +123,59 @@ try {
   assert.equal(read.reply.ok, true, `Allowed reads pass the proxy byte for byte: ${JSON.stringify(read)}`)
   console.log("Socket and page proxy refusals hold")
 
-  // Hidden desk windows live inside the host and call its handlers over IPC,
-  // never through the socket or the proxy.
-  removeRenderer = publishDevRendererRegistration(dirname(location.socket), { profile, sourceRoot: root, url })
-  const desk = await until(async () => registeredDeskBrowsers().find((browser) => browser.profile === profile), "desk registration")
-  assert.equal(desk.fixture, true, "Agents discovering the desk see a fixture desk")
-  console.log("Desk registered as a fixture")
-  cdp = new WebSocket(await desk.endpoint())
-  await new Promise((done, fail) => { cdp.onopen = done; cdp.onerror = fail })
-  let sequence = 0
-  const pending = new Map()
-  cdp.onmessage = (event) => {
-    const message = JSON.parse(event.data)
-    const held = pending.get(message.id)
-    if (!held) return
-    pending.delete(message.id)
-    if (message.error) held.fail(new Error(message.error.message))
-    else held.done(message.result)
+  if (app) {
+    assert.equal(host.exitCode, null, `The fixture host stayed up: ${output.slice(-2000)}`)
+    // Packaged hosts load their bundled interface and serve no dev desk windows.
+    console.log("PASS: a packaged fixture desk host refuses writes, provider, git, process and unknown calls from its socket and its page proxy before any handler runs; allowed reads and boot still work. Hidden desk windows are a source-host feature, checked without --app")
+  } else {
+    // Hidden desk windows live inside the host and call its handlers over IPC,
+    // never through the socket or the proxy.
+    removeRenderer = publishDevRendererRegistration(dirname(location.socket), { profile, sourceRoot: root, url })
+    const desk = await until(async () => registeredDeskBrowsers().find((browser) => browser.profile === profile), "desk registration")
+    assert.equal(desk.fixture, true, "Agents discovering the desk see a fixture desk")
+    console.log("Desk registered as a fixture")
+    cdp = new WebSocket(await desk.endpoint())
+    await new Promise((done, fail) => { cdp.onopen = done; cdp.onerror = fail })
+    let sequence = 0
+    const pending = new Map()
+    cdp.onmessage = (event) => {
+      const message = JSON.parse(event.data)
+      const held = pending.get(message.id)
+      if (!held) return
+      pending.delete(message.id)
+      if (message.error) held.fail(new Error(message.error.message))
+      else held.done(message.result)
+    }
+    const send = (method, params = {}, sessionId) => new Promise((done, fail) => {
+      const id = ++sequence
+      const timer = setTimeout(() => { pending.delete(id); fail(new Error(`${method} timed out`)) }, 30_000)
+      pending.set(id, { done: (value) => { clearTimeout(timer); done(value) }, fail: (error) => { clearTimeout(timer); fail(error) } })
+      cdp.send(JSON.stringify({ id, method, params, sessionId }))
+    })
+    const { targetId } = await send("Target.createTarget", {})
+    const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true })
+    const evaluate = async (expression) => {
+      const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId)
+      if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
+      return result.result.value
+    }
+    console.log(`Hidden desk window ${targetId} attached`)
+    await until(() => evaluate("Boolean(window.mako)"), "desk bridge")
+    const outcome = (expression) => evaluate(`${expression}.then(() => "ran", (error) => String(error?.message ?? error))`)
+    for (const [label, expression] of [
+      ["live-start", `window.mako.liveStart("codex", "/tmp", { conversationId: crypto.randomUUID() })`],
+      ["terminal-create", `window.mako.terminalCreate({ cwd: "/tmp" })`],
+      ["list-models", `window.mako.listModels()`],
+      ["lifecycle-command", `window.mako.lifecycleCommand({ kind: "cancel" })`],
+      ["save-automations", `window.mako.saveAutomations([])`],
+    ]) assert.match(await outcome(expression), /fixture desk refused/, `A hidden desk window's ${label} is refused`)
+    assert.equal(await savedAutomations(), automations, "No desk window wrote automations")
+    assert.equal(await outcome("window.mako.threads()"), "ran", "A hidden desk window can read")
+    assert.deepEqual((await socketCall(call("mako:terminal-list"))).value, [], "No desk window started a terminal")
+    await send("Target.closeTarget", { targetId })
+    assert.equal(host.exitCode, null, `The fixture host stayed up: ${output.slice(-2000)}`)
+    console.log("PASS: a fixture desk host refuses writes, provider, git, process and unknown calls from its socket, its page proxy and its own hidden desk windows before any handler runs; allowed reads and boot still work; the desk is registered as a fixture")
   }
-  const send = (method, params = {}, sessionId) => new Promise((done, fail) => {
-    const id = ++sequence
-    const timer = setTimeout(() => { pending.delete(id); fail(new Error(`${method} timed out`)) }, 30_000)
-    pending.set(id, { done: (value) => { clearTimeout(timer); done(value) }, fail: (error) => { clearTimeout(timer); fail(error) } })
-    cdp.send(JSON.stringify({ id, method, params, sessionId }))
-  })
-  const { targetId } = await send("Target.createTarget", {})
-  const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true })
-  const evaluate = async (expression) => {
-    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId)
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
-    return result.result.value
-  }
-  console.log(`Hidden desk window ${targetId} attached`)
-  await until(() => evaluate("Boolean(window.mako)"), "desk bridge")
-  const outcome = (expression) => evaluate(`${expression}.then(() => "ran", (error) => String(error?.message ?? error))`)
-  for (const [label, expression] of [
-    ["live-start", `window.mako.liveStart("codex", "/tmp", { conversationId: crypto.randomUUID() })`],
-    ["terminal-create", `window.mako.terminalCreate({ cwd: "/tmp" })`],
-    ["list-models", `window.mako.listModels()`],
-    ["lifecycle-command", `window.mako.lifecycleCommand({ kind: "cancel" })`],
-    ["save-automations", `window.mako.saveAutomations([])`],
-  ]) assert.match(await outcome(expression), /fixture desk refused/, `A hidden desk window's ${label} is refused`)
-  assert.equal(await savedAutomations(), automations, "No desk window wrote automations")
-  assert.equal(await outcome("window.mako.threads()"), "ran", "A hidden desk window can read")
-  assert.deepEqual((await socketCall(call("mako:terminal-list"))).value, [], "No desk window started a terminal")
-  await send("Target.closeTarget", { targetId })
-  assert.equal(host.exitCode, null, `The fixture host stayed up: ${output.slice(-2000)}`)
-  console.log("PASS: a fixture desk host refuses writes, provider, git, process and unknown calls from its socket, its page proxy and its own hidden desk windows before any handler runs; allowed reads and boot still work; the desk is registered as a fixture")
 } catch (error) {
   console.error(error)
   process.exitCode = 1
