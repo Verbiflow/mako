@@ -30,7 +30,7 @@ export type HarnessUpdateCommand = z.infer<typeof HarnessUpdateCommandSchema>
 /** The receipt of the last update Mako ran for a runtime. */
 export const HarnessUpdateResultSchema = z.object({
   at: z.number(),
-  outcome: z.enum(["updated", "unchanged", "failed"]),
+  outcome: z.enum(["installed", "updated", "unchanged", "failed"]),
   from: z.string().optional(),
   to: z.string().optional(),
   /** The updater's own words on failure: the tail of what it printed. */
@@ -55,8 +55,10 @@ export const HarnessUpdateInfoSchema = z.object({
   managedBy: z.string().optional(),
   /** An update Mako can run for the user. */
   update: HarnessUpdateCommandSchema.optional(),
+  /** The installer Mako can run while no binary is found: the first plan whose command exists here. */
+  install: HarnessUpdateCommandSchema.optional(),
   /** What the host is doing with this runtime right now. Never persisted. */
-  phase: z.enum(["checking", "updating"]).optional(),
+  phase: z.enum(["checking", "updating", "installing"]).optional(),
   /** When the installed reading was taken. */
   checkedAt: z.number().optional(),
   /** When the public version was last read. */

@@ -202,6 +202,21 @@ async function review() {
   assert.equal(await evaluate(`document.querySelector('#provider-grok-accounts').textContent.includes('system key store is unavailable')`), false)
   assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser"])
   await screenshot("agents-grok-connected.png")
+
+  // A missing CLI installs from its row: the exact command is shown before it runs.
+  const devinRow = `document.querySelector('[role="listitem"][aria-label="Devin"]')`
+  await evaluate(`${devinRow}.scrollIntoView({block:'center'})`)
+  assert.equal(await evaluate(`${devinRow}.textContent.includes('CLI not installed')`), true)
+  assert.equal(await evaluate(`${devinRow}.textContent.includes('curl -fsSL https://cli.devin.ai/install.sh | bash')`), true)
+  await screenshot("agents-install.png")
+  await click("Install")
+  await until(`document.querySelector('[aria-label="Devin installation"][aria-busy="true"]') !== null`)
+  await screenshot("agents-installing.png")
+  await until(`${devinRow}.textContent.includes('3000.11.3')`)
+  assert.equal(await evaluate(`${devinRow}.textContent.includes('Installed')`), true)
+  assert.equal(await evaluate(`${devinRow}.textContent.includes('CLI not installed')`), false)
+  assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser", "install:devin"])
+  await screenshot("agents-installed.png")
   assert.deepEqual(errors, [])
   clearTimeout(watchdog)
   window.destroy()

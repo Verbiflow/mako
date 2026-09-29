@@ -12,6 +12,7 @@ import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
 import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../executable.js"
+import { scriptInstall } from "../update-source.js"
 import { electronSecretEncryption } from "../../secure-storage.js"
 
 async function openExternal(url: string): Promise<void> {
@@ -72,5 +73,6 @@ export const installCursor: ProviderModule = (host) => {
         path.includes("/.local/share/cursor-agent/") ||
         path.endsWith("/.local/bin/cursor-agent"),
     },
+    install: [scriptInstall("https://cursor.com/install")],
   })
 }

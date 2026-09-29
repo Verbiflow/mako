@@ -1,7 +1,11 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { resolveExecutable } from "../../executable.js"
-import type { ProviderUpdateSource, RuntimeRelease } from "../update-source.js"
+import {
+  npmInstall,
+  type ProviderUpdateSource,
+  type RuntimeRelease,
+} from "../update-source.js"
 import { isOpenCodeV2 } from "./version.js"
 import { openCodeExecutable } from "./installation.js"
 
@@ -71,9 +75,15 @@ export function openCodeRelease(
 
 export const openCodeUpdateSource: ProviderUpdateSource = {
   provider: "opencode",
-  binary: (env) => openCodeUpdateBinary("opencode", env),
+  // The v2 npm package links only `opencode2`, which is then the one sessions run.
+  binary: (env) =>
+    openCodeUpdateBinary("opencode", env) ??
+    openCodeUpdateBinary("opencode2", env),
   supportsVersion: isOpenCodeV2,
   release: openCodeRelease,
+  // opencode.ai/install takes the main repository's latest release, which is
+  // v1; v2 is published to npm, whose `latest` tag is a v2 prerelease.
+  install: [npmInstall("@opencode-ai/cli")],
   installations: [
     {
       id: "opencode2",
@@ -81,9 +91,9 @@ export const openCodeUpdateSource: ProviderUpdateSource = {
       binary: (env) => {
         const binary = openCodeUpdateBinary("opencode2", env)
         const other = openCodeUpdateBinary("opencode", env)
-        return binary && other && realpathSync(binary) === realpathSync(other)
-          ? null
-          : binary
+        return binary && other && realpathSync(binary) !== realpathSync(other)
+          ? binary
+          : null
       },
       supportsVersion: isOpenCodeV2,
       release: openCodeRelease,

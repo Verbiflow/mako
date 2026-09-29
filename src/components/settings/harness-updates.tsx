@@ -3,7 +3,7 @@ import { Action } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
 import { harnessLabel } from "@/lib/harness-label"
-import { runtimeRowView } from "@/lib/runtime-updates"
+import { installCommandText, runtimeRowView } from "@/lib/runtime-updates"
 import { providers, useProviders } from "@/state/providers"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -103,6 +103,88 @@ export function RuntimeRow({
       {view.note ? (
         <p role="alert" className="mt-1 text-label text-removed">
           {view.note}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+/** A missing runtime: the installer the host found on this machine, shown before it runs. */
+export function InstallRow({
+  runtimeId,
+  name,
+  info,
+}: {
+  runtimeId: string
+  name: string
+  info: HarnessUpdateInfo
+}) {
+  const [pending, setPending] = useState(false)
+  const installing = pending || info.phase === "installing"
+  const failed =
+    info.result?.outcome === "failed" ? info.result.message : undefined
+  const runInstall = async () => {
+    setPending(true)
+    try {
+      const next = await providers.runRuntimeInstall(runtimeId)
+      if (next.result?.outcome === "installed")
+        toast.success(`${name} is installed`, {
+          description: `Version ${next.installed ?? next.result.to ?? "unknown"} is ready for new conversations.`,
+        })
+      else
+        toast.error(`${name} was not installed`, {
+          description: next.result?.message ?? "The installer did not finish.",
+          duration: ACTION_TOAST_MS,
+          action: { label: "Try again", onClick: () => void runInstall() },
+        })
+    } catch (error) {
+      toast.error(`${name} was not installed`, {
+        description: error instanceof Error ? error.message : String(error),
+        duration: ACTION_TOAST_MS,
+        action: { label: "Try again", onClick: () => void runInstall() },
+      })
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <div aria-label={`${name} installation`} aria-busy={installing}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span
+          role="status"
+          className="min-w-0 flex-1 text-label text-muted-foreground"
+        >
+          {installing ? (
+            <Shimmer text={`Installing ${name}…`} />
+          ) : info.install ? (
+            "CLI not installed"
+          ) : (
+            `CLI not installed. Install ${name} from its website, then refresh.`
+          )}
+        </span>
+        {info.install ? (
+          <Action
+            size="xs"
+            tone="solid"
+            disabled={installing}
+            aria-label={`Install ${name}`}
+            onClick={() => void runInstall()}
+          >
+            {installing ? "Installing…" : failed ? "Retry" : "Install"}
+          </Action>
+        ) : null}
+      </div>
+      {info.install ? (
+        <p className="mt-1 text-label text-faint">
+          Runs{" "}
+          <code className="font-mono text-code break-all">
+            {installCommandText(info.install)}
+          </code>
+        </p>
+      ) : null}
+      {failed ? (
+        <p role="alert" className="mt-1 text-label text-removed">
+          Install failed: {failed}
         </p>
       ) : null}
     </div>

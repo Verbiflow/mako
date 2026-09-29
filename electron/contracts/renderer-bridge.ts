@@ -393,6 +393,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<Record<string, HarnessUpdateInfo>>("mako:harness-updates", refresh),
     runHarnessUpdate: (provider: string) =>
       invokeTrustedHost<HarnessUpdateInfo>("mako:harness-update", provider),
+    runHarnessInstall: (provider: string) =>
+      invokeTrustedHost<HarnessUpdateInfo>("mako:harness-install", provider),
     daemonStatus: () =>
       invokeTrustedHost<{
         pid: number

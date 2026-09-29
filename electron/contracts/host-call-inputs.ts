@@ -129,6 +129,7 @@ export const hostCallInputs = {
     z.string().optional(),
     z.boolean().optional(),
   ]),
+  "mako:harness-install": z.tuple([z.string()]),
   "mako:harness-update": z.tuple([z.string()]),
   "mako:harness-updates": z.tuple([z.boolean().optional()]),
   "mako:host-log-path": z.tuple([]),

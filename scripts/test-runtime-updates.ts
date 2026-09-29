@@ -4,9 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { HarnessUpdates } from "../electron/contracts/harness-updates.ts"
 import { compareVersions, parseVersion, versionBehind } from "../electron/contracts/runtime-version.ts"
-import type { ProviderUpdateSource } from "../electron/providers/update-source.ts"
+import { scriptInstall, type ProviderUpdateSource } from "../electron/providers/update-source.ts"
 import { RuntimeUpdates, resolveRuntimeChannel } from "../electron/runtime-updates.ts"
-import { runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
+import { installCommandText, runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
 
 // Versions the way CLIs print them, ordered the way a person would.
 assert.equal(parseVersion("codex-cli 0.147.0"), "0.147.0")
@@ -31,6 +31,7 @@ const codex: ProviderUpdateSource = {
   binary: () => null,
   npmPackage: "@openai/codex",
   homebrew: { name: "codex" },
+  install: [],
 }
 const claude: ProviderUpdateSource = {
   provider: "claude",
@@ -42,11 +43,16 @@ const claude: ProviderUpdateSource = {
     args: ["update"],
     ownsPath: (path) => path.includes("/.local/share/claude/") || path.endsWith("/.local/bin/claude"),
   },
+  install: [],
 }
 const devin: ProviderUpdateSource = {
   provider: "devin",
   binary: () => null,
   managedBy: [["external_agents", "Zed"]],
+  install: [
+    { label: "Install", command: "/nonexistent/devin-installer", args: [] },
+    scriptInstall("https://cli.devin.ai/install.sh"),
+  ],
 }
 const cursor: ProviderUpdateSource = {
   provider: "cursor",
@@ -56,6 +62,7 @@ const cursor: ProviderUpdateSource = {
     args: ["update"],
     ownsPath: (path) => path.includes("/.local/share/cursor-agent/"),
   },
+  install: [],
 }
 assert.deepEqual(
   resolveRuntimeChannel(
@@ -364,6 +371,97 @@ try {
   await assert.rejects(second.update("devin"), /does not update through Mako/)
   await assert.rejects(second.update("unknown"), /does not update through Mako/)
 
+  // A missing runtime offers the first installer whose command exists here, and only while it is missing.
+  const devinInstall = scriptInstall("https://cli.devin.ai/install.sh")
+  assert.deepEqual(second.snapshot().devin.install, devinInstall, "a plan whose command is absent is skipped")
+  assert.equal(second.snapshot().codex.install, undefined, "an installed runtime offers no installer")
+  await assert.rejects(second.install("codex"), /does not install through Mako/)
+  await assert.rejects(second.install("unknown"), /does not install through Mako/)
+
+  // A failed install reports the installer's own words and keeps the plan, so Retry runs it again.
+  next.ran.length = 0
+  next.runResult = { code: 1, output: "curl: (6) Could not resolve host: cli.devin.ai" }
+  const failedInstall = await second.install("devin")
+  assert.equal(failedInstall.result?.outcome, "failed")
+  assert.match(failedInstall.result?.message ?? "", /Could not resolve host/)
+  assert.deepEqual(failedInstall.install, devinInstall)
+  assert.equal(failedInstall.phase, undefined)
+
+  // An installer that exits 0 without leaving a binary where the provider looks is a failure, not a success.
+  next.runResult = { code: 0, output: "installed somewhere else" }
+  const lostInstall = await second.install("devin")
+  assert.equal(lostInstall.result?.outcome, "failed")
+  assert.match(lostInstall.result?.message ?? "", /cannot find the CLI/)
+
+  // An install: the plan runs as declared, the runtime is read again, discovery is told, the receipt says installed.
+  const devinBinary = "/Users/me/.local/bin/devin"
+  next.ran.length = 0
+  next.changed.length = 0
+  next.emitted.length = 0
+  next.runResult = { code: 0, output: "Devin CLI installed" }
+  next.onRun = () => {
+    next.binaries.devin = devinBinary
+    next.versions[devinBinary] = "devin 3000.10.23 (deb81600)"
+    next.stats[devinBinary] = { mtimeMs: 1, size: 1 }
+  }
+  const installedDevin = await second.install("devin")
+  delete next.onRun
+  await settle()
+  assert.ok(
+    next.emitted.some((batch) => batch.devin?.phase === "installing"),
+    "the row said so while the installer ran"
+  )
+  assert.deepEqual(next.ran, [{ command: "/bin/bash", args: devinInstall.args }])
+  assert.equal(installedDevin.binary, devinBinary)
+  assert.equal(installedDevin.installed, "3000.10.23")
+  assert.equal(installedDevin.install, undefined)
+  assert.equal(installedDevin.phase, undefined)
+  assert.deepEqual(installedDevin.result, { at: next.clock, outcome: "installed", to: "3000.10.23" })
+  assert.deepEqual(next.changed.map((change) => [change.provider, change.to]), [["devin", "3000.10.23"]])
+  await assert.rejects(second.install("devin"), /already installed/)
+
+  // `devin setup` signs in at the end of Devin's installer and fails without a terminal: the CLI in place decides.
+  const wizard = fake()
+  wizard.runResult = { code: 1, output: "Installed devin v3000.11.3\nError: Login canceled" }
+  wizard.onRun = () => {
+    wizard.binaries.devin = devinBinary
+    wizard.versions[devinBinary] = "devin 3000.11.3"
+    wizard.stats[devinBinary] = { mtimeMs: 2, size: 2 }
+  }
+  const wizardService = service(wizard, join(dir, "wizard.json"))
+  await wizardService.refresh()
+  const afterWizard = await wizardService.install("devin")
+  assert.equal(afterWizard.result?.outcome, "installed", "an interactive step after the CLI landed does not fail the install")
+  assert.equal(afterWizard.installed, "3000.11.3")
+  wizardService.stop()
+
+  // An installer that lands a version the provider does not support has not installed it.
+  const retired = fake()
+  retired.onRun = () => {
+    retired.binaries.devin = devinBinary
+    retired.versions[devinBinary] = "devin 1.0.0"
+    retired.stats[devinBinary] = { mtimeMs: 3, size: 3 }
+  }
+  const retiredService = new RuntimeUpdates({
+    sources: () => [{ ...devin, binary: () => retired.binaries.devin, supportsVersion: (version) => version.startsWith("3000.") }],
+    path: join(dir, "retired.json"),
+    env: () => ({ PATH: "/usr/bin" }),
+    emit: () => undefined,
+    version: async (binary) => retired.versions[binary] ?? Promise.reject(new Error("missing")),
+    run: async () => {
+      retired.onRun?.()
+      return { code: 0, output: "installed" }
+    },
+    stat: async (path) => retired.stats[path] ?? Promise.reject(new Error("ENOENT")),
+    realpath: async (path) => path,
+    now: () => retired.clock,
+  })
+  await retiredService.refresh()
+  const unsupported = await retiredService.install("devin")
+  assert.equal(unsupported.result?.outcome, "failed")
+  assert.match(unsupported.result?.message ?? "", /does not support this installed version/)
+  retiredService.stop()
+
   // Two updates on one channel run one after the other; a second update of one runtime is refused.
   let release!: () => void
   const gate = new Promise<void>((resolve) => {
@@ -428,6 +526,13 @@ try {
 // The row's words follow the reading.
 const now = 10_000_000
 assert.deepEqual(runtimeRowView({ phase: "checking" }, now), { detail: "Checking…", busy: true, tone: "faint" })
+assert.equal(
+  runtimeRowView({ installed: "3000.10.23", checkedAt: now, result: { at: now - 1_000, outcome: "installed", to: "3000.10.23" } }, now).detail,
+  "Installed",
+  "a fresh install is named until it reads as merely present"
+)
+assert.equal(installCommandText(scriptInstall("https://cli.devin.ai/install.sh")), "curl -fsSL https://cli.devin.ai/install.sh | bash")
+assert.equal(installCommandText({ label: "Install with npm", command: "npm", args: ["install", "-g", "@openai/codex@latest"] }), "npm install -g @openai/codex@latest")
 assert.equal(runtimeRowView({ installed: "0.147.0", phase: "updating" }, now).busy, true, "an update in flight reads as work, not a result")
 assert.equal(runtimeRowView({ installed: "0.147.0", channel: "npm" }, now).busy, true, "a version with no reading yet is still being checked")
 assert.equal(runtimeRowView({ installed: "0.147.0", phase: "checking" }, now).version, "0.147.0", "a re-read keeps the version on screen")

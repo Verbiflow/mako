@@ -1,12 +1,11 @@
 import { query } from "@anthropic-ai/claude-agent-sdk"
-import { resolveExecutable } from "../../executable.js"
+import { claudeRuntime } from "./runtime.js"
 import { createClaudeSdkDriver } from "./sdk-driver.js"
 import { join } from "node:path"
 import { prepareClaudePermissionObserver } from "./permission-observer.js"
 
 export const claudeLiveDriver = createClaudeSdkDriver({
-  available: () =>
-    resolveExecutable(process.env.CLAUDE_CODE_EXECUTABLE ?? "claude") !== null,
+  available: () => claudeRuntime() !== null,
   configure: async (...args) =>
     (await import("./sdk-options.js")).claudeSdkOptions(...args),
   query,

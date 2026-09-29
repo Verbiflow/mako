@@ -1,4 +1,3 @@
-import { resolveExecutable } from "../../executable.js"
 import { z } from "zod"
 import {
   argumentAfter,
@@ -7,6 +6,7 @@ import {
   type NativeCommand,
   type NativeRunner,
 } from "../native-runner.js"
+import { claudeRuntime } from "./runtime.js"
 
 const CARRIES = ["effort", "fast", "agentTeams"] as const
 const FastSettingsSchema = z.object({ fastMode: z.boolean().optional() })
@@ -25,7 +25,7 @@ function withEnv(command: NativeCommand, env: Record<string, string> | undefined
 
 export const claudeNativeRunner: NativeRunner = {
   provider: "claude",
-  available: () => resolveExecutable("claude") !== null,
+  available: () => claudeRuntime() !== null,
   fastMode: "supported",
   carries: CARRIES,
   prepare: async (options) => dropUncarried(options, CARRIES),
@@ -33,7 +33,7 @@ export const claudeNativeRunner: NativeRunner = {
     const tuning = commandTuning(options)
     return withEnv(
       {
-        command: "claude",
+        command: claudeRuntime()?.executable ?? "claude",
         args: [
           "-p",
           prompt,
@@ -52,7 +52,7 @@ export const claudeNativeRunner: NativeRunner = {
     const tuning = commandTuning(options)
     return withEnv(
       {
-        command: "claude",
+        command: claudeRuntime()?.executable ?? "claude",
         args: [
           "-p",
           prompt,

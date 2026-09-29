@@ -66,6 +66,15 @@ const versions: HarnessUpdates = {
       args: ["upgrade", "2.0.2"],
     },
   },
+  devin: {
+    provider: "devin",
+    checkedAt: Date.now(),
+    install: {
+      label: "Install",
+      command: "/bin/bash",
+      args: ["-o", "pipefail", "-c", "curl -fsSL https://cli.devin.ai/install.sh | bash"],
+    },
+  },
 }
 providerStore.set({
   availability: {
@@ -74,6 +83,7 @@ providerStore.set({
     cursor: true,
     opencode: true,
     grok: true,
+    devin: false,
   },
   runtimeUpdates: versions,
 })
@@ -174,6 +184,29 @@ window.mako = {
         outcome: "failed",
         message: "Download interrupted. Retry when connected.",
       },
+    }
+  },
+  runHarnessInstall: async (id) => {
+    calls.push(`install:${id}`)
+    const held = providerStore.get().runtimeUpdates?.[id]
+    if (!held?.install) throw new Error("Nothing to install")
+    providerStore.set({
+      runtimeUpdates: {
+        ...providerStore.get().runtimeUpdates,
+        [id]: { ...held, phase: "installing" },
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    providerStore.set({
+      availability: { ...providerStore.get().availability, [id]: true },
+    })
+    return {
+      provider: id,
+      binary: "/Users/developer/.local/bin/devin",
+      installed: "3000.11.3",
+      channel: "manual",
+      checkedAt: Date.now(),
+      result: { at: Date.now(), outcome: "installed", to: "3000.11.3" },
     }
   },
   providerConnectionAction: async (provider, action) => {

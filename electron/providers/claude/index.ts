@@ -29,6 +29,8 @@ export const installClaude: ProviderModule = (host) => {
     primary: true,
     binary: (env) => claudeRuntime(env)?.executable ?? null,
     ...claudeReleasePolicy,
+    // Sessions run the Claude Code build the Agent SDK ships inside Mako.
+    install: [],
     installations: [
       {
         id: "terminal",

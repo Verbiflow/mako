@@ -1838,6 +1838,24 @@ by its owner's name. `scripts/test-runtime-updates.ts` covers the ladder,
 the signature cache, the registry TTL, persistence, the locks, the receipts
 and the row's words (`src/lib/runtime-updates.ts`).
 
+A missing CLI installs from its Settings row. `install` is required on every
+`ProviderUpdateSource`, most preferred first: the vendor's documented
+`scriptInstall(url)` (`curl -fsSL <url> | bash` under pipefail) or
+`npmInstall(pkg)`, and empty only when sessions need no local CLI (Claude
+runs the build the Agent SDK ships). A reading with no binary offers the first
+plan whose command exists here, and the row shows that exact command before
+the Install button runs it. `RuntimeUpdates.install` shares the update's
+runner, channel locks and deadline, then reads the runtime again; the binary
+where `binary` looks, reporting a version `supportsVersion` accepts, decides
+the outcome, not the installer's exit code, because Devin's installer ends in
+the interactive `devin setup` and fails without a terminal after the CLI is in
+place. So every plan must land where `binary` resolves: OpenCode installs
+through npm because `opencode.ai/install` takes the main repository's latest
+release, which is v1. Detection resolves each CLI the way the vendor installs
+it, not through one other app: Devin checks `DEVIN_CLI_PATH`, the shared
+resolver (PATH, `~/.local/bin`), `Devin.app`'s bundled CLI, then Zed's
+registry. Each installer was proven against a scratch `HOME`.
+
 `test:message-queue` covers these boundaries with held discovery promises and real
 fixture subprocesses. ACP and app-server startup must consume the host-provided
 MCP snapshot, including its local-control readiness gate. `test:background-lifecycle`

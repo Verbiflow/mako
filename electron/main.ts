@@ -1380,6 +1380,9 @@ function bindIpc() {
   handle("mako:harness-update", (_e, provider: string) =>
     runtimeUpdates.update(provider)
   )
+  handle("mako:harness-install", (_e, provider: string) =>
+    runtimeUpdates.install(provider)
+  )
   handle("mako:daemon-status", () => daemonStatus())
   handle("mako:daemon-login", () => daemonLoginEnabled())
   handle("mako:daemon-login-set", (_e, enabled: boolean) =>

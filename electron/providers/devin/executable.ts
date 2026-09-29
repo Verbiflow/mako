@@ -1,13 +1,35 @@
 import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { resolveExecutable } from "../../executable.js"
 
-export function devinExecutable(): string | null {
-  const configured = process.env.DEVIN_CLI_PATH
+/**
+ * The Devin CLI Mako launches. The standalone install comes first because it
+ * updates itself; `cli.devin.ai/install.sh` links ~/.local/bin/devin, which
+ * the shared resolver searches with PATH. Devin.app and Zed each carry a
+ * full CLI of their own, `acp` included, updated with that app.
+ */
+export function devinExecutable(env: NodeJS.ProcessEnv = process.env): string | null {
+  const configured = env.DEVIN_CLI_PATH
   if (configured && existsSync(configured)) return configured
-  const direct = join(homedir(), ".local", "bin", "devin")
-  if (existsSync(direct)) return direct
+  const standalone = resolveExecutable("devin", env)
+  if (standalone) return standalone
   if (process.platform !== "darwin") return null
+  for (const applications of ["/Applications", join(homedir(), "Applications")]) {
+    const bundled = join(
+      applications,
+      "Devin.app",
+      "Contents",
+      "Resources",
+      "app",
+      "extensions",
+      "windsurf",
+      "devin",
+      "bin",
+      "devin"
+    )
+    if (existsSync(bundled)) return bundled
+  }
   const registry = join(
     homedir(),
     "Library",

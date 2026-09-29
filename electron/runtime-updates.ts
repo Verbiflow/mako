@@ -21,9 +21,10 @@ import { compareVersions, parseVersion } from "./contracts/runtime-version.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { withDiscoveryProcess } from "./providers/discovery-process.js"
-import type {
-  ProviderUpdateSource,
-  RuntimeUpdateSource,
+import {
+  npmUpdate,
+  type ProviderUpdateSource,
+  type RuntimeUpdateSource,
 } from "./providers/update-source.js"
 
 /**
@@ -63,6 +64,7 @@ const persistedInfoSchema = z.object({
   channel: HarnessUpdateChannelSchema.optional(),
   managedBy: z.string().optional(),
   update: HarnessUpdateCommandSchema.optional(),
+  install: HarnessUpdateCommandSchema.optional(),
   checkedAt: z.number().optional(),
   latestCheckedAt: z.number().optional(),
   error: z.string().optional(),
@@ -158,7 +160,7 @@ export class RuntimeUpdates {
   private loaded: Promise<void> | null = null
   private writes: Promise<void> = Promise.resolve()
   private readonly checking = new Map<string, Promise<HarnessUpdateInfo>>()
-  private readonly updating = new Set<string>()
+  private readonly updating = new Map<string, "updating" | "installing">()
   private readonly locks = new Map<string, Promise<void>>()
   private refreshing: Promise<HarnessUpdates> | null = null
   private emitScheduled = false
@@ -173,6 +175,7 @@ export class RuntimeUpdates {
     return this.options.sources().flatMap((source) =>
       [source, ...(source.installations ?? [])].map((installation) => ({
         ...installation,
+        install: installation === source ? source.install : [],
         provider: source.provider,
         key: installation.id
           ? `${source.provider}:${installation.id}`
@@ -292,7 +295,7 @@ export class RuntimeUpdates {
     const previous = this.updates[provider]
     this.publish(provider, {
       ...previous,
-      phase: this.updating.has(provider) ? "updating" : "checking",
+      phase: this.updating.get(provider) ?? "checking",
     })
     const next: HarnessUpdateInfo = {
       provider: source.provider,
@@ -333,8 +336,11 @@ export class RuntimeUpdates {
         // Never offer an update when its executable could not identify itself.
         if (!installed.version) delete next.update
       } else {
-        // Not installed: nothing to show and nothing to update. The row stays hidden.
+        // Not installed: nothing to update, only the installer Mako can run here.
         this.signatures.delete(provider)
+        next.install = source.install.find(
+          (plan) => resolveExecutable(plan.command, env) !== null
+        )
       }
     } catch (error) {
       next.error = error instanceof Error ? error.message : String(error)
@@ -362,10 +368,8 @@ export class RuntimeUpdates {
     }
     this.pinUpdate(next, policy)
     next.checkedAt = this.options.now?.() ?? Date.now()
-    this.publish(
-      provider,
-      this.updating.has(provider) ? { ...next, phase: "updating" } : next
-    )
+    const working = this.updating.get(provider)
+    this.publish(provider, working ? { ...next, phase: working } : next)
     if (
       previous &&
       (previous.installed !== next.installed || previous.binary !== next.binary)
@@ -544,11 +548,12 @@ export class RuntimeUpdates {
       current.channel === "self"
         ? source.provider
         : (current.channel ?? provider)
-    this.updating.add(provider)
+    this.updating.set(provider, "updating")
     this.publish(provider, { ...current, phase: "updating" })
     const startedAt = this.options.now?.() ?? Date.now()
     try {
       const failure = await this.runUpdate(
+        "update",
         provider,
         current,
         plan,
@@ -609,8 +614,95 @@ export class RuntimeUpdates {
     }
   }
 
-  /** The updater itself, under the channel lock. Resolves to the failure text, or `null` when it finished cleanly. */
+  /**
+   * Installs a missing runtime with the plan its reading offers, then reads
+   * it again. Package-manager installs share the channel lock with updates,
+   * and a runtime is never installed and updated at once.
+   */
+  async install(provider: string): Promise<HarnessUpdateInfo> {
+    await this.load()
+    const source = this.sources().find((entry) => entry.key === provider)
+    if (!source || source.install.length === 0)
+      throw new Error(`${provider} does not install through Mako`)
+    const busy = this.updating.get(provider)
+    if (busy) throw new Error(`${provider} is already ${busy}`)
+    const current = await this.check(provider, { force: true })
+    if (this.updating.has(provider))
+      throw new Error(`${provider} is already ${this.updating.get(provider)}`)
+    const label = current.label ?? provider
+    if (current.binary)
+      throw new Error(`${label} is already installed at ${current.binary}`)
+    const plan = current.install
+    if (!plan)
+      throw new Error(
+        `Mako cannot install ${label} here: none of its installers (${source.install.map((entry) => entry.command).join(", ")}) is available.`
+      )
+    const env = this.options.env?.() ?? process.env
+    this.updating.set(provider, "installing")
+    this.publish(provider, { ...current, phase: "installing" })
+    const startedAt = this.options.now?.() ?? Date.now()
+    try {
+      const failure = await this.runUpdate(
+        "install",
+        provider,
+        current,
+        plan,
+        source.updateEnvironment?.(env) ?? env,
+        plan.command.startsWith("/") ? provider : plan.command
+      )
+      // A vendor installer may end in an interactive step (`devin setup`
+      // signs in) that fails without a terminal after the CLI is in place, so
+      // the binary reporting a supported version decides, not the exit code.
+      await this.checking.get(provider)?.catch(() => undefined)
+      const after = await this.check(provider, { force: true, latest: true })
+      if (!after.binary)
+        throw new Error(
+          failure ??
+            "The installer finished, but Mako still cannot find the CLI. Check the installer output in a terminal, then refresh."
+        )
+      if (!after.installed || after.error)
+        throw new Error(
+          after.error ?? failure ?? "The installed executable did not report a version"
+        )
+      if (failure !== null)
+        hostWarn("runtime", "installer failed after installing", {
+          provider,
+          error: failure,
+        })
+      hostLog("runtime", "install finished", {
+        provider,
+        to: after.installed,
+        binary: after.binary,
+      })
+      const done = withoutPhase({
+        ...after,
+        result: { at: startedAt, outcome: "installed", to: after.installed },
+      })
+      this.updating.delete(provider)
+      this.publish(provider, done)
+      await this.persist()
+      return done
+    } catch (error) {
+      const failed = withoutPhase({
+        ...(this.updates[provider] ?? current),
+        result: {
+          at: startedAt,
+          outcome: "failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      })
+      this.updating.delete(provider)
+      this.publish(provider, failed)
+      await this.persist()
+      return failed
+    } finally {
+      this.updating.delete(provider)
+    }
+  }
+
+  /** The updater or installer itself, under the channel lock. Resolves to the failure text, or `null` when it finished cleanly. */
   private async runUpdate(
+    action: "update" | "install",
     provider: string,
     current: HarnessUpdateInfo,
     plan: HarnessUpdateCommand,
@@ -621,7 +713,7 @@ export class RuntimeUpdates {
     try {
       const command = resolveExecutable(plan.command, env)
       if (!command) throw new Error(`${plan.command} is not installed`)
-      hostLog("runtime", "update started", {
+      hostLog("runtime", `${action} started`, {
         provider,
         channel: current.channel ?? null,
         command: [plan.command, ...plan.args].join(" "),
@@ -648,7 +740,7 @@ export class RuntimeUpdates {
       return null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      hostWarn("runtime", "update failed", { provider, error: message })
+      hostWarn("runtime", `${action} failed`, { provider, error: message })
       return message
     } finally {
       release()
@@ -797,25 +889,6 @@ function packageUpdate(
     label: `Update with ${channel}`,
     command: channel,
     args: ["add", "-g", pkg],
-  }
-}
-
-/**
- * npm 12 blocks install scripts by default and still exits 0, so a package
- * whose postinstall finishes the install (Claude copies its native binary
- * over a stub) is left broken while the update reports success. This one
- * package's scripts are allowed; npm 11 accepts the flag silently.
- */
-function npmUpdate(name: string): HarnessUpdateCommand {
-  return {
-    label: "Update with npm",
-    command: "npm",
-    args: [
-      "install",
-      "-g",
-      `--allow-scripts=${name.slice(0, name.lastIndexOf("@"))}`,
-      name,
-    ],
   }
 }
 

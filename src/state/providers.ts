@@ -249,6 +249,15 @@ export const providers = {
     return next
   },
 
+  /** Installs a missing runtime on the host, then re-reads which agents can run so the row turns ready. */
+  async runRuntimeInstall(provider: string): Promise<HarnessUpdateInfo> {
+    const next = await getMako().runHarnessInstall(provider)
+    admitRuntimeUpdates({ ...providerStore.get().runtimeUpdates, [provider]: next })
+    if (next.result?.outcome === "installed")
+      await providers.loadAll(true).then(() => providers.loadStatus())
+    return next
+  },
+
   async setDaemonLogin(enabled: boolean): Promise<void> {
     const previous = providerStore.get().daemonLogin
     providerStore.set({ daemonLogin: enabled })

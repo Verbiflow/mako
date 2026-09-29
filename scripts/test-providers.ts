@@ -1,3 +1,4 @@
+import { claudeRuntime } from "../electron/providers/claude/runtime.ts"
 import {
   codexExecutableCandidates,
   resolveCodexExecutable,
@@ -381,7 +382,7 @@ assert.deepEqual(
     options: { effort: "high" },
   }),
   {
-    command: "claude",
+    command: claudeRuntime()?.executable ?? "claude",
     args: [
       "-p",
       "continue",

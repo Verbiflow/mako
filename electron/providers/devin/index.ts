@@ -6,6 +6,7 @@ import { devinNativeRunner } from "./native-runner.js"
 import { devinProfileLoader } from "./profile.js"
 import { devinSkillSource } from "./skills.js"
 import { devinExecutable } from "./executable.js"
+import { scriptInstall } from "../update-source.js"
 
 export const installDevin: ProviderModule = (host) => {
   host.nativeRunners.register(devinNativeRunner)
@@ -14,12 +15,12 @@ export const installDevin: ProviderModule = (host) => {
   host.profiles.register(devinProfileLoader)
   host.mcpSources.register(devinMcpSource)
   host.skillSources.register(devinSkillSource)
-  // Zed installs its own copy under its external-agents registry and
-  // replaces it on its schedule; `devin update` asks before it installs, so
-  // it is not run unattended.
+  // Devin.app and Zed each replace their bundled copy on their own schedule;
+  // `devin update` asks before it installs, so it is not run unattended.
   host.updateSources.register({
     provider: "devin",
-    binary: () => devinExecutable(),
+    binary: (env) => devinExecutable(env),
     managedBy: [["external_agents", "Zed"]],
+    install: [scriptInstall("https://cli.devin.ai/install.sh")],
   })
 }

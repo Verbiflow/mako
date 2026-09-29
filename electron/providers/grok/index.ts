@@ -8,6 +8,7 @@ import { grokProcessProbe } from "./process-probe.js"
 import { grokProfileLoader } from "./profile.js"
 import { grokSkillSource } from "./skills.js"
 import { grokConnection } from "./connection.js"
+import { npmInstall, scriptInstall } from "../update-source.js"
 import {
   environmentForExecutable,
   resolveExecutable,
@@ -38,6 +39,10 @@ export const installGrok: ProviderModule = (host) => {
       args: ["update"],
       ownsPath: (path) => path.includes("/.grok/bin/"),
     },
+    install: [
+      scriptInstall("https://x.ai/cli/install.sh"),
+      npmInstall("@xai-official/grok"),
+    ],
   })
 }
 

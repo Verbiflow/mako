@@ -8,6 +8,7 @@ import { codexProcessProbe } from "./process-probe.js"
 import { codexProfileLoader } from "./profile.js"
 import { codexSkillSource } from "./skills.js"
 import { resolveCodexExecutable } from "./executable.js"
+import { npmInstall } from "../update-source.js"
 
 export const installCodex: ProviderModule = (host) => {
   host.liveDrivers.register(codexLiveDriver)
@@ -28,5 +29,9 @@ export const installCodex: ProviderModule = (host) => {
     binary: (env) => resolveCodexExecutable(env),
     npmPackage: "@openai/codex",
     homebrew: { name: "codex" },
+    install: [
+      npmInstall("@openai/codex"),
+      { label: "Install with Homebrew", command: "brew", args: ["install", "codex"] },
+    ],
   })
 }

@@ -964,6 +964,13 @@ export function installMockBridge() {
       latestCheckedAt: Date.now(),
       result: { at: Date.now() - 4_000, outcome: "updated", from: "0.147.0", to: "0.154.0" },
     }),
+    runHarnessInstall: async (provider: string) => ({
+      binary: `/Users/you/.local/bin/${provider}`,
+      installed: "1.0.0",
+      channel: "self",
+      checkedAt: Date.now(),
+      result: { at: Date.now(), outcome: "installed", to: "1.0.0" },
+    }),
     daemonStatus: async () => ({
       pid: 4242,
       startedAt: Date.now() - 7_200_000,

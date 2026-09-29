@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { resolveExecutable } from "../../executable.js"
 import { isOpenCodeV2 } from "./version.js"
 import { readOpenCodeRecord } from "./resume.js"
 
@@ -15,9 +16,14 @@ export interface OpenCodeInstallation {
 
 /** Candidate discovery is not evidence of the executable's generation. */
 function executableCandidates(env: NodeJS.ProcessEnv): string[] {
-  return env.OPENCODE_BIN_PATH ? [env.OPENCODE_BIN_PATH] : [
+  if (env.OPENCODE_BIN_PATH) return [env.OPENCODE_BIN_PATH]
+  const installed = ["opencode2", "opencode"]
+    .map((name) => resolveExecutable(name, env))
+    .filter((path) => path !== null)
+  return [
     env.OPENCODE2_BIN_PATH ?? join(homedir(), ".opencode", "bin", "opencode2"),
     join(homedir(), ".opencode", "bin", "opencode"),
+    ...installed,
   ]
 }
 

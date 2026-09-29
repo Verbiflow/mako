@@ -16,7 +16,7 @@ import {
   ConnectionStatus,
 } from "./provider-connections"
 import { ProviderAccounts } from "./provider-accounts"
-import { RuntimeRow, InstallationDetails } from "./harness-updates"
+import { InstallRow, RuntimeRow, InstallationDetails } from "./harness-updates"
 import { runtimeBusy, runtimeRows } from "@/lib/runtime-updates"
 import { cn } from "@/lib/utils"
 
@@ -111,6 +111,11 @@ function ProviderRow({
       ([, a], [, b]) => Number(Boolean(b.primary)) - Number(Boolean(a.primary))
     )
   const primary = runtimes[0]
+  const missing = updates?.[agent.id]
+  const installable =
+    !primary && missing && !missing.binary && missing.checkedAt !== undefined
+      ? missing
+      : undefined
   const [expanded, setExpanded] = useState(false)
   const [keyOpen, setKeyOpen] = useState(false)
   const selected = providerAccounts.find((account) => account.active)
@@ -197,6 +202,12 @@ function ProviderRow({
               provider={agent.id}
               info={primary[1]}
             />
+          ) : installable ? (
+            <InstallRow
+              runtimeId={agent.id}
+              name={agent.name}
+              info={installable}
+            />
           ) : (
             <span className="text-label text-faint">
               {installed === null
@@ -271,7 +282,7 @@ function ProviderRow({
           ) : (
             <p className="text-label text-muted-foreground">
               {installed === false
-                ? `Install ${agent.name}, then refresh to connect.`
+                ? `Install ${agent.name} to connect.`
                 : `${agent.name} manages sign-in in its own CLI.`}
             </p>
           )}
