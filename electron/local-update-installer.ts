@@ -17,7 +17,10 @@ import { promisify } from "node:util"
 
 const execute = promisify(execFile)
 
-const replacementFile = (socket: string) => join(dirname(socket), "replacing")
+// A quitting host deletes its whole runtime directory, so the marker sits beside
+// it. Hosts built before September 29 only read the one inside.
+const replacementFile = (socket: string) => `${dirname(socket)}.replacing`
+const insideReplacementFile = (socket: string) => join(dirname(socket), "replacing")
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0)
@@ -26,16 +29,19 @@ const alive = (pid: number) => {
     return false
   }
 }
-const replacementOwner = (socket: string) =>
-  readFile(replacementFile(socket), "utf8").then((text) => Number(text), () => NaN)
+const markerOwner = (file: string) =>
+  readFile(file, "utf8").then((text) => Number(text), () => NaN)
 
 /** An installer quits the host at `socket` to replace the app. While the
  * installer lives, automatic wakes from other profiles must not reopen the app
- * being replaced. A crashed installer's marker lapses with its process, and an
+ * being replaced, including after that host has quit and removed its
+ * directory. A crashed installer's marker lapses with its process, and an
  * ordinary launch never consults it. */
 export async function reserveHostReplacement(socket: string, pid = process.pid) {
-  // No host directory means no host has run there, so nothing can be woken.
-  const written = await writeFile(replacementFile(socket), String(pid), { mode: 0o600 }).then(
+  await writeFile(replacementFile(socket), String(pid), { mode: 0o600 })
+  // No host directory means no host has run there, so an older reader has
+  // nothing to wake.
+  const inside = await writeFile(insideReplacementFile(socket), String(pid), { mode: 0o600 }).then(
     () => true,
     (error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return false
@@ -43,15 +49,17 @@ export async function reserveHostReplacement(socket: string, pid = process.pid) 
     }
   )
   return async () => {
-    if (!written) return
-    if ((await replacementOwner(socket)) === pid)
-      await rm(replacementFile(socket), { force: true })
+    for (const file of inside ? [insideReplacementFile(socket), replacementFile(socket)] : [replacementFile(socket)])
+      if ((await markerOwner(file)) === pid) await rm(file, { force: true })
   }
 }
 
 export async function hostReplacementPending(socket: string): Promise<boolean> {
-  const pid = await replacementOwner(socket)
-  return Number.isSafeInteger(pid) && pid > 0 && alive(pid)
+  for (const file of [replacementFile(socket), insideReplacementFile(socket)]) {
+    const pid = await markerOwner(file)
+    if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) return true
+  }
+  return false
 }
 
 interface PreparedApplication {

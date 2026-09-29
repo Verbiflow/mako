@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { createServer } from "node:http"
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
@@ -305,7 +305,12 @@ try {
     const releaseReplacement = await reserveHostReplacement(restartLocation.socket)
     assert.equal((await router.resolve("fixture", "restart-native")).kind, "unavailable")
     assert.equal((await probeRuntime(restartLocation.socket)).state, "absent", "a live installer reservation blocks automatic wake")
+    // The host being replaced removes its runtime directory as it quits.
+    rmSync(restartLocation.directory, { recursive: true, force: true })
+    assert.equal((await router.resolve("fixture", "restart-native")).kind, "unavailable")
+    assert.equal((await probeRuntime(restartLocation.socket)).state, "absent", "the reservation outlives the quit host's cleanup")
     await releaseReplacement()
+    assert.ok(!existsSync(`${restartLocation.directory}.replacing`), "release removes the marker")
     assert.equal(wireSnapshot.parse(await attach(router, "fixture", "restart-native")).session.id, restartId)
     const probe = await probeRuntime(restartLocation.socket)
     assert.equal(probe.state, "ready")
