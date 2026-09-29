@@ -40,7 +40,8 @@ export function Paragraph({
         }
         observer = new ResizeObserver(([entry]) => {
           if (!entry) return
-          let { width, height } = entry.contentRect
+          const { width } = entry.contentRect
+          let { height } = entry.contentRect
           if (width <= 0) return
           // Native layout is exact while rendered. A skipped paragraph reports
           // its placeholder, so only a new width needs an estimate; the inline

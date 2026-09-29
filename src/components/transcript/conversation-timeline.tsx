@@ -312,6 +312,9 @@ export function ConversationTimeline({
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
     const atBottom = distance < NEAR_BOTTOM
     if (userScrolling.current) pinned.current = !movingUp && atBottom
+    // Keys, find-in-page and focus move the reader without a wheel or
+    // pointer; leaving the end upward releases the pin all the same.
+    else if (movingUp && !atBottom) pinned.current = false
     lastScrollTop.current = node.scrollTop
     // A reader who keeps scrolling while a page is on its way moves the
     // position that page must be placed around.
@@ -411,19 +414,12 @@ export function ConversationTimeline({
       lastScrollTop.current = node.scrollTop
     }
     pin()
-    let frame: number | null = null
-    const grown = new ResizeObserver(() => {
-      frame ??= requestAnimationFrame(() => {
-        frame = null
-        pin()
-      })
-    })
+    // Observers run after layout and before paint. Turns revealed by
+    // content-visibility in that same frame must not paint at a stale offset.
+    const grown = new ResizeObserver(pin)
     grown.observe(node)
     if (node.firstElementChild) grown.observe(node.firstElementChild)
-    return () => {
-      grown.disconnect()
-      if (frame !== null) cancelAnimationFrame(frame)
-    }
+    return () => grown.disconnect()
   }, [identity, isEmpty])
 
   const endEarlier = useCallback((progressed: boolean) => {

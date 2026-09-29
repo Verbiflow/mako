@@ -224,22 +224,32 @@ const liveModules = Promise.all([
   import("@/state/live-recovery"),
 ]).then(([acpModule, recovery]) => ({ ...acpModule, applyLiveSnapshot: recovery.applyLiveSnapshot }))
 
-async function adoptOwner(ref: ThreadRef, generation: number) {
+/**
+ * How long a row another host owns waits for that conversation before its
+ * saved transcript is read instead. A warm owner answers well inside it; a
+ * cold one still takes over from the transcript when it answers.
+ */
+const OWNER_PATIENCE_MS = 1_200
+
+/** Show the Mako conversation that owns `ref`; false when none took over. */
+async function adoptOwner(ref: ThreadRef, generation: number): Promise<boolean> {
   try {
     const [owner, { acp, acpStore, applyLiveSnapshot }] = await Promise.all([
       getMako().resolveOwner(ref.path),
       liveModules,
     ])
-    if (!owner || generation !== viewingGeneration) return
+    if (!owner || generation !== viewingGeneration) return false
     applyLiveSnapshot(owner.snapshot, owner.bindingId ?? null)
     if (acpStore.get().activeKey !== owner.snapshot.session.id)
       acp.activate(owner.snapshot.session.id, false)
     openThreadTab(ref.path)
     if (threadsStore.get().viewing || threadsStore.get().opening)
       leaveViewerForLive(owner.provider)
+    return true
   } catch (error) {
     if (generation === viewingGeneration)
       toast.error(error instanceof Error ? error.message : String(error))
+    return false
   }
 }
 
@@ -318,10 +328,10 @@ export const threadViewingActions = {
     handedOff = null
     const { acp, acpStore, activeAcp } = await liveModules
     if (generation !== viewingGeneration) return
-    // The saved transcript paints now; a Mako conversation that owns this
-    // thread takes over when the host names it. Sending resolves again, so
-    // this lookup never decides where a reply goes.
-    if (mode === "conversation") void adoptOwner(ref, generation)
+    // A Mako conversation that owns this thread takes over when the host
+    // names it. Sending resolves again, so this lookup never decides where
+    // a reply goes.
+    const adopted = mode === "conversation" ? adoptOwner(ref, generation) : null
     const activated = mode === "conversation" && acp.activateThread(ref)
     if (!activated) acp.deactivate()
     const liveHarness = activated
@@ -336,6 +346,14 @@ export const threadViewingActions = {
       harnessBeforeViewing = threadsStore.get().composerHarness
     threadsStore.set({ composerHarness: liveHarness })
     markThreadReviewed(ref.path)
+    // A row another host's conversation owns opens straight into it. Read
+    // first, its saved transcript painted only to be replaced by the live one.
+    if (adopted && ref.ownedElsewhere) {
+      threadsStore.set({ viewing: null, opening: { kind: "loading", ref }, run: null })
+      const patience = new Promise<"waited">((resolve) => setTimeout(resolve, OWNER_PATIENCE_MS, "waited"))
+      const owned = await Promise.race([adopted, patience])
+      if (owned === true || generation !== viewingGeneration) return
+    }
     const cached = threadCache.get(ref.path)
     if (cached) {
       // Instant: the last read paints now, the fresh one lands underneath.
