@@ -74,6 +74,14 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
   /**
+   * The native session's source, found from its id alone once the agent has
+   * written it. A session is resumed only from a located source, and the
+   * thread catalog finds one only after it has indexed the file, so without
+   * this a process that dies in a new session's first turn could not be
+   * continued. Required when `canResume`.
+   */
+  locateSession?(input: { nativeId: string; cwd: string; env: NodeJS.ProcessEnv }): string | undefined
+  /**
    * How a second `session/prompt` during a running turn behaves, verified
    * against the real agent. `concurrent-prompt` folds it into the running
    * turn; `interrupting-prompt` cancels the current step and continues with

@@ -6,6 +6,8 @@ import type { ProviderLiveDriver } from "./live-driver.js"
 export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
   if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
     throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)
+  if (source.canResume && !source.locateSession)
+    throw new Error(`${source.provider}: a resumable ACP source must locate its sessions, or a new session's dropped first turn cannot be continued`)
   return {
     provider: source.provider,
     approvalEvidence: source.approvalEvidence,
@@ -17,8 +19,8 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       ? {
           kind: "continues",
           accepted: "The agent's first output of the turn, or the session/prompt response when nothing streams first.",
-          exit: "The connection's close aborts the turn, whose failed result then waits for the process exit, which settles the session failed and disconnected in one update.",
-          tests: ["scripts/test-acp-provider-turn.mjs"],
+          exit: "The connection's close aborts the turn, whose failed result then waits for the process exit, which settles the session failed and disconnected in one update, with the session's source located by its ID.",
+          tests: ["scripts/test-acp-provider-turn.mjs", "scripts/test-turn-recovery-live.mjs"],
         }
       : { kind: "manual", reason: `${source.provider} cannot reopen its sessions, so a turn its process dropped is left to the user.` },
     compaction: source.compaction?.kind === "supported"

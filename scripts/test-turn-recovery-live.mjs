@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises"
 // killed while the agent runs a shell command, and the conversation must come
 // back on its own, finish the turn, and send nothing more. Uses each
 // provider's installed CLI and sign-in, so it spends a few model calls:
-//   npm run test:turn-recovery-live -- codex claude cursor
+//   npm run test:turn-recovery-live -- codex claude cursor grok devin
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-turn-recovery-live-"))
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-turn-recovery-live", main: fileURLToPath(import.meta.url) }))
@@ -21,7 +21,7 @@ if (!process.versions.electron) {
     ...process.env,
     MAKO_RECOVERY_ROOT: root,
     MAKO_REPO: resolve("."),
-    MAKO_RECOVERY_PROVIDERS: (providers.length ? providers : ["codex", "claude", "cursor"]).join(","),
+    MAKO_RECOVERY_PROVIDERS: (providers.length ? providers : ["codex", "claude", "cursor", "grok", "devin"]).join(","),
   }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })

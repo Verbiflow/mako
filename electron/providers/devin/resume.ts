@@ -66,8 +66,21 @@ export function devinResumePolicy(directory = join(homedir(), ".local", "share",
       return { kind: "unavailable", reason: "The Devin session is missing from its database." }
     return { kind: "resumable", record: compareNativeCheckpoint(binding.checkpoint, current) }
   }
+  /** `<database>#<id>`, once Devin has saved the session's row. */
+  const locateSession = ({ nativeId }: { nativeId: string }): string | undefined => {
+    if (!/^[\w-]+$/.test(nativeId)) return undefined
+    let db: DatabaseSync | undefined
+    try {
+      db = new DatabaseSync(database, { readOnly: true })
+      return db.prepare("SELECT 1 FROM sessions WHERE id = ? AND hidden = 0").get(nativeId) ? `${database}#${nativeId}` : undefined
+    } catch {
+      return undefined
+    } finally {
+      db?.close()
+    }
+  }
   /** The strict form: unowned and unchanged since the binding's checkpoint. */
   const canResumeBinding = async (binding: ProviderBinding): Promise<boolean> =>
     resumable(await resumeVerdict(binding), "same")
-  return { checkpoint, resumeVerdict, canResumeBinding }
+  return { checkpoint, resumeVerdict, canResumeBinding, locateSession }
 }

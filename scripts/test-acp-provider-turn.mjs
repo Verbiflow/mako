@@ -37,9 +37,12 @@ async function check() {
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
   const { liveStart, livePrompt, liveCancel, liveClose } = await import(join(repo, "dist-electron/acp.js"))
   const { advancePromptDelivery } = await import(join(repo, "dist-electron/contracts/prompt-delivery.js"))
+  // Sessions the agent has written to; a new session is not on disk until its first turn.
+  const written = new Set()
   const fixture = (provider, source) => providerHost.acpSources.register({
     provider,
     canResume: false,
+    locateSession: ({ nativeId }) => (written.has(nativeId) ? join(root, "located", nativeId) : undefined),
     available: () => true,
     providerTurns: source.providerTurns,
     observeAgents: source.observeAgents,
@@ -149,6 +152,8 @@ async function check() {
   // before answering reports the turn failed and disconnected in one update,
   // so the host continues it rather than recording a provider failure.
   const exiting = await conversation("provider-turn-grok")
+  assert.equal(exiting.session().nativePath, undefined, "a new session has no source yet")
+  written.add(exiting.session().nativeId)
   const reports = []
   const before = exiting.events.length
   await livePrompt(exiting.session().id, "exits-mid-turn", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: (evidence) => reports.push(evidence) })
@@ -159,5 +164,7 @@ async function check() {
   const ended = exiting.events.slice(before).flatMap((event) => event.type === "live-session" && event.session.status !== "running" ? [event.session] : [])
   assert.equal(ended[0]?.status, "failed")
   assert.equal(ended[0]?.connection, "disconnected", "the turn ends with the disconnect, not as a failure of a connected provider")
-  console.log("PASS: An ACP agent's first output accepts the prompt, and its process dying mid-turn ends the turn disconnected in one update")
+  assert.equal(ended[0]?.nativePath, join(root, "located", exiting.session().nativeId),
+    "the same update names the session's source, so the host can resume it before the thread list has indexed it")
+  console.log("PASS: An ACP agent's first output accepts the prompt, and its process dying mid-turn ends the turn disconnected in one update that locates the session")
 }

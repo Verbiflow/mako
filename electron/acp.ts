@@ -336,6 +336,10 @@ async function startAcp(
     resume: options.resume,
     mcpServers: preparedServers.length,
   })
+  const located = () =>
+    live.sessionId
+      ? (source?.locateSession?.({ nativeId: live.sessionId, cwd: workingDir, env }) ?? live.state.nativePath)
+      : live.state.nativePath
   child.on("exit", (code, signal) => {
     live.agents?.dispose()
     live.compaction?.dispose()
@@ -354,6 +358,7 @@ async function startAcp(
     update(live, {
       status: "failed",
       connection: "disconnected",
+      nativePath: located(),
       backgroundTasks: 0,
       error:
         stderrDetail(stderr) ||
@@ -574,6 +579,7 @@ async function startAcp(
     const selection = acpInitialSelection(policy, modes, sessionModes, effectiveModeId)
     update(live, {
       nativeId: session.sessionId,
+      nativePath: located(),
       status: "ready",
       connection: "connected",
       modes,

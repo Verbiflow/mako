@@ -1674,15 +1674,23 @@ fails the turn and disconnects in one patch. Claude's hooks report a fresh
 session's transcript only when its first turn ends, so a death before that
 finds the file by session id under the account's `CLAUDE_CONFIG_DIR`
 (`ClaudeTranscript.locate`); without it the reconnect refused with "native
-session source has not been located". ACP harnesses get the path only from
-the thread catalog, which normally has indexed a new session by the time it
-dies. `test-live-conversations.ts` (`providerExitContinued`, including Stop,
-close and declined cases), `test-claude-sdk.ts`, `test-acp-provider-turn.mjs`
-and `test-opencode-live.ts` cover them without a model. `npm run
-test:turn-recovery-live -- codex claude cursor` drives the real host with the
-real CLI and sign-in: it kills the provider process Mako spawned while the
-agent runs a shell command, and requires the reopened session to finish the
-turn with one continuation and send nothing more.
+session source has not been located". A resumable ACP source declares
+`locateSession` (`acpLiveDriver` refuses one without it), and the transport
+reports the located source on the ready update and again on the exit update,
+since a new session is not on disk when it opens: Grok searches
+`~/.grok/sessions/*/<id>/updates.jsonl`, trying the URL-encoded launch
+directory first because a macOS temporary directory may be spelled under
+`/private`; Devin names `sessions.db#<id>` once the row exists. Before this,
+Grok and Devin got the path only from the thread catalog, which the live test
+host does not run, and Grok's killed first turn was left to the user.
+`test-live-conversations.ts` (`providerExitContinued`, including Stop, close
+and declined cases), `test-claude-sdk.ts`, `test-acp-provider-turn.mjs` and
+`test-opencode-live.ts` cover them without a model, and
+`test-turn-recovery-contract.ts` covers both locators. `npm run
+test:turn-recovery-live -- codex claude cursor grok devin` drives the real host
+with the real CLI and sign-in: it kills the provider process Mako spawned while
+the agent runs a shell command, and requires the reopened session to finish
+the turn with one continuation and send nothing more.
 
 A failed turn carries a `failure` kind decided once on the host
 (`electron/contracts/provider-failure.ts`, no imports, shared with the

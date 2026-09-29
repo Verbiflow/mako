@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { backgroundCommandLabel } from "@mako/sessions"
+import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { GrokAgents } from "./agents.js"
@@ -17,6 +18,33 @@ import type { AccessTier } from "../../contracts/access.js"
  * modes over ACP, so the default is pinned explicitly: without it an
  * unchosen session ran Grok's own default while the desk reported nothing.
  */
+/**
+ * Grok writes `<workspace>/<id>/updates.jsonl` (`chat_history.jsonl` before
+ * 1.0) under ~/.grok/sessions, one folder per URL-encoded launch directory;
+ * the other folders are searched when the directory was spelled differently,
+ * as a macOS temporary path is under /private.
+ */
+export function grokSessionSource(
+  nativeId: string,
+  cwd: string,
+  root = join(homedir(), ".grok", "sessions")
+): string | undefined {
+  if (!/^[\w-]+$/.test(nativeId)) return undefined
+  let workspaces: string[]
+  try {
+    workspaces = readdirSync(root)
+  } catch {
+    return undefined
+  }
+  const launched = encodeURIComponent(cwd)
+  for (const workspace of [launched, ...workspaces.filter((name) => name !== launched)])
+    for (const transcript of ["updates.jsonl", "chat_history.jsonl"]) {
+      const path = join(root, workspace, nativeId, transcript)
+      if (existsSync(path)) return path
+    }
+  return undefined
+}
+
 function grokPermissionMode(tier: AccessTier): string | undefined {
   switch (tier) {
     case "plan":
@@ -135,6 +163,7 @@ export const grokAcpSource: ProviderAcpSource = {
     },
   }),
   canResume: true,
+  locateSession: ({ nativeId, cwd }) => grokSessionSource(nativeId, cwd),
   launchOptionIds: ["effort"],
   access: { launch: ["plan", "deny", "auto", "full"], default: "deny" },
   available: () => resolveExecutable("grok") !== null,
