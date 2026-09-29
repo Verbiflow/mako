@@ -754,3 +754,51 @@ Evidence:
 
 Included in candidate `26b4f06bc693a102` (queued to install when the default
 host is idle); not installed yet.
+
+### Host-sized preview frames (local, September 28)
+
+The installed September 26 audits froze the preview for 521 ms with two load
+workers and 1,349 ms with four. The recording from the same stream never held
+over 267 ms, so the loss was downstream of capture. Every viewer received each
+full 1920×1080 frame over the host socket, then decoded it to paint a 288×162
+card. Under load that transfer and decode fell behind the source.
+
+The change (`7253639`, `3689c37`, `1ddeaac`, `481d4dd`):
+
+- Each viewer reports the box it displays, in device pixels. The host scales
+  each frame once to the box that covers every viewer of that task
+  (`sharp`, `mks2021`), so no viewer draws with less detail than it shows.
+- An unmeasured viewer gets full pixels. A viewer that shrinks keeps the
+  current frames until the next one; a viewer that grows gets a new frame at its
+  new size at once instead of an upscaled one.
+- Hosts without `previewSizing` still send full frames, and viewers handle both.
+  `MAKO_PREVIEW_FULL_FRAMES=1` makes the audit request full frames, for A/B runs.
+- Recording and explicit screenshots are unchanged: they read the capture, not
+  the preview.
+
+Quality: the viewer's frame equals the host-scaled frame exactly. Against a
+high-quality downscale of a full capture it measures 34.3 dB PSNR, mean error
+2.06 levels (gate at least 33 dB, at most 2.5).
+
+A/B on the same host (source mode, two viewers plus recording), with the share
+of source frames each viewer composited as the measure, because the machine's
+source rate was throttled all day (10–32 fps against 58–60 on September 26):
+
+| Load | Arm | Composited share | Gap p95 / max (ms) |
+| --- | --- | --- | --- |
+| Ordinary (3 sized, 2 full, interleaved) | sized | 73–87% | 72–173 / 137–404 |
+| Ordinary | full | 27–31% | 207–513 / 269–633 |
+| Four workers, 30 s | sized | 220 frames painted | 456 / 677 |
+| Four workers, 30 s | full | 100 frames painted | 1,174 / 1,507 |
+
+The viewer path now keeps up with most of what the source produces. The loaded
+runs still exceed the 500 ms freeze gate because the throttled source itself
+held frames that long, so neither gate can be judged on this machine today.
+[Logs and tables](audits/2026-09-28/preview-sizing/README.md).
+
+In the same work, an invalid command to the video encoder worker used to be
+dropped silently, and its caller waited out the response timeout. It now fails
+at once with "Invalid video worker command" (`7e38f89`).
+
+Included in candidate `13a82042e7e655bd`, queued September 28 to install when the
+default host is idle (`release/rollout-20260928`).

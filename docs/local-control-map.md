@@ -1,6 +1,6 @@
 # Local Control wayfinder
 
-Updated 2026-09-26. This is the current plan for browser and computer control across
+Updated 2026-09-28. This is the current plan for browser and computer control across
 all harnesses, desktop Mac and isolated Linux cloud jobs. The goal is accurate,
 responsive complete workflows through a typed engine, agent MCP and composable CLI. Full ChatGPT/Codex
 parity has not been established.
@@ -40,8 +40,8 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 | Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
 | Browser capture | Installed ordinary Aside preview/recording reaches 56.84/57.73 distinct fps at 1920×1080 with two viewers, exact inputs and unchanged screenshot pixels. Corrected loaded input-to-visible p95 is 121/73/82 ms for click/type/scroll through a production offscreen viewer. | Earlier installed loaded recordings and the combined-build 120-second isolated-host run interrupt at the two-second backlog guard; the uninstalled timestamped source completes them. A matched A/B shows preview rate follows machine load (47.97–58.25 fps), not encoding method; the 55-fps preview gate under contention stays open. Sustained efficiency, physical-screen latency, remote delivery and broader native rates remain open. Focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.24 selected for new launches (September 26): a daemon killed or stopped mid-key no longer leaves the key held, and typing text already in a field is no longer falsely confirmed; running daemons keep +23 until their host starts a new one. Connected implicit-session idle lifetime and right/double-click cursor acceptance pass; fresh isolated right/double-click recording passes; the current default-host daemon loads +23 and installed right-click timeline propagation passes; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux accepts 60 fps requests (+19, repeated on +24), but its native CLI clip is under a second; GNOME capture polls at ~5 fps. |
-| Standalone Linux | +mako.24 with the current engine (September 26) passes ARM64 X11 jobs/recording, three Sway scale/rotation configurations, labwc/Weston/KWin, GNOME 46, both CLI workflows and eleven lifecycle cases. Native AMD x64 (EC2, AMD EPYC 9R14) passes the five acceptance suites, both CLI workflows and eleven lifecycle cases on +mako.24 (September 26). Acceptance containers now run as any calling UID. [+24 evidence](audits/2026-09-26/linux24/README.md). | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
-| Installed components | Installed and running: `3ba69b6e251ab7e7` (built 10:23 UTC Sep 26 by the other contributor's `release/rollout-20260926c` job, installed 10:27 UTC; default host PID 12099). Its Local Control source is identical to this workstream's `26b4f06bc693a102` (installed 09:32 UTC, replaced an hour later); the 18 non-document files that differ are Cursor compaction, transcript UI and Linux runner scripts. Installed driver death, ordinary preview and fresh-agent LC-22 pass on it; the loaded preview's freeze gate fails; see [delivery order](#delivery-order). Local fixes made after it (not installed): the fixture desk (A09), named native sessions that ended after five idle minutes, window-state errors that hid the driver's message, and a preview meter that counted a viewer stall as an idle source. Previous: `6ac3f4fbd690b74d` (built 01:15:34 UTC Sep 26), installed 01:25 UTC, startup verified, Settings receipt `ok:true`. Installed recording, MCP, native cursor-idle and both two-minute preview/recording jobs pass. It replaced `c291bf2845c02eec` (built 22:21:43 UTC, installed outside this workstream), which is retained as the backup. Earlier combined build `1fb3bfb7b3d14e96` (21:51:28 UTC) passed fresh default-host browser/native recovery. Sustained recording still interrupts. Previous builds `3c865f5347d339c7` and `48bf10dc948aa13c` are historical. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.24 is now selected for new Mac driver launches (September 26); the current installed daemon still runs +mako.23 until its host starts a new one. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
+| Standalone Linux | +mako.24 with the current engine (September 26) passes ARM64 X11 jobs/recording, three Sway scale/rotation configurations, labwc/Weston/KWin, GNOME 46, both CLI workflows and eleven lifecycle cases. Native AMD x64 (EC2, AMD EPYC 9R14) passes the five acceptance suites, both CLI workflows and eleven lifecycle cases on +mako.24 (September 26). Acceptance containers now run as any calling UID. [+24 evidence](audits/2026-09-26/linux24/README.md). September 28: the same native x64 suites pass again with the current engine (A23 CLI, R23 and encoder fixes), byte-identical to candidate `13a82042e7e655bd` ([evidence](audits/2026-09-28/linux24/x64-native-ec2/README.md)). | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
+| Installed components | **September 28:** installed and running is `869dadbcbbd1a69d` (built 06:05 UTC Sep 28 by Mako's in-app updater from this checkout). It contains the fixture desk (A09), the native session expiry retry (A22), the window-state error text and the meter stall fix; its installed fixture desk and idle `get_window_state` checks pass ([delivery order](#delivery-order)). Queued: `13a82042e7e655bd` (`release/rollout-20260928`), which adds host-sized preview frames and the viewer report, the A23 CLI changes, the R23 screenshot fix and the encoder fast failure. The record below is from September 26: installed and running was `3ba69b6e251ab7e7` (built 10:23 UTC Sep 26 by the other contributor's `release/rollout-20260926c` job, installed 10:27 UTC; default host PID 12099). Its Local Control source is identical to this workstream's `26b4f06bc693a102` (installed 09:32 UTC, replaced an hour later); the 18 non-document files that differ are Cursor compaction, transcript UI and Linux runner scripts. Installed driver death, ordinary preview and fresh-agent LC-22 pass on it; the loaded preview's freeze gate fails; see [delivery order](#delivery-order). Local fixes made after it (not installed): the fixture desk (A09), named native sessions that ended after five idle minutes, window-state errors that hid the driver's message, and a preview meter that counted a viewer stall as an idle source. Previous: `6ac3f4fbd690b74d` (built 01:15:34 UTC Sep 26), installed 01:25 UTC, startup verified, Settings receipt `ok:true`. Installed recording, MCP, native cursor-idle and both two-minute preview/recording jobs pass. It replaced `c291bf2845c02eec` (built 22:21:43 UTC, installed outside this workstream), which is retained as the backup. Earlier combined build `1fb3bfb7b3d14e96` (21:51:28 UTC) passed fresh default-host browser/native recovery. Sustained recording still interrupts. Previous builds `3c865f5347d339c7` and `48bf10dc948aa13c` are historical. Earlier build `9b696b0d9525e7e9` passed installed signature/host/module identity with recipe-4 media. [Installed media acceptance](local-control-installed-media.md) exposes loaded-recording and native cursor failures. Earlier build `3c1d563e25a9bd78` established the following agent-integration checks; +mako.24 is now selected for new Mac driver launches (September 26); the current installed daemon still runs +mako.23 until its host starts a new one. Installed package/host identity, SDK/CLI/MCP state, Aside exact-save/dialog/images, native exact values, reset/worker-fault recovery and MCP/browser reconnect checks pass. Default-host Codex compaction and task interruption/resume pass with 1,006 foreground samples without fixture activation. ASAR metadata cache failure is fixed in deployment tooling. [Installed evidence](local-control-agent-repl.md#september-24-installed-acceptance-and-recovery); [receipt](local-control-mcp-deployment.json). | Model compaction/interruption acceptance is scoped to Codex/macOS. Other providers, Linux and broader whole-job/streaming acceptance remain separate. Browser reconnect may remove temporary tabs; no automatic replacement or replay. |
 | Packaging | Retired npm Cua SDK and regular-profile debugging scans removed; target-specific builds, media recipes, licenses, ignores and archive checks exist. | Complete installed-size/performance budgets for every supported release target and a proven smaller native build profile. |
 
 Evidence: [capture and final cloud packages](audits/2026-09-23/local-control-capture21/README.md),
@@ -86,7 +86,54 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
-**Next (September 26, local, not installed):** build and queue one candidate with
+**Next (September 28): candidate `13a82042e7e655bd` installs when the default host is idle.**
+It is built from a clean clone of `6cf09aa` (`release/rollout-20260928/build.mjs`):
+typecheck, packaging with its packaged startup checks, and eleven ASAR content
+assertions (host-sized preview frames, the viewer report, the A23 CLI receipt,
+scoped `act`, `expect` and the selector refusal, the R23 screenshot fix and the
+encoder fast failure). The fixture desk test also passed against the candidate
+bundle itself. The one-shot job `dev.mako.rollout-20260928` reserved host PID
+11623 and asked it to close after work; it waits without force-stopping
+anything, and its cancel path withdraws the pending quit. Read
+`release/rollout-20260928/install-state.json`. After it installs, in order:
+
+1. `node scripts/test-fixture-desk.mjs --app=/Applications/Mako.app`, and native
+   `get_window_state` on the AppKit fixture before and after more than five idle
+   minutes.
+2. Installed ordinary and loaded preview audits (`--installed-session`,
+   `--conversation`, `--extension`, `--two-viewers --recording`, as on September 26). The
+   restoration check now reads the host's viewer report, so a failure names who
+   holds the capture. Judge the 55-fps gate only when the source rate is back near
+   60 fps; it was 10–32 fps all day on September 28.
+3. An installed element screenshot on a page wider than 1920 CSS px reports scale 1 (R23).
+4. A fresh agent repeats the LC-22 task on the installed CLI (A23). Target: fewer
+   than 12 help lookups and no program for work the CLI now does.
+
+**Done September 28:**
+
+- **Installed checks on `869dadbcbbd1a69d`, passed.** The fixture desk test
+  gained `--app=<Mako.app>`, which runs its socket and page-proxy checks against a
+  packaged bundle's own main process. On the installed app, every write,
+  provider, git, process and unknown call was refused before its handler, reads
+  and boot worked, and the host quit through its lifecycle. Packaged hosts serve
+  no dev desk windows, so those checks stay source-only. Native `get_window_state`
+  on the repo's AppKit fixture succeeded 397 s after the previous read; the
+  driver's session TTL is 300 s, so the retry under a new session name ran (A22).
+- **Viewer freeze under load: diagnosed and fixed locally** (item 2, ledger R22).
+  Viewers were sent full 1920×1080 frames to paint 288×162. The host now scales
+  frames to the largest displayed viewer: 73–87% of source frames composited
+  against 27–31%, and 220 against 100 frames painted under four load workers.
+  [Write-up](local-control-media-fixes.md#host-sized-preview-frames-local-september-28).
+- **Page left visible after the last viewer closed: instrumented, and passing
+  from source.** The host now reports who holds a task's capture
+  (`mako:control-preview-viewers`). A real Chrome profile through the extension
+  restored the tab to hidden with no viewers and no capture. The installed hold is
+  not yet explained; step 2 above names it.
+- **A23 fresh-agent friction and R23 scaling: fixed locally** (ledger rows).
+- **Linux:** the contributor's x64 workflow is still unpublished; native x64 on
+  EC2 passes again with this engine ([LC-25](#lc-25--linux-backend-and-cloud-coverage)).
+
+**Earlier queue record (September 26, local, not installed):** build and queue one candidate with
 the fixture desk (A09, [LC-23](#lc-23--preview-isolation-and-installed-browser-rollout)),
 the native session expiry fix, the window-state error fix and the preview meter
 stall fix, using the install job's own lifecycle and cancel path once the default
@@ -621,7 +668,16 @@ one generate. It needed 12 help lookups. What slowed it down:
 - The recording directory holds both `timeline.json` and `timeline.jsonl`, and
   help does not say which to read.
 
-Next: fix these, then repeat with a new fresh agent. Capability/result typing and
+September 28 (local, queued in `13a82042e7e655bd`): each of these is fixed with a
+test; details in ledger A23 and R23. `open`/`claim` print `{target, url, title}`,
+and that receipt works as a target file. `act` takes `--role`/`--name` or a
+`selector` with `within`. `expect` and `close` exist. `api` lists its topics. A
+CSS or text selector is refused with the quoted text and the observe call to
+use instead. Element screenshots keep scale 1 when Chromium returns a short view.
+Help says which timeline file to read.
+
+Next: repeat with a new fresh agent on the installed candidate, with the same
+task and a target of fewer than 12 lookups. Capability/result typing and
 long-running start/resume/cancel without guessing a ticket shape remain.
 
 Done when a fresh agent can discover/connect, scope duplicate controls, capture an
@@ -995,6 +1051,15 @@ and SSH open only to the operator's address; only prepared payloads were copied.
 The instance, key, security group and VPC were deleted afterwards and the
 deletion was confirmed.
 [Evidence](audits/2026-09-26/linux24/x64-native-ec2/).
+
+September 28, native x64 again, same recipe and machine type, because the
+contributor workflow is still unpublished. It uses the current engine,
+byte-identical to candidate `13a82042e7e655bd` for the CLI, session server,
+browser service and encoder worker. All suites pass: desktop acceptance with 10
+hidden jobs, the runtime image, both CLI workflows (including the public
+scoped-edit examples) and the eleven lifecycle scenarios. Every AWS resource was
+deleted and checked by ID; no volume remained.
+[Evidence](audits/2026-09-28/linux24/x64-native-ec2/README.md).
 
 Next: run the contributor workflow once published (it exercises the calling-UID
 fix on GitHub's UID), then extend compositor/version and real display/GPU coverage. AMD x64 Sway now
