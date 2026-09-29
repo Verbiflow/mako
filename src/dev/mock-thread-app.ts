@@ -25,7 +25,7 @@ const clock = (offsetMinutes = 0) =>
   dim(new Date(Date.now() - offsetMinutes * 60_000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }))
 
 const INSTALL = [
-  dim("$ npm ci"),
+  dim("$ npm install"),
   "npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory.",
   "npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported",
   "",
@@ -166,7 +166,7 @@ export function installMockThreadApp(): void {
     }
     if (!installed) {
       reset("prepare")
-      put({ phase: "preparing", prepare: { command: "npm ci", reason: "package-lock.json changed" }, room: undefined })
+      put({ phase: "preparing", prepare: { command: "npm install", reason: "package-lock.json changed" }, room: undefined })
       stream("prepare", INSTALL, 2600, () => {
         installed = true
         start()
@@ -245,7 +245,7 @@ export function installMockThreadApp(): void {
     case "installing":
       emit("prepare", INSTALL.slice(0, 3))
       emit("check:quick", QUICK_PASS)
-      putThreadApp(CWD, { ...ready("preparing"), prepare: { command: "npm ci", reason: "package-lock.json changed" } })
+      putThreadApp(CWD, { ...ready("preparing"), prepare: { command: "npm install", reason: "package-lock.json changed" } })
       break
     case "running":
     case "check-failed":

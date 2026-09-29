@@ -57,7 +57,7 @@ Note which rung each fix used.
     "api": { "command": "npm run api", "port": "{port+1}", "cwd": "server", "values": { "HOME": "{data}/home" } }
   },
   "checks": { "quick": "npm run typecheck && npm test", "full": "npm run e2e" },
-  "prepare": [{ "command": "npm ci", "inputs": ["package-lock.json"] }]
+  "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"] }]
 }
 \`\`\`
 
@@ -74,6 +74,8 @@ The fields:
 - checks.quick: no running app, such as typecheck, lint and unit tests.
 - checks.full: runs against the running app, such as end-to-end tests. Mako starts the app first.
 - prepare: install in a fresh copy, and catch up after the branch moves. Each step runs again only when one of its inputs changes. Only add it if a fresh checkout can't start without it.
+  - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch.
+  - Never a clean reinstall, such as npm ci or deleting node_modules first. A new worktree already has the main checkout's installed JavaScript packages copied in when the lockfile matches, and the usual install leaves that copy alone; a clean reinstall throws it away and writes every file again.
 
 Keep it small, and name the project's own scripts. Add a script to the project only when none exists. Nothing Mako-specific goes inside a command, so every command still works without Mako.
 
