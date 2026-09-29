@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import { z } from "zod"
 import type { CursorSdkModelSelection } from "./cursor-sdk-models.js"
+import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 
 /**
  * The Cursor SDK keeps two things per state root: one `store.db` of blobs
@@ -104,7 +105,7 @@ function openReadOnly(path: string): DatabaseSync | null {
   const module = sqliteModule()
   if (!module) return null
   try {
-    return new module.DatabaseSync(path, { readOnly: true })
+    return new module.DatabaseSync(path, { readOnly: true, timeout: READ_BUSY_TIMEOUT_MS })
   } catch {
     return null
   }

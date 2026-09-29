@@ -60,11 +60,13 @@ import {
 } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import { todoDetails } from "../tool-plan.js"
-import type {
-  NativeFile,
-  SessionFollower,
-  SessionProvider,
-  SessionUpdate,
+import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
+import {
+  SessionUnreadable,
+  type NativeFile,
+  type SessionFollower,
+  type SessionProvider,
+  type SessionUpdate,
 } from "./types.js"
 
 /** Where a user turn begins: its index in the root's hash list and in the entries. */
@@ -253,7 +255,8 @@ async function openDatabase(path: string): Promise<DatabaseSync | null> {
   if (sqliteOpen === undefined) {
     try {
       const sqlite = await import("node:sqlite")
-      sqliteOpen = (file) => new sqlite.DatabaseSync(file, { readOnly: true })
+      sqliteOpen = (file) =>
+        new sqlite.DatabaseSync(file, { readOnly: true, timeout: READ_BUSY_TIMEOUT_MS })
     } catch {
       sqliteOpen = null
     }
@@ -624,7 +627,7 @@ export class CursorProvider implements SessionProvider {
    * rewritten history places nothing.
    */
   private foldInput(database: DatabaseSync, path: string): FoldInput | null {
-    const meta = this.readMeta(database)
+    const meta = this.readMeta(database, path)
     if (!meta) return null
     const agent = this.isSdkStore(path) ? this.sdkAgentOf(path, meta) : null
     const rootId = this.isSdkStore(path) ? agent?.rootId : meta.latestRootBlobId
@@ -757,7 +760,7 @@ export class CursorProvider implements SessionProvider {
       let agentId: string | undefined
       if (database) {
         try {
-          agentId = this.readMeta(database)?.agentId
+          agentId = this.readMeta(database, path)?.agentId
         } finally {
           database.close()
         }
@@ -775,7 +778,7 @@ export class CursorProvider implements SessionProvider {
     const database = await openDatabase(file.path)
     if (!database) return null
     try {
-      const meta = this.readMeta(database)
+      const meta = this.readMeta(database, file.path)
       if (!meta) return null
       // Cursor writes each Task/subagent as its own store.db with
       // `subagentInfo` pointing at the parent. Those are tool calls, not
@@ -956,6 +959,41 @@ export class CursorProvider implements SessionProvider {
       const { fold } = this.foldStore(database, input)
       this.lastFold = { ...fold, path }
       return { ref, entries: fold.entries }
+    } finally {
+      database.close()
+    }
+  }
+
+  /**
+   * The newest exchanges, folded from the end of the hash list alone: from
+   * the earliest prompt within the last `bytes` of message blobs. A whole
+   * fold reads every blob, and a long agent's store holds a gigabyte of
+   * tool output behind the few prompts a first page shows. Null when that
+   * prompt opens the conversation, where the whole fold is the same work.
+   */
+  async recent(path: string, bytes: number): Promise<ThreadEntry[] | null> {
+    if (this.desktop.owns(path) || !this.storeOf(path)) return null
+    const database = await openDatabase(path)
+    if (!database) return null
+    try {
+      const input = this.foldInput(database, path)
+      if (!input) return null
+      const sizes = database.prepare("SELECT length(data) AS size FROM blobs WHERE id = ?")
+      const blobs = database.prepare("SELECT data FROM blobs WHERE id = ?")
+      let read = 0
+      let start = 0
+      for (let index = input.hashes.length - 1; index > 0 && (read < bytes || !start); index--) {
+        const hash = input.hashes[index]
+        if (hash === undefined) continue
+        const size = sizes.get(hash)?.["size"]
+        read += isNumberValue(size) ? size : 0
+        const message = this.readMessage(blobs, hash)
+        if (message?.role === "user" && (spokenText(message.content) || message.attachments.length))
+          start = index
+      }
+      if (!start) return null
+      const folded = this.foldHashes(database, input, start)
+      return folded.dropped ? null : folded.entries
     } finally {
       database.close()
     }
@@ -1208,7 +1246,9 @@ export class CursorProvider implements SessionProvider {
 
   /* ------------------------------------------------------------ sqlite */
 
-  private readMeta(database: DatabaseSync): CursorMeta | null {
+  /** The store's meta row; null for a store without one. A writer that
+   * outlasts the busy timeout is `SessionUnreadable`, never "no meta". */
+  private readMeta(database: DatabaseSync, path: string): CursorMeta | null {
     try {
       const result = database
         .prepare("SELECT value FROM meta WHERE key = '0'")
@@ -1221,7 +1261,10 @@ export class CursorProvider implements SessionProvider {
           : row.value
         : Buffer.from(row.value).toString("utf8")
       return parseCursorMeta(text)
-    } catch {
+    } catch (error) {
+      const failure = SqliteFailure.safeParse(error)
+      if (failure.success && isBusy(failure.data))
+        throw new SessionUnreadable(path, { cause: error })
       return null
     }
   }

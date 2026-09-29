@@ -11,6 +11,18 @@
 
 import type { Harness, Thread, ThreadEntry, ThreadRef } from "../format.js"
 
+/**
+ * A session store that exists but could not be read just now, because a
+ * writer held it. Answering null instead would say the file is no session,
+ * and the catalog would announce a live row removed.
+ */
+export class SessionUnreadable extends Error {
+  constructor(path: string, options?: ErrorOptions) {
+    super(`${path} could not be read just now`, options)
+    this.name = "SessionUnreadable"
+  }
+}
+
 /** A native session file as discovery sees it: a path and its stat facts. */
 export interface NativeFile {
   path: string
@@ -115,7 +127,8 @@ export interface SessionProvider {
   /**
    * The cheap read: enough of the file to identify the session — id, cwd,
    * title, when. Bounded I/O regardless of file size. Returns null for a
-   * file that turns out not to be a session.
+   * file that turns out not to be a session, and rejects with
+   * `SessionUnreadable` for one that could not be read just now.
    */
   peek(file: NativeFile): Promise<ThreadRef | null>
 
@@ -155,4 +168,10 @@ export interface SessionProvider {
     path: string,
     fromByte: number
   ): Promise<{ entries: ThreadEntry[]; nextByte: number }>
+  /**
+   * The newest exchanges of a store with no byte tail to read, translated
+   * from about its last `bytes` of messages and starting at a prompt. Null
+   * when that reaches back to the start, where a full read costs the same.
+   */
+  recent?(path: string, bytes: number): Promise<ThreadEntry[] | null>
 }
