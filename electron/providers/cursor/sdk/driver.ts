@@ -402,6 +402,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.
     backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run." },
+    turnRecovery: {
+      kind: "continues",
+      accepted: "The run ID the SDK returns for the sent message.",
+      exit: "The SDK child's exit, unless Mako closed it, settles the running turn and the session failed and disconnected in one update.",
+      tests: ["scripts/test-turn-recovery-live.mjs"],
+    },
     canResume: true,
     checkpoint,
     resumeVerdict,

@@ -614,6 +614,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     approvalAnswerDigest: openCodeApprovalDigest,
     observesNativeAgents: true,
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts every subagent session still executing and then removes every running shell of the conversation's sessions, once the interrupted turn settles, and at once with no turn running; closing does both before the server exits. OpenCode 2.0.1 keeps a background shell and a background subagent through an interrupt, and a shell past its server's exit." },
+    turnRecovery: {
+      kind: "continues",
+      accepted: "The server's acceptance of the prompt into the session's inbox, or its echo on the event stream.",
+      exit: "The server's exit settles the session failed and disconnected in one update.",
+      tests: ["scripts/test-opencode-live.ts"],
+    },
     compaction: {
       kind: "supported",
       async start(id, actionId) {

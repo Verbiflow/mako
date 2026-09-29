@@ -13,6 +13,14 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
     approvalAnswerDigest: source.approvalAnswerDigest,
     observesNativeAgents: source.observeAgents ? true : undefined,
     canResume: source.canResume,
+    turnRecovery: source.canResume
+      ? {
+          kind: "continues",
+          accepted: "The agent's first output of the turn, or the session/prompt response when nothing streams first.",
+          exit: "The connection's close aborts the turn, whose failed result then waits for the process exit, which settles the session failed and disconnected in one update.",
+          tests: ["scripts/test-acp-provider-turn.mjs"],
+        }
+      : { kind: "manual", reason: `${source.provider} cannot reopen its sessions, so a turn its process dropped is left to the user.` },
     compaction: source.compaction?.kind === "supported"
       ? { kind: "supported", start: async (id, actionId) => (await import("../acp.js")).liveCompact(id, actionId) }
       : source.compaction,

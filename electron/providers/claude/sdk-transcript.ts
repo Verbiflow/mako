@@ -1,5 +1,5 @@
-import { open } from "node:fs/promises"
-import { basename } from "node:path"
+import { open, readdir, stat } from "node:fs/promises"
+import { basename, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import type { HookCallback, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -24,9 +24,32 @@ export class ClaudeTranscript {
   path: string | undefined
   private lastMessageId: string | undefined
 
+  /** The account's Claude home the process runs under. */
+  private readonly configDir: string | undefined
+
+  constructor(configDir?: string) {
+    this.configDir = configDir
+  }
+
   readonly hook: HookCallback = async (input) => {
     if (!input.agent_id) this.path = input.transcript_path
     return {}
+  }
+
+  /**
+   * The transcript path, found by the session's file name when no hook has
+   * reported it: a fresh session's hooks report it only when its first turn
+   * ends, and a process that dies in that turn must still leave the record
+   * it resumes from. Session IDs are unique across project folders.
+   */
+  async locate(sessionId: string | undefined): Promise<string | undefined> {
+    if (this.path || !sessionId || !this.configDir) return this.path
+    const root = join(this.configDir, "projects")
+    for (const project of await readdir(root).catch(() => [])) {
+      const candidate = join(root, project, `${sessionId}.jsonl`)
+      if (await stat(candidate).then((entry) => entry.isFile(), () => false)) return (this.path = candidate)
+    }
+    return undefined
   }
 
   reset(): void {

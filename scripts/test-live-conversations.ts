@@ -1228,6 +1228,12 @@ async function autoContinuedTurn() {
  * outcome to the user, a turn that fails on a dropped connection continues
  * in the same process, and any other failure stays a failure.
  */
+/** What the fixture driver does when the host cancels or closes it, set per case. */
+interface DriverHooks {
+  cancel?: () => void
+  close?: () => void
+}
+
 async function providerExitContinued() {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
   const run = async (accepts: boolean, check: (context: {
@@ -1236,6 +1242,7 @@ async function providerExitContinued() {
     starts: Array<string | undefined>
     prompts: string[]
     end: (patch: Partial<LiveSessionState>) => void
+    hooks: DriverHooks
   }) => Promise<void>) => {
     const root = mkdtempSync(join(tmpdir(), "mako-live-provider-exit-"))
     const id = randomUUID()
@@ -1243,6 +1250,7 @@ async function providerExitContinued() {
     const prompts: string[] = []
     const emitters: Array<(event: LiveDriverEvent) => void> = []
     const bindings: string[] = []
+    const hooks: DriverHooks = {}
     const session = (bindingId: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
       id: bindingId,
       nativeId: "native-exit",
@@ -1274,8 +1282,8 @@ async function providerExitContinued() {
         if (accepts) dispatch.report({ kind: "accepted", source: "native-echo" })
       },
       permission: async () => {},
-      cancel: async () => {},
-      close: async () => {},
+      cancel: async () => { hooks.cancel?.() },
+      close: async () => { hooks.close?.() },
       setMode: async () => {},
     }
     const owner = new LiveConversations({
@@ -1295,6 +1303,7 @@ async function providerExitContinued() {
         starts,
         prompts,
         end: (patch) => emitters.at(-1)?.({ type: "live-session", session: session(bindings.at(-1) ?? id, patch) }),
+        hooks,
       })
     } finally {
       owner.stop()
@@ -1361,6 +1370,77 @@ async function providerExitContinued() {
     assert.equal(request?.status, "failed", "a provider's refusal is a failure, not a continuation")
     assert.equal(request?.failure, "rate-limited")
     assert.equal(prompts.length, 1)
+  })
+
+  // Stop is the user's answer however the driver ends the turn: Cursor's
+  // unacknowledged cancel closes the process, Claude's interrupt can settle
+  // as a failed result first.
+  for (const ending of [exited, { status: "failed", error: "stream disconnected before completion" }] as const)
+    await run(true, async ({ owner, id, starts, prompts, end, hooks }) => {
+      const first = randomUUID()
+      owner.submit(id, first, "first")
+      await dispatched(owner, id, 0)
+      hooks.cancel = () => end(ending)
+      assert.equal(await owner.stopRequest(id, first), true)
+      await sleep(60)
+      const request = owner.snapshot(id)!.requests[0]
+      assert.equal(request?.status, "interrupted")
+      assert.equal(request?.interruption?.reason, "stopped", `a stopped turn that ended ${ending.error} reads as stopped`)
+      assert.equal(prompts.length, 1, "a stopped turn is never continued")
+      assert.equal(starts.length, 1, "a stopped turn never restarts the provider")
+    })
+
+  // A turn that finishes as Stop reaches it keeps its answer.
+  await run(true, async ({ owner, id, prompts, end, hooks }) => {
+    const first = randomUUID()
+    owner.submit(id, first, "first")
+    await dispatched(owner, id, 0)
+    hooks.cancel = () => end({ status: "ready", lastStop: "end_turn" })
+    await owner.stopRequest(id, first)
+    await sleep(60)
+    assert.equal(owner.snapshot(id)!.requests[0]?.status, "completed", "Stop does not relabel a turn that finished")
+    assert.equal(prompts.length, 1)
+  })
+
+  // Closing the conversation mid-turn ends it on purpose.
+  await run(true, async ({ owner, id, starts, prompts, end, hooks }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    hooks.close = () => end(exited)
+    await owner.close(id)
+    await sleep(60)
+    assert.notEqual(owner.snapshot(id)?.requests[0]?.interruption?.reason, "provider-exited")
+    assert.equal(prompts.length, 1, "a closed conversation is never continued")
+    assert.equal(starts.length, 1)
+  })
+
+  // A driver that reports its session closed was ended on purpose.
+  await run(true, async ({ owner, id, prompts, end }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    end({ status: "closed", connection: "disconnected" })
+    const request = owner.snapshot(id)!.requests[0]
+    assert.equal(request?.interruption?.autoContinue, undefined, "a closed session is never scheduled")
+    assert.notEqual(request?.interruption?.reason, "provider-exited", "a closed session did not stop unexpectedly")
+    await sleep(60)
+    assert.equal(prompts.length, 1, "a closed session is never continued")
+  })
+
+  // A continuation the user declined stays declined: a later turn the
+  // provider starts on its own, or a compaction, ending does not revive it.
+  await run(true, async ({ owner, id, prompts, end }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    end({ status: "failed", error: "stream disconnected before completion" })
+    assert.ok(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue)
+    await owner.cancel(id)
+    end({ status: "running" })
+    end({ status: "ready" })
+    end({ status: "running" })
+    end({ status: "failed", error: "stream disconnected before completion" })
+    await sleep(60)
+    assert.equal(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue, undefined)
+    assert.equal(prompts.length, 1, "a declined continuation is never sent later")
   })
 }
 

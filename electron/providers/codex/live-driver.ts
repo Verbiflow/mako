@@ -12,6 +12,12 @@ export const codexLiveDriver: ProviderLiveDriver = {
   canResume: true,
   forkPoint: "run",
   backgroundStop: { kind: "ends-on-stop", how: "Stop cleans the thread's background terminals once the interrupted turn settles, and at once with no turn running; it interrupts each subagent thread's turn and cleans its terminals too. Closing does both before the app-server exits. Codex 0.154 keeps terminals and subagents through an interrupt, which adds the running command, and past the app-server's exit." },
+  turnRecovery: {
+    kind: "continues",
+    accepted: "The turn/start response, which names the turn Codex began, before any of the turn runs.",
+    exit: "The app-server's exit, or a stdin or spawn error, settles the session failed and disconnected in one update; the rollout path was reported when the thread started.",
+    tests: ["scripts/test-turn-recovery-live.mjs"],
+  },
   steer: async (...args) =>
     (await import("../../codex-app.js")).codexAppSteer(...args),
   // Re-probed 2026-09-14 (app-server 0.147.0): after thread/compact/start a

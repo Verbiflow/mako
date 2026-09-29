@@ -63,6 +63,12 @@ export interface Resident {
   retireWhenIdle?: boolean
   /** The scheduled continuation of a turn that ended on a dropped connection, while it is pending. */
   autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }
+  /**
+   * The request the user pressed Stop on, until it settles. However its
+   * driver ends it (an acknowledged cancel, a closed process, a failed
+   * result), it settles stopped and is never continued automatically.
+   */
+  stopping?: string
 }
 
 export interface Dependencies {

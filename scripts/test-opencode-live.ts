@@ -262,7 +262,11 @@ try {
   const noticeFrom = full.events.length
   const finishing = await turn(full, `Use the bash tool with background set to true to run exactly: sleep 8 && echo ${marker}-finished\nDo not wait for it; reply with the word started. When it finishes, reply with only the word noticed.`)
   assert.equal(finishing.state.lastStop, "end_turn", finishing.state.error)
-  const opener = await until("the turn OpenCode starts on the finished command", () => updatesSince(noticeFrom).find(update => update.kind === "provider-turn"), 60_000)
+  const opener = await until("the turn OpenCode starts on the finished command", () => updatesSince(noticeFrom).find(update => update.kind === "provider-turn"), 60_000).catch(error => {
+    const shells = updatesSince(noticeFrom).flatMap(update => update.kind === "tool" && update.toolKind === "execute" ? [update.input] : [])
+    const stream = nativeTail.replace(/data: \{"type":"session\.(text|reasoning)\.delta"[^\n]*\n/g, "").slice(-3000)
+    throw new Error(`${error.message}; the model ran ${JSON.stringify(shells)} and said ${JSON.stringify(finishing.prose)}\nnative stream tail:\n${stream}`)
+  })
   assert.ok(opener.kind === "provider-turn")
   assert.equal(opener.reason, `Background command "sleep 8 && echo ${marker}-finished" completed (exit code 0)`)
   const openerAt = full.events.findIndex(event => event.type === "live-update" ? event.update === opener : event.type === "live-updates" && event.updates.includes(opener))

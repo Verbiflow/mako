@@ -1542,13 +1542,19 @@ export class LiveConversations {
           permissions: [],
           requests: resident.snapshot.requests.map((request) =>
             request.status === "dispatching"
-              ? settleRequest(request, event.session)
+              ? settleRequest(
+                  request,
+                  event.session,
+                  resident.closing || resident.stopping === request.id
+                )
               : request
           ),
         }
-        if (finishedRequest)
+        resident.stopping = undefined
+        if (finishedRequest) {
           this.checkpoints.settle(resident, finishedRequest.id)
-        this.scheduleAutoContinue(resident)
+          this.scheduleAutoContinue(resident, finishedRequest.id)
+        }
       }
     } else if (event.type === "live-action-result") {
       this.actions.result(resident, bindingId, event.actionId, event.result)
@@ -1769,12 +1775,15 @@ export class LiveConversations {
    * stamped with the moment so the renderer says "continuing automatically"
    * instead of offering the button; the timer re-checks eligibility when it
    * fires, because the user may have sent something, closed the
-   * conversation, or the host may be leaving.
+   * conversation, or the host may be leaving. Only `settled`, the request
+   * whose turn ended in this very transition, is considered: an older
+   * interruption the user left alone, or a provider-started turn or
+   * compaction ending later, never revives one.
    */
-  private scheduleAutoContinue(resident: Resident): void {
+  private scheduleAutoContinue(resident: Resident, settled: string): void {
     if (resident.autoContinue || (!resident.driver && !this.reconnectBinding(resident)) || lifecycleBlocked()) return
     const candidate = autoContinueCandidate(resident.snapshot.requests)
-    if (!candidate?.interruption) return
+    if (candidate?.id !== settled || !candidate.interruption) return
     const delay = this.dependencies.autoContinueDelayMs ?? AUTO_CONTINUE_DELAY_MS
     const at = Date.now() + delay
     resident.snapshot = {
@@ -2503,6 +2512,7 @@ export class LiveConversations {
     for (const child of this.control(resident).children)
       if (child.delivery === "pending" || child.delivery === "queued") this.children.cancelChild(id, child.id)
     const opening = resident.opening
+    resident.stopping = requestId
     const result = this.cancelRequest(id, requestId).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
     this.stops.set(id, { requestId, result })
     return result
@@ -3395,17 +3405,23 @@ function showsActivity(event: LiveDriverEvent, status: LiveSessionState["status"
  * saved session holds the turn so far: then a process that died under the
  * turn, or a turn that failed on a dropped connection, is picked up where it
  * stopped. Without that receipt the outcome is unknown and stays the user's
- * call.
+ * call. A session that reports itself closed was ended on purpose.
  */
 function continuableInterruption(request: LiveRequest, session: LiveSessionState): InterruptionReason | undefined {
+  if (session.status === "closed") return undefined
   if (session.lastStop === CONNECTION_LOST_STOP) return "connection-lost"
   if (session.status === "ready" || request.nativeDelivery?.evidence.kind !== "accepted") return undefined
   if (session.connection === "disconnected") return "provider-exited"
   return classifyProviderFailure(session.error).kind === "network" ? "connection-lost" : undefined
 }
 
-function settleRequest(request: LiveRequest, session: LiveSessionState): LiveRequest {
-  const stopped = /cancel|interrupt/i.test(session.lastStop ?? "")
+/**
+ * The request's outcome for the turn `session` just ended. `ended` says the
+ * user stopped this turn or closed the conversation: unless the turn finished
+ * first, it settles stopped however the driver reported the end.
+ */
+function settleRequest(request: LiveRequest, session: LiveSessionState, ended: boolean): LiveRequest {
+  const stopped = (ended && session.status !== "ready") || /cancel|interrupt/i.test(session.lastStop ?? "")
   const dropped = stopped ? undefined : continuableInterruption(request, session)
   const status = stopped || dropped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
   const settled: LiveRequest = {

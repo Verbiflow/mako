@@ -1647,15 +1647,42 @@ that fails with a `network` failure kind while connected is
 `failed`, the user's call. With no driver, the continuation reopens the native
 session through `LiveTransfers`' reconnect, the path a user's send takes, and
 the transfer carries `continues` beside its actor so the new request is Mako's.
-Drivers owe the receipt early and the death in one update
-(`ProviderLiveDriver.prompt`). ACP answers `session/prompt` only at turn end,
-so the agent's first output for the turn is its receipt. A prompt that fails
-because the connection closed is left to the process exit, which kills a
-process that closed its pipes without exiting. OpenCode's exit handler fails
-the turn and disconnects in one patch. `test-live-conversations.ts`
-(`providerExitContinued`), `test-acp-provider-turn.mjs` (a fixture agent
-that closes its pipe and exits later) and `test-opencode-live.ts` (the real
-server killed mid-turn) cover them.
+Only a turn that ended in the transition being handled is considered, and
+only when nobody meant to end it. `stopRequest` marks the request
+(`Resident.stopping`) and `closeResident` sets `closing`, so a turn the user
+stopped or closed settles `stopped` however its driver reported the end:
+Cursor closes the SDK child when a cancel is not acknowledged, which reads
+exactly like a crash, and Claude's interrupt can settle as a failed result
+first. A session that reports itself `closed` is never continuable, and
+`scheduleAutoContinue` takes the id of the request that just settled, so a
+continuation the user declined is not revived by a later provider-started
+turn or compaction ending. Codex and Claude retry dropped streams inside a
+turn without ending it; only their turn-end signals (`turn/completed`, the
+SDK `result`) settle, so a retry never triggers a continuation.
+
+Drivers owe the receipt early, the death in one update, and the native
+path a new session resumes from. Each declares that in `turnRecovery`
+(`ProviderLiveDriver`), with the tests that kill its process mid-turn;
+`validateLiveDriver` refuses a driver that leaves it out, and
+`test-turn-recovery-contract.ts` loads the real provider modules and checks
+each named test exists and has an npm script. A driver that cannot resume
+declares `manual` with the reason. ACP answers `session/prompt` only at turn
+end, so the agent's first output for the turn is its receipt. A prompt that
+fails because the connection closed is left to the process exit, which kills
+a process that closed its pipes without exiting. OpenCode's exit handler
+fails the turn and disconnects in one patch. Claude's hooks report a fresh
+session's transcript only when its first turn ends, so a death before that
+finds the file by session id under the account's `CLAUDE_CONFIG_DIR`
+(`ClaudeTranscript.locate`); without it the reconnect refused with "native
+session source has not been located". ACP harnesses get the path only from
+the thread catalog, which normally has indexed a new session by the time it
+dies. `test-live-conversations.ts` (`providerExitContinued`, including Stop,
+close and declined cases), `test-claude-sdk.ts`, `test-acp-provider-turn.mjs`
+and `test-opencode-live.ts` cover them without a model. `npm run
+test:turn-recovery-live -- codex claude cursor` drives the real host with the
+real CLI and sign-in: it kills the provider process Mako spawned while the
+agent runs a shell command, and requires the reopened session to finish the
+turn with one continuation and send nothing more.
 
 A failed turn carries a `failure` kind decided once on the host
 (`electron/contracts/provider-failure.ts`, no imports, shared with the

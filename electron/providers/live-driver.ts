@@ -48,6 +48,26 @@ export type BackgroundStop =
   | { kind: "ends-on-stop"; how: string }
   | { kind: "ends-with-turn"; evidence: string }
 
+/**
+ * How a turn survives the provider's process dying under it. The host
+ * decides for every harness: a turn the provider accepted is reopened on its
+ * native session and continued once, and anything else is left to the user.
+ * What the host cannot see is the driver's share, stated here with the tests
+ * that kill the process mid-turn and prove it:
+ * - `accepted`: when `prompt` reports `accepted`. It must be as soon as the
+ *   provider shows it has the prompt, not at turn end, or a death mid-turn
+ *   leaves an unknown outcome.
+ * - `exit`: how the death reaches the host: one session update with
+ *   `status: "failed"` and `connection: "disconnected"` together, carrying
+ *   the `nativePath` a new session resumes from when the driver knows it.
+ * - `tests`: scripts, each run by an npm script, that kill the process
+ *   mid-turn and check both.
+ * A provider whose sessions cannot be reopened says why instead.
+ */
+export type TurnRecovery =
+  | { kind: "continues"; accepted: string; exit: string; tests: readonly string[] }
+  | { kind: "manual"; reason: string }
+
 /** A running agent's grant to Mako's control tools: the `mako-control` MCP server and, when it started, the control CLI. */
 export interface ConversationTools {
   token: string
@@ -92,6 +112,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
   defaultMode?: string
   compaction?: ProviderCompaction
   backgroundStop: BackgroundStop
+  turnRecovery: TurnRecovery
   forkPoint?: "run" | "checkpoint"
   canResume: boolean
   checkpoint?(path: string): Promise<string | undefined>
@@ -101,12 +122,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
   /**
    * Resolving this call is not a receipt. Report native evidence through the
-   * attempt-scoped dispatch, and report `accepted` as soon as the provider
-   * shows it is working on the prompt. A turn whose process then dies is
-   * reopened and continued by the host only when it was accepted; report
-   * that death as one session update carrying both `status: "failed"` and
-   * `connection: "disconnected"`, never a failure first and the disconnect
-   * after it, or the host records a provider failure instead.
+   * attempt-scoped dispatch, and keep the receipt and process-death promises
+   * `turnRecovery` declares.
    */
   prompt(
     id: string,
@@ -157,6 +174,14 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : ""
   if (!reason.trim())
     throw new Error(`${driver.provider}: declare how Stop ends its background work, or the evidence that none outlives its turn`)
+  const recovery = driver.turnRecovery
+  if (recovery?.kind === "continues") {
+    if (!driver.canResume)
+      throw new Error(`${driver.provider}: a turn is continued on its native session, which needs canResume`)
+    if (!recovery.accepted.trim() || !recovery.exit.trim() || !recovery.tests.length)
+      throw new Error(`${driver.provider}: declare when a prompt is accepted, how a process death is reported, and the tests that prove both`)
+  } else if (!recovery?.reason.trim())
+    throw new Error(`${driver.provider}: declare how a turn survives its process dying, or why it cannot`)
 }
 
 /** Call immediately before answering a native request, after any adapter awaits. */

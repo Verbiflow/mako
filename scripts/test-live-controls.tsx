@@ -3,7 +3,7 @@ import { CompactionControl } from "../src/components/composer/compaction-control
 import { Exchange } from "../src/components/transcript/exchange"
 import { Prose } from "../src/components/transcript/markdown"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
-import { recoverableRequests } from "../src/state/prompt-delivery"
+import { makoPrompts, recoverableRequests } from "../src/state/prompt-delivery"
 import { agentActivity } from "../src/state/agent-activity"
 import { cn } from "../src/lib/utils"
 import { ActivityMark } from "../src/components/ui/activity-mark"
@@ -382,10 +382,10 @@ const screenshot: Attachment = {
 }
 const clip: Attachment = { ...screenshot, id: "clip", name: "Clip.mp4", kind: "binary", mimeType: "video/mp4", preview: "blob:fixture-video" }
 const inline = renderToStaticMarkup(<InlineAttachment item={screenshot} reference="[Screenshot.png]" />)
-assert.match(inline, /\[Screenshot.png\]/)
+assert.match(inline.replace(/<[^>]+>/g, ""), /\[Screenshot\.png\]/, "the reference reads as its token, whatever spans style the brackets")
 assert.doesNotMatch(inline, /<button|Remove|role="button"/)
 const previews = renderToStaticMarkup(<AttachmentStrip items={[screenshot, clip]} onRemove={() => {}} />)
-assert.match(previews, /<img/)
+assert.match(previews, /role="img" aria-label="Screenshot\.png"/, "an image tile is an image named for its file, however it is painted")
 assert.match(previews, /<video/)
 assert.equal((previews.match(/aria-label="Remove /g) ?? []).length, 2)
 assert.doesNotMatch(previews, /autoplay/i)
@@ -404,14 +404,14 @@ assert.match(formatted, /prompt-prose whitespace-normal/)
 assert.match(formatted, /aria-label="Copy question"/)
 const files = [{index:1, name:"Screenshot.png", path:"/retained/Screenshot.png"}]
 const references = renderToStaticMarkup(<Prose text="Use **@src/file.ts** with [Screenshot.png] and $review." references={files} />)
-assert.match(references, /Open src\/file.ts/)
-assert.match(references, /Open \/retained\/Screenshot.png/)
+assert.match(references, /data-copy-file="src\/file.ts"/)
+assert.match(references, /data-copy-file="\/retained\/Screenshot.png"/)
 assert.match(references, /Skill: review/)
 const literal = renderToStaticMarkup(<Prose text={'```text\n@src/file.ts [Screenshot.png]\n```'} references={files} />)
-assert.doesNotMatch(literal, /Open src\/file.ts|Open \/retained\/Screenshot.png/)
+assert.doesNotMatch(literal, /data-copy-file=/)
 const screenshotName = "CleanShot 2026-09-09 at 1.01.59 AM@2x.png"
 const namedScreenshot = renderToStaticMarkup(<Exchange exchange={{id:"named-shot", prompt:{id:"named-shot",role:"user",blocks:[{type:"text",text:`[${screenshotName}]`},{type:"attachment",name:screenshotName,mimeType:"image/png",source:{kind:"file",path:"/retained/shot.png"}}]},response:[],system:[]}} />)
-assert.match(namedScreenshot, /Open \/retained\/shot.png/)
+assert.match(namedScreenshot, /data-copy-file="\/retained\/shot.png"/)
 assert.doesNotMatch(namedScreenshot, /mailto:/)
 console.log("Prompt Markdown: the reported bullet/bold case, normal paragraph flow, copy controls, rich references, screenshot names with @2x, and literal code verified")
 conversation.blocks = [{type:"user",requestId:"stopped",text:"Keep this original question"}]
@@ -460,10 +460,12 @@ assert.match(continuingMarkup, /data-turn-continuing[^>]*>[^]*?continuing automa
 assert.doesNotMatch(continuingMarkup, /Continue turn/, "a scheduled continuation is not also offered")
 // Mako's own continuation is drawn as Mako's line where the prompt would be,
 // not as the user's bubble; the words it sent are not shown as theirs.
+const sentByMako = (auto: boolean) =>
+  makoPrompts([{ id: "continued", text: "Continue where you left off.", attachments: [], status: "completed", continues: { requestId: "stopped", reason: "connection-lost", auto } }]).get("continued")
 const continuedMarkup = renderToStaticMarkup(
   <TranscriptSourceContext value={{ liveId: conversation.key }}>
     <Exchange
-      continues={{ requestId: "stopped", reason: "connection-lost", auto: true }}
+      sentByMako={sentByMako(true)}
       exchange={{ ...stoppedExchange, id: "continued", prompt: { ...stoppedExchange.prompt, id: "continued", requestId: "continued", timestamp: 1_700_000_000_000, blocks: [{ type: "text" as const, text: "Continue where you left off." }] } }}
     />
   </TranscriptSourceContext>
@@ -475,7 +477,7 @@ assert.doesNotMatch(continuedMarkup, /Copy question/)
 // A continuation the user sent by pressing the button is their prompt and stays one.
 const manualMarkup = renderToStaticMarkup(
   <TranscriptSourceContext value={{ liveId: conversation.key }}>
-    <Exchange continues={{ requestId: "stopped", reason: "connection-lost", auto: false }} exchange={stoppedExchange} />
+    <Exchange sentByMako={sentByMako(false)} exchange={stoppedExchange} />
   </TranscriptSourceContext>
 )
 assert.match(manualMarkup, /Keep this original question/)

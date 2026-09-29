@@ -1,6 +1,8 @@
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import type {
   Options,
   Query,
@@ -244,8 +246,11 @@ async function pump(engine: Engine, live: Live): Promise<void> {
   } catch (error) {
     if (live.closed) return
     if (error instanceof Error) live.authDiagnostics.failure(error.message)
+    const nativePath = await live.transcript.locate(live.state.nativeId)
+    if (live.closed) return
     stop(live)
     engine.patch(live, {
+      nativePath,
       status: "failed",
       connection: "disconnected",
       error: error instanceof Error ? error.message : String(error),
@@ -300,6 +305,12 @@ export function createClaudeSdkDriver(
     canResume: true,
     forkPoint: "checkpoint",
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. Mako declares no per-task stop affordance, so an interrupt stops them too." },
+    turnRecovery: {
+      kind: "continues",
+      accepted: "The SDK's echo of the prompt's user message, as the turn starts.",
+      exit: "The SDK stream's failure when the process dies settles the session failed and disconnected in one update, with the transcript found by session ID when no hook has reported it yet.",
+      tests: ["scripts/test-claude-sdk.ts", "scripts/test-turn-recovery-live.mjs"],
+    },
     steering: "step",
     modes: CLAUDE_MODES,
     defaultMode: "default",
@@ -346,7 +357,7 @@ export function createClaudeSdkDriver(
           starting.delete(options.conversationId)
       }
       const input = new ClaudeInput()
-      const transcript = new ClaudeTranscript()
+      const transcript = new ClaudeTranscript((config.env ?? process.env).CLAUDE_CONFIG_DIR || join(homedir(), ".claude"))
       const permissions = new ClaudePermissions(
         options.conversationId,
         options.emit,

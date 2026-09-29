@@ -1,7 +1,7 @@
 import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -164,6 +164,41 @@ await assert.rejects(
   driver.prompt("sdk-fixture", "After stop", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} }),
   /disconnected/
 )
+
+// A process killed in a fresh session's first turn: no hook has reported the
+// transcript yet, and the death must still carry the path it resumes from.
+{
+  const configDir = await mkdtemp(join(tmpdir(), "mako-claude-config-"))
+  const conversationId = randomUUID()
+  const transcriptPath = join(configDir, "projects", "-tmp-work", `${conversationId}.jsonl`)
+  await mkdir(join(configDir, "projects", "-tmp-work"), { recursive: true })
+  await mkdir(join(configDir, "projects", "-tmp-other"), { recursive: true })
+  await writeFile(transcriptPath, "{}\n")
+  let fail: ((error: Error) => void) | undefined
+  const dying: AsyncIterable<SDKMessage> = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => new Promise<IteratorResult<SDKMessage>>((_, reject) => { fail = reject }),
+    }),
+  }
+  const deaths: LiveDriverEvent[] = []
+  const dyingDriver = createClaudeSdkDriver({
+    ...dependencies,
+    configure: async () => ({ env: { CLAUDE_CONFIG_DIR: configDir } }),
+    query: (options) => ({ ...dependencies.query(options), [Symbol.asyncIterator]: () => dying[Symbol.asyncIterator]() }),
+  })
+  await dyingDriver.start("/tmp/work", { conversationId, emit: (event) => deaths.push(event) })
+  await dyingDriver.prompt(conversationId, "Begin", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  const before = deaths.length
+  fail?.(new Error("Claude Code process terminated by signal SIGKILL"))
+  for (let waited = 0; deaths.length === before && waited < 2000; waited += 10) await delay(10)
+  const reported = deaths.slice(before).filter((event) => event.type === "live-session")
+  assert.equal(reported.length, 1, "the death is one session update")
+  const death = reported[0]?.type === "live-session" ? reported[0].session : undefined
+  assert.equal(death?.status, "failed")
+  assert.equal(death?.connection, "disconnected")
+  assert.equal(death?.nativePath, transcriptPath, "the death carries the transcript found under the account's config")
+  await rm(configDir, { recursive: true, force: true })
+}
 
 let configured: (() => void) | undefined
 let launched = false
