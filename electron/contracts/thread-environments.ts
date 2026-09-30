@@ -23,8 +23,8 @@ export interface ThreadEnvironmentValues {
 
 /** A Thread's values as its agents receive them: its folder's app's. */
 export interface ThreadEnvironment extends Omit<ThreadEnvironmentValues, "usedAt"> {
-  /** The agent's own Thread; every Thread in the app's folder shares its values. */
-  thread: ThreadId
+  /** The agent's own Thread; every Thread in the app's folder shares its values. Absent for an app a person runs from the desk. */
+  thread?: ThreadId
   /** `THREAD_PORT_COUNT` ports from `port`. */
   ports: number
   /** Private to the Thread and kept for its life; outside the checkout, so Git never sees it. */
@@ -46,6 +46,11 @@ export type ThreadRecipeSummary =
 
 /** What starts a setup Session; the guide itself comes from `environment_guide`, so it's the same for every agent. */
 export const ENVIRONMENT_SETUP_PROMPT = `Set this project up so every Thread can run and check its own copy of the app at the same time as the others. Call the environment_guide tool first and follow it.`
+
+/** What starts a repair Session for a recipe Mako can't use. */
+export function environmentRepairPrompt(problem: string): string {
+  return `Mako can't run this project's app because its recipe is broken: ${problem}\n\nFix the recipe so every Thread can run and check its own copy again. Call the environment_guide tool first and follow it.`
+}
 
 export const THREAD_PORT_COUNT = 10
 /** Below both macOS's (49152) and Linux's (32768) ephemeral ranges, so the system never hands these out. */

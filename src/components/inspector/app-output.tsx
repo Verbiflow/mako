@@ -16,6 +16,7 @@ import {
   showAppOutput,
   threadAppDriver,
   useThreadApp,
+  type AppFailure,
   type AppOutputKey,
   type ThreadAppView,
 } from "@/state/thread-app"
@@ -80,9 +81,12 @@ export function AppOutputView({ cwd, outputKey }: { cwd: string; outputKey: AppO
     const fit = new FitAddon()
     terminal.loadAddon(fit)
     terminal.open(element)
-    terminal.write("\x1b[?25l")
-    terminal.write(driver.output(cwd, outputKey))
-    const unsubscribe = driver.subscribeOutput(cwd, outputKey, (chunk) => terminal.write(chunk))
+    const hideCursor = "\x1b[?25l"
+    terminal.write(hideCursor)
+    const unsubscribe = driver.subscribeOutput(cwd, outputKey, (text, reset) => {
+      if (reset) terminal.reset()
+      terminal.write(reset ? hideCursor + text : text)
+    })
     const resize = new ResizeObserver(() => {
       if (element.isConnected && element.clientWidth > 0) fit.fit()
     })
@@ -112,7 +116,7 @@ function FailureBar({ cwd, view, outputKey }: { cwd: string; view: ThreadAppView
   return <Failure key={`${outputKey}:${failure.at}`} cwd={cwd} failure={failure} />
 }
 
-function Failure({ cwd, failure }: { cwd: string; failure: NonNullable<ReturnType<typeof failureOf>> }) {
+function Failure({ cwd, failure }: { cwd: string; failure: ShownFailure }) {
   const [asked, setAsked] = useState(false)
   const [copied, setCopied] = useState(false)
   useEffect(() => {
@@ -137,10 +141,11 @@ function Failure({ cwd, failure }: { cwd: string; failure: NonNullable<ReturnTyp
         className={dockButton("plain")}
         onClick={() => {
           if ("process" in failure) threadAppDriver()?.restart(cwd)
-          else threadAppDriver()?.runCheck(cwd, failure.check.tier)
+          else if ("check" in failure) threadAppDriver()?.runCheck(cwd, failure.check.tier)
+          else threadAppDriver()?.start(cwd)
         }}
       >
-        {"process" in failure ? "Restart" : "Run again"}
+        {"process" in failure ? "Restart" : "check" in failure ? "Run again" : "Try again"}
       </button>
       <button
         type="button"
@@ -162,7 +167,7 @@ function Failure({ cwd, failure }: { cwd: string; failure: NonNullable<ReturnTyp
         disabled={asked}
         className={cn(dockButton("primary"), "disabled:opacity-100 data-asked:bg-fill-selected data-asked:text-foreground")}
         onClick={() => {
-          sendToAgent(cwd, failure)
+          void sendToAgent(cwd, failure)
           setAsked(true)
         }}
       >
@@ -174,7 +179,10 @@ function Failure({ cwd, failure }: { cwd: string; failure: NonNullable<ReturnTyp
   )
 }
 
-function failureOf(view: ThreadAppView | undefined, key: AppOutputKey) {
+/** A failure as the bar words it. */
+type ShownFailure = AppFailure & { at: number | undefined; title: string; detail: string }
+
+function failureOf(view: ThreadAppView | undefined, key: AppOutputKey): ShownFailure | undefined {
   if (view?.kind !== "ready") return undefined
   if (key.startsWith("process:")) {
     const process = view.processes.find((entry) => `process:${entry.name}` === key)
@@ -185,6 +193,11 @@ function failureOf(view: ThreadAppView | undefined, key: AppOutputKey) {
       title: `${process.name} stopped`,
       detail: `with code ${process.exit.code}, ${formatDuration(process.exit.afterMs)} after it started`,
     }
+  }
+  if (key === "prepare") {
+    const exit = view.prepare?.exit
+    if (!view.prepare || !exit) return undefined
+    return { prepare: view.prepare, at: exit.at, title: "Install failed", detail: `with code ${exit.code}, so the app didn't start` }
   }
   if (key.startsWith("check:")) {
     const check = view.checks.find((entry) => `check:${entry.tier}` === key)

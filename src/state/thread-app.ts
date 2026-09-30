@@ -5,71 +5,36 @@ import { getMako } from "@/lib/bridge"
 import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
+import type { AppCheckView, AppOutputKey, AppPrepareView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
 
 /**
- * A Thread's own copy of its project's app, as the strip and the terminal
- * dock show it. Keyed by the Thread's checkout. A driver (the host, or the
- * fixture desk's simulation) supplies the views and carries out the actions;
- * without one, nothing here shows.
+ * A folder's app, as the strip and the terminal dock show it. Keyed by the
+ * checkout. A driver (the host, or the fixture desk's simulation) supplies
+ * the views and carries out the actions; without one, nothing here shows.
  */
 
-export type AppPhase = "stopped" | "preparing" | "starting" | "running" | "crashed" | "waiting"
-
-export interface AppProcessView {
-  name: string
-  state: "starting" | "running" | "exited" | "stopped"
-  port?: number
-  memoryBytes?: number
-  exit?: { code: number | null; afterMs: number; at: number }
-}
-
-export interface AppCheckView {
-  tier: "quick" | "full"
-  command: string
-  state: "never" | "running" | "passed" | "failed"
-  at?: number
-}
-
-export interface SetupStepView {
-  label: string
-  state: "done" | "failed" | "running" | "waiting"
-}
-
-export type ThreadAppView =
-  | { kind: "none"; project: string; root: string }
-  | {
-      kind: "setting-up"
-      project: string
-      thread: { title: string; harness: string }
-      steps: SetupStepView[]
-    }
-  | {
-      kind: "ready"
-      project: string
-      phase: AppPhase
-      host: string
-      port: number
-      startedAt?: number
-      processes: AppProcessView[]
-      checks: AppCheckView[]
-      prepare?: { command: string; reason: string }
-      /** Set while waiting: the other Threads' apps that stopping would free. */
-      room?: { apps: number; bytes: number }
-    }
-
-/** One output the dock can show: the install step, a process, or a check. */
-export type AppOutputKey = "prepare" | `process:${string}` | `check:${"quick" | "full"}`
+export type {
+  AppCheckView,
+  AppOutputKey,
+  AppPhase,
+  AppPrepareView,
+  AppProcessView,
+  ThreadAppView,
+} from "../../electron/contracts/thread-app"
 
 export interface ThreadAppDriver {
   start(cwd: string): void
   stop(cwd: string): void
   restart(cwd: string): void
   runCheck(cwd: string, tier: "quick" | "full"): void
-  /** Stop the other Threads' apps counted in `room`, then start this one. */
+  /** Stop the other apps counted in `room`, then start this one. */
   makeRoom(cwd: string): void
-  openSetupThread(cwd: string): void
-  output(cwd: string, key: AppOutputKey): string
-  subscribeOutput(cwd: string, key: AppOutputKey, listener: (chunk: string) => void): () => void
+  /** Everything the output holds now, to hand to an agent. */
+  readOutput(cwd: string, key: AppOutputKey): Promise<string>
+  /** The output as it grows: first all of it so far, then what's added. `reset` means start over. */
+  subscribeOutput(cwd: string, key: AppOutputKey, listener: (text: string, reset: boolean) => void): () => void
+  /** Keep the app in this folder current while something shows it. */
+  watch?(cwd: string): () => void
 }
 
 interface ThreadAppState {
@@ -135,7 +100,7 @@ export function processKey(name: string): AppOutputKey {
 
 export function outputsOf(view: Extract<ThreadAppView, { kind: "ready" }>): { key: AppOutputKey; label: string; mark: Mark }[] {
   return [
-    ...(view.phase === "preparing" && view.prepare ? [{ key: "prepare" as const, label: "Install", mark: "running" as const }] : []),
+    ...(view.prepare ? [{ key: "prepare" as const, label: "Install", mark: view.prepare.exit ? ("failed" as const) : ("running" as const) }] : []),
     ...view.processes
       .filter((process) => process.state !== "stopped" || process.exit)
       .map((process) => ({ key: processKey(process.name), label: process.name, mark: processMark(process) })),
@@ -181,23 +146,37 @@ export function checkTitle(tier: "quick" | "full"): string {
   return tier === "quick" ? "Quick check" : "Full check"
 }
 
-export type AppFailure = { process: AppProcessView } | { check: AppCheckView }
+export type AppFailure = { process: AppProcessView } | { check: AppCheckView } | { prepare: AppPrepareView }
+
+function failureKey(failed: AppFailure): AppOutputKey {
+  if ("process" in failed) return processKey(failed.process.name)
+  if ("check" in failed) return `check:${failed.check.tier}`
+  return "prepare"
+}
+
+function failureName(failed: AppFailure): string {
+  if ("process" in failed) return failed.process.name
+  if ("check" in failed) return checkTitle(failed.check.tier)
+  return "Install"
+}
 
 /** What went wrong, what it printed, and what to ask for, worded once for every place it goes. */
-function failureReport(cwd: string, failed: AppFailure) {
-  const key = "process" in failed ? processKey(failed.process.name) : (`check:${failed.check.tier}` as const)
-  const output = driver?.output(cwd, key) ?? ""
+async function failureReport(cwd: string, failed: AppFailure) {
+  const output = (await driver?.readOutput(cwd, failureKey(failed)).catch(() => "")) ?? ""
   // Terminal colours and cursor codes mean nothing to the agent.
   // eslint-disable-next-line no-control-regex
   const plain = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "")
   const tail = plain.trimEnd().split("\n").slice(-400).join("\n")
-  const name = "process" in failed ? failed.process.name : checkTitle(failed.check.tier)
+  const name = failureName(failed)
   let what: string
   let ask: string
   if ("process" in failed) {
     const exit = failed.process.exit
     what = `The app's ${name} process stopped with code ${exit?.code ?? "unknown"}${exit ? `, ${formatDuration(exit.afterMs)} after it started` : ""}.`
     ask = "Find out why, fix it, and start the app again to show it stays up."
+  } else if ("prepare" in failed) {
+    what = `Installing before the app starts (\`${failed.prepare.command}\`) failed${failed.prepare.exit ? ` with code ${failed.prepare.exit.code}` : ""}, so the app didn't start.`
+    ask = "Find out why, fix it, and start the app again to show it installs and stays up."
   } else {
     what = `The ${name.toLowerCase()} (\`${failed.check.command}\`) failed.`
     ask = "Fix what it found and run the check again to show it passes."
@@ -220,8 +199,8 @@ function failureReport(cwd: string, failed: AppFailure) {
  * output goes in as an attached file, the composer gets one sentence that
  * names it, and nothing is sent until the person sends it.
  */
-export function sendToAgent(cwd: string, failed: AppFailure): void {
-  const report = failureReport(cwd, failed)
+export async function sendToAgent(cwd: string, failed: AppFailure): Promise<void> {
+  const report = await failureReport(cwd, failed)
   window.dispatchEvent(new CustomEvent("mako:attach", {
     detail: {
       files: [{ file: new File([report.output], report.file, { type: "text/plain" }), contextLabel: report.label, origin: "terminal" }],
@@ -236,7 +215,7 @@ export function sendToAgent(cwd: string, failed: AppFailure): void {
  * elsewhere it is the sentence with the output written out.
  */
 export async function copyAppFailure(cwd: string, failed: AppFailure, { notify = true } = {}): Promise<boolean> {
-  const report = failureReport(cwd, failed)
+  const report = await failureReport(cwd, failed)
   const bytes = new TextEncoder().encode(report.output)
   const staged = await getMako()
     .stageFile(report.file, btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join("")))

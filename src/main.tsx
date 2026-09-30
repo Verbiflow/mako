@@ -18,6 +18,11 @@ async function start() {
     await installWebBridge()
   }
 
+  if (!new URLSearchParams(location.search).has("mock") && window.mako) {
+    const { installHostThreadApp } = await import("./state/thread-app-host.ts")
+    installHostThreadApp()
+  }
+
   const { default: App } = await import("./App.tsx")
   watchForFailures()
 

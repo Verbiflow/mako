@@ -164,6 +164,15 @@ export function installMockBridge() {
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
       Object.fromEntries(folders.map((folder) => [folder, MOCK_HEADS.get(folder) ?? null])),
+    threadApp: async () => {
+      throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
+    },
+    startThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
+    stopThreadApp: async () => {},
+    restartThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
+    checkThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
+    makeRoomForThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
+    threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     removeWorktree: async () => {
       throw new Error("The mock desk has no worktrees to remove.")
     },

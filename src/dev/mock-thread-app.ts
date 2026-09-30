@@ -1,7 +1,8 @@
 // The fixture desk's stand-in for a Thread's app: `?mock&app=<scenario>`.
-// Scenarios: none, setting-up, stopped, installing, running, crashed,
-// check-failed, waiting, and demo (a start that installs and runs, then
-// crashes soon after its log is opened, as when the agent's edit lands).
+// Scenarios: none, invalid, setting-up, stopped, first-run (no ports yet),
+// installing, install-failed, running, crashed, check-failed, waiting, and
+// demo (a start that installs and runs, then crashes soon after its log is
+// opened, as when the agent's edit lands).
 import { toast } from "sonner"
 import {
   installThreadAppDriver,
@@ -75,6 +76,18 @@ const CRASH = [
   "Node.js v24.19.0",
 ]
 
+const INSTALL_FAIL = [
+  dim("$ npm install"),
+  `npm ${red("error")} code ERESOLVE`,
+  `npm ${red("error")} ERESOLVE unable to resolve dependency tree`,
+  `npm ${red("error")}`,
+  `npm ${red("error")} While resolving: mako@0.0.1`,
+  `npm ${red("error")} Found: react@19.2.0`,
+  `npm ${red("error")} Could not resolve dependency:`,
+  `npm ${red("error")} peer react@"^18" from @xterm/addon-webgl@0.18.0`,
+  "",
+]
+
 const QUICK_PASS = [
   dim("$ npm run typecheck && npm run lint"),
   "",
@@ -121,7 +134,7 @@ export function installMockThreadApp(): void {
   const scenario = new URLSearchParams(location.search).get("app")
   if (!scenario) return
   const outputs = new Map<AppOutputKey, string>()
-  const listeners = new Map<AppOutputKey, Set<(chunk: string) => void>>()
+  const listeners = new Map<AppOutputKey, Set<(text: string, reset: boolean) => void>>()
   const timers = new Set<ReturnType<typeof setTimeout>>()
   let installed = scenario !== "demo"
   let crashes = scenario === "demo"
@@ -130,9 +143,12 @@ export function installMockThreadApp(): void {
   const emit = (key: AppOutputKey, lines: string[]) => {
     const chunk = lines.map((line) => `${line}\r\n`).join("")
     outputs.set(key, (outputs.get(key) ?? "") + chunk)
-    for (const listener of listeners.get(key) ?? []) listener(chunk)
+    for (const listener of listeners.get(key) ?? []) listener(chunk, false)
   }
-  const reset = (key: AppOutputKey) => outputs.delete(key)
+  const reset = (key: AppOutputKey) => {
+    outputs.delete(key)
+    for (const listener of listeners.get(key) ?? []) listener("", true)
+  }
   const later = (ms: number, run: () => void) => {
     const timer = setTimeout(() => {
       timers.delete(timer)
@@ -212,10 +228,10 @@ export function installMockThreadApp(): void {
       toast("Stopped the apps of “Migrate billing to v2” and “Old experiment”. Their files and data stay.")
       start()
     },
-    openSetupThread: () => toast("Opens the setup Thread"),
-    output: (_cwd, key) => outputs.get(key) ?? "",
+    readOutput: async (_cwd, key) => outputs.get(key) ?? "",
     subscribeOutput: (_cwd, key, listener) => {
       if (key === "process:web" && crashes && current().phase === "running") later(3500, crash)
+      listener(outputs.get(key) ?? "", true)
       const set = listeners.get(key) ?? new Set()
       set.add(listener)
       listeners.set(key, set)
@@ -228,18 +244,33 @@ export function installMockThreadApp(): void {
     case "none":
       putThreadApp(CWD, { kind: "none", project: "mako", root: CWD })
       break
+    case "invalid":
+      putThreadApp(CWD, {
+        kind: "invalid",
+        project: "mako",
+        root: CWD,
+        message: 'processes.web.port: "{port:12}" is outside the Thread\'s ten ports (0 to 9).',
+      })
+      break
     case "setting-up":
       putThreadApp(CWD, {
         kind: "setting-up",
         project: "mako",
-        thread: { title: "Set up the app", harness: "codex" },
-        steps: [
-          { label: "Wrote .mako/environment.json", state: "done" },
-          { label: "Started the app, and it stayed up", state: "done" },
-          { label: "Quick check", state: "running" },
-          { label: "Full check", state: "waiting" },
-          { label: "Committed on its branch", state: "waiting" },
-        ],
+        root: CWD,
+        thread: { title: "Set up the app", harness: "codex", conversation: "mock-setup" },
+      })
+      break
+    case "first-run": {
+      const fresh = ready("stopped")
+      delete fresh.address
+      putThreadApp(CWD, { ...fresh, checks: fresh.checks.map((check) => ({ tier: check.tier, command: check.command, state: "never" as const })) })
+      break
+    }
+    case "install-failed":
+      emit("prepare", INSTALL_FAIL)
+      putThreadApp(CWD, {
+        ...ready("crashed"),
+        prepare: { command: "npm install", reason: "package-lock.json changed", exit: { code: 1, at: minutes(0) } },
       })
       break
     case "installing":
@@ -277,8 +308,7 @@ export function installMockThreadApp(): void {
       kind: "ready",
       project: "mako",
       phase,
-      host: HOST,
-      port: PORT,
+      address: { host: HOST, port: PORT },
       processes: [{ name: "web", state: "stopped", port: PORT }],
       checks: [
         { tier: "quick", command: "npm run typecheck && npm run lint", state: scenario === "demo" ? "never" : "passed", at: minutes(4) },

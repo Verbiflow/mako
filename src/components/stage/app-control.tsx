@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react"
-import { ENVIRONMENT_SETUP_PROMPT } from "../../../electron/contracts/thread-environments"
+import { ENVIRONMENT_SETUP_PROMPT, environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
 import { cn } from "@/lib/utils"
@@ -22,6 +22,7 @@ import {
   threadAppDriver,
   useThreadApp,
   type AppCheckView,
+  type AppFailure,
   type AppProcessView,
   type Mark,
   type ThreadAppView,
@@ -73,6 +74,7 @@ function useNow(): number {
 export function AppControl({ cwd }: { cwd: string | undefined }) {
   const view = useThreadApp((state) => (cwd ? state.byCwd[cwd] : undefined))
   const hidden = useThreadApp((state) => view?.kind === "none" && state.hidden.includes(view.root))
+  useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
   if (!cwd || !view || hidden) return null
   const state = view.kind === "ready" ? view.phase : view.kind
   if (view.kind === "ready" && view.phase === "stopped") {
@@ -97,8 +99,10 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
       <MenuContent align="end" className="w-80" onCloseAutoFocus={(event) => event.preventDefault()}>
         {view.kind === "none" ? (
           <NoneMenu view={view} />
+        ) : view.kind === "invalid" ? (
+          <InvalidMenu view={view} />
         ) : view.kind === "setting-up" ? (
-          <SettingUpMenu cwd={cwd} view={view} />
+          <SettingUpMenu view={view} />
         ) : (
           <ReadyMenu cwd={cwd} view={view} />
         )}
@@ -108,7 +112,7 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
 }
 
 function triggerTone(view: ThreadAppView): string {
-  if (view.kind === "ready" && view.phase === "crashed") return "text-negative"
+  if (view.kind === "invalid" || (view.kind === "ready" && view.phase === "crashed")) return "text-negative"
   if (view.kind === "ready" && view.phase === "waiting") return "text-caution"
   if (view.kind === "ready" && view.phase === "running") return "text-muted-foreground hover:text-foreground data-[state=open]:text-foreground"
   return "text-faint hover:text-muted-foreground data-[state=open]:text-foreground"
@@ -126,6 +130,7 @@ function TriggerLabel({ view }: { view: ThreadAppView }) {
 /** The words on the control, and whether they name work still under way. */
 function triggerParts(view: ThreadAppView): [string, boolean] {
   if (view.kind === "none") return ["Run app", false]
+  if (view.kind === "invalid") return ["Can't run app", false]
   if (view.kind === "setting-up") return ["Setting up", true]
   switch (view.phase) {
     case "preparing":
@@ -135,7 +140,7 @@ function triggerParts(view: ThreadAppView): [string, boolean] {
     case "running":
       return ["App running", false]
     case "crashed":
-      return ["App crashed", false]
+      return [view.prepare?.exit ? "Install failed" : "App crashed", false]
     case "waiting":
       return ["Waiting for memory", false]
     default:
@@ -143,12 +148,12 @@ function triggerParts(view: ThreadAppView): [string, boolean] {
   }
 }
 
-function address(view: Ready): string {
-  return `http://${view.host}:${view.port}/`
+function address({ host, port }: { host: string; port: number }): string {
+  return `http://${host}:${port}/`
 }
 
-function copyAddress(view: Ready): void {
-  void navigator.clipboard.writeText(address(view)).then(
+function copyAddress(at: { host: string; port: number }): void {
+  void navigator.clipboard.writeText(address(at)).then(
     () => toast("Address copied"),
     () => toast.error("The address wasn't copied")
   )
@@ -175,7 +180,7 @@ function NoneMenu({ view }: { view: Extract<ThreadAppView, { kind: "none" }> }) 
   return (
     <>
       <Head title="Not set up">Mako doesn't know how to run {view.project} yet.</Head>
-      <Action data-app-action="set-up" onSelect={() => void setUp(view.root)}>
+      <Action data-app-action="set-up" onSelect={() => void newThreadWith(view.root, ENVIRONMENT_SETUP_PROMPT)}>
         Set up in a new Thread
       </Action>
       <MenuSeparator />
@@ -186,54 +191,67 @@ function NoneMenu({ view }: { view: Extract<ThreadAppView, { kind: "none" }> }) 
   )
 }
 
-/** A new Thread in the project with the setup prompt written; the person picks the agent and sends it. */
-async function setUp(root: string): Promise<void> {
+/** A new Thread in the project with the request written; the person picks the agent and sends it. */
+async function newThreadWith(root: string, text: string): Promise<void> {
   if (!(await actions.newConversationIn(root))) return
-  requestAnimationFrame(() =>
-    window.dispatchEvent(new CustomEvent("mako:compose", { detail: { text: ENVIRONMENT_SETUP_PROMPT } }))
+  requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("mako:compose", { detail: { text } })))
+}
+
+function InvalidMenu({ view }: { view: Extract<ThreadAppView, { kind: "invalid" }> }) {
+  return (
+    <>
+      <Head title="Can't run the app">
+        <span className="line-clamp-4">Mako's recipe for {view.project} is broken: {view.message}</span>
+      </Head>
+      <MenuSeparator />
+      <Action data-app-action="repair" onSelect={() => void newThreadWith(view.root, environmentRepairPrompt(view.message))}>
+        Fix it in a new Thread
+      </Action>
+      <Action data-app-action="copy-problem" onSelect={() => void actions.copy(environmentRepairPrompt(view.message))}>
+        Copy to paste elsewhere
+      </Action>
+    </>
   )
 }
 
-function SettingUpMenu({ cwd, view }: { cwd: string; view: Extract<ThreadAppView, { kind: "setting-up" }> }) {
+function SettingUpMenu({ view }: { view: Extract<ThreadAppView, { kind: "setting-up" }> }) {
   return (
     <>
       <Head title="Setting up">
-        Every Thread of {view.project} gets the app once “{view.thread.title}” is merged.
+        “{view.thread.title}” is working out how to run {view.project}. Every Thread of it gets the app once that's saved.
       </Head>
       <MenuSeparator />
-      <div className="py-0.5">
-        {view.steps.map((step) => (
-          <div key={step.label} className={cn("flex h-8 items-center gap-2 px-2", step.state === "waiting" ? "text-faint" : "text-foreground")}>
-            <AppMark mark={step.state === "done" ? "done" : step.state} />
-            <span className="min-w-0 flex-1 truncate">{step.label}</span>
-          </div>
-        ))}
-      </div>
-      <MenuSeparator />
-      <Action onSelect={() => threadAppDriver()?.openSetupThread(cwd)}>
+      <Action data-app-action="open-setup" onSelect={() => void openConversation(view.thread.conversation)}>
         Open “{view.thread.title}”
       </Action>
     </>
   )
 }
 
+async function openConversation(id: string): Promise<void> {
+  const { acp } = await import("@/state/acp")
+  if (!acp.activate(id)) toast("That Thread isn't open in this window")
+}
+
 function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
   const now = useNow()
   const driver = threadAppDriver()
   const crashed = view.processes.find((process) => process.exit && process.exit.code !== 0)
+  const failure: AppFailure | undefined = crashed ? { process: crashed } : view.prepare?.exit ? { prepare: view.prepare } : undefined
+  const at = view.address
   return (
     <>
       <ReadyHead view={view} crashed={crashed} now={now} />
-      {view.phase === "running" ? (
+      {view.phase === "running" && at ? (
         <MenuItem
           data-app-action="copy-address"
           title="Copy the address"
           className="group mb-1 min-h-7 bg-raised/70 text-label tabular-nums data-[highlighted]:bg-fill-selected"
-          onSelect={() => copyAddress(view)}
+          onSelect={() => copyAddress(at)}
         >
           <span className="min-w-0 flex-1 truncate">
-            <span className="text-foreground">{view.host.split(".")[0]}</span>
-            <span className="text-faint">.{view.host.split(".").slice(1).join(".")}:{view.port}</span>
+            <span className="text-foreground">{at.host.split(".")[0]}</span>
+            <span className="text-faint">.{at.host.split(".").slice(1).join(".")}:{at.port}</span>
           </span>
           <span className="shrink-0 text-faint transition-colors group-data-[highlighted]:text-foreground">Copy</span>
         </MenuItem>
@@ -242,9 +260,11 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
       <MenuSeparator />
       {view.phase === "running" ? (
         <>
-          <Action data-app-action="open" onSelect={() => void desktop.openUrl(address(view))}>
-            Open in browser
-          </Action>
+          {at ? (
+            <Action data-app-action="open" onSelect={() => void desktop.openUrl(address(at))}>
+              Open in browser
+            </Action>
+          ) : null}
           <Action data-app-action="restart" onSelect={() => driver?.restart(cwd)}>
             Restart
           </Action>
@@ -252,19 +272,19 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
             Stop
           </Action>
         </>
-      ) : view.phase === "crashed" && crashed ? (
+      ) : view.phase === "crashed" && failure ? (
         <>
-          <Action data-app-action="send-to-agent" onSelect={() => sendToAgent(cwd, { process: crashed })}>
+          <Action data-app-action="send-to-agent" onSelect={() => void sendToAgent(cwd, failure)}>
             Ask the agent to fix it
           </Action>
-          <Action data-app-action="copy-failure" onSelect={() => void copyAppFailure(cwd, { process: crashed })}>
+          <Action data-app-action="copy-failure" onSelect={() => void copyAppFailure(cwd, failure)}>
             Copy to paste elsewhere
           </Action>
-          <Action data-app-action="show-output" onSelect={() => showAppOutput(cwd, processKey(crashed.name))}>
+          <Action data-app-action="show-output" onSelect={() => showAppOutput(cwd, crashed ? processKey(crashed.name) : "prepare")}>
             Show what it printed
           </Action>
-          <Action data-app-action="restart" onSelect={() => driver?.restart(cwd)}>
-            Restart
+          <Action data-app-action="restart" onSelect={() => (crashed ? driver?.restart(cwd) : driver?.start(cwd))}>
+            {crashed ? "Restart" : "Try again"}
           </Action>
         </>
       ) : view.phase === "waiting" && view.room ? (
@@ -290,6 +310,8 @@ function ReadyHead({ view, crashed, now }: { view: Ready; crashed?: AppProcessVi
     case "running":
       return <Head title="Running" aside={`started ${formatAgo(view.startedAt ?? now, now)}`} />
     case "crashed":
+      if (!crashed && view.prepare?.exit)
+        return <Head title="Install failed">{`${view.prepare.command} stopped with code ${view.prepare.exit.code}, so the app didn't start.`}</Head>
       return (
         <Head title="Crashed">
           {crashed?.exit
@@ -301,7 +323,7 @@ function ReadyHead({ view, crashed, now }: { view: Ready; crashed?: AppProcessVi
       return (
         <Head title="Waiting for memory">
           {view.room
-            ? `Your Mac is short on memory. ${view.room.apps === 1 ? "Another Thread's app is" : `${view.room.apps} other Threads' apps are`} using ${formatBytes(view.room.bytes)}.`
+            ? `Your Mac is short on memory. ${view.room.apps === 1 ? "Another app is" : `${view.room.apps} other apps are`} using ${formatBytes(view.room.bytes)}.`
             : "Your Mac is short on memory."}
         </Head>
       )
@@ -317,8 +339,14 @@ function Rows({ cwd, view, now }: { cwd: string; view: Ready; now: number }) {
   return (
     <>
       <MenuSeparator />
-      {view.phase === "preparing" && view.prepare ? (
-        <Row mark="running" title="Install" detail={view.prepare.command} onSelect={() => showAppOutput(cwd, "prepare")} />
+      {view.prepare ? (
+        <Row
+          mark={view.prepare.exit ? "failed" : "running"}
+          title="Install"
+          detail={view.prepare.exit ? `Exited with ${view.prepare.exit.code}` : view.prepare.command}
+          hint="Show output"
+          onSelect={() => showAppOutput(cwd, "prepare")}
+        />
       ) : null}
       {view.processes.map((process) => (
         <ProcessRow key={process.name} process={process} onSelect={() => showAppOutput(cwd, processKey(process.name))} />

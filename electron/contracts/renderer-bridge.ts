@@ -11,6 +11,7 @@ import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./threa
 import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
+import type { AppActionOutcome, AppOutputChunk, AppOutputCursor, AppOutputKey, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
@@ -180,6 +181,14 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
     worktrees: () => invokeTrustedHost<ThreadWorktrees>("mako:worktrees"),
     checkoutHeads: (folders: string[]) => invokeTrustedHost<CheckoutHeads>("mako:checkout-heads", folders),
+    threadApp: (cwd: string) => invokeTrustedHost<ThreadAppView>("mako:thread-app", cwd),
+    startThreadApp: (cwd: string) => invokeTrustedHost<AppActionOutcome>("mako:thread-app-start", cwd),
+    stopThreadApp: (cwd: string) => invokeTrustedHost<void>("mako:thread-app-stop", cwd),
+    restartThreadApp: (cwd: string) => invokeTrustedHost<AppActionOutcome>("mako:thread-app-restart", cwd),
+    checkThreadApp: (cwd: string, tier: "quick" | "full") => invokeTrustedHost<AppActionOutcome>("mako:thread-app-check", cwd, tier),
+    makeRoomForThreadApp: (cwd: string) => invokeTrustedHost<AppActionOutcome>("mako:thread-app-make-room", cwd),
+    threadAppOutput: (cwd: string, key: AppOutputKey, cursor?: AppOutputCursor) =>
+      invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     chatFolders: (paths: string[]) => invokeTrustedHost<ChatFolders>("mako:chat-folders", paths),
     removeWorktree: (path: string) => invokeTrustedHost<ThreadWorktrees>("mako:worktree-remove", path),
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),

@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -390,6 +390,88 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const failedPrepare = await tools.start(conversation)
   assert.match(failedPrepare, /Preparing this checkout failed \(crashed \(exit 1\)\), so nothing started\. It runs again on the next start\.\nLast lines of its log:\nresolving\nnpm ERR! missing peer/)
   assert.equal(await portListening(toolBase), false)
+
+  // The desk: the same app by folder, for the strip and the terminal dock.
+  const deskFolder = async (cwd: string, claim: boolean) => {
+    const found = await environments.forFolder(cwd, claim)
+    return found.environment ? { ...found, environment: { ...found.environment, port: toolBase } } : found
+  }
+  const setupConversation = randomUUID()
+  store.registerJournal({ conversationId: setupConversation, createdAt: Date.now(), bindings: [], harness: "codex" }, service)
+  const bare = realpathSync(mkdtempSync(join(root, "bare-")))
+  let setupLive = true
+  const deskTools = environmentTools({
+    cwd: (id) => id === setupConversation ? bare : undefined,
+    environment,
+    launchedWith: () => undefined,
+    conversation: (id) => id === setupConversation && setupLive ? { title: "Set up the app", harness: "codex" } : undefined,
+    folder: deskFolder,
+    processes,
+    recipesRoot: projectRecipes,
+    settleMs: settle,
+  })
+  const { desk } = deskTools
+  const failedView = await desk.view(project)
+  assert.equal(failedView.kind === "ready" && failedView.phase, "crashed", "a failed install shows as the app failing")
+  assert.deepEqual(failedView.kind === "ready" && failedView.prepare && [failedView.prepare.reason, failedView.prepare.exit?.code], ["the recipe's install step changed", 1])
+  assert.match((await desk.output(project, "prepare")).text, /resolving\nnpm ERR! missing peer/)
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
+  assert.deepEqual(await desk.start(project), { problems: [] })
+  const up = await desk.view(project)
+  assert.equal(up.kind === "ready" && up.phase, "running", "a start after the recipe's repair leaves the old failure behind")
+  assert.deepEqual(up.kind === "ready" && up.address, { host: launched!.host, port: toolBase }, "the desk shows the folder's own address, shared with its agents")
+  assert.deepEqual(up.kind === "ready" && up.processes.map((entry) => [entry.name, entry.state, entry.port]), [["web", "running", toolBase], ["api", "running", toolBase + 1]])
+  assert.equal(up.kind === "ready" && up.prepare, undefined)
+  const firstRead = await desk.output(project, "process:web")
+  assert.equal(firstRead.reset, true)
+  assert.match(firstRead.text, new RegExp(`listening on ${toolBase}`))
+  assert.deepEqual(await desk.output(project, "process:web", firstRead.cursor), { text: "", cursor: firstRead.cursor, reset: false }, "a read from where the last one ended has only what's new")
+  assert.deepEqual(await desk.restart(project), { problems: [] })
+  const afterRestart = await desk.output(project, "process:web", firstRead.cursor)
+  assert.equal(afterRestart.reset, true, "a new run's output starts over")
+  assert.match(afterRestart.text, /^listening on/)
+  assert.deepEqual(await desk.check(project, "quick"), { problems: [] })
+  const checkedView = await desk.view(project)
+  assert.deepEqual(checkedView.kind === "ready" && checkedView.checks.map((check) => [check.tier, check.state]), [["quick", "passed"], ["full", "passed"]], "the full check the agent ran earlier shows too")
+  assert.match((await desk.output(project, "check:quick")).text, /quick ok/)
+  await desk.stop(project)
+  const stoppedView = await desk.view(project)
+  assert.equal(stoppedView.kind === "ready" && stoppedView.phase, "stopped")
+  assert.equal(stoppedView.kind === "ready" && stoppedView.checks[0]?.state, "passed", "stopping keeps what the checks found")
+  assert.equal(await portListening(toolBase), false)
+  const fresh = realpathSync(mkdtempSync(join(root, "fresh-")))
+  mkdirSync(join(fresh, ".mako"))
+  writeFileSync(join(fresh, RECIPE_PATH), JSON.stringify(recipe))
+  const freshView = await desk.view(fresh)
+  assert.equal(freshView.kind === "ready" && freshView.phase, "stopped")
+  assert.equal(freshView.kind === "ready" && freshView.address, undefined, "an app that never ran has no address yet")
+  assert.equal(store.environment(folderApp(fresh)), undefined, "looking claims no ports")
+  const broken = realpathSync(mkdtempSync(join(root, "broken-")))
+  mkdirSync(join(broken, ".mako"))
+  writeFileSync(join(broken, RECIPE_PATH), "{ not json")
+  const brokenView = await desk.view(broken)
+  assert.equal(brokenView.kind, "invalid")
+  assert.match(brokenView.kind === "invalid" ? brokenView.message : "", /not JSON/)
+  assert.deepEqual(await desk.view(bare), { kind: "none", project: basename(bare), root: bare })
+  await deskTools.guide(setupConversation)
+  assert.deepEqual(await desk.view(bare), { kind: "setting-up", project: basename(bare), root: bare, thread: { title: "Set up the app", harness: "codex", conversation: setupConversation } }, "reading the guide marks the project as being set up")
+  setupLive = false
+  assert.equal((await desk.view(bare)).kind, "none", "until that conversation ends")
+  setupLive = true
+  await deskTools.guide(setupConversation)
+  writeFileSync(join(bare, "server.mjs"), "")
+  await deskTools.save(setupConversation, RecipeSchema.parse({ processes: { web: { command: "node server.mjs", port: "{port}" } } }))
+  assert.equal((await desk.view(bare)).kind, "ready", "or it saves the recipe")
+  // An install stopped before it finished runs again on the next start instead of reading as failed.
+  const install = `echo installed >> ${installs}`
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, prepare: [{ command: install, inputs: ["package-lock.json"] }] }))
+  const interrupted = await processes.prepared(realpathSync(project))
+  await processes.savePrepared(realpathSync(project), { done: interrupted.done, pending: { [install]: "stopped mid-way" } })
+  const installsBefore = count()
+  assert.deepEqual(await desk.start(project), { problems: [] })
+  assert.equal(count(), installsBefore + 1)
+  assert.equal((await desk.view(project)).kind === "ready" && (await desk.view(project)).phase, "running")
+  await desk.stop(project)
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
 
   // Room: under memory pressure another Thread's quiet app goes first; a Mac that stays critical makes the start wait.
@@ -413,6 +495,17 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   await processes.touch(quietThread)
   assert.match(await critical.start(conversation), /^Waiting for room: this Mac is critically short of memory, with these apps running: \S+ \(\d+ MB, used 0 min ago\)\. Nothing was started\./)
   assert.equal(await portListening(toolBase), false)
+  const criticalDesk = environmentTools({ cwd: () => undefined, environment, launchedWith: () => undefined, folder: deskFolder, processes, settleMs: settle, pressure: async () => "critical" }).desk
+  assert.deepEqual(await criticalDesk.start(project), { problems: [] })
+  const waitingView = await criticalDesk.view(project)
+  assert.equal(waitingView.kind === "ready" && waitingView.phase, "waiting", "the desk shows the start waiting for memory")
+  assert.equal(waitingView.kind === "ready" && waitingView.room?.apps, 1)
+  assert.ok(waitingView.kind === "ready" && (waitingView.room?.bytes ?? 0) > 0)
+  assert.deepEqual(await criticalDesk.makeRoom(project), { problems: [] })
+  assert.equal((await processes.active()).some((entry) => entry.app === quietThread), false, "making room stops the other apps")
+  assert.equal((await criticalDesk.view(project)).kind === "ready" && (await criticalDesk.view(project)).phase, "running", "and starts this one whatever the memory")
+  await criticalDesk.stop(project)
+  await processes.start(quietThread, [{ kind: "process", name: "busy", command: "sleep 300", cwd: root, env: process.env }])
 
   // After a long quiet an app stops by itself; its files and data stay.
   writeFileSync(join(records, quietThread, "used"), String(Date.now() - 7 * 60 * 60 * 1000))
@@ -459,7 +552,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: one app per folder, shared by the Threads in it; recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, waiting for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })

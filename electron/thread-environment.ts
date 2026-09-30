@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { connect } from "node:net"
 import { basename, join } from "node:path"
-import type { ThreadId } from "./contracts/thread-identity.js"
+import { ThreadIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { worktreeSlug } from "./contracts/thread-worktrees.js"
 import {
   AppKeySchema,
@@ -16,7 +16,7 @@ import {
   type ThreadRecipeProcess,
 } from "./contracts/thread-environments.js"
 import type { ThreadStore } from "./thread-store.js"
-import { checkoutOf, processPort, readRecipe, recipeValues } from "./thread-recipe.js"
+import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "./thread-recipe.js"
 
 const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
@@ -35,7 +35,7 @@ export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: Thr
   for (const name of env[RECIPE_NAMES]?.split(",") ?? []) if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) delete env[name]
   for (const name of VARIABLES) delete env[name]
   if (!environment) return
-  env.MAKO_THREAD_ID = environment.thread
+  if (environment.thread) env.MAKO_THREAD_ID = environment.thread
   env.MAKO_THREAD_HOST = environment.host
   env.MAKO_THREAD_PORT = String(environment.port)
   env.MAKO_THREAD_PORTS = String(environment.ports)
@@ -158,17 +158,40 @@ export class ThreadEnvironments {
    * folder's own, shared by every Thread in it. A Thread with no folder has
    * one of its own. `name` names its host.
    */
-  appFor(thread: ThreadId, checkout: string | undefined): AppOwner {
-    if (!checkout) return { app: AppKeySchema.parse(thread) }
+  appFor(thread: ThreadId | undefined, checkout: string | undefined): AppOwner {
+    if (!checkout) {
+      if (!thread) throw new Error("An app belongs to a folder or a Thread")
+      return { app: AppKeySchema.parse(thread) }
+    }
     const worktree = this.dependencies.store.worktrees().find((candidate) => candidate.path === checkout)
     if (worktree) return { app: AppKeySchema.parse(worktree.thread), name: basename(worktree.path) }
     return { app: folderApp(checkout), name: basename(checkout) }
   }
 
   /** What an app holds on this device, if it has claimed anything, without claiming or marking it used. */
-  held(app: AppKey): Omit<ThreadEnvironment, "thread"> | undefined {
+  held(app: AppKey): ThreadEnvironment | undefined {
     const values = this.dependencies.store.environment(app)
     return values && { app, host: values.host, port: values.port, ports: THREAD_PORT_COUNT, dataDir: this.dataDir(app) }
+  }
+
+  /**
+   * The app in the folder at `cwd`, for a person at the desk rather than an
+   * agent: whose it is, and its values. Only `claim` gives an app that has
+   * never run its ports; a look at the strip claims nothing.
+   */
+  async forFolder(cwd: string, claim: boolean): Promise<FolderApp> {
+    const checkout = await checkoutOf(cwd)
+    const owner = this.appFor(undefined, checkout)
+    const root = await projectRoot(checkout)
+    const found: FolderApp = { app: owner.app, checkout, project: basename(root), root }
+    const values = claim
+      ? this.dependencies.store.useEnvironment(owner.app) ?? await this.claim(owner.app, owner.name ?? basename(checkout))
+      : this.dependencies.store.environment(owner.app)
+    if (!values) return found
+    found.environment = { app: owner.app, host: values.host, port: values.port, ports: THREAD_PORT_COUNT, dataDir: this.dataDir(owner.app) }
+    if (ThreadIdSchema.safeParse(owner.app).success) found.environment.thread = ThreadIdSchema.parse(owner.app)
+    if (claim) await mkdir(found.environment.dataDir, { recursive: true, mode: 0o700 })
+    return found
   }
 
   /** Where an app's own data lives; removing its worktree deletes it. */
@@ -223,6 +246,16 @@ export class ThreadEnvironments {
     const ports = Array.from({ length: THREAD_PORT_COUNT }, (_, index) => base + index)
     return (await Promise.all(ports.map((port) => this.listening(port)))).some(Boolean)
   }
+}
+
+/** A folder's app as the desk sees it: whose it is, which project, and its values once it has any. */
+export interface FolderApp {
+  app: AppKey
+  checkout: string
+  /** The project's name, and its main checkout. */
+  project: string
+  root: string
+  environment?: ThreadEnvironment
 }
 
 /** Whose app a checkout runs, and the name its host is given. */

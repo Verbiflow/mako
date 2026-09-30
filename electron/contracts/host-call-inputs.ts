@@ -709,6 +709,20 @@ export const hostCallInputs = {
   "mako:terminal-resize": z.tuple([z.string(), z.number(), z.number()]),
   "mako:terminal-write": z.tuple([z.string(), z.string()]),
   "mako:thread-abort-run": z.tuple([z.string()]),
+  "mako:thread-app": z.tuple([z.string().min(1)]),
+  "mako:thread-app-check": z.tuple([
+    z.string().min(1),
+    z.union([z.literal("full"), z.literal("quick")]),
+  ]),
+  "mako:thread-app-make-room": z.tuple([z.string().min(1)]),
+  "mako:thread-app-output": z.tuple([
+    z.string().min(1),
+    z.string(),
+    z.object({ file: z.string(), offset: z.number().int().nonnegative() }).optional(),
+  ]),
+  "mako:thread-app-restart": z.tuple([z.string().min(1)]),
+  "mako:thread-app-start": z.tuple([z.string().min(1)]),
+  "mako:thread-app-stop": z.tuple([z.string().min(1)]),
   "mako:thread-archive": z.tuple([
     z.object({
       id: z.string(),

@@ -242,6 +242,33 @@ export class ThreadProcesses {
     return text.split("\n").slice(-lines - 1).join("\n")
   }
 
+  /**
+   * What a run wrote since `cursor`, or its last `maxBytes` without one. A
+   * new run writes a new file, and a trimmed log starts over, so either
+   * comes back as a reset. Never splits a character.
+   */
+  async readLog(app: AppKey, key: string, cursor?: { file: string; offset: number }, maxBytes = 256 * 1024): Promise<{ text: string; cursor: { file: string; offset: number }; reset: boolean }> {
+    const path = this.file(app, key, "log")
+    const info = await stat(path).catch(() => undefined)
+    if (!info) return { text: "", cursor: { file: "", offset: 0 }, reset: Boolean(cursor?.file) }
+    const file = `${info.ino}:${Math.round(info.birthtimeMs)}`
+    const same = cursor?.file === file && cursor.offset <= info.size
+    const from = same ? cursor.offset : Math.max(0, info.size - maxBytes)
+    const length = Math.min(info.size - from, maxBytes)
+    if (!length) return { text: "", cursor: { file, offset: from }, reset: !same }
+    const handle = await open(path, "r")
+    try {
+      const buffer = Buffer.alloc(length)
+      const { bytesRead } = await handle.read(buffer, 0, length, from)
+      let skip = 0
+      if (!same && from > 0) while (skip < bytesRead && (buffer[skip]! & 0xc0) === 0x80) skip += 1
+      const whole = completeCharacters(buffer.subarray(skip, bytesRead))
+      return { text: whole.toString("utf8"), cursor: { file, offset: from + skip + whole.length }, reset: !same }
+    } finally {
+      await handle.close()
+    }
+  }
+
   /** Who listens on a port: one of an app's runs, or a process Mako didn't start. */
   async portOwner(port: number): Promise<PortOwner | undefined> {
     const listeners = await listeningPids(port)
@@ -577,6 +604,17 @@ async function readTail(path: string, bytes: number): Promise<string> {
   } finally {
     await file.close()
   }
+}
+
+/** Up to the last whole UTF-8 character: a read can end partway through one, and the next read picks it up. */
+function completeCharacters(bytes: Buffer): Buffer {
+  for (let back = 1; back <= Math.min(3, bytes.length); back += 1) {
+    const byte = bytes[bytes.length - back]!
+    if ((byte & 0xc0) === 0x80) continue
+    const size = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1
+    return size > back ? bytes.subarray(0, bytes.length - back) : bytes
+  }
+  return bytes
 }
 
 function sleep(ms: number): Promise<void> {

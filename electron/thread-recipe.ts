@@ -92,6 +92,12 @@ export async function checkoutOf(cwd: string): Promise<string> {
   return realpath(top).catch(() => top)
 }
 
+/** The project a checkout belongs to: its main checkout, which every worktree of it shares. */
+export async function projectRoot(checkout: string): Promise<string> {
+  const common = await git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
+  return common ? realpath(dirname(common)).catch(() => dirname(common)) : checkout
+}
+
 /**
  * Where Mako keeps a project's recipe: one file for the main checkout and
  * all its worktrees, so saving it reaches every Thread and branch at once.

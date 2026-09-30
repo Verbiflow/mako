@@ -77,6 +77,7 @@ import { moveablePlace, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
+import { installThreadAppIpc } from "./ipc/thread-app.js"
 import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
 import { nativeStopToken } from "./drivers.js"
 import type { LiveSnapshot, LiveStartOptions } from "./shared.js"
@@ -2196,6 +2197,19 @@ app.whenReady().then(async () => {
     failed: (_id, message) => emit({ type: "notice", level: "error", message }),
   })
   workspaceMoves = moves
+  const appTools = threadEnvironments && threadProcesses ? environmentTools({
+    cwd: (id) => liveConversations.snapshot(id)?.session.cwd,
+    environment: (id, cwd) => threadEnvironments.forConversation(id, liveConversations.snapshot(id)?.session.title, cwd),
+    launchedWith: (id) => threadEnvironments.launchedWith(id),
+    conversation: (id) => {
+      const session = liveConversations.snapshot(id)?.session
+      return session && { title: session.title || "Untitled conversation", harness: session.harness }
+    },
+    folder: (cwd, claim) => threadEnvironments.forFolder(cwd, claim),
+    processes: threadProcesses,
+    recipesRoot: threadRecipes,
+    whose: whoseApp,
+  }) : undefined
   conversationMcp = await startConversationMcp(
     liveConversations,
     (bindingId, operation, signal) => controlSessions.request(bindingId, operation, signal),
@@ -2205,14 +2219,7 @@ app.whenReady().then(async () => {
       moves,
       removed: () => emit({ type: "worktrees-changed" }),
     }),
-    threadEnvironments && threadProcesses ? environmentTools({
-      cwd: (id) => liveConversations.snapshot(id)?.session.cwd,
-      environment: (id, cwd) => threadEnvironments.forConversation(id, liveConversations.snapshot(id)?.session.title, cwd),
-      launchedWith: (id) => threadEnvironments.launchedWith(id),
-      processes: threadProcesses,
-      recipesRoot: threadRecipes,
-      whose: whoseApp,
-    }) : undefined
+    appTools
   )
   trace("conversation tools ready")
   controlService = await startControlService(
@@ -2250,6 +2257,7 @@ app.whenReady().then(async () => {
   // Spares a project stopped wanting go after a day even while the host keeps running.
   setInterval(tidyWorktrees, 60 * 60_000).unref()
   installCheckoutHeadsIpc(checkoutHeads)
+  if (appTools) installThreadAppIpc(appTools.desk)
   application = installApplicationIpc({
     live: liveConversations,
     native: nativeRequests,
