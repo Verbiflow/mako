@@ -166,7 +166,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const withRecipe = async (conversationId: string): Promise<Context & { recipe: Recipe }> => ready(await context(conversationId))
   const ready = ({ read, ...rest }: Context & { read: Read }): Context & { recipe: Recipe } => {
     if (read.kind === "none")
-      throw new Error("This project has no recipe yet, so Mako has nothing to start or check. Run what you need yourself on this Thread's ports. environment_guide says how to set one up, which gives every Thread this; do that when the user asks.")
+      throw new Error("This project has no recipe yet, so Mako has nothing to start or check. Run what you need yourself on this Thread's ports. recipe_guide says how to set one up, which gives every Thread this; do that when the user asks.")
     if (read.kind === "invalid") throw new Error(`The project's recipe is broken, so nothing can start: ${read.message}`)
     return { ...rest, recipe: read.recipe }
   }
@@ -212,7 +212,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const settled = async (): Promise<Unprepared | undefined> => {
       const status = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")
       const record = await deps.processes.prepared(checkout)
-      if (status?.state.kind === "running") return { shown: true, message: `Preparing this checkout (${status.command}); it keeps going. Call again to wait for it, or environment_logs with process "prepare" to watch it.` }
+      if (status?.state.kind === "running") return { shown: true, message: `Preparing this checkout (${status.command}); it keeps going. Call again to wait for it, or app_logs with process "prepare" to watch it.` }
       if (!record.pending) return undefined
       if (!status) {
         // Stopped before it finished, and its run forgotten: it runs again now.
@@ -257,7 +257,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       .map((entry) => `${deps.whose?.(entry.app) || entry.app} (${bytes(entry.memoryBytes)}, used ${minutes(now - entry.usedAt)} ago)`)
     return {
       notes,
-      refused: `Waiting in line for memory: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing has started yet; Mako starts it by itself once there's room, and environment_status shows when. If it can't wait, ask the user whether to stop one of those apps; environment_stop takes it out of the line.`,
+      refused: `Waiting in line for memory: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing has started yet; Mako starts it by itself once there's room, and app_status shows when. If it can't wait, ask the user whether to stop one of those apps; app_stop takes it out of the line.`,
     }
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
@@ -329,7 +329,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       ...outcome.notes,
       ...outcome.lines,
       `App: http://${current.environment.host}:${current.environment.port}`,
-      outcome.stillStarting ? `Still starting after ${Math.round(settleMs / 1000)} seconds; call environment_status to see when it's up, or environment_logs to see why not.` : undefined,
+      outcome.stillStarting ? `Still starting after ${Math.round(settleMs / 1000)} seconds; call app_status to see when it's up, or app_logs to see why not.` : undefined,
     ].filter(Boolean).join("\n")
   }
   const again = (conversationId: string, names?: string[]) => async (): Promise<StartOutcome> => {
@@ -375,7 +375,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     await deps.processes.start(app, [{ kind: "check", name: tier, command, cwd: current.checkout, env: env(current, current.recipe) }])
     const [status] = await deps.processes.settle(app, [key], settleMs)
     const result = checkResult(status)
-    if (status?.state.kind === "running") return `The ${tier} check (${command}) is still running after ${Math.round(settleMs / 1000)} seconds. Call environment_check with the same tier to keep waiting for this run, or environment_logs with check "${tier}" to watch it.`
+    if (status?.state.kind === "running") return `The ${tier} check (${command}) is still running after ${Math.round(settleMs / 1000)} seconds. Call app_check with the same tier to keep waiting for this run, or app_logs with check "${tier}" to watch it.`
     const output = await deps.processes.logs(app, key, status?.state.kind === "exited" && status.state.code === 0 ? 15 : 60).catch(() => "")
     return `The ${tier} check (${command}) ${result}.\n${output}`
   }
@@ -527,7 +527,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
             return summary(name, spec?.command ?? "", port, status)
           }),
           ...runs.filter((entry) => entry.kind === "process" && !processNames.includes(entry.name))
-            .map((entry) => ({ ...summary(entry.name, entry.command, entry.port, entry), note: "no longer in the recipe; environment_stop with its name stops it" })),
+            .map((entry) => ({ ...summary(entry.name, entry.command, entry.port, entry), note: "no longer in the recipe; app_stop with its name stops it" })),
         ],
         prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(read.recipe, checkout) : undefined,
         room: await roomReport(environment.app),
@@ -575,8 +575,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         saved.previous ? `The version it replaced is kept at ${saved.previous}.` : read.kind === "none" ? "It's the project's first recipe." : undefined,
         after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; Mako's saved recipe comes first, so that file is ignored while this one exists.` : undefined,
         ...carried,
-        running ? "This Thread's processes are still running as they were started; environment_restart runs them with this recipe." : undefined,
-        "Agents already running keep the values their shell started with; their next Session gets these. Prove it with environment_start and environment_check.",
+        running ? "This Thread's processes are still running as they were started; app_restart runs them with this recipe." : undefined,
+        "Agents already running keep the values their shell started with; their next Session gets these. Prove it with app_start and app_check.",
       ].filter(Boolean).join("\n")
     },
   }
@@ -620,7 +620,7 @@ interface RecipeSummary {
   state: string
   /** The file in use, or the one that's broken. */
   from?: string
-  /** Where Mako keeps this project's recipe; environment_recipe_save writes it. */
+  /** Where Mako keeps this project's recipe; recipe_save writes it. */
   savedIn?: string
   ignored?: string
   problem?: string
@@ -635,7 +635,7 @@ function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSumm
     if (read.ignored) summary.ignored = `${read.ignored}: committed with the project, but the recipe saved in Mako comes first`
     summary.contents = read.recipe
   }
-  if (read.kind === "none") summary.state = "none: agents run things themselves on this Thread's ports; environment_guide says how to set one up"
+  if (read.kind === "none") summary.state = "none: agents run things themselves on this Thread's ports; recipe_guide says how to set one up"
   if (read.kind === "invalid") {
     summary.state = "broken"
     summary.problem = read.message
@@ -728,56 +728,57 @@ async function reply(work: () => Promise<string>) {
 }
 
 /**
- * The environment tools beside `js` on a conversation's MCP server. They
- * act on the calling conversation's Thread only: its processes, its ports,
- * its checks.
+ * The app, recipe and port tools on a conversation's `mako` server. They act
+ * on the calling conversation's Thread only: its processes, its ports, its
+ * checks. Each description says when to call it, since that's all an agent
+ * reads before choosing a tool.
  */
 export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTools, conversationId: () => string): void {
   const names = z.object({
     processes: z.array(z.string().min(1).max(32)).max(20).optional().describe("The recipe's process names; all of them when left out."),
   }).strict()
   server.registerTool(
-    "environment_status",
+    "app_status",
     {
       description:
-        "This Thread's running app: its address, ports and data folder; the project's recipe (where it's kept, what it says, and the values it sets for this Thread, and whether your shell has them); each recipe process's state (running, starting, stopped, crashed with its exit code); and the last quick and full check results.",
+        "Call first when you need this Thread's app running or checked, when a start or check went wrong, or before changing the recipe. Returns this Thread's address, ports and data folder; the project's recipe (where it's kept, all of it, the values it sets for this Thread and whether your shell has them); each process's state (running, starting, stopped, or crashed with its exit code); and the last quick and full check results.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => reply(() => tools.status(conversationId()))
   )
   server.registerTool(
-    "environment_start",
+    "app_start",
     {
       description:
-        "Start the recipe's processes for this Thread, on this Thread's own ports, and wait up to about 25 seconds for their ports to answer. Processes Mako starts keep running after your turn and after Mako restarts, and they stay out of other Threads' way. A process whose port something else holds is refused, with who holds it. When this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log.",
+        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes on this Thread's ports and waits up to about 25 seconds for their ports to answer. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log.",
       inputSchema: names,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     ({ processes }) => reply(() => tools.start(conversationId(), processes))
   )
   server.registerTool(
-    "environment_stop",
+    "app_stop",
     {
-      description: "Stop this Thread's processes that Mako started, each with every process it started. Never touches another Thread's processes or anything Mako didn't start.",
+      description: "Stop this Thread's app when you're done with it or before changing something its processes hold open. Stops only what Mako started for this Thread, each with every process it started; never another Thread's processes or anything Mako didn't start.",
       inputSchema: names,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     ({ processes }) => reply(() => tools.stop(conversationId(), processes))
   )
   server.registerTool(
-    "environment_restart",
+    "app_restart",
     {
-      description: "Stop, then start, this Thread's recipe processes, for example after changing configuration a dev server doesn't reload.",
+      description: "Stop, then start, this Thread's app: after changing configuration, environment values or dependencies that a running dev server doesn't reload, or after recipe_save changed how its processes start.",
       inputSchema: names,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     ({ processes }) => reply(() => tools.restart(conversationId(), processes))
   )
   server.registerTool(
-    "environment_logs",
+    "app_logs",
     {
-      description: "The end of a recipe process's or check's output, stdout and stderr together. Name either a process or a check.",
+      description: "Read the end of an app process's or a check's output, stdout and stderr together, when one crashed, failed or isn't answering. Name either a process or a check.",
       inputSchema: z.object({
         process: z.string().min(1).max(32).optional(),
         check: z.enum(["quick", "full"]).optional(),
@@ -788,30 +789,30 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     ({ process, check, lines }) => reply(() => tools.logs(conversationId(), process === undefined ? { check: check! } : { process }, lines))
   )
   server.registerTool(
-    "environment_check",
+    "app_check",
     {
       description:
-        "Run the recipe's quick check (no running app: typecheck, lint, unit tests) or full check (starts the app first, then runs the project's end-to-end check against it) in this Thread's checkout, with this Thread's values. Waits up to about 25 seconds; a check still running then keeps going, and calling this again with the same tier waits for that run. A passing full check is the proof to report.",
+        "Prove your change works before you report it. \"quick\" runs the recipe's check that needs no running app (such as typecheck, lint and unit tests); \"full\" starts the app first, then runs the project's end-to-end check against it. Runs in this Thread's checkout with this Thread's values and waits up to about 25 seconds; a check still running then keeps going, and calling again with the same tier waits for that run. A passing full check is the proof to report.",
       inputSchema: z.object({ tier: z.enum(["quick", "full"]) }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     ({ tier }) => reply(() => tools.check(conversationId(), tier))
   )
   server.registerTool(
-    "environment_guide",
+    "recipe_guide",
     {
       description:
-        "How to set up, or repair, this project's recipe so every Thread can run and check its own copy of the app side by side: where to learn how the project runs, what two copies fight over, the recipe's fields, and how to prove it with the other environment tools. Call it when asked to set up testing, or when environment_status says the recipe is missing or broken.",
+        "Read before setting up or repairing this project's recipe: when the user asks for every Thread to run or test its own copy of the app, when app_status says there's no recipe or it's broken, or when a change of yours needs a recipe field you don't know yet. Explains where to learn how the project runs, what two copies of the app fight over, every recipe field, and how to prove the result with the app tools. A small edit to a working recipe needs only app_status and recipe_save.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => reply(() => tools.guide(conversationId()))
   )
   server.registerTool(
-    "environment_recipe_save",
+    "recipe_save",
     {
       description:
-        "Save this project's recipe in Mako, where every Thread of the project, on every branch, uses it at once; nothing to commit or merge. Checked first against this Thread's ports and this checkout's folders, and refused with the reason if it can't run. The version it replaces is kept. Pass the whole recipe, as environment_guide describes it.",
+        "Replace this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run; the version it replaces is kept. Mako keeps it for the project, so every Thread on every branch uses it at once and nothing needs committing. Prove it afterwards with app_restart and app_check.",
       inputSchema: z.object({
         recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and carry and oneAtATime when it needs them."),
       }).strict(),
@@ -824,9 +825,9 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     })
   )
   server.registerTool(
-    "environment_port",
+    "port_holder",
     {
-      description: "Who holds a port on this Mac: one of this Thread's processes, another Thread's (named by its title), or a process Mako didn't start. Ask this instead of killing whatever holds a port.",
+      description: "Who holds a port on this Mac: one of this Thread's app processes, another Thread's (named by its title), or a process Mako didn't start. Ask before assuming a port is free, and instead of stopping whatever holds it.",
       inputSchema: z.object({ port: z.number().int().min(1).max(65_535) }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

@@ -3,7 +3,7 @@ import { applyThreadEnvironment } from "../../thread-environment.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { accountEnv } from "../../accounts.js"
 import { acpMcpServers } from "../../mcp-runtime.js"
-import type { ProviderStartOptions } from "../live-driver.js"
+import { conversationServers, type ProviderStartOptions } from "../live-driver.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
 import { claudeRuntime } from "./runtime.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
@@ -52,11 +52,8 @@ export async function claudeSdkOptions(
     }
   }
   if (input.conversationTools)
-    mcpServers["mako-control"] = {
-      type: "http",
-      url: input.conversationTools.controlUrl,
-      headers: { Authorization: `Bearer ${input.conversationTools.token}` },
-    }
+    for (const { name, url } of conversationServers(input.conversationTools))
+      mcpServers[name] = { type: "http", url, headers: { Authorization: `Bearer ${input.conversationTools.token}` } }
   return {
     cwd,
     env,

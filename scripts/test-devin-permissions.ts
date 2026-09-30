@@ -25,13 +25,13 @@ const request = {
     {
       optionId: "allow_session",
       kind: "allow_always",
-      name: "Yes, allow calling mako_control_exec on the mako-control MCP server (this session)",
+      name: "Yes, allow calling mako_computer_js on the mako-computer MCP server (this session)",
     },
   ],
 } satisfies Parameters<typeof devinPermissionTitle>[0]
 assert.equal(
   devinPermissionTitle(request),
-  "mako-control: mako_control_exec"
+  "mako-computer: mako_computer_js"
 )
 assert.equal(devinPermissionTitle({ ...request, options: [] }), undefined)
 const command = "printf '%s' 'approval-nonce' >> '/tmp/mako-provider-e2e/allow.txt'"
@@ -47,7 +47,7 @@ assert.equal(
     options: [
       {
         ...request.options[0],
-        name: "Yes, allow calling all tools on the mako-control MCP server (this session)",
+        name: "Yes, allow calling all tools on the mako-computer MCP server (this session)",
       },
     ],
   }),

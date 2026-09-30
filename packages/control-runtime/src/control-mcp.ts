@@ -32,7 +32,7 @@ export {
 export function createControlMcpServer(
   request: ControlAgentRequest
 ): McpServer {
-  const server = new McpServer({ name: "mako-control", version: "1.0.0" })
+  const server = new McpServer({ name: "mako-computer", version: "1.0.0" })
   const invoke = async (
     operation: ControlAgentOperation,
     signal: AbortSignal

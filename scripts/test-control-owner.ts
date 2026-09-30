@@ -46,8 +46,8 @@ try {
   assert.ok(env.PATH?.startsWith(launch.bin))
   assert.ok(controlLaunchInstructions(launch).includes(launch.command))
   const grant = grants.mint("binding", "conversation")
-  assert.ok(grant.controlUrl)
-  await agent.connect(new StreamableHTTPClientTransport(new URL(grant.controlUrl), {
+  assert.ok(grant.computerUrl)
+  await agent.connect(new StreamableHTTPClientTransport(new URL(grant.computerUrl), {
     requestInit: { headers: { Authorization: `Bearer ${grant.token}` } },
   }))
   assert.deepEqual((await agent.listTools()).tools.map(t => t.name), ["js", "js_reset"])

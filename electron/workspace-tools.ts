@@ -121,7 +121,7 @@ async function reply(work: () => Promise<string>) {
 }
 
 /**
- * The workspace tools beside `js` on a conversation's MCP server. They act
+ * The workspace tools on a conversation's `mako` server. They act
  * on the calling conversation's Thread only. Mako adds no approval of its
  * own to merging or removing: the harness's permission for MCP tools
  * decides, and Mako's checks only keep the work safe.
@@ -132,7 +132,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "workspace_status",
     {
       description:
-        "Where this Session makes changes: the project folder itself, its Thread's own branch (a Git worktree Mako made), or a worktree made outside Mako. Returns the folder, branch, uncommitted files, the Thread's branch and its commits, and the answer to a move you asked for.",
+        "Call when you're unsure which folder or branch your edits land in, and before moving, merging or removing. Says where this Session makes changes: the project folder itself, its Thread's own branch (a Git worktree Mako made), or a worktree made outside Mako. Returns the folder, branch, uncommitted files, the Thread's branch and its commits, and the answer to a move you asked for.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -142,7 +142,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "workspace_move",
     {
       description:
-        "Ask to go on on this Thread's own branch: a Git worktree with its own checkout, so your edits stay out of the user's project folder. Use this instead of `git worktree add`, a `--worktree` flag or a worktree tool of your own: Mako then shows the branch in the app, brings the conversation and the uncommitted changes along, and offers merging or a pull request afterwards. Returns at once. The user answers in the app, unless the project always allows it; an allowed move happens when your turn ends.",
+        "Call when the user asks for this work on its own branch or in a worktree. Asks to go on on this Thread's own branch: a Git worktree with its own checkout, so your edits stay out of the user's project folder. Use this instead of `git worktree add`, a `--worktree` flag or a worktree tool of your own: Mako then shows the branch in the app, brings the conversation and the uncommitted changes along, and offers merging or a pull request afterwards. Returns at once. The user answers in the app, unless the project always allows it; an allowed move happens when your turn ends.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -152,7 +152,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "workspace_merge",
     {
       description:
-        "Merge this Thread's branch into the branch the project folder has out. Mako merges only when it's safe (everything on the branch committed, the project folder clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. The branch and its worktree stay.",
+        "Call when the user asks to merge this Thread's work. Merges this Thread's branch into the branch the project folder has out. Mako merges only when it's safe (everything on the branch committed, the project folder clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. The branch and its worktree stay.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -162,7 +162,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "workspace_remove",
     {
       description:
-        "Remove this Thread's worktree folder. Refused while anything runs in it or anything in it is uncommitted, so it can't remove the folder you're working in. The branch stays with everything committed on it.",
+        "Call when the user asks to clean up this Thread's worktree. Removes its folder. Refused while anything runs in it or anything in it is uncommitted, so it can't remove the folder you're working in. The branch stays with everything committed on it.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },

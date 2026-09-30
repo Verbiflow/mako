@@ -270,8 +270,8 @@ assert.deepEqual(
 )
 assert.equal(claudeServers.find((item) => item.name === "mako-backend")?.description, "Mako skills, integrations, and Slack")
 assert.equal(claudeServers.find((item) => item.name === "github")?.description, "npx -y github")
-assert.ok(isMakoServerName("mako-control"), "a chip naming the per-conversation control server still reads as built in")
-assert.ok(!isMakoServerName("mako-conversations"), "the retired conversation tools are nobody's now")
+assert.ok(isMakoServerName("mako-computer") && isMakoServerName("mako"), "a chip naming either per-conversation server reads as built in")
+assert.ok(!isMakoServerName("mako-conversations") && !isMakoServerName("mako-control"), "retired Mako server names are nobody's now")
 assert.ok(!isMakoServerName("github"))
 
 const CLAUDE = mcpTransportsFor("sdk")

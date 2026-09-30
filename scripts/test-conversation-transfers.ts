@@ -383,29 +383,36 @@ try {
   )
   mcp = await startConversationMcp(owner, async () => ({ content: [{ type: "text", text: "control ran" }] }))
   const credential = mcp.mint(beta.id, id)
-  const unauthenticated = await fetch(credential.controlUrl, {
+  const unauthenticated = await fetch(credential.computerUrl, {
     method: "POST",
     body: "{}",
   })
   assert.equal(unauthenticated.status, 401)
   const revokedCredential = mcp.mint(beta.id, id)
   mcp.revoke(beta.id, id)
-  const revoked = await fetch(revokedCredential.controlUrl, {
+  const revoked = await fetch(revokedCredential.computerUrl, {
     method: "POST",
     headers: { Authorization: `Bearer ${revokedCredential.token}` },
     body: "{}",
   })
   assert.equal(revoked.status, 401)
   const activeCredential = mcp.mint(beta.id, id)
-  const retired = await fetch(activeCredential.controlUrl.replace(/\/control$/, "/mcp"), {
+  const retired = await fetch(activeCredential.computerUrl.replace(/\/computer$/, "/control"), {
     method: "POST",
     headers: { Authorization: `Bearer ${activeCredential.token}` },
     body: "{}",
   })
-  assert.equal(retired.status, 405, "the retired conversation tools answer nothing")
+  assert.equal(retired.status, 405, "the retired control path answers nothing")
+  assert.equal(activeCredential.makoUrl, undefined, "a host with no Thread tools hands out no mako server")
+  const unserved = await fetch(activeCredential.computerUrl.replace(/\/computer$/, "/mako"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${activeCredential.token}` },
+    body: "{}",
+  })
+  assert.equal(unserved.status, 405, "and doesn't answer on its path")
   mcpClient = new Client({ name: "mako-transfer-test", version: "1.0.0" })
   await mcpClient.connect(
-    new StreamableHTTPClientTransport(new URL(activeCredential.controlUrl), {
+    new StreamableHTTPClientTransport(new URL(activeCredential.computerUrl), {
       requestInit: {
         headers: { Authorization: `Bearer ${activeCredential.token}` },
       },

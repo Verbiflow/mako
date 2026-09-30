@@ -234,7 +234,7 @@ async function runElectron() {
             )
           const fixtureControl =
             controlMode &&
-            /mako-control|mako_control_/i.test(permission.title)
+            /mako-computer|mako_computer_/i.test(permission.title)
           if (
             !once ||
             (!fixtureRead && !fixtureAuthentication && !fixtureControl)

@@ -1,5 +1,7 @@
 import {
+  MAKO_COMPUTER_SERVER,
   MAKO_RUNTIME_SERVERS,
+  MAKO_THREAD_SERVER,
   isMakoManagedServer,
   reachableMcpServers,
 } from "../../electron/contracts/mcp-reach"
@@ -79,7 +81,8 @@ export interface SkillReach {
 /** Product copy for Mako's own servers; the registry's detail is operational. */
 const BUILT_IN_DESCRIPTIONS = new Map<string, string>([
   ["mako-backend", "Mako skills, integrations, and Slack"],
-  ["mako-control", "Drive pages, native windows, and system tasks"],
+  [MAKO_COMPUTER_SERVER, "Drive pages, native windows, and system tasks"],
+  [MAKO_THREAD_SERVER, "This Thread's worktree, app and recipe"],
 ])
 
 export function isMakoServerName(name: string): boolean {

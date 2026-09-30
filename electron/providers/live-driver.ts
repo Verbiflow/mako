@@ -17,6 +17,7 @@ import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { ProviderCapability } from "./registry.js"
 import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
+import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { UNAVAILABLE_RECOVERY, type RecoveryCapabilities } from "../contracts/recovery.js"
 
 /** Admission resolves separately from the correlated live-action-result event.
@@ -68,11 +69,24 @@ export type TurnRecovery =
   | { kind: "continues"; accepted: string; exit: string; tests: readonly string[] }
   | { kind: "manual"; reason: string }
 
-/** A running agent's grant to Mako's control tools: the `mako-control` MCP server and, when it started, the control CLI. */
+/**
+ * A running agent's grant to Mako's own MCP servers, both opened with
+ * `token`: `mako-computer` for browser and computer use and, when the host
+ * serves it, `mako` for the Thread's worktree, app and recipe; plus the
+ * control CLI when it started.
+ */
 export interface ConversationTools {
   token: string
-  controlUrl: string
+  computerUrl: string
+  makoUrl?: string
   control?: ControlLaunch
+}
+
+/** Mako's servers for one launch, by the names the agent sees. Every adapter adds exactly these. */
+export function conversationServers(tools: ConversationTools): Array<{ name: string; url: string }> {
+  const servers = [{ name: MAKO_COMPUTER_SERVER, url: tools.computerUrl }]
+  if (tools.makoUrl) servers.push({ name: MAKO_THREAD_SERVER, url: tools.makoUrl })
+  return servers
 }
 
 /** Host-only launch credentials. Never included in the renderer wire contract or journals. */

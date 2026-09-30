@@ -20,6 +20,11 @@ export const MAKO_RUNTIME_SERVERS: ReadonlySet<string> = new Set([
   "mako-backend",
 ])
 
+/** The per-conversation server for browser and computer use. */
+export const MAKO_COMPUTER_SERVER = "mako-computer"
+/** The per-conversation server for the Thread's worktree, app and recipe. */
+export const MAKO_THREAD_SERVER = "mako"
+
 const ALL_TRANSPORTS: readonly McpTransport[] = ["stdio", "http", "sse"]
 const LOCAL_AND_HTTP: readonly McpTransport[] = ["stdio", "http"]
 

@@ -66,7 +66,7 @@ export async function runBrowserFixture(
             const once = permission.options.find(
               (option) => option.kind === "allow_once"
             )
-            const permitted = /mako-control/.test(JSON.stringify(permission)) || JSON.stringify(permission).includes(cwd)
+            const permitted = /mako-computer/.test(JSON.stringify(permission)) || JSON.stringify(permission).includes(cwd)
 
             if (!once || !permitted)
               throw new Error(
@@ -105,7 +105,7 @@ export async function runBrowserFixture(
         )
         const calls = completed.blocks.filter((block) => block.type === "tool")
         if (JSON.stringify(calls).includes("incompatible-session")) throw new Error("Runtime changed during acceptance; private-protocol workarounds do not count as MCP acceptance")
-        const mcpCalls = calls.filter((block) => /mako-control.*js/.test(block.title))
+        const mcpCalls = calls.filter((block) => /mako-computer.*js/.test(block.title))
         const endpointCalls = controlMcpCalls.filter(call => call.method === "js" && completed.control.bindings.some(binding => binding.id === call.bindingId)).length
         if (!endpointCalls) throw new Error("The agent did not call the task's Mako Control MCP endpoint")
         result.controlErrors = mcpCalls.filter((block) => block.status === "failed" || /"isError"\s*:\s*true/.test(block.output ?? "")).length

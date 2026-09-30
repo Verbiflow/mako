@@ -26,7 +26,7 @@ export function launchInstructions(control?: ControlLaunch, thread?: ThreadEnvir
 
 export function launchLines(control?: ControlLaunch, thread?: ThreadEnvironment): string[] {
   return [
-    control && `Browser and computer use: use the mako-control MCP js tool; its first result supplies the SDK documentation. After lost context call control.rewriteDocumentation(). For shell/file pipelines, ${JSON.stringify(control.command)} --help exposes the same task session. MCP and CLI share target ownership and program state; do not start another session. Verify results explicitly and never replay an unknown outcome.`,
+    control && `Browser and computer use: use the js tool on the mako-computer MCP server; its first result supplies the SDK documentation. After lost context call control.rewriteDocumentation(). For shell/file pipelines, ${JSON.stringify(control.command)} --help exposes the same task session. MCP and CLI share target ownership and program state; do not start another session. Verify results explicitly and never replay an unknown outcome.`,
     thread && threadEnvironmentInstructions(thread),
   ].filter((line): line is string => Boolean(line))
 }

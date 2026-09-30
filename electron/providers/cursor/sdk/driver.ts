@@ -22,10 +22,11 @@ import {
   type PromptAttachment,
 } from "../../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../../live-engine.js"
-import type {
-  ProviderLiveDriver,
-  ProviderStartOptions,
-  ProviderSteerResult,
+import {
+  conversationServers,
+  type ProviderLiveDriver,
+  type ProviderStartOptions,
+  type ProviderSteerResult,
 } from "../../live-driver.js"
 import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from "./auth.js"
 import { CursorSdkClient, CursorSdkError } from "./client.js"
@@ -154,11 +155,8 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
     }
   }
   if (options.conversationTools)
-    servers["mako-control"] = {
-      type: "http",
-      url: options.conversationTools.controlUrl,
-      headers: { Authorization: `Bearer ${options.conversationTools.token}` },
-    }
+    for (const { name, url } of conversationServers(options.conversationTools))
+      servers[name] = { type: "http", url, headers: { Authorization: `Bearer ${options.conversationTools.token}` } }
   return servers
 }
 

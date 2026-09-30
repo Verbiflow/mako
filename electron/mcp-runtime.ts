@@ -86,7 +86,7 @@ function codexDefinition(
 
 export function codexMcpConfig(
   snapshot: McpRegistrySnapshot,
-  controlUrl?: string
+  makoServers: ReadonlyArray<{ name: string; url: string }> = []
 ): JsonObject {
   const servers: JsonObject = {}
   for (const definition of projectRuntimeDefinitions(snapshot, "codex", [
@@ -96,11 +96,8 @@ export function codexMcpConfig(
     const projected = codexDefinition(definition)
     if (projected) servers[definition.name] = projected
   }
-  if (controlUrl)
-    servers["mako-control"] = {
-      url: controlUrl,
-      bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN",
-    }
+  for (const { name, url } of makoServers)
+    servers[name] = { url, bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN" }
   return Object.keys(servers).length > 0 ? { mcp_servers: servers } : {}
 }
 

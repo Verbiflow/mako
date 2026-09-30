@@ -17,7 +17,7 @@ import type { LiveSessionState, McpRegistrySnapshot, PromptAttachment } from "..
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type { FailureBoundary } from "../../live-runtime.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
-import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, verifyOpenCodeSession } from "./installation.js"
 import { configureOpenCodePermissions } from "./permissions.js"
@@ -168,7 +168,8 @@ async function mcpServers(options: ProviderStartOptions): Promise<Array<{ name: 
   }
   const tools = options.conversationTools
   if (tools)
-    servers.push({ name: "mako-control", config: { type: "remote", url: tools.controlUrl, headers: { Authorization: `Bearer ${tools.token}` }, oauth: false } })
+    for (const { name, url } of conversationServers(tools))
+      servers.push({ name, config: { type: "remote", url, headers: { Authorization: `Bearer ${tools.token}` }, oauth: false } })
   return servers
 }
 

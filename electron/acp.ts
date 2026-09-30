@@ -5,7 +5,7 @@ import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
-import { SHUTDOWN_GRACE_MS, type ProviderStartOptions, type ProviderSteerInput, type ProviderSteerResult } from "./providers/live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderStartOptions, type ProviderSteerInput, type ProviderSteerResult } from "./providers/live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction } from "./acp-compaction.js"
@@ -270,11 +270,11 @@ async function startAcp(
   if (!executable) throw new Error(`${harness} is not installed`)
 
   const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
-  const controlMcp: McpServer | null = options.conversationTools ? {
-    type: "http", name: "mako-control", url: options.conversationTools.controlUrl,
-    headers: [{ name: "Authorization", value: `Bearer ${options.conversationTools.token}` }],
-  } : null
-  if (controlMcp) preparedServers.push(controlMcp)
+  const tools = options.conversationTools
+  const makoMcp: McpServer[] = tools
+    ? conversationServers(tools).map(({ name, url }) => ({ type: "http", name, url, headers: [{ name: "Authorization", value: `Bearer ${tools.token}` }] }))
+    : []
+  preparedServers.push(...makoMcp)
   const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
   const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
     root: join(app.getPath("userData"), "approval-evidence"), env,
@@ -502,7 +502,7 @@ async function startAcp(
           transports
         )
       : []
-    if (controlMcp && mcpCapabilities?.http) live.mcpServers.push(controlMcp)
+    if (mcpCapabilities?.http) live.mcpServers.push(...makoMcp)
     const resume = options.resume
     const session = await openAuthenticatedSession({
       methods: initialized.authMethods ?? [],

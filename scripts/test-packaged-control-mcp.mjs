@@ -91,7 +91,7 @@ if (!worker) {
   try {
     await sessions.start("fixture", service.mint("packaged-mcp", "fixture"), async () => { await service.revoke("packaged-mcp", "fixture") })
     const grant = grants.mint("fixture", "packaged-mcp")
-    await client.connect(new StreamableHTTPClientTransport(new URL(grant.controlUrl), {
+    await client.connect(new StreamableHTTPClientTransport(new URL(grant.computerUrl), {
       requestInit: { headers: { Authorization: `Bearer ${grant.token}` } },
     }))
     assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["js", "js_reset"])
@@ -118,7 +118,7 @@ if (!worker) {
     // Closing an MCP connection releases its transport, not the task session.
     await client.close()
     client = new Client({ name: "packaged-reconnected", version: "1" })
-    await client.connect(new StreamableHTTPClientTransport(new URL(grant.controlUrl), {
+    await client.connect(new StreamableHTTPClientTransport(new URL(grant.computerUrl), {
       requestInit: { headers: { Authorization: `Bearer ${grant.token}` } },
     }))
     assert.deepEqual(last(await js("tab.target")), target)

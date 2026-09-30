@@ -56,15 +56,16 @@ export function threadEnvironmentInstructions(environment: ThreadEnvironment): s
 function recipeInstructions(environment: ThreadEnvironment): string | undefined {
   const recipe = environment.recipe
   if (!recipe) return undefined
-  if (recipe.kind === "none") return "This project has no recipe yet for running its app in each Thread; if you're asked to set one up, call environment_guide."
-  if (recipe.kind === "invalid") return `The project's recipe is broken, so its values aren't set and its processes can't start: ${recipe.message}. Tell the user; environment_guide says how to repair it.`
+  if (recipe.kind === "none") return "This project has no recipe yet for running its app in each Thread; if you're asked to set one up, call recipe_guide."
+  if (recipe.kind === "invalid") return `The project's recipe is broken, so its values aren't set and its processes can't start: ${recipe.message}. Tell the user; recipe_guide says how to repair it.`
   const names = Object.entries(environment.values ?? {}).map(([name, value]) => `${name}=${value}`)
   const processes = recipe.processes.map((entry) => entry.port === undefined ? entry.name : `${entry.name} on ${entry.port}`)
   return [
     names.length ? `The project's recipe also sets ${names.join(", ")} in your shell.` : undefined,
-    processes.length ? `Its processes (${processes.join(", ")}) run through the environment_start, environment_stop, environment_restart, environment_status and environment_logs tools; start them there rather than by hand, so they stay this Thread's and survive your turn.` : undefined,
-    recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with environment_check; a passing full check is the proof to report.` : undefined,
-    "environment_port names whoever holds a port.",
+    processes.length ? `Its processes (${processes.join(", ")}) run through the mako server's app_start, app_stop, app_restart, app_status and app_logs tools; start them there rather than by hand, so they stay this Thread's and survive your turn.` : undefined,
+    recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with app_check; a passing full check is the proof to report.` : undefined,
+    "port_holder names whoever holds a port.",
+    "If your change alters how the project installs, starts or is checked, update the recipe in the same turn with recipe_save.",
   ].filter(Boolean).join(" ")
 }
 

@@ -9,6 +9,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { z } from "zod"
 import type { ThreadWorktree } from "../electron/contracts/thread-worktrees.js"
 import type { WorkspaceMoves as WorkspaceMovesState } from "../electron/contracts/workspace-moves.js"
+import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/mcp-reach.js"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
 import { moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
@@ -135,16 +136,36 @@ try {
   // The tools, over the conversation's real HTTP MCP server, act on the calling conversation only.
   const removed: number[] = []
   const tools = workspaceTools({ cwd: (id) => sources.get(id)?.cwd, worktrees, moves, removed: () => removed.push(1) })
+  let releaseComputer = () => {}
+  const computerHeld = new Promise<void>((resolve) => { releaseComputer = resolve })
   grants = await startConversationMcp(
     { authorizeAgent: (conversationId, bindingId) => { assert.equal(bindingId, "binding"); assert.ok(sources.has(conversationId)) } },
-    async () => null,
+    async () => {
+      await computerHeld
+      return { content: [{ type: "text", text: "done" }] }
+    },
     tools,
   )
   sources.set("g", { cwd: project, harness: "claude", busy: true })
   const grant = grants.mint("binding", "g")
-  await agent.connect(new StreamableHTTPClientTransport(new URL(grant.controlUrl), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
+  assert.ok(grant.makoUrl, "a host with Thread tools serves the mako server")
+  const headers = { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }
+  const computer = new Client({ name: "agent", version: "1" })
+  await computer.connect(new StreamableHTTPClientTransport(new URL(grant.computerUrl), headers))
+  await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl), headers))
+  assert.deepEqual([computer.getServerVersion()?.name, agent.getServerVersion()?.name], [MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER], "each server introduces itself by the name the agent app lists it under")
+  assert.deepEqual((await computer.listTools()).tools.map((tool) => tool.name), ["js", "js_reset"], "browser and computer use have a server of their own")
   const listed = (await agent.listTools()).tools
-  assert.deepEqual(listed.map((tool) => tool.name), ["js", "js_reset", "workspace_status", "workspace_move", "workspace_merge", "workspace_remove"])
+  assert.deepEqual(listed.map((tool) => tool.name), ["workspace_status", "workspace_move", "workspace_merge", "workspace_remove"])
+  assert.match(agent.getInstructions() ?? "", /^Mako's tools for the Thread this Session belongs to\./, "the mako server says what it's for")
+  // Each client numbers its own requests, so the same number on both servers is two different calls.
+  const slow = computer.callTool({ name: "js", arguments: { code: "1" } })
+  await delay(100)
+  const concurrent = await agent.callTool({ name: "workspace_status", arguments: {} })
+  assert.equal(concurrent.isError, undefined, "a call on one server doesn't block the same request number on the other")
+  releaseComputer()
+  await slow
+  await computer.close()
   assert.match(listed.find((tool) => tool.name === "workspace_move")!.description!, /instead of `git worktree add`/)
   assert.equal(listed.find((tool) => tool.name === "workspace_status")!.annotations?.readOnlyHint, true)
   assert.equal(listed.find((tool) => tool.name === "workspace_remove")!.annotations?.destructiveHint, true)

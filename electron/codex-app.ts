@@ -17,7 +17,7 @@ import type {
   ProviderSteerResult,
 } from "./providers/live-driver.js"
 import { resolveCodexExecutable } from "./providers/codex/executable.js"
-import { SHUTDOWN_GRACE_MS, type ProviderStartOptions } from "./providers/live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderStartOptions } from "./providers/live-driver.js"
 import { hostWarn } from "./host-log.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./providers/provider-process.js"
@@ -88,7 +88,8 @@ type Live = {
   access: AccessTier | null
   state: LiveSessionState
   tuning?: Tuning
-  controlUrl?: string
+  /** Mako's own servers, opened with the token in `MAKO_CONVERSATIONS_TOKEN`. */
+  makoServers: Array<{ name: string; url: string }>
   mcpSnapshot: McpRegistrySnapshot
   nextRequestId: number
   pending: Map<string, PendingRpc>
@@ -182,7 +183,7 @@ async function startCodex(
     },
     tuning: options.tuning,
     emit: (event) => emit(event),
-    controlUrl: options.conversationTools?.controlUrl,
+    makoServers: options.conversationTools ? conversationServers(options.conversationTools) : [],
     mcpSnapshot,
     nextRequestId: 0,
     pending: new Map(),
@@ -491,7 +492,7 @@ async function openThread(
   sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
   const tuning = threadTuning(
     live.tuning,
-    codexMcpConfig(live.mcpSnapshot, live.controlUrl)
+    codexMcpConfig(live.mcpSnapshot, live.makoServers)
   )
   if (fork)
     return trace.step("session-fork", () => watch.step("thread/fork", rpcRequest(live, "thread/fork", {

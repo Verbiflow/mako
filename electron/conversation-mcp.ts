@@ -2,6 +2,7 @@ import { createControlMcpServer, type ControlAgentOperation } from "@mako/contro
 import type { JsonValue } from "@mako/control"
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
@@ -17,7 +18,25 @@ interface Scope {
   bindingId: string
   expiresAt: number
   revoked: boolean
-  controlRequests: Map<string | number, AbortController>
+  /** Calls under way, by path and JSON-RPC id: each server's client numbers its own requests. */
+  controlRequests: Map<string, AbortController>
+}
+
+/** What an agent reads about the `mako` server before calling any of its tools. */
+const MAKO_INSTRUCTIONS = [
+  "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only.",
+  "workspace_*: where this Session edits (the project folder or the Thread's own worktree and branch), moving onto its own branch, merging it and removing its worktree.",
+  "app_*: this Thread's own running copy of the project's app, on its own ports, from the project's recipe. Use them to run and check your work instead of starting servers by hand.",
+  "recipe_*: the recipe every Thread of the project runs its app from. recipe_guide explains how to set one up or repair it; recipe_save replaces it. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
+  "port_holder: who holds a port, before you assume it's free or stop anything.",
+].join("\n")
+
+type Route = "computer" | "mako"
+
+function routeOf(url: string | undefined): Route | undefined {
+  if (url === "/computer") return "computer"
+  if (url === "/mako") return "mako"
+  return undefined
 }
 
 async function readMessage(request: IncomingMessage, maxBytes: number) {
@@ -36,9 +55,11 @@ async function readMessage(request: IncomingMessage, maxBytes: number) {
 }
 
 /**
- * Mako's control tools for a running agent, over MCP. Loopback only.
- * Credentials are ephemeral and scoped to a currently executing provider
- * binding.
+ * Mako's servers for a running agent, over MCP: `/computer` for browser and
+ * computer use, and `/mako` for the Thread's worktree, app and recipe.
+ * Loopback only, and handed to each agent in its launch, never written to an
+ * agent app's own settings. Credentials are ephemeral and scoped to a
+ * currently executing provider binding; one grant opens both.
  */
 export async function startConversationMcp(
   owner: ConversationOwner,
@@ -47,6 +68,7 @@ export async function startConversationMcp(
   environment?: EnvironmentTools
 ) {
   const scopes = new Map<string, Scope>()
+  const serveMako = Boolean(workspace || environment)
   const server = createServer((request, response) => {
     void (async () => {
       const token = request.headers.authorization?.replace(/^Bearer /, "")
@@ -55,7 +77,8 @@ export async function startConversationMcp(
         response.writeHead(401).end()
         return
       }
-      if (request.url !== "/control" || request.method !== "POST") {
+      const route = routeOf(request.url)
+      if (!route || (route === "mako" && !serveMako) || request.method !== "POST") {
         response.writeHead(405).end()
         return
       }
@@ -68,11 +91,11 @@ export async function startConversationMcp(
       // find the original call by its grant and JSON-RPC id, not a new server.
       if ("method" in message && message.method === "notifications/cancelled") {
         const cancellation = z.object({ requestId: z.union([z.string(), z.number()]) }).parse(message.params)
-        scope.controlRequests.get(cancellation.requestId)?.abort()
+        scope.controlRequests.get(`${route}:${cancellation.requestId}`)?.abort()
         response.writeHead(202).end()
         return
       }
-      const controlRequestId = "method" in message && message.method === "tools/call" && "id" in message ? message.id : undefined
+      const controlRequestId = "method" in message && message.method === "tools/call" && "id" in message ? `${route}:${message.id}` : undefined
       if (controlRequestId !== undefined && scope.controlRequests.has(controlRequestId)) {
         response.writeHead(409).end("This control request is already running; it was not replayed")
         return
@@ -88,12 +111,14 @@ export async function startConversationMcp(
         owner.authorizeAgent(scope.conversationId, scope.bindingId)
         return scope.conversationId
       }
-      const mcp = createControlMcpServer((operation, signal) => {
-        authorized()
-        return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
-      })
-      if (workspace) registerWorkspaceTools(mcp, workspace, authorized)
-      if (environment) registerEnvironmentTools(mcp, environment, authorized)
+      const mcp = route === "computer"
+        ? createControlMcpServer((operation, signal) => {
+            authorized()
+            return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
+          })
+        : new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
+      if (route === "mako" && workspace) registerWorkspaceTools(mcp, workspace, authorized)
+      if (route === "mako" && environment) registerEnvironmentTools(mcp, environment, authorized)
       response.once("close", () => {
         if (controlRequestId !== undefined) scope.controlRequests.delete(controlRequestId)
         if (!response.writableFinished) disconnected.abort()
@@ -119,7 +144,8 @@ export async function startConversationMcp(
   if (!address || Object.prototype.toString.call(address) === "[object String]")
     throw new Error("No control listener")
   const parsed = z.object({ port: z.number() }).parse(address)
-  const controlUrl = `http://127.0.0.1:${parsed.port}/control`
+  const computerUrl = `http://127.0.0.1:${parsed.port}/computer`
+  const makoUrl = serveMako ? `http://127.0.0.1:${parsed.port}/mako` : undefined
   return {
     mint(bindingId: string, conversationId: string): ConversationTools {
       for (const [token, scope] of scopes)
@@ -135,7 +161,9 @@ export async function startConversationMcp(
         revoked: false,
         controlRequests: new Map(),
       })
-      return { token, controlUrl }
+      const tools: ConversationTools = { token, computerUrl }
+      if (makoUrl) tools.makoUrl = makoUrl
+      return tools
     },
     revoke(bindingId: string, conversationId: string): void {
       for (const [token, scope] of scopes)

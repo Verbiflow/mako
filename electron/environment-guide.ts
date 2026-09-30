@@ -2,26 +2,28 @@ import { RECIPE_PATH } from "./thread-recipe.js"
 
 /**
  * How an agent sets up, or repairs, a project's recipe. Served by the
- * `environment_guide` tool.
+ * `recipe_guide` tool.
  */
 export const ENVIRONMENT_GUIDE = `# Setting up this project's recipe
 
-Mako runs many agents at once, each in its own Thread, usually on its own branch in its own checkout (a Git worktree). Your job: make every Thread able to start this project's app and pass its checks side by side with the others, with the least change to the project. You write one small recipe and save it in Mako with environment_recipe_save. Every Thread of this project uses it from then on, on every branch, with nothing to commit or merge.
+Mako runs many agents at once, each in its own Thread, usually on its own branch in its own checkout (a Git worktree). Your job: make every Thread able to start this project's app and pass its checks side by side with the others, with the least change to the project. You write one small recipe and save it in Mako with recipe_save. Every Thread of this project uses it from then on, on every branch, with nothing to commit or merge.
 
 ## What each Thread already has
 
 - Ten ports of its own: MAKO_THREAD_PORT is the first, MAKO_THREAD_PORTS says how many.
 - A hostname of its own, such as fix-login.thread.localhost, with its own cookies. MAKO_THREAD_URL is http://<host>:<first port>.
 - A private data folder outside the checkout: MAKO_THREAD_DATA_DIR.
-- The environment_* tools. Mako runs the recipe's processes outside your shell, so they survive your turn and a Mako restart, and it stops their whole process tree.
+- The app_* tools on Mako's mako server. Mako runs the recipe's processes outside your shell, so they survive your turn and a Mako restart, and it stops their whole process tree.
 
 ## 0. Is there a recipe already?
 
-Call environment_status first. Its recipe section says where the recipe comes from and shows what it says.
+Call app_status first. Its recipe section says where the recipe comes from and shows what it says.
 
 - If the recipe is ready, prove it (step 5). If the proof passes, you're done: say so and stop. Don't rewrite a recipe that works.
 - If it's broken or fails the proof, repair it. Start from what it says, keep what works, change only what's wrong, and save it again.
 - A recipe committed with the project (${RECIPE_PATH}) is used when Mako has none saved. Start from it; saving one in Mako puts yours first.
+
+Changing a working recipe for a change of your own, such as a new install step, a renamed script or a new port or value, doesn't need this whole guide: take the recipe app_status shows, edit it, pass the whole of it to recipe_save, then prove it with app_restart and app_check. Do it in the same turn as the change, so the next Thread doesn't start from a stale recipe.
 
 ## 1. Learn how the project runs from what it already has
 
@@ -51,7 +53,7 @@ Note which rung each fix used.
 
 ## 4. Save the recipe
 
-Pass it to environment_recipe_save as the recipe. Mako checks it against this Thread's ports and this checkout's folders, and refuses it with the reason if it can't run. It keeps the version it replaces.
+Pass it to recipe_save as the recipe. Mako checks it against this Thread's ports and this checkout's folders, and refuses it with the reason if it can't run. It keeps the version it replaces.
 
 \`\`\`json
 {
@@ -94,14 +96,14 @@ Saving it reaches every Thread of the project at once, including ones on other b
 
 Never run the app with & or nohup in your own shell. Use the tools, so it stays this Thread's.
 
-1. Call environment_status: the recipe is ready, and the values resolved as you meant. If it has carry or outputs, saving it said what each found in the main checkout; check that's what you meant.
-2. Call environment_start: every process is running on its port. If one isn't, call environment_logs, fix the cause, and try again.
+1. Call app_status: the recipe is ready, and the values resolved as you meant. If it has carry or outputs, saving it said what each found in the main checkout; check that's what you meant.
+2. Call app_start: every process is running on its port. If one isn't, call app_logs, fix the cause, and try again.
 3. Fetch the app at MAKO_THREAD_URL, or at 127.0.0.1 on its port, from your shell (curl, or the project's own test script), and check that it's this copy answering, such as the page title or a health endpoint. Don't drive a browser or the desktop for this.
 4. Show it keeps out of the way:
-   - With environment_port, the project's usual port (3000, 5173, ...) isn't held by your copy.
+   - With port_holder, the project's usual port (3000, 5173, ...) isn't held by your copy.
    - Nothing was written to the usual data folder or profile.
-5. Call environment_check "quick", then environment_check "full" if the recipe has one.
-6. Call environment_stop. Afterwards, nothing of this Thread's is still listening.
+5. Call app_check "quick", then app_check "full" if the recipe has one.
+6. Call app_stop. Afterwards, nothing of this Thread's is still listening.
 
 ## 6. Outside services
 

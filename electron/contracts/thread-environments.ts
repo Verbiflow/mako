@@ -44,12 +44,16 @@ export type ThreadRecipeSummary =
   | { kind: "ready"; processes: ThreadRecipeProcess[]; checks: string[] }
   | { kind: "invalid"; message: string }
 
-/** What starts a setup Session; the guide itself comes from `environment_guide`, so it's the same for every agent. */
-export const ENVIRONMENT_SETUP_PROMPT = `Set this project up so every Thread can run and check its own copy of the app at the same time as the others. Call the environment_guide tool first and follow it.`
+/**
+ * What starts a setup Session, in the person's words. The agent finds the
+ * guide through its note and `recipe_guide`'s description, so the request
+ * names no tool.
+ */
+export const ENVIRONMENT_SETUP_PROMPT = `Set this project up so every Thread can run and check its own copy of the app at the same time as the others.`
 
 /** What starts a repair Session for a recipe Mako can't use. */
 export function environmentRepairPrompt(problem: string): string {
-  return `Mako can't run this project's app because its recipe is broken: ${problem}\n\nFix the recipe so every Thread can run and check its own copy again. Call the environment_guide tool first and follow it.`
+  return `Mako can't run this project's app because its recipe is broken: ${problem}\n\nFix the recipe so every Thread can run and check its own copy again.`
 }
 
 export const THREAD_PORT_COUNT = 10
