@@ -1,4 +1,5 @@
 import type { ProposedPlan } from "@mako/sessions/content"
+import type { TranscriptEvent } from "@mako/sessions/events"
 import type {
   AttachmentContent,
   ToolDetail,
@@ -128,6 +129,8 @@ export interface ChatMessage {
   anchor?: MessageAnchor
   /** A system message that opens a turn the provider started itself; its text is the provider's cause. */
   opensTurn?: boolean
+  /** A system message drawn as a transcript marker; its text is `eventText(note)`. */
+  note?: TranscriptEvent
 }
 
 /**

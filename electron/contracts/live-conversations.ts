@@ -16,6 +16,7 @@ import type {
   LiveUpdate,
 } from "./providers-acp.js"
 import type { LiveBlock } from "./live-content.js"
+import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
 import type { Actor } from "./thread-identity.js"
@@ -194,10 +195,14 @@ export interface LiveSnapshot extends LiveSummary {
    * Held by this host only; the journal does not keep it.
    */
   activityAt?: number
+  /** Held by this host only, like `activityAt`; see `NativeActivity`. */
+  nativeActivity?: NativeActivity
 }
 
 export interface LiveBatch {
   activityAt?: number
+  /** `null` when the activity ended; absent when it did not change. */
+  nativeActivity?: NativeActivity | null
   /** Absolute retained-block coordinates for consumers holding a history window. */
   changedFrom?: number
   blockCount?: number
@@ -225,6 +230,8 @@ export type LiveDriverEvent =
   | { type: "live-permission-ended"; id: string; requestId: string; observationId: string; source: import("./approval-response.js").ApprovalEndSource }
   | { type: "live-action-result"; id: string; actionId: string; result: import("./live-actions.js").LiveActionResult }
   | { type: "live-agent"; id: string; agent: NativeAgentObservation }
+  /** `null`: whatever the provider was doing without output has ended. */
+  | { type: "live-activity"; id: string; activity: NativeActivityObservation | null }
   | { type: "live-session"; session: LiveSessionState }
   | { type: "live-update"; id: string; update: LiveUpdate }
   | { type: "live-updates"; id: string; updates: LiveUpdate[] }

@@ -12,6 +12,13 @@ const plan = z.array(z.object({ content: z.string(), status: z.string() }))
  * running. `status` and `output` are what closed the row, not the call's own.
  */
 const unfinished = z.literal(true).optional()
+/** `TranscriptEvent` from `@mako/sessions/events`. */
+const transcriptEvent = {
+  label: z.string(),
+  detail: z.string().optional(),
+  body: z.string().optional(),
+  tone: z.enum(["warning", "error"]).optional(),
+}
 export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
     kind: z.literal("proposed-plan"),
@@ -69,6 +76,8 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("plan"), entries: plan }),
   /** The provider started a turn on its own; `reason` is what it reported as the cause. */
   z.object({ kind: z.literal("provider-turn"), reason: z.string() }),
+  /** A marker the provider gave the conversation (`TranscriptEvent`); a saved history's `event` entry. */
+  z.object({ kind: z.literal("event"), ...transcriptEvent }),
 ])
 export type LiveUpdate = z.infer<typeof LiveUpdateSchema>
 export const LiveBlockSchema = z.discriminatedUnion("type", [
@@ -114,6 +123,7 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("plan"), entries: plan }),
   z.object({ type: z.literal("provider-turn"), reason: z.string() }),
+  z.object({ type: z.literal("event"), ...transcriptEvent }),
 ])
 export type LiveBlock = z.infer<typeof LiveBlockSchema>
 
@@ -321,6 +331,9 @@ export function reduceLiveUpdates(
         tools.clear()
         turnStart = next.length
         replace(-1, { type: "provider-turn", reason: update.reason })
+        break
+      case "event":
+        replace(-1, { type: "event", label: update.label, detail: update.detail, body: update.body, tone: update.tone })
         break
     }
   }
