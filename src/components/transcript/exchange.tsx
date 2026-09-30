@@ -731,6 +731,7 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
 /** `inline` sits inside the answer, whose gap already spaces it. */
 function SystemNote({ message, inline }: { message: ChatMessage; inline?: boolean }) {
   const text = textOf(message.blocks)
+  if (message.note) return <EventNote note={message.note} inline={inline} />
   if (!text) return null
   return (
     <div className={cn("flex items-center gap-2.5", inline ? "my-1" : "my-3")}>
@@ -739,6 +740,49 @@ function SystemNote({ message, inline }: { message: ChatMessage; inline?: boolea
         {text.slice(0, 140)}
       </span>
       <span className="h-px flex-1 bg-hairline" />
+    </div>
+  )
+}
+
+const NOTE_TONE = { warning: "text-caution", error: "text-negative" } as const
+
+/** A provider's marker: a hairline with its label, opening onto its body when it has one. */
+function EventNote({ note, inline }: { note: NonNullable<ChatMessage["note"]>; inline?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const line = (
+    <>
+      <span className={note.tone ? NOTE_TONE[note.tone] : undefined}>{note.label}</span>
+      {note.detail ? <span> · {note.detail.slice(0, 140)}</span> : null}
+    </>
+  )
+  return (
+    <div className={inline ? "my-1" : "my-3"}>
+      <div className="flex items-center gap-2.5 text-label text-faint">
+        <span className="h-px flex-1 bg-hairline" />
+        {note.body ? (
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            className="pressable flex min-w-0 max-w-[85%] items-center gap-1 rounded px-1 transition-colors duration-100 hover:text-foreground"
+          >
+            <span className="truncate">{line}</span>
+            <ChevronRightIcon
+              className={cn("size-3 shrink-0 [transition:transform_150ms_var(--ease-out)]", open && "rotate-90")}
+            />
+          </button>
+        ) : (
+          <span className="min-w-0 max-w-[85%] truncate">{line}</span>
+        )}
+        <span className="h-px flex-1 bg-hairline" />
+      </div>
+      {note.body ? (
+        <Collapse open={open}>
+          <div className="mt-2 max-h-96 overflow-y-auto rounded-lg border border-hairline px-3 py-2 text-muted-foreground">
+            <Prose text={note.body} />
+          </div>
+        </Collapse>
+      ) : null}
     </div>
   )
 }

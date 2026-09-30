@@ -7,6 +7,7 @@ import { useCopy } from "@/components/ui/use-copy"
 import { CompactionControl } from "@/components/composer/compaction-control"
 import { compactionAvailable } from "../../../electron/contracts/recovery"
 import { ActivityMark } from "@/components/ui/activity-mark"
+import { Shimmer } from "@/components/ui/shimmer"
 import { TransferStatus } from "./transfer-status"
 import { LiveActionStatus } from "./live-action-status"
 import { loadEarlierLive } from "@/state/live-recovery"
@@ -233,14 +234,46 @@ function AcpActivity({
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
     // The approval notice owns this status; do not repeat it in the transcript.
     if (approval) return { kind: "idle" as const, label: "" }
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, preparing, quietForMs })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, preparing, quietForMs, native: live?.nativeActivity })
   }, shallowEqual)
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
       <ActivityMark state={activity.kind} size={20} />
-      <span className="truncate">{activity.label}</span>
+      {activity.since === undefined ? (
+        <span className="truncate">{activity.label}</span>
+      ) : (
+        <span data-native-activity className="flex min-w-0 items-baseline gap-1">
+          <Shimmer text={activity.label} className="shrink-0" />
+          {activity.detail ? <span className="truncate text-faint">· {activity.detail}</span> : null}
+          <NativeClock since={activity.since} retryAt={activity.retryAt} />
+        </span>
+      )}
     </div>
   ) : null
+}
+
+/**
+ * How long the provider has been at it, or how long until its next attempt.
+ * Only this span ticks, once a second, while the row is shown.
+ */
+function NativeClock({ since, retryAt }: { since: number; retryAt?: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [])
+  const text = retryAt !== undefined && retryAt > now
+    ? `next try in ${clockDuration(retryAt - now)}`
+    : now - since >= 1_000 ? clockDuration(now - since) : undefined
+  return text ? <span className="tabular shrink-0 text-faint">· {text}</span> : null
+}
+
+function clockDuration(milliseconds: number): string {
+  const seconds = Math.ceil(milliseconds / 1_000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`
 }
 
 /** A spare worktree is ready in well under this; only a checkout made on the spot is worth naming. */
