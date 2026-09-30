@@ -6,7 +6,7 @@ import { z } from "zod"
  * the app's records, so every host sharing the Thread store shows the same.
  */
 
-export type AppPhase = "stopped" | "preparing" | "starting" | "running" | "crashed" | "waiting" | "elsewhere"
+export type AppPhase = "stopped" | "preparing" | "starting" | "running" | "crashed" | "waiting"
 
 export interface AppProcessView {
   name: string
@@ -53,7 +53,11 @@ export type ThreadAppView =
       prepare?: AppPrepareView
       /** Set while waiting: the other apps that stopping would free. */
       room?: { apps: number; bytes: number }
-      /** Set when the recipe runs one copy at a time and another checkout has it: whose, in words, such as `the Thread “Fix login”`. */
+      /**
+       * Set while stopped when the recipe runs one copy at a time and another
+       * checkout has it: whose, in words, such as `the Thread “Fix login”`.
+       * Nobody hears it until they ask to run this one.
+       */
       elsewhere?: string
     }
 

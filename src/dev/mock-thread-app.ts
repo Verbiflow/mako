@@ -1,7 +1,8 @@
 // The fixture desk's stand-in for a Thread's app: `?mock&app=<scenario>`.
 // Scenarios: none, invalid, setting-up, stopped, first-run (no ports yet),
 // installing, install-failed, running, crashed, check-failed, waiting,
-// elsewhere (one copy at a time, running in another Thread), and
+// elsewhere (one copy at a time, running in another Thread: it reads as
+// stopped, and Run asks first), and
 // demo (a start that installs and runs, then crashes soon after its log is
 // opened, as when the agent's edit lands).
 import { toast } from "sonner"
@@ -279,7 +280,7 @@ export function installMockThreadApp(): void {
       })
       break
     case "elsewhere":
-      putThreadApp(CWD, { ...ready("elsewhere"), elsewhere: "the Thread “Migrate billing to v2”" })
+      putThreadApp(CWD, { ...ready("stopped"), elsewhere: "the Thread “Migrate billing to v2”" })
       emit("check:quick", QUICK_PASS)
       break
     case "installing":

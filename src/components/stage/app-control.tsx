@@ -77,6 +77,24 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
   useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
   if (!cwd || !view || hidden) return null
   const state = view.kind === "ready" ? view.phase : view.kind
+  if (view.kind === "ready" && view.phase === "stopped" && view.elsewhere) {
+    return (
+      <Menu modal={false}>
+        <MenuTrigger asChild>
+          <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5 text-faint hover:text-foreground data-[state=open]:text-foreground")}>
+            <span key={state} className="changing-label">Run app</span>
+          </button>
+        </MenuTrigger>
+        <MenuContent align="end" className="w-80" onCloseAutoFocus={(event) => event.preventDefault()}>
+          <Head title="Run it here instead?">{`Only one copy of ${view.project}'s app runs at a time, and ${view.elsewhere} has it.`}</Head>
+          <MenuSeparator />
+          <Action data-app-action="take-turn" onSelect={() => threadAppDriver()?.takeTurn(cwd)}>
+            Stop it there and run it here
+          </Action>
+        </MenuContent>
+      </Menu>
+    )
+  }
   if (view.kind === "ready" && view.phase === "stopped") {
     return (
       <button
@@ -143,8 +161,6 @@ function triggerParts(view: ThreadAppView): [string, boolean] {
       return [view.prepare?.exit ? "Install failed" : "App crashed", false]
     case "waiting":
       return ["Waiting for memory", false]
-    case "elsewhere":
-      return ["Running elsewhere", false]
     default:
       return ["", false]
   }
@@ -258,7 +274,7 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
           <span className="shrink-0 text-faint transition-colors group-data-[highlighted]:text-foreground">Copy</span>
         </MenuItem>
       ) : null}
-      {view.phase === "waiting" || view.phase === "elsewhere" ? null : <Rows cwd={cwd} view={view} now={now} />}
+      {view.phase === "waiting" ? null : <Rows cwd={cwd} view={view} now={now} />}
       <MenuSeparator />
       {view.phase === "running" ? (
         <>
@@ -300,10 +316,6 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
             Stop waiting
           </Action>
         </>
-      ) : view.phase === "elsewhere" ? (
-        <Action data-app-action="take-turn" onSelect={() => driver?.takeTurn(cwd)}>
-          Stop it there and run it here
-        </Action>
       ) : (
         <Action data-app-action="stop" onSelect={() => driver?.stop(cwd)}>
           Stop
@@ -333,12 +345,6 @@ function ReadyHead({ view, crashed, now }: { view: Ready; crashed?: AppProcessVi
           {`Your Mac is short on memory, so the app starts by itself once there's room.${
             view.room?.apps ? ` ${view.room.apps === 1 ? "Another app is" : `${view.room.apps} other apps are`} using ${formatBytes(view.room.bytes)}.` : ""
           }`}
-        </Head>
-      )
-    case "elsewhere":
-      return (
-        <Head title="Running elsewhere">
-          {`Only one copy of ${view.project}'s app runs at a time, and ${view.elsewhere ?? "another checkout"} has it.`}
         </Head>
       )
     case "preparing":

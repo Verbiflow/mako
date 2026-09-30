@@ -439,10 +439,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     else if (read.recipe.oneAtATime) {
       const [holder] = await copiesElsewhere({ environment, checkout: found.checkout })
-      if (holder) {
-        view.phase = "elsewhere"
-        view.elsewhere = deps.whose?.(holder) || "another checkout of this project"
-      }
+      if (holder) view.elsewhere = deps.whose?.(holder) || "another checkout of this project"
     }
     return view
   }
@@ -450,7 +447,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const deskOutcome = (outcome: StartOutcome): AppActionOutcome => {
     if (outcome.kind === "nothing") return { problems: ["The recipe names no processes to start."] }
     if (outcome.kind === "blocked") return { problems: outcome.shown ? [] : [outcome.message] }
-    if (outcome.kind === "waiting" || outcome.kind === "elsewhere") return { problems: [] }
+    if (outcome.kind === "waiting") return { problems: [] }
+    if (outcome.kind === "elsewhere") return { problems: [`Only one copy of this app runs at a time, and ${outcome.whose} has it.`] }
     return { problems: outcome.refused.map((entry) => `${entry.name} didn't start: ${entry.reason}`) }
   }
   const roomReport = async (app: AppKey): Promise<RoomReport> => {
