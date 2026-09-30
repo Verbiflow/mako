@@ -5,6 +5,19 @@ import type { LiveUpdate } from "../../../contracts/live-content.js"
 import type { JsonValue, SdkDelta, SdkMessage } from "./wire.js"
 
 const MAX_TOOL_TEXT = 32 * 1024
+/** A running command's row keeps the tail of what it printed. */
+const MAX_STREAMED_OUTPUT = 16 * 1024
+
+/**
+ * The summary Cursor wrote when it compacted the conversation. The SDK
+ * turns its `summary` update into a `task` message carrying only text
+ * (SDK 1.0.31); a task message with a status is something else.
+ */
+export function compactionSummary(message: SdkMessage): string | undefined {
+  if (message.type !== "task" || message.status !== undefined) return undefined
+  const summary = message.text?.trim()
+  return summary || undefined
+}
 
 /**
  * Projects one SDK run into the shared transcript contract.
@@ -23,7 +36,7 @@ export class CursorSdkProjection {
   private segment = 0
   private text = new Accumulated()
   private thinking = new Accumulated()
-  private readonly tools = new Map<string, { name: string; input: JsonValue | undefined }>()
+  private readonly tools = new Map<string, { name: string; input: JsonValue | undefined; output?: string }>()
 
   private readonly turn: string
 
@@ -70,10 +83,36 @@ export class CursorSdkProjection {
       case "thinking-completed":
         this.closeThinking()
         return []
+      // Text after a compaction starts a block of its own, below its marker.
       case "turn-ended":
+      case "summary-completed":
         this.closeText()
         return []
+      case "shell-output":
+        return this.shellOutput(delta.text)
+      case "summary-started":
+      case "unhandled":
+        return []
     }
+  }
+
+  /**
+   * Streamed output names no call, so it goes to the one shell call still
+   * running; with two running it is dropped, and each completed call shows
+   * its whole output anyway.
+   */
+  private shellOutput(text: string): LiveUpdate[] {
+    let id: string | undefined
+    for (const [candidate, tool] of this.tools) {
+      if (tool.name !== "shell") continue
+      if (id) return []
+      id = candidate
+    }
+    const tool = id === undefined ? undefined : this.tools.get(id)
+    if (id === undefined || !tool) return []
+    const output = (tool.output ?? "") + text
+    tool.output = output.length > MAX_STREAMED_OUTPUT ? output.slice(-MAX_STREAMED_OUTPUT) : output
+    return [{ kind: "tool-update", id, output: tool.output }]
   }
 
   message(message: SdkMessage): LiveUpdate[] {
@@ -154,11 +193,13 @@ export class CursorSdkProjection {
         this.tools.delete(message.call_id)
         return updates
       }
+      case "task":
+        if (compactionSummary(message) !== undefined) this.closeText()
+        return []
       case "user":
       case "system":
       case "status":
       case "request":
-      case "task":
       case "usage":
         return []
     }
@@ -369,8 +410,10 @@ export function toolTitle(name: string, args: JsonValue | undefined): string {
   }
 }
 
+/** A call that errored, or an MCP tool that answered with `isError`. */
 function resultFailed(result: JsonValue | undefined): boolean {
-  return isObject(result) && result.status === "error"
+  if (!isObject(result)) return false
+  return result.status === "error" || (isObject(result.value) && result.value.isError === true)
 }
 
 function toolOutput(name: string, result: JsonValue | undefined): string | undefined {

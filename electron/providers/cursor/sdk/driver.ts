@@ -12,6 +12,7 @@ import {
   normalizeCursorSdkModels,
 } from "@mako/sessions"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
+import { messageEvent, TURN_FAILED } from "@mako/sessions/events"
 import { compareNativeCheckpoint, type ProviderBinding, type ResumeVerdict } from "../../../contracts/conversation-control.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
@@ -32,7 +33,7 @@ import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from 
 import { CursorSdkClient, CursorSdkError } from "./client.js"
 import { createCursorModelCache, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
-import { CursorSdkProjection } from "./projection.js"
+import { compactionSummary, CursorSdkProjection } from "./projection.js"
 import { CursorAgents } from "./agents.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
 import { migrateRetiredMakoMcpFile } from "../../../retired-mcp.js"
@@ -76,8 +77,17 @@ interface Live {
   settledTurns: Set<string>
   agents: CursorAgents
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
+  compaction: CompactionMark
   closed: boolean
 }
+
+/**
+ * Where the current compaction's marker stands. The summary (a `task`
+ * message) and `summary-completed` (a delta) travel separately and may
+ * arrive in either order: the summary always places the marker, and a
+ * completion seen first holds it until the summary or the turn's end.
+ */
+type CompactionMark = "idle" | "awaiting-summary" | "marked"
 
 /** The SDK's own error codes for a dropped or exhausted connection. */
 const CONNECTION_CODES = new Set(["unavailable", "canceled", "cancelled", "deadline_exceeded", "aborted"])
@@ -178,8 +188,34 @@ function unfinishedToolNote(outcome: "finished" | "cancelled" | "error", error?:
 
 const MAX_SETTLED_TURNS = 64
 
+function compactionStarted(engine: Engine, live: Live): void {
+  releaseCompaction(engine, live)
+  engine.activity(live, { kind: "compacting" })
+}
+
+function compactionCompleted(engine: Engine, live: Live): void {
+  if (live.compaction === "marked") {
+    live.compaction = "idle"
+    return
+  }
+  live.compaction = "awaiting-summary"
+  engine.activity(live, null)
+}
+
+function summarised(engine: Engine, live: Live, summary: string): void {
+  engine.compacted(live, { summary })
+  live.compaction = live.compaction === "awaiting-summary" ? "idle" : "marked"
+}
+
+/** A completed compaction whose summary never came is still marked. */
+function releaseCompaction(engine: Engine, live: Live): void {
+  if (live.compaction === "awaiting-summary") engine.compacted(live)
+  live.compaction = "idle"
+}
+
 /** Ends the turn's projection, closing any tool row the run left open. */
 function settleTurn(engine: Engine, live: Live, outcome: "finished" | "cancelled" | "error", error?: string): void {
+  releaseCompaction(engine, live)
   const projection = live.projection
   if (live.turn) {
     live.settledTurns.add(live.turn)
@@ -238,6 +274,8 @@ function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
         error: message,
       })
       if (authenticationFailure(result.error)) live.onRejected(message)
+      // A dropped connection is continued by Mako itself; its failure is not the conversation's.
+      if (!lost) engine.event(live, messageEvent(TURN_FAILED, message, "error"))
       Object.assign(patch, {
         status: "failed",
         lastStop: lost ? CONNECTION_LOST_STOP : "failed",
@@ -262,6 +300,8 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
         }
       }
       engine.emitUpdates(live, live.projection.message(event.message))
+      const summary = compactionSummary(event.message)
+      if (summary) summarised(engine, live, summary)
       const agent = live.agents.project(event.message)
       if (agent) engine.emitAgent(live, agent)
       return
@@ -269,6 +309,9 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
     case "delta": {
       if (!claimTurn(engine, live, event.turn) || !live.projection) return
       engine.emitUpdates(live, live.projection.delta(event.delta))
+      if (event.delta.type === "summary-started") compactionStarted(engine, live)
+      else if (event.delta.type === "summary-completed") compactionCompleted(engine, live)
+      else if (event.delta.type === "unhandled") engine.unhandled(live, event.delta.kind)
       return
     }
     case "result":
@@ -446,6 +489,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         settledTurns: new Set(),
         agents: new CursorAgents(),
         pendingPermissions: new Map(),
+        compaction: "idle",
         closed: false,
         state: {
           id: options.conversationId,
@@ -468,7 +512,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         stop(engine, live)
         const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
         hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail, reason: signal ? undefined : cursorSdkExitReason(code) })
-        if (live.state.status === "running") settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`)
+        if (live.state.status === "running") {
+          settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`)
+          engine.event(live, messageEvent(TURN_FAILED, `Cursor's SDK process exited (${detail})`, "error"))
+        }
         engine.patch(live, {
           status: live.state.status === "running" ? "failed" : live.state.status,
           connection: "disconnected",

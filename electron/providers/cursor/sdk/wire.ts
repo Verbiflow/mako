@@ -206,6 +206,18 @@ export const SdkDeltaSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thinking-delta"), text: z.string() }),
   z.object({ type: z.literal("thinking-completed") }),
   z.object({ type: z.literal("turn-ended") }),
+  /**
+   * Cursor is summarising the conversation to fit its context;
+   * `summary-completed` ends it. The summary itself arrives as a `task`
+   * message. SDK 1.0.31 withholds all three deltas from `onDelta`, so there
+   * the message is the only sign of a compaction.
+   */
+  z.object({ type: z.literal("summary-started") }),
+  z.object({ type: z.literal("summary-completed") }),
+  /** The tail of what a running shell command printed since the last one, coalesced by the child. */
+  z.object({ type: z.literal("shell-output"), text: z.string() }),
+  /** An update kind this child does not know, sent once per kind. */
+  z.object({ type: z.literal("unhandled"), kind: z.string() }),
 ])
 export type SdkDelta = z.infer<typeof SdkDeltaSchema>
 

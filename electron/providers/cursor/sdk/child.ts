@@ -328,6 +328,10 @@ async function pump(turn: string, run: Run): Promise<void> {
   } catch (cause) {
     if (!closing) log("warn", `run stream ended early: ${cursorSdkWireError(cause).message}`)
   }
+  if (shellOutput?.turn === turn) {
+    clearTimeout(shellOutput.timer)
+    shellOutput = undefined
+  }
   let result
   try {
     result = await run.wait()
@@ -352,6 +356,38 @@ async function pump(turn: string, run: Run): Promise<void> {
   })
 }
 
+const unknownDeltas = new Set<string>()
+
+/**
+ * A running command's output reaches the host at most this often, as the
+ * tail of what it printed since. Its completed call carries the whole.
+ */
+const SHELL_OUTPUT_INTERVAL_MS = 100
+const SHELL_OUTPUT_TAIL = 16 * 1024
+
+const ShellChunkSchema = z.object({
+  case: z.enum(["stdout", "stderr"]),
+  value: z.object({ data: z.string() }),
+})
+
+let shellOutput: { turn: string; text: string; timer: NodeJS.Timeout } | undefined
+
+function bufferShellOutput(turn: string, printed: string): void {
+  if (!printed) return
+  if (shellOutput && shellOutput.turn !== turn) flushShellOutput()
+  if (!shellOutput) shellOutput = { turn, text: "", timer: setTimeout(flushShellOutput, SHELL_OUTPUT_INTERVAL_MS) }
+  const text = shellOutput.text + printed
+  shellOutput.text = text.length > SHELL_OUTPUT_TAIL ? text.slice(-SHELL_OUTPUT_TAIL) : text
+}
+
+function flushShellOutput(): void {
+  const pending = shellOutput
+  if (!pending) return
+  shellOutput = undefined
+  clearTimeout(pending.timer)
+  write({ event: "delta", turn: pending.turn, delta: { type: "shell-output", text: pending.text } })
+}
+
 async function send(params: SendParams): Promise<SdkResult<"send">> {
   const open = agent
   if (!open) throw new ConfigurationError("No agent is open in this child")
@@ -359,7 +395,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
   if (closing) throw new ConfigurationError("This session is closing")
   if (params.model) open.model = params.model
   const message = { text: params.text, images: params.images }
-  const onDelta = ({ update }: { update: { type: string; text?: string } }) => {
+  const onDelta = ({ update }: { update: { type: string; text?: string; event?: unknown } }) => {
     switch (update.type) {
       case "text-delta":
       case "thinking-delta":
@@ -372,8 +408,32 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
         remember(line)
         return
       }
-      default:
+      case "summary-started":
+      case "summary-completed":
+        write({ event: "delta", turn: params.turn, delta: { type: update.type } })
         return
+      case "shell-output-delta": {
+        const chunk = ShellChunkSchema.safeParse(update.event)
+        if (chunk.success) bufferShellOutput(params.turn, chunk.data.value.data)
+        return
+      }
+      // Tool calls, steps, usage and the compaction summary (a `task`
+      // message) arrive whole on the run's message stream. A subagent's own
+      // progress rides `tool-call-delta` and is not shown until its call completes.
+      case "summary":
+      case "tool-call-started":
+      case "tool-call-delta":
+      case "tool-call-completed":
+      case "partial-tool-call":
+      case "token-delta":
+      case "step-started":
+      case "step-completed":
+      case "user-message-appended":
+        return
+      default:
+        if (unknownDeltas.has(update.type)) return
+        unknownDeltas.add(update.type)
+        write({ event: "delta", turn: params.turn, delta: { type: "unhandled", kind: update.type } })
     }
   }
   const options = { model: params.model, mode: "agent" as const, onDelta }
