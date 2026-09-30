@@ -723,6 +723,7 @@ export const hostCallInputs = {
   "mako:thread-app-restart": z.tuple([z.string().min(1)]),
   "mako:thread-app-start": z.tuple([z.string().min(1)]),
   "mako:thread-app-stop": z.tuple([z.string().min(1)]),
+  "mako:thread-app-take-turn": z.tuple([z.string().min(1)]),
   "mako:thread-archive": z.tuple([
     z.object({
       id: z.string(),

@@ -37,16 +37,17 @@ Search the code. Don't guess.
 
 - Fixed ports: listen( calls, port: settings, numbers like 3000, 5173 and 8080. A port the system picks (port 0) never collides; leave it alone.
 - Fixed places for data: app data folders, profiles, SQLite files, ~/Library/Application Support/<app>, ~/.config/<app>, caches, sockets, lock and pid files, single-instance locks.
+- Docker Compose: published ports ("5432:5432") and container_name collide. Compose names everything else after its project, which defaults to the folder's name, so Threads sharing a folder share one stack.
 - Outside services: databases, queues, email, payments, OAuth, production APIs. For each, how does a developer's copy reach it today?
 
 ## 3. Fix each collision on the lowest rung
 
 Note which rung each fix used.
 
-1. Wrap: map Mako's values to names the app already reads, in "values", such as PORT, DATABASE_URL, or a data-folder or profile variable.
+1. Wrap: map Mako's values to names the app already reads, in "values", such as PORT, DATABASE_URL, or a data-folder or profile variable. For Compose, COMPOSE_PROJECT_NAME set to {thread}, and a published port read from a variable, such as "\${DB_PORT:-5432}:5432" with DB_PORT set to {port+2}.
 2. Configure: pass the app's own flags in the command, such as --port {port}.
 3. A small change to the project, only when the app can't take a port or folder from outside. Keep today's behavior as the default, so nothing changes for anyone not using Mako, for example \`port: Number(process.env.PORT) || 5173\`. Say what the change buys.
-4. Take turns: when nothing else works, leave that one thing shared and say so plainly.
+4. Take turns: when nothing else works, set "oneAtATime": true. One copy runs on this Mac at a time, so a process may keep its fixed port; a start while another Thread has it running is refused and names that Thread. Say plainly what's shared.
 
 ## 4. Save the recipe
 
@@ -60,7 +61,8 @@ Pass it to environment_recipe_save as the recipe. Mako checks it against this Th
     "api": { "command": "npm run api", "port": "{port+1}", "cwd": "server", "values": { "HOME": "{data}/home" } }
   },
   "checks": { "quick": "npm run typecheck && npm test", "full": "npm run e2e" },
-  "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"] }]
+  "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"], "outputs": ["**/node_modules"] }],
+  "carry": [".env", "**/.env.local"]
 }
 \`\`\`
 
@@ -72,13 +74,17 @@ The fields:
   - MAKO_THREAD_* and MAKO_CONTROL_* are Mako's own. The project's own MAKO_ names are fine.
 - processes: what runs the app, as the project's own commands.
   - "port" is {port} or {port+N}. The process counts as running once that port answers.
-  - A fixed port is refused.
+  - A fixed port, such as "5432", only with "oneAtATime": true.
   - A process can set its own values, including HOME, TMPDIR or XDG_* for an app with no data-folder setting.
 - checks.quick: no running app, such as typecheck, lint and unit tests.
 - checks.full: runs against the running app, such as end-to-end tests. Mako starts the app first.
 - prepare: install in a fresh copy, and catch up after the branch moves. Each step runs again only when one of its inputs changes. Only add it if a fresh checkout can't start without it.
-  - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch.
-  - Never a clean reinstall, such as npm ci or deleting node_modules first. A new worktree already has the main checkout's installed JavaScript packages copied in when the lockfile matches, and the usual install leaves that copy alone; a clean reinstall throws it away and writes every file again.
+  - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch. Never a clean reinstall (npm ci, or deleting what it installs first): it throws away what a new checkout was given.
+  - inputs: the files the step reads, usually the lockfiles. A folder counts only the files Git tracks or would track there.
+  - outputs: what the step writes, as paths or patterns (* stays in one folder, ** crosses folders), such as **/node_modules. A new checkout gets them cloned from the main checkout when its inputs are the same there, which costs no disk and takes a second or two, so its first install only catches up. List only what still works in another folder. Never a Python virtual environment (.venv): it names its own folder, so a copy quietly runs the main checkout's code, and Mako refuses it; uv sync makes one from its cache in well under a second anyway. A build cache that checks itself works: with Rust's target/ cloned in, Cargo keeps the dependencies and rebuilds only the project's own crates.
+- carry: files Git ignores that a new checkout gets from the main checkout as they are, before its agent starts, such as .env files. Paths or patterns. Copy them; never read their values.
+- oneAtATime: true for an app whose fixed port, local database or Docker stack copies can't split (rung 4 above).
+- Nothing else comes from the main checkout: without carry and outputs, a new checkout has only what Git checks out.
 
 Keep it small, and name the project's own scripts. Add a script to the project only when none exists. Nothing Mako-specific goes inside a command, so every command still works without Mako.
 
@@ -88,7 +94,7 @@ Saving it reaches every Thread of the project at once, including ones on other b
 
 Never run the app with & or nohup in your own shell. Use the tools, so it stays this Thread's.
 
-1. Call environment_status: the recipe is ready, and the values resolved as you meant.
+1. Call environment_status: the recipe is ready, and the values resolved as you meant. If it has carry or outputs, saving it said what each found in the main checkout; check that's what you meant.
 2. Call environment_start: every process is running on its port. If one isn't, call environment_logs, fix the cause, and try again.
 3. Fetch the app at MAKO_THREAD_URL, or at 127.0.0.1 on its port, from your shell (curl, or the project's own test script), and check that it's this copy answering, such as the page title or a health endpoint. Don't drive a browser or the desktop for this.
 4. Show it keeps out of the way:

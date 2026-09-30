@@ -10,6 +10,7 @@ export function installThreadAppIpc(desk: DeskApp) {
   registerIpc("mako:thread-app-restart", (_event, cwd: string): Promise<AppActionOutcome> => desk.restart(cwd))
   registerIpc("mako:thread-app-check", (_event, cwd: string, tier: "quick" | "full"): Promise<AppActionOutcome> => desk.check(cwd, tier))
   registerIpc("mako:thread-app-make-room", (_event, cwd: string): Promise<AppActionOutcome> => desk.makeRoom(cwd))
+  registerIpc("mako:thread-app-take-turn", (_event, cwd: string): Promise<AppActionOutcome> => desk.takeTurn(cwd))
   registerIpc("mako:thread-app-output", (_event, cwd: string, key: string, cursor?: AppOutputCursor): Promise<AppOutputChunk> =>
     desk.output(cwd, AppOutputKeySchema.parse(key), cursor))
 }

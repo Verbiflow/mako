@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { constants, existsSync } from "node:fs"
-import { copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
@@ -10,22 +10,17 @@ import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile } from "./contracts/thread-worktrees.js"
-import { carryDependencies, ignoredEntries, lockDigest, ownBytes, removeBelowAgents, type DependencyCarry } from "./worktree-dependencies.js"
+import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
+import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
 import { placeSpare, setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 
 const execute = promisify(execFile)
-/**
- * Gitignored files a worktree gets from the main checkout. Mako's own list,
- * not another tool's file: a project's setup recipe will extend it.
- */
-const CARRIED = /^\.env(\..+)?$/
 /** Git's own markers for work under way, which a removal would throw away. */
 const UNDER_WAY: readonly (readonly [string, string])[] = [
   ["rebase-merge", "rebase"], ["rebase-apply", "rebase"], ["MERGE_HEAD", "merge"],
   ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["BISECT_LOG", "bisect"],
 ]
-const CLONE_FROM_BYTES = 1024 * 1024
 const MAX_REMEMBERED_CARRIES = 64
 
 const ReceiptSchema = z.object({
@@ -54,23 +49,11 @@ export interface PreparedWorktree {
   cwd: string
   path: string
   branch: string
-  /** Gitignored entries carried over from the main checkout. */
+  /** Files the recipe's `carry` names, copied from the main checkout. */
   copied: number
   tookMs: number
   /** Taken from a checkout made ahead of time rather than checked out on the send. */
   spare: boolean
-}
-
-/**
- * Copy-on-write where the filesystem has it: APFS clones through `cp -c`, and
- * reflinks through FICLONE on btrfs and XFS. Both fall back to a plain copy
- * (another volume, HFS+, ext4). Node's FICLONE never clones on macOS: libuv
- * copies the bytes there.
- */
-async function cloneEntry(from: string, to: string, directory: boolean): Promise<void> {
-  if (process.platform === "darwin") await execute("/bin/cp", directory ? ["-c", "-n", "-R", from, to] : ["-c", "-n", from, to])
-  else if (directory) await cp(from, to, { recursive: true, mode: constants.COPYFILE_FICLONE, verbatimSymlinks: true })
-  else await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
 }
 
 /** What a review loads in full; the files past these are listed but not read. */
@@ -152,40 +135,19 @@ async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value
 }
 
 /**
- * The main checkout's gitignored inputs a fresh checkout lacks. Entries the
- * worktree already has are left alone, so a retry never overwrites what the
- * Thread's agent wrote. A small file is copied in-process; cloning only pays
- * for itself past the cost of starting `cp`.
- */
-async function carryIgnored(repoRoot: string, destination: string): Promise<number> {
-  const listed = (await ignoredEntries(repoRoot)).filter((entry) => CARRIED.test(basename(entry)))
-  let copied = 0
-  for (const entry of listed) {
-    const from = join(repoRoot, entry)
-    const to = join(destination, entry)
-    if (existsSync(to)) continue
-    await mkdir(dirname(to), { recursive: true })
-    const info = await lstat(from)
-    // A `.env` folder is a virtualenv: thousands of files whose scripts name the main checkout's path.
-    if (info.isDirectory()) continue
-    if (info.isSymbolicLink()) await symlink(await readlink(from), to)
-    else if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(from, to, constants.COPYFILE_EXCL)
-    else await cloneEntry(from, to, false)
-    copied += 1
-  }
-  return copied
-}
-
-/**
  * Worktrees for Threads that start in one. Each is a branch `mako/{slug}`
  * checked out under `{root}/{repo}-{hash}/{slug}`, made on the Thread's
  * first send and never on a read. A receipt per conversation makes a
  * repeated start find the worktree the first attempt made, including one
  * cut short between `git worktree add` and the copy.
  *
+ * What else a new checkout gets from the main one is the project's recipe's
+ * to say, not Mako's: the files its `carry` names, before the agent starts,
+ * and its install steps' `outputs` in the background (`carryOutputs`).
+ * Without a recipe, a worktree has what Git checks out and nothing more.
+ *
  * The send takes a spare checkout when the project has one ready, and the
- * project's spares are topped up behind it (`WorktreeSpares`). Installed
- * dependencies follow in the background (`carryDependencies`).
+ * project's spares are topped up behind it (`WorktreeSpares`).
  */
 /** A Worktree Thread's running app ends with its worktree: its processes stop before the folder goes, and its data after. */
 export interface ThreadEnvironmentEnd {
@@ -199,15 +161,18 @@ export class ThreadWorktreeService {
   private readonly inUse: (path: string) => Promise<string[]>
   private readonly working: (path: string) => Promise<string[]>
   private readonly environment: ThreadEnvironmentEnd | undefined
+  private readonly setup: CheckoutSetup | undefined
   private readonly pending = new Map<string, Promise<Receipt>>()
-  private readonly carrying = new Map<string, Promise<DependencyCarry>>()
+  private readonly carrying = new Map<string, Promise<OutputsCarry>>()
   private readonly wanting = new Set<Promise<void>>()
   private readonly spares: WorktreeSpares
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
    * `working`, the conversations there that are in the middle of a turn;
-   * `environment`, what ends a Thread's running app with its worktree.
+   * `environment`, what ends a Thread's running app with its worktree;
+   * `setup`, the project's recipe and install records, for what a new
+   * checkout takes from the main one.
    */
   constructor(
     root: string,
@@ -215,13 +180,15 @@ export class ThreadWorktreeService {
     inUse: (path: string) => Promise<string[]> = async () => [],
     working: (path: string) => Promise<string[]> = async () => [],
     environment?: ThreadEnvironmentEnd,
+    setup?: CheckoutSetup,
   ) {
     this.root = root
     this.threads = threads
     this.inUse = inUse
     this.working = working
     this.environment = environment
-    this.spares = new WorktreeSpares(root, (repoRoot) => this.projectFolder(repoRoot))
+    this.setup = setup
+    this.spares = new WorktreeSpares(root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
 
   prepare(conversationId: string, cwd: string, name: string | undefined): Promise<PreparedWorktree> {
@@ -294,7 +261,7 @@ export class ThreadWorktreeService {
     await this.spares.sweep()
   }
 
-  /** Resolves once spares being made and dependencies being cloned are in place. */
+  /** Resolves once spares being made and outputs being cloned are in place. */
   async settled(): Promise<void> {
     await Promise.all([...this.wanting, ...this.carrying.values()])
     await this.spares.settled()
@@ -315,18 +282,24 @@ export class ThreadWorktreeService {
       const { path, repoRoot, branch, base } = receipt
       loose.set(path, { path, thread: null, repoRoot, project: receipt.source, branch, base, createdAt })
     }
+    const skipped = new Map<string, Promise<string[]>>()
+    const outputsOf = (repoRoot: string) => {
+      let names = skipped.get(repoRoot)
+      if (!names) skipped.set(repoRoot, names = (this.setup?.recipe(repoRoot) ?? Promise.resolve(undefined)).then(outputNames, () => []))
+      return names
+    }
     const detailed = await mapLimited([...worktrees, ...loose.values()], 4, async (worktree): Promise<WorktreeDetail> => {
       const [status, landing, users, bytes] = await Promise.all([
         git(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => null),
         this.landing(worktree),
         this.inUse(worktree.path),
-        ownBytes(worktree.path),
+        outputsOf(worktree.repoRoot).then((names) => ownBytes(worktree.path, names)),
       ])
       const held = await removalBlocker(worktree.path, status ?? undefined) ?? null
       return { ...worktree, changes: status ? status.split("\n").length : 0, held, landing, users, bytes }
     })
     const spares = await this.spares.recorded()
-    const spareBytes = await mapLimited(spares, 4, (spare) => ownBytes(spare.path))
+    const spareBytes = await mapLimited(spares, 4, async (spare) => ownBytes(spare.path, await outputsOf(spare.repoRoot)))
     const known = spareBytes.filter((bytes) => bytes !== null)
     return { worktrees: detailed, spares: { count: spares.length, bytes: known.length ? known.reduce((sum, bytes) => sum + bytes, 0) : null } }
   }
@@ -457,8 +430,8 @@ export class ThreadWorktreeService {
     return { branch: review.branch, into: review.merge.into }
   }
 
-  /** The dependency clone for a conversation's worktree, once it finishes. */
-  dependencies(conversationId: string): Promise<DependencyCarry> | undefined {
+  /** What the recipe's install steps' outputs did for a conversation's worktree, once it finishes. */
+  outputs(conversationId: string): Promise<OutputsCarry> | undefined {
     return this.carrying.get(conversationId)
   }
 
@@ -689,11 +662,12 @@ export class ThreadWorktreeService {
     // A start cut short between placing a spare and checking out its branch finishes here.
     if (existed && !(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"])))
       await git(receipt.path, ["checkout", "-q", receipt.branch])
-    const copied = await carryIgnored(receipt.repoRoot, receipt.path)
+    const recipe = await this.setup?.recipe(receipt.path).catch(() => undefined)
+    const copied = await carryFiles(receipt.repoRoot, receipt.path, recipe?.carry ?? [])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true
     await this.save(ready)
-    this.carryDependencies(conversationId, ready.repoRoot, ready.path)
+    this.carryOutputs(conversationId, ready.repoRoot, ready.path, recipe?.prepare ?? [])
     const wanted = this.spares.want(ready.repoRoot).catch(() => {})
     this.wanting.add(wanted)
     void wanted.finally(() => this.wanting.delete(wanted))
@@ -713,24 +687,23 @@ export class ThreadWorktreeService {
       if (!(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"]))) await git(receipt.path, ["checkout", "-q", receipt.branch])
     }
     await this.spares.used(spare)
-    // Its dependencies were cloned for the lockfiles of that moment; if either side's changed since, they go.
-    if (spare.dependencies.length) {
-      const [main, here] = await Promise.all([lockDigest(receipt.repoRoot), lockDigest(receipt.path)])
-      if (main !== spare.lock || here !== spare.lock) {
-        for (const entry of spare.dependencies) {
-          const aside = join(this.trash(), randomUUID())
-          await mkdir(this.trash(), { recursive: true, mode: 0o700 })
-          if (await rename(join(receipt.path, entry), aside).then(() => true, () => false)) void removeBelowAgents(aside)
-        }
+    // Its outputs were cloned for the inputs of that moment; if either side's have changed since, they go.
+    for (const outputs of spare.outputs) {
+      const [main, here] = await Promise.all([inputsDigest(receipt.repoRoot, outputs.inputs), inputsDigest(receipt.path, outputs.inputs)])
+      if (main === outputs.digest && here === outputs.digest) continue
+      for (const entry of outputs.entries) {
+        const aside = join(this.trash(), randomUUID())
+        await mkdir(this.trash(), { recursive: true, mode: 0o700 })
+        if (await rename(join(receipt.path, entry), aside).then(() => true, () => false)) void removeBelowAgents(aside)
       }
     }
     return spare
   }
 
-  private carryDependencies(conversationId: string, repoRoot: string, path: string): void {
-    const work = carryDependencies(repoRoot, path).catch((error): DependencyCarry => ({
+  private carryOutputs(conversationId: string, repoRoot: string, path: string, steps: PrepareStep[]): void {
+    const work = carryOutputs(repoRoot, path, steps, this.setup).catch((error): OutputsCarry => ({
       carried: [],
-      skipped: error instanceof Error ? error.message : String(error),
+      skipped: [error instanceof Error ? error.message : String(error)],
     }))
     this.carrying.set(conversationId, work)
     for (const key of this.carrying.keys()) {

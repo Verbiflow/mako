@@ -172,6 +172,7 @@ export function installMockBridge() {
     restartThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
     checkThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
     makeRoomForThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
+    takeTurnForThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     removeWorktree: async () => {
       throw new Error("The mock desk has no worktrees to remove.")

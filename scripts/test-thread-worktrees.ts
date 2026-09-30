@@ -5,14 +5,17 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Actor } from "../electron/contracts/thread-identity.js"
+import type { Prepared } from "../electron/thread-processes.js"
+import { inputsDigest, RecipeSchema, type Recipe } from "../electron/thread-recipe.js"
 import { ThreadStore } from "../electron/thread-store.js"
 import { worktreeSlug } from "../electron/contracts/thread-worktrees.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
+import { carryOutputs, carryReport, type CheckoutSetup, outputNames } from "../electron/worktree-carry.js"
 
 /**
- * A Thread's worktree against a real repository: where it goes, what it
- * carries from the main checkout, that a repeated or interrupted start finds
- * the first one, and what removal refuses.
+ * A Thread's worktree against a real repository: where it goes, what the
+ * project's recipe has it take from the main checkout, that a repeated or
+ * interrupted start finds the first one, and what removal refuses.
  */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-worktrees-")))
@@ -28,7 +31,7 @@ function repository(name: string, commit = true): string {
   git(path, "init", "-q", "-b", "main")
   git(path, "config", "user.email", "test@example.invalid")
   git(path, "config", "user.name", "Test")
-  writeFileSync(join(path, ".gitignore"), "node_modules/\ndist/\n.env\n.env.*\n")
+  writeFileSync(join(path, ".gitignore"), "node_modules/\ndist/\n.env\n.env.*\n.venv/\n")
   writeFileSync(join(path, "web", "index.ts"), "export {}\n")
   // Past Git's threshold, so the checkout runs its parallel workers.
   mkdirSync(join(path, "web", "generated"))
@@ -37,6 +40,8 @@ function repository(name: string, commit = true): string {
   writeFileSync(join(path, ".env.local"), "LOCAL=1\n")
   mkdirSync(join(path, "node_modules", "left-pad"), { recursive: true })
   writeFileSync(join(path, "node_modules", "left-pad", "index.js"), "module.exports = 1\n")
+  mkdirSync(join(path, "web", "node_modules", "tiny"), { recursive: true })
+  writeFileSync(join(path, "web", "node_modules", "tiny", "index.js"), "module.exports = 2\n")
   mkdirSync(join(path, "dist"))
   writeFileSync(join(path, "dist", "app.js"), "\n")
   if (commit) {
@@ -49,7 +54,17 @@ function repository(name: string, commit = true): string {
 const busy = new Map<string, string[]>()
 const working = new Map<string, string[]>()
 const threads = new ThreadStore(join(root, "threads.sqlite"))
-const service = () => new ThreadWorktreeService(join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [], async (path) => working.get(path) ?? [])
+const INSTALL = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"] }
+let recipe: Recipe | undefined = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
+const records = new Map<string, Prepared>()
+const setup: CheckoutSetup = {
+  recipe: async () => recipe,
+  prepared: async (checkout) => records.get(checkout) ?? { done: {} },
+  savePrepared: async (checkout, prepared) => {
+    records.set(checkout, prepared)
+  },
+}
+const service = () => new ThreadWorktreeService(join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [], async (path) => working.get(path) ?? [], undefined, setup)
 
 function started(conversationId: string) {
   return threads.registerJournal({ conversationId, createdAt: Date.now(), bindings: [], harness: "codex" }, migration)
@@ -79,19 +94,23 @@ assert.equal(git(prepared.path, "ls-files").split("\n").length, git(shop, "ls-fi
 assert.equal(git(prepared.path, "status", "--porcelain"), "", "a parallel checkout leaves a clean worktree")
 assert.equal(readFileSync(join(prepared.path, "web", "generated", "part-149.ts"), "utf8"), "export const part = 149\n")
 
-// Mako's list of gitignored inputs comes along, then installed dependencies as clones; builds don't.
+// What the recipe's carry names comes along before the agent starts, then its install step's outputs as clones, at any depth; nothing else does.
 assert.equal(prepared.copied, 2)
 assert.equal(prepared.spare, false, "the project's first worktree has no spare to take")
 assert.equal(readFileSync(join(prepared.path, ".env"), "utf8"), "API=1\n")
 assert.equal(readFileSync(join(prepared.path, ".env.local"), "utf8"), "LOCAL=1\n")
-const dependencies = await worktrees.dependencies(first)
+const outputs = await worktrees.outputs(first)
+const noLock = await inputsDigest(shop, ["package-lock.json"])
 if (process.platform === "darwin") {
-  assert.deepEqual(dependencies, { carried: ["node_modules"] })
+  assert.deepEqual(outputs, { carried: [{ command: "npm install", inputs: ["package-lock.json"], digest: noLock, entries: ["node_modules", "web/node_modules"] }], skipped: [] })
   assert.equal(readFileSync(join(prepared.path, "node_modules", "left-pad", "index.js"), "utf8"), "module.exports = 1\n")
+  assert.equal(readFileSync(join(prepared.path, "web", "node_modules", "tiny", "index.js"), "utf8"), "module.exports = 2\n")
 } else {
-  assert.ok(dependencies?.carried.length || dependencies?.skipped, "Linux clones them where the volume shares blocks and says why not elsewhere")
+  assert.ok(outputs?.carried.length || outputs?.skipped.length, "Linux clones them where the volume shares blocks and says why not elsewhere")
 }
 assert.equal(existsSync(join(prepared.path, "dist")), false)
+assert.equal(records.has(prepared.path), false, "the main checkout has no record of the step passing, so it still runs once here to catch up")
+assert.equal(git(prepared.path, "status", "--porcelain"), "", "what came along is all ignored")
 
 // Another Thread with the same words gets the next free name.
 const second = randomUUID()
@@ -186,8 +205,8 @@ assert.equal(git(claimed.path, "rev-parse", "HEAD"), git(shop, "rev-parse", "HEA
 assert.equal(git(claimed.path, "status", "--porcelain"), "")
 assert.equal(readFileSync(join(claimed.path, ".env"), "utf8"), "API=1\n")
 assert.doesNotMatch(git(shop, "worktree", "list", "--porcelain"), new RegExp(`worktree ${claimed.path}\\n[^\\n]*\\n[^\\n]*\\nlocked`), "a claimed spare isn't locked")
-await worktrees.dependencies(fromSpare)
-if (process.platform === "darwin") assert.equal(existsSync(join(claimed.path, "node_modules", "left-pad", "index.js")), true, "the spare's cloned dependencies came with it")
+await worktrees.outputs(fromSpare)
+if (process.platform === "darwin") assert.equal(existsSync(join(claimed.path, "web", "node_modules", "tiny", "index.js")), true, "the spare's cloned outputs came with it")
 await worktrees.settled()
 assert.equal(spares().filter((spare) => spare.repoRoot === shop).length, 2, "the taken spare is replaced")
 
@@ -201,14 +220,31 @@ assert.equal(readFileSync(join(caughtUp.path, "web", "index.ts"), "utf8"), "expo
 assert.equal(git(caughtUp.path, "status", "--porcelain"), "")
 await worktrees.settled()
 
-// Dependencies cloned before the lockfile changed don't fit it: they go, and aren't cloned again while it differs.
+// Outputs cloned before the step's inputs changed don't fit them: they go, and aren't cloned again while they differ.
 writeFileSync(join(shop, "package-lock.json"), "{\"lockfileVersion\":3}\n")
 const relocked = randomUUID()
 const unlocked = await worktrees.prepare(relocked, shop, "lockfile changed")
 assert.equal(unlocked.spare, true)
+assert.deepEqual(await worktrees.outputs(relocked), { carried: [], skipped: ["npm install: package-lock.json differs from the main checkout's, so it installs here in full."] })
 assert.equal(existsSync(join(unlocked.path, "node_modules")), false)
-assert.deepEqual(await worktrees.dependencies(relocked), { carried: [], skipped: "package-lock.json differs from the main checkout's" })
+assert.equal(existsSync(join(unlocked.path, "web", "node_modules")), false)
 rmSync(join(shop, "package-lock.json"))
+await worktrees.settled()
+
+// When the main checkout's own record says the step passed with these inputs, a new checkout's says so too, and it doesn't run there.
+records.set(shop, { done: { "npm install": noLock } })
+const recorded = randomUUID()
+const trusted = await worktrees.prepare(recorded, shop, "install recorded")
+await worktrees.outputs(recorded)
+if (process.platform === "darwin") {
+  assert.deepEqual(records.get(trusted.path), { done: { "npm install": noLock } })
+  // An install already under way there records its own outcome.
+  const underWay: Prepared = { done: {}, pending: { "npm install": noLock } }
+  records.set(trusted.path, underWay)
+  await carryOutputs(shop, trusted.path, [INSTALL], setup)
+  assert.deepEqual(records.get(trusted.path), underWay)
+}
+records.delete(shop)
 await worktrees.settled()
 
 // Two hosts sharing the root never take the same spare.
@@ -418,16 +454,48 @@ assert.deepEqual((await worktrees.review(mergeable.path)).merge, { ok: false, re
 working.delete(shop)
 assert.deepEqual((await worktrees.review(mergeable.path)).merge, { ok: true, into: "main" })
 
-// A `.env` folder is a virtualenv, not settings: it stays behind. Dependency clones are
-// staged beside the checkout, where Git can't see them, and ones a stopped host left go.
-mkdirSync(join(shop, ".env.venv", "bin"), { recursive: true })
-writeFileSync(join(shop, ".env.venv", "bin", "python"), "#!/bin/sh\n")
+// A Python virtual environment names its own folder, so a copy would run the main checkout's
+// packages: neither carry nor outputs take one, and saving a recipe that names one is refused.
+for (const venvFolder of [".env.venv", ".venv"]) {
+  mkdirSync(join(shop, venvFolder, "bin"), { recursive: true })
+  writeFileSync(join(shop, venvFolder, "pyvenv.cfg"), "home = /usr/bin\n")
+  writeFileSync(join(shop, venvFolder, "bin", "python"), "#!/bin/sh\n")
+}
+recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL, { command: "uv sync", inputs: ["uv.lock"], outputs: [".venv"] }] })
 const venvId = randomUUID()
 const venv = await worktrees.prepare(venvId, shop, "Virtualenv left behind")
 assert.equal(existsSync(join(venv.path, ".env")), true)
 assert.equal(existsSync(join(venv.path, ".env.venv")), false)
-await worktrees.dependencies(venvId)
+const venvOutputs = await worktrees.outputs(venvId)
+assert.equal(existsSync(join(venv.path, ".venv")), false)
+assert.ok(venvOutputs?.skipped.includes(".venv is a Python virtual environment, which names its own folder; it's made here instead."))
+await assert.rejects(carryReport(recipe, shop), /^Error: Not saved: \.env\.venv is a Python virtual environment, which names its own folder, so a copy would run the main checkout's packages/)
 assert.deepEqual(readdirSync(venv.path).filter((name) => name.includes("mako-")), [], "nothing half-made is left in the checkout")
+for (const venvFolder of [".env.venv", ".venv"]) rmSync(join(shop, venvFolder), { recursive: true })
+assert.deepEqual(await carryReport(recipe, shop), [
+  "A new checkout gets these from the main checkout before its agent starts: .env, .env.local.",
+  "npm install: node_modules, web/node_modules are cloned into a new checkout when package-lock.json is the same there.",
+  "uv sync: nothing Git ignores in the main checkout matches .venv yet; once the step has run there, new checkouts get them.",
+])
+assert.deepEqual(outputNames(RecipeSchema.parse({ prepare: [{ command: "make", inputs: ["Makefile"], outputs: ["**/node_modules", "target", "dist/*", "build/*.o"] }] })), ["node_modules", "target"], "a wildcard name would leave the whole checkout out of its size")
+
+// A path inside an ignored folder is taken as it is; the rest of the folder stays.
+writeFileSync(join(shop, "dist", "big.js"), "\n")
+recipe = RecipeSchema.parse({ carry: ["dist/app.js"] })
+const single = await worktrees.prepare(randomUUID(), shop, "One built file")
+assert.equal(existsSync(join(single.path, "dist", "app.js")), true)
+assert.equal(existsSync(join(single.path, "dist", "big.js")), false)
+
+// Without a recipe, a worktree has what Git checks out and nothing more.
+recipe = undefined
+const bareId = randomUUID()
+const bare = await worktrees.prepare(bareId, shop, "No recipe")
+assert.equal(bare.copied, 0)
+assert.deepEqual(await worktrees.outputs(bareId), { carried: [], skipped: [] })
+for (const entry of [".env", ".env.local", "node_modules", "dist"]) assert.equal(existsSync(join(bare.path, entry)), false, `${entry} stays behind`)
+recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
+
+// Output clones are staged beside the checkout, where Git can't see them, and ones a stopped host left go.
 const staging = join(venv.path, "..", ".carrying")
 const stale = join(staging, "left-by-a-stopped-host")
 mkdirSync(stale, { recursive: true })
@@ -437,7 +505,22 @@ await worktrees.tidy()
 for (let tries = 0; existsSync(stale) && tries < 100; tries += 1) await new Promise((resolve) => setTimeout(resolve, 20))
 assert.equal(existsSync(stale), false, "a clone staged over an hour ago is deleted")
 assert.equal(existsSync(join(staging, "in-flight")), true, "one being made now stays")
-rmSync(join(shop, ".env.venv"), { recursive: true })
+
+// A folder named as an install input counts what Git tracks or would track there, never what the step writes.
+const webInputs = await inputsDigest(shop, ["web"])
+writeFileSync(join(shop, "web", "node_modules", "tiny", "index.js"), "module.exports = 3\n")
+assert.equal(await inputsDigest(shop, ["web"]), webInputs, "an ignored output changing leaves the digest as it was")
+writeFileSync(join(shop, "web", "schema.sql"), "create table t ();\n")
+assert.notEqual(await inputsDigest(shop, ["web"]), webInputs, "a new source file changes it")
+rmSync(join(shop, "web", "schema.sql"))
+assert.equal(await inputsDigest(shop, ["web"]), webInputs)
+assert.notEqual(await inputsDigest(shop, [".env"]), await inputsDigest(shop, ["missing.lock"]), "a file named outright counts even when Git ignores it")
+const loosePlain = join(root, "loose")
+mkdirSync(join(loosePlain, "db"), { recursive: true })
+writeFileSync(join(loosePlain, "db", "001.sql"), "one\n")
+const looseDigest = await inputsDigest(loosePlain, ["db"])
+writeFileSync(join(loosePlain, "db", "002.sql"), "two\n")
+assert.notEqual(await inputsDigest(loosePlain, ["db"]), looseDigest, "outside Git, every file in the folder counts")
 
 // Folders that can't have one say what to do instead.
 const plain = join(root, "plain")
@@ -449,4 +532,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, carried inputs and dependencies, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, stale dependencies, two hosts, orphans, idle), inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, .env folders, stale staging, refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, refusals")

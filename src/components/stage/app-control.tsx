@@ -143,6 +143,8 @@ function triggerParts(view: ThreadAppView): [string, boolean] {
       return [view.prepare?.exit ? "Install failed" : "App crashed", false]
     case "waiting":
       return ["Waiting for memory", false]
+    case "elsewhere":
+      return ["Running elsewhere", false]
     default:
       return ["", false]
   }
@@ -256,7 +258,7 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
           <span className="shrink-0 text-faint transition-colors group-data-[highlighted]:text-foreground">Copy</span>
         </MenuItem>
       ) : null}
-      {view.phase === "waiting" ? null : <Rows cwd={cwd} view={view} now={now} />}
+      {view.phase === "waiting" || view.phase === "elsewhere" ? null : <Rows cwd={cwd} view={view} now={now} />}
       <MenuSeparator />
       {view.phase === "running" ? (
         <>
@@ -298,6 +300,10 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
             Stop waiting
           </Action>
         </>
+      ) : view.phase === "elsewhere" ? (
+        <Action data-app-action="take-turn" onSelect={() => driver?.takeTurn(cwd)}>
+          Stop it there and run it here
+        </Action>
       ) : (
         <Action data-app-action="stop" onSelect={() => driver?.stop(cwd)}>
           Stop
@@ -327,6 +333,12 @@ function ReadyHead({ view, crashed, now }: { view: Ready; crashed?: AppProcessVi
           {`Your Mac is short on memory, so the app starts by itself once there's room.${
             view.room?.apps ? ` ${view.room.apps === 1 ? "Another app is" : `${view.room.apps} other apps are`} using ${formatBytes(view.room.bytes)}.` : ""
           }`}
+        </Head>
+      )
+    case "elsewhere":
+      return (
+        <Head title="Running elsewhere">
+          {`Only one copy of ${view.project}'s app runs at a time, and ${view.elsewhere ?? "another checkout"} has it.`}
         </Head>
       )
     case "preparing":

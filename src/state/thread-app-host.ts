@@ -81,6 +81,7 @@ export function installHostThreadApp(): void {
     stop: (cwd) => act(cwd, "stopped", () => mako.stopThreadApp(cwd)),
     restart: (cwd) => act(cwd, "starting", () => mako.restartThreadApp(cwd)),
     makeRoom: (cwd) => act(cwd, "starting", () => mako.makeRoomForThreadApp(cwd)),
+    takeTurn: (cwd) => act(cwd, "starting", () => mako.takeTurnForThreadApp(cwd)),
     runCheck: (cwd, tier) => {
       const view = threadAppStore.get().byCwd[cwd]
       if (view?.kind === "ready")

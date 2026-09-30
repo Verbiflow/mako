@@ -4,7 +4,7 @@ import { mkdir, open, readFile, readdir, rename, rm, stat, statfs, writeFile } f
 import { basename, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { CARRYING, CARRYING_STALE_MS, carryDependencies, lockDigest, removeBelowAgents } from "./worktree-dependencies.js"
+import { CARRYING, CARRYING_STALE_MS, carryOutputs, removeBelowAgents, type CheckoutSetup } from "./worktree-carry.js"
 import { git, PARALLEL_CHECKOUT } from "./worktree-git.js"
 
 /** Enough for two new Threads in a row without waiting; the one after that waits for a refill. */
@@ -26,9 +26,8 @@ const SpareSchema = z.object({
   state: z.enum(["preparing", "ready"]),
   pid: z.number(),
   createdAt: z.number(),
-  /** `lockDigest` of the main checkout when its dependencies were cloned in. */
-  lock: z.string(),
-  dependencies: z.array(z.string()),
+  /** Install steps' outputs cloned in from the main checkout, with the digest of the inputs they fit. */
+  outputs: z.array(z.object({ command: z.string(), inputs: z.array(z.string()), digest: z.string(), entries: z.array(z.string()) })).default([]),
   tookMs: z.number().optional(),
 })
 export type Spare = z.infer<typeof SpareSchema>
@@ -47,8 +46,8 @@ function alive(pid: number): boolean {
  * so a first send takes one instead of waiting for `git worktree add`.
  *
  * A spare is a detached, locked worktree beside the project's Thread
- * worktrees (`.spare-…`), checked out and given the main checkout's
- * dependencies in the background band. Hooks don't run while it's prepared;
+ * worktrees (`.spare-…`), checked out and given the outputs of the recipe's
+ * install steps in the background band. Hooks don't run while it's prepared;
  * the claim's `git checkout -b` runs them, as a fresh worktree would. Records
  * live in `spares/`, one file each, so the installed app and a development
  * host sharing this root see one pool: a claim renames the record, which
@@ -59,13 +58,15 @@ export class WorktreeSpares {
   private readonly records: string
   private readonly trash: string
   private readonly projectFolder: (repoRoot: string) => string
+  private readonly setup: CheckoutSetup | undefined
   private filling: Promise<void> = Promise.resolve()
 
-  constructor(root: string, projectFolder: (repoRoot: string) => string) {
+  constructor(root: string, projectFolder: (repoRoot: string) => string, setup?: CheckoutSetup) {
     this.root = root
     this.records = join(root, "spares")
     this.trash = join(root, "trash")
     this.projectFolder = projectFolder
+    this.setup = setup
   }
 
   /** A project is starting worktree Threads: keep its spares and top them up in the background. */
@@ -177,8 +178,7 @@ export class WorktreeSpares {
       state: "preparing",
       pid: process.pid,
       createdAt: Date.now(),
-      lock: "",
-      dependencies: [],
+      outputs: [],
     }
     await this.save(spare)
     try {
@@ -186,8 +186,9 @@ export class WorktreeSpares {
       await git(repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, spare.path])
       await git(spare.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", base], true)
       const written = Date.now()
-      const lock = await lockDigest(repoRoot)
-      const { carried } = await carryDependencies(repoRoot, spare.path, true)
+      // No records: a spare's install record would outlive the move to its Thread's path.
+      const recipe = await this.setup?.recipe(spare.path)
+      const { carried } = await carryOutputs(repoRoot, spare.path, recipe?.prepare ?? [], undefined, true)
       // Git trusts an index entry only when its file is older than the index,
       // to the second; entries written in the index's own second are re-read
       // by the next command, 80-180 ms for 2,000 files. Refreshing once that
@@ -195,7 +196,7 @@ export class WorktreeSpares {
       const pastSecond = Math.ceil((written + 1) / 1000) * 1000 - Date.now()
       if (pastSecond > 0) await delay(pastSecond)
       await git(spare.path, ["update-index", "-q", "--refresh"], true).catch(() => {})
-      spare = { ...spare, state: "ready", lock, dependencies: carried, tookMs: Math.round(performance.now() - began) }
+      spare = { ...spare, state: "ready", outputs: carried, tookMs: Math.round(performance.now() - began) }
       await this.save(spare)
     } catch (error) {
       await this.discard(spare)

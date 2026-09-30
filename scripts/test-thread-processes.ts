@@ -153,7 +153,13 @@ try {
   rmSync(savedFile)
   const fromCommitted = await readRecipe(savedFolder, fixture, recipes)
   assert.equal(fromCommitted.kind === "ready" && fromCommitted.from, join(savedFolder, RECIPE_PATH), "with nothing saved, the committed recipe is used")
-  await invalid(JSON.stringify({ processes: { web: { command: "x", port: "3000" } } }), /a process's port is \{port\} or \{port\+N\}/)
+  await invalid(JSON.stringify({ processes: { web: { command: "x", port: "3000" } } }), /processes\.web\.port: 3000 is fixed, so two Threads' copies would fight over it\. Use \{port\} or \{port\+N\}; if the app can't move off it, set "oneAtATime": true/)
+  assert.equal((await recipeIn(JSON.stringify({ oneAtATime: true, processes: { db: { command: "x", port: "5432" } } }))).kind, "ready", "one copy at a time may keep its fixed port")
+  await invalid(JSON.stringify({ oneAtATime: true, processes: { db: { command: "x", port: "70000" } } }), /70000 isn't a port/)
+  await invalid(JSON.stringify({ processes: { web: { command: "x", port: "{port:1}" } } }), /a process's port is \{port\}, \{port\+N\}, or a fixed number when the recipe is oneAtATime/)
+  for (const outside of ["../secrets", "/etc/hosts", ".git/config", "a//b", "./env"])
+    await invalid(JSON.stringify({ carry: [outside] }), /a path in the checkout, such as \.env or \*\*\/node_modules/)
+  await invalid(JSON.stringify({ prepare: [{ command: "npm install", inputs: ["package-lock.json"], outputs: ["../node_modules"] }] }), /a path in the checkout/)
   await invalid(JSON.stringify({ processes: { web: { command: "x", cwd: "../elsewhere" } } }), /doesn't exist in this checkout|outside the checkout/)
   await invalid(JSON.stringify({ processes: { web: { command: "x", cwd: "/tmp" } } }), /relative to the checkout/)
   await invalid(JSON.stringify({ processes: { Web: { command: "x" } } }), /lowercase letters/)
@@ -547,9 +553,38 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const worktreeTools = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, settleMs: settle })
   assert.match(await worktreeTools.start(conversation), /web: running/)
   assert.equal((await fetchJson(toolBase)).cwd, realpathSync(prepared.path), "a worktree Thread's processes run in its own checkout, from its own recipe")
+  await worktreeTools.stop(conversation)
+
+  // One copy at a time: a fixed port, and a start refused while another checkout of the project runs it, naming whose it is.
+  const turnRecipes = join(root, "turn-recipes")
+  const fixedPort = toolBase + 5
+  await saveRecipe(turnRecipes, project, RecipeSchema.parse({
+    oneAtATime: true,
+    processes: { web: { command: "node server.mjs", port: String(fixedPort), values: { PORT: String(fixedPort) } } },
+    checks: { quick: "node -e \"console.log('quick ok')\"" },
+  }), fixture)
+  title.set(AppKeySchema.parse(placed.thread), "the Thread “Fix login”")
+  const turnDeps = { environment, launchedWith: () => undefined, folder: deskFolder, processes, recipesRoot: turnRecipes, settleMs: settle, whose: (id: string) => title.get(id) }
+  const inWorktreeTurn = environmentTools({ ...turnDeps, cwd: () => prepared.cwd })
+  const inMainTurn = environmentTools({ ...turnDeps, cwd: () => project })
+  assert.match(await inWorktreeTurn.start(conversation), new RegExp(`web: running on port ${fixedPort}`))
+  assert.equal(await inMainTurn.start(neighbour), "Only one copy of this project's app runs at a time on this Mac (the recipe sets oneAtATime), and the Thread “Fix login” has it running, so nothing started here. Ask the user whether to stop that copy; never stop it yourself.")
+  assert.equal((await fetchJson(fixedPort)).cwd, realpathSync(prepared.path), "the running copy is left alone")
+  const elsewhere = await inMainTurn.desk.view(project)
+  assert.deepEqual(elsewhere.kind === "ready" && [elsewhere.phase, elsewhere.elsewhere], ["elsewhere", "the Thread “Fix login”"], "the desk shows whose copy is running")
+  assert.match(await inMainTurn.check(neighbour, "quick"), /^The quick check .* passed\./, "a check without the app isn't held up")
+  assert.deepEqual(await inMainTurn.desk.takeTurn(project), { problems: [] })
+  assert.equal((await fetchJson(fixedPort)).cwd, realpathSync(project), "taking a turn stops the other copy and starts this one")
+  assert.equal(JSON.parse(await inWorktreeTurn.status(conversation)).processes[0].state, "stopped")
+  assert.match(await inWorktreeTurn.start(conversation), /^Only one copy of this project's app runs at a time on this Mac \(the recipe sets oneAtATime\), and \S+ has it running/)
+  assert.equal((await inWorktreeTurn.desk.view(prepared.cwd)).kind === "ready" && (await inWorktreeTurn.desk.view(prepared.cwd)).phase, "elsewhere")
+  await inMainTurn.stop(neighbour)
+  assert.equal((await inWorktreeTurn.desk.view(prepared.cwd)).kind === "ready" && (await inWorktreeTurn.desk.view(prepared.cwd)).phase, "stopped", "once it stops, the turn is free")
+  assert.match(await worktreeTools.start(conversation), /web: running/)
   // Saved from a worktree, the recipe reaches the main checkout and every other worktree at once.
   const saving = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, recipesRoot: projectRecipes, settleMs: settle })
-  const savedNote = await saving.save(conversation, RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" } }))
+  const savedNote = await saving.save(conversation, RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, carry: [".env"] }))
+  assert.ok(savedNote.includes(`carry: nothing Git ignores in the main checkout (${realpathSync(project)}) matches .env yet; files Git tracks come with every checkout anyway.`), "saving says what carry finds in the main checkout")
   assert.match(savedNote, /^Saved as this project's recipe in Mako, \S+project-recipes\/\S+\.json\. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that\.\nThis checkout also has/)
   assert.match(savedNote, /also has a committed \.mako\/environment\.json; Mako's saved recipe comes first/)
   assert.match(savedNote, /This Thread's processes are still running as they were started; environment_restart runs them with this recipe\./)
@@ -571,7 +606,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; one copy at a time (a fixed port, a start refused naming whose copy runs, the desk taking a turn); process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })

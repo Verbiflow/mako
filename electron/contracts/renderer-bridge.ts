@@ -187,6 +187,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     restartThreadApp: (cwd: string) => invokeTrustedHost<AppActionOutcome>("mako:thread-app-restart", cwd),
     checkThreadApp: (cwd: string, tier: "quick" | "full") => invokeTrustedHost<AppActionOutcome>("mako:thread-app-check", cwd, tier),
     makeRoomForThreadApp: (cwd: string) => invokeTrustedHost<AppActionOutcome>("mako:thread-app-make-room", cwd),
+    takeTurnForThreadApp: (cwd: string) => invokeTrustedHost<AppActionOutcome>("mako:thread-app-take-turn", cwd),
     threadAppOutput: (cwd: string, key: AppOutputKey, cursor?: AppOutputCursor) =>
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     chatFolders: (paths: string[]) => invokeTrustedHost<ChatFolders>("mako:chat-folders", paths),

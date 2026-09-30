@@ -76,6 +76,7 @@ import { WorkspaceMoves, type MoveSource } from "./workspace-moves.js"
 import { moveablePlace, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
+import { projectRecipe } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { installThreadAppIpc } from "./ipc/thread-app.js"
 import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
@@ -375,7 +376,7 @@ function whoseApp(app: AppKey): string | undefined {
   const thread = ThreadIdSchema.safeParse(app)
   if (thread.success) {
     const title = threadStore?.thread(thread.data)?.title
-    return title ? `the Thread "${title}"` : undefined
+    return title ? `the Thread “${title}”` : undefined
   }
   const folder = threadProcesses?.checkoutOf(app)
   return folder ? `the ${basename(folder)} folder` : undefined
@@ -404,6 +405,10 @@ const threadWorktrees = threadStore
         await threadProcesses.forgetPrepared(path)
         await rm(threadEnvironments.dataDir(AppKeySchema.parse(thread)), { recursive: true, force: true })
       },
+    } : undefined, threadProcesses ? {
+      recipe: (checkout) => projectRecipe(checkout, threadRecipes),
+      prepared: (checkout) => threadProcesses.prepared(checkout),
+      savePrepared: (checkout, prepared) => threadProcesses.savePrepared(checkout, prepared),
     } : undefined)
   : null
 hostLog("host", "starting", {

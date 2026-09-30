@@ -1,6 +1,7 @@
 // The fixture desk's stand-in for a Thread's app: `?mock&app=<scenario>`.
 // Scenarios: none, invalid, setting-up, stopped, first-run (no ports yet),
-// installing, install-failed, running, crashed, check-failed, waiting, and
+// installing, install-failed, running, crashed, check-failed, waiting,
+// elsewhere (one copy at a time, running in another Thread), and
 // demo (a start that installs and runs, then crashes soon after its log is
 // opened, as when the agent's edit lands).
 import { toast } from "sonner"
@@ -228,6 +229,10 @@ export function installMockThreadApp(): void {
       toast("Stopped the apps of “Migrate billing to v2” and “Old experiment”. Their files and data stay.")
       start()
     },
+    takeTurn: () => {
+      put({ elsewhere: undefined })
+      start()
+    },
     readOutput: async (_cwd, key) => outputs.get(key) ?? "",
     subscribeOutput: (_cwd, key, listener) => {
       if (key === "process:web" && crashes && current().phase === "running") later(3500, crash)
@@ -272,6 +277,10 @@ export function installMockThreadApp(): void {
         ...ready("crashed"),
         prepare: { command: "npm install", reason: "package-lock.json changed", exit: { code: 1, at: minutes(0) } },
       })
+      break
+    case "elsewhere":
+      putThreadApp(CWD, { ...ready("elsewhere"), elsewhere: "the Thread “Migrate billing to v2”" })
+      emit("check:quick", QUICK_PASS)
       break
     case "installing":
       emit("prepare", INSTALL.slice(0, 3))

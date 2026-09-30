@@ -7,6 +7,7 @@ import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "./contracts/thread-environ
 import type { AppActionOutcome, AppCheckView, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, ThreadAppView } from "./contracts/thread-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
+import { carryReport } from "./worktree-carry.js"
 import { memoryPressure, runKey, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
   checkoutOf,
@@ -83,6 +84,8 @@ export interface DeskApp {
   check(cwd: string, tier: CheckTier): Promise<AppActionOutcome>
   /** Stops every other app on this Mac, then starts this one whatever the memory. */
   makeRoom(cwd: string): Promise<AppActionOutcome>
+  /** For a recipe that runs one copy at a time: stops the copy another checkout runs, then starts this one. */
+  takeTurn(cwd: string): Promise<AppActionOutcome>
   output(cwd: string, key: AppOutputKey, cursor?: AppOutputCursor): Promise<AppOutputChunk>
 }
 
@@ -114,6 +117,7 @@ type StartOutcome =
   | { kind: "nothing" }
   | ({ kind: "blocked" } & Unprepared)
   | { kind: "waiting"; notes: string[]; message: string }
+  | { kind: "elsewhere"; whose: string }
   | { kind: "started"; notes: string[]; lines: string[]; refused: { name: string; reason: string }[]; stillStarting: boolean }
 
 export function environmentTools(deps: Deps): EnvironmentTools {
@@ -264,6 +268,19 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       state: done[step.command] === (await inputsDigest(checkout, step.inputs)) ? "up to date" : "runs before the next start or check",
     })))
   }
+  /** Other checkouts of this project with the app's processes up: a recipe that runs one copy at a time waits for them. */
+  const copiesElsewhere = async (current: Context): Promise<AppKey[]> => {
+    const project = await projectRoot(current.checkout)
+    const found: AppKey[] = []
+    for (const other of await deps.processes.active()) {
+      if (other.app === current.environment.app) continue
+      const checkout = deps.processes.checkoutOf(other.app)
+      if (!checkout || (await projectRoot(checkout).catch(() => checkout)) !== project) continue
+      const runs = await deps.processes.status(other.app)
+      if (runs.some((run) => run.kind === "process" && (run.state.kind === "running" || run.state.kind === "starting"))) found.push(other.app)
+    }
+    return found
+  }
   /** Starts the named processes, or all; under critical memory it joins the line with `again`, unless `anyway`. */
   const startIn = async (current: Context & { recipe: Recipe }, names: string[] | undefined, again: () => Promise<StartOutcome>, anyway = false): Promise<StartOutcome> => {
     const picked = chosen(current.recipe, names)
@@ -272,6 +289,13 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const before = await deps.processes.status(app)
     const idle = picked.filter((name) => !before.some((entry) => entry.kind === "process" && entry.name === name && (entry.state.kind === "running" || entry.state.kind === "starting")))
     let notes: string[] = []
+    if (idle.length && current.recipe.oneAtATime) {
+      const [holder] = await copiesElsewhere(current)
+      if (holder) {
+        line.delete(app)
+        return { kind: "elsewhere", whose: deps.whose?.(holder) || holder }
+      }
+    }
     if (idle.length) {
       const preparing = await prepare(current)
       if (preparing) return { kind: "blocked", ...preparing }
@@ -299,6 +323,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (outcome.kind === "nothing") return "The recipe names no processes to start."
     if (outcome.kind === "blocked") return outcome.message
     if (outcome.kind === "waiting") return [...outcome.notes, outcome.message].join("\n")
+    if (outcome.kind === "elsewhere")
+      return `Only one copy of this project's app runs at a time on this Mac (the recipe sets oneAtATime), and ${outcome.whose} has it running, so nothing started here. Ask the user whether to stop that copy; never stop it yourself.`
     return [
       ...outcome.notes,
       ...outcome.lines,
@@ -411,13 +437,20 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       view.phase = "waiting"
       view.room = { apps: others.length, bytes: others.reduce((sum, entry) => sum + entry.memoryBytes, 0) }
     }
+    else if (read.recipe.oneAtATime) {
+      const [holder] = await copiesElsewhere({ environment, checkout: found.checkout })
+      if (holder) {
+        view.phase = "elsewhere"
+        view.elsewhere = deps.whose?.(holder) || "another checkout of this project"
+      }
+    }
     return view
   }
   /** What a person should hear after an action; the view shows the rest. */
   const deskOutcome = (outcome: StartOutcome): AppActionOutcome => {
     if (outcome.kind === "nothing") return { problems: ["The recipe names no processes to start."] }
     if (outcome.kind === "blocked") return { problems: outcome.shown ? [] : [outcome.message] }
-    if (outcome.kind === "waiting") return { problems: [] }
+    if (outcome.kind === "waiting" || outcome.kind === "elsewhere") return { problems: [] }
     return { problems: outcome.refused.map((entry) => `${entry.name} didn't start: ${entry.reason}`) }
   }
   const roomReport = async (app: AppKey): Promise<RoomReport> => {
@@ -448,6 +481,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const others = (await deps.processes.active()).filter((entry) => entry.app !== current.environment.app)
       for (const other of others) await deps.processes.stop(other.app)
       return deskOutcome(await startIn(current, undefined, deskAgain(cwd), true))
+    },
+    async takeTurn(cwd) {
+      const current = ready(await folderContext(cwd))
+      for (const other of await copiesElsewhere(current)) await deps.processes.stop(other)
+      return deskOutcome(await startIn(current, undefined, deskAgain(cwd)))
     },
     async output(cwd, key, cursor) {
       if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
@@ -528,6 +566,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async save(conversationId, recipe) {
       if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
       const { environment, checkout, read } = await context(conversationId)
+      const carried = await carryReport(recipe, await projectRoot(checkout))
       const saved = await saveRecipe(deps.recipesRoot, checkout, recipe, environment)
       setups.delete(await projectRoot(checkout))
       const after = await readRecipe(checkout, environment, deps.recipesRoot)
@@ -537,6 +576,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         `Saved as this project's recipe in Mako, ${saved.file}. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that.`,
         saved.previous ? `The version it replaced is kept at ${saved.previous}.` : read.kind === "none" ? "It's the project's first recipe." : undefined,
         after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; Mako's saved recipe comes first, so that file is ignored while this one exists.` : undefined,
+        ...carried,
         running ? "This Thread's processes are still running as they were started; environment_restart runs them with this recipe." : undefined,
         "Agents already running keep the values their shell started with; their next Session gets these. Prove it with environment_start and environment_check.",
       ].filter(Boolean).join("\n")
@@ -775,7 +815,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       description:
         "Save this project's recipe in Mako, where every Thread of the project, on every branch, uses it at once; nothing to commit or merge. Checked first against this Thread's ports and this checkout's folders, and refused with the reason if it can't run. The version it replaces is kept. Pass the whole recipe, as environment_guide describes it.",
       inputSchema: z.object({
-        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks and prepare."),
+        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and carry and oneAtATime when it needs them."),
       }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

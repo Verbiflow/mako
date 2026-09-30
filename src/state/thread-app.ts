@@ -29,6 +29,8 @@ export interface ThreadAppDriver {
   runCheck(cwd: string, tier: "quick" | "full"): void
   /** Stop the other apps counted in `room`, then start this one. */
   makeRoom(cwd: string): void
+  /** Stop the copy named in `elsewhere`, then start this one. */
+  takeTurn(cwd: string): void
   /** Everything the output holds now, to hand to an agent. */
   readOutput(cwd: string, key: AppOutputKey): Promise<string>
   /** The output as it grows: first all of it so far, then what's added. `reset` means start over. */

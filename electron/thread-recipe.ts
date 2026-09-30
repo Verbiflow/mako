@@ -39,12 +39,18 @@ function variableProblem(name: string): string | undefined {
   return undefined
 }
 
+/** A path in the checkout, or a pattern: `*` stays within one folder, `**` crosses any number of them. */
+const checkoutPattern = z.string().trim().min(1).max(300).refine(
+  (pattern) => !isAbsolute(pattern) && !pattern.split("/").some((part) => part === "" || part === "." || part === ".." || part === ".git"),
+  "a path in the checkout, such as .env or **/node_modules",
+)
+
 const processSchema = z.object({
   command,
   /** Relative to the checkout. */
   cwd: z.string().min(1).optional(),
-  /** Which of the Thread's ports it listens on, such as `{port+1}`; it's running once that port answers. */
-  port: z.string().regex(/^\{port(\+\d+)?\}$/, "a process's port is {port} or {port+N}").optional(),
+  /** Which of the Thread's ports it listens on, such as `{port+1}`; it's running once that port answers. A fixed port needs `oneAtATime`. */
+  port: z.string().regex(/^(\{port(\+\d+)?\}|[1-9]\d{0,4})$/, "a process's port is {port}, {port+N}, or a fixed number when the recipe is oneAtATime").optional(),
   /** Only for this process, so it can also set HOME, TMPDIR or XDG_* for an app with no data-folder setting. */
   values: named(template, (name) => variableProblem(name) ?? (name === "PATH" ? "PATH stays the machine's" : undefined)).optional(),
 }).strict()
@@ -53,6 +59,12 @@ const prepareSchema = z.object({
   command,
   /** Files or folders in the checkout; the step runs in a fresh copy and again whenever one of them changes. */
   inputs: z.array(z.string().min(1).max(500)).min(1).max(20),
+  /**
+   * What the step writes, such as `**\/node_modules`. A new checkout gets them
+   * cloned from the main checkout when the inputs are the same there, so its
+   * first run only catches up.
+   */
+  outputs: z.array(checkoutPattern).min(1).max(10).optional(),
 }).strict()
 
 export const RecipeSchema = z.object({
@@ -68,6 +80,14 @@ export const RecipeSchema = z.object({
   }).strict().default({}),
   /** Install in a fresh copy, and catch up after the branch moves: each step only when its inputs changed. */
   prepare: z.array(prepareSchema).max(10).default([]),
+  /** Files Git ignores that a new checkout gets from the main checkout as they are, such as `.env` files. */
+  carry: z.array(checkoutPattern).max(20).optional(),
+  /**
+   * One copy on this Mac at a time: for an app with a fixed port, one local
+   * database or one Docker stack that copies can't split. A start is refused
+   * while another checkout of the project runs it.
+   */
+  oneAtATime: z.boolean().optional(),
 }).strict()
 
 export type Recipe = z.infer<typeof RecipeSchema>
@@ -164,6 +184,11 @@ export async function recipeProblem(recipe: Recipe, checkout: string, environmen
   try {
     recipeValues(recipe, environment)
     for (const [name, spec] of Object.entries(recipe.processes)) {
+      if (spec.port && !spec.port.startsWith("{")) {
+        if (Number(spec.port) > 65_535) throw new Error(`processes.${name}.port: ${spec.port} isn't a port`)
+        if (!recipe.oneAtATime)
+          throw new Error(`processes.${name}.port: ${spec.port} is fixed, so two Threads' copies would fight over it. Use {port} or {port+N}; if the app can't move off it, set "oneAtATime": true so one copy runs at a time`)
+      }
       processPort(spec, environment)
       processValues(recipe, spec, environment)
       await processCwd(checkout, name, spec)
@@ -267,34 +292,70 @@ export async function processCwd(checkout: string, name: string, spec: RecipePro
   return folder
 }
 
-/** Folders a prepare step's inputs never reach into: they're its outputs, or Git's own. */
-const DIGEST_SKIPPED = new Set([".git", "node_modules"])
 const DIGEST_MAX_FILES = 10_000
+
+/**
+ * A folder's files as inputs: what Git tracks or would track there, so what
+ * a step writes (anything the project ignores) never counts. Outside Git,
+ * every file but Git's own.
+ */
+async function inputFiles(checkout: string, folder: string): Promise<string[]> {
+  const listed = await git(checkout, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", folder]).then(
+    (output) => output.split("\0").filter(Boolean),
+    () => undefined,
+  )
+  if (listed) return [...new Set(listed)].sort()
+  const found: string[] = []
+  const visit = async (relativePath: string): Promise<void> => {
+    for (const entry of await readdir(join(checkout, relativePath), { withFileTypes: true })) {
+      if (entry.name === ".git") continue
+      const inside = join(relativePath, entry.name)
+      if (entry.isDirectory()) await visit(inside)
+      else if (entry.isFile()) found.push(inside)
+      if (found.length > DIGEST_MAX_FILES) return
+    }
+  }
+  await visit(folder)
+  return found.sort()
+}
 
 /**
  * One digest of a step's inputs, by content, so a branch switch that
  * changes the lockfile back and forth is seen, and a touched file isn't.
+ * A file named outright counts even when Git ignores it.
  */
 export async function inputsDigest(checkout: string, inputs: string[]): Promise<string> {
   const hash = createHash("sha256")
   let files = 0
-  const visit = async (path: string, shown: string): Promise<void> => {
-    const entry = await lstat(path).catch(() => undefined)
-    if (!entry) {
-      hash.update(`missing ${shown}\n`)
+  const add = async (relativePath: string) => {
+    const bytes = await readFile(join(checkout, relativePath)).catch(() => undefined)
+    if (!bytes) {
+      hash.update(`missing ${relativePath}\n`)
       return
     }
-    if (entry.isDirectory()) {
-      const names = (await readdir(path)).filter((name) => !DIGEST_SKIPPED.has(name)).sort()
-      for (const name of names) await visit(join(path, name), `${shown}/${name}`)
-      return
-    }
-    if (!entry.isFile()) return
     files += 1
     if (files > DIGEST_MAX_FILES) throw new Error(`prepare inputs cover more than ${DIGEST_MAX_FILES} files; name the lockfiles or migration folders themselves`)
-    hash.update(`file ${shown}\n`)
-    hash.update(await readFile(path))
+    hash.update(`file ${relativePath}\n`)
+    hash.update(bytes)
   }
-  for (const input of [...inputs].sort()) await visit(resolve(checkout, input), input)
+  for (const input of [...inputs].sort()) {
+    const entry = await lstat(resolve(checkout, input)).catch(() => undefined)
+    if (!entry) hash.update(`missing ${input}\n`)
+    else if (entry.isDirectory()) for (const file of await inputFiles(checkout, relative(checkout, resolve(checkout, input)) || ".")) await add(file)
+    else if (entry.isFile()) await add(relative(checkout, resolve(checkout, input)))
+  }
   return hash.digest("hex")
+}
+
+/**
+ * The project's recipe as written, saved in Mako or committed, without
+ * checking it against a Thread: what a new checkout takes from the main one
+ * needs no ports. Undefined when there is none, or it doesn't parse.
+ */
+export async function projectRecipe(checkout: string, recipesRoot: string | undefined): Promise<Recipe | undefined> {
+  const saved = recipesRoot ? await readJson(await recipePath(recipesRoot, checkout)).catch((): JsonRead => ({ kind: "absent" })) : { kind: "absent" as const }
+  const read = saved.kind === "absent" ? await readJson(join(checkout, RECIPE_PATH)).catch((): JsonRead => ({ kind: "absent" })) : saved
+  if (read.kind !== "json") return undefined
+  const parsed = RecipeSchema.safeParse(read.value)
+  return parsed.success ? parsed.data : undefined
 }
