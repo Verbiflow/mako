@@ -165,6 +165,34 @@ const quietBlocks = {
   "quiet-tool": { type: "tool", id: "quiet-build", toolKind: "execute", title: "npm run build", input: "{\"command\":\"npm run build\"}", output: "", status: "pending" },
   "quiet-reply": { type: "text", text: "The route guard keeps the destination, and the session refresh" },
 } as const
+const nativeScenes = {
+  compacting: () => ({ activity: { kind: "compacting", since: Date.now() - 72_000 }, blocks: [] }),
+  retrying: () => ({ activity: { kind: "retrying", attempt: 2, maxAttempts: 10, reason: "Overloaded (529)", since: Date.now() - 3_000, retryAt: Date.now() + 9_000 }, blocks: [] }),
+  compacted: () => ({
+    activity: undefined,
+    blocks: [
+      { type: "event", label: "Context compacted", detail: "Automatic · 182k → 24k tokens", body: "## Where things stand\n\nThe route guard now keeps the destination through sign-in. Remaining: the session-expiry deep link and its regression test.\n\n- `src/router/guard.ts` — keeps `returnTo`\n- `src/session/refresh.ts` — retries once before signing out" },
+      { type: "event", label: "Model changed", detail: "claude-opus-4 → claude-sonnet-4 · after a refusal" },
+      { type: "event", label: "Rate limited", detail: "Reached your 5-hour limit · resets 3:40 PM", tone: "warning" },
+      { type: "event", label: "Turn failed", detail: "Server overloaded", body: "stream disconnected before completion: Our servers are currently overloaded. Please try again later.", tone: "error" },
+      { type: "text", text: "Picking up from the summary: the deep link is next." },
+    ],
+  }),
+} satisfies Record<string, () => { activity: LiveSnapshot["nativeActivity"]; blocks: LiveSnapshot["blocks"] }>
+function publishNative(scene: keyof typeof nativeScenes) {
+  const { activity, blocks } = nativeScenes[scene]()
+  const next: LiveSnapshot = {
+    ...snapshot,
+    revision: (acpStore.get().conversations[id]?.revision ?? 0) + 1,
+    session: { ...snapshot.session, status: "running", connection: "connected" },
+    blocks: [...snapshot.blocks, ...blocks],
+    activityAt: Date.now(),
+    nativeActivity: activity,
+    requests: [{ ...snapshot.requests[0]!, status: "dispatching" }],
+  }
+  mock.setLiveSnapshot(next)
+  applyLiveSnapshot(next)
+}
 function publishQueue(phase: "starting" | "reasoning" | "responding" | keyof typeof quietBlocks) {
   const starting = phase === "starting"
   const quiet = phase === "quiet-tool" || phase === "quiet-reply" ? quietBlocks[phase] : undefined
@@ -298,6 +326,11 @@ export function Fixture() {
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="responding" onClick={() => publishQueue("responding")}>Streaming reply</button>
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-tool" onClick={() => publishQueue("quiet-tool")}>Quiet tool</button>
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-reply" onClick={() => publishQueue("quiet-reply")}>Quiet reply</button>
+            {(["compacting", "retrying", "compacted"] as const).map((scene) => (
+              <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={scene} onClick={() => publishNative(scene)}>
+                {{ compacting: "Compacting", retrying: "Retrying", compacted: "Provider markers" }[scene]}
+              </button>
+            ))}
             <button
               className="pressable rounded border border-hairline px-2 py-1"
               onClick={() => setNarrow((value) => !value)}
