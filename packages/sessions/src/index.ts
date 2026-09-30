@@ -102,8 +102,9 @@ export {
   type CursorSdkModelSelection,
   type CursorSdkSelectionResult,
 } from "./providers/cursor-sdk-models.js"
-export { GrokProvider } from "./providers/grok.js"
+export { GrokProvider, grokUpdateMarker } from "./providers/grok.js"
 export { ClaudeProvider } from "./providers/claude.js"
+export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
 import type { EvictionPolicy } from "./archive.js"
@@ -157,5 +158,6 @@ export { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
 export { attachmentFiles } from "./attachment-files.js"
 
 export * from "./settings.js"
+export * from "./events.js"
 
 export { openCodeDatabasePaths } from "./providers/opencode-location.js"

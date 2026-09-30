@@ -63,6 +63,9 @@ export const ThreadEntrySchema = z.discriminatedUnion("kind", [
     kind: z.literal("event"),
     label: z.string(),
     detail: z.string().optional(),
+    /** Long text the reader opens on demand (`TranscriptEvent.body`). */
+    body: z.string().optional(),
+    tone: z.enum(["warning", "error"]).optional(),
     /**
      * The provider started a turn on its own and this is what it reported as
      * the cause (a background command finishing). It opens the turn the way a

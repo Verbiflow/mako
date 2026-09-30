@@ -254,7 +254,7 @@ export function entryChars(entry: ThreadEntry): number {
   if (entry.kind === "user")
     return entry.text.length + attachmentChars(entry.attachments)
   if (entry.kind === "event")
-    return entry.label.length + (entry.detail?.length ?? 0)
+    return entry.label.length + (entry.detail?.length ?? 0) + (entry.body?.length ?? 0)
   let chars = 0
   for (const block of entry.blocks) {
     if (block.type === "text" || block.type === "thinking")
@@ -514,7 +514,7 @@ function entryCharacters(entry: ThreadEntry): number {
   if (entry.kind === "user")
     return entry.text.length + JSON.stringify(entry.attachments ?? []).length
   if (entry.kind === "event")
-    return entry.label.length + (entry.detail?.length ?? 0)
+    return entry.label.length + (entry.detail?.length ?? 0) + (entry.body?.length ?? 0)
   return entry.blocks.reduce((sum, block) => {
     if (
       block.type === "text" ||

@@ -1,4 +1,5 @@
 import { describeToolDetails } from "./content.js"
+import { eventText } from "./events.js"
 /**
  * Deterministic, reverse-time transcripts for handing a conversation to a
  * different agent. The Markdown is the index; large tool payloads are kept
@@ -503,6 +504,8 @@ function renderEntries(
       )
       if (entry.detail !== undefined)
         parts.push("", "Detail:", fenced(entry.detail, "text"))
+      if (entry.body !== undefined)
+        parts.push("", "Body:", fenced(entry.body, "text"))
       continue
     }
 
@@ -778,7 +781,7 @@ export function formatTranscript(
     if (entry.kind === "event") {
       if (depth === "full")
         sections.push(
-          `## Event\n\n${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}`
+          `## Event\n\n${eventText(entry)}${entry.body ? `\n\n${entry.body}` : ""}`
         )
       continue
     }
