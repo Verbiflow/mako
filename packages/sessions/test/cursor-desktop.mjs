@@ -78,6 +78,49 @@ try {
   assert.equal(corrected.entries[0].blocks[0].text, "Updated answeR", "Equal-length edits are not mistaken for unchanged text")
   assert.equal(await provider.read(ref.path.replace(id, "../../foreign")), null)
   console.log("Cursor desktop discovery and bounded message reads preserve text, tools, media, Canvas, and continuation limits")
+
+  // Shapes recorded from Cursor Desktop's state.vscdb on 2026-09-29: what
+  // Cursor wrote in the user's place, the summary it compacted to, and the
+  // errors a reply ended on.
+  const eventsId = "32345678-1234-1234-1234-123456789abc"
+  const events = new DatabaseSync(join(root, "state.vscdb"))
+  events.prepare("INSERT INTO composerHeaders VALUES (?,?,?,?,?)").run(eventsId, 1700000004000, 1, 0, JSON.stringify({...header, composerId: eventsId, name: "Events"}))
+  const notification = "<timestamp>Today</timestamp>\n<system_notification>\nThe following task has finished. If you were already aware, ignore this notification and do not restate prior responses.\n\n<task>\nkind: shell\nstatus: error\ntask_id: 14171\ntitle: Run the checks\n</task>\n</system_notification>\n<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>"
+  const explained = JSON.stringify({error: "ERROR_CONVERSATION_TOO_LONG", details: {title: "Conversation Too Long", detail: "Your conversation is too long. Please try creating a new conversation or shortening your messages.", isRetryable: false}, isExpected: true})
+  const eventBubbles = [
+    {bubbleId: "ask", type: 1, text: "Plan the refactor", toolFormerData: {additionalData: {status: "error"}}},
+    {bubbleId: "plan", type: 1, isSimulatedMsg: true, simulatedMsgReason: 1, text: "Refactor plan\n\nImplement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself."},
+    {bubbleId: "summarised", type: 2, text: "Continuing.", conversationSummary: {summary: "The user asked for a refactor plan.", truncationLastBubbleIdInclusive: "ask"}},
+    {bubbleId: "again", type: 2, text: "Still going.", conversationSummary: {summary: "The user asked for a refactor plan."}},
+    {bubbleId: "too-long", type: 2, errorDetails: {generationUUID: "g1", error: explained, message: "Error"}},
+    {bubbleId: "stopped", type: 2, errorDetails: {message: "Canceled"}},
+    {bubbleId: "dropped", type: 2, errorDetails: {message: "Error [unavailable]"}},
+    {bubbleId: "notice", type: 1, isSimulatedMsg: true, simulatedMsgReason: 3, text: notification},
+    {bubbleId: "nudge", type: 1, isNudge: true, text: "Also fix the header"},
+  ]
+  for (const bubble of eventBubbles) events.prepare("INSERT OR REPLACE INTO cursorDiskKV VALUES (?,?)").run(`bubbleId:${eventsId}:${bubble.bubbleId}`, JSON.stringify(bubble))
+  events.prepare("INSERT OR REPLACE INTO cursorDiskKV VALUES (?,?)").run(`composerData:${eventsId}`, JSON.stringify({fullConversationHeadersOnly: eventBubbles.map(({bubbleId}) => ({bubbleId}))}))
+  events.close()
+  const read = (await provider.read(ref.path.replace(id, eventsId))).entries
+  const outline = read.map((entry) => entry.kind === "event"
+    ? `event${entry.opensTurn ? ":opens" : ""}${entry.tone ? `:${entry.tone}` : ""}:${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}`
+    : entry.kind === "user" ? `user:${entry.text}` : `assistant:${entry.blocks.map((block) => block.text).join("")}`)
+  assert.deepEqual(outline, [
+    "user:Plan the refactor",
+    "event:opens:Implement plan — Refactor plan",
+    "event:Context compacted",
+    "assistant:Continuing.",
+    "assistant:Still going.",
+    "event:error:Turn failed — Conversation Too Long",
+    "event:Interrupted",
+    "event:error:Turn failed — Error [unavailable]",
+    'event:opens:error:Background command "Run the checks" failed',
+    "user:Also fix the header",
+  ])
+  assert.equal(read[2].body, "The user asked for a refactor plan.", "the summary is the marker's body, once per summary")
+  assert.equal(read[5].body, "Your conversation is too long. Please try creating a new conversation or shortening your messages.")
+  assert.match(read[1].body, /Implement the plan as specified/, "Cursor's canned instruction is kept, but not as the user's words")
+  console.log("Cursor desktop: simulated messages open turns in Cursor's words, a summary marks its compaction, error replies mark failed turns, and a nameless tool record costs nothing")
 } finally {
   await rm(home, {recursive: true, force: true})
 }

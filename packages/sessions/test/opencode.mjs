@@ -433,8 +433,9 @@ try {
     7000,
     7000,
     json({
+      status: "completed",
       reason: "manual",
-      summary: "CURRENT_COMPACTION_SECRET",
+      summary: "The user asked about the README; it was read and answered.",
       recent: "CURRENT_RECENT_SECRET",
       time: { created: 7000 },
     })
@@ -597,7 +598,8 @@ try {
       kind: "event",
       at: "1970-01-01T01:56:40.000Z",
       label: "Context compacted",
-      detail: "Manual",
+      detail: "Manual · from 360 tokens",
+      body: "The user asked about the README; it was read and answered.",
     },
     {
       kind: "assistant",
@@ -609,8 +611,7 @@ try {
   ])
   const currentSerialized = JSON.stringify(currentThread)
   assert.ok(!currentSerialized.includes("CURRENT_SYSTEM_SECRET"))
-  assert.ok(!currentSerialized.includes("CURRENT_COMPACTION_SECRET"))
-  assert.ok(!currentSerialized.includes("CURRENT_RECENT_SECRET"))
+  assert.ok(!currentSerialized.includes("CURRENT_RECENT_SECRET"), "the compaction's summary is shown; the recent turns it keeps verbatim are not")
   assert.ok(!currentSerialized.includes("CURRENT_USER_METADATA_SECRET"))
 
   const isolatedFollower = provider.createFollower(legacyFile.path, legacyThread.ref.bytes)
@@ -820,6 +821,59 @@ try {
     }
     console.log("OpenCode native WAL observation delivered without directory events")
   } finally { await catalog.stop() }
+
+  // Markers: a retried step, compactions that completed, failed or still
+  // run, and a turn that failed. Shapes from a real OpenCode 2 store.
+  {
+    const at = (seq) => new Date((12_000 + seq) * 1000).toISOString()
+    const row = (id, type, seq, data) =>
+      insertCurrent.run(id, "ses_markers", type, seq, 12_000 + seq, 12_000 + seq, json({ ...data, time: { created: 12_000 + seq } }))
+    const invalidOutput = { type: "provider.invalid-output", message: "The provider response ended with an unknown finish reason." }
+    const tokens = (input, output) => ({ input, output, reasoning: 0, cache: { read: 0, write: 0 } })
+    insertCurrentSession.run("ses_markers", "current-project", null, "/projects/current-root/pkg", "Markers", null, 12_000, 12_000, null)
+    row("m_user", "user", 0, { text: "go", files: [], agents: [] })
+    row("m_retried", "assistant", 1, {
+      content: [{ type: "text", id: "t1", text: "partial" }], finish: "error", error: invalidOutput,
+      retry: { attempt: 2, at: 12_001_500, error: invalidOutput }, tokens: tokens(1000, 10),
+    })
+    row("m_continue", "synthetic", 2, { text: "The previous response was interrupted. Continue from where you left off without repeating completed content." })
+    row("m_done", "assistant", 3, { content: [{ type: "text", id: "t2", text: "done" }], finish: "stop", tokens: tokens(1500, 20) })
+    row("m_compacted", "compaction", 4, { status: "completed", reason: "auto", summary: "Worked on the task.", recent: "RECENT_SECRET" })
+    row("m_compaction_failed", "compaction", 5, { status: "failed", reason: "auto", error: { type: "compaction.failed", message: "The model could not summarize" } })
+    row("m_compacting", "compaction", 6, { status: "running", reason: "manual", summary: "", recent: "" })
+    row("m_again", "user", 7, { text: "again", files: [], agents: [] })
+    row("m_failed", "assistant", 8, { content: [], finish: "error", error: { type: "provider.invalid-request", message: "Invalid request: context too long\nsee provider logs" } })
+    row("m_system", "system", 9, { text: "Today's date is now: Mon Aug 31 2026", description: "Instructions updated: core/date" })
+    const markers = await provider.read(`${currentPath}#ses_markers`)
+    assert.deepEqual(markers?.entries, [
+      { kind: "user", id: "m_user", at: at(0), text: "go", attachments: [] },
+      { kind: "assistant", at: at(1), usage: { input: 1000, output: 10, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "partial" }] },
+      { kind: "event", at: at(1), label: "Retried", detail: "attempt 2 · The provider response ended with an unknown finish reason.", tone: "warning" },
+      { kind: "assistant", at: at(3), usage: { input: 1500, output: 20, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "done" }] },
+      { kind: "event", at: at(4), label: "Context compacted", detail: "Automatic · from 2k tokens", body: "Worked on the task." },
+      { kind: "event", at: at(5), label: "Compaction failed", detail: "The model could not summarize", tone: "warning" },
+      { kind: "user", id: "m_again", at: at(7), text: "again", attachments: [] },
+      { kind: "event", at: at(8), label: "Turn failed", detail: "Request rejected", body: "Invalid request: context too long\nsee provider logs", tone: "error" },
+    ], "a retried step continues its turn, so OpenCode's continue notice opens none; a running compaction and system rows show nothing")
+    assert.ok(!JSON.stringify(markers).includes("RECENT_SECRET"))
+  }
+  {
+    insertLegacySession.run("ses_legacy_failed", "legacy-project", null, "/projects/legacy-root/app", "Legacy failure", 13_000, 13_000, null)
+    const overloaded = { name: "APIError", data: { message: "Overloaded", isRetryable: true } }
+    insertMessage.run("msg_legacy_failed", "ses_legacy_failed", 13_000, 13_000,
+      json({ role: "assistant", time: { created: 13_000 }, error: overloaded }))
+    insertPart.run("prt_legacy_partial", "msg_legacy_failed", "ses_legacy_failed", 13_000, 13_000, json({ type: "text", text: "partial" }))
+    insertPart.run("prt_legacy_retry", "msg_legacy_failed", "ses_legacy_failed", 13_001, 13_001,
+      json({ type: "retry", attempt: 1, error: overloaded, time: { created: 13_001 } }))
+    const failed = await provider.read(`${legacyPath}#ses_legacy_failed`)
+    const at = new Date(13_000 * 1000).toISOString()
+    assert.deepEqual(failed?.entries, [
+      { kind: "assistant", at, blocks: [{ type: "text", text: "partial" }] },
+      { kind: "event", at, label: "Retried", detail: "attempt 1 · Overloaded", tone: "warning" },
+      { kind: "event", at, label: "Turn failed", detail: "Provider error", body: "Overloaded", tone: "error" },
+    ], "OpenCode 1 retries within one message; an error after them failed the turn")
+  }
+  console.log("OpenCode markers: retried steps, completed, failed and running compactions, failed turns in both stores")
 
   // A store OpenCode 2 created itself has session_v2 and session_message
   // and none of v1's tables.

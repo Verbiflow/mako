@@ -301,6 +301,43 @@ try {
     assert.equal(after.title, "Renamed in Devin", "a rename that moves no timestamp still reaches the row")
     console.log("Devin rename without an activity bump reaches the row")
   } finally { await renaming.stop() }
+
+  // Recorded from devin 3000.10.23: a failed tool result, and the system
+  // message an automatic compaction leaves in place of the history it summarized.
+  const annotated = new DatabaseSync(join(dir, "sessions.db"))
+  annotated
+    .prepare("INSERT INTO sessions (id, hidden, last_activity_at, working_directory, model, title, created_at, main_chain_id) VALUES (?, 0, ?, ?, ?, ?, ?, ?)")
+    .run("session-2", 20, "/work", "swe-1-6", "Compacted", 10, 15)
+  const node = annotated.prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)")
+  const extensions = (value) => ({ metadata: { num_tokens: null, extensions: value, telemetry: { source: "system" } } })
+  node.run(1011, "session-2", 11, null, JSON.stringify({ role: "user", content: "Speed up the build" }), 11, null)
+  node.run(1012, "session-2", 12, 11, JSON.stringify({ role: "assistant", content: "", tool_calls: [{ id: "call-edit", name: "edit", arguments: { file_path: "/work/a.ts" } }] }), 12, null)
+  node.run(1013, "session-2", 13, 12, JSON.stringify({
+    role: "tool",
+    tool_call_id: "call-edit",
+    content: "Tool 'edit' validation failed: String not found in file.",
+    ...extensions({ "chisel/tool_result_meta": { success: false, failure_reason: "ValidationError", kind: "edit" }, "chisel/tool_failure": { reason: "ValidationError" } }),
+  }), 13, null)
+  node.run(1014, "session-2", 14, 13, JSON.stringify({
+    role: "system",
+    content: "You are continuing work from a previous conversation thread. Below is a summary of the previous conversation thread:\nFull conversation history saved at /Users/me/.local/share/devin/cli/summaries/history_19c6.md.\nSummary:\n## 1. Request and Intent\n\nMake the build faster.",
+    ...extensions({ "devin-rs/summary": { source: "async_file_compactor" }, "compact/edited_files": { paths: ["/work/a.ts"] } }),
+  }), 14, JSON.stringify({ summarized_from: 335, num_tokens_preceding: null, is_system_prefix: null }))
+  node.run(1015, "session-2", 15, 14, JSON.stringify({
+    role: "system",
+    content: "The session mode has changed: you are now in the 'Ask' mode.",
+    ...extensions({ mode_transition: { from: "normal", to: "ask" } }),
+  }), 15, null)
+  annotated.close()
+  const compacted = await provider.read(`${join(dir, "sessions.db")}#session-2`)
+  assert.ok(compacted)
+  const failedTool = compacted.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).find((block) => block.type === "tool")
+  assert.equal(failedTool?.error, true, "a failed tool result reads as failed")
+  const markers = compacted.entries.filter((entry) => entry.kind === "event")
+  assert.deepEqual(markers, [{ kind: "event", id: "1014", at: new Date(14_000).toISOString(), label: "Context compacted", body: "## 1. Request and Intent\n\nMake the build faster." }],
+    "the compaction reads as a marker carrying its summary; a mode change is not shown")
+  assert.ok(!compacted.entries.some((entry) => entry.kind === "user" && /continuing work/.test(entry.text)))
+  console.log("Devin compaction summaries read as markers and failed tool results as failed")
   provider.close()
   console.log("Devin CLI tests clean: streamed rows, tools, thinking, locks, and incremental follow verified.")
 } finally {

@@ -340,6 +340,43 @@ try {
 
   const finalInfo = await stat(updatesPath)
   assert.equal(follower.offset, finalInfo.size)
+
+  // Recorded from grok 1.0.44: an automatic compaction in the middle of a
+  // turn, and the reminder that wakes Grok when a background subagent ends.
+  const compactedDir = join(home, ".grok", "sessions", "%2Fwork", "compacted-session")
+  const compactedPath = join(compactedDir, "updates.jsonl")
+  await mkdir(compactedDir, { recursive: true })
+  await writeFile(join(compactedDir, "summary.json"), JSON.stringify({ info: { id: "compacted-session", cwd: "/work" }, session_summary: "Compacted" }))
+  const vendor = (update, timestamp) => jsonl({ timestamp, method: "_x.ai/session/update", params: { sessionId: "compacted-session", update } })
+  const standard = (update, timestamp, meta) => jsonl({ timestamp, method: "session/update", params: { sessionId: "compacted-session", update: meta ? { ...update, _meta: meta } : update } })
+  const wake = `<system-reminder>\nWhile you were idle, 1 background subagent completed:\n- [general-purpose] "Sleep 20 then reply" — completed successfully (32.9s, 2 tool calls)\n=== Task 01a0c67b ===\nCommand: [subagent:general-purpose] Sleep 20 then reply\nStatus: completed\n\n=== Output ===\nCHILD_DONE_GROK_A\n</system-reminder>`
+  await writeFile(
+    compactedPath,
+    standard({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "Refactor the build" } }, 1_790_296_400) +
+      standard({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Reading the scripts." } }, 1_790_296_401) +
+      vendor({ sessionUpdate: "auto_compact_started", tokens_used: 403803, context_window: 500000, percentage: 81, reason: "Context window 81% full" }, 1_790_296_465) +
+      vendor({ sessionUpdate: "compaction_checkpoint", checkpoint_id: "c8858747" }, 1_790_296_560) +
+      vendor({ sessionUpdate: "auto_compact_completed", tokens_before: 403803, tokens_after: 21289, elapsed_ms: 94952, summary_preview: null }, 1_790_296_560) +
+      standard({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Continuing." } }, 1_790_296_561) +
+      vendor({ sessionUpdate: "turn_completed", prompt_id: "p1", stop_reason: "end_turn" }, 1_790_296_562) +
+      standard({ sessionUpdate: "user_message_chunk", content: { type: "text", text: wake } }, 1_790_296_600, { promptIndex: 1, hideFromScrollback: true }) +
+      standard({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "The subagent replied." } }, 1_790_296_601)
+  )
+  const compacted = await provider.read(compactedPath)
+  assert.deepEqual(
+    compacted.entries.map((entry) => entry.kind === "event" ? `event:${entry.opensTurn ? "opens:" : ""}${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}` : entry.kind),
+    [
+      "user",
+      "assistant",
+      "event:Context compacted — Automatic · 404k → 21k tokens",
+      "assistant",
+      'event:opens:Subagent "Sleep 20 then reply" completed',
+      "assistant",
+    ],
+    "a compaction marks where it happened, and a subagent's wake opens the turn it starts instead of reading as the user's words"
+  )
+  const compactedFollower = provider.createFollower(compactedPath, 0)
+  assert.deepEqual(apply([], await compactedFollower.next()), compacted.entries, "following converges with a full read")
   console.log("Grok updates tests clean: authority, envelopes, chunks, tools, plans, usage, fallback, and convergence verified.")
 } finally {
   rmSync(home, { recursive: true, force: true })
