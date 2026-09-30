@@ -5,9 +5,9 @@ import { format } from "node:util"
 /**
  * The host's durable record of what it did.
  *
- * The shared host is spawned detached with its stdio ignored, so `console`
- * output from the host process goes nowhere. Every provider start, startup
- * step, failure and exit is written here instead, one line each, so a thread
+ * The shared host is spawned detached; its raw stdout and stderr go to
+ * `host-output.log` beside this file, unstructured. Every provider start,
+ * startup step, failure and exit is written here, one line each, so a thread
  * that reads "did not start" can be traced to the step that stalled and the
  * process that stalled it. Crash reports remain separate files; this log
  * mirrors their one-line summary so the timeline is in one place.

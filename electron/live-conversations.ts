@@ -64,6 +64,8 @@ import type {
   LiveSnapshot,
   LiveStartOptions,
   LiveSummary,
+  NativeActivity,
+  NativeActivityObservation,
 } from "./shared.js"
 import { reduceLiveUpdates, mergeLiveUpdates, changedLiveBlockStart, isTurnStart } from "./contracts/live-content.js"
 import type { InterruptionReason, TurnContinuation } from "./contracts/live-conversations.js"
@@ -1506,6 +1508,7 @@ export class LiveConversations {
           ...event.session,
           title: event.session.title ?? resident.snapshot.session.title,
         },
+        nativeActivity: event.session.status === "running" ? resident.snapshot.nativeActivity : undefined,
       }
       if (event.session.nativeRunId && event.session.status === "running") {
         const runId = event.session.nativeRunId
@@ -1575,6 +1578,13 @@ export class LiveConversations {
           observedAt: Date.now(),
         }),
       }
+    } else if (event.type === "live-activity") {
+      const nativeActivity = observeNativeActivity(
+        resident.snapshot.nativeActivity,
+        resident.snapshot.session.status === "running" && !replaying ? event.activity : null
+      )
+      if (nativeActivity !== resident.snapshot.nativeActivity)
+        resident.snapshot = { ...resident.snapshot, nativeActivity }
     } else if (event.type === "live-question-answered") {
       this.questions.observeAnswer(resident, bindingId, event.answer)
     } else if (event.type === "live-question") {
@@ -1600,6 +1610,9 @@ export class LiveConversations {
           return []
         }
       })
+      // The model answering again is the end of a retry's wait.
+      if (resident.snapshot.nativeActivity?.kind === "retrying" && prepared.some((update) => update.kind !== "user"))
+        resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
       for (const update of prepared) {
         if (dispatching && update.kind === "user") continue
         resident.steps?.observe(update)
@@ -1624,7 +1637,7 @@ export class LiveConversations {
       }
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
-    if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent")
+    if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent" || event.type === "live-activity")
       this.flush(resident)
     else this.schedule(resident)
     if (event.type === "live-session" || event.type === "live-agent") {
@@ -3265,6 +3278,10 @@ export class LiveConversations {
           previous.activityAt !== snapshot.activityAt
             ? snapshot.activityAt
             : undefined,
+        nativeActivity:
+          previous.nativeActivity !== snapshot.nativeActivity
+            ? (snapshot.nativeActivity ?? null)
+            : undefined,
       },
     })
     if (
@@ -3459,9 +3476,25 @@ function showsActivity(event: LiveDriverEvent, status: LiveSessionState["status"
     case "live-question":
     case "live-agent":
       return true
+    case "live-activity":
+      return event.activity !== null && !replaying
     default:
       return false
   }
+}
+
+/**
+ * The running turn's activity after `observation`: the same object when
+ * nothing changed, so a repeated report publishes nothing, and the first
+ * `since` while the provider keeps doing the same kind of thing.
+ */
+function observeNativeActivity(
+  current: NativeActivity | undefined,
+  observation: NativeActivityObservation | null
+): NativeActivity | undefined {
+  if (!observation) return undefined
+  const next = { ...observation, since: current?.kind === observation.kind ? current.since : Date.now() }
+  return current && JSON.stringify(current) === JSON.stringify(next) ? current : next
 }
 
 /**

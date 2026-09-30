@@ -5,6 +5,7 @@ import {
   CodexAgentActivitySchema,
 } from "./providers/codex/agents.js"
 import { attachmentFromCodexContent } from "./providers/codex/content.js"
+import { z } from "zod"
 import {
   booleanValue,
   isJsonObject,
@@ -90,7 +91,7 @@ export type PatchNotification = {
   threadId: string
   turnId: string
   itemId: string
-  changes: JsonValue
+  changes: FileChange[]
 }
 
 type PlanNotification = {
@@ -103,6 +104,10 @@ type ErrorNotification = {
   method: "error"
   threadId?: string
   message: string
+  /** Codex is retrying the request itself; the turn goes on. */
+  willRetry: boolean
+  /** The `CodexErrorInfo` variant, when Codex classified the error. */
+  variant?: string
 }
 
 type ResolvedNotification = {
@@ -114,6 +119,82 @@ type ResolvedNotification = {
 type TokenUsageNotification = {
   method: "thread/tokenUsage/updated"
   threadId: string
+  /** Tokens in the context window at the latest request. */
+  used: number
+  /** The model's context window, when Codex knows it. */
+  size?: number
+}
+
+type WarningNotification = {
+  method: "warning" | "guardianWarning"
+  threadId?: string
+  message: string
+}
+
+type ConfigNoticeNotification = {
+  method: "configWarning" | "deprecationNotice"
+  threadId?: undefined
+  summary: string
+  details?: string
+}
+
+type StrictReviewNotification = {
+  method: "autoApprovalReview/strictReviewRequired"
+  threadId: string
+}
+
+type RerouteNotification = {
+  method: "model/rerouted"
+  threadId: string
+  fromModel: string
+  toModel: string
+  reason: string
+}
+
+type McpStatusNotification = {
+  method: "mcpServer/startupStatus/updated"
+  threadId?: string
+  name: string
+  status: string
+  error?: string
+  failureReason?: string
+}
+
+type SafetyBufferingNotification = {
+  method: "model/safetyBuffering/updated"
+  threadId: string
+  turnId: string
+  show: boolean
+}
+
+type WaitNotification = {
+  method:
+    | "item/autoApprovalReview/started"
+    | "item/autoApprovalReview/completed"
+    | "modelProvider/authRecoveryStarted"
+    | "modelProvider/authRecoveryCompleted"
+  threadId: string
+}
+
+type ThreadNameNotification = {
+  method: "thread/name/updated"
+  threadId: string
+  name?: string
+}
+
+type SummaryPartNotification = {
+  method: "item/reasoning/summaryPartAdded"
+  threadId: string
+  turnId: string
+  itemId: string
+  summaryIndex: number
+}
+
+/** A notification this protocol knows whose payload did not validate. */
+type InvalidNotification = {
+  method: "invalid"
+  threadId?: undefined
+  kind: string
 }
 
 export type ProtocolNotification =
@@ -127,6 +208,31 @@ export type ProtocolNotification =
   | ErrorNotification
   | ResolvedNotification
   | TokenUsageNotification
+  | WarningNotification
+  | ConfigNoticeNotification
+  | StrictReviewNotification
+  | RerouteNotification
+  | McpStatusNotification
+  | SafetyBufferingNotification
+  | WaitNotification
+  | ThreadNameNotification
+  | SummaryPartNotification
+  | InvalidNotification
+
+const TokenUsageSchema = z.object({
+  last: z.object({ totalTokens: z.number().nonnegative() }),
+  modelContextWindow: z.number().positive().nullish(),
+})
+const ConfigNoticeSchema = z.object({ summary: z.string().min(1), details: z.string().nullish() })
+const RerouteSchema = z.object({ fromModel: z.string(), toModel: z.string(), reason: z.string() })
+const McpStatusSchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  error: z.string().nullish(),
+  failureReason: z.string().nullish(),
+})
+const SafetyBufferingSchema = z.object({ turnId: z.string(), showBufferingUi: z.boolean() })
+const SummaryPartSchema = z.object({ turnId: z.string(), itemId: z.string(), summaryIndex: z.number() })
 
 export function parseJsonRpcEnvelope(line: string): JsonRpcEnvelope {
   let value: JsonValue
@@ -177,9 +283,10 @@ export function parseNotification(
     case "item/completed": {
       const turnId = stringValue(params.turnId)
       const item = parseThreadItem(params.item)
-      return threadId !== undefined && turnId !== undefined && item
-        ? { method, threadId, turnId, item }
-        : null
+      if (threadId !== undefined && turnId !== undefined && item)
+        return { method, threadId, turnId, item }
+      const type = stringValue(objectValue(params.item)?.type)
+      return type === undefined ? null : { method: "invalid", kind: `item/${type}/invalid` }
     }
     case "item/agentMessage/delta":
     case "item/plan/delta":
@@ -221,11 +328,12 @@ export function parseNotification(
     case "item/fileChange/patchUpdated": {
       const turnId = stringValue(params.turnId)
       const itemId = stringValue(params.itemId)
+      const changes = parseArray(params.changes, parseFileChange)
       return threadId !== undefined &&
         turnId !== undefined &&
         itemId !== undefined &&
-        params.changes !== undefined
-        ? { method, threadId, turnId, itemId, changes: params.changes }
+        changes
+        ? { method, threadId, turnId, itemId, changes }
         : null
     }
     case "turn/plan/updated": {
@@ -238,17 +346,75 @@ export function parseNotification(
         method,
         threadId,
         message: stringValue(error?.message) ?? "Codex encountered an error",
+        willRetry: booleanValue(params.willRetry) === true,
+        variant: errorVariant(error?.codexErrorInfo),
       }
     }
     case "serverRequest/resolved": {
       const requestId = rpcIdValue(params.requestId)
       return requestId === undefined ? null : { method, threadId, requestId }
     }
-    case "thread/tokenUsage/updated":
+    case "thread/tokenUsage/updated": {
+      const usage = TokenUsageSchema.safeParse(params.tokenUsage)
+      if (threadId === undefined || !usage.success) return null
+      const { last, modelContextWindow } = usage.data
+      return { method, threadId, used: last.totalTokens, size: modelContextWindow ?? undefined }
+    }
+    case "warning":
+    case "guardianWarning": {
+      const message = stringValue(params.message)
+      return message ? { method, threadId, message } : null
+    }
+    case "configWarning":
+    case "deprecationNotice": {
+      const notice = ConfigNoticeSchema.safeParse(params)
+      return notice.success
+        ? { method, summary: notice.data.summary, details: notice.data.details ?? undefined }
+        : null
+    }
+    case "autoApprovalReview/strictReviewRequired":
+    case "item/autoApprovalReview/started":
+    case "item/autoApprovalReview/completed":
+    case "modelProvider/authRecoveryStarted":
+    case "modelProvider/authRecoveryCompleted":
       return threadId === undefined ? null : { method, threadId }
+    case "model/rerouted": {
+      const reroute = RerouteSchema.safeParse(params)
+      return threadId !== undefined && reroute.success ? { method, threadId, ...reroute.data } : null
+    }
+    case "mcpServer/startupStatus/updated": {
+      const status = McpStatusSchema.safeParse(params)
+      if (!status.success) return null
+      const { name, error, failureReason } = status.data
+      return {
+        method,
+        threadId,
+        name,
+        status: status.data.status,
+        error: error ?? undefined,
+        failureReason: failureReason ?? undefined,
+      }
+    }
+    case "model/safetyBuffering/updated": {
+      const buffering = SafetyBufferingSchema.safeParse(params)
+      return threadId !== undefined && buffering.success
+        ? { method, threadId, turnId: buffering.data.turnId, show: buffering.data.showBufferingUi }
+        : null
+    }
+    case "thread/name/updated":
+      return threadId === undefined ? null : { method, threadId, name: stringValue(params.threadName) }
+    case "item/reasoning/summaryPartAdded": {
+      const part = SummaryPartSchema.safeParse(params)
+      return threadId !== undefined && part.success ? { method, threadId, ...part.data } : null
+    }
     default:
       return null
   }
+}
+
+/** A `CodexErrorInfo`: a bare variant name, or one keyed by it with its fields. */
+function errorVariant(value: JsonValue | undefined): string | undefined {
+  return stringValue(value) ?? Object.keys(objectValue(value) ?? {})[0]
 }
 
 export function parseObjectResult(
@@ -345,6 +511,8 @@ function parseTurnError(
   if (message.value !== undefined) error.message = message.value
   if (additionalDetails.value !== undefined)
     error.additionalDetails = additionalDetails.value
+  const variant = errorVariant(root.codexErrorInfo)
+  if (variant !== undefined) error.variant = variant
   return { valid: true, value: error }
 }
 
@@ -417,6 +585,7 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
             server,
             tool,
             status,
+            arguments: root.arguments,
             result: root.result,
             error: error.value,
           }
@@ -439,11 +608,33 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
             namespace: namespace.value,
             tool,
             status,
+            arguments: root.arguments,
             contentItems: contentItems.value,
             success: success.value,
           }
         : null
     }
+    case "webSearch": {
+      const query = stringValue(root.query)
+      return query === undefined
+        ? null
+        : {
+            type,
+            id,
+            query,
+            action: objectValue(root.action) ?? null,
+            results: Array.isArray(root.results) ? root.results : null,
+          }
+    }
+    case "sleep": {
+      const durationMs = numberValue(root.durationMs)
+      return durationMs === undefined ? null : { type, id, durationMs }
+    }
+    case "enteredReviewMode":
+    case "exitedReviewMode":
+      return { type, id, review: stringValue(root.review) ?? "" }
+    case "hookPrompt":
+      return { type, id }
     case "imageView":
     case "imageGeneration": {
       return {
@@ -464,6 +655,8 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
       const text = stringValue(root.text)
       return text === undefined ? null : { type, id, text }
     }
+    case "contextCompaction":
+      return { type, id }
     default:
       return { type: "unsupported", id, sourceType: type }
   }

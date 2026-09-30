@@ -53,6 +53,7 @@ export type ThreadItem =
       server: string
       tool: string
       status: string
+      arguments?: JsonValue
       result: JsonValue
       error: McpToolError | null
     }
@@ -62,18 +63,30 @@ export type ThreadItem =
       namespace: string | null
       tool: string
       status: string
+      arguments?: JsonValue
       contentItems: JsonValue[] | null
       success: boolean | null
     }
+  | { type: "webSearch"; id: string; query: string; action: JsonObject | null; results: JsonValue[] | null }
+  | { type: "sleep"; id: string; durationMs: number }
+  | { type: "enteredReviewMode" | "exitedReviewMode"; id: string; review: string }
+  /** Text a hook added to the conversation; Codex itself does not show it. */
+  | { type: "hookPrompt"; id: string }
   | { type: "attachment"; id: string; attachment: AttachmentContent }
   | { type: "plan"; id: string; text: string }
+  | { type: "contextCompaction"; id: string }
   | { type: "unsupported"; id: string; sourceType: string }
 
 export type Turn = {
   id: string
   items: ThreadItem[]
   status: string
-  error: { message?: string; additionalDetails?: string | null } | null
+  error: {
+    message?: string
+    additionalDetails?: string | null
+    /** The `CodexErrorInfo` variant, when Codex classified the error. */
+    variant?: string
+  } | null
 }
 
 export type ThreadResponse = {
@@ -175,6 +188,12 @@ export interface ProtocolCallbacks {
   handleFatal(message: string): void
   updateState(patch: Partial<LiveSessionState>): void
   emitUpdate(update: LiveUpdate): void
+  activity?(activity: import("./contracts/native-activity.js").NativeActivityObservation | null): void
+  compacted?(compaction?: import("@mako/sessions/events").Compaction): void
+  /** A transcript marker: a warning, a failed turn, a review boundary. */
+  event?(marker: import("@mako/sessions/events").TranscriptEvent): void
+  /** A notification or item this protocol does not translate. */
+  unhandled?(kind: string): void
   observeAgents(item: CodexAgentItem, replay: boolean): void
   observeAgentTurn?(nativeId: string): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void
@@ -198,6 +217,12 @@ export interface ProtocolContext {
   background: { running: Set<string>; raced?: Set<string> }
   /** Waiters for a subagent's turn to settle, by the subagent's thread. */
   subagentTurns?: Map<string, Array<() => void>>
+  /** Context tokens when the running compaction started. */
+  compactingFrom?: number
+  /** The label of the waiting activity this protocol set and has yet to end. */
+  waiting?: string
+  /** Notices already shown this session; a repeat adds nothing. */
+  notices?: Set<string>
   stdoutLines: LineAssembler
   exited: boolean
   protocol: ProtocolCallbacks

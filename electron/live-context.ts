@@ -27,6 +27,10 @@ export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
       entries.push({ kind: "event", label: block.reason, opensTurn: true })
       continue
     }
+    if (block.type === "event") {
+      entries.push({ kind: "event", label: block.label, detail: block.detail })
+      continue
+    }
     if (block.type === "plan") {
       entries.push({
         kind: "assistant",

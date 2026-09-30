@@ -6,8 +6,12 @@ import type {
   LivePermissionResponse,
   LiveSessionState,
   LiveUpdate,
+  NativeActivityObservation,
   NativeAgentObservation,
+  NativeNotice,
 } from "./shared.js"
+import { compactionEvent, type Compaction, type TranscriptEvent } from "@mako/sessions/events"
+import { hostLog } from "./host-log.js"
 
 /** What a live engine's per-session record must carry to share the runtime. */
 export interface EngineLive {
@@ -30,6 +34,23 @@ export interface LiveEngineApi<Live extends EngineLive> {
   emitUpdate(live: Live, update: LiveUpdate): void
   emitUpdates(live: Live, updates: LiveUpdate[]): void
   emitAgent(live: Live, agent: NativeAgentObservation): void
+  /** What the turn is doing without output, or `null` once it stops. */
+  activity(live: Live, activity: NativeActivityObservation | null): void
+  /** The provider compacted the conversation: the transcript marks it and compacting ends. */
+  compacted(live: Live, compaction?: Compaction): void
+  /** A marker in the transcript: a provider notice, warning or failure. */
+  event(live: Live, event: TranscriptEvent): void
+  /**
+   * Apply what a harness decoder made of one native event; `undefined`
+   * means the decoder does not know it, and `kind` is logged as unhandled.
+   */
+  observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined): void
+  /**
+   * A native event this engine does not translate. Logged once per harness
+   * and kind for the host's life, so a new provider event is on record
+   * without a line per occurrence.
+   */
+  unhandled(live: Live, kind: string): void
   /**
    * Put a request to the desk and wait for its answer. The pending entry
    * is removed when the answer arrives; `release` answers whatever is
@@ -48,8 +69,24 @@ export interface LiveEngineApi<Live extends EngineLive> {
  * keeps only protocol translation — turning session/new, turn/start, or SDK
  * callbacks into these calls.
  */
+const unhandled = new Set<string>()
+
 export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live> {
   const sessions = new Map<string, Live>()
+  const activity = (live: Live, observation: NativeActivityObservation | null): void =>
+    live.emit({ type: "live-activity", id: live.state.id, activity: observation })
+  const event = (live: Live, marker: TranscriptEvent): void =>
+    live.emit({ type: "live-update", id: live.state.id, update: { kind: "event", ...marker } })
+  const compacted = (live: Live, compaction?: Compaction): void => {
+    event(live, compactionEvent(compaction))
+    activity(live, null)
+  }
+  const unhandledEvent = (live: Live, kind: string): void => {
+    const key = `${live.state.harness}\0${kind}`
+    if (unhandled.has(key)) return
+    unhandled.add(key)
+    hostLog("live", "native event not handled", { harness: live.state.harness, kind })
+  }
 
   return {
     sessions,
@@ -76,6 +113,19 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
     emitAgent(live: Live, agent: NativeAgentObservation): void {
       live.emit({ type: "live-agent", id: live.state.id, agent })
     },
+
+    activity,
+    compacted,
+    event,
+    observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined): void {
+      if (!notices) return unhandledEvent(live, kind)
+      for (const notice of notices) {
+        if (notice.kind === "activity") activity(live, notice.activity)
+        else if (notice.kind === "compacted") compacted(live, notice.compaction)
+        else event(live, notice.event)
+      }
+    },
+    unhandled: unhandledEvent,
 
     /**
      * Put a request to the desk and wait for its answer. The pending entry

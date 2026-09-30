@@ -43,3 +43,4 @@ export type {
 } from "./account-types.js"
 
 export * from "./contracts/native-agents.js"
+export * from "./contracts/native-activity.js"

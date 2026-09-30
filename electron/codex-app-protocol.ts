@@ -3,10 +3,15 @@ import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
 import { z } from "zod"
 import {
+  codexErrorClass,
+  codexFailureEvent,
   codexPresentation,
   codexPrompt,
   codexPromptImages,
+  codexWarningEvent,
+  firstLine,
 } from "@mako/sessions/codex-presentation"
+import { event, type TranscriptEvent } from "@mako/sessions/events"
 import {
   boundedText,
   isNumber,
@@ -28,6 +33,7 @@ import {
   type StreamDeltaNotification,
   type ToolOutputNotification,
 } from "./codex-app-parse.js"
+import type { NativeActivityObservation } from "./contracts/native-activity.js"
 import type {
   ItemTracker,
   PendingRpc,
@@ -67,6 +73,90 @@ const MAX_TOOL_OUTPUT = 32 * 1024
 const MAX_STREAM_COMPARE = 128 * 1024
 const MAX_TRACKED_ITEMS = 2048
 const MAX_REPLAY_ITEMS = 1000
+const MAX_NOTICES = 256
+const REVIEWING_APPROVAL = "Reviewing the approval"
+const CHECKING_RESPONSE = "Checking the response"
+const REFRESHING_SIGN_IN = "Refreshing sign-in"
+/** Codex 0.159's `ModelRerouteReason`, in plain words. */
+const REROUTE_REASONS = new Map([["highRiskCyberActivity", "cybersecurity safety check"]])
+/** Codex 0.159's `McpServerStartupFailureReason`, in plain words. */
+const MCP_FAILURES = new Map([["reauthenticationRequired", "sign-in required"]])
+/**
+ * Notifications that are bookkeeping for Codex's own clients: thread
+ * lifecycle Mako drives itself, account and app state, realtime audio, raw
+ * model frames, and duplicates of events handled elsewhere. Known here so the
+ * unhandled log keeps to events Mako has yet to translate. Checked on 0.159.
+ */
+const IGNORED_NOTIFICATIONS = new Set([
+  // Superseded by the contextCompaction item.
+  "thread/compacted",
+  "thread/started",
+  "thread/archived",
+  "thread/unarchived",
+  "thread/deleted",
+  "thread/reverted",
+  "thread/status/changed",
+  "thread/closed",
+  "thread/settings/updated",
+  "thread/attachment/updated",
+  "thread/queue/changed",
+  "thread/project/updated",
+  "thread/environment/connected",
+  "thread/environment/disconnected",
+  "thread/goal/updated",
+  "thread/goal/cleared",
+  "thread/realtime/started",
+  "thread/realtime/closed",
+  "thread/realtime/error",
+  "thread/realtime/sdp",
+  "thread/realtime/itemAdded",
+  "thread/realtime/item/started",
+  "thread/realtime/item/completed",
+  "thread/realtime/item/transcript/delta",
+  "thread/realtime/outputAudio/delta",
+  "thread/realtime/transcript/delta",
+  "thread/realtime/transcript/done",
+  "project/changed",
+  "skills/changed",
+  "app/list/updated",
+  "account/updated",
+  "account/login/completed",
+  "account/gatewayOAuth/changed",
+  "account/rateLimits/updated",
+  "remoteControl/status/changed",
+  "externalAgentConfig/import/progress",
+  "externalAgentConfig/import/completed",
+  "mcpServer/oauthLogin/completed",
+  "mcpServer/event/stream/notification",
+  "fs/changed",
+  "command/exec/outputDelta",
+  "process/outputDelta",
+  "process/exited",
+  "fuzzyFileSearch/sessionUpdated",
+  "fuzzyFileSearch/sessionCompleted",
+  "windows/worldWritableWarning",
+  "windowsSandbox/setupCompleted",
+  "turn/moderationMetadata",
+  // The fileChange items carry each edit; this is the turn's aggregate diff.
+  "turn/diff/updated",
+  "hook/started",
+  "hook/completed",
+  "model/verification",
+  "item/commandExecution/terminalInteraction",
+  "rawResponse/completed",
+  "rawResponseItem/completed",
+])
+const PatchKindSchema = z.object({
+  type: z.enum(["add", "delete", "update"]),
+  move_path: z.string().nullish(),
+})
+const SearchActionSchema = z.object({
+  query: z.string().nullish(),
+  queries: z.array(z.string()).nullish(),
+  url: z.string().nullish(),
+})
+const SearchResultSchema = z.object({ title: z.string().optional(), url: z.string().min(1) })
+type FileChange = Extract<ThreadItem, { type: "fileChange" }>["changes"][number]
 const BackgroundTerminalsSchema = z.object({
   data: z.array(z.object({ itemId: z.string() })),
   nextCursor: z.string().nullish(),
@@ -115,8 +205,10 @@ function processLine(context: ProtocolContext, line: string): void {
     )
     return
   }
+  if (IGNORED_NOTIFICATIONS.has(message.method)) return
   const notification = parseNotification(message.method, message.params)
   if (notification) handleNotification(context, notification)
+  else context.protocol.unhandled?.(message.method)
 }
 
 function settleRpc(
@@ -143,6 +235,10 @@ function handleNotification(
   context: ProtocolContext,
   notification: ProtocolNotification
 ): void {
+  if (notification.method === "invalid") {
+    context.protocol.unhandled?.(notification.kind)
+    return
+  }
   if (
     notification.threadId &&
     context.threadId &&
@@ -159,6 +255,7 @@ function handleNotification(
       if (context.compaction && !context.compaction.turnId)
         context.compaction.turnId = notification.turnId
       context.currentTurnId = notification.turnId
+      context.waiting = undefined
       context.protocol.updateState({
         status: "running",
         nativeRunId: notification.turnId,
@@ -172,8 +269,7 @@ function handleNotification(
       handleItem(context, notification.turnId, notification.item, false)
       return
     case "item/completed":
-      if (context.compaction?.turnId === notification.turnId &&
-        notification.item.type === "unsupported" && notification.item.sourceType === "contextCompaction")
+      if (context.compaction?.turnId === notification.turnId && notification.item.type === "contextCompaction")
         context.compaction.confirmed = true
       handleItem(context, notification.turnId, notification.item, true)
       return
@@ -204,7 +300,7 @@ function handleNotification(
       streamToolOutput(context, notification)
       return
     case "item/fileChange/patchUpdated":
-      updateToolOutput(context, notification, boundedJson(notification.changes))
+      updateToolOutput(context, notification, patchText(notification.changes))
       return
     case "turn/plan/updated":
       context.protocol.emitUpdate({
@@ -216,14 +312,130 @@ function handleNotification(
       })
       return
     case "error":
-      context.protocol.updateState({ error: notification.message })
+      if (notification.willRetry) {
+        context.waiting = undefined
+        context.protocol.activity?.(retrying(notification.message, notification.variant))
+      } else context.protocol.updateState({ error: notification.message })
       return
     case "serverRequest/resolved":
       context.protocol.resolveServerRequest(notification.requestId)
       return
-    case "thread/tokenUsage/updated":
+    case "thread/tokenUsage/updated": {
+      const { used, size } = notification
+      const current = context.state.usage
+      if (size === undefined || (current?.used === used && current.size === size)) return
+      context.protocol.updateState({ usage: { used, size } })
+      return
+    }
+    case "warning":
+    case "guardianWarning":
+      // Codex's own UI leaves approvals out; denials and failures stay.
+      if (notification.method === "guardianWarning" &&
+        notification.message.startsWith("Automatic approval review approved ("))
+        return
+      notice(context, codexWarningEvent(notification.message))
+      return
+    case "configWarning":
+    case "deprecationNotice":
+      notice(context, codexWarningEvent(notification.summary, notification.details))
+      return
+    case "autoApprovalReview/strictReviewRequired":
+      notice(context, codexWarningEvent("This request needs extra safety checks, so some tool calls may take longer."))
+      return
+    case "model/rerouted": {
+      const reason = REROUTE_REASONS.get(notification.reason) ?? words(notification.reason)
+      notice(context, event("Model changed", `${notification.fromModel} → ${notification.toModel} · ${reason}`))
+      return
+    }
+    case "mcpServer/startupStatus/updated": {
+      if (notification.status !== "failed") return
+      const failure = notification.failureReason
+      const reason = notification.error ??
+        (failure ? MCP_FAILURES.get(failure) ?? words(failure) : undefined)
+      const line = reason ? firstLine(reason) : undefined
+      notice(context, {
+        ...event("MCP server failed", line ? `${notification.name} · ${line}` : notification.name,
+          reason === line ? undefined : reason),
+        tone: "warning",
+      })
+      return
+    }
+    case "model/safetyBuffering/updated":
+      if (notification.turnId !== context.currentTurnId) return
+      if (notification.show) wait(context, CHECKING_RESPONSE)
+      else endWait(context, CHECKING_RESPONSE)
+      return
+    case "item/autoApprovalReview/started":
+      wait(context, REVIEWING_APPROVAL)
+      return
+    case "item/autoApprovalReview/completed":
+      // A denial arrives as its own guardianWarning.
+      endWait(context, REVIEWING_APPROVAL)
+      return
+    case "modelProvider/authRecoveryStarted":
+      wait(context, REFRESHING_SIGN_IN)
+      return
+    case "modelProvider/authRecoveryCompleted":
+      endWait(context, REFRESHING_SIGN_IN)
+      return
+    case "thread/name/updated":
+      if (notification.name?.trim() && notification.name !== context.state.title)
+        context.protocol.updateState({ title: notification.name })
+      return
+    case "item/reasoning/summaryPartAdded":
+      // Codex joins summary parts with a blank line once the item completes.
+      if (notification.summaryIndex > 0)
+        streamDelta(context, { ...notification, method: "item/reasoning/summaryTextDelta", delta: "\n\n" }, "thinking")
       return
   }
+}
+
+/**
+ * Codex numbers its own retries in the message ("Reconnecting... 2/5") and
+ * classifies what failed; the counter becomes the attempt.
+ */
+function retrying(message: string, variant: string | undefined): NativeActivityObservation {
+  const counter = /^Reconnecting\.\.\.\s*(\d+)\/(\d+)\s*$/.exec(message)
+  const said = message.replace(/^Reconnecting\.\.\.\s*/, "")
+  // Codex tags every stream retry `responseStreamDisconnected`, whatever failed.
+  const reason = (variant === "responseStreamDisconnected" ? undefined : codexErrorClass(variant)) ??
+    (counter || !said ? undefined : `${said[0]?.toUpperCase() ?? ""}${said.slice(1)}`)
+  const activity: NativeActivityObservation = { kind: "retrying" }
+  if (counter) {
+    activity.attempt = Number(counter[1])
+    activity.maxAttempts = Number(counter[2])
+  }
+  if (reason) activity.reason = reason
+  return activity
+}
+
+/** A marker shown once per session, however often Codex repeats it. */
+function notice(context: ProtocolContext, marker: TranscriptEvent): void {
+  const notices = context.notices ??= new Set()
+  const key = `${marker.label}\u0000${marker.detail ?? ""}\u0000${marker.body ?? ""}`
+  if (notices.has(key)) return
+  const oldest = notices.size >= MAX_NOTICES ? notices.values().next().value : undefined
+  if (oldest !== undefined) notices.delete(oldest)
+  notices.add(key)
+  context.protocol.event?.(marker)
+}
+
+function wait(context: ProtocolContext, label: string): void {
+  if (context.waiting === label) return
+  context.waiting = label
+  context.protocol.activity?.({ kind: "waiting", label })
+}
+
+/** End a waiting activity this protocol set, never one it did not. */
+function endWait(context: ProtocolContext, label: string): void {
+  if (context.waiting !== label) return
+  context.waiting = undefined
+  context.protocol.activity?.(null)
+}
+
+/** A variant Mako has no words for yet, as lowercase words. */
+function words(identifier: string): string {
+  return identifier.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()
 }
 
 function completeTurn(context: ProtocolContext, turn: Turn): void {
@@ -231,7 +443,10 @@ function completeTurn(context: ProtocolContext, turn: Turn): void {
   if (compaction) context.compaction = undefined
   const error = turn.error?.message || undefined
   const stop = turn.status === "inProgress" ? "completed" : turn.status
+  if (error || stop === "failed")
+    context.protocol.event?.(codexFailureEvent(turn.error?.variant, error))
   context.currentTurnId = null
+  context.waiting = undefined
   context.protocol.clearTurnServerRequests(turn.id)
   for (const key of context.items.keys()) {
     if (key.startsWith(`${turn.id}\u0000`)) context.items.delete(key)
@@ -347,6 +562,8 @@ function streamDelta(
 ): void {
   if (!notification.turnId || !notification.itemId || !notification.delta)
     return
+  // Output arriving is the response passing its check; Codex sends no end.
+  if (context.waiting === CHECKING_RESPONSE) endWait(context, CHECKING_RESPONSE)
   const tracker = itemTracker(context, notification.turnId, notification.itemId)
   if (kind === "text") {
     tracker.textDelta = true
@@ -400,6 +617,7 @@ function handleItem(
   replay = false
 ): void {
   if (!turnId) return
+  if (!replay && context.waiting === CHECKING_RESPONSE) endWait(context, CHECKING_RESPONSE)
   const tracker = itemTracker(context, turnId, item.id)
   switch (item.type) {
     case "userMessage":
@@ -471,7 +689,7 @@ function handleItem(
         paths.length ? { path: paths[0], paths } : undefined
       )
       if (completed)
-        finishTool(context, tracker, item.status, boundedJson(item.changes))
+        finishTool(context, tracker, item.status, patchText(item.changes))
       return
     }
     case "mcpToolCall":
@@ -480,7 +698,8 @@ function handleItem(
         tracker,
         `${item.server}: ${item.tool}`,
         item.tool,
-        item.status
+        item.status,
+        item.arguments ?? undefined
       )
       if (completed) {
         const output =
@@ -495,7 +714,8 @@ function handleItem(
         tracker,
         `${item.namespace ? `${item.namespace}.` : ""}${item.tool}`,
         item.tool,
-        item.status
+        item.status,
+        item.arguments ?? undefined
       )
       if (completed)
         finishTool(
@@ -504,6 +724,37 @@ function handleItem(
           item.status,
           item.contentItems ? boundedJson(item.contentItems) : undefined
         )
+      return
+    case "webSearch": {
+      const input = item.action ?? { query: item.query }
+      const title = item.query || searchTarget(item.action) || "Web search"
+      startTool(context, tracker, title, "web_search", completed ? "completed" : "inProgress", input)
+      // The query is empty until the search ends.
+      if (completed)
+        context.protocol.emitUpdate({
+          kind: "tool-update",
+          id: tracker.acpId,
+          title: boundedText(title, 500),
+          input: boundedJson(input),
+          status: "completed",
+          output: searchResults(item.results),
+        })
+      return
+    }
+    case "sleep":
+      startTool(context, tracker, `Sleep ${duration(item.durationMs)}`, "sleep", completed ? "completed" : "inProgress")
+      if (completed) finishTool(context, tracker, "completed")
+      return
+    case "enteredReviewMode":
+      if (completed) {
+        const line = firstLine(item.review)
+        context.protocol.event?.(event("Review mode started", line, item.review === line ? undefined : item.review))
+      }
+      return
+    case "exitedReviewMode":
+      if (completed) context.protocol.event?.(event("Review mode ended", undefined, item.review))
+      return
+    case "hookPrompt":
       return
     case "collabAgentToolCall":
     case "subAgentActivity":
@@ -518,7 +769,24 @@ function handleItem(
         replace: true,
       })
       return
+    case "contextCompaction":
+      if (replay) {
+        if (completed) context.protocol.compacted?.()
+        return
+      }
+      context.waiting = undefined
+      if (completed) {
+        // Codex reports the compacted estimate before this item completes.
+        const tokensBefore = context.compactingFrom
+        context.compactingFrom = undefined
+        context.protocol.compacted?.(tokensBefore ? { tokensBefore } : undefined)
+      } else {
+        context.compactingFrom = context.state.usage?.used
+        context.protocol.activity?.({ kind: "compacting" })
+      }
+      return
     case "unsupported":
+      context.protocol.unhandled?.(`item/${item.sourceType}`)
       return
   }
 }
@@ -534,7 +802,7 @@ function startTool(
   title: string,
   toolKind: string,
   status: string,
-  input?: JsonObject
+  input?: JsonValue
 ): void {
   if (tracker.started) return
   tracker.started = true
@@ -763,6 +1031,58 @@ function appendComparable(
   if (current === null || current.length + delta.length > MAX_STREAM_COMPARE)
     return null
   return current + delta
+}
+
+/**
+ * Codex's edits as one patch a reader can follow: each file's heading, then
+ * its unified diff, or its whole content for a file added or deleted.
+ */
+function patchText(changes: FileChange[]): string {
+  const files = changes.map((change) => {
+    const kind = PatchKindSchema.safeParse(change.kind)
+    const type = kind.success ? kind.data.type : "update"
+    const moved = kind.success ? kind.data.move_path : undefined
+    const path = change.path ?? "file"
+    const diff = change.diff ?? ""
+    switch (type) {
+      case "add":
+        return `Add ${path}\n${prefixLines(diff, "+")}`
+      case "delete":
+        return `Delete ${path}\n${prefixLines(diff, "-")}`
+      case "update":
+        return `Update ${moved ? `${path} → ${moved}` : path}\n${diff.trimEnd()}`
+    }
+  })
+  return boundedText(files.join("\n\n"), MAX_TOOL_OUTPUT)
+}
+
+function prefixLines(text: string, prefix: string): string {
+  return text.trimEnd().split("\n").map((line) => `${prefix}${line}`).join("\n")
+}
+
+function searchTarget(action: JsonObject | null): string | undefined {
+  const target = SearchActionSchema.safeParse(action)
+  if (!target.success) return undefined
+  const { query, queries, url } = target.data
+  return query || queries?.join(" · ") || url || undefined
+}
+
+/** Standalone search returns results out of band; hosted search returns none. */
+function searchResults(results: JsonValue[] | null): string | undefined {
+  const lines = (results ?? []).flatMap((result) => {
+    const parsed = SearchResultSchema.safeParse(result)
+    if (!parsed.success) return []
+    const { title, url } = parsed.data
+    return [title ? `${title}\n${url}` : url]
+  })
+  return lines.length ? boundedText(lines.join("\n\n"), MAX_TOOL_OUTPUT) : undefined
+}
+
+function duration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  return seconds % 60 ? `${minutes}m ${seconds % 60}s` : `${minutes}m`
 }
 
 function boundedJson(value: JsonValue): string {

@@ -70,7 +70,7 @@ import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { forward } from "./acp-notifications.js"
 import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
-import type { AcpBackgroundObserver, AcpBackgroundReport, AcpTuning } from "./providers/acp-source.js"
+import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpTuning } from "./providers/acp-source.js"
 import type { JsonObject } from "./codex-app-json.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
@@ -441,12 +441,23 @@ async function startAcp(
       if (live.turn && !live.providerTurn && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate))
         live.turnReceipt?.()
       forward(live, params, live.emit, update, live.state.settings,
-        params.update.sessionUpdate === "tool_call" ? source?.toolName?.(params.update) : undefined)
+        params.update.sessionUpdate === "tool_call" ? source?.toolName?.(params.update) : undefined,
+        (kind) => engine.unhandled(live, kind))
     },
     async extNotification(method: string, params: JsonObject) {
-      reportBackground(background?.extension?.(method, params))
-      observeProviderTurn(method, params)
+      const report = background?.extension?.(method, params)
+      reportBackground(report)
+      const observed = observeProviderTurn(method, params)
+      const decoded = source?.decodeNotification?.(method, params)
+      if (decoded) applyNotification(decoded)
+      else if (!observed && !report) engine.unhandled(live, method)
     },
+  }
+  /** A notification for another session is not this conversation's; an unknown one is logged either way. */
+  function applyNotification({ sessionId, kind, notices, state }: AcpNotificationDecoding): void {
+    if (notices && (!live.sessionId || sessionId !== live.sessionId)) return
+    engine.observe(live, kind, notices)
+    if (notices && state) update(live, state)
   }
   const background = source?.observeBackground?.()
   live.background = background
@@ -455,16 +466,19 @@ async function startAcp(
     if (cause && cause.sessionId === live.sessionId && live.state.status !== "running")
       live.providerTurnCause = cause.reason
   }
-  function observeProviderTurn(method: string, params: JsonObject): void {
-    if (!providerTurns || !live.sessionId) return
-    announceProviderTurn(providerTurns.cause?.(method, params))
+  /** Whether the notification is one the provider-turn observer knows. */
+  function observeProviderTurn(method: string, params: JsonObject): boolean {
+    if (!providerTurns || !live.sessionId) return false
+    const cause = providerTurns.cause?.(method, params)
+    announceProviderTurn(cause)
     const ended = providerTurns.ended(method, params)
-    if (ended?.sessionId !== live.sessionId) return
+    if (ended?.sessionId !== live.sessionId) return Boolean(cause || ended)
     live.providerTurnCause = undefined
-    if (!live.providerTurn) return
+    if (!live.providerTurn) return true
     live.providerTurn = false
     if (live.state.status === "running")
       update(live, { status: "ready", lastStop: ended.interrupted ? "interrupted" : "completed" })
+    return true
   }
   function reportBackground(report: AcpBackgroundReport | undefined): void {
     if (!report || !live.sessionId || report.sessionId !== live.sessionId) return

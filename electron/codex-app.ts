@@ -69,6 +69,7 @@ import type {
   McpRegistrySnapshot,
 } from "./shared.js"
 import { createLiveEngine } from "./live-engine.js"
+import { compactionEvent } from "@mako/sessions/events"
 
 type Live = {
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }
@@ -209,6 +210,13 @@ async function startCodex(
       handleFatal: (message) => protocolFatal(live, message),
       updateState: (patch) => updateState(live, patch),
       emitUpdate: (update) => emitUpdate(live, update),
+      activity: (activity) => engine.activity(live, activity),
+      compacted: (compaction) => {
+        emitUpdate(live, { kind: "event", ...compactionEvent(compaction) })
+        engine.activity(live, null)
+      },
+      event: (marker) => emitUpdate(live, { kind: "event", ...marker }),
+      unhandled: (kind) => engine.unhandled(live, kind),
       observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
       observeAgents: (item, replay) => {
         for (const agent of live.agents.project(item, replay))

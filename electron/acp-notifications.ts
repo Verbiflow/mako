@@ -29,7 +29,8 @@ export function forward<LiveSession extends { id: string }>(
   emit: (event: LiveDriverEvent) => void,
   updateState: (live: LiveSession, patch: Partial<LiveSessionState>) => void,
   currentSettings?: SessionSettings,
-  toolName?: string
+  toolName?: string,
+  unhandled?: (kind: string) => void
 ): void {
   const raw = notification.update
   let update: LiveUpdate
@@ -115,8 +116,19 @@ export function forward<LiveSession extends { id: string }>(
         ),
       })
       return
+    case "session_info_update": {
+      // A cleared title keeps the one the thread has; `updatedAt` is the agent's own bookkeeping.
+      const title = raw.title?.trim()
+      if (title) updateState(live, { title })
+      return
+    }
+    // The host reads these before forwarding: the context reading and the command list.
+    case "usage_update":
+    case "available_commands_update":
+      return
     default:
-      return // Command lists and the rest are not rendered yet.
+      unhandled?.(raw.sessionUpdate)
+      return
   }
   if (
     (update.kind !== "text" && update.kind !== "user") ||

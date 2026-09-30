@@ -1,6 +1,6 @@
 /** A host cannot relaunch into a different checkout: the launcher owns that
  * choice. Keep the same profile and wait for its owner to release it. */
-export async function replaceDevHost({ original, probe, command, readState, start, compatible, sleep, report = () => {}, now = Date.now, timeoutMs = 60_000 }) {
+export async function replaceDevHost({ original, probe, command, readState, start, compatible, sleep, alive = processAlive, report = () => {}, now = Date.now, timeoutMs = 60_000 }) {
   let lifecycle = await command({ kind: "wait", action: "quit" })
   let reported = ""
   const inspect = () => {
@@ -18,7 +18,10 @@ export async function replaceDevHost({ original, probe, command, readState, star
   let nextStatus = now() + 1000
   for (;;) {
     const current = await probe()
-    if (current.state === "absent") {
+    // The host closes its socket before it releases the profile lock; a host
+    // started in between cannot take the lock and exits.
+    const exited = current.state === "absent" && !alive(original.pid)
+    if (exited) {
       const runtime = await start()
       if (!compatible(runtime.info))
         throw new Error("Another launcher started a different Mako build in this profile. Close that launcher and try again.")
@@ -34,12 +37,23 @@ export async function replaceDevHost({ original, probe, command, readState, star
       nextStatus = now() + 1000
     }
     if (now() >= deadline) {
+      if (current.state === "absent")
+        throw new Error(`The previous Mako host (pid ${original.pid}) closed its connection but has not exited. No replacement was started.`)
       // Do not leave a delayed quit behind after the launcher has given up.
       if (current.state === "ready" && current.info.instanceId === original.instanceId && lifecycle.operation.kind === "waiting")
         await command({ kind: "cancel" })
       throw new Error(`${describeWaiting(lifecycle)} No agents were stopped. ${lifecycle.work.length ? "Finish or pause the listed work in Mako, then run this command again." : "Review Mako's shutdown status before trying again."}`)
     }
     await sleep(250)
+  }
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === "EPERM"
   }
 }
 

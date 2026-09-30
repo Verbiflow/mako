@@ -425,6 +425,8 @@ if (!app.requestSingleInstanceLock()) {
   console.error(
     "Mako is already running. Close the existing desk host before starting another desktop or web host."
   )
+  // app.exit() drops queued log writes; this line is the only record a detached launch leaves.
+  await flushHostLog()
   app.exit(1)
 }
 
