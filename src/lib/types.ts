@@ -12,6 +12,7 @@ export type {
   UtilityProviderInfo,
   NativeAgent,
   NativeAgentRoster,
+  NativeActivity,
   LiveAction,
   LiveActionInput,
   RewindPreview,

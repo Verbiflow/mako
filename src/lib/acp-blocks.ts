@@ -1,3 +1,4 @@
+import { eventText } from "@mako/sessions/events"
 import { liveToolName } from "@/lib/tools"
 import type { Block, ChatMessage } from "@/lib/types"
 
@@ -126,6 +127,17 @@ export function acpBlocksToMessages(
           blocks: [{ type: "text", text: block.reason }],
         })
         break
+      case "event": {
+        assistant = null
+        const note = { label: block.label, detail: block.detail, body: block.body, tone: block.tone }
+        messages.push({
+          id: `acp-event-${absolute}`,
+          role: "system",
+          blocks: [{ type: "text", text: eventText(note) }],
+          note,
+        })
+        break
+      }
       case "plan":
         plan = block.entries
         append(

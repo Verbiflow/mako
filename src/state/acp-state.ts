@@ -40,6 +40,8 @@ interface AcpConversationBase {
   epoch?: string
   /** `LiveSnapshot.activityAt`, on the host's clock. */
   activityAt?: number
+  /** `LiveSnapshot.nativeActivity`; `since` is on the host's clock. */
+  nativeActivity?: LiveSnapshot["nativeActivity"]
   hydrated?: boolean
   projection?: LiveProjection
   blocks: AcpBlock[]

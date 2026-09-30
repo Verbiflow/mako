@@ -107,6 +107,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     revision: snapshot.revision,
     epoch: snapshot.epoch ?? existing?.epoch,
     activityAt: snapshot.activityAt,
+    nativeActivity: snapshot.nativeActivity,
     history: snapshot.history,
     hydrated: true,
     projection: projectLive(snapshot, existing?.projection, pendingPrompts),
@@ -185,6 +186,10 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   return fetch
 }
 
+function batchNativeActivity(batch: LiveBatch, current: { nativeActivity?: LiveSnapshot["nativeActivity"] }): LiveSnapshot["nativeActivity"] {
+  return batch.nativeActivity === undefined ? current.nativeActivity : (batch.nativeActivity ?? undefined)
+}
+
 export function applyLiveBatch(batch: LiveBatch): void {
   for (const request of batch.requests ?? []) settleMessage(request.id, true)
   for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
@@ -222,6 +227,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
           : (batch.threadPath ?? undefined),
       revision: batch.revision,
       activityAt: batch.activityAt ?? current.activityAt,
+      nativeActivity: batchNativeActivity(batch, current),
       updatedAt: Date.now(),
       failureSeen: carriedFailureSeen(current, session),
     }
@@ -284,6 +290,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     revision: batch.revision,
     epoch: batch.epoch ?? current.epoch,
     activityAt: batch.activityAt ?? current.activityAt,
+    nativeActivity: batchNativeActivity(batch, current),
     base,
     baseCoveredBlocks,
     threadPath:

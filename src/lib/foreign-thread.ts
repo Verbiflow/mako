@@ -1,3 +1,4 @@
+import { eventText } from "@mako/sessions/events"
 import type { Block, ChatMessage, MessageAnchor, ThreadEntry } from "@/lib/types"
 
 const INPUT_TOOLS = new Set([
@@ -70,15 +71,10 @@ export function threadToMessages(
       const message: ChatMessage = {
         id: messageId,
         role: "system",
-        blocks: [
-          {
-            type: "text",
-            text: entry.detail
-              ? `${entry.label} — ${entry.detail}`
-              : entry.label,
-          },
-        ],
+        blocks: [{ type: "text", text: eventText(entry) }],
       }
+      if (!entry.opensTurn)
+        message.note = { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone }
       if (entry.opensTurn) {
         message.opensTurn = true
         if (entry.at) message.timestamp = Date.parse(entry.at) || undefined
