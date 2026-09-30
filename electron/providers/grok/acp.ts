@@ -4,6 +4,7 @@ import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { GrokAgents } from "./agents.js"
+import { grokNotification } from "./notifications.js"
 import { resolveExecutable } from "../../executable.js"
 import type { ProviderAcpSource } from "../acp-source.js"
 import type { AccessTier } from "../../contracts/access.js"
@@ -162,6 +163,7 @@ export const grokAcpSource: ProviderAcpSource = {
       }
     },
   }),
+  decodeNotification: grokNotification,
   canResume: true,
   locateSession: ({ nativeId, cwd }) => grokSessionSource(nativeId, cwd),
   launchOptionIds: ["effort"],
