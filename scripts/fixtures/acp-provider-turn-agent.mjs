@@ -71,6 +71,27 @@ new AgentSideConnection((connection) => {
       await chunk("agent_message_chunk", "A late chunk with no announced turn.")
     },
   }
+  // Played inside the prompted turn, as grok 1.0.44 and devin 3000.10.23
+  // send them mid-turn.
+  const grokUpdate = (update, session = sessionId) => connection.extNotification("_x.ai/session_notification", { sessionId: session, update })
+  const inline = {
+    async "native-grok"() {
+      await grokUpdate({ sessionUpdate: "hook_execution", hook: "PreToolUse" })
+      await grokUpdate({ sessionUpdate: "auto_compact_started", tokens_used: 403803, context_window: 500000, percentage: 81, reason: "Context window 81% full" })
+      await grokUpdate({ sessionUpdate: "auto_compact_started", tokens_used: 1, context_window: 2, percentage: 50, reason: "A child session" }, "child-session")
+      await grokUpdate({ sessionUpdate: "compaction_checkpoint", checkpoint_id: "c1" })
+      await grokUpdate({ sessionUpdate: "auto_compact_completed", tokens_before: 403803, tokens_after: 21289, elapsed_ms: 94952, summary_preview: null })
+      await grokUpdate({ sessionUpdate: "session_summary_generated", session_summary: "Compacted fixture" })
+      await grokUpdate({ sessionUpdate: "scheduled_task_fired" })
+      await update({ sessionUpdate: "session_info_update", title: "Renamed by the agent" })
+    },
+    async "native-devin"() {
+      await connection.extNotification("_cognition.ai/connection_retry", { sessionId, attempt: 1, maxAttempts: 5, isStreamRetry: true })
+      await chunk("agent_message_chunk", "Reconnected.")
+      await connection.extNotification("_cognition.ai/turn_stats", { sessionId, turnClientMessageId: "m1" })
+      await connection.extNotification("_cognition.ai/agent_stopped", { sessionId, cause: "quota_exhausted", errorMessage: "You have used all of your credits.", stats: {} })
+    },
+  }
   return {
     async initialize() {
       return { protocolVersion: 1, agentCapabilities: { loadSession: false } }
@@ -93,6 +114,10 @@ new AgentSideConnection((connection) => {
         process.stdout.end()
         setTimeout(() => process.exit(70), 300)
         return new Promise(() => {})
+      }
+      if (inline[name]) {
+        await inline[name]()
+        return { stopReason: "end_turn" }
       }
       if (name.startsWith("devin-")) {
         await subagentStarted()
