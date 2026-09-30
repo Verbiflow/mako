@@ -1,7 +1,8 @@
 import { acpToolDetails } from "../acp-tool-details.js"
 import { acpAttachments } from "../acp-attachments.js"
 import type { AttachmentContent, ToolDetail } from "../content.js"
-import { backgroundCommandLabel } from "../provider-turn.js"
+import { backgroundCommandLabel, subagentLabel } from "../provider-turn.js"
+import { compactionEvent, compactionFailedEvent, event, modelChangedEvent, plainWords, turnFailedEvent, type TranscriptEvent } from "../events.js"
 /**
  * Grok sessions.
  *
@@ -122,6 +123,11 @@ interface GrokTurnCompleted extends GrokUpdateBase {
   usage?: TurnUsage
 }
 
+interface GrokMarker extends GrokUpdateBase {
+  sessionUpdate: "marker"
+  marker: TranscriptEvent
+}
+
 type GrokUpdate =
   | GrokUserChunk
   | GrokAgentChunk
@@ -129,6 +135,7 @@ type GrokUpdate =
   | GrokToolUpdate
   | GrokPlan
   | GrokTurnCompleted
+  | GrokMarker
 
 /**
  * Grok records the start of the turn it runs after a background command as a
@@ -139,17 +146,78 @@ type GrokUpdate =
  *   Background task "<id>" completed (exit code: 0).
  *   Description: <description> | Duration: 8.2s
  *   …
+ *
+ * A background subagent that finishes while Grok is idle wakes it the same
+ * way (grok 1.0.44):
+ *
+ *   <system-reminder>
+ *   While you were idle, 1 background subagent completed:
+ *   - [general-purpose] "<description>" — completed successfully (32.9s, 2 tool calls)
+ *   …
  */
 function backgroundReminderLabel(text: string): string | undefined {
   const body = /^\s*<system-reminder>\s*([\s\S]*?)<\/system-reminder>\s*$/.exec(text)?.[1]
-  const status = body && /^Background task "[^"]*" ([^\n(.]+)/.exec(body)?.[1]?.trim()
-  if (!body || !status) return undefined
+  if (!body) return undefined
+  const subagents = /^While you were idle, (\d+) background subagents? \w+:/.exec(body)
+  if (subagents) return subagentReminderLabel(body, Number(subagents[1]))
+  const status = /^Background task "[^"]*" ([^\n(.]+)/.exec(body)?.[1]?.trim()
+  if (!status) return undefined
   const exitCode = /exit code:\s*(-?\d+)/.exec(body)?.[1]
   return backgroundCommandLabel({
     description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
     exitCode: exitCode === undefined ? undefined : Number(exitCode),
     stopped: /kill|stop|cancel/i.test(status),
   })
+}
+
+function subagentReminderLabel(body: string, count: number): string {
+  if (count !== 1) return `${count} subagents finished`
+  const line = /^- \[[^\]]*\] "(.*)" — (\S+)/m.exec(body)
+  const status = line?.[2] ?? ""
+  return subagentLabel({
+    description: line?.[1],
+    state: /^complete/i.test(status) ? "completed" : /cancel|stop|kill/i.test(status) ? "cancelled" : /fail|error/i.test(status) ? "failed" : undefined,
+  })
+}
+
+/**
+ * Grok's own updates that are transcript facts. Saved history and the live
+ * connection (electron/providers/grok/notifications.ts) both read them here,
+ * so a marker says the same thing in both.
+ */
+export function grokUpdateMarker(kind: string | undefined, update: JsonObject): TranscriptEvent | undefined {
+  switch (kind) {
+    case "auto_compact_completed":
+      return compactionEvent({
+        trigger: "automatic",
+        tokensBefore: numberValue(update["tokens_before"]),
+        tokensAfter: numberValue(update["tokens_after"]),
+        summary: stringValue(update["summary_preview"]),
+      })
+    case "auto_compact_failed":
+      return compactionFailedEvent(reasonOf(update))
+    case "model_auto_switched": {
+      const reason = stringValue(update["reason"])
+      return modelChangedEvent(stringValue(update["previous_model_id"]), stringValue(update["new_model_id"]), reason && plainWords(reason))
+    }
+    case "retry_state": {
+      if (stringValue(update["state"])?.toLowerCase() !== "exhausted") return undefined
+      const errorType = stringValue(update["error_type"])
+      return turnFailedEvent(update["is_rate_limited"] === true ? "Rate limited" : errorType ? plainWords(errorType) : "Retries exhausted")
+    }
+    case "image_dropped":
+      return { ...event("Warning", "An image was not sent to the model", reasonOf(update)), tone: "warning" }
+    case "auto_recovery_started":
+      return event("Notice", "Grok is recovering the turn", reasonOf(update))
+    case "auto_recovery_exhausted":
+      return { ...event("Warning", "Grok could not recover the turn", reasonOf(update)), tone: "warning" }
+    default:
+      return undefined
+  }
+}
+
+function reasonOf(update: JsonObject): string | undefined {
+  return stringValue(update["reason"]) ?? stringValue(update["error"]) ?? stringValue(update["message"])
 }
 
 interface LegacyUserLine {
@@ -459,8 +527,10 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
         stopReason: stringValue(update["stop_reason"]),
         usage: parseUsage(update["usage"]),
       }
-    default:
-      return null
+    default: {
+      const marker = grokUpdateMarker(sessionUpdate, update)
+      return marker ? { sessionUpdate: "marker", at, marker } : null
+    }
   }
 }
 
@@ -885,6 +955,10 @@ function updatesTranslator(): GrokTranslator {
         sink.push(plan)
         return
       }
+      case "marker":
+        flushAssistant()
+        sink.push({ kind: "event", at: event.at, ...event.marker })
+        return
       case "turn_completed": {
         const completedAssistant = assistant ?? latestAssistant
         if (completedAssistant && event.usage)

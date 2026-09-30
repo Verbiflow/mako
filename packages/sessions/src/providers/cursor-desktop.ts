@@ -1,4 +1,10 @@
-import { cursorTaskNotification, cursorPrompt } from "./cursor-presentation.js"
+import {
+  cursorFailure,
+  cursorPrompt,
+  cursorSimulatedOpener,
+  cursorTaskOpener,
+} from "./cursor-presentation.js"
+import { compactionEvent, event, turnFailedEvent, type TranscriptEvent } from "../events.js"
 import { stat } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { basename, join } from "node:path"
@@ -60,7 +66,27 @@ const Bubble = z.object({
       result: z.string().optional(),
       status: z.string().optional(),
     })
-    .optional(),
+    .optional()
+    // A nameless record (`{ additionalData: { status } }`) sits on prompts
+    // and replies alike and describes no call.
+    .catch(undefined),
+  // Read leniently: a field Cursor changes must not cost the whole message.
+  /** Cursor wrote this user record for something the user clicked, or for a task notification. */
+  isSimulatedMsg: z.boolean().optional().catch(undefined),
+  /** Set on the reply Cursor produced right after it summarised everything before. */
+  conversationSummary: z
+    .object({ summary: z.string().optional() })
+    .optional()
+    .catch(undefined),
+  errorDetails: z
+    .object({ message: z.string().optional(), error: z.string().optional() })
+    .optional()
+    .catch(undefined),
+})
+
+/** The JSON Cursor keeps in `errorDetails.error` for an error it explains. */
+const ExplainedError = z.object({
+  details: z.object({ title: z.string().optional(), detail: z.string().optional() }),
 })
 
 function parseJson<T>(
@@ -344,6 +370,7 @@ export class CursorDesktopStore {
       ref.model = data.modelConfig?.modelName
       const sink = new EntrySink()
       let spent = z.string().safeParse(raw).data?.length ?? 0
+      let lastSummary: string | undefined
       const query = db.prepare(
         "SELECT value FROM cursorDiskKV WHERE key = ? AND length(value) <= ?"
       )
@@ -367,8 +394,14 @@ export class CursorDesktopStore {
           })
           continue
         }
+        const summary = bubble.conversationSummary?.summary?.trim()
+        if (summary && summary !== lastSummary)
+          sink.push(desktopEvent(compactionEvent({ summary }), bubble.createdAt))
+        if (summary) lastSummary = summary
         const entry = bubbleEntry(bubble, ref.model)
         if (entry) sink.push(entry)
+        if (bubble.errorDetails)
+          sink.push(desktopEvent(bubbleFailure(bubble.errorDetails), bubble.createdAt))
       }
       if (data.activeCanvas)
         sink.push({
@@ -422,25 +455,49 @@ function bubbleImages(images: z.infer<typeof Image>[]): AttachmentContent[] {
   })
 }
 
+function desktopEvent(marker: TranscriptEvent, at: string | undefined): ThreadEntry {
+  return at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
+}
+
+/** What an error bubble says, in the words of a failed turn; a cancelled request is a stop. */
+function bubbleFailure(error: { message?: string; error?: string }): TranscriptEvent {
+  const message = error.message?.trim() ?? ""
+  if (/^cancel+ed$/i.test(message)) return event("Interrupted")
+  const explained = explainedError(error.error)
+  if (explained?.title || explained?.detail)
+    return turnFailedEvent(explained.title ?? explained.detail, explained.title ? explained.detail : undefined)
+  // Cursor's bare "Error" says nothing a failed turn does not.
+  return message && message !== "Error" ? cursorFailure(message) : turnFailedEvent()
+}
+
+function explainedError(raw: string | undefined): { title?: string; detail?: string } | undefined {
+  if (!raw) return undefined
+  try {
+    return ExplainedError.safeParse(JSON.parse(raw)).data?.details
+  } catch {
+    return undefined
+  }
+}
+
 function bubbleEntry(
   bubble: z.infer<typeof Bubble>,
   model: string | undefined
 ): ThreadEntry | null {
   const attachments = bubbleImages(bubble.images ?? [])
-  if (bubble.type === 1)
-    return (
-      cursorTaskNotification(
-        bubble.text ?? "",
-        bubble.bubbleId,
-        bubble.createdAt
-      ) ?? {
-        kind: "user",
-        id: bubble.bubbleId,
-        at: bubble.createdAt,
-        text: cursorPrompt(bubble.text ?? ""),
-        attachments,
-      }
-    )
+  if (bubble.type === 1) {
+    const text = bubble.text ?? ""
+    const opener = cursorTaskOpener(text, bubble.bubbleId, bubble.createdAt)
+    if (opener) return opener
+    if (bubble.isSimulatedMsg && !attachments.length)
+      return cursorSimulatedOpener(text, bubble.bubbleId, bubble.createdAt)
+    return {
+      kind: "user",
+      id: bubble.bubbleId,
+      at: bubble.createdAt,
+      text: cursorPrompt(text),
+      attachments,
+    }
+  }
   if (bubble.type !== 2) return null
   const entry: Extract<ThreadEntry, { kind: "assistant" }> = {
     kind: "assistant",

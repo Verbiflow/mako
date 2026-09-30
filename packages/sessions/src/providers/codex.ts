@@ -1,9 +1,16 @@
 import { existsSync, statSync, type Stats } from "node:fs"
 import {
+  codexFailureEvent,
   codexPrompt,
   codexPromptImages,
   codexPresentation,
+  firstLine,
 } from "./codex-presentation.js"
+import {
+  compactionEvent,
+  event as marker,
+  type TranscriptEvent,
+} from "../events.js"
 import { codexPlanDetails } from "../tool-plan.js"
 import { codexServiceTier } from "../model-catalog.js"
 import type { SessionSettings } from "../settings.js"
@@ -19,11 +26,13 @@ import { attachmentFromUrl, type AttachmentContent } from "../content.js"
  *   * `response_item`  — the transcript proper, as OpenAI Responses items:
  *                        message / reasoning / function_call / function_call_output
  *   * `event_msg`      — streaming milestones; `user_message`,
- *                        `token_count` and `thread_settings_applied` (the
+ *                        `token_count`, `thread_settings_applied` (the
  *                        turn's model, effort and service tier — the only
- *                        record that carries the tier) are used here, the
- *                        rest are echoes of response items and are skipped
- *                        to avoid doubling
+ *                        record that carries the tier), a failed
+ *                        `task_complete`, `turn_aborted` and review-mode
+ *                        boundaries are used here, the rest are echoes of
+ *                        response items and are skipped to avoid doubling
+ *   * `compacted`      — a compaction boundary, in every history mode
  *
  * User turns are read from `response_item` messages rather than `user_message`
  * events, because resumed sessions replay history only as response items —
@@ -58,6 +67,7 @@ import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
 
 const MAX_TRANSLATED_BYTES = 64 * 1024 * 1024
+const MAX_SUMMARY = 32 * 1024
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonObject | JsonValue[]
@@ -108,6 +118,8 @@ interface CodexTokenUsage {
   output: number
   cacheRead: number
   cacheWrite: number
+  /** Tokens in the context window at that request. */
+  context: number
 }
 
 interface CodexTokenCountEvent extends CodexRolloutBase {
@@ -163,8 +175,17 @@ interface CodexFunctionOutputResponse extends CodexRolloutBase {
 
 interface CodexEventLine extends CodexRolloutBase {
   kind: "event"
-  label: string
-  detail?: string
+  event: TranscriptEvent
+}
+
+/**
+ * A compaction boundary. Every rollout writes the top-level `compacted`
+ * record; legacy rollouts also write `event_msg/context_compacted` beside it.
+ */
+interface CodexCompactedLine extends CodexRolloutBase {
+  kind: "compacted"
+  source: "record" | "event"
+  summary?: string
 }
 
 interface CodexIgnoredRolloutLine extends CodexRolloutBase {
@@ -183,6 +204,7 @@ type CodexRolloutEvent =
   | CodexFunctionCallResponse
   | CodexFunctionOutputResponse
   | CodexEventLine
+  | CodexCompactedLine
   | CodexIgnoredRolloutLine
 
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
@@ -281,7 +303,34 @@ function parseTokenUsage(payload: JsonObject): CodexTokenUsage | undefined {
     output: Number(usage["output_tokens"] ?? 0),
     cacheRead: Number(usage["cached_input_tokens"] ?? 0),
     cacheWrite: Number(usage["cache_write_input_tokens"] ?? 0),
+    context: Number(usage["total_tokens"] ?? 0),
   }
+}
+
+/** Codex's `SUMMARY_PREFIX`, which opens a locally made compaction summary. */
+const SUMMARY_PREFIX = "Another language model started to solve this problem and produced a summary of its thinking process."
+
+function compactionSummary(message: string | undefined): string | undefined {
+  const text = message?.trim()
+  if (!text) return undefined
+  return text.startsWith(SUMMARY_PREFIX)
+    ? text.slice(text.indexOf("\n") + 1).trim() || undefined
+    : text
+}
+
+/** A `CodexErrorInfo`: a bare variant name, or one keyed by it with its fields. */
+function errorVariant(value: JsonValue | undefined): string | undefined {
+  return stringValue(value) ?? Object.keys(objectValue(value) ?? {})[0]
+}
+
+function reviewStarted(hint: string | undefined): TranscriptEvent {
+  const text = hint?.trim() ?? ""
+  const line = firstLine(text)
+  return marker("Review mode started", line, text === line ? undefined : text)
+}
+
+function reviewEnded(output: JsonValue | undefined): TranscriptEvent {
+  return marker("Review mode ended", undefined, stringValue(objectValue(output)?.["overall_explanation"]))
 }
 
 function parseResponseItem(
@@ -461,13 +510,45 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
           return {
             kind: "event",
             at,
-            label: "Interrupted",
-            detail: abortDetail(stringValue(payload["reason"])),
+            event: marker("Interrupted", abortDetail(stringValue(payload["reason"]))),
           }
+        case "task_complete": {
+          const error = objectValue(payload["error"])
+          if (!error) return { kind: "ignored", at }
+          return {
+            kind: "event",
+            at,
+            event: codexFailureEvent(errorVariant(error["codex_error_info"]), stringValue(error["message"])),
+          }
+        }
         case "context_compacted":
-          return { kind: "event", at, label: "Context compacted" }
+          return { kind: "compacted", at, source: "event" }
+        case "entered_review_mode":
+          return { kind: "event", at, event: reviewStarted(stringValue(payload["user_facing_hint"])) }
+        case "exited_review_mode":
+          return { kind: "event", at, event: reviewEnded(payload["review_output"]) }
+        case "item_completed": {
+          // Paginated rollouts record every item here; only review
+          // boundaries have no response item of their own.
+          const item = objectValue(payload["item"])
+          switch (stringValue(item?.["type"])) {
+            case "EnteredReviewMode":
+              return { kind: "event", at, event: reviewStarted(stringValue(item?.["user_facing_hint"])) }
+            case "ExitedReviewMode":
+              return { kind: "event", at, event: reviewEnded(item?.["review_output"]) }
+            default:
+              return { kind: "ignored", at }
+          }
+        }
         default:
           return { kind: "ignored", at }
+      }
+    case "compacted":
+      return {
+        kind: "compacted",
+        at,
+        source: "record",
+        summary: compactionSummary(stringValue(payload?.["message"])),
       }
     case "response_item":
       return payload ? parseResponseItem(payload, at) : { kind: "ignored", at }
@@ -893,13 +974,24 @@ function translator(): CodexTranslator {
   let started = false
   let needsReset = false
   let model: string | undefined
+  /** Context tokens at the latest request, which a compaction starts from. */
+  let contextTokens: number | undefined
+  /** The record that marked the latest compaction, until content follows it. */
+  let compaction: CodexCompactedLine["source"] | undefined
 
   const openAssistant = (at?: string): AssistantEntry => {
+    compaction = undefined
     if (!assistant) {
       assistant = { kind: "assistant", at, model, blocks: [] }
       sink.push(assistant)
     }
     return assistant
+  }
+
+  const pushMarker = (marker: TranscriptEvent, at: string | undefined): void => {
+    assistant = null
+    callsById.clear()
+    sink.push(at ? { kind: "event", at, ...marker } : { kind: "event", ...marker })
   }
 
   const push = (raw: string): void => {
@@ -911,6 +1003,7 @@ function translator(): CodexTranslator {
         if (event.model) model = event.model
         return
       case "token_count_event":
+        if (event.usage?.context) contextTokens = event.usage.context
         if (event.usage && assistant) {
           const usage: TurnUsage = {
             input: event.usage.input,
@@ -928,6 +1021,7 @@ function translator(): CodexTranslator {
           : codexPromptImages(event.text)
         if (!text && !attachments.length) return
         assistant = null
+        compaction = undefined
         started = true
         sink.push({
           kind: "user",
@@ -995,15 +1089,18 @@ function translator(): CodexTranslator {
         return
       }
       case "event":
-        assistant = null
-        callsById.clear()
-        const item: Extract<ThreadEntry, { kind: "event" }> = {
-          kind: "event",
-          label: event.label,
+        pushMarker(event.event, event.at)
+        return
+      case "compacted":
+        // A legacy rollout records one compaction twice; either record
+        // alone still marks it.
+        if (compaction && compaction !== event.source) {
+          compaction = undefined
+          return
         }
-        if (event.at) item.at = event.at
-        if (event.detail) item.detail = event.detail
-        sink.push(item)
+        compaction = event.source
+        pushMarker(compactionEvent({ tokensBefore: contextTokens, summary: clip(event.summary, MAX_SUMMARY) }), event.at)
+        contextTokens = undefined
         return
       case "session_meta":
       case "user_message_event":

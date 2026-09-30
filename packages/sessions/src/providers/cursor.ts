@@ -1,5 +1,7 @@
 import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
+import { cursorFailure, cursorTaskOpener } from "./cursor-presentation.js"
+import { compactionEvent } from "../events.js"
 import { attachmentFromUrl, type AttachmentContent } from "../content.js"
 /**
  * Cursor CLI sessions.
@@ -38,7 +40,7 @@ import {
   type CursorSdkAgentMatch,
   type CursorSdkAgentRecord,
   type CursorSdkAgentStamp,
-  type CursorSdkCancelledRun,
+  type CursorSdkEndedRun,
 } from "./cursor-sdk-index.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
 import {
@@ -80,13 +82,13 @@ interface ExchangeStart {
  * last checkpoint ended, an unrecorded one where the conversation stood when
  * it started.
  */
-type RunStops = Map<number, CursorSdkCancelledRun[]>
+type RunStops = Map<number, CursorSdkEndedRun[]>
 
 /** What a fold reads: the root, its whole hash list, its summaries and its stopped runs. */
 interface FoldInput {
   rootId: string
   hashes: string[]
-  compactions: Set<number>
+  compactions: Compactions
   stops: RunStops
   /** Where each unrecorded run's prompt and output are read from. */
   indexPath: string
@@ -96,7 +98,7 @@ function stopKey(stops: RunStops): string {
   return JSON.stringify(
     [...stops]
       .sort(([a], [b]) => a - b)
-      .map(([at, runs]) => [at, runs.map((run) => [run.runId, run.cancelledAt])])
+      .map(([at, runs]) => [at, runs.map((run) => [run.runId, run.end.kind, run.endedAt])])
   )
 }
 
@@ -160,10 +162,12 @@ interface CursorRoot {
   cwd?: string
 }
 
+/** Indices in `hashes` where a summary replaced everything before them, with the summary when the window kept it. */
+type Compactions = Map<number, string | undefined>
+
 /** A root with its summarized-away windows restored ahead of the live one. */
 interface CursorConversation extends CursorRoot {
-  /** Indices in `hashes` where a summary replaced everything before them. */
-  compactions: Set<number>
+  compactions: Compactions
 }
 
 interface ParsedRoot extends CursorRoot {
@@ -212,6 +216,8 @@ interface CursorUserMessage {
   role: "user"
   attachments: AttachmentContent[]
   content: CursorTextContent
+  /** The summary a compaction left the model in place of what came before. */
+  summary: boolean
 }
 
 interface CursorAssistantMessage {
@@ -388,6 +394,15 @@ function parseRoot(data: Uint8Array): ParsedRoot {
   return { hashes, cwd, windows }
 }
 
+/** The summary an archived window was replaced by: its field 2. */
+function windowSummary(data: Uint8Array): string | undefined {
+  let summary: string | undefined
+  eachField(data, (field, value) => {
+    if (field === 2 && value instanceof Uint8Array) summary = Buffer.from(value).toString("utf8").trim()
+  })
+  return summary || undefined
+}
+
 /**
  * The SDK's record of one prompt as sent: its text (field 1), the state it
  * was sent against (field 10) and when (field 25, epoch millis). A turn
@@ -407,6 +422,7 @@ function parsePromptRecord(data: Uint8Array): { text: string; at: number } | nul
 }
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
+const SUMMARY_PREFIX = /^\s*\[Previous conversation summary\]:?\s*/
 
 /** What the user actually typed, or null for an injected scaffold message. */
 function spokenText(content: CursorTextContent): string | null {
@@ -636,7 +652,7 @@ export class CursorProvider implements SessionProvider {
     const hashes = root?.hashes ?? []
     const stops: RunStops = new Map()
     let spoken: number | undefined
-    for (const run of agent?.cancelled ?? []) {
+    for (const run of agent?.ended ?? []) {
       const checkpoint = run.recorded ? run.rootId : run.startRootId
       const at = checkpoint ? this.readRoot(database, checkpoint)?.hashes : []
       if (!at || (run.recorded && !at.length) || at.length > hashes.length) continue
@@ -649,7 +665,7 @@ export class CursorProvider implements SessionProvider {
     return {
       rootId: rootId ?? "",
       hashes,
-      compactions: root?.compactions ?? new Set(),
+      compactions: root?.compactions ?? new Map(),
       stops,
       indexPath: cursorSdkIndexPath(this.sdkStateRoot),
     }
@@ -1130,34 +1146,61 @@ export class CursorProvider implements SessionProvider {
             if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool") calls.push(block)
           }
         }
-        for (const call of calls) if (call.output === undefined && !call.error) call.canceled = true
+        const failed = run.end.kind === "failed"
+        for (const call of calls) {
+          if (call.output !== undefined || call.error) continue
+          if (failed) call.error = true
+          else call.canceled = true
+        }
         calls = []
         assistant = null
-        const at = run.cancelledAt
-        sink.push(at ? { kind: "event", at, label: "Interrupted" } : { kind: "event", label: "Interrupted" })
+        const marker = run.end.kind === "failed" ? cursorFailure(run.end.error ?? "") : { label: "Interrupted" }
+        sink.push(run.endedAt ? { kind: "event", at: run.endedAt, ...marker } : { kind: "event", ...marker })
       }
     }
+    // The marker of the compaction just passed, until the conversation goes
+    // on: the summary message that follows it gives it its text when the
+    // window kept none.
+    type EventEntry = Extract<ThreadEntry, { kind: "event" }>
+    let compacted: EventEntry | null = null
     // Like a stop, a summary at `start` is already in the continued entries.
-    const compact = (index: number) => {
-      if (index === start || !compactions.has(index)) return
+    const compact = (index: number): EventEntry | null => {
+      if (index === start || !compactions.has(index)) return null
       assistant = null
-      sink.push({ kind: "event", label: "Context compacted" })
+      const marker: EventEntry = { kind: "event", ...compactionEvent({ summary: compactions.get(index) }) }
+      sink.push(marker)
+      return marker
     }
 
     for (let index = start; index < hashes.length; index++) {
       stop(index)
-      compact(index)
+      compacted = compact(index) ?? compacted
       const hash = hashes[index]
       if (hash === undefined) continue
       const message = this.readMessage(statement, hash)
       if (!message) continue
       switch (message.role) {
         case "user": {
-          const spoken = spokenText(message.content)
-          if (!spoken && !message.attachments.length) continue
+          if (message.summary) {
+            const summary = plainText(message.content).replace(SUMMARY_PREFIX, "")
+            // A root that kept no window for this summary still marks it.
+            if (!compacted) sink.push({ kind: "event", ...compactionEvent({ summary }) })
+            else if (!compacted.body) Object.assign(compacted, compactionEvent({ summary }))
+            compacted = null
+            continue
+          }
+          const text = plainText(message.content)
+          const opener = cursorTaskOpener(text, hash)
+          const spoken = opener ? null : spokenText(message.content)
+          if (!opener && !spoken && !message.attachments.length) continue
           assistant = null
           calls = []
+          compacted = null
           exchanges.push({ hash: index, entry: sink.entries.length })
+          if (opener) {
+            sink.push(opener)
+            continue
+          }
           sink.push({
             kind: "user",
             id: hash,
@@ -1187,6 +1230,7 @@ export class CursorProvider implements SessionProvider {
           }
           continue
         case "assistant":
+          compacted = null
           if (!assistant) {
             assistant = {
               kind: "assistant",
@@ -1338,12 +1382,12 @@ export class CursorProvider implements SessionProvider {
       if (!row) return null
       const root = parseRoot(row.data)
       const hashes: string[] = []
-      const compactions = new Set<number>()
+      const compactions: Compactions = new Map()
       for (const id of root.windows) {
         const window = parseBlobDataRow(statement.get(id))
         if (!window) continue
         hashes.push(...parseRoot(window.data).hashes)
-        compactions.add(hashes.length)
+        compactions.set(hashes.length, windowSummary(window.data))
       }
       hashes.push(...root.hashes)
       return { hashes, cwd: root.cwd, compactions }
@@ -1370,7 +1414,7 @@ export class CursorProvider implements SessionProvider {
   private unrecordedTurn(
     database: DatabaseSync,
     indexPath: string,
-    run: Extract<CursorSdkCancelledRun, { recorded: false }>
+    run: Extract<CursorSdkEndedRun, { recorded: false }>
   ): ThreadEntry[] {
     const entries: ThreadEntry[] = []
     const prompt = this.promptBetween(database, run)
@@ -1389,8 +1433,10 @@ export class CursorProvider implements SessionProvider {
       }
       const result = isJsonObject(part.result) ? part.result : undefined
       if (part.status === "completed" && result) {
-        block.output = clip(formatToolResult(result["value"] ?? result))
-        if (result["status"] === "error") block.error = true
+        const value = result["value"]
+        block.output = clip(formatToolResult(value ?? result))
+        // An MCP tool can answer and still report failure with `isError`.
+        if (result["status"] === "error" || (isJsonObject(value) && value["isError"] === true)) block.error = true
       } else if (part.status === "error") {
         block.error = true
       }
@@ -1408,10 +1454,10 @@ export class CursorProvider implements SessionProvider {
    */
   private promptBetween(
     database: DatabaseSync,
-    run: Extract<CursorSdkCancelledRun, { recorded: false }>
+    run: Extract<CursorSdkEndedRun, { recorded: false }>
   ): { id: string; text: string } | null {
     const from = run.startedAt ? Date.parse(run.startedAt) : -Infinity
-    const to = run.cancelledAt ? Date.parse(run.cancelledAt) : Infinity
+    const to = run.endedAt ? Date.parse(run.endedAt) : Infinity
     try {
       const start = run.startRootId
         ? database.prepare("SELECT rowid FROM blobs WHERE id = ?").get(run.startRootId)?.["rowid"]
@@ -1482,6 +1528,7 @@ function parseCursorMessage(raw: string): CursorMessage | null {
         role: "user",
         content: parseTextContent(value["content"]),
         attachments: cursorAttachments(value["content"]),
+        summary: cursorOption(value["providerOptions"], "isSummary") === true,
       }
     case "assistant":
       return {
@@ -1547,15 +1594,16 @@ function parseAssistantPart(value: JsonValue): CursorAssistantPart {
   }
 }
 
-function cursorToolError(value: JsonValue | undefined): boolean {
+/** A field of a message's `providerOptions.cursor`. */
+function cursorOption(value: JsonValue | undefined, key: string): JsonValue | undefined {
   const provider = isJsonObject(value) ? value : undefined
-  const cursor = isJsonObject(provider?.["cursor"])
-    ? provider["cursor"]
-    : undefined
-  const result = isJsonObject(cursor?.["highLevelToolCallResult"])
-    ? cursor["highLevelToolCallResult"]
-    : undefined
-  return result?.["isError"] === true
+  const cursor = isJsonObject(provider?.["cursor"]) ? provider["cursor"] : undefined
+  return cursor?.[key]
+}
+
+function cursorToolError(value: JsonValue | undefined): boolean {
+  const result = cursorOption(value, "highLevelToolCallResult")
+  return isJsonObject(result) && result["isError"] === true
 }
 
 function parseToolContent(value: JsonValue | undefined): CursorToolPart[] {

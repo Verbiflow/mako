@@ -32,8 +32,8 @@ export interface CursorSdkAgentRecord {
   turns: number
   /** Whether the newest run is still non-terminal. */
   running: boolean
-  /** Runs the user stopped after they wrote to the conversation, oldest first. */
-  cancelled: CursorSdkCancelledRun[]
+  /** Runs stopped, expired or failed after they wrote to the conversation, oldest first. */
+  ended: CursorSdkEndedRun[]
   /**
    * Set when Mako created this agent from a `cursor-agent` store (an
    * `acp-sessions` or `chats` session) so the conversation could go on
@@ -52,14 +52,26 @@ export interface CursorSdkImport {
   agentId: string
 }
 
-/** A run the user stopped, oldest first. */
-export type CursorSdkCancelledRun =
+/**
+ * How a run ended short of finishing: the user stopped it, a later send
+ * expired it after the process running it died (`force_send`), or it failed
+ * with the SDK's error message.
+ */
+export type CursorSdkRunEnd =
+  | { kind: "cancelled" }
+  | { kind: "expired" }
+  | { kind: "failed"; error?: string }
+
+/** A run that ended short of finishing, oldest first. */
+export type CursorSdkEndedRun =
   | {
       recorded: true
       runId: string
+      end: CursorSdkRunEnd
       /** Blob id of the root the run last checkpointed: the conversation as it stopped. */
       rootId: string
-      cancelledAt?: string
+      /** When it was stopped or failed; an expired run's expiry is when the next send found it, so it has none. */
+      endedAt?: string
     }
   | {
       /**
@@ -69,10 +81,11 @@ export type CursorSdkCancelledRun =
        */
       recorded: false
       runId: string
+      end: CursorSdkRunEnd
       /** The conversation the run started from; absent for an agent's first run. */
       startRootId?: string
       startedAt?: string
-      cancelledAt?: string
+      endedAt?: string
     }
 
 /** What a run streamed, in order: text and thinking deltas joined, each tool call at its latest state. */
@@ -204,37 +217,44 @@ function modelParams(raw: string | undefined): CursorSdkModelSelection["params"]
 }
 
 /** An index without run checkpoints records no stops, not an unreadable agent. */
-function cancelledRuns(database: DatabaseSync, agentId: string): CursorSdkCancelledRun[] {
+function endedRuns(database: DatabaseSync, agentId: string): CursorSdkEndedRun[] {
   let rows: ReturnType<ReturnType<DatabaseSync["prepare"]>["all"]>
   try {
     rows = database
-      .prepare("SELECT * FROM runs WHERE agent_id = ? AND status = 'CANCELLED' ORDER BY turn_number")
+      .prepare("SELECT * FROM runs WHERE agent_id = ? AND status IN ('CANCELLED', 'EXPIRED', 'ERROR') ORDER BY turn_number")
       .all(agentId)
   } catch {
     return []
   }
-  const cancelled: CursorSdkCancelledRun[] = []
+  const ended: CursorSdkEndedRun[] = []
   for (const row of rows) {
     if (!("latest_checkpoint_ref_json" in row)) return []
     const runId = text(row["run_id"])
     if (!runId) continue
+    const end = runEnd(text(row["status"]), text(row["error_code"]))
     const rootId = checkpointBlobId(text(row["latest_checkpoint_ref_json"]))
     const startRootId = checkpointBlobId(text(row["start_checkpoint_ref_json"]))
-    const cancelledAt = text(row["cancelled_at"])
+    const endedAt = end.kind === "cancelled" ? text(row["cancelled_at"]) : end.kind === "failed" ? text(row["finished_at"]) : undefined
     if (rootId && rootId !== startRootId) {
-      const run: Extract<CursorSdkCancelledRun, { recorded: true }> = { recorded: true, runId, rootId }
-      if (cancelledAt) run.cancelledAt = cancelledAt
-      cancelled.push(run)
+      const run: Extract<CursorSdkEndedRun, { recorded: true }> = { recorded: true, runId, end, rootId }
+      if (endedAt) run.endedAt = endedAt
+      ended.push(run)
       continue
     }
     const startedAt = text(row["started_at"])
-    const run: Extract<CursorSdkCancelledRun, { recorded: false }> = { recorded: false, runId }
+    const run: Extract<CursorSdkEndedRun, { recorded: false }> = { recorded: false, runId, end }
     if (startRootId) run.startRootId = startRootId
     if (startedAt) run.startedAt = startedAt
-    if (cancelledAt) run.cancelledAt = cancelledAt
-    cancelled.push(run)
+    if (endedAt) run.endedAt = endedAt
+    ended.push(run)
   }
-  return cancelled
+  return ended
+}
+
+function runEnd(status: string | undefined, error: string | undefined): CursorSdkRunEnd {
+  if (status === "EXPIRED") return { kind: "expired" }
+  if (status === "ERROR") return error ? { kind: "failed", error } : { kind: "failed" }
+  return { kind: "cancelled" }
 }
 
 /** The `run_events` messages history reads; any other message is skipped. */
@@ -340,14 +360,14 @@ export function readCursorSdkAgent(
       .get(agentId, agentId)
     const modelId = text(run?.["model"])
     const runStatus = text(run?.["status"])
-    const cancelled = cancelledRuns(database, agentId)
+    const ended = endedRuns(database, agentId)
     const record: CursorSdkAgentRecord = {
       agentId,
       cwd: text(agent["workspace_ref"]) ?? "",
       status: statusOf(text(agent["status"])),
       turns: count(run?.["turns"]),
       running: runStatus !== undefined && !TERMINAL.has(runStatus),
-      cancelled,
+      ended,
     }
     const name = text(agent["name"])
     if (name) record.name = name

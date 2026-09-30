@@ -37,6 +37,7 @@ import {
 } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import { subagentLabel } from "../provider-turn.js"
+import { compactionEvent } from "../events.js"
 import type {
   NativeFile,
   SessionFollower,
@@ -76,6 +77,8 @@ interface ChatMessage {
   tool_calls?: ToolCall[]
   tool_call_id?: string
   usage?: TurnUsage
+  /** Devin's per-message annotations, `metadata.extensions`. */
+  extensions?: JsonObject
 }
 
 interface DiscoveryRow {
@@ -448,6 +451,19 @@ async function lockedSessionIds(path: string, ids: string[]): Promise<Set<string
 
 /** The system message Devin appends to a turn the user stopped. */
 const DEVIN_STOP_NOTICE = "[Response interrupted by user]"
+/**
+ * Annotations on a saved message (devin 3000.10.23): the system message that
+ * replaces compacted history carries `devin-rs/summary`, and a tool result
+ * that failed carries `chisel/tool_failure` with its reason.
+ */
+const DEVIN_SUMMARY = "devin-rs/summary"
+const DEVIN_TOOL_FAILURE = "chisel/tool_failure"
+
+/** The summary a compaction message holds, after the preamble that names where the full history went. */
+function compactionSummary(text: string): string {
+  const at = text.indexOf("\nSummary:\n")
+  return at === -1 ? text : text.slice(at + "\nSummary:\n".length)
+}
 
 function translator(): MessageTranslator {
   const sink = new EntrySink()
@@ -468,6 +484,10 @@ function translator(): MessageTranslator {
         if (text.trim() === DEVIN_STOP_NOTICE) {
           running = false
           sink.push({ kind: "event", at, label: "Interrupted" })
+          return
+        }
+        if (message.extensions?.[DEVIN_SUMMARY] !== undefined) {
+          sink.push({ kind: "event", id: String(row.rowId), at, ...compactionEvent({ summary: clip(compactionSummary(text)) }) })
           return
         }
         const completion = parseSubagentCompletion(text)
@@ -566,6 +586,7 @@ function translator(): MessageTranslator {
         const agent = title ? /^Background subagent started with agent_id=([^\s.]+)/.exec(output)?.[1] : undefined
         if (title && agent) subagentTitles.set(agent, title)
         block.output = clip(normalizeToolOutput(output))
+        if (message.extensions?.[DEVIN_TOOL_FAILURE] !== undefined) block.error = true
         const attachments = devinAttachments(message.content)
         if (attachments.length) block.attachments = attachments
       }
@@ -667,6 +688,7 @@ function parseChatMessage(text: string): ChatMessage | null {
       tool_calls: parseToolCalls(parsed.tool_calls),
       tool_call_id: jsonText(parsed.tool_call_id),
       usage: usageFromMetadata(parsed.metadata),
+      extensions: isJsonObject(parsed.metadata) && isJsonObject(parsed.metadata.extensions) ? parsed.metadata.extensions : undefined,
     }
   } catch {
     return null

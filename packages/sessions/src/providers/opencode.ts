@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { openCodeDatabasePaths } from "./opencode-location.js"
 import { openCodeNoticeLabel } from "./opencode-notice.js"
+import { compactionEvent, compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "../events.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
@@ -607,7 +608,7 @@ function currentEntries(
     )
     .all(sessionId, MAX_MESSAGES)
   const sink = new EntrySink()
-  const execution = { running: false }
+  const execution: Execution = { running: false }
   for (const fields of stored) {
     const row = parseStoredRow(fields)
     if (row) pushCurrent(sink, row, execution)
@@ -657,18 +658,29 @@ function legacyEntries(
   return sink.done()
 }
 
+interface Execution {
+  /**
+   * The session's execution had not ended at this row. A step that ended in
+   * tool calls continues it; any other end settles it. A synthetic notice
+   * delivered while it runs is read in that execution.
+   */
+  running: boolean
+  /** Context tokens of the latest step: what a compaction starts from, as live reads it. */
+  context?: number
+}
+
 /**
- * `execution.running`: the session's execution had not ended at this row. A
- * step that ended in tool calls continues it; any other end settles it. A
- * synthetic notice delivered while it runs is read in that execution.
+ * `system` rows (instructions and date updates OpenCode tells the model) and
+ * `skill` rows are protocol, not conversation, and are left out.
  */
-function pushCurrent(sink: EntrySink, row: StoredRow, execution: { running: boolean }): void {
+function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): void {
   const type = row.type ?? jsonText(row.data.type)
   const at = isoOf(timeCreated(row.data) ?? row.timeCreated)
   if (type === "user") execution.running = true
   if (type === "assistant") {
     const finish = jsonText(row.data.finish)
-    execution.running = finish === undefined || finish === "tool-calls"
+    // A retried step continues its execution; OpenCode resumes it with a synthetic "continue".
+    execution.running = finish === undefined || finish === "tool-calls" || jsonObject(row.data.retry) !== undefined
   }
   if (type === "synthetic") {
     if (!execution.running)
@@ -704,8 +716,16 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: { running: bool
     const model = modelFromData(row.data)
     if (blocks.length > 0 || usage)
       pushAssistant(sink, at, model?.id, usage, blocks)
+    execution.context = contextTokens(row.data) ?? execution.context
+    // A step that failed and was retried did not fail the turn.
+    const retry = retryEvent(jsonObject(row.data.retry))
+    if (retry) pushEvent(sink, at, retry)
     if (isInterrupted(row.data))
       sink.push({ kind: "event", at, label: "Interrupted" })
+    else if (!retry) {
+      const failure = failedTurn(jsonObject(row.data.error))
+      if (failure) pushEvent(sink, at, failure)
+    }
     return
   }
   if (type === "shell") {
@@ -726,7 +746,16 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: { running: bool
     return
   }
   if (type === "compaction") {
-    pushCompaction(sink, at, jsonText(row.data.reason) === "auto")
+    const status = jsonText(row.data.status)
+    if (status === "failed")
+      pushEvent(sink, at, compactionFailedEvent(errorText(row.data.error) || undefined))
+    // A running compaction has not happened yet; the row settles when it ends.
+    else if (status !== "running")
+      pushEvent(sink, at, compactionEvent({
+        trigger: compactionTrigger(jsonText(row.data.reason)),
+        tokensBefore: execution.context,
+        summary: jsonText(row.data.summary),
+      }))
     return
   }
   if (type === "model-switched") {
@@ -758,7 +787,7 @@ function pushLegacy(
     (part) => jsonText(part.data.type) === "compaction"
   )
   if (compaction) {
-    pushCompaction(sink, at, jsonBoolean(compaction.data.auto) === true)
+    pushEvent(sink, at, compactionEvent({ trigger: jsonBoolean(compaction.data.auto) === true ? "automatic" : "manual" }))
     return
   }
   if (role === "user") {
@@ -779,9 +808,15 @@ function pushLegacy(
   }
   if (role !== "assistant") return
   const blocks: EntryBlock[] = []
+  const retries: TranscriptEvent[] = []
   let usage = usageFrom(message.data)
   for (const part of parts) {
     const type = jsonText(part.data.type)
+    if (type === "retry") {
+      const retry = retryEvent(part.data)
+      if (retry) retries.push(retry)
+      continue
+    }
     if (type === "file") {
       blocks.push(...fileParts([part.data]))
       continue
@@ -810,8 +845,13 @@ function pushLegacy(
   const model = modelFromData(message.data)
   if (blocks.length > 0 || usage)
     pushAssistant(sink, at, model?.id, usage, blocks)
+  for (const retry of retries) pushEvent(sink, at, retry)
   if (isInterrupted(message.data))
     sink.push({ kind: "event", at, label: "Interrupted" })
+  else {
+    const failure = failedTurn(jsonObject(message.data.error))
+    if (failure) pushEvent(sink, at, failure)
+  }
 }
 
 function pushAssistant(
@@ -942,17 +982,78 @@ function modelFromEntries(
   return null
 }
 
-function pushCompaction(
-  sink: EntrySink,
-  at: string | undefined,
-  automatic: boolean
-): void {
-  sink.push({
-    kind: "event",
-    at,
-    label: "Context compacted",
-    detail: automatic ? "Automatic" : "Manual",
-  })
+function pushEvent(sink: EntrySink, at: string | undefined, marker: TranscriptEvent): void {
+  sink.push({ kind: "event", at, ...marker })
+}
+
+function compactionTrigger(reason: string | undefined): "automatic" | "manual" | undefined {
+  return reason === "auto" ? "automatic" : reason === "manual" ? "manual" : undefined
+}
+
+/** Context tokens of one step, as the live session reads them. */
+function contextTokens(data: JsonObject): number | undefined {
+  const tokens = jsonObject(data.tokens)
+  if (!tokens) return undefined
+  const cache = jsonObject(tokens.cache)
+  const counts = [tokens.input, tokens.output, tokens.reasoning, cache?.read, cache?.write].map(jsonNumber)
+  const total = counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
+  return total > 0 ? total : undefined
+}
+
+/** A v2 step's `retry` or a v1 `retry` part: the attempt OpenCode scheduled after an error. */
+function retryEvent(retry: JsonObject | undefined): TranscriptEvent | undefined {
+  if (!retry) return undefined
+  const attempt = jsonNumber(retry.attempt)
+  const message = errorText(retry.error)
+  if (attempt === undefined && !message) return undefined
+  const line = oneLine(message)
+  const detail = [attempt === undefined ? undefined : `attempt ${attempt}`, line].filter(Boolean).join(" · ")
+  return { ...event("Retried", detail, line === message.trim() ? undefined : message), tone: "warning" }
+}
+
+/** An error that ended the turn; a stopped turn reads as interrupted instead. */
+function failedTurn(error: JsonObject | undefined): TranscriptEvent | undefined {
+  if (!error) return undefined
+  const kind = jsonText(error.type) ?? jsonText(error.name)
+  const message = errorText(error)
+  if (!kind && !message) return undefined
+  return turnFailedEvent(kind ? failureClass(kind) : oneLine(message), message)
+}
+
+/** OpenCode 2 error types and OpenCode 1 error names, in plain words. */
+const FAILURE_CLASSES = new Map([
+  ["provider.invalid-output", "Invalid model response"],
+  ["provider.invalid-request", "Request rejected"],
+  ["provider.rate-limit", "Rate limited"],
+  ["provider.quota", "Quota exceeded"],
+  ["provider.auth", "Authentication failed"],
+  ["provider.content-filter", "Blocked by content filter"],
+  ["provider.transport", "Connection failed"],
+  ["provider.connect", "Connection failed"],
+  ["provider.no-route", "Model unavailable"],
+  ["provider.unsupported-operation", "Not supported by the provider"],
+  ["provider.internal", "Provider error"],
+  ["provider.error", "Provider error"],
+  ["provider.unknown", "Provider error"],
+  ["ProviderAuthError", "Authentication failed"],
+  ["APIError", "Provider error"],
+  ["MessageOutputLengthError", "Output too long"],
+  ["ContextOverflowError", "Context too long"],
+  ["StructuredOutputError", "Invalid structured output"],
+  ["UnknownError", "Unknown error"],
+])
+
+function failureClass(kind: string): string {
+  const known = FAILURE_CLASSES.get(kind)
+  if (known) return known
+  const words = kind.replace(/Error$/, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[._-]+/g, " ").trim().toLowerCase()
+  return words ? words[0]!.toUpperCase() + words.slice(1) : "Error"
+}
+
+/** The first line of a message, short enough to sit beside a label. */
+function oneLine(text: string, max = 160): string {
+  const line = text.trim().split("\n", 1)[0]!.trim()
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 
 function isInterrupted(data: JsonObject): boolean {

@@ -2,6 +2,12 @@ import { type AttachmentContent } from "../content.js"
 import { extname, basename } from "node:path"
 import { z } from "zod"
 import { userTextFrom } from "../format.js"
+import {
+  compactionFailedEvent,
+  event,
+  turnFailedEvent,
+  type TranscriptEvent,
+} from "../events.js"
 
 const QuestionReplies = z
   .array(z.object({ question: z.string(), answer: z.string() }))
@@ -82,6 +88,87 @@ export function codexPresentation(text: string): string {
     .replace(/^::code-comment\{([^\n]*)\}\s*$/gm, reviewComment)
     .split(/(`[^`\n]*`)/g).map((span, position) => position % 2 ? span : span.replace(/codex:\/\/review\?[^\s)<>]+/g, reviewLink)).join("")
   ).join("")
+}
+
+/**
+ * Codex's `CodexErrorInfo` variants in plain words. Rollouts spell them in
+ * snake_case and the app-server in camelCase, so keys are compared without
+ * underscores or case. `other` and unknown variants have no class.
+ */
+const ERROR_CLASSES = new Map([
+  ["contextwindowexceeded", "Context window full"],
+  ["sessionbudgetexceeded", "Session budget reached"],
+  ["usagelimitexceeded", "Usage limit reached"],
+  ["ratelimitexceeded", "Rate limited"],
+  ["flexunavailable", "Flex processing unavailable"],
+  ["serveroverloaded", "Server overloaded"],
+  ["cyberpolicy", "Blocked by safety policy"],
+  ["biopolicy", "Blocked by safety policy"],
+  ["misalignmentpolicyviolation", "Blocked by safety policy"],
+  ["toomanydenials", "Too many approvals denied"],
+  ["httpconnectionfailed", "Connection failed"],
+  ["responsestreamconnectionfailed", "Connection failed"],
+  ["responsestreamdisconnected", "Connection lost"],
+  ["responsetoomanyfailedattempts", "Too many failed attempts"],
+  ["internalservererror", "Server error"],
+  ["unauthorized", "Sign-in required"],
+  ["badrequest", "Request rejected"],
+  ["invalidprompt", "Prompt rejected"],
+  ["sandboxerror", "Sandbox error"],
+])
+const MAX_DETAIL = 160
+const COMPACTION_ERROR = /^Error running (?:remote |local )?compact task:\s*/
+const EmbeddedError = z.union([
+  z.object({ error: z.object({ message: z.string().min(1) }) }),
+  z.object({ message: z.string().min(1) }),
+])
+
+/** The `CodexErrorInfo` variant named by `variant` in plain words. */
+export function codexErrorClass(variant: string | undefined): string | undefined {
+  return variant === undefined
+    ? undefined
+    : ERROR_CLASSES.get(variant.replaceAll("_", "").toLowerCase())
+}
+
+/**
+ * The marker for a turn Codex ended with an error: the class beside the
+ * label, the full message inside. A failed compaction reads as one.
+ */
+export function codexFailureEvent(variant: string | undefined, message: string | undefined): TranscriptEvent {
+  const text = message?.trim() ?? ""
+  const compaction = COMPACTION_ERROR.exec(text)
+  const readable = readableError(compaction ? text.slice(compaction[0].length) : text)
+  const detail = codexErrorClass(variant) ?? firstLine(readable)
+  if (compaction) return compactionFailedEvent(detail)
+  return turnFailedEvent(detail, readable === detail ? undefined : readable)
+}
+
+/** A provider warning: its first line beside the label, the rest inside. */
+export function codexWarningEvent(text: string, more?: string | null): TranscriptEvent {
+  const whole = text.trim()
+  const line = firstLine(whole)
+  const body = [whole === line ? "" : whole, more?.trim() ?? ""].filter(Boolean).join("\n\n")
+  return { ...event("Warning", line, body), tone: "warning" }
+}
+
+/** The first line of `text`, short enough to sit beside a label. */
+export function firstLine(text: string): string {
+  const line = text.trimStart().split("\n", 1)[0]?.trim() ?? ""
+  return line.length <= MAX_DETAIL ? line : `${line.slice(0, MAX_DETAIL - 1).trimEnd()}…`
+}
+
+/** API errors arrive as JSON bodies; their message is what a reader wants. */
+function readableError(text: string): string {
+  const start = text.indexOf("{")
+  if (start < 0 || !text.endsWith("}")) return text
+  try {
+    const parsed = EmbeddedError.safeParse(JSON.parse(text.slice(start)))
+    if (!parsed.success) return text
+    const inner = "error" in parsed.data ? parsed.data.error.message : parsed.data.message
+    return `${text.slice(0, start)}${inner}`.trim()
+  } catch {
+    return text
+  }
 }
 
 export function codexPromptImages(text: string): AttachmentContent[] {

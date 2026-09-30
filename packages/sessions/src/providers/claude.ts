@@ -1,4 +1,10 @@
 import { claudeCommandPrompt, claudeInterrupted } from "./claude-presentation.js"
+import {
+  claudeApiErrorEvent,
+  claudeCompactSummary,
+  claudeLocalCommand,
+} from "./claude-events.js"
+import { compactionEvent, event, messageEvent, modelChangedEvent, turnFailedEvent, type Compaction, type TranscriptEvent } from "../events.js"
 import { todoDetails } from "../tool-plan.js"
 import { attachmentFromUrl, type AttachmentContent } from "../content.js"
 /**
@@ -76,11 +82,19 @@ interface ClaudeOtherContent {
   type: "other"
 }
 
+/** The API answered on another model than the one asked (a refusal's fallback). */
+interface ClaudeFallbackContent {
+  type: "fallback"
+  from?: string
+  to?: string
+}
+
 type ClaudeContentBlock =
   | ClaudeTextContent
   | ClaudeThinkingContent
   | ClaudeToolUseContent
   | ClaudeToolResultContent
+  | ClaudeFallbackContent
   | ClaudeOtherContent
   | { type: "attachment"; value: AttachmentContent }
 type ClaudeContent = string | ClaudeContentBlock[]
@@ -118,9 +132,19 @@ interface ClaudeLine {
   isCompactSummary: boolean
   isAbortedMidStream: boolean
   message?: ClaudeMessage
+  subtype?: string
+  requestId?: string
+  /** The `error` of a message Claude Code composed to report an API failure. */
+  apiError?: string
+  /** A `system` record's own fields. */
+  system?: ClaudeJsonObject
+  /** An `attachment` record's attachment. */
+  attachment?: ClaudeJsonObject
 }
 
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
+type UserEntry = Extract<ThreadEntry, { kind: "user" }>
+type EventEntry = Extract<ThreadEntry, { kind: "event" }>
 type ClaudeToolBlock = EntryBlock & { type: "tool" }
 
 interface ClaudeTranslator extends LineTranslator {
@@ -155,6 +179,15 @@ function isJsonObject(
 
 function stringValue(value: ClaudeJsonValue | undefined): string | undefined {
   return isString(value) ? value : undefined
+}
+
+function numberValue(value: ClaudeJsonValue | undefined): number | undefined {
+  return Number.isFinite(value) ? Number(value) : undefined
+}
+
+/** Claude's own words on a refusal, then the API's explanation when it gave one. */
+function refusalText(record: ClaudeJsonObject): string | undefined {
+  return [stringValue(record["content"]), stringValue(record["apiRefusalExplanation"])].filter(Boolean).join("\n\n") || undefined
 }
 
 function parseContentBlock(value: ClaudeJsonValue): ClaudeContentBlock {
@@ -218,9 +251,15 @@ function parseContentBlock(value: ClaudeJsonValue): ClaudeContentBlock {
         content: parseContent(value["content"]),
         isError: value["is_error"] === true,
       }
+    case "fallback":
+      return { type: "fallback", from: modelName(value["from"]), to: modelName(value["to"]) }
     default:
       return { type: "other" }
   }
+}
+
+function modelName(value: ClaudeJsonValue | undefined): string | undefined {
+  return isJsonObject(value) ? stringValue(value["model"]) : undefined
 }
 
 function parseContent(
@@ -280,6 +319,11 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
     isCompactSummary: root["isCompactSummary"] === true,
     isAbortedMidStream: root["isAbortedMidStream"] === true,
     message: parseMessage(root["message"]),
+    subtype: stringValue(root["subtype"]),
+    requestId: stringValue(root["requestId"]),
+    apiError: root["isApiErrorMessage"] === true ? (stringValue(root["error"]) ?? "unknown") : undefined,
+    system: type === "system" ? root : undefined,
+    attachment: type === "attachment" && isJsonObject(root["attachment"]) ? root["attachment"] : undefined,
   }
 }
 
@@ -540,6 +584,91 @@ function translator(): ClaudeTranslator {
   const toolsById = new Map<string, ClaudeToolBlock>()
   let started = false
   let needsReset = false
+  /** The prompt that opened the running turn; a prompt Claude folds into the turn steers it. */
+  let opener: string | undefined
+  /** The latest boundary's marker, which the summary written after it completes. */
+  let compaction: { entry: EventEntry; kept: Compaction } | null = null
+  /** The latest terminal slash command's marker, which the output written after it completes. */
+  let command: { entry: EventEntry; name: string } | null = null
+  /** Fallback markers by API request: the reply's `fallback` block and Claude's notice after it are one change. */
+  const fallbacks = new Map<string, EventEntry>()
+
+  const mark = (marker: TranscriptEvent, at: string | undefined, id?: string): EventEntry => {
+    const entry: EventEntry = { kind: "event", at, ...marker }
+    if (id) entry.id = id
+    sink.push(entry)
+    assistant = null
+    return entry
+  }
+  const conversing = (): void => {
+    compaction = null
+    command = null
+  }
+
+  const system = (line: ClaudeLine, record: ClaudeJsonObject): void => {
+    switch (line.subtype) {
+      case "compact_boundary": {
+        const metadata = isJsonObject(record["compactMetadata"]) ? record["compactMetadata"] : {}
+        const trigger = metadata["trigger"]
+        const kept: Compaction = {
+          trigger: trigger === "auto" ? "automatic" : trigger === "manual" ? "manual" : undefined,
+          tokensBefore: numberValue(metadata["preTokens"]),
+          tokensAfter: numberValue(metadata["postTokens"]),
+        }
+        compaction = { entry: mark(compactionEvent(kept), line.timestamp, line.uuid), kept }
+        return
+      }
+      case "model_refusal_fallback": {
+        const from = stringValue(record["originalModel"])
+        const to = stringValue(record["fallbackModel"])
+        if (!from || !to) return
+        const marker = modelChangedEvent(from, to,
+          record["scope"] === "local" ? "for one reply after a refusal" : "after a refusal", refusalText(record))
+        const earlier = line.requestId ? fallbacks.get(line.requestId) : undefined
+        if (earlier) Object.assign(earlier, marker)
+        else mark(marker, line.timestamp, line.uuid)
+        return
+      }
+      case "model_refusal_no_fallback":
+        mark(turnFailedEvent(`${stringValue(record["originalModel"]) ?? "The model"} declined the request`,
+          refusalText(record)), line.timestamp, line.uuid)
+        return
+      case "local_command": {
+        const local = claudeLocalCommand(stringValue(record["content"]) ?? "")
+        if (local.kind === "command") {
+          command = { entry: mark(event("Notice", local.command), line.timestamp, line.uuid), name: local.command }
+          return
+        }
+        if (!local.output) return
+        const printed = messageEvent("Notice", command ? `${command.name} · ${local.output}` : local.output)
+        const marker: TranscriptEvent = local.failed ? { ...printed, tone: "warning" } : printed
+        if (command) Object.assign(command.entry, marker)
+        else mark(marker, line.timestamp, line.uuid)
+        command = null
+        return
+      }
+    }
+  }
+
+  /** A prompt or background result Claude took in while a turn ran, recorded only as a queued command. */
+  const queued = (line: ClaudeLine, attachment: ClaudeJsonObject): void => {
+    if (attachment["type"] !== "queued_command") return
+    const prompt = parseContent(attachment["prompt"])
+    const text = claudeCommandPrompt(plainText(prompt))
+    const notification = taskNotificationLabel(text)
+    if (notification) {
+      mark(event(notification), line.timestamp, line.uuid)
+      return
+    }
+    if (attachment["commandMode"] !== "prompt") return
+    const attachments = attachmentParts(prompt)
+    if ((!text.trim() && !attachments.length) || NOT_A_PROMPT.test(text.trimStart())) return
+    const entry: UserEntry = { kind: "user", id: line.uuid, at: line.timestamp, text, attachments }
+    if (opener) entry.steeringFor = opener
+    conversing()
+    assistant = null
+    sink.push(entry)
+  }
 
   const push = (raw: string): void => {
     const line = parseClaudeLine(raw)
@@ -552,6 +681,9 @@ function translator(): ClaudeTranslator {
       line.type === "last-prompt"
     )
       return
+
+    if (line.system) return system(line, line.system)
+    if (line.attachment) return queued(line, line.attachment)
 
     if (line.type === "user") {
       const content = line.message?.content
@@ -576,17 +708,14 @@ function translator(): ClaudeTranslator {
         }
         if (onlyResults) return
       }
-      if (line.isMeta) return
       if (line.isCompactSummary) {
-        sink.push({
-          kind: "event",
-          at: line.timestamp,
-          label: "Compacted",
-          detail: undefined,
-        })
-        assistant = null
+        const summary = claudeCompactSummary(plainText(content))
+        if (compaction) Object.assign(compaction.entry, compactionEvent({ ...compaction.kept, summary }))
+        else mark(compactionEvent({ summary }), line.timestamp, line.uuid)
+        compaction = null
         return
       }
+      if (line.isMeta) return
       const text = claudeCommandPrompt(plainText(content))
       if (claudeInterrupted(text)) {
         sink.push({kind: "event", at: line.timestamp, label: "Interrupted"})
@@ -597,6 +726,7 @@ function translator(): ClaudeTranslator {
       if (notification) {
         assistant = null
         started = true
+        opener = undefined
         sink.push({ kind: "event", id: line.uuid, at: line.timestamp, label: notification, opensTurn: true })
         return
       }
@@ -608,6 +738,9 @@ function translator(): ClaudeTranslator {
         return
       assistant = null
       started = true
+      opener = line.uuid
+      conversing()
+      fallbacks.clear()
       sink.push({
         kind: "user",
         id: line.uuid,
@@ -628,7 +761,19 @@ function translator(): ClaudeTranslator {
       }
       return
     }
+    if (line.apiError !== undefined) {
+      mark(claudeApiErrorEvent(line.apiError, plainText(message.content)), line.timestamp, line.uuid)
+      return
+    }
+    if (message.model === "<synthetic>" && plainText(message.content).trim() === "No response requested.") return
+    for (const part of message.content) {
+      if (part.type !== "fallback" || !part.from || !part.to) continue
+      const entry = mark(modelChangedEvent(part.from, part.to), line.timestamp)
+      if (line.requestId) fallbacks.set(line.requestId, entry)
+    }
+    if (message.content.length && message.content.every((part) => part.type === "fallback")) return
     if (!assistant || (line.uuid && assistant.id !== line.uuid)) {
+      conversing()
       assistant = {
         id: line.uuid,
         kind: "assistant",
