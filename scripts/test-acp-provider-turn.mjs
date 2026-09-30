@@ -45,6 +45,7 @@ async function check() {
     locateSession: ({ nativeId }) => (written.has(nativeId) ? join(root, "located", nativeId) : undefined),
     available: () => true,
     providerTurns: source.providerTurns,
+    decodeNotification: source.decodeNotification,
     observeAgents: source.observeAgents,
     clientCapabilities: source.clientCapabilities,
     launch: async () => ({
@@ -114,6 +115,20 @@ async function check() {
   assert.equal(grok.opened().length, 2, "output without an announced turn opens nothing")
   assert.equal(grok.session()?.status, "ready")
   console.log("PASS: Output Grok did not announce as a new turn opens nothing")
+
+  const beforeNative = grok.events.length
+  await grok.prompt("native-grok")
+  const since = (from) => grok.events.slice(from)
+  assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-activity" ? [event.activity] : []), [{ kind: "compacting" }, null],
+    "Grok's auto-compaction shows while it runs and ends with its marker; another session's does not")
+  assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
+    [{ kind: "event", label: "Context compacted", detail: "Automatic · 404k → 21k tokens" }])
+  const titles = since(beforeNative).flatMap((event) => event.type === "live-session" && event.session.title ? [event.session.title] : [])
+  // The SDK dispatches vendor notifications through more handlers than session
+  // updates, so the two channels are not ordered against each other.
+  assert.ok(titles.includes("Compacted fixture"), "Grok's generated title names the thread")
+  assert.ok(titles.includes("Renamed by the agent"), "ACP's session_info_update names the thread")
+  console.log("PASS: Grok's vendor notifications reach the conversation as activity, a marker and a title")
   await grok.close()
 
   const devin = await conversation("provider-turn-devin")
@@ -146,6 +161,16 @@ async function check() {
   await delay(150)
   assert.equal(devin.opened().length, 2, "the ended announcement does not open a later turn")
   console.log("PASS: Stopping Devin's background subagent opens no turn, and leaves no announcement behind")
+
+  const beforeDevinNative = devin.events.length
+  await devin.prompt("native-devin")
+  const devinSince = devin.events.slice(beforeDevinNative)
+  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
+    [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
+  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
+    [{ kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error" }])
+  assert.equal(devin.opened().length, 2, "a failed prompted turn opens no provider turn")
+  console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker")
   await devin.close()
 
   // The agent's first output is the prompt's receipt, and a process that dies

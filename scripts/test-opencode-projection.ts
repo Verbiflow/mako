@@ -1,17 +1,20 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
+import type { McpServer, OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { OpenCodeContent } from "../electron/providers/opencode/content.ts"
 import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "../electron/providers/opencode/interactions.ts"
 import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
-import { openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
+import { createOpenCodeDriver, openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "../electron/providers/opencode/notices.ts"
+import { flushHostLog, installHostLog } from "../electron/host-log.ts"
 import type { LiveDriverEvent } from "../electron/shared.ts"
 import type { ApprovalSubmission } from "../electron/contracts/approval-response.ts"
 import type { JsonValue } from "../electron/codex-app-json.ts"
+import { z } from "zod"
 
 /** Native event data; an `undefined` field is one the native event leaves out. */
 type EventData = Record<string, JsonValue | undefined>
@@ -55,6 +58,11 @@ const message = "msg_assistant"
   const [childCalled] = content.observe(event("session.tool.called", { sessionID: child, assistantMessageID: "msg_c", id: "t1", input: { filePath: "src/a.ts" }, executed: false }))
   assert.deepEqual(childCalled.kind === "tool-update" && childCalled.details, [{ type: "location", path: "/work/src/a.ts" }])
   assert.equal(childCalled.kind === "tool-update" && childCalled.title, "Explore the repo: src/a.ts")
+
+  const unknown: string[] = []
+  assert.deepEqual(content.observe(event("session.step.started", { sessionID: root }), (type) => unknown.push(type)), [])
+  assert.deepEqual(content.observe(event("session.future.thing", { sessionID: root }), (type) => unknown.push(type)), [])
+  assert.deepEqual(unknown, ["session.future.thing"], "only an event the projection does not know is reported")
 
   content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "w", name: "write" }))
   const [write] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "w", input: { filePath: "/abs/new.txt", content: "fresh" }, executed: false }))
@@ -267,4 +275,166 @@ try {
   assert.equal(new Set(ids).size, ids.length)
 }
 
-console.log("OpenCode projection: session-scoped rows, child labels, diffs, plans, answered question rows, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids")
+// Markers the driver reads off events that are not content.
+{
+  const mcp = new OpenCodeMcpHealth()
+  const server = (name: string, status: McpServer["status"]): McpServer => ({ name, status })
+  assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "spawn docs-mcp ENOENT" }), server("ok", { status: "connected" })]),
+    [{ label: "MCP server failed", detail: "docs · spawn docs-mcp ENOENT", tone: "warning" }])
+  assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "spawn docs-mcp ENOENT again" })]), [], "a server that keeps failing is one marker")
+  assert.deepEqual(mcp.observe([server("docs", { status: "pending" })]), [])
+  assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "still" })]), [], "a retry that fails again is the same failure")
+  assert.deepEqual(mcp.observe([server("docs", { status: "connected" }), server("drive", { status: "needs_auth" })]),
+    [{ label: "MCP server failed", detail: "drive · needs sign-in", tone: "warning" }])
+  assert.equal(mcp.observe([server("docs", { status: "failed", error: "crashed" })]).length, 1, "failing again after recovering is a new marker")
+  const [refused] = mcp.failed("big", `Invalid config\n${"x".repeat(300)}`)
+  assert.deepEqual(refused, { label: "MCP server failed", detail: "big · Invalid config", body: `Invalid config\n${"x".repeat(300)}`, tone: "warning" },
+    "a long error stays one line beside the label, whole in the body")
+  assert.equal(openCodeStopped("user"), undefined, "a turn the user stopped needs no marker")
+  assert.deepEqual(openCodeStopped("superseded"), { label: "Stopped by OpenCode", detail: "a newer run took its place" })
+  assert.ok(openCodeIgnores(event("tui.toast.show", { message: "hi", variant: "warning" })))
+  assert.ok(openCodeIgnores(event("rpc.internal", {})))
+  assert.ok(!openCodeIgnores(event("mcp.status.changed", { server: "docs" })))
+}
+
+// The live driver against a fake OpenCode: an executable that reports its
+// version and health, every other request answered here at the driver's
+// fetch boundary, and a native event stream the test writes.
+{
+  const home = await mkdtemp(join(tmpdir(), "mako-opencode-driver-"))
+  const log = join(home, "host.log")
+  installHostLog(log)
+  const executable = join(home, "opencode.mjs")
+  await writeFile(executable, `#!${process.execPath}
+import { createServer } from "node:http"
+if (process.argv.includes("--version")) { console.log("2.0.1"); process.exit(0) }
+const server = createServer((_request, response) => {
+  response.setHeader("content-type", "application/json")
+  response.end(JSON.stringify({ healthy: true, version: "2.0.1", pid: process.pid }))
+})
+server.listen(0, "127.0.0.1", () => console.log(JSON.stringify({ url: "http://127.0.0.1:" + server.address().port })))
+process.stdin.resume()
+process.stdin.on("end", () => process.exit(0))
+`, { mode: 0o700 })
+  const env: NodeJS.ProcessEnv = { ...process.env, OPENCODE_BIN_PATH: executable, HOME: home, XDG_DATA_HOME: join(home, "data"), XDG_CONFIG_HOME: join(home, "config") }
+  const encoder = new TextEncoder()
+  let push: (native: OpenCodeEvent) => void = () => {}
+  let mcpServers: McpServer[] = []
+  let compactID: string | undefined
+  const unexpected: string[] = []
+  const reply = (data: JsonValue | McpServer[]) => new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } })
+  const driver = createOpenCodeDriver({
+    env: async () => ({ ...env }),
+    approvalRoot: async () => join(home, "approvals"),
+    fetch: async (input, init) => {
+      const { pathname } = new URL(String(input))
+      switch (pathname) {
+        case "/api/health": return fetch(input, init)
+        case "/api/event":
+          return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+            push = native => controller.enqueue(encoder.encode(`data: ${JSON.stringify(native)}\n\n`))
+            push(event("server.connected", {}))
+          } }), { headers: { "content-type": "text/event-stream" } })
+        case "/api/plugin/await-activation": return new Response(null, { status: 204 })
+        case "/api/model": return reply([{ id: "m", providerID: "p", name: "M", family: "m", enabled: true, status: "active", variants: [],
+          limit: { context: 200_000, output: 8_000 }, capabilities: { input: ["text"] } }])
+        case "/api/model/default": return reply({ id: "m", providerID: "p" })
+        case "/api/agent": return reply([{ id: "build", name: "build", mode: "primary" }])
+        case "/api/command": case "/api/skill": case "/api/shell": return reply([])
+        case "/api/session": return reply({ id: root, title: "Fixture" })
+        case "/api/mcp": return reply(mcpServers)
+        case `/api/session/${root}/compact`:
+          compactID = z.object({ id: z.string() }).parse(JSON.parse(String(init?.body))).id
+          return reply({ id: compactID })
+        default:
+          unexpected.push(pathname)
+          return new Response(null, { status: 404 })
+      }
+    },
+  })
+  const emitted: LiveDriverEvent[] = []
+  const id = "conversation-driver"
+  const until = async <T>(label: string, probe: () => T | undefined | false): Promise<T> => {
+    const deadline = Date.now() + 5000
+    for (;;) {
+      const value = probe()
+      if (value) return value
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${label}; saw ${JSON.stringify(emitted.slice(-6))}`)
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+  }
+  const markers = () => emitted.flatMap(item => item.type === "live-update" && item.update.kind === "event" ? [item.update] : [])
+  const activities = () => emitted.flatMap(item => item.type === "live-activity" ? [item.activity] : [])
+  const session = () => emitted.flatMap(item => item.type === "live-session" ? [item.session] : []).at(-1)
+  try {
+    const started = await driver.start(home, { conversationId: id, emit: item => { emitted.push(item) } })
+    assert.equal(started.status, "ready", started.error)
+    const assistantMessageID = "msg_a"
+    push(event("session.execution.started", { sessionID: root }))
+    await until("the turn OpenCode starts", () => session()?.status === "running")
+
+    const retryAt = Date.now() + 30_000
+    push(event("session.retry.scheduled", { sessionID: root, assistantMessageID, attempt: 2, at: retryAt, error: { type: "provider.rate-limit", message: "Too many requests" } }))
+    assert.deepEqual(await until("the retry", () => activities().find(activity => activity?.kind === "retrying")),
+      { kind: "retrying", attempt: 2, reason: "Too many requests", retryAt }, "the countdown runs to OpenCode's next attempt")
+
+    push(event("session.step.ended", { sessionID: root, assistantMessageID, finish: "stop", cost: 0, tokens: { input: 150_000, output: 500, reasoning: 0, cache: { read: 0, write: 0 } } }))
+    push(event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" }))
+    push(event("session.compaction.delta", { sessionID: root, text: "Sum" }))
+    push(event("session.compaction.ended", { sessionID: root, reason: "auto", text: "Summary of the work so far.", recent: "" }))
+    assert.deepEqual(await until("the compaction", () => markers().find(marker => marker.label === "Context compacted")),
+      { kind: "event", label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
+
+    push(event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" }))
+    push(event("session.compaction.failed", { sessionID: root, reason: "auto", error: { type: "compaction.failed", message: "The model could not summarize" } }))
+    assert.deepEqual(await until("the failed compaction", () => markers().find(marker => marker.label === "Compaction failed")),
+      { kind: "event", label: "Compaction failed", detail: "The model could not summarize", tone: "warning" }, "an automatic compaction that fails leaves its trace")
+    assert.equal(activities().at(-1), null, "compacting ends with the failure")
+
+    push(event("session.execution.interrupted", { sessionID: root, reason: "inactivity" }))
+    assert.deepEqual(await until("OpenCode's stop", () => markers().find(marker => marker.label === "Stopped by OpenCode")),
+      { kind: "event", label: "Stopped by OpenCode", detail: "the workspace was idle too long" })
+    await until("the stopped turn to settle", () => session()?.status === "ready")
+
+    mcpServers = [{ name: "docs", status: { status: "failed", error: "spawn docs-mcp ENOENT" } }]
+    push(event("mcp.status.changed", { server: "docs" }))
+    push(event("mcp.status.changed", { server: "docs" }))
+    assert.deepEqual(await until("the MCP failure", () => markers().find(marker => marker.label === "MCP server failed")),
+      { kind: "event", label: "MCP server failed", detail: "docs · spawn docs-mcp ENOENT", tone: "warning" })
+
+    if (driver.compaction?.kind !== "supported") throw new Error("OpenCode compaction is supported")
+    const actionId = randomUUID()
+    await driver.compaction.start(id, actionId)
+    push(event("session.compaction.failed", { sessionID: root, reason: "manual", inputID: compactID, error: { type: "compaction.failed", message: "Nothing to compact" } }))
+    const result = await until("the compaction action", () => emitted.find(item => item.type === "live-action-result" && item.actionId === actionId))
+    assert.deepEqual(result.type === "live-action-result" && result.result, { kind: "failed", reason: "Nothing to compact" })
+
+    const quiet: Array<[string, EventData]> = [
+      ["tui.toast.show", { message: "MCP Authentication Required", variant: "warning" }],
+      ["config.updated", {}],
+      ["installation.update-available", { version: "2.0.2" }],
+      ["session.synthetic", { sessionID: root, text: "notice" }],
+      ["session.skill.activated", { sessionID: root, id: "s", name: "review", text: "" }],
+      ["session.revert.committed", { sessionID: root, to: "msg_x" }],
+      ["future.sessionless", {}],
+      ["session.future.scoped", { sessionID: root }],
+    ]
+    for (const [type, data] of quiet) push(event(type, data))
+    push(event("session.renamed", { sessionID: root, title: "Settled" }))
+    await until("the stream to drain", () => session()?.title === "Settled")
+
+    assert.equal(markers().filter(marker => marker.label === "MCP server failed").length, 1, "a server's repeated status is one marker")
+    assert.equal(markers().filter(marker => marker.label === "Compaction failed").length, 1, "a compaction Mako asked for fails its action, not a second marker")
+    assert.deepEqual(unexpected, [])
+    await flushHostLog()
+    const unhandled = (await readFile(log, "utf8")).split("\n").filter(line => line.includes("native event not handled") && line.includes("harness=opencode"))
+      .map(line => /kind=(\S+)/.exec(line)?.[1])
+    assert.deepEqual(unhandled, ["future.sessionless", "session.future.scoped"],
+      "unknown events are logged once each; handled, ignored and sessionless-but-known events are not")
+  } finally {
+    await driver.close(id)
+    await rm(home, { recursive: true, force: true })
+  }
+}
+
+console.log("OpenCode projection: session-scoped rows, child labels, diffs, plans, answered question rows, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids; retry countdown, compaction summary and failure, OpenCode's own stops, MCP failures once, explicit ignores and unknown-event logging")

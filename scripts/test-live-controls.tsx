@@ -1,3 +1,4 @@
+import type { TranscriptEvent } from "@mako/sessions/events"
 import { ProposedPlanCard } from "../src/components/transcript/proposed-plan"
 import { CompactionControl } from "../src/components/composer/compaction-control"
 import { Exchange } from "../src/components/transcript/exchange"
@@ -560,6 +561,22 @@ assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"text",text:"Half 
 assert.equal(agentActivity({...activityBase,blocks:[],quietForMs:120*60_000}).label,"No output for 2h")
 assert.equal(agentActivity({...activityBase,waiting:true,blocks:[pendingTool],quietForMs:10*60_000}).label,"Waiting for your approval",
   "a turn waiting on the user is not quiet")
+assert.deepEqual(agentActivity({...activityBase,blocks:[pendingTool],native:{kind:"compacting",since:5},quietForMs:3*60_000}),
+  {kind:"working",label:"Compacting context",detail:"Making room to continue",since:5},
+  "a provider compacting says so, counting from when it began, instead of reading as silent")
+assert.deepEqual(agentActivity({...activityBase,blocks:[],native:{kind:"retrying",since:0,attempt:2,maxAttempts:10,reason:"Overloaded (529)",retryAt:9}}),
+  {kind:"working",label:"Retrying",detail:"attempt 2 of 10 · Overloaded (529)",since:0,retryAt:9})
+assert.equal(agentActivity({...activityBase,blocks:[],native:{kind:"retrying",since:0}}).detail,undefined)
+assert.deepEqual(agentActivity({...activityBase,blocks:[],native:{kind:"waiting",since:3,label:"Reviewing the approval"}}),{kind:"working",label:"Reviewing the approval",since:3})
+const markerExchange = (note: TranscriptEvent) => renderToStaticMarkup(<Exchange exchange={{id:"marker",prompt:{id:"marker",role:"user",blocks:[{type:"text",text:"Go"}]},response:[],
+  system:[{after:0,message:{id:"note",role:"system",blocks:[{type:"text",text:note.label}],note}}]}} />)
+const compactedMarkup = markerExchange({label:"Context compacted",detail:"Automatic · 182k → 24k tokens",body:"## Kept\nThe plan"})
+assert.match(compactedMarkup, /Context compacted<\/span><span> · Automatic · 182k → 24k tokens/, "the marker reads its label and detail on the hairline")
+assert.match(compactedMarkup, /<button[^>]*aria-expanded="false"/, "a marker with a body opens onto it")
+assert.doesNotMatch(compactedMarkup, /The plan/, "the body stays unmounted until it is opened")
+const failedMarkup = markerExchange({label:"Turn failed",detail:"Server overloaded",tone:"error"})
+assert.match(failedMarkup, /class="text-negative">Turn failed/, "a failure reads in its tone")
+assert.doesNotMatch(failedMarkup, /aria-expanded/, "a marker without a body is not a control")
 const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[],current:false,pinned:false,latest:"",order:"",priority:1,running:0,active:1,needsInput:0,failed:0,unread:0}
 const folderMarkup = renderToStaticMarkup(<FolderActivity folder={activeFolder} />)
 assert.match(folderMarkup, /1 running/)

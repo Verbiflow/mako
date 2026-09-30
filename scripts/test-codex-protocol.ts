@@ -31,6 +31,7 @@ import type {
   LiveUpdate,
   HostEvent,
 } from "../electron/shared.ts"
+import type { TranscriptEvent } from "@mako/sessions/events"
 
 assert.deepEqual(parseJsonRpcEnvelope("not-json"), { kind: "invalid" })
 assert.deepEqual(parseJsonRpcEnvelope("[]"), { kind: "ignored" })
@@ -180,9 +181,8 @@ assert.equal(parsedThread.valid, true)
 if (parsedThread.valid) {
   assert.equal(parsedThread.value.thread.path, "/custom/codex-home/sessions/native.jsonl", "retain the provider-owned locator instead of waiting for catalog discovery")
   assert.deepEqual(parsedThread.value.thread.turns?.[0]?.items.at(-1), {
-    type: "unsupported",
+    type: "contextCompaction",
     id: "compact-1",
-    sourceType: "contextCompaction",
   })
 }
 assert.equal(
@@ -394,6 +394,165 @@ for (const confirmed of [false, true]) {
   assert.equal(context.compaction, undefined)
 }
 console.log("PASS: Codex compaction requires the matching turn and native compaction boundary")
+
+const activities: unknown[] = []
+const unhandled: string[] = []
+let compactions = 0
+context.protocol.activity = (activity) => activities.push(activity)
+context.protocol.compacted = () => compactions++
+context.protocol.unhandled = (kind) => unhandled.push(kind)
+notify("turn/started", { threadId: "thread-1", turn: { id: "quiet-turn" } })
+notify("item/started", { threadId: "thread-1", turnId: "quiet-turn", item: { type: "contextCompaction", id: "auto" } })
+notify("item/completed", { threadId: "thread-1", turnId: "quiet-turn", item: { type: "contextCompaction", id: "auto" } })
+notify("error", { threadId: "thread-1", turnId: "quiet-turn", willRetry: true, error: { message: "Reconnecting... 2/5" } })
+assert.equal(state.error, undefined, "a retried error is not the turn's error")
+notify("error", { threadId: "thread-1", turnId: "quiet-turn", willRetry: false, error: { message: "stream disconnected" } })
+assert.equal(state.error, "stream disconnected")
+notify("future/notification", { threadId: "thread-1" })
+notify("item/started", { threadId: "thread-1", turnId: "quiet-turn", item: { type: "futureItem", id: "future" } })
+assert.deepEqual(activities, [{ kind: "compacting" }, { kind: "retrying", attempt: 2, maxAttempts: 5 }])
+assert.equal(compactions, 1)
+assert.deepEqual(unhandled, ["future/notification", "item/futureItem"])
+notify("turn/completed", { threadId: "thread-1", turn: { id: "quiet-turn", status: "completed", error: null, items: [] } })
+state.error = undefined
+console.log("PASS: Codex reports compaction and retries as activity, a retried error as no failure, and unknown events")
+
+{
+  const markers: TranscriptEvent[] = []
+  const patches: Array<Partial<LiveSessionState>> = []
+  const updateState = context.protocol.updateState
+  context.protocol.event = (marker) => markers.push(marker)
+  context.protocol.updateState = (patch) => { patches.push(patch); updateState(patch) }
+  activities.length = 0
+  unhandled.length = 0
+  updates.length = 0
+  notify("turn/started", { threadId: "thread-1", turn: { id: "notice-turn" } })
+  patches.length = 0
+
+  const usage = (totalTokens: number, modelContextWindow: number | null) =>
+    notify("thread/tokenUsage/updated", { threadId: "thread-1", turnId: "notice-turn", tokenUsage: {
+      total: { totalTokens: 900_000 }, last: { totalTokens }, modelContextWindow,
+    } })
+  usage(120_000, null)
+  assert.equal(state.usage, undefined, "no meter without a known window")
+  usage(120_000, 400_000)
+  usage(120_000, 400_000)
+  assert.deepEqual(state.usage, { used: 120_000, size: 400_000 }, "the meter reads the latest request, not the thread total")
+  assert.equal(patches.filter((patch) => patch.usage).length, 1, "an unchanged reading is not reported again")
+
+  notify("warning", { threadId: "thread-1", message: "Heads up: long threads can be less accurate." })
+  notify("warning", { threadId: "thread-1", message: "Heads up: long threads can be less accurate." })
+  notify("guardianWarning", { threadId: "thread-1", message: "Automatic approval review approved (risk: low, authorization: high): fine" })
+  notify("guardianWarning", { threadId: "thread-1", message: "Automatic approval review denied (risk: high, authorization: low): writes outside the project" })
+  notify("configWarning", { summary: "Unknown key `foo`", details: "Remove it from config.toml", path: "/tmp/config.toml" })
+  notify("configWarning", { summary: "Unknown key `foo`", details: "Remove it from config.toml", path: "/tmp/config.toml" })
+  notify("deprecationNotice", { summary: "`--full-auto` is deprecated", details: null })
+  notify("model/rerouted", { threadId: "thread-1", turnId: "notice-turn", fromModel: "gpt-5.5", toModel: "gpt-5.4", reason: "highRiskCyberActivity" })
+  notify("mcpServer/startupStatus/updated", { threadId: null, name: "linear", status: "starting", error: null, failureReason: null })
+  notify("mcpServer/startupStatus/updated", { threadId: null, name: "linear", status: "failed", error: null, failureReason: "reauthenticationRequired" })
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "enteredReviewMode", id: "review-in", review: "current changes" } })
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "exitedReviewMode", id: "review-out", review: "No issues found.\n\nThe change is correct." } })
+  assert.deepEqual(markers, [
+    { label: "Warning", detail: "Heads up: long threads can be less accurate.", tone: "warning" },
+    { label: "Warning", detail: "Automatic approval review denied (risk: high, authorization: low): writes outside the project", tone: "warning" },
+    { label: "Warning", detail: "Unknown key `foo`", body: "Remove it from config.toml", tone: "warning" },
+    { label: "Warning", detail: "`--full-auto` is deprecated", tone: "warning" },
+    { label: "Model changed", detail: "gpt-5.5 → gpt-5.4 · cybersecurity safety check" },
+    { label: "MCP server failed", detail: "linear · sign-in required", tone: "warning" },
+    { label: "Review mode started", detail: "current changes" },
+    { label: "Review mode ended", body: "No issues found.\n\nThe change is correct." },
+  ], "each notice is marked once, in Mako's words")
+  markers.length = 0
+
+  notify("model/safetyBuffering/updated", { threadId: "thread-1", turnId: "other-turn", model: "gpt-5.5", useCases: [], reasons: [], showBufferingUi: true, fasterModel: null })
+  notify("model/safetyBuffering/updated", { threadId: "thread-1", turnId: "notice-turn", model: "gpt-5.5", useCases: [], reasons: [], showBufferingUi: true, fasterModel: null })
+  notify("item/agentMessage/delta", { threadId: "thread-1", turnId: "notice-turn", itemId: "answer", delta: "Checked." })
+  notify("item/agentMessage/delta", { threadId: "thread-1", turnId: "notice-turn", itemId: "answer", delta: " Still checked." })
+  notify("item/autoApprovalReview/started", { threadId: "thread-1", turnId: "notice-turn", reviewId: "r1" })
+  notify("item/autoApprovalReview/completed", { threadId: "thread-1", turnId: "notice-turn", reviewId: "r1" })
+  notify("modelProvider/authRecoveryStarted", { threadId: "thread-1", turnId: "notice-turn", provider: "openai", message: "Refreshing" })
+  notify("modelProvider/authRecoveryCompleted", { threadId: "thread-1", turnId: "notice-turn", provider: "openai", message: "Done" })
+  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: { type: "contextCompaction", id: "auto-2" } })
+  notify("item/autoApprovalReview/completed", { threadId: "thread-1", turnId: "notice-turn", reviewId: "stale" })
+  notify("modelProvider/authRecoveryCompleted", { threadId: "thread-1", turnId: "notice-turn", provider: "openai", message: "Done" })
+  assert.deepEqual(activities, [
+    { kind: "waiting", label: "Checking the response" }, null,
+    { kind: "waiting", label: "Reviewing the approval" }, null,
+    { kind: "waiting", label: "Refreshing sign-in" }, null,
+    { kind: "compacting" },
+  ], "a wait ends with its own end or the output it held, and never ends compaction")
+  activities.length = 0
+  const compacted: unknown[] = []
+  context.protocol.compacted = (compaction) => compacted.push(compaction)
+  usage(9_000, 400_000)
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "contextCompaction", id: "auto-2" } })
+  assert.deepEqual(compacted, [{ tokensBefore: 120_000 }], "the marker counts from where compaction started, not Codex's post-compaction estimate")
+
+  notify("error", { threadId: "thread-1", turnId: "notice-turn", willRetry: true, error: {
+    message: "Selected model is at capacity.", codexErrorInfo: "serverOverloaded", additionalDetails: null,
+  } })
+  notify("error", { threadId: "thread-1", turnId: "notice-turn", willRetry: true, error: {
+    message: "Reconnecting... 3/5", codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } }, additionalDetails: "unexpected status 503",
+  } })
+  notify("error", { threadId: "thread-1", turnId: "notice-turn", willRetry: true, error: {
+    message: "Reconnecting... waiting for network", codexErrorInfo: null, additionalDetails: null,
+  } })
+  assert.deepEqual(activities, [
+    { kind: "retrying", reason: "Server overloaded" },
+    { kind: "retrying", attempt: 3, maxAttempts: 5 },
+    { kind: "retrying", reason: "Waiting for network" },
+  ])
+
+  for (const method of ["thread/status/changed", "account/rateLimits/updated", "turn/diff/updated", "thread/compacted", "hook/started", "rawResponseItem/completed"])
+    notify(method, { threadId: "thread-1" })
+  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: { type: "commandExecution", id: "broken" } })
+  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: { type: "hookPrompt", id: "hook", fragments: [] } })
+  assert.deepEqual(unhandled, ["item/commandExecution/invalid"], "bookkeeping is known and quiet; a broken known item names itself")
+
+  notify("thread/name/updated", { threadId: "thread-1", threadName: "Fix the flaky test" })
+  assert.equal(state.title, "Fix the flaky test")
+
+  updates.length = 0
+  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: { type: "webSearch", id: "search", query: "", action: null, results: null } })
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
+    type: "webSearch", id: "search", query: "electron utility process", action: { type: "search", query: "electron utility process", queries: null }, results: null,
+  } })
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "sleep", id: "nap", durationMs: 90_000 } })
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
+    type: "mcpToolCall", id: "mcp", server: "linear", tool: "get_issue", status: "completed", arguments: { id: "MAK-1" }, result: null, error: null,
+  } })
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
+    type: "fileChange", id: "edit", status: "completed", changes: [
+      { path: "/tmp/project/new.ts", kind: { type: "add" }, diff: "export {}\n" },
+      { path: "/tmp/project/old.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-a\n+b\n" },
+    ],
+  } })
+  const tools = reduceLiveUpdates([], updates).filter((block) => block.type === "tool")
+  assert.deepEqual(tools.map((tool) => [tool.title, tool.toolKind, tool.status]), [
+    ["electron utility process", "web_search", "completed"],
+    ["Sleep 1m 30s", "sleep", "completed"],
+    ["linear: get_issue", "get_issue", "completed"],
+    ["Edit /tmp/project/new.ts, /tmp/project/old.ts", "apply_patch", "completed"],
+  ])
+  assert.equal(tools[0]?.input, JSON.stringify({ type: "search", query: "electron utility process", queries: null }, null, 2))
+  assert.equal(tools[2]?.input, JSON.stringify({ id: "MAK-1" }, null, 2), "an MCP row shows what it was called with")
+  assert.equal(tools[3]?.output, "Add /tmp/project/new.ts\n+export {}\n\nUpdate /tmp/project/old.ts\n@@ -1 +1 @@\n-a\n+b", "edits read as a patch, not JSON")
+
+  notify("item/reasoning/summaryTextDelta", { threadId: "thread-1", turnId: "notice-turn", itemId: "why", delta: "First part." })
+  notify("item/reasoning/summaryPartAdded", { threadId: "thread-1", turnId: "notice-turn", itemId: "why", summaryIndex: 1 })
+  notify("item/reasoning/summaryTextDelta", { threadId: "thread-1", turnId: "notice-turn", itemId: "why", delta: "Second part." })
+  assert.equal(reduceLiveUpdates([], updates).findLast((block) => block.type === "thinking")?.text, "First part.\n\nSecond part.")
+
+  notify("turn/completed", { threadId: "thread-1", turn: { id: "notice-turn", status: "failed", items: [], error: {
+    message: "You've hit your usage limit. Try again at 6:26 PM.", codexErrorInfo: "usageLimitExceeded", additionalDetails: null,
+  } } })
+  assert.deepEqual(markers, [{ label: "Turn failed", detail: "Usage limit reached", body: "You've hit your usage limit. Try again at 6:26 PM.", tone: "error" }])
+  assert.equal(state.status, "failed")
+  context.protocol.updateState = updateState
+  context.protocol.event = undefined
+  Object.assign(state, { error: undefined, status: "ready" })
+  console.log("PASS: Codex usage, notices, waits, error classes, ignored bookkeeping and new item rows reach Mako's vocabulary")
+}
 
 assert.throws(() => consumeStdout({
   ...context,

@@ -967,6 +967,61 @@ async function quietTurnsCarryLastActivity() {
   }
 }
 
+async function nativeActivityLastsItsTurn() {
+  const f = fixture()
+  const clock = mock.method(Date, "now", () => 1_000)
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.snapshot(f.id)
+    const activity = () => f.owner.snapshot(f.id)?.nativeActivity
+    const published = () => f.events.flatMap((event) =>
+      event.type === "live-batch" && event.batch.nativeActivity !== undefined ? [event.batch.nativeActivity] : [])
+
+    f.owner.observe({ type: "live-activity", id: f.id, activity: { kind: "compacting" } })
+    assert.equal(activity(), undefined, "a settled conversation has nothing running to describe")
+
+    f.owner.submit(f.id, randomUUID(), "long task")
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    f.events.length = 0
+    clock.mock.mockImplementation(() => 2_000)
+    f.owner.observe({ type: "live-activity", id: f.id, activity: { kind: "compacting" } })
+    assert.deepEqual(activity(), { kind: "compacting", since: 2_000 })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 2_000, "native activity is activity")
+    clock.mock.mockImplementation(() => 3_000)
+    f.owner.observe({ type: "live-activity", id: f.id, activity: { kind: "compacting" } })
+    assert.equal(published().length, 1, "a repeated report publishes nothing")
+
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "event", label: "Context compacted" } })
+    f.owner.observe({ type: "live-activity", id: f.id, activity: null })
+    assert.equal(activity(), undefined)
+    assert.deepEqual(f.owner.snapshot(f.id)?.blocks.at(-1), { type: "event", label: "Context compacted", detail: undefined, body: undefined, tone: undefined })
+
+    clock.mock.mockImplementation(() => 4_000)
+    f.owner.observe({ type: "live-activity", id: f.id, activity: { kind: "retrying", attempt: 1, reason: "Overloaded" } })
+    f.owner.observe({ type: "live-activity", id: f.id, activity: { kind: "retrying", attempt: 2, reason: "Overloaded" } })
+    assert.deepEqual(activity(), { kind: "retrying", attempt: 2, reason: "Overloaded", since: 4_000 }, "the retry's start stays its start")
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", text: "answer" } })
+    assert.equal(activity(), undefined, "the model answering ends the retry")
+
+    f.owner.observe({ type: "live-activity", id: f.id, activity: { kind: "compacting" } })
+    const journal = new DatabaseSync(join(f.root, `${f.id}.sqlite`), { readOnly: true })
+    try {
+      const metadata = z.object({ value: z.string() }).parse(journal.prepare("SELECT value FROM metadata").get()).value
+      assert.doesNotMatch(metadata, /nativeActivity/, "the journal does not keep it")
+    } finally {
+      journal.close()
+    }
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
+    assert.equal(activity(), undefined, "a turn's end ends whatever it was doing")
+    assert.equal(published().at(-1), null, "and the renderer hears it end")
+  } finally {
+    clock.mock.restore()
+    f.cleanup()
+  }
+}
+
 async function coalescedToolBursts() {
   const f = fixture()
   try {
@@ -1526,6 +1581,7 @@ await autoContinuedTurn()
 await providerExitContinued()
 await coalescedToolBursts()
 await quietTurnsCarryLastActivity()
+await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()
 
 await queuedSettings()

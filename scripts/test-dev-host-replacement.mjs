@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { replaceDevHost } from "../electron/dev-host-replacement.mjs"
 
-const old = { instanceId: "old", devBuild: "old-checkout" }
+const old = { instanceId: "old", devBuild: "old-checkout", pid: 4242 }
 const fresh = { instanceId: "new", devBuild: "current-checkout" }
 const waiting = { operation: { kind: "waiting", action: "quit" }, work: [{ id: "queued-id", provider: "cursor", title: "Pending follow-up", status: "queued" }] }
 function fixture(states) {
@@ -19,6 +19,7 @@ function fixture(states) {
       start: async () => { starts++; return { info: fresh } },
       compatible: (info) => info.devBuild === fresh.devBuild,
       sleep: async (ms) => { time += ms },
+      alive: () => false,
       now: () => time,
       timeoutMs: 500,
     },
@@ -29,6 +30,20 @@ function fixture(states) {
   assert.deepEqual(await replaceDevHost(test.input), { info: fresh })
   assert.deepEqual(test.commands, [{ kind: "wait", action: "quit" }])
   assert.equal(test.starts, 1, "Only start from the requested checkout after the old host leaves")
+}
+{
+  const test = fixture([{ state: "ready", info: old }, { state: "absent" }])
+  let checks = 0
+  test.input.timeoutMs = 5_000
+  test.input.alive = (pid) => { assert.equal(pid, old.pid); return ++checks < 4 }
+  test.input.start = async () => { assert.equal(checks, 4, "Start only once the old process has exited"); return { info: fresh } }
+  assert.deepEqual(await replaceDevHost(test.input), { info: fresh })
+}
+{
+  const test = fixture([{ state: "ready", info: old }, { state: "absent" }])
+  test.input.alive = () => true
+  await assert.rejects(replaceDevHost(test.input), /pid 4242\) closed its connection but has not exited/)
+  assert.equal(test.starts, 0, "A host that still holds the profile lock must not get a replacement")
 }
 {
   const test = fixture([{ state: "ready", info: old }])
@@ -70,4 +85,4 @@ function fixture(states) {
   test.input.start = async () => ({ info: old })
   await assert.rejects(replaceDevHost(test.input), /Another launcher/)
 }
-console.log("Dev host replacement: checkout handoff, busy-host cancellation, and concurrent launcher ownership verified")
+console.log("Dev host replacement: checkout handoff, lock release, busy-host cancellation, and concurrent launcher ownership verified")

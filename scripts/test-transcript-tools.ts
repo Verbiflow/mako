@@ -389,6 +389,18 @@ assert.deepEqual(pair.map((exchange) => [exchange.opener?.id, exchange.system.ma
   [["native-event-first", ["native-event-second"]]], "causes reported together open one turn")
 console.log("A turn the provider started itself is its own exchange headed by its cause, live and native")
 
+const compactedLive = toExchanges(acpBlocksToMessages([
+  { type: "user", requestId: "r2", text: "Keep going" },
+  { type: "text", text: "Before." },
+  { type: "event", label: "Context compacted", detail: "Automatic" },
+  { type: "text", text: "After." },
+], false).messages)
+assert.equal(compactedLive.length, 1, "a compaction does not open a turn")
+assert.deepEqual(compactedLive[0]!.system.map((entry) => [textOf(entry.message.blocks), entry.after]),
+  [["Context compacted — Automatic", 1]], "live, the marker sits where it happened, as it does in saved history")
+assert.deepEqual(compactedLive[0]!.response.map((message) => textOf(message.blocks)), ["Before.", "After."])
+console.log("A live compaction is a marker in place inside its answer")
+
 const controlEnvelope = '<mako-local-control>\nBrowser and computer use: fixture setup\n</mako-local-control>\n\n'
 assert.equal(codexPrompt(controlEnvelope + '<send_user_message_question_reply>\n[{"question":"Which profile?","answer":"Existing"}]\n</send_user_message_question_reply>'), 'Which profile?\n\nExisting')
 const { userTextFrom } = await import('../packages/sessions/src/format.ts')

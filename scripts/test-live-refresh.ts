@@ -76,6 +76,12 @@ try {
     assert.equal(held()?.activityAt, 4_000, `${harness}: new output moves it`)
     applyLiveBatch({ id: quiet.session.id, epoch: quiet.epoch, revision: quiet.revision + 2, updates: [] })
     assert.equal(held()?.activityAt, 4_000, `${harness}: a batch without output keeps it`)
+    applyLiveBatch({ id: quiet.session.id, epoch: quiet.epoch, revision: quiet.revision + 3, updates: [], nativeActivity: { kind: "compacting", since: 5_000 } })
+    assert.deepEqual(held()?.nativeActivity, { kind: "compacting", since: 5_000 }, `${harness}: the batch says what the provider is doing`)
+    applyLiveBatch({ id: quiet.session.id, epoch: quiet.epoch, revision: quiet.revision + 4, updates: [{ kind: "text", text: "more" }] })
+    assert.deepEqual(held()?.nativeActivity, { kind: "compacting", since: 5_000 }, `${harness}: a batch that does not mention it keeps it`)
+    applyLiveBatch({ id: quiet.session.id, epoch: quiet.epoch, revision: quiet.revision + 5, updates: [], nativeActivity: null })
+    assert.equal(held()?.nativeActivity, undefined, `${harness}: and it ends when the host says so`)
   }
   assert.equal(sends.mock.callCount(), 0, "Hydration never resends prompts")
   console.log("PASS: all-six refresh outage, bounded retries, retained content, reconnect, genuine errors, dismissal and legacy IPC")

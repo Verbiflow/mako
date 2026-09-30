@@ -6,7 +6,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type {
+  HookCallback,
   SDKMessage,
+  SDKResultSuccess,
   SDKUserMessage,
   SDKAssistantMessage,
   PermissionUpdate,
@@ -289,7 +291,9 @@ const projection = new ClaudeProjection()
 for (const confirmed of [true, false]) {
   const messages = new Messages()
   const compactEvents: LiveDriverEvent[] = []
+  let postCompact: HookCallback | undefined
   const compactDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+    postCompact = options.options.hooks?.PostCompact?.at(-1)?.hooks[0]
     return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
   await compactDriver.start("/disposable", { conversationId: "compact-fixture", emit: (event) => compactEvents.push(event) })
@@ -299,7 +303,37 @@ for (const confirmed of [true, false]) {
   assert.ok(command && !command.done)
   assert.equal(command.value.message.content, "/compact")
   assert.equal(compactEvents.some((event) => event.type === "live-action-result"), false)
-  if (confirmed) messages.send({ type: "system", subtype: "compact_boundary", uuid: randomUUID(), session_id: "compact-fixture", compact_metadata: { trigger: "manual", pre_tokens: 1000 } })
+  if (confirmed) {
+    const retriedAt = Date.now()
+    messages.send({ type: "system", subtype: "status", status: "compacting", uuid: randomUUID(), session_id: "compact-fixture" })
+    messages.send({ type: "system", subtype: "api_retry", attempt: 2, max_retries: 10, retry_delay_ms: 1000, error_status: 529,
+      error: "overloaded", uuid: randomUUID(), session_id: "compact-fixture" })
+    await delay(0)
+    await postCompact?.({ hook_event_name: "PostCompact", trigger: "manual", compact_summary: "Kept: the parser plan.",
+      session_id: "compact-fixture", transcript_path: "/disposable/compact-fixture.jsonl", cwd: "/disposable" },
+    undefined, { signal: new AbortController().signal })
+    messages.send({ type: "system", subtype: "compact_boundary", uuid: randomUUID(), session_id: "compact-fixture", compact_metadata: { trigger: "manual", pre_tokens: 1000, post_tokens: 200 } })
+    for (let index = 0; index < 2; index++) {
+      // A Claude Code newer than the SDK types: the message arrives as parsed JSON.
+      const future: SDKMessage = JSON.parse(JSON.stringify({ type: "system", subtype: "future_notice", uuid: randomUUID(), session_id: "compact-fixture" }))
+      messages.send(future)
+    }
+    await delay(0)
+    const activities = compactEvents.flatMap((event) => event.type === "live-activity" ? [event.activity] : [])
+    const retrying = activities[1]
+    assert.ok(retrying?.kind === "retrying")
+    const { retryAt, ...retry } = retrying
+    assert.deepEqual([activities[0], retry, ...activities.slice(2)],
+      [{ kind: "compacting" }, { kind: "retrying", attempt: 2, maxAttempts: 10, reason: "Overloaded (529)" }, null],
+      "compaction and its retry show while they run and end at the boundary")
+    assert.ok(retryAt !== undefined && retryAt >= retriedAt + 1000 && retryAt <= Date.now() + 1000,
+      "the retry counts down to when Claude tries again")
+    assert.deepEqual(
+      compactEvents.flatMap((event) => event.type === "live-update" ? [event.update] : []),
+      [{ kind: "event", label: "Context compacted", detail: "Manual · 1k → 200 tokens", body: "Kept: the parser plan." }],
+      "the boundary is a transcript event with its trigger, tokens and the hook's summary, not assistant text"
+    )
+  }
   const result = {
     type: "result", subtype: "success", uuid: randomUUID(), session_id: "compact-fixture",
     duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "", stop_reason: "end_turn", total_cost_usd: 0,
@@ -334,6 +368,8 @@ for (const confirmed of [true, false]) {
     await flushHostLog()
     const authLog = await readFile(join(authLogRoot, "host.log"), "utf8")
     assert.match(authLog, /claude-auth Native authentication failure .*category=native-refresh-unavailable/)
+    assert.equal(authLog.match(/native event not handled .*kind=system\/future_notice/g)?.length, 1,
+      "a message kind this SDK does not declare is logged once")
     assert.equal(receipts.at(-1)?.kind, "accepted", "API failure does not undo SDK acknowledgement")
     const nextAttempt = randomUUID()
     await compactDriver.prompt("compact-fixture", "Next prompt", [], undefined, {
@@ -506,6 +542,138 @@ const assistant: SDKAssistantMessage = {
   assert.equal(session()?.error, undefined, "the interrupt's own aborted result is not reported as an error")
 }
 console.log("PASS: A turn Claude starts after a background task opens with its cause, runs, and settles on its result")
+{
+  const messages = new Messages()
+  const noticeEvents: LiveDriverEvent[] = []
+  const noticeDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  } })
+  await noticeDriver.start("/disposable", { conversationId: "notice-fixture", emit: (event) => noticeEvents.push(event) })
+  const session = () => noticeEvents.findLast((event) => event.type === "live-session")?.session
+  const updates = () => noticeEvents.flatMap((event) =>
+    event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
+  const markers = () => updates().flatMap((update) => update.kind === "event" ? [update] : [])
+  const since = (count: number) => markers().slice(count).map(({ label, detail, body, tone }) => ({ label, detail, body, tone }))
+  const ids = { uuid: randomUUID(), session_id: "notice-fixture" }
+  const send = (message: SDKMessage) => messages.send({ ...message, uuid: randomUUID() })
+  const result = (fields: Partial<SDKResultSuccess> = {}) => send({
+    type: "result", subtype: "success", ...ids, duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "",
+    stop_reason: "end_turn", total_cost_usd: 0, modelUsage: {}, permission_denials: [], queued_turn_count: 0,
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+      cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+      fallback_credit: { status: { type: "redeemed" } }, inference_geo: "", iterations: [], output_tokens_details: { thinking_tokens: 0 },
+      server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" },
+    ...fields,
+  })
+  const prompt = () => noticeDriver.prompt("notice-fixture", "Go", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+
+  let count = markers().length
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600
+  for (const status of ["allowed", "allowed_warning", "allowed_warning", "rejected", "rejected"] as const)
+    send({ type: "rate_limit_event", ...ids, rate_limit_info: { status, rateLimitType: "five_hour", resetsAt } })
+  await delay(0)
+  const limits = since(count)
+  assert.deepEqual(limits.map(({ label, tone }) => [label, tone]), [["Warning", "warning"], ["Rate limited", "warning"]],
+    "a limit is said once per status and reset, and an allowed request says nothing")
+  assert.match(limits[0]?.detail ?? "", /^Approaching your 5-hour limit · resets \S/)
+  assert.match(limits[1]?.detail ?? "", /^Reached your 5-hour limit · resets \S/)
+
+  count = markers().length
+  send({ type: "system", subtype: "model_refusal_fallback", ...ids, trigger: "refusal", direction: "retry", scope: "session",
+    original_model: "claude-fable-5-1", fallback_model: "claude-opus-4-8", request_id: "req-1",
+    content: "Fable 5.1's safeguards flagged this message. Switched to Opus 4.8.", api_refusal_explanation: null })
+  send({ type: "system", subtype: "informational", ...ids, level: "info", content: "Transcript-mode detail" })
+  send({ type: "system", subtype: "informational", ...ids, level: "notice", content: "A UserPromptSubmit hook said hello" })
+  send({ type: "system", subtype: "informational", ...ids, level: "warning", content: "Plugin failed to load\nSee the plugin log" })
+  for (let index = 0; index < 2; index++)
+    send({ type: "system", subtype: "notification", ...ids, key: "update", text: "Update available", priority: "low" })
+  send({ type: "system", subtype: "local_command_output", ...ids, content: "Kept model as Opus 4.8" })
+  send({ type: "system", subtype: "hook_response", ...ids, hook_id: "h", hook_name: "SessionStart:startup", hook_event: "SessionStart",
+    output: "", stdout: "", stderr: "setup.sh: not found", exit_code: 127, outcome: "error" })
+  send({ type: "system", subtype: "hook_response", ...ids, hook_id: "h2", hook_name: "SessionStart:startup", hook_event: "SessionStart",
+    output: "", stdout: "", stderr: "", outcome: "success" })
+  send({ type: "system", subtype: "session_state_changed", ...ids, state: "idle" })
+  await delay(0)
+  assert.deepEqual(since(count), [
+    { label: "Model changed", detail: "claude-fable-5-1 → claude-opus-4-8 · after a refusal",
+      body: "Fable 5.1's safeguards flagged this message. Switched to Opus 4.8.", tone: undefined },
+    { label: "Notice", detail: "A UserPromptSubmit hook said hello", body: undefined, tone: undefined },
+    { label: "Warning", detail: "Plugin failed to load", body: "Plugin failed to load\nSee the plugin log", tone: "warning" },
+    { label: "Notice", detail: "Update available", body: undefined, tone: undefined },
+    { label: "Notice", detail: "Kept model as Opus 4.8", body: undefined, tone: undefined },
+    { label: "Warning", detail: "SessionStart:startup hook failed", body: "setup.sh: not found", tone: "warning" },
+  ], "provider notices are markers; transcript-mode detail, repeated notifications and bookkeeping say nothing")
+
+  send({ type: "system", subtype: "status", ...ids, status: null, permissionMode: "plan" })
+  send({ type: "system", subtype: "commands_changed", ...ids,
+    commands: [{ name: "review", description: "Review the branch", argumentHint: "[branch]" }, { name: "exit", description: "", argumentHint: "" }] })
+  await delay(0)
+  assert.equal(session()?.currentMode, "plan", "a mode Claude changes mid-turn shows")
+  assert.deepEqual(session()?.commands, [{ name: "review", description: "Review the branch", hint: "[branch]" }, { name: "exit", description: undefined, hint: undefined }])
+
+  await prompt()
+  count = markers().length
+  const textUpdates = updates().filter((update) => update.kind === "text").length
+  const apiFailure: SDKAssistantMessage = { ...assistant, ...ids, error: "rate_limit", message: { ...assistant.message,
+    id: "synthetic-error", model: "<synthetic>", content: [{ type: "text", text: "You've hit your session limit · resets 5:10am", citations: null }] } }
+  send(apiFailure)
+  send({ ...assistant, ...ids, message: { ...assistant.message, id: "synthetic-filler", model: "<synthetic>",
+    content: [{ type: "text", text: "No response requested.", citations: null }] } })
+  send({ ...assistant, ...ids, message: { ...assistant.message, id: "answer", model: "claude-opus-4-8",
+    usage: { ...assistant.message.usage, input_tokens: 1000, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0, output_tokens: 200 } } })
+  const window = { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 5000, cacheCreationInputTokens: 0,
+    webSearchRequests: 0, costUSD: 0.25, contextWindow: 1_000_000, maxOutputTokens: 64_000 }
+  result({ stop_reason: "max_tokens", total_cost_usd: 0.25, modelUsage: { "claude-opus-4-8[1m]": window } })
+  await delay(0)
+  assert.equal(updates().filter((update) => update.kind === "text").length, textUpdates + 1, "only the model's own answer is prose")
+  assert.deepEqual(since(count), [
+    { label: "Rate limited", detail: "You've hit your session limit · resets 5:10am", body: undefined, tone: "warning" },
+    { label: "Warning", detail: "The reply hit the output token limit", body: undefined, tone: "warning" },
+  ], "an API failure Claude composed is a marker, and a truncated reply says so")
+  assert.deepEqual(session()?.usage, { used: 6200, size: 1_000_000, cost: { amount: 0.25, currency: "USD" } },
+    "the context meter reads the main loop's latest request against its model's window")
+  const reports = noticeEvents.length
+  result({ total_cost_usd: 0.25, modelUsage: { "claude-opus-4-8[1m]": window } })
+  await delay(0)
+  assert.equal(noticeEvents.length, reports, "an unchanged reading reports nothing")
+  send({ type: "system", subtype: "compact_boundary", ...ids, compact_metadata: { trigger: "auto", pre_tokens: 6200, post_tokens: 900 } })
+  await delay(0)
+  assert.equal(session()?.usage?.used, 900, "compaction empties the meter to what it kept")
+  assert.equal(markers().at(-1)?.detail, "Automatic · 6k → 900 tokens")
+
+  await prompt()
+  count = markers().length
+  send({ type: "system", subtype: "model_refusal_no_fallback", ...ids, original_model: "claude-opus-4-8", request_id: null,
+    content: "Opus 4.8's safeguards flagged this message.", api_refusal_explanation: "Blocked under the usage policy." })
+  result({ stop_reason: "refusal" })
+  await delay(0)
+  assert.deepEqual(since(count), [{ label: "Turn failed", detail: "claude-opus-4-8 declined the request",
+    body: "Opus 4.8's safeguards flagged this message.\n\nBlocked under the usage policy.", tone: "error" }],
+  "a refusal is said once, not again as the turn's stop")
+
+  count = markers().length
+  result({ terminal_reason: "hook_stopped" })
+  await prompt()
+  send({ type: "result", subtype: "error_max_turns", ...ids, duration_ms: 1, duration_api_ms: 1, is_error: true, num_turns: 9,
+    stop_reason: null, total_cost_usd: 0, modelUsage: {}, permission_denials: [], errors: [], terminal_reason: "max_turns",
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+      cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+      fallback_credit: { status: { type: "redeemed" } }, inference_geo: "", iterations: [], output_tokens_details: { thinking_tokens: 0 },
+      server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" } })
+  await delay(0)
+  assert.deepEqual(since(count), [{ label: "Warning", detail: "A hook ended the turn", body: undefined, tone: "warning" }],
+    "a turn that ended early says why; a failed one says it on its request")
+  assert.equal(session()?.status, "failed")
+  assert.equal(session()?.error, "Reached the turn limit", "a failure without text is named by why the turn stopped")
+
+  const resetId = randomUUID()
+  send({ type: "conversation_reset", ...ids, new_conversation_id: resetId, trigger: "clear" })
+  await delay(0)
+  assert.equal(session()?.nativeId, resetId, "a cleared conversation continues under its new native id")
+  assert.equal(session()?.usage, undefined)
+  noticeDriver.close("notice-fixture")
+}
+console.log("PASS: Claude limits, fallbacks, notices, mode, commands, usage and stop reasons reach the session once each")
 diagnostic.observe({ ...assistant, error: "authentication_failed", parent_tool_use_id: "child-tool" })
 assert.equal(authDiagnostics.length, 1, "a child failure must not be attributed to the parent account")
 diagnostic.observe({

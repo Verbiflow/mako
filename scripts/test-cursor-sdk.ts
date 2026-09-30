@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { clip, CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
+import { clip, compactionSummary, CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "../electron/providers/cursor/sdk/modes.ts"
 import {
   SdkChildLineSchema,
@@ -7,7 +7,11 @@ import {
   sdkMessageForWire,
   type JsonValue,
   type SdkDelta,
+  type SdkEvent,
   type SdkMessage,
+  type SdkMethod,
+  type SdkResult,
+  type SdkRunResult,
 } from "../electron/providers/cursor/sdk/wire.ts"
 import type { LiveUpdate } from "../electron/contracts/live-content.ts"
 
@@ -169,6 +173,77 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
       ["t3:text:1", "Second"],
     ]
   )
+}
+
+// A context summary mid-answer: the text after it is a block of its own, so
+// the compaction marker stays between the two.
+{
+  const projection = new CursorSdkProjection("t-summary")
+  const updates: LiveUpdate[] = [
+    ...projection.delta({ type: "text-delta", text: "Before" }),
+    ...projection.delta({ type: "summary-started" }),
+    ...projection.delta({ type: "summary-completed" }),
+    ...projection.delta({ type: "text-delta", text: "After" }),
+  ]
+  assert.deepEqual([...textOf(updates).entries()], [["t-summary:text:0", "Before"], ["t-summary:text:1", "After"]])
+  for (const delta of [{ type: "summary-started" }, { type: "summary-completed" }, { type: "unhandled", kind: "future-update" }, { type: "shell-output", text: "tail" }])
+    assert.ok(SdkChildLineSchema.safeParse({ event: "delta", turn: "t", delta }).success, `${delta.type} crosses the wire`)
+
+  // SDK 1.0.31 withholds the summary deltas from `onDelta` and streams the
+  // summary as a `task` message: that message splits the text the same way.
+  const streamed = new CursorSdkProjection("t-task")
+  const split: LiveUpdate[] = [
+    ...streamed.message(assistant("Before")),
+    ...streamed.message({ ...run, type: "task", text: "Summary of the conversation so far." }),
+    ...streamed.message(assistant("After")),
+  ]
+  assert.deepEqual([...textOf(split).entries()], [["t-task:text:0", "Before"], ["t-task:text:1", "After"]])
+  assert.equal(compactionSummary({ ...run, type: "task", text: "  The summary.  " }), "The summary.")
+  assert.equal(compactionSummary({ ...run, type: "task", status: "running", text: "Something else" }), undefined, "a task with a status is not a summary")
+  assert.equal(compactionSummary({ ...run, type: "task", text: "  " }), undefined)
+}
+
+// An MCP tool can answer and still report failure with `isError`; the row
+// fails like any other call. Shape from SDK 1.0.31 run events.
+{
+  const projection = new CursorSdkProjection("t-mcp")
+  const mcp = (id: string, isError: boolean): LiveUpdate | undefined => projection.message({
+    ...run,
+    type: "tool_call",
+    call_id: id,
+    name: "mcp",
+    status: "completed",
+    args: { providerIdentifier: "linear", toolName: "get_issue" },
+    result: { status: "success", value: { content: [{ text: { text: isError ? "Issue not found" : "ENG-1" } }], isError } },
+  }).find((update) => update.kind === "tool-update")
+  const failed = mcp("mcp-failed", true)
+  assert.ok(failed?.kind === "tool-update" && failed.status === "failed" && failed.output === "Issue not found")
+  const answered = mcp("mcp-ok", false)
+  assert.ok(answered?.kind === "tool-update" && answered.status === "completed")
+}
+
+// A running command's output streams into its row as a tail. The SDK's
+// chunks name no call, so output goes to the one shell call running and is
+// dropped while two are; the completed call's whole output replaces it.
+{
+  const projection = new CursorSdkProjection("t-shell")
+  const shell = (id: string, status: "running" | "completed"): SdkMessage => {
+    const message: SdkMessage = { ...run, type: "tool_call", call_id: id, name: "shell", status, args: { command: "make test" } }
+    if (status === "completed") message.result = { status: "success", value: { exitCode: 0, stdout: "all passed\n", stderr: "" } }
+    return message
+  }
+  projection.message(shell("one", "running"))
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "building\n" }), [{ kind: "tool-update", id: "one", output: "building\n" }])
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "testing\n" }), [{ kind: "tool-update", id: "one", output: "building\ntesting\n" }])
+  const long = projection.delta({ type: "shell-output", text: "x".repeat(40_000) })[0]
+  assert.ok(long?.kind === "tool-update" && long.output?.length === 16 * 1024 && long.output.endsWith("x"), "the row keeps the tail")
+  projection.message(shell("two", "running"))
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "whose?" }), [], "with two commands running the output names neither")
+  const done = projection.message(shell("one", "completed")).find((update) => update.kind === "tool-update")
+  assert.ok(done?.kind === "tool-update" && done.output === "all passed\n", "the result replaces the streamed tail")
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "two's\n" }), [{ kind: "tool-update", id: "two", output: "two's\n" }])
+  projection.message(shell("two", "completed"))
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "late" }), [], "output after the call completed reopens nothing")
 }
 
 // A plan tool's arguments stream in; each growth repaints the plan and the
@@ -503,3 +578,110 @@ console.log("cursor sdk projection, modes and wire ok")
   }
 }
 console.log("cursor sdk: steer and send outlive the request deadline, cancel does not")
+
+// The driver marks each compaction once, with its summary, whichever of the
+// summary message and `summary-completed` arrives first; SDK 1.0.31 sends
+// the message alone. A failed turn leaves its reason in the transcript,
+// unless the connection dropped and Mako continues it itself.
+{
+  const { randomUUID } = await import("node:crypto")
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { CursorSdkAuth } = await import("../electron/providers/cursor/sdk/auth.ts")
+  const { CursorCredentialStore } = await import("../electron/providers/cursor/sdk/credentials.ts")
+  const { createCursorSdkDriver } = await import("../electron/providers/cursor/sdk/driver.ts")
+  type Client = import("../electron/providers/cursor/sdk/driver.ts").CursorSdkLiveClient
+  type Answers = { [M in SdkMethod]?: () => SdkResult<M> }
+
+  const root = mkdtempSync(join(tmpdir(), "mako-cursor-events-"))
+  let childEvent: (event: SdkEvent) => void = () => {}
+  const client: Client = {
+    alive: true,
+    exited: new Promise(() => {}),
+    hello: async () => ({ wire: 1, sdkVersion: "fixture", node: process.version }),
+    request: async <Method extends SdkMethod>(method: Method): Promise<SdkResult<Method>> => {
+      const answers: Answers = {
+        me: () => ({ email: "fixture@example.test", apiKeyName: "fixture", createdAt: "2026-09-22" }),
+        open: () => ({ agentId: "fixture-agent", model: { id: "fixture-model" } }),
+        active: () => ({}),
+        send: () => ({ runId: "fixture-run" }),
+      }
+      const respond = answers[method]
+      if (!respond) throw new Error(`Unexpected fixture method: ${method}`)
+      return respond()
+    },
+    close: async () => {},
+    kill() {},
+  }
+  const auth = new CursorSdkAuth({
+    env: async () => ({ CURSOR_API_KEY: "key_fixture_0123456789abcdef" }),
+    openUrl: async () => {
+      throw new Error("Fixture must not sign in")
+    },
+    credentials: new CursorCredentialStore(join(root, "credential.bin"), {
+      available: async () => false,
+      encrypt: async () => Buffer.alloc(0),
+      decrypt: async () => "",
+    }),
+    cliKey: async () => null,
+    client: () => client,
+  })
+  const driver = createCursorSdkDriver({
+    auth,
+    stateRoot: () => root,
+    home: root,
+    client: (options) => {
+      childEvent = options.onEvent
+      return client
+    },
+    models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
+  })
+  const id = randomUUID()
+  const markers: string[] = []
+  const activity: string[] = []
+  try {
+    await driver.start(root, {
+      conversationId: id,
+      emit(event) {
+        if (event.type === "live-update" && event.update.kind === "event") {
+          const { label, detail, body, tone } = event.update
+          markers.push([label, detail, body, tone].filter(Boolean).join(" | "))
+        }
+        if (event.type === "live-activity") activity.push(event.activity?.kind ?? "idle")
+      },
+    })
+    const summary = (text: string) => (turn: string): SdkEvent => ({ event: "message", turn, message: { ...run, type: "task", text } })
+    const delta = (type: "summary-started" | "summary-completed") => (turn: string): SdkEvent => ({ event: "delta", turn, delta: { type } })
+    const turn = async (lines: ((turn: string) => SdkEvent)[], result: Partial<SdkRunResult> = {}) => {
+      markers.length = 0
+      activity.length = 0
+      const attemptId = randomUUID()
+      await driver.prompt(id, "go", [], undefined, { operationId: randomUUID(), attemptId, report() {} })
+      for (const line of lines) childEvent(line(attemptId))
+      childEvent({ event: "result", turn: attemptId, result: { runId: "fixture-run", status: "finished", ...result } })
+      return [...markers]
+    }
+
+    assert.deepEqual(await turn([summary("First summary."), summary("Second summary.")]),
+      ["Context compacted | First summary.", "Context compacted | Second summary."], "SDK 1.0.31: the summary message alone marks each compaction")
+    assert.deepEqual(await turn([delta("summary-started"), summary("Text first."), delta("summary-completed")]), ["Context compacted | Text first."])
+    assert.deepEqual(activity, ["compacting", "idle"], "compacting shows until the summary lands")
+    assert.deepEqual(await turn([delta("summary-started"), delta("summary-completed"), summary("Text last.")]), ["Context compacted | Text last."])
+    assert.deepEqual(activity, ["compacting", "idle", "idle"])
+    assert.deepEqual(await turn([delta("summary-started"), delta("summary-completed")]), ["Context compacted"],
+      "a compaction whose summary never came is still marked, at the turn's end")
+
+    assert.deepEqual(await turn([], { status: "error", error: { message: "Model overloaded", code: "resource_exhausted" } }),
+      ["Turn failed | Model overloaded | error"])
+    const long = `Provider returned error: ${"x".repeat(300)}\nsecond line`
+    const [failure] = await turn([], { status: "error", error: { message: long } })
+    assert.ok(failure?.startsWith("Turn failed | Provider returned error: x") && failure.includes(`| ${long} |`), "a long reason is clipped beside the label and whole in the body")
+    assert.deepEqual(await turn([], { status: "error", error: { message: "RST_STREAM", code: "unavailable" } }), [],
+      "a dropped connection is Mako's to continue, not the conversation's failure")
+  } finally {
+    await driver.close(id)
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+console.log("cursor sdk: compaction markers carry their summary in either order; failed turns say why")
