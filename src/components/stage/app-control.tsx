@@ -287,13 +287,15 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
             {crashed ? "Restart" : "Try again"}
           </Action>
         </>
-      ) : view.phase === "waiting" && view.room ? (
+      ) : view.phase === "waiting" ? (
         <>
-          <Action data-app-action="make-room" onSelect={() => driver?.makeRoom(cwd)}>
-            Stop the other {view.room.apps === 1 ? "app" : `${view.room.apps} apps`} and start this one
-          </Action>
-          <Action data-app-action="retry" onSelect={() => driver?.start(cwd)}>
-            Try again
+          {view.room?.apps ? (
+            <Action data-app-action="make-room" onSelect={() => driver?.makeRoom(cwd)}>
+              Stop the other {view.room.apps === 1 ? "app" : `${view.room.apps} apps`} and start this one
+            </Action>
+          ) : null}
+          <Action data-app-action="stop-waiting" onSelect={() => driver?.stop(cwd)}>
+            Stop waiting
           </Action>
         </>
       ) : (
@@ -322,9 +324,9 @@ function ReadyHead({ view, crashed, now }: { view: Ready; crashed?: AppProcessVi
     case "waiting":
       return (
         <Head title="Waiting for memory">
-          {view.room
-            ? `Your Mac is short on memory. ${view.room.apps === 1 ? "Another app is" : `${view.room.apps} other apps are`} using ${formatBytes(view.room.bytes)}.`
-            : "Your Mac is short on memory."}
+          {`Your Mac is short on memory, so the app starts by itself once there's room.${
+            view.room?.apps ? ` ${view.room.apps === 1 ? "Another app is" : `${view.room.apps} other apps are`} using ${formatBytes(view.room.bytes)}.` : ""
+          }`}
         </Head>
       )
     case "preparing":

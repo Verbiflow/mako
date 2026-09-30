@@ -493,8 +493,27 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const critical = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, pressure: async () => "critical" })
   await processes.start(quietThread, [{ kind: "process", name: "busy", command: "sleep 300", cwd: root, env: process.env }])
   await processes.touch(quietThread)
-  assert.match(await critical.start(conversation), /^Waiting for room: this Mac is critically short of memory, with these apps running: \S+ \(\d+ MB, used 0 min ago\)\. Nothing was started\./)
+  assert.match(await critical.start(conversation), /^Waiting in line for memory: this Mac is critically short of memory, with these apps running: \S+ \(\d+ MB, used 0 min ago\)\. Nothing has started yet; Mako starts it by itself once there's room/)
   assert.equal(await portListening(toolBase), false)
+  assert.match(JSON.parse(await critical.status(conversation)).room.waitingInLine, /^since 0 min ago; it starts by itself once there's room$/)
+  assert.equal(await critical.stop(conversation), "Nothing was running; the start waiting for memory was taken out of the line.")
+  assert.equal(JSON.parse(await critical.status(conversation)).room.waitingInLine, undefined)
+
+  // A start waiting in line goes ahead by itself once memory frees up.
+  let short = true
+  const lineTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, settleMs: settle, lineMs: 100, pressure: async () => short ? "critical" : "normal" })
+  assert.match(await lineTools.start(conversation), /^Waiting in line for memory/)
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.equal(await portListening(toolBase), false, "nothing starts while memory stays critical")
+  assert.equal((await lineTools.desk.view(project)).kind === "ready" && (await lineTools.desk.view(project)).phase, "waiting")
+  short = false
+  const deadline = Date.now() + settle
+  while (!(await portListening(toolBase)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(await portListening(toolBase), true, "the start went ahead once there was room")
+  const startedView = await lineTools.desk.view(project)
+  assert.ok(startedView.kind === "ready" && (startedView.phase === "running" || startedView.phase === "starting"))
+  assert.equal(JSON.parse(await lineTools.status(conversation)).room.waitingInLine, undefined)
+  await lineTools.stop(conversation)
   const criticalDesk = environmentTools({ cwd: () => undefined, environment, launchedWith: () => undefined, folder: deskFolder, processes, settleMs: settle, pressure: async () => "critical" }).desk
   assert.deepEqual(await criticalDesk.start(project), { problems: [] })
   const waitingView = await criticalDesk.view(project)
@@ -552,7 +571,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, waiting for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })

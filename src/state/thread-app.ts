@@ -125,7 +125,7 @@ export function checkMark(check: AppCheckView): Mark {
 }
 
 export function formatBytes(bytes: number): string {
-  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)}\u00a0GB` : `${Math.round(bytes / 1024 ** 2)}\u00a0MB`
 }
 
 export function formatAgo(at: number, now: number): string {

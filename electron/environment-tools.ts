@@ -31,6 +31,8 @@ const FAILURE_LINES = 40
 /** Under memory pressure, another Thread's app unused this long is stopped to make room. */
 const EVICT_QUIET_MS = 15 * 60 * 1000
 const PREPARE_KEY = runKey("prepare", "checkout")
+/** How often a start waiting in line looks at memory again. */
+const LINE_MS = 5_000
 
 interface Deps {
   cwd(conversationId: string): string | undefined
@@ -49,6 +51,7 @@ interface Deps {
   whose?(app: AppKey): string | undefined
   pressure?: () => Promise<MemoryPressure>
   settleMs?: number
+  lineMs?: number
   now?: () => number
 }
 
@@ -90,6 +93,18 @@ interface Context {
 
 type Read = Awaited<ReturnType<typeof readRecipe>>
 
+interface RoomReport {
+  memory: MemoryPressure
+  appsRunningOnThisMac: number
+  /** Set while this app's start waits for memory. */
+  waitingInLine?: string
+}
+
+interface InLine {
+  since: number
+  again(): Promise<StartOutcome>
+}
+
 interface Unprepared {
   message: string
   shown: boolean
@@ -103,8 +118,29 @@ type StartOutcome =
 
 export function environmentTools(deps: Deps): EnvironmentTools {
   const settleMs = deps.settleMs ?? SETTLE_MS
-  /** Set while a start waits for memory, so the desk says so whoever asked. */
-  const waiting = new Map<AppKey, number>()
+  /**
+   * Starts waiting in line for memory, oldest first: when each joined, and
+   * how to try it again with the recipe as it is then. Whoever asked, the
+   * desk shows it waiting, and it starts by itself once there's room.
+   */
+  const line = new Map<AppKey, InLine>()
+  let lineTimer: ReturnType<typeof setTimeout> | undefined
+  const pressure = deps.pressure ?? memoryPressure
+  const followLine = () => {
+    if (lineTimer || !line.size) return
+    lineTimer = setTimeout(() => {
+      void (async () => {
+        if ((await pressure().catch(() => "critical")) === "critical") return
+        const [app, next] = [...line.entries()].sort((a, b) => a[1].since - b[1].since)[0]!
+        const outcome = await next.again().catch(() => undefined)
+        if (outcome?.kind !== "waiting") line.delete(app)
+      })().finally(() => {
+        lineTimer = undefined
+        followLine()
+      })
+    }, deps.lineMs ?? LINE_MS)
+    lineTimer.unref?.()
+  }
   /** Projects an agent is setting up, by main checkout: the conversation that read the guide. */
   const setups = new Map<string, string>()
   const context = async (conversationId: string): Promise<Context & { read: Read }> => {
@@ -201,9 +237,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     await deps.processes.settle(app, [PREPARE_KEY], settleMs)
     return settled()
   }
-  /** Under memory pressure, stops other Threads' quiet apps first; refuses only while the machine stays critical. */
+  /** Under memory pressure, stops other Threads' quiet apps first; the start waits only while the machine stays critical. */
   const makeRoom = async (app: AppKey): Promise<{ refused?: string; notes: string[] }> => {
-    const pressure = deps.pressure ?? memoryPressure
     const notes: string[] = []
     if ((await pressure()) === "normal") return { notes }
     const now = (deps.now ?? Date.now)()
@@ -218,7 +253,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       .map((entry) => `${deps.whose?.(entry.app) || entry.app} (${bytes(entry.memoryBytes)}, used ${minutes(now - entry.usedAt)} ago)`)
     return {
       notes,
-      refused: `Waiting for room: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing was started. Ask the user whether to stop one, or try again later.`,
+      refused: `Waiting in line for memory: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing has started yet; Mako starts it by itself once there's room, and environment_status shows when. If it can't wait, ask the user whether to stop one of those apps; environment_stop takes it out of the line.`,
     }
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
@@ -229,7 +264,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       state: done[step.command] === (await inputsDigest(checkout, step.inputs)) ? "up to date" : "runs before the next start or check",
     })))
   }
-  const startIn = async (current: Context & { recipe: Recipe }, names?: string[], anyway = false): Promise<StartOutcome> => {
+  /** Starts the named processes, or all; under critical memory it joins the line with `again`, unless `anyway`. */
+  const startIn = async (current: Context & { recipe: Recipe }, names: string[] | undefined, again: () => Promise<StartOutcome>, anyway = false): Promise<StartOutcome> => {
     const picked = chosen(current.recipe, names)
     if (!picked.length) return { kind: "nothing" }
     const { app } = current.environment
@@ -241,12 +277,13 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (preparing) return { kind: "blocked", ...preparing }
       const room = anyway ? { notes: [] } : await makeRoom(app)
       if (room.refused) {
-        waiting.set(app, (deps.now ?? Date.now)())
+        line.set(app, { since: line.get(app)?.since ?? (deps.now ?? Date.now)(), again })
+        followLine()
         return { kind: "waiting", notes: room.notes, message: room.refused }
       }
       notes = room.notes
     }
-    waiting.delete(app)
+    line.delete(app)
     const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
     const statuses = await deps.processes.settle(app, picked.map((name) => runKey("process", name)), settleMs)
     const lines = await Promise.all(picked.map(async (name) => {
@@ -269,9 +306,14 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       outcome.stillStarting ? `Still starting after ${Math.round(settleMs / 1000)} seconds; call environment_status to see when it's up, or environment_logs to see why not.` : undefined,
     ].filter(Boolean).join("\n")
   }
+  const again = (conversationId: string, names?: string[]) => async (): Promise<StartOutcome> => {
+    const current = await withRecipe(conversationId)
+    return startIn(current, names, again(conversationId, names))
+  }
+  const deskAgain = (cwd: string) => async (): Promise<StartOutcome> => startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd))
   const start = async (conversationId: string, names?: string[]) => {
     const current = await withRecipe(conversationId)
-    return startText(current, await startIn(current, names))
+    return startText(current, await startIn(current, names, again(conversationId, names)))
   }
   /** Stops the named processes, or the whole app with its install step and any check under way; finished checks keep their results. */
   const stopIn = async ({ environment, read }: Context & { read?: Read }, names?: string[]) => {
@@ -280,19 +322,20 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const up = (status: RunStatus) => status.state.kind === "running" || status.state.kind === "starting"
     const picked = runs.filter((status) => names?.length ? status.kind === "process" && names.includes(status.name) : status.kind !== "check" || up(status))
     await deps.processes.stop(environment.app, picked.map((status) => runKey(status.kind, status.name)))
-    if (!names?.length) waiting.delete(environment.app)
+    const inLine = line.delete(environment.app)
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the install step" : status.name)
-    return were.length ? `Stopped ${were.join(", ")}, with every process each had started.` : "Nothing was running."
+    if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.`
+    return inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running."
   }
   const stop = async (conversationId: string, names?: string[]) => stopIn(await context(conversationId), names)
-  const checkIn = async (current: Context & { recipe: Recipe }, tier: CheckTier): Promise<string> => {
+  const checkIn = async (current: Context & { recipe: Recipe }, tier: CheckTier, again: () => Promise<StartOutcome>): Promise<string> => {
     const command = current.recipe.checks[tier]
     if (!command) throw new Error(`The recipe has no ${tier} check.`)
     const { app } = current.environment
     if (tier === "full") {
       const names = Object.keys(current.recipe.processes)
       if (names.length) {
-        const running = startText(current, await startIn(current, names))
+        const running = startText(current, await startIn(current, names, again))
         const statuses = await deps.processes.status(app)
         const down = names.filter((name) => statuses.find((entry) => entry.kind === "process" && entry.name === name)?.state.kind !== "running")
         if (down.length) return `The full check needs the app running, and ${down.join(", ")} isn't up yet:\n${running}`
@@ -363,7 +406,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     else if (processes.some((entry) => entry.state === "exited")) view.phase = "crashed"
     else if (up.some((entry) => entry.state === "starting")) view.phase = "starting"
     else if (up.length) view.phase = "running"
-    else if (waiting.has(found.app)) {
+    else if (line.has(found.app)) {
       const others = (await deps.processes.active()).filter((entry) => entry.app !== found.app)
       view.phase = "waiting"
       view.room = { apps: others.length, bytes: others.reduce((sum, entry) => sum + entry.memoryBytes, 0) }
@@ -377,10 +420,16 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (outcome.kind === "waiting") return { problems: [] }
     return { problems: outcome.refused.map((entry) => `${entry.name} didn't start: ${entry.reason}`) }
   }
+  const roomReport = async (app: AppKey): Promise<RoomReport> => {
+    const report: RoomReport = { memory: await pressure(), appsRunningOnThisMac: (await deps.processes.active()).length }
+    const queued = line.get(app)
+    if (queued) report.waitingInLine = `since ${minutes((deps.now ?? Date.now)() - queued.since)} ago; it starts by itself once there's room`
+    return report
+  }
   const desk: DeskApp = {
     view: deskView,
     async start(cwd) {
-      return deskOutcome(await startIn(ready(await folderContext(cwd))))
+      return deskOutcome(await startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd)))
     },
     async stop(cwd) {
       await stopIn(await folderContext(cwd))
@@ -388,17 +437,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async restart(cwd) {
       const current = ready(await folderContext(cwd))
       await stopIn(current)
-      return deskOutcome(await startIn(current))
+      return deskOutcome(await startIn(current, undefined, deskAgain(cwd)))
     },
     async check(cwd, tier) {
-      await checkIn(ready(await folderContext(cwd)), tier)
+      await checkIn(ready(await folderContext(cwd)), tier, deskAgain(cwd))
       return { problems: [] }
     },
     async makeRoom(cwd) {
       const current = ready(await folderContext(cwd))
       const others = (await deps.processes.active()).filter((entry) => entry.app !== current.environment.app)
       for (const other of others) await deps.processes.stop(other.app)
-      return deskOutcome(await startIn(current, undefined, true))
+      return deskOutcome(await startIn(current, undefined, deskAgain(cwd), true))
     },
     async output(cwd, key, cursor) {
       if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
@@ -445,7 +494,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
             .map((entry) => ({ ...summary(entry.name, entry.command, entry.port, entry), note: "no longer in the recipe; environment_stop with its name stops it" })),
         ],
         prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(read.recipe, checkout) : undefined,
-        room: { memory: await (deps.pressure ?? memoryPressure)(), appsRunningOnThisMac: (await deps.processes.active()).length },
+        room: await roomReport(environment.app),
         checks: (["quick", "full"] as const).flatMap((tier) => {
           const command = read.kind === "ready" ? read.recipe.checks[tier] : undefined
           const status = runs.find((entry) => entry.kind === "check" && entry.name === tier)
@@ -460,7 +509,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const current = await withRecipe(conversationId)
       const picked = chosen(current.recipe, names)
       await deps.processes.stop(current.environment.app, picked.map((name) => runKey("process", name)))
-      return startText(current, await startIn(current, picked))
+      return startText(current, await startIn(current, picked, again(conversationId, picked)))
     },
     async logs(conversationId, target, lines) {
       const { environment } = await context(conversationId)
@@ -468,7 +517,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return deps.processes.logs(environment.app, key, lines)
     },
     async check(conversationId, tier) {
-      return checkIn(await withRecipe(conversationId), tier)
+      return checkIn(await withRecipe(conversationId), tier, again(conversationId))
     },
     async port(conversationId, port) {
       const { environment } = await context(conversationId)
@@ -663,7 +712,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "environment_start",
     {
       description:
-        "Start the recipe's processes for this Thread, on this Thread's own ports, and wait up to about 25 seconds for their ports to answer. Processes Mako starts keep running after your turn and after Mako restarts, and they stay out of other Threads' way. A process whose port something else holds is refused, with who holds it. Returns each process's state and, for one that crashed, the end of its log.",
+        "Start the recipe's processes for this Thread, on this Thread's own ports, and wait up to about 25 seconds for their ports to answer. Processes Mako starts keep running after your turn and after Mako restarts, and they stay out of other Threads' way. A process whose port something else holds is refused, with who holds it. When this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log.",
       inputSchema: names,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
