@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type {
+  ModelUsage,
   Options,
   Query,
   SDKMessage,
@@ -11,7 +12,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
-import type { LiveSessionMode, LiveSessionState } from "../../shared.js"
+import type { LiveSessionCommand, LiveSessionMode, LiveSessionState, LiveSessionUsage } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type {
   ProviderLiveDriver,
@@ -34,6 +35,8 @@ import { ProviderStartupWatch, STARTUP_TOTAL_MS } from "../../provider-startup.j
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { claudeAuthDiagnostics } from "./auth-diagnostics.js"
+import { claudeMessageKind } from "./sdk-message-kinds.js"
+import { ClaudeNotices, claudeStopReason } from "./sdk-notices.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
 const CLAUDE_MODES: LiveSessionMode[] = [
@@ -62,6 +65,11 @@ interface Receipt {
 }
 interface Live {
   compaction?: { actionId: string; runId: string; confirmed: boolean }
+  notices: ClaudeNotices
+  /** The model and context of the main loop's latest request, for the usage its turn's result reports. */
+  lastCall?: { model: string; tokens: number }
+  /** Commands `init` said belong to a terminal; a later command list leaves them out too. */
+  terminalCommands: Set<string>
   state: LiveSessionState
   query: ClaudeQuery
   input: ClaudeInput
@@ -135,6 +143,51 @@ function acknowledge(live: Live, message: SDKMessage): void {
   }
 }
 
+/** Claude's own reports, and the session state they move outside a turn's content. */
+function observe(engine: Engine, live: Live, message: SDKMessage): void {
+  engine.observe(live, claudeMessageKind(message), live.notices.decode(message))
+  if (message.type === "assistant") {
+    const { model, usage } = message.message
+    if (!message.parent_tool_use_id && model !== "<synthetic>")
+      live.lastCall = { model, tokens: usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) +
+        (usage.cache_read_input_tokens ?? 0) + usage.output_tokens }
+  } else if (message.type === "result") {
+    const size = live.lastCall && contextWindow(message.modelUsage, live.lastCall.model)
+    if (live.lastCall && size)
+      reportUsage(engine, live, { used: live.lastCall.tokens, size,
+        cost: message.total_cost_usd > 0 ? { amount: message.total_cost_usd, currency: "USD" } : live.state.usage?.cost })
+  } else if (message.type === "conversation_reset") {
+    live.lastCall = undefined
+    engine.patch(live, { nativeId: message.new_conversation_id, usage: undefined })
+  } else if (message.type === "system" && message.subtype === "status") {
+    if (message.permissionMode && message.permissionMode !== live.state.currentMode)
+      engine.patch(live, { currentMode: message.permissionMode })
+  } else if (message.type === "system" && message.subtype === "compact_boundary") {
+    live.lastCall = undefined
+    const after = message.compact_metadata.post_tokens
+    if (after !== undefined && live.state.usage) reportUsage(engine, live, { ...live.state.usage, used: after })
+  } else if (message.type === "system" && message.subtype === "commands_changed") {
+    const described = message.commands
+      .filter((command) => !live.terminalCommands.has(command.name))
+      .map((command): LiveSessionCommand => ({ name: command.name, description: command.description || undefined, hint: command.argumentHint || undefined }))
+    engine.patch(live, { commands: described })
+  }
+}
+
+function reportUsage(engine: Engine, live: Live, usage: LiveSessionUsage): void {
+  const held = live.state.usage
+  if (held?.used === usage.used && held.size === usage.size && held.cost?.amount === usage.cost?.amount) return
+  engine.patch(live, { usage })
+}
+
+/** The answering model's window. Usage can key it with a suffix the reply's model id lacks (`[1m]`). */
+function contextWindow(models: Record<string, ModelUsage>, model: string): number | undefined {
+  const usage = Object.hasOwn(models, model)
+    ? models[model]
+    : Object.entries(models).find(([name]) => name.startsWith(model))?.[1]
+  return usage?.contextWindow || undefined
+}
+
 function openProviderTurn(engine: Engine, live: Live): void {
   live.projection.reset()
   live.transcript.reset()
@@ -162,6 +215,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
           conversation: live.state.id, event: message.subtype,
         })
       acknowledge(live, message)
+      observe(engine, live, message)
       live.authDiagnostics.observe(message)
       live.transcript.observe(message)
       live.approvals.observe(message)
@@ -191,13 +245,14 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         if (message.effort) options.effort = message.effort
         if (message.fast_mode_state)
           options.fast = message.fast_mode_state !== "off"
-        const terminal = new Set(message.terminal_slash_commands ?? [])
+        live.terminalCommands = new Set(message.terminal_slash_commands ?? [])
+        const described = new Map(live.state.commands?.map((command) => [command.name, command]))
         engine.patch(live, {
           nativeId: message.session_id,
           currentMode: message.permissionMode,
           commands: (message.slash_commands ?? [])
-            .filter((name) => !terminal.has(name))
-            .map((name) => ({ name })),
+            .filter((name) => !live.terminalCommands.has(name))
+            .map((name) => described.get(name) ?? { name }),
           settings: {
             ...live.state.settings,
             model: message.model,
@@ -221,7 +276,8 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (live.closed) return
       // SDK subtype "success" also carries API failures; is_error is authoritative.
       const failure = message.is_error
-        ? (message.subtype === "success" ? message.result : message.errors.join("\n")).slice(0, 2000) || "Claude ended the turn with an error"
+        ? (message.subtype === "success" ? message.result : message.errors.join("\n")).slice(0, 2000) ||
+          claudeStopReason(message) || "Claude ended the turn with an error"
         : undefined
       if (failure) live.authDiagnostics.failure(failure)
       engine.patch(live, {
@@ -358,6 +414,7 @@ export function createClaudeSdkDriver(
       }
       const input = new ClaudeInput()
       const transcript = new ClaudeTranscript((config.env ?? process.env).CLAUDE_CONFIG_DIR || join(homedir(), ".claude"))
+      const notices = new ClaudeNotices()
       const permissions = new ClaudePermissions(
         options.conversationId,
         options.emit,
@@ -391,6 +448,7 @@ export function createClaudeSdkDriver(
               { hooks: [transcript.hook] },
             ],
             Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
+            PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [notices.hook] }],
           },
           spawnClaudeCodeProcess: (options) => {
             const child = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
@@ -429,6 +487,8 @@ export function createClaudeSdkDriver(
         transcript,
         emit: options.emit,
         projection: new ClaudeProjection(),
+        notices,
+        terminalCommands: new Set(),
         agents: new ClaudeAgents(),
         receipts: new Map(),
         closed: false,

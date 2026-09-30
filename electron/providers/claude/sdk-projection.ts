@@ -1,4 +1,5 @@
 import { claudeProposedPlan } from "./sdk-plan.js"
+import { claudeApiErrorEvent } from "@mako/sessions"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { AttachmentContent } from "@mako/sessions"
 import type { LiveUpdate } from "../../shared.js"
@@ -107,6 +108,12 @@ export class ClaudeProjection {
       this.finalized.add(message.uuid)
       if (this.finalized.size > 4096)
         this.finalized.delete(this.finalized.values().next().value ?? "")
+      // Claude Code composes these itself: an API failure, or filler for a turn with nothing to answer.
+      if (message.message.model === "<synthetic>") {
+        const text = message.message.content.map((block) => block.type === "text" ? block.text : "").join("")
+        if (message.error) return [{ kind: "event", ...claudeApiErrorEvent(message.error, text) }]
+        if (text.trim() === "No response requested.") return []
+      }
       const slots = this.slots(message.message.id)
       return message.message.content.flatMap((block): LiveUpdate[] => {
         let slot = slots.find(
@@ -193,14 +200,6 @@ export class ClaudeProjection {
         ]
       })
     }
-    if (message.type === "system" && message.subtype === "compact_boundary")
-      return [
-        {
-          kind: "text",
-          id: message.uuid,
-          text: "Conversation context compacted.",
-        },
-      ]
     return []
   }
 }
