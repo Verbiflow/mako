@@ -78,7 +78,8 @@ export class OpenCodeContent {
     return sessionID === this.root ? "" : `${this.titles.get(sessionID) ?? "Subagent"}: `
   }
 
-  observe(event: OpenCodeEvent): LiveUpdate[] {
+  /** `unknown` hears an event this projection does not know. */
+  observe(event: OpenCodeEvent, unknown?: (type: string) => void): LiveUpdate[] {
     switch (event.type) {
       case "session.text.delta":
         return event.data.sessionID === this.root
@@ -92,7 +93,21 @@ export class OpenCodeContent {
       case "session.tool.success":
       case "session.tool.failed":
         return this.tool(event)
+      // Their content arrives as the deltas and tool results above.
+      case "session.text.started":
+      case "session.text.ended":
+      case "session.reasoning.started":
+      case "session.reasoning.ended":
+      case "session.tool.input.delta":
+      case "session.tool.input.ended":
+      case "session.step.started":
+      case "session.step.streamed":
+      case "session.step.failed":
+      case "session.status":
+      case "session.idle":
+        return []
       default:
+        unknown?.(event.type)
         return []
     }
   }

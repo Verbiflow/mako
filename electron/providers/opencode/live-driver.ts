@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { openCodeNoticeLabel, PROVIDER_TURN_FALLBACK } from "@mako/sessions"
+import { compactionFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { z } from "zod"
 import { applyControlEnvironment } from "../../control-launch.js"
 import { applyThreadEnvironment } from "../../thread-environment.js"
@@ -42,6 +43,7 @@ import { OpenCodeContent } from "./content.js"
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeShells } from "./background.js"
+import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "./notices.js"
 import { openCodeCheckpoint, openCodeResumeVerdict } from "./resume.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
@@ -101,6 +103,9 @@ interface Live {
   /** Context tokens of the root session's latest step; cost is the session's own total. */
   context?: number
   cost?: number
+  mcp: OpenCodeMcpHealth
+  /** MCP status reads, in order, so an older read never reports over a newer one. */
+  mcpReads: Promise<void>
   /** Native events are applied in order; interaction bookkeeping awaits its store. */
   queue: Promise<void>
   /** Pending while a missed call's native name is read; content waits behind it. */
@@ -334,6 +339,21 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     if (!live.turn) live.providerTurnCause = openCodeNoticeLabel({ text: notice.text, description: notice.description, source: metadata.source, state: metadata.state })
   }
 
+  function mark(live: Live, markers: readonly TranscriptEvent[]): void {
+    for (const marker of markers) engine.event(live, marker)
+  }
+
+  /** OpenCode's status event names a server; its state is read back once the session is up. */
+  function readMcp(live: Live): void {
+    live.mcpReads = live.mcpReads.then(async () => {
+      if (live.closed || live.state.connection !== "connected") return
+      const listed = await live.api.client.mcp.list({ location: { directory: live.cwd } })
+      if (!live.closed) mark(live, live.mcp.observe(listed.data))
+    }).catch(error => {
+      if (!live.closed) hostWarn("opencode", "MCP server status could not be read", { conversation: live.state.id, error: errorText({ error }) })
+    })
+  }
+
   /** Mako sends every other turn, so an execution starting while none is bound is one OpenCode started on a notice. */
   function openProviderTurn(live: Live): void {
     live.turn = { kind: "provider", enqueued: true, delivered: true }
@@ -387,7 +407,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       case "session.execution.started":
         if (event.data.sessionID === root && !live.turn && (live.state.status === "ready" || live.state.status === "failed"))
           openProviderTurn(live)
-        break
+        return
       case "session.inbox.cancelled":
         if (event.data.sessionID === root && live.turn?.inboxId === event.data.inboxID && !live.turn.delivered)
           finish(live, { kind: "interrupted", reason: "cancelled before delivery" })
@@ -402,6 +422,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           for (const settle of live.childSettling.get(sessionID) ?? []) settle()
           return
         }
+        const stopped = event.type === "session.execution.interrupted" ? openCodeStopped(event.data.reason) : undefined
+        if (stopped) engine.event(live, stopped)
         if (!live.turn?.delivered) return
         if (event.type === "session.execution.succeeded") finish(live, { kind: "succeeded" })
         else if (event.type === "session.execution.failed") finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
@@ -409,8 +431,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return
       }
       case "session.compaction.failed":
-        if (event.data.sessionID === root && live.turn?.kind === "compaction" && (!event.data.inputID || event.data.inputID === live.turn.inboxId))
+        if (event.data.sessionID !== root) return
+        engine.activity(live, null)
+        // Compaction Mako asked for fails its action and turn; any other would leave no trace.
+        if (live.turn?.kind === "compaction" && (!event.data.inputID || event.data.inputID === live.turn.inboxId))
           finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
+        else engine.event(live, compactionFailedEvent(event.data.error.message))
         return
       case "session.step.ended":
         if (event.data.sessionID === root) { live.context = contextTokens(event.data.tokens); usage(live) }
@@ -425,8 +451,23 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (event.data.sessionID === root) selectModel(live, event.data.model)
         return
       case "session.retry.scheduled":
-        if (event.data.sessionID === root)
+        if (event.data.sessionID === root) {
           hostLog("opencode", "provider retry scheduled", { conversation: live.state.id, attempt: event.data.attempt, error: event.data.error.message })
+          // OpenCode's `at` is epoch ms on this host's clock.
+          engine.activity(live, { kind: "retrying", attempt: event.data.attempt, reason: event.data.error.message, retryAt: event.data.at })
+        }
+        return
+      case "session.compaction.started":
+        if (event.data.sessionID === root) engine.activity(live, { kind: "compacting" })
+        return
+      case "session.compaction.delta":
+        return
+      case "session.compaction.ended":
+        if (event.data.sessionID === root)
+          engine.compacted(live, { trigger: event.data.reason === "auto" ? "automatic" : "manual", tokensBefore: live.context, summary: event.data.text })
+        return
+      case "mcp.status.changed":
+        if (!event.location || event.location.directory === live.cwd) readMcp(live)
         return
       case "form.created":
       case "form.replied":
@@ -439,8 +480,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       default:
         break
     }
+    if (openCodeIgnores(event)) return
     const scope = SessionScopeSchema.safeParse(event.data).data
-    if (!scope || !owns(live, scope.sessionID) || !live.content) return
+    if (!scope) { engine.unhandled(live, event.type); return }
+    if (!owns(live, scope.sessionID) || !live.content) return
     if (!live.projection && !unnamedCall(live, event)) { project(live, event); return }
     // Later content waits behind a native name lookup so rows keep their order.
     const projection: Promise<void> = (live.projection ?? Promise.resolve()).then(async () => {
@@ -483,7 +526,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       observeAgent(live, event)
       engine.emitUpdates(live, content.observe(event))
     } else {
-      engine.emitUpdates(live, content.observe(event))
+      engine.emitUpdates(live, content.observe(event, (type) => engine.unhandled(live, type)))
       observeAgent(live, event)
     }
   }
@@ -652,6 +695,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
       const live: Live = {
         api, cwd, emit: options.emit, launchAccess, children: new Set(), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
+        mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
         shells: new OpenCodeShells(sessionID => owns(live, sessionID)), settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
         state: {
           id: options.conversationId, harness: "opencode", cwd, title: options.title, nativeId: options.resume, nativePath,
@@ -674,9 +718,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         await trace.step("sdk-initialization", () => api.watch.step("plugin activation", api.client.plugin.awaitActivation({ location })))
         const catalog = await trace.step("model-discovery", () => api.watch.step("catalog", loadCatalog(live)))
         const loadedAt = live.catalogGeneration
+        const refused: Array<{ name: string; error: string }> = []
         await trace.step("mcp-preparation", () => Promise.all(servers.map(server =>
-          api.client.mcp.add({ server: server.name, location, config: server.config }).catch(error =>
-            hostWarn("opencode", "an MCP server could not be added", { conversation: live.state.id, server: server.name, error: errorText({ error }) })))))
+          api.client.mcp.add({ server: server.name, location, config: server.config }).catch(error => {
+            hostWarn("opencode", "an MCP server could not be added", { conversation: live.state.id, server: server.name, error: errorText({ error }) })
+            refused.push({ name: server.name, error: errorText({ error }) })
+          }))))
         const modes = openCodeSessionModes(catalog.agents)
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE
         const agent = openCodeAgentForMode(requested, launchAccess)
@@ -724,6 +771,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           ...reported,
         })
         api.watch.dispose()
+        for (const server of refused) mark(live, live.mcp.failed(server.name, server.error))
+        readMcp(live)
         if (live.catalogGeneration !== loadedAt) refreshCatalog(live)
         hostLog("opencode", options.resume ? "resumed session" : "created session", {
           conversation: live.state.id, session: session.id, pid: api.health.pid, version: api.health.version,

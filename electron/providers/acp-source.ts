@@ -8,6 +8,8 @@ import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "../acp-access.js"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contracts/approval-response.js"
 import type { JsonObject } from "../codex-app-json.js"
+import type { NativeNotice } from "../contracts/native-activity.js"
+import type { LiveSessionState } from "../contracts/providers-acp.js"
 
 export type AcpTuning = SessionSettings
 
@@ -71,6 +73,12 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
    * could never settle, so its output stays with the previous turn.
    */
   providerTurns?(): AcpProviderTurnObserver
+  /**
+   * What one of the provider's vendor notifications (`_`-prefixed method)
+   * means in Mako's shared vocabulary. Pure, so it is tested on recorded
+   * payloads. `undefined` for a method the provider does not own.
+   */
+  decodeNotification?(method: string, params: JsonObject): AcpNotificationDecoding | undefined
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
   /**
@@ -125,6 +133,20 @@ export interface AcpBackgroundObserver {
   extension?(method: string, params: JsonObject): AcpBackgroundReport | undefined
   /** End all of the session's background work, as Stop does on every harness. */
   stop(control: AcpBackgroundControl): Promise<void>
+}
+
+export interface AcpNotificationDecoding {
+  /** The session the notification names; notices for another session are not applied. */
+  sessionId?: string
+  /**
+   * The notification's specific kind, the method plus the payload's own
+   * discriminator where it has one (`_x.ai/session_notification/auto_compact_started`),
+   * so an unknown one is logged under its own name.
+   */
+  kind: string
+  /** `[]` for a notification deliberately not shown; `undefined` for one the provider does not know. */
+  notices: NativeNotice[] | undefined
+  state?: Pick<Partial<LiveSessionState>, "title">
 }
 
 /** Vendor notifications about turns the agent started itself. */
