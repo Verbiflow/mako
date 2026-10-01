@@ -96,10 +96,19 @@ if (!worker) {
     }))
     assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["js", "js_reset"])
     const inventory = last(await js("JSON.stringify(await control.browsers())"))
-    const aside = inventory.browsers.filter(browser => browser.product === "Aside")
-    assert.equal(aside.length, 1, `Acceptance needs one exact installed Aside profile; found ${JSON.stringify(inventory.browsers.map(({ id, name, product, status }) => ({ id, name, product, status })))}`)
+    // MAKO_ACCEPTANCE_BROWSER picks an exact id; otherwise Aside, then any
+    // Chromium profile whose extension is connected. Only the test's own
+    // fixture tab is touched, and disconnect() drops only this test's client.
+    const connected = inventory.browsers.filter(browser =>
+      browser.transport === "extension" && browser.connection?.status !== "setup-required")
+    const requested = process.env.MAKO_ACCEPTANCE_BROWSER
+    const chosen = requested
+      ? connected.filter(browser => browser.id === requested)
+      : [connected.find(browser => browser.product === "Aside") ?? connected[0]].filter(Boolean)
+    assert.equal(chosen.length, 1, `Acceptance needs a Chromium profile with the Mako extension${requested ? ` matching ${requested}` : ""}; found ${JSON.stringify(inventory.browsers.map(({ id, name, transport, connection }) => ({ id, name, transport, connection })))}`)
+    evidence.browserUnderTest = { id: chosen[0].id, name: chosen[0].name, applicationPath: chosen[0].applicationPath }
     const value = "  Zoë 東京 🧪 00123  "
-    await js(`await control.connectBrowser(${JSON.stringify(aside[0].id)}); let tab=await control.openTab({browser:${JSON.stringify(aside[0].id)},url:${JSON.stringify(`http://127.0.0.1:${page.address().port}`)},background:true}); await tab.observe()`)
+    await js(`await control.connectBrowser(${JSON.stringify(chosen[0].id)}); let tab=await control.openTab({browser:${JSON.stringify(chosen[0].id)},url:${JSON.stringify(`http://127.0.0.1:${page.address().port}`)},background:true}); await tab.observe()`)
     await js(`await tab.locator({role:'form',name:'Shipping'}).locator({role:'textbox',name:'Recipient'}).setValue(${JSON.stringify(value)})`)
     const interrupted = await js("await tab.locator({role:'form',name:'Shipping'}).locator({role:'button',name:'Save'}).click()", true)
     assert.match(JSON.stringify(interrupted), /dialog-open/)
@@ -142,7 +151,8 @@ if (!worker) {
     assert.ok((await pending).error, "Cancelled MCP request must reject")
     const recovered = await js("JSON.stringify(typeof tab)")
     assert.equal(last(recovered), "undefined")
-    assert.match(JSON.stringify(recovered), /Mako browser and computer use/)
+    assert.match(JSON.stringify(recovered), /Program state was reset after a timeout, cancellation or worker fault/)
+    assert.doesNotMatch(JSON.stringify(recovered), /Mako browser and computer use/, "a cancellation does not reprint the documentation")
     await js(`let tab=control.tab(${JSON.stringify(target)}); await tab.observe(); await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}})`)
     await new Promise(done => setTimeout(done, 2100))
     assert.equal(interruptions.length, 1)
@@ -159,26 +169,28 @@ if (!worker) {
     assert.ok(image.content.some(block => block.type === "image"))
     await js('setTimeout(()=>{throw Error("late packaged fixture callback")},100); "scheduled"')
     await new Promise(done => setTimeout(done, 300))
-    assert.equal(last(await js("JSON.stringify(typeof tab)")), "undefined")
+    const afterLate = await js("JSON.stringify(typeof tab)")
+    assert.equal(last(afterLate), "object", "a late callback failure keeps bindings")
+    assert.match(JSON.stringify(afterLate), /its callbacks threw; bindings and state were kept: late packaged fixture callback/)
     await js(`let tab=control.tab(${JSON.stringify(target)}); await tab.observe()`)
     // Drop this test's browser connection. Reconnect explicitly and reconcile
     // the exact original tab; old generations must never remain usable.
-    browsers.disconnect(aside[0].id)
+    browsers.disconnect(chosen[0].id)
     const stale = await js("await tab.observe()", true)
     assert.match(JSON.stringify(stale), /stale|lease|connection|target|connect/i)
-    const connection = last(await js(`JSON.stringify(await control.connectBrowser(${JSON.stringify(aside[0].id)}))`))
+    const connection = last(await js(`JSON.stringify(await control.connectBrowser(${JSON.stringify(chosen[0].id)}))`))
     assert.notEqual(connection.generation, target.generation)
-    const pages = last(await js(`JSON.stringify(await control.tabs(${JSON.stringify(aside[0].id)}))`))
+    const pages = last(await js(`JSON.stringify(await control.tabs(${JSON.stringify(chosen[0].id)}))`))
     const original = pages.pages.find(page => page.tab === target.tab)
     if (original) {
-      await js(`tab=await control.claimTab({browser:${JSON.stringify(aside[0].id)},tab:${JSON.stringify(target.tab)}}); await tab.observe(); await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}}); await tab.close()`)
+      await js(`tab=await control.claimTab({browser:${JSON.stringify(chosen[0].id)},tab:${JSON.stringify(target.tab)}}); await tab.observe(); await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}}); await tab.close()`)
     }
     evidence.recovery.browserReconnect = { generationChanged: true,
       staleTargetRefused: true, originalTab: original ? "reclaimed-and-verified" : "confirmed-absent" }
     assert.equal(saves.length, 1, "Reconnect must not replay the original save")
     assert.equal(interruptions.length, 1, "Cancelled input must not resume later")
-    assert.ok(!last(await js(`JSON.stringify(await control.tabs(${JSON.stringify(aside[0].id)}))`)).pages.some(page => page.tab === target.tab))
-    evidence.browser = { transport: "installed Aside extension", exactSaveCount: saves.length, resetPreservedTarget: true, idleWorkerFaultPreservedTarget: true, screenshot: true }
+    assert.ok(!last(await js(`JSON.stringify(await control.tabs(${JSON.stringify(chosen[0].id)}))`)).pages.some(page => page.tab === target.tab))
+    evidence.browser = { transport: "installed browser extension", name: chosen[0].name, exactSaveCount: saves.length, resetPreservedTarget: true, idleWorkerFaultPreservedTarget: true, screenshot: true }
     fixture = await startCocoaFixture({ root, title: "Mako packaged MCP native proof" })
     const { pid } = await fixture.started()
     sampler = sampleFrontmost()

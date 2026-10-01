@@ -148,7 +148,7 @@ in 6 calls, with no errors and no help lookups. Following its reports:
 - the first cell's result now follows a `This cell's output:` line;
 - the docs say how `within`, `absent` and `hidden` behave in `expect`.
 
-**October 1: installed check of the second pass ([U25, U26](local-control-agent-issues.md#september-30-usage-audit)).**
+**October 1: installed check of the second pass ([U25–U27](local-control-agent-issues.md#september-30-usage-audit)).**
 - The packaged CLI and recording tests passed on build `e5b103991ebe70ef`.
 - The end-to-end API test then found U25: installed control workers run in
   Electron's Node mode, and the commands they ran inherited it. So
@@ -157,8 +157,13 @@ in 6 calls, with no errors and no help lookups. Following its reports:
   shows it.
 - Reading the installed MCP tool from Cursor found U26: text blocks run
   together in clients that join them with nothing between them.
-- Both are fixed in source, not installed. With the fixed runtime, the
+- A connected Brave profile listed as "Chrome · Kashyab" (U27). Brave copies
+  Chrome's user agent and launched Chrome's native-host helper. Listing now
+  names a browser from the application that launched its host.
+- All three are fixed in source, not installed. With the fixed runtime, the
   end-to-end test passed against the installed `dist-electron`.
+- The packaged MCP test now uses any Chromium profile with the extension
+  connected, or `MAKO_ACCEPTANCE_BROWSER`. It passed on Brave.
 
 To run a repo test against installed code without rebuilding `dist-electron`:
 1. Copy the test and `scripts/lib` into a scratch folder under `scripts/`.
@@ -167,9 +172,8 @@ To run a repo test against installed code without rebuilding `dist-electron`:
 3. Run it with `ELECTRON_RUN_AS_NODE=1 /Applications/Mako.app/Contents/MacOS/Mako`.
 4. Delete the scratch folder.
 
-Next: install U25 and U26, then rerun `test-control-api-e2e` on the installed
-runtime. The packaged MCP test's browser half needs a dedicated Aside profile,
-and Aside is no longer installed.
+Next: install U25–U27, then rerun `test-control-api-e2e` on the installed
+runtime.
 
 **Next (September 29): candidate from `dac8a05` installs when the default host is idle (`release/rollout-20260929`).**
 Both earlier jobs stopped the same way. The host quit for the install, Mako was

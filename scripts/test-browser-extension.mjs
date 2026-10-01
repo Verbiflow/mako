@@ -18,7 +18,10 @@ import {
   NativeMessageDecoder,
 } from "../packages/control-runtime/dist/browser-extension-protocol.js"
 import { startBrowserNativeHost } from "../dist-electron/browser-native-host.js"
-import { extensionBrowsers } from "../packages/control-runtime/dist/browser-extension-registration.js"
+import {
+  applicationProduct,
+  extensionBrowsers,
+} from "../packages/control-runtime/dist/browser-extension-registration.js"
 import {
   chromiumProfileRoots,
   prepareBrowserExtension,
@@ -171,6 +174,30 @@ try {
       "Work"
   )
   assert.equal((await extensionBrowsers(root))[0].name, "Aside · Work")
+  // Brave reports Chrome's user agent and can launch Chrome's host manifest;
+  // the application that launched the host names it.
+  const brave = join(root, "brave")
+  await mkdir(brave, { mode: 0o700 })
+  await writeFile(
+    join(brave, "chromium-cd033952-8c01-4b96-a1b6-8295f595cdec.json"),
+    JSON.stringify({
+      ...JSON.parse(await readFile(host.registration, "utf8")),
+      product: "Chrome",
+      name: "Chrome · Work",
+      applicationPath: "/Applications/Brave Browser.app",
+    })
+  )
+  const [listedBrave] = await extensionBrowsers(brave)
+  assert.equal(listedBrave.name, "Brave Browser · Work")
+  assert.equal(listedBrave.product, "Brave Browser")
+  for (const [applicationPath, product] of [
+    ["/opt/brave.com/brave/brave", "Brave Browser"],
+    ["/snap/chromium/3120/usr/lib/chromium-browser/chrome", "Chromium"],
+    ["/opt/google/chrome/chrome", "Google Chrome"],
+    ["/opt/microsoft/msedge/msedge", "Microsoft Edge"],
+    ["/usr/lib/unknown-browser/browser", undefined],
+  ])
+    assert.equal(applicationProduct(applicationPath), product, applicationPath)
   assert.equal((await stat(root)).mode & 0o777, 0o700)
   assert.equal((await stat(host.registration)).mode & 0o777, 0o600)
   for (const options of [
