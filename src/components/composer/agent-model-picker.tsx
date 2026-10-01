@@ -4,7 +4,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   BrainIcon,
-  ClipboardListIcon,
+  NotebookPenIcon,
   PinIcon,
   PinOffIcon,
   RulerIcon,
@@ -49,6 +49,8 @@ import { cn } from "@/lib/utils"
 import type { HarnessModel } from "@/lib/types"
 import { settingSourceLabel, settingValueLabel } from "./settings-source"
 import { useComposerSettings, type ComposerSettingsView } from "./use-composer-settings"
+import { flipPlan, PLAN_KEYS, planDetail } from "./plan-actions"
+import { usePlanContext } from "@/state/plan-mode"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -115,6 +117,7 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
         <MenuSeparator />
         <HarnessRows view={view} />
         <OptionRows view={view} />
+        <PlanModeRow view={view} />
         <MenuSeparator />
         <MenuItem
           onSelect={() =>
@@ -556,6 +559,8 @@ function SwitchOption({ view, option }: { view: ComposerSettingsView; option: Mo
   }
   return (
     <MenuItem
+      role="menuitemcheckbox"
+      aria-checked={on}
       disabled={Boolean(option.disabledReason)}
       title={option.disabledReason ?? settingSourceLabel(current ?? { kind: "unknown" })}
       onSelect={(event) => {
@@ -574,6 +579,36 @@ function SwitchOption({ view, option }: { view: ComposerSettingsView; option: Mo
       )}
       <SwitchMark on={on} />
     </MenuItem>
+  )
+}
+
+/** Plan mode beside the model's own options; the composer shows it only while it is on. */
+function PlanModeRow({ view }: { view: ComposerSettingsView }) {
+  const context = usePlanContext(view)
+  const { control } = context
+  if (control.kind === "none") return null
+  return (
+    <>
+      <MenuSeparator />
+      <MenuItem
+        role="menuitemcheckbox"
+        aria-checked={control.active}
+        disabled={Boolean(control.locked)}
+        title={control.locked ?? planDetail(context)}
+        onSelect={(event) => {
+          event.preventDefault()
+          flipPlan(context)
+        }}
+        className="group/option"
+      >
+        <OptionGlyph role="plan" />
+        <span className="flex-1 truncate">{ROLE_NAMES.plan}</span>
+        <span className="opacity-0 transition-opacity duration-100 group-data-[highlighted]/option:opacity-100">
+          <Keys keys={PLAN_KEYS} />
+        </span>
+        <SwitchMark on={control.active} />
+      </MenuItem>
+    </>
   )
 }
 
@@ -623,7 +658,7 @@ const ROLE_GLYPHS = {
   reasoning: BrainIcon,
   speed: ZapIcon,
   context: RulerIcon,
-  plan: ClipboardListIcon,
+  plan: NotebookPenIcon,
 } satisfies Record<OptionRole, typeof ZapIcon>
 
 function OptionGlyph({ role }: { role: ModelOption["role"] }) {
