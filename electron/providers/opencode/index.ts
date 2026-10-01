@@ -1,5 +1,6 @@
 import { join } from "node:path"
 import { accountEnv } from "../../accounts.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { openCodeAccountCapability } from "./accounts.js"
 import { createOpenCodeDriver } from "./live-driver.js"
@@ -16,19 +17,24 @@ import { openCodeUpdateSource } from "./updates.js"
  * before; its bridge dropped native questions, could not bind a turn to the
  * message it sent, and needed a plugin to see permission decisions.
  */
-export const installOpenCode: ProviderModule = (host) => {
-  host.accountCapabilities.register(openCodeAccountCapability)
-  host.nativeRunners.register(openCodeNativeRunner)
-  host.liveDrivers.register(createOpenCodeDriver({
+export const installOpenCode: ProviderModule = (host) => installHarness(host, {
+  provider: "opencode",
+  live: createOpenCodeDriver({
     env: () => accountEnv("opencode", process.env),
     approvalRoot: async () => {
       const { app } = await import("electron")
       return join(app.getPath("userData"), "approval-evidence")
     },
-  }))
-  host.profiles.register(openCodeProfileLoader)
-  host.processProbes.register(openCodeProcessProbe)
-  host.mcpSources.register(openCodeMcpSource)
-  host.skillSources.register(openCodeSkillSource)
-  host.updateSources.register(openCodeUpdateSource)
-}
+  }),
+  profile: openCodeProfileLoader,
+  accounts: openCodeAccountCapability,
+  acp: lacks("Runs on OpenCode’s native API"),
+  nativeRunner: openCodeNativeRunner,
+  processProbe: openCodeProcessProbe,
+  mcp: openCodeMcpSource,
+  skills: openCodeSkillSource,
+  sessionEmitter: notBuilt("Mako cannot write an OpenCode session to continue in"),
+  connection: lacks("Signs in through OpenCode’s own providers"),
+  updates: openCodeUpdateSource,
+  artifactPreview: lacks("Writes no artifact Mako previews"),
+})

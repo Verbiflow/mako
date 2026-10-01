@@ -423,7 +423,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           return
         }
         const stopped = event.type === "session.execution.interrupted" ? openCodeStopped(event.data.reason) : undefined
-        if (stopped) engine.event(live, stopped)
+        if (stopped) engine.event(live, stopped, event.id)
         if (!live.turn?.delivered) return
         if (event.type === "session.execution.succeeded") finish(live, { kind: "succeeded" })
         else if (event.type === "session.execution.failed") finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
@@ -436,7 +436,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         // Compaction Mako asked for fails its action and turn; any other would leave no trace.
         if (live.turn?.kind === "compaction" && (!event.data.inputID || event.data.inputID === live.turn.inboxId))
           finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
-        else engine.event(live, compactionFailedEvent(event.data.error.message))
+        else engine.event(live, compactionFailedEvent(event.data.error.message), event.id)
         return
       case "session.step.ended":
         if (event.data.sessionID === root) { live.context = contextTokens(event.data.tokens); usage(live) }
@@ -464,7 +464,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return
       case "session.compaction.ended":
         if (event.data.sessionID === root)
-          engine.compacted(live, { trigger: event.data.reason === "auto" ? "automatic" : "manual", tokensBefore: live.context, summary: event.data.text })
+          engine.compacted(live, { trigger: event.data.reason === "auto" ? "automatic" : "manual", tokensBefore: live.context, summary: event.data.text }, event.id)
         return
       case "mcp.status.changed":
         if (!event.location || event.location.directory === live.cwd) readMcp(live)
