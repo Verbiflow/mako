@@ -1,0 +1,427 @@
+{
+  "harness": "devin",
+  "source": "Shapes from devin 3000.10.23's saved sessions (tool_call_state) and its binary's option ids; plan text invented. The permission request's toolCall is assumed to repeat the exit_plan_mode call, as ACP's does; a capture should confirm it.",
+  "about": "Plan mode: write_plan revisions replace one card, exit_plan_mode's permission builds that card, and a revision after the rejected exit opens a new card.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "devin-session-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call_write_1",
+            "title": "Updated plan: Add a greeting",
+            "kind": "edit",
+            "content": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "newText": "# Plan: Add a greeting\n\nAdd `hello()` to the app.\n"
+              }
+            ],
+            "rawInput": {
+              "file_path": "/Users/me/.devin/plans/plan-2b7389.md"
+            },
+            "_meta": {
+              "cognition.ai/isPlanFileEdit": true,
+              "cognition.ai/inferenceToolName": "write_plan"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_write_1",
+            "title": "Updated plan: Add a greeting",
+            "toolKind": "write_plan",
+            "status": "pending",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "oldText": null,
+                "newText": "# Plan: Add a greeting\n\nAdd `hello()` to the app.\n"
+              }
+            ],
+            "input": "{\n  \"file_path\": \"/Users/me/.devin/plans/plan-2b7389.md\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "devin:devin-session-1:call_write_1",
+            "text": "# Plan: Add a greeting\n\nAdd `hello()` to the app.\n",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "devin-session-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call_write_1",
+            "status": "completed",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write_plan"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_write_1",
+            "title": "(undefined)",
+            "status": "completed",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "devin-session-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call_write_2",
+            "title": "Updated plan: Add a greeting",
+            "kind": "edit",
+            "content": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "newText": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello()`.\n2. Test it.\n"
+              }
+            ],
+            "rawInput": {
+              "file_path": "/Users/me/.devin/plans/plan-2b7389.md"
+            },
+            "_meta": {
+              "cognition.ai/isPlanFileEdit": true,
+              "cognition.ai/inferenceToolName": "write_plan"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_write_2",
+            "title": "Updated plan: Add a greeting",
+            "toolKind": "write_plan",
+            "status": "pending",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "oldText": null,
+                "newText": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello()`.\n2. Test it.\n"
+              }
+            ],
+            "input": "{\n  \"file_path\": \"/Users/me/.devin/plans/plan-2b7389.md\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "devin:devin-session-1:call_write_1",
+            "text": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello()`.\n2. Test it.\n",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "devin-session-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call_write_2",
+            "status": "completed",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write_plan"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_write_2",
+            "title": "(undefined)",
+            "status": "completed",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "devin-session-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call_exit_1",
+            "title": "Exit plan mode",
+            "kind": "switch_mode",
+            "locations": [
+              {
+                "path": "/Users/me/.devin/plans/plan-2b7389.md"
+              }
+            ],
+            "rawInput": {
+              "plan": "Add hello() and test it."
+            },
+            "_meta": {
+              "cognition.ai/isExitPlan": true,
+              "cognition.ai/planFilePath": "/Users/me/.devin/plans/plan-2b7389.md",
+              "cognition.ai/inferenceToolName": "exit_plan_mode"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_exit_1",
+            "title": "Exit plan mode",
+            "toolKind": "exit_plan_mode",
+            "status": "pending",
+            "details": [
+              {
+                "type": "location",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "line": "(undefined)"
+              }
+            ],
+            "input": "{\n  \"plan\": \"Add hello() and test it.\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "request": "session/request_permission",
+        "params": {
+          "sessionId": "devin-session-1",
+          "toolCall": {
+            "toolCallId": "call_exit_1",
+            "title": "Exit plan mode",
+            "kind": "switch_mode",
+            "locations": [
+              {
+                "path": "/Users/me/.devin/plans/plan-2b7389.md"
+              }
+            ],
+            "rawInput": {
+              "plan": "Add hello() and test it."
+            },
+            "_meta": {
+              "cognition.ai/isExitPlan": true,
+              "cognition.ai/planFilePath": "/Users/me/.devin/plans/plan-2b7389.md",
+              "cognition.ai/inferenceToolName": "exit_plan_mode"
+            }
+          },
+          "options": [
+            {
+              "optionId": "plan_normal",
+              "name": "Yes, implement plan",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "plan_accept_edits",
+              "name": "Yes, implement plan and accept edits",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "plan_bypass",
+              "name": "Yes, implement plan and bypass permissions",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "reject_once",
+              "name": "No, plan needs changes",
+              "kind": "reject_once"
+            }
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "ask",
+            "ask": {
+              "request": {
+                "title": "Exit plan mode",
+                "kind": "switch_mode",
+                "options": [
+                  {
+                    "optionId": "plan_normal",
+                    "name": "Yes, implement plan",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "plan_accept_edits",
+                    "name": "Yes, implement plan and accept edits",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "plan_bypass",
+                    "name": "Yes, implement plan and bypass permissions",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "reject_once",
+                    "name": "No, plan needs changes",
+                    "kind": "reject_once"
+                  }
+                ],
+                "implementsPlan": {
+                  "plan": "devin:devin-session-1:call_write_1",
+                  "approve": "plan_accept_edits"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "devin-session-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call_exit_1",
+            "status": "failed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "Tool execution was rejected: User rejected this tool call"
+                }
+              }
+            ],
+            "_meta": {
+              "cognition.ai/rejected": true,
+              "cognition.ai/inferenceToolName": "exit_plan_mode"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_exit_1",
+            "title": "(undefined)",
+            "status": "failed",
+            "input": "(undefined)",
+            "output": "Tool execution was rejected: User rejected this tool call",
+            "attachments": "(undefined)",
+            "details": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "devin-session-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call_write_3",
+            "title": "Updated plan: Add a greeting",
+            "kind": "edit",
+            "content": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "newText": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello(name)`.\n2. Test it.\n"
+              }
+            ],
+            "rawInput": {
+              "file_path": "/Users/me/.devin/plans/plan-2b7389.md"
+            },
+            "_meta": {
+              "cognition.ai/isPlanFileEdit": true,
+              "cognition.ai/inferenceToolName": "write_plan"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_write_3",
+            "title": "Updated plan: Add a greeting",
+            "toolKind": "write_plan",
+            "status": "pending",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "oldText": null,
+                "newText": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello(name)`.\n2. Test it.\n"
+              }
+            ],
+            "input": "{\n  \"file_path\": \"/Users/me/.devin/plans/plan-2b7389.md\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "devin:devin-session-1:call_write_3",
+            "text": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello(name)`.\n2. Test it.\n",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    }
+  ]
+}
