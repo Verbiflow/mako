@@ -20,6 +20,7 @@ import {
   valueFields,
 } from "../../accounts-common.js"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
+import type { JsonValue } from "../../codex-app-json.js"
 import { resolveExecutable } from "../../executable.js"
 import type { ObservedAccountCapability } from "../account-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"
@@ -76,7 +77,7 @@ const BillingSchema = z.object({
  * no unit, so they stay unread until one is confirmed.
  */
 export function parseGrokBilling(
-  value: unknown
+  value: JsonValue
 ): Extract<AccountUsage, { status: "ok" }> {
   const billing = BillingSchema.parse(value)
   const config = billing.config
@@ -113,7 +114,7 @@ export function parseGrokBilling(
  * Grok answers billing over its ACP agent without a session, so no session
  * is created and no MCP server starts: initialize, ask, exit.
  */
-async function readGrokBilling(env: NodeJS.ProcessEnv): Promise<unknown> {
+async function readGrokBilling(env: NodeJS.ProcessEnv): Promise<JsonValue> {
   return withDiscoveryProcess(
     {
       command: "grok",
@@ -139,7 +140,7 @@ async function readGrokBilling(env: NodeJS.ProcessEnv): Promise<unknown> {
         clientCapabilities: {},
       })
       // Grok's extension methods keep ACP's underscore prefix on the wire.
-      return connection.extMethod("_x.ai/billing", {})
+      return z.json().parse(await connection.extMethod("_x.ai/billing", {}))
     }
   )
 }
