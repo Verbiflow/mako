@@ -1,6 +1,7 @@
 import { acpToolDetails } from "../acp-tool-details.js"
 import { acpAttachments } from "../acp-attachments.js"
-import type { AttachmentContent, ToolDetail } from "../content.js"
+import { ProposedPlans, type AttachmentContent, type ToolDetail } from "../content.js"
+import { DevinPlanCallSchema, DevinPlanTracker } from "./devin-plans.js"
 /**
  * Devin, running locally.
  *
@@ -25,6 +26,7 @@ import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import {
+  agentTitleFrom,
   clip,
   EntrySink,
   titleFrom,
@@ -126,6 +128,7 @@ interface AcpToolCall extends AcpEventBase {
   name: string
   input?: string
   toolCallId?: string
+  notification: JsonRecord
 }
 
 interface AcpToolCallUpdate extends AcpEventBase {
@@ -133,6 +136,7 @@ interface AcpToolCallUpdate extends AcpEventBase {
   output: string
   status?: string
   toolCallId?: string
+  notification: JsonRecord
 }
 
 interface AcpPlanEntry {
@@ -232,7 +236,7 @@ export class DevinLocalProvider implements SessionProvider {
       nativeId: rawId.split("/").pop() ?? rawId,
       path: file.path,
       cwd: meta?.cwd,
-      title: titleFrom(meta?.title),
+      title: agentTitleFrom(meta?.title),
       model: meta?.model,
       modelProvider: "devin",
       startedAt: meta?.createdAt,
@@ -242,7 +246,7 @@ export class DevinLocalProvider implements SessionProvider {
     if (!ref.title || !ref.startedAt) {
       // No metadata (or a stale cache): the journal's own first lines carry
       // a title update and the first user words. Bounded read.
-      const skim = translator()
+      const skim = translator(journalOf(file.path))
       let budget = 64_000
       await readLines(file.path, 0, (line) => {
         budget -= line.length + 1
@@ -251,7 +255,7 @@ export class DevinLocalProvider implements SessionProvider {
       })
       const entries = skim.done()
       const first = entries.find((entry) => entry.kind === "user")
-      if (!ref.title && skim.title) ref.title = titleFrom(skim.title)
+      if (!ref.title && skim.title) ref.title = agentTitleFrom(skim.title)
       if (!ref.title) {
         for (const entry of entries) {
           if (entry.kind !== "user") continue
@@ -273,22 +277,22 @@ export class DevinLocalProvider implements SessionProvider {
       mtimeMs: info.mtimeMs,
     })
     if (!ref) return null
-    const into = translator()
+    const into = translator(journalOf(path))
     const checkpoint = await readLines(path, 0, into.push)
     const entries = into.done()
-    if (!ref.title && into.title) ref.title = titleFrom(into.title)
+    if (!ref.title && into.title) ref.title = agentTitleFrom(into.title)
     return { ref, checkpoint, entries }
   }
 
   createFollower(path: string, fromByte: number) {
-    return createJsonlFollower(path, fromByte, translator)
+    return createJsonlFollower(path, fromByte, () => translator(journalOf(path)))
   }
 
   async tail(
     path: string,
     fromByte: number
   ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
-    const into = translator()
+    const into = translator(journalOf(path))
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
   }
@@ -350,9 +354,16 @@ export class DevinLocalProvider implements SessionProvider {
  * block, and tool calls pick up their updates by id. User chunks group by
  * the client message id so a multi-chunk prompt stays one entry.
  */
-function translator(): DevinTranslator {
+function journalOf(path: string): string {
+  return basename(path, ".ndjson")
+}
+
+/** `journal` scopes plan cards; Mako runs no desktop session live, so they need not match a live id. */
+function translator(journal: string): DevinTranslator {
   const sink = new EntrySink()
   const state: TranslatorState = {}
+  const plans = new DevinPlanTracker()
+  const cards = new ProposedPlans()
   let assistant: AssistantEntry | null = null
   let userId: string | null = null
   const toolsById = new Map<string, ToolBlock>()
@@ -378,6 +389,12 @@ function translator(): DevinTranslator {
     } else {
       entry.blocks.push({ type: kind, text })
     }
+  }
+
+  const propose = (notification: JsonRecord, at?: string) => {
+    const plan = plans.observe(DevinPlanCallSchema.safeParse(notification).data, journal)
+    const block = plan && cards.propose(plan.id, plan.text)
+    if (block) ensureAssistant(at).blocks.push(block)
   }
 
   const push = (raw: string): void => {
@@ -435,6 +452,7 @@ function translator(): DevinTranslator {
         if (event.attachments?.length) block.attachments = event.attachments
         entry.blocks.push(block)
         if (event.toolCallId) toolsById.set(event.toolCallId, block)
+        propose(event.notification, event.at)
         return
       }
       case "tool_call_update": {
@@ -451,6 +469,7 @@ function translator(): DevinTranslator {
         } else if (event.toolCallId) {
           needsReset = true
         }
+        propose(event.notification, event.at)
         return
       }
       case "plan":
@@ -500,7 +519,7 @@ function translator(): DevinTranslator {
         })
         return
       case "session_info_update":
-        if (event.title) state.title = event.title
+        state.title = agentTitleFrom(event.title) ?? state.title
         return
       case "current_mode_update":
         flushAssistant()
@@ -632,6 +651,7 @@ function parseAcpEvent(raw: string): AcpEvent | null {
         attachments: acpAttachments(notification["content"]),
         details: acpToolDetails(notification["content"]),
         toolCallId: readString(notification, "toolCallId"),
+        notification,
       }
     case "tool_call_update":
       return {
@@ -642,6 +662,7 @@ function parseAcpEvent(raw: string): AcpEvent | null {
         attachments: acpAttachments(notification["content"]),
         details: acpToolDetails(notification["content"]),
         toolCallId: readString(notification, "toolCallId"),
+        notification,
       }
     case "plan":
       return {

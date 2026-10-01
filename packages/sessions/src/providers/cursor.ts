@@ -2,7 +2,7 @@ import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
 import { cursorFailure, cursorTaskOpener } from "./cursor-presentation.js"
 import { compactionEvent } from "../events.js"
-import { attachmentFromUrl, type AttachmentContent } from "../content.js"
+import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent, type ProposedPlan } from "../content.js"
 /**
  * Cursor CLI sessions.
  *
@@ -1270,6 +1270,8 @@ export class CursorProvider implements SessionProvider {
                 if (part.toolCallId) toolsById.set(part.toolCallId, block)
                 calls.push(block)
                 assistant.blocks.push(block)
+                const plan = part.toolCallId ? createPlanBlock(part.toolCallId, part.toolName, part.args) : undefined
+                if (plan) assistant.blocks.push(plan)
                 break
               }
               case "other":
@@ -1684,4 +1686,14 @@ function cursorAttachments(
     )
   }
   return result
+}
+
+/**
+ * Cursor's plan tool, saved as `CreatePlan` (`createPlan` over the SDK), shows
+ * its plan as the card live gives it; the stored call id is the live one.
+ */
+function createPlanBlock(id: string, name: string, args: JsonValue | undefined): ProposedPlan | undefined {
+  if (name !== "CreatePlan" && name !== "createPlan") return undefined
+  const plan = isJsonObject(args) ? stringValue(args["plan"]) : undefined
+  return plan === undefined ? undefined : proposedPlanBlock(id, plan)
 }

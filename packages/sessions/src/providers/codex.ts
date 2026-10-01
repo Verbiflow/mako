@@ -14,7 +14,7 @@ import {
 import { codexPlanDetails } from "../tool-plan.js"
 import { codexServiceTier } from "../model-catalog.js"
 import type { SessionSettings } from "../settings.js"
-import { attachmentFromUrl, type AttachmentContent } from "../content.js"
+import { attachmentFromUrl, ProposedPlans, type AttachmentContent } from "../content.js"
 /**
  * Codex CLI sessions.
  *
@@ -194,6 +194,13 @@ interface CodexIgnoredRolloutLine extends CodexRolloutBase {
   kind: "ignored"
 }
 
+/** A plan-mode turn's plan, under the id the app-server gives the live card. */
+interface CodexPlanLine extends CodexRolloutBase {
+  kind: "plan"
+  id: string
+  text: string
+}
+
 type CodexRolloutEvent =
   | CodexSessionMeta
   | CodexTurnContext
@@ -208,6 +215,7 @@ type CodexRolloutEvent =
   | CodexEventLine
   | CodexCompactedLine
   | CodexIgnoredRolloutLine
+  | CodexPlanLine
 
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
 type ToolBlock = EntryBlock & { type: "tool" }
@@ -542,6 +550,13 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
               return { kind: "event", at, event: reviewStarted(stringValue(item?.["user_facing_hint"])) }
             case "ExitedReviewMode":
               return { kind: "event", at, event: reviewEnded(item?.["review_output"]) }
+            case "Plan": {
+              // Every history mode records a plan here; its id matches the app-server's.
+              const turn = stringValue(payload["turn_id"])
+              const id = stringValue(item?.["id"])
+              const text = stringValue(item?.["text"])
+              return turn && id && text !== undefined ? { kind: "plan", at, id: `codex:${turn}:${id}`, text } : { kind: "ignored", at }
+            }
             default:
               return { kind: "ignored", at }
           }
@@ -979,6 +994,11 @@ export class CodexProvider implements SessionProvider {
  * closes over the most recent assistant entry, which is the turn it priced.
  * Push-based so a gigabyte session streams through without ever being held.
  */
+/** Codex hides a plan's markup from the reply; the plan shows as its card. */
+function withoutPlanMarkup(text: string): string {
+  return text.includes("<proposed_plan>") ? text.replace(/<proposed_plan>[\s\S]*?<\/proposed_plan>/g, "").trim() : text
+}
+
 function translator(): CodexTranslator {
   const sink = new EntrySink()
   let assistant: AssistantEntry | null = null
@@ -998,6 +1018,7 @@ function translator(): CodexTranslator {
    */
   let turnOpen = false
   let lastAt: string | undefined
+  const plans = new ProposedPlans()
 
   const openAssistant = (at?: string): AssistantEntry => {
     compaction = undefined
@@ -1056,19 +1077,21 @@ function translator(): CodexTranslator {
         })
         return
       }
-      case "assistant_response":
-        if (!event.text && !event.attachments?.length) return
+      case "assistant_response": {
+        const text = withoutPlanMarkup(event.text)
+        if (!text && !event.attachments?.length) return
         if (!started) needsReset = true
         started = true
         if (event.id && assistant?.id !== event.id) assistant = null
         openAssistant(event.at).id = event.id
-        if (event.text)
+        if (text)
           openAssistant(event.at).blocks.push({
             type: "text",
-            text: codexPresentation(event.text),
+            text: codexPresentation(text),
           })
         openAssistant(event.at).blocks.push(...(event.attachments ?? []))
         return
+      }
       case "reasoning_response":
         if (!event.text.trim()) return
         if (!started) needsReset = true
@@ -1115,6 +1138,11 @@ function translator(): CodexTranslator {
       case "event":
         pushMarker(event.event, event.at)
         return
+      case "plan": {
+        const card = plans.propose(event.id, event.text)
+        if (card) openAssistant(event.at).blocks.push(card)
+        return
+      }
       case "compacted":
         // A legacy rollout records one compaction twice; either record
         // alone still marks it.

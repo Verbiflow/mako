@@ -1,10 +1,11 @@
-import { attachmentFromUrl, type AttachmentContent } from "../content.js"
+import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "../content.js"
 import { stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { openCodeDatabasePaths } from "./opencode-location.js"
-import { openCodeNoticeLabel } from "./opencode-notice.js"
+import { isOpenCodeInstruction, openCodeNoticeLabel } from "./opencode-notice.js"
+import { openCodePlan } from "./opencode-plan.js"
 import { compactionEvent, compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "../events.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
@@ -685,19 +686,15 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
     execution.running = finish === undefined || finish === "tool-calls" || jsonObject(row.data.retry) !== undefined
   }
   if (type === "synthetic") {
+    const notice = {
+      text: jsonText(row.data.text),
+      description: jsonText(row.data.description),
+      source: jsonText(jsonObject(row.data.metadata)?.source),
+      state: jsonText(jsonObject(row.data.metadata)?.state),
+    }
+    if (isOpenCodeInstruction(notice)) return
     if (!execution.running)
-      sink.push({
-        kind: "event",
-        id: row.id,
-        at,
-        label: openCodeNoticeLabel({
-          text: jsonText(row.data.text),
-          description: jsonText(row.data.description),
-          source: jsonText(jsonObject(row.data.metadata)?.source),
-          state: jsonText(jsonObject(row.data.metadata)?.state),
-        }),
-        opensTurn: true,
-      })
+      sink.push({ kind: "event", id: row.id, at, label: openCodeNoticeLabel(notice), opensTurn: true })
     execution.running = true
     return
   }
@@ -713,7 +710,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
     return
   }
   if (type === "assistant") {
-    const blocks = assistantContent(row.data.content)
+    const blocks = withPlanCard(row.id, row.data, assistantContent(row.data.content))
     const usage = usageFrom(row.data)
     const model = modelFromData(row.data)
     if (blocks.length > 0 || usage)
@@ -847,7 +844,7 @@ function pushLegacy(
   }
   const model = modelFromData(message.data)
   if (blocks.length > 0 || usage)
-    pushAssistant(sink, at, model?.id, usage, blocks)
+    pushAssistant(sink, at, model?.id, usage, withPlanCard(message.id, message.data, blocks))
   for (const retry of retries) pushEvent(sink, at, retry)
   if (isInterrupted(message.data))
     sink.push({ kind: "event", at, label: "Interrupted" })
@@ -872,6 +869,14 @@ function pushAssistant(
   if (model !== undefined) entry.model = model
   if (usage !== undefined) entry.usage = usage
   sink.push(entry)
+}
+
+/** A Plan step's reply shows as its plan card, as it does live. */
+function withPlanCard(messageId: string, data: JsonObject, blocks: EntryBlock[]): EntryBlock[] {
+  const texts = blocks.flatMap((block) => block.type === "text" ? [block.text] : [])
+  const plan = openCodePlan(messageId, jsonText(data.agent), jsonText(data.finish), texts)
+  const card = plan && proposedPlanBlock(plan.id, plan.text)
+  return card ? [...blocks.filter((block) => block.type !== "text"), card] : blocks
 }
 
 function assistantContent(value: JsonValue | undefined): EntryBlock[] {

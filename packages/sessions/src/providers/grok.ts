@@ -1,6 +1,6 @@
 import { acpToolDetails } from "../acp-tool-details.js"
 import { acpAttachments } from "../acp-attachments.js"
-import type { AttachmentContent, ToolDetail } from "../content.js"
+import { ProposedPlans, type AttachmentContent, type ToolDetail } from "../content.js"
 import { backgroundCommandLabel, subagentLabel } from "../provider-turn.js"
 import { compactionEvent, compactionFailedEvent, event, modelChangedEvent, plainWords, turnFailedEvent, type TranscriptEvent } from "../events.js"
 /**
@@ -95,6 +95,7 @@ interface GrokToolCall extends GrokUpdateBase {
   name: string
   input?: string
   output?: string
+  plan?: GrokProposedPlan
 }
 
 interface GrokToolUpdate extends GrokUpdateBase {
@@ -105,6 +106,13 @@ interface GrokToolUpdate extends GrokUpdateBase {
   output?: string
   status?: string
   failed: boolean
+  plan?: GrokProposedPlan
+}
+
+/** A plan `exit_plan_mode` proposed, under its live id (`electron/providers/grok/plans.ts`). */
+interface GrokProposedPlan {
+  id: string
+  text: string
 }
 
 interface GrokPlanEntry {
@@ -447,8 +455,13 @@ function failedToolUpdate(
   return exitCode !== undefined && exitCode !== 0
 }
 
+/** Grok's own name, as the live desk reads it; the title is a fallback for older files. */
 function toolName(update: JsonObject): string {
-  return stringValue(update["title"]) || stringValue(update["kind"]) || "tool"
+  const native = stringValue(objectValue(objectValue(update["_meta"])?.["x.ai/tool"])?.["name"])
+  if (native) return native
+  const title = stringValue(update["title"])
+  if (title && /^web search\b/i.test(title)) return "web_search"
+  return title || stringValue(update["kind"]) || "tool"
 }
 
 function parseUpdateLine(raw: string): GrokUpdate | null {
@@ -500,6 +513,7 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
         output:
           clip(normalizeToolOutput(contentText(update["content"]))) ||
           undefined,
+        plan: grokProposedPlan(params, update, toolName(update) === "exit_plan_mode" ? objectValue(update["rawInput"])?.["planContent"] : undefined),
       }
     }
     case "tool_call_update": {
@@ -517,6 +531,7 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
         output: clip(normalizeToolOutput(content)) || undefined,
         status,
         failed: failedToolUpdate(status, update["rawOutput"]),
+        plan: grokProposedPlan(params, update, objectValue(objectValue(update["rawOutput"])?.["PlanReady"])?.["plan_content"]),
       }
     }
     case "plan":
@@ -533,6 +548,17 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
       return marker ? { sessionUpdate: "marker", at, marker } : null
     }
   }
+}
+
+/**
+ * Grok's `exit_plan_mode` carries the model's copy of the plan as
+ * `planContent`; an approved call completes with the plan file's own text as
+ * `PlanReady.plan_content`, which replaces it.
+ */
+function grokProposedPlan(params: JsonObject, update: JsonObject, text: JsonValue | undefined): GrokProposedPlan | undefined {
+  const sessionId = stringValue(params["sessionId"])
+  const toolCallId = stringValue(update["toolCallId"])
+  return sessionId && toolCallId && isString(text) && text.trim() ? { id: `grok:${sessionId}:${toolCallId}`, text } : undefined
 }
 
 function parseLegacyCalls(value: JsonValue | undefined): LegacyAssistantCall[] {
@@ -817,6 +843,7 @@ function updatesTranslator(): GrokTranslator {
   let userKey: string | undefined
   let plan: AssistantEntry | null = null
   const toolsById = new Map<string, GrokToolBlock>()
+  const plans = new ProposedPlans()
   let started = false
   let needsReset = false
 
@@ -854,6 +881,11 @@ function updatesTranslator(): GrokTranslator {
     ensureAssistant(at).blocks.push(block)
     if (id) toolsById.set(id, block)
     return block
+  }
+
+  const propose = (found: GrokProposedPlan | undefined, at?: string): void => {
+    const block = found && plans.propose(found.id, found.text)
+    if (block) ensureAssistant(at).blocks.push(block)
   }
 
   const push = (raw: string): void => {
@@ -916,6 +948,7 @@ function updatesTranslator(): GrokTranslator {
         if (event.details?.length) block.details = event.details
         if (event.attachments?.length) block.attachments = event.attachments
         if (event.output) block.output = event.output
+        propose(event.plan, event.at)
         return
       }
       case "tool_call_update": {
@@ -937,6 +970,7 @@ function updatesTranslator(): GrokTranslator {
         }
         if (event.failed) target.error = true
         if (/cancel/i.test(event.status ?? "")) target.canceled = true
+        propose(event.plan, event.at)
         return
       }
       case "plan": {

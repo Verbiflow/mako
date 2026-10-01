@@ -6,7 +6,7 @@ import {
 } from "./claude-events.js"
 import { compactionEvent, event, messageEvent, modelChangedEvent, turnFailedEvent, type Compaction, type TranscriptEvent } from "../events.js"
 import { todoDetails } from "../tool-plan.js"
-import { attachmentFromUrl, type AttachmentContent } from "../content.js"
+import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "../content.js"
 /**
  * Claude Code sessions.
  *
@@ -183,6 +183,11 @@ function stringValue(value: ClaudeJsonValue | undefined): string | undefined {
 
 function numberValue(value: ClaudeJsonValue | undefined): number | undefined {
   return Number.isFinite(value) ? Number(value) : undefined
+}
+
+/** `ExitPlanMode`'s plan, as its live session reads it (`electron/providers/claude/sdk-plan.ts`). */
+function exitPlanText(input: ClaudeJsonValue | undefined): string {
+  return (isJsonObject(input) && stringValue(input["plan"])) || ""
 }
 
 /** Claude's own words on a refusal, then the API's explanation when it gave one. */
@@ -809,6 +814,8 @@ function translator(): ClaudeTranslator {
           if (part.name === "TodoWrite") block.details = todoDetails(block.input)
           if (part.id !== undefined) toolsById.set(part.id, block)
           turn.blocks.push(block)
+          const plan = part.name === "ExitPlanMode" && part.id ? proposedPlanBlock(part.id, exitPlanText(part.input)) : undefined
+          if (plan) turn.blocks.push(plan)
           break
         }
       }

@@ -1,6 +1,7 @@
 import { devinReferences, devinPromptImages, devinMcpCall } from "./devin-presentation.js"
 import { todoDetails } from "../tool-plan.js"
-import { attachmentFromUrl, type AttachmentContent } from "../content.js"
+import { attachmentFromUrl, ProposedPlans, type AttachmentContent } from "../content.js"
+import { DevinPlanCallSchema, DevinPlanTracker, type DevinPlanCall } from "./devin-plans.js"
 /**
  * devin-cli's own sessions — the ones Zed's agent panel (or any ACP host)
  * drives.
@@ -28,6 +29,7 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
   EntrySink,
+  agentTitleFrom,
   titleFrom,
   type EntryBlock,
   type Thread,
@@ -262,7 +264,7 @@ export class DevinCliProvider implements SessionProvider {
         .get(id)
       if (!stored) return null
       const row = parseSessionRow(stored)
-      let title = titleFrom(row.title)
+      let title = agentTitleFrom(row.title)
       if (!title) {
         for (const entry of translatedMainChain(db, id, mainChainId(db, id))) {
           if (entry.kind !== "user") continue
@@ -307,10 +309,8 @@ export class DevinCliProvider implements SessionProvider {
     if (!db) return null
     try {
       const cursor = mainChainId(db, id)
-      const into = translator()
-      for (const row of mainChainRows(db, id, cursor)) into.push(row)
       ref.bytes = cursor
-      return { ref, entries: into.snapshot() }
+      return { ref, entries: translatedMainChain(db, id, cursor) }
     } catch {
       this.resetConnection()
       return null
@@ -423,9 +423,43 @@ function translatedMainChain(
   sessionId: string,
   leafId: number
 ): ThreadEntry[] {
-  const into = translator()
+  const into = translator(sessionId, acpToolCalls(db, sessionId))
   for (const row of mainChainRows(db, sessionId, leafId)) into.push(row)
   return into.snapshot()
+}
+
+interface AcpToolCallState {
+  call?: DevinPlanCall
+  update?: DevinPlanCall
+}
+
+/**
+ * Each tool call as Devin reported it over ACP, which is where a plan file's
+ * rendered text and path live; the chat messages hold only the model's own
+ * arguments. Older stores have no such table.
+ */
+function acpToolCalls(db: DatabaseSync, sessionId: string): Map<string, AcpToolCallState> {
+  const calls = new Map<string, AcpToolCallState>()
+  const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_call_state'").get()
+  if (!table) return calls
+  const rows = db
+    .prepare("SELECT tool_call_id, tool_call_json, tool_call_update_json FROM tool_call_state WHERE session_id = ?")
+    .all(sessionId)
+  for (const row of rows) {
+    const id = sqliteText(row.tool_call_id)
+    if (id) calls.set(id, { call: planCall(row.tool_call_json), update: planCall(row.tool_call_update_json) })
+  }
+  return calls
+}
+
+function planCall(value: SQLOutputValue | undefined): DevinPlanCall | undefined {
+  const text = sqliteText(value)
+  if (!text) return undefined
+  try {
+    return DevinPlanCallSchema.safeParse(JSON.parse(text)).data
+  } catch {
+    return undefined
+  }
 }
 
 function entryDigest(entry: ThreadEntry): string {
@@ -465,9 +499,11 @@ function compactionSummary(text: string): string {
   return at === -1 ? text : text.slice(at + "\nSummary:\n".length)
 }
 
-function translator(): MessageTranslator {
+function translator(sessionId: string, acp: ReadonlyMap<string, AcpToolCallState>): MessageTranslator {
   const sink = new EntrySink()
   const tools = new Map<string, ToolBlock>()
+  const plans = new DevinPlanTracker()
+  const cards = new ProposedPlans()
   /** A turn ends with an assistant message that calls no tool, or a stop. */
   let running = false
   const subagentCalls = new Map<string, string>()
@@ -560,6 +596,9 @@ function translator(): MessageTranslator {
           if (mcp) { block.name = mcp.name; block.input = mcp.input }
           blocks.push(block)
           if (call.id) tools.set(call.id, block)
+          const plan = call.id ? plans.observe(acp.get(call.id)?.call, sessionId) : undefined
+          const card = plan && cards.propose(plan.id, plan.text)
+          if (card) blocks.push(card)
         }
         const text = contentText(message.content)
         if (text.trim()) blocks.push({ type: "text", text: devinReferences(text) })
@@ -580,6 +619,7 @@ function translator(): MessageTranslator {
         const block = message.tool_call_id
           ? tools.get(message.tool_call_id)
           : undefined
+        if (message.tool_call_id) plans.observe(acp.get(message.tool_call_id)?.update, sessionId)
         if (!block) return
         const output = contentText(message.content)
         const title = message.tool_call_id ? subagentCalls.get(message.tool_call_id) : undefined

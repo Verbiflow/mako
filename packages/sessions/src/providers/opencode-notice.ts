@@ -36,3 +36,12 @@ export function openCodeNoticeLabel(notice: OpenCodeNotice): string {
   }
   return text.replace(/\s+/g, " ").trim().slice(0, 500) || PROVIDER_TURN_FALLBACK
 }
+
+/**
+ * A synthetic message that only instructs the model, like the
+ * `<system-reminder>` Plan mode writes ahead of each prompt. It isn't a
+ * notice and opens no turn.
+ */
+export function isOpenCodeInstruction(notice: OpenCodeNotice): boolean {
+  return notice.source === undefined && /^\s*<system-reminder>/.test(notice.text ?? "")
+}
