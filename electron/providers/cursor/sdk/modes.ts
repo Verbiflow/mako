@@ -15,9 +15,11 @@ import type { LiveSessionMode } from "../../../contracts/providers-acp.js"
  * SDK's `autoReview` classifier is not used either: it refuses instead of
  * asking, the reason reaches the model only, and nobody at the desk can
  * overrule it, so a blocked call is a turn lost to a decision the user never
- * saw. Cursor's planning mode and a read-only tool allowlist would work, but
- * they are deliberately not offered: Cursor in Mako is Agent and nothing
- * else, and the composer's access chip says so rather than opening a ladder.
+ * saw. A read-only tool allowlist would work but is deliberately not offered:
+ * Cursor in Mako is Agent, and the composer's access chip says so rather than
+ * opening a ladder. Planning is not an access level here: it is the SDK's
+ * per-send conversation mode, the `plan` setting every Cursor model declares
+ * (`cursor-sdk-models.ts`), so Plan runs beside Agent's access.
  * A workspace's `.cursor/hooks.json` remains the one policy hook, which is
  * why the child loads project settings.
  *

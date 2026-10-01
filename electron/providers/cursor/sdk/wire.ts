@@ -313,6 +313,8 @@ export const SdkSendParamsSchema = z.object({
   text: z.string(),
   images: z.array(SdkImageSchema).optional(),
   model: SdkModelSelectionSchema.optional(),
+  /** Cursor's Plan mode for this send: the agent proposes a plan with `createPlan` and changes nothing. */
+  plan: z.boolean().optional(),
 })
 
 export const SdkRequestSchema = z.discriminatedUnion("method", [

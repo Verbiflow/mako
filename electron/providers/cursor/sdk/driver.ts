@@ -11,7 +11,7 @@ import {
   cursorStoreOrigin,
   normalizeCursorSdkModels,
 } from "@mako/sessions"
-import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
+import type { SessionModel, SessionSettings, SettingValue } from "@mako/sessions/settings"
 import { messageEvent, TURN_FAILED } from "@mako/sessions/events"
 import { compareNativeCheckpoint, type ProviderBinding, type ResumeVerdict } from "../../../contracts/conversation-control.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
@@ -110,11 +110,11 @@ export function connectionLost(result: SdkRunResult): boolean {
 
 type Engine = LiveEngineApi<Live>
 
-function configOptions(models: readonly SessionModel[], selection: SdkModelSelection | undefined): SessionModel["options"] {
+function configOptions(models: readonly SessionModel[], selection: SdkModelSelection | undefined, plan?: SettingValue): SessionModel["options"] {
   if (!selection) return []
   const model = models.find((candidate) => candidate.id === selection.id)
   if (!model) return []
-  const reported = cursorSdkReportedSettings(selection, models)
+  const reported = cursorSdkReportedSettings(selection, models, plan)
   return model.options.map((option) => {
     const value = reported.options?.[option.id]
     if (value === undefined) return option
@@ -253,10 +253,11 @@ function claimTurn(engine: Engine, live: Live, turn: string): boolean {
 
 function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
   settleTurn(engine, live, result.status, result.error?.message)
-  const settings = result.model ? cursorSdkReportedSettings(result.model, live.models) : live.state.settings
+  const plan = live.state.settings?.options?.plan
+  const settings = result.model ? cursorSdkReportedSettings(result.model, live.models, plan) : live.state.settings
   const patch: Partial<LiveSessionState> = {
     settings,
-    configOptions: result.model ? configOptions(live.models, result.model) : live.state.configOptions,
+    configOptions: result.model ? configOptions(live.models, result.model, plan) : live.state.configOptions,
   }
   switch (result.status) {
     case "finished":
@@ -295,8 +296,8 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
       if (event.message.type === "system" && event.message.model) {
         live.state = {
           ...live.state,
-          settings: cursorSdkReportedSettings(event.message.model, live.models),
-          configOptions: configOptions(live.models, event.message.model),
+          settings: cursorSdkReportedSettings(event.message.model, live.models, live.state.settings?.options?.plan),
+          configOptions: configOptions(live.models, event.message.model, live.state.settings?.options?.plan),
         }
       }
       engine.emitUpdates(live, live.projection.message(event.message))
@@ -559,8 +560,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           nativeId: opened.agentId,
           nativePath: cursorSdkStorePath(stateRoot, opened.agentId),
           currentMode: CURSOR_SDK_DEFAULT_MODE,
-          settings: cursorSdkReportedSettings(reported, live.models),
-          configOptions: configOptions(live.models, reported),
+          settings: cursorSdkReportedSettings(reported, live.models, options.tuning?.options?.plan),
+          configOptions: configOptions(live.models, reported, options.tuning?.options?.plan),
         })
         hostLog("cursor-sdk", opened.imported ? "imported and resumed a cursor-agent session" : options.resume ? "resumed agent" : "created agent", {
           conversation: options.conversationId,
@@ -597,7 +598,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           ? "Cursor was still running an earlier turn. Mako shows it again from where its saved output starts; your message is sent when it finishes."
           : "Cursor was still running an earlier turn. Mako shows it again; your message is sent when it finishes.")
       })
-      const { live, selection } = preparePrompt(dispatch, () => {
+      const { live, selection, plan } = preparePrompt(dispatch, () => {
         const live = requireLive(id)
         if (live.state.status === "running") throw new Error("Cursor is already working")
         const merged: SessionSettings = {
@@ -606,7 +607,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           options: { ...live.state.settings?.options, ...settings?.options },
         }
         const selection = selectionFor(live, merged, live.state.settings?.model)
-        return { live, selection }
+        return { live, selection, plan: merged.options?.plan === true }
       })
       const turn = dispatch.attemptId
       live.turn = turn
@@ -616,8 +617,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         nativeRunId: undefined,
         lastStop: undefined,
         error: undefined,
-        settings: cursorSdkReportedSettings(selection, live.models),
-        configOptions: configOptions(live.models, selection),
+        settings: cursorSdkReportedSettings(selection, live.models, plan),
+        configOptions: configOptions(live.models, selection, plan),
       })
       engine.emitUpdate(live, { kind: "user", text })
       try {
@@ -628,6 +629,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           text: promptText(text, attachments),
           images: images.length > 0 ? images : undefined,
           model: selection,
+          plan,
         })
         dispatch.report({ kind: "accepted", source: "native-response", referenceId: sent.runId })
         if (live.turn === turn) engine.patch(live, { nativeRunId: sent.runId })

@@ -183,9 +183,9 @@ function mcpConfig(servers: Record<string, SdkMcpServer> | undefined): Record<st
 function handleOptions(open: Omit<OpenAgent, "handle">): Partial<AgentOptions> {
   return {
     model: open.model,
-    // Agent with the full toolset and nothing else: no `plan`, no `tools`
-    // allowlist, and never `autoReview`, whose classifier refuses calls
-    // nobody at the desk can approve (`modes.ts`).
+    // Agent with the full toolset: no `tools` allowlist, and never
+    // `autoReview`, whose classifier refuses calls nobody at the desk can
+    // approve (`modes.ts`). A planning turn asks for `plan` on its send.
     mode: "agent",
     mcpServers: open.mcpServers,
     local: {
@@ -441,7 +441,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
         write({ event: "delta", turn: params.turn, delta: { type: "unhandled", kind: update.type } })
     }
   }
-  const options = { model: params.model, mode: "agent" as const, onDelta }
+  const options = { model: params.model, mode: params.plan ? ("plan" as const) : ("agent" as const), onDelta }
   sending = params.turn
   cancelWhileSending = false
   try {
