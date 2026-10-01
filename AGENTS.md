@@ -65,7 +65,23 @@ registers the recorded-message decoder from the same hooks. To change a decoder,
 `MAKO_NATIVE_CAPTURE=<harness>` to record real messages, inspect them with
 `npm run decode -- <capture>`, turn the case into a fixture with `--fixture`,
 then run `npm run test:decoders`. Captures hold conversation content: read a
-fixture before committing it.
+fixture before committing it. A fixture written from wire strings rather than
+captured says so in its `source`, until a capture confirms it, as Devin's
+captured `plan-approved.json` corrected the request shape `plan-mode.json` had
+assumed.
+
+Tool calls are identified once, in `@mako/sessions/tool-identity`. Each
+harness declares its native tool names, wrappers (Grok's `use_tool`, Cursor's
+`CallDynamicTool`, the code-mode scripts of Codex's `exec` and OpenCode's
+`execute`) and argument keys there; `identifyTool` resolves a call to a shared
+kind, label and target, and unwraps a wrapper to the tool it ran. Producers
+send the harness's own name (`name` on live tool updates, the history block's
+`name`); ACP's `toolKind` stays ACP's own kind. The transcript row, glyph,
+views (`registerToolKindView` by kind), work summary and activity line read the
+identity and never branch on a native name. A tool that resolves to `other`
+needs a line in that table: `npm run audit:tools` lists those in this machine's
+stores (names and keys only), `scripts/test-tool-identity.ts` pins samples, and
+the transcript fixture page's "Harness tools" tab renders them.
 
 `@mako/sessions` remains the pure native-store layer. Its `SessionProvider`
 contract owns discovery, translation, and following without importing Electron
@@ -1201,9 +1217,14 @@ Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
 (`native`, `launch`, `base`); `electron/acp-access.ts` builds the mode
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11
 against the installed CLIs: Devin advertises all five tiers
-natively. Grok reads `--permission-mode` at launch and, in every mode except
-always-approve, denies tool calls over ACP instead of asking, so its tiers are
-launch-only. OpenCode supports v2 only (2.x and known v2 prereleases); runtime
+natively. Grok reads `--permission-mode` at launch, so its tiers are
+launch-only. Grok also applies Claude Code's `permissions.defaultMode` (from
+`~/.claude/settings*.json` and the project's own), and that mode replaces
+`--permission-mode default`, which is Ask; explicit Auto and Full still win.
+`grok/claude-permissions.ts` reads the same files at launch: the session reports
+the tier Grok really runs at and opens with a "Grok overrides Ask" warning
+naming the file. An ACP source reports this through `AcpLaunch.access` and
+`notices`. OpenCode supports v2 only (2.x and known v2 prereleases); runtime
 admission and update policy share `isOpenCodeV2`. Do not restore v1 execution,
 model discovery or update feeds. OpenCode Ask/Edit/Full presets use per-process native JSONC configuration on the Build agent;
 Plan and custom agents retain their native policies. Existing inline fields survive the merge.
@@ -1233,8 +1254,11 @@ Plan is one composer control (the Plan chip, Shift+Tab, the palette's
   each report or the chip turns itself off after one turn.
 - A **mode**: the access mode whose tier is `plan` (Claude, OpenCode, Devin,
   Grok). Entering it replaces the access level; leaving returns to the one
-  remembered on entry. Grok's modes are launch-only, so a live Grok session's
-  chip is locked.
+  remembered on entry. Grok's access tiers are launch-only, but its Plan is
+  set live, and approving a plan returns it to the launch tier
+  (`current_mode_update` to `default`). Devin reports the chosen build mode
+  the same way. `npm run test:grok-modes-live` drives real Grok against a
+  stand-in model to check both.
 
 A setting wins when a harness declares both. Generic option menus and the
 Settings defaults skip `role: "plan"`. A plan chosen for a session that has
@@ -1246,7 +1270,13 @@ Codex's plan item, Cursor's `createPlan`, Claude's `ExitPlanMode`, Grok's
 `exit_plan_mode` and its `_x.ai/exit_plan_mode` approval request
 (`grok/plans.ts`), Devin's plan-file edits and `exit_plan_mode`
 (`devin/plans.ts`), and the final reply of OpenCode's plan agent
-(`OpenCodeContent`, which retracts that step's text parts).
+(`OpenCodeContent`, which retracts that step's text parts). Each live driver
+declares this as `planning` (a mode or a per-send setting, plus where the plan
+comes from), checked by `validateLiveDriver`; `npm run audit:capabilities`
+prints every harness's modes, plan mechanism, approvals and sign-in and fails
+on a contradiction. The history readers in `packages/sessions` produce the same
+card under the same id from saved sessions; Devin's live decoder and both
+Devin readers share `DevinPlanTracker`.
 
 Build answers the native plan approval when one is waiting for that plan
 (`LivePermissionRequest.implementsPlan`, set by Claude's `ExitPlanMode` and
@@ -1263,7 +1293,16 @@ A build is recorded in `src/state/plan-builds.ts` once it is confirmed: an
 carrying the plan's implement request (from the card or the composer). The
 card then reads "Built in this session" or "Built in another session", Build
 becomes "Build again", and an open building session gets "Open build
-session". The record is per desk, in `localStorage`, newest 200 plans.
+session". The record lives in the host (`electron/plan-builds.ts`,
+`userData/plan-builds.json`, newest 200 plans); recording is idempotent and
+every window hears of a change through the `plan-builds` host event. A desk's
+old `localStorage` record is handed to the host once, then deleted.
+
+`npm run probe:plan-turn -- <harness>` runs one minimal real planning turn and
+its build through the live driver, with native capture, printing only shapes
+and ids; it spends model usage. Run it in the real HOME: copying a sign-in that
+refreshes can sign the user out. `--start-only` is free and shows launch
+notices.
 
 How a catalogued thread is continued is the host's decision, not the
 renderer's. `electron/contracts/thread-continuation.ts` turns one ref plus
