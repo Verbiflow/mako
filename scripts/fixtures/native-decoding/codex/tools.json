@@ -56,7 +56,7 @@
             "kind": "tool",
             "id": "codex:tool-turn:search",
             "title": "Web search",
-            "toolKind": "web_search",
+            "name": "web_search",
             "status": "pending",
             "input": "{\n  \"query\": \"\"\n}"
           }
@@ -116,7 +116,7 @@
             "kind": "tool",
             "id": "codex:tool-turn:nap",
             "title": "Sleep 1m 30s",
-            "toolKind": "sleep",
+            "name": "sleep",
             "status": "completed",
             "input": "(undefined)"
           }
@@ -159,7 +159,7 @@
             "kind": "tool",
             "id": "codex:tool-turn:mcp",
             "title": "linear: get_issue",
-            "toolKind": "get_issue",
+            "name": "mcp__linear__get_issue",
             "status": "pending",
             "input": "{\n  \"id\": \"MAK-1\"\n}"
           }
@@ -234,7 +234,7 @@
             "kind": "tool",
             "id": "codex:tool-turn:mcp-failed",
             "title": "linear: update_issue",
-            "toolKind": "update_issue",
+            "name": "mcp__linear__update_issue",
             "status": "failed",
             "input": "{\n  \"id\": \"MAK-1\"\n}"
           }
@@ -282,7 +282,7 @@
             "kind": "tool",
             "id": "codex:tool-turn:dyn",
             "title": "mako.open_file",
-            "toolKind": "open_file",
+            "name": "mako.open_file",
             "status": "completed",
             "input": "{\n  \"path\": \"README.md\"\n}"
           }
@@ -327,7 +327,7 @@
             "kind": "tool",
             "id": "codex:tool-turn:add",
             "title": "Edit /tmp/project/new.ts",
-            "toolKind": "apply_patch",
+            "name": "apply_patch",
             "status": "completed",
             "input": "{\n  \"path\": \"/tmp/project/new.ts\",\n  \"paths\": [\n    \"/tmp/project/new.ts\"\n  ]\n}"
           }

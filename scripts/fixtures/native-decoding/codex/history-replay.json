@@ -108,7 +108,7 @@
             "kind": "tool",
             "id": "codex:old-2:c2",
             "title": "npm test",
-            "toolKind": "exec_command",
+            "name": "exec_command",
             "status": "completed",
             "input": "{\n  \"command\": \"npm test\"\n}"
           }

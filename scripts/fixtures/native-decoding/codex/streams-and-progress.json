@@ -165,7 +165,7 @@
             "kind": "tool",
             "id": "codex:stream-turn:edit",
             "title": "Edit /tmp/project/a.ts",
-            "toolKind": "apply_patch",
+            "name": "apply_patch",
             "status": "pending",
             "input": "{\n  \"path\": \"/tmp/project/a.ts\",\n  \"paths\": [\n    \"/tmp/project/a.ts\"\n  ]\n}"
           }
@@ -285,7 +285,7 @@
             "kind": "tool",
             "id": "codex:stream-turn:mcp",
             "title": "docs: search",
-            "toolKind": "search",
+            "name": "mcp__docs__search",
             "status": "pending",
             "input": "{\n  \"q\": \"zod\"\n}"
           }

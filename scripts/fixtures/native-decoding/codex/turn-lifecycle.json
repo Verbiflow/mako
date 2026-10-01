@@ -206,7 +206,7 @@
             "kind": "tool",
             "id": "codex:turn-1:cmd-1",
             "title": "npm test",
-            "toolKind": "exec_command",
+            "name": "exec_command",
             "status": "pending",
             "input": "{\n  \"command\": \"npm test\"\n}"
           }
@@ -300,7 +300,7 @@
             "kind": "tool",
             "id": "codex:turn-1:edit-1",
             "title": "Edit /tmp/project/range.ts",
-            "toolKind": "apply_patch",
+            "name": "apply_patch",
             "status": "pending",
             "input": "{\n  \"path\": \"/tmp/project/range.ts\",\n  \"paths\": [\n    \"/tmp/project/range.ts\"\n  ]\n}"
           }
