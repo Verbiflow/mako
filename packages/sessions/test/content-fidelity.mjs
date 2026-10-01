@@ -92,4 +92,25 @@ try {
   console.log(`PASS ${name} native ACP diff, terminal, and completed plan`)
  }
 
+ const planCards=(thread)=>thread.entries.filter(entry=>entry.kind==='assistant').flatMap(entry=>entry.blocks).filter(block=>block.type==='proposed-plan')
+ const planFile='/home/me/.devin/plans/plan-1.md'
+ const planEdit=(id,body)=>({sessionUpdate:'tool_call',toolCallId:id,title:'Updated plan',kind:'edit',content:[{type:'diff',path:planFile,newText:`---\nagent: devin\n---\n${body}`}],_meta:{'cognition.ai/isPlanFileEdit':true}})
+ await writeFile(dpath,[
+  {sessionUpdate:'user_message_chunk',content:{type:'text',text:'Plan it'}},
+  planEdit('write_plan:1','# Plan\n\nFirst draft'),
+  {sessionUpdate:'tool_call_update',toolCallId:'write_plan:1',status:'completed'},
+  planEdit('write_plan:2','# Plan\n\nRevised'),
+  {sessionUpdate:'tool_call',toolCallId:'exit:3',title:'Exit plan mode',kind:'switch_mode',rawInput:{plan:'Revised'},_meta:{'cognition.ai/isExitPlan':true,'cognition.ai/planFilePath':planFile}},
+  {sessionUpdate:'tool_call_update',toolCallId:'exit:3',status:'completed'},
+ ].map(update=>JSON.stringify({notification:update})).join('\n')+'\n')
+ assert.deepEqual(planCards(await new DevinLocalProvider(devin).read(dpath)),[{type:'proposed-plan',id:'devin:session:write_plan:1',text:'# Plan\n\nRevised',status:'proposed'}])
+ const grokTool={'x.ai/tool':{name:'exit_plan_mode'}}
+ await writeFile(gpath,[
+  {sessionUpdate:'user_message_chunk',content:{type:'text',text:'Plan it'}},
+  {sessionUpdate:'tool_call',toolCallId:'call-1',title:'exit_plan_mode',kind:'other',rawInput:{planContent:'model copy'},_meta:grokTool},
+  {sessionUpdate:'tool_call_update',toolCallId:'call-1',status:'completed',rawOutput:{PlanReady:{plan_content:'# Plan\n\nAs saved'}},_meta:grokTool},
+ ].map(update=>JSON.stringify({method:'session/update',params:{sessionId:'session',update}})).join('\n')+'\n')
+ assert.deepEqual(planCards(await new GrokProvider(root).read(gpath)),[{type:'proposed-plan',id:'grok:session:call-1',text:'# Plan\n\nAs saved',status:'proposed'}])
+ console.log('PASS Devin and Grok saved plans read as their live cards')
+
 }finally{await rm(root,{recursive:true,force:true})}

@@ -111,6 +111,16 @@ try {
   assert.equal(update.replaceFrom, 1)
   assert.deepEqual(update.entries.map((entry) => [entry.kind, entry.body]), [["event", "Summary:\n1. The user asked for a parser."]])
   console.log("PASS: Claude history reads compaction, queued prompts, task results, API errors, fallbacks and local commands as markers")
+
+  const planned = join(home, "planned.jsonl")
+  await writeFile(planned, `${[
+    user("u1", "Plan the parser"),
+    assistant("a1", [{ type: "tool_use", id: "toolu_plan", name: "ExitPlanMode", input: { plan: "# Parser\n\n1. Move parsing." } }]),
+  ].join("\n")}\n`)
+  const plannedThread = await new ClaudeProvider(home).read(planned)
+  assert.deepEqual(plannedThread.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).filter((block) => block.type === "proposed-plan"),
+    [{ type: "proposed-plan", id: "toolu_plan", text: "# Parser\n\n1. Move parsing.", status: "proposed" }])
+  console.log("PASS: Claude's saved ExitPlanMode reads as the live plan card")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

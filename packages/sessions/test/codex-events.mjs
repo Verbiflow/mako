@@ -92,5 +92,19 @@ assert.deepEqual(markers(await new CodexProvider(home).read(timed)), [
   { label: "Context compacted" },
 ], "a compaction in a turn is timed from the record before it; one outside a turn is not")
 
+const planned = join(sessions, "rollout-plan.jsonl")
+await writeFile(planned,
+  line("session_meta", { id: "planned", cwd: home }) +
+  user("Plan the parser refactor") +
+  answer("Here is the plan.\n\n<proposed_plan>\n# Parser\n\n1. Move parsing to the boundary.\n</proposed_plan>") +
+  line("event_msg", { type: "item_completed", thread_id: "planned", turn_id: "t1", item: { type: "Plan", id: "t1-plan", text: "# Parser\n\n1. Move parsing to the boundary." } }) +
+  line("event_msg", { type: "task_complete", turn_id: "t1", error: null })
+)
+const plannedBlocks = (await new CodexProvider(home).read(planned)).entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : [])
+assert.deepEqual(plannedBlocks, [
+  { type: "text", text: "Here is the plan." },
+  { type: "proposed-plan", id: "codex:t1:t1-plan", text: "# Parser\n\n1. Move parsing to the boundary.", status: "proposed" },
+], "a saved plan is the card the live turn showed, and the reply does not repeat it")
+
 await rm(home, { recursive: true, force: true })
-console.log("Codex history markers: compactions, failed turns and review boundaries read as Mako events.")
+console.log("Codex history markers: compactions, failed turns, review boundaries and plans read as Mako events.")

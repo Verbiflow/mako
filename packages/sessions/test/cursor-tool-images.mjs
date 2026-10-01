@@ -24,6 +24,7 @@ try {
           {type: 'image', data: 'cHJvb2Y=', mimeType: 'image/png'},
         ],
       }]},
+      {role: 'assistant', content: [{type: 'tool-call', toolCallId: 'toolu_plan', toolName: 'CreatePlan', args: {name: 'Fix', overview: 'Fix it', plan: '# Fix\n\n1. Patch.'}}]},
     ]
     const rootFields = []
     for (const [index, message] of messages.entries()) {
@@ -44,6 +45,9 @@ try {
   }])
   assert.equal(tool.output, '{"width":10,"height":10}')
   console.log('PASS Cursor native experimental_content preserves image bytes and structured text output')
+  const plans = thread.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : []).filter(block => block.type === 'proposed-plan')
+  assert.deepEqual(plans, [{type: 'proposed-plan', id: 'toolu_plan', text: '# Fix\n\n1. Patch.', status: 'proposed'}])
+  console.log('PASS Cursor saved CreatePlan reads as the live plan card')
 } finally {
   await rm(home, {recursive: true, force: true})
 }

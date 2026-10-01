@@ -875,6 +875,31 @@ try {
   }
   console.log("OpenCode markers: retried steps, completed, failed and running compactions, failed turns in both stores")
 
+  // The Plan agent has no plan tool: the reply of a Plan step that ends the
+  // turn is the plan, under the id its live step reported.
+  {
+    const row = (id, type, seq, data) =>
+      insertCurrent.run(id, "ses_plan", type, seq, 14_000 + seq, 14_000 + seq, json({ ...data, time: { created: 14_000 + seq } }))
+    insertCurrentSession.run("ses_plan", "current-project", null, "/projects/current-root/pkg", "Plan", null, 14_000, 14_000, null)
+    row("p_user", "user", 0, { text: "plan it", files: [], agents: [] })
+    row("p_look", "assistant", 1, { agent: "plan", content: [{ type: "text", id: "t0", text: "Looking around." }], finish: "tool-calls" })
+    row("p_plan", "assistant", 2, { agent: "plan", content: [{ type: "reasoning", id: "r1", text: "weighing" }, { type: "text", id: "t1", text: "# Plan\n" }, { type: "text", id: "t2", text: "1. Do it." }], finish: "stop" })
+    row("p_build", "assistant", 3, { agent: "build", content: [{ type: "text", id: "t3", text: "Built." }], finish: "stop" })
+    const planned = await provider.read(`${currentPath}#ses_plan`)
+    assert.deepEqual(planned.entries.filter((entry) => entry.kind === "assistant").map((entry) => entry.blocks), [
+      [{ type: "text", text: "Looking around." }],
+      [{ type: "thinking", text: "weighing" }, { type: "proposed-plan", id: "opencode:p_plan", text: "# Plan\n\n1. Do it.", status: "proposed" }],
+      [{ type: "text", text: "Built." }],
+    ], "only a Plan step that ends its turn is a plan; its reply shows as the card")
+
+    insertLegacySession.run("ses_legacy_plan", "legacy-project", null, "/projects/legacy-root/app", "Legacy plan", 15_000, 15_000, null)
+    insertMessage.run("msg_legacy_plan", "ses_legacy_plan", 15_000, 15_000, json({ role: "assistant", agent: "plan", finish: "stop", time: { created: 15_000 } }))
+    insertPart.run("prt_legacy_plan", "msg_legacy_plan", "ses_legacy_plan", 15_000, 15_000, json({ type: "text", text: "# Legacy plan" }))
+    const legacyPlan = await provider.read(`${legacyPath}#ses_legacy_plan`)
+    assert.deepEqual(legacyPlan.entries[0].blocks, [{ type: "proposed-plan", id: "opencode:msg_legacy_plan", text: "# Legacy plan", status: "proposed" }])
+  }
+  console.log("OpenCode plans read as the cards the live session showed, in both stores")
+
   // A store OpenCode 2 created itself has session_v2 and session_message
   // and none of v1's tables.
   const freshHome = join(home, "fresh-v2")

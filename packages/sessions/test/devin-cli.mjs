@@ -338,6 +338,38 @@ try {
     "the compaction reads as a marker carrying its summary; a mode change is not shown")
   assert.ok(!compacted.entries.some((entry) => entry.kind === "user" && /continuing work/.test(entry.text)))
   console.log("Devin compaction summaries read as markers and failed tool results as failed")
+
+  // Shapes from a devin 3000.10.23 plan capture: the chat rows hold the
+  // model's own arguments, `tool_call_state` the ACP calls with the rendered plan file.
+  const planning = new DatabaseSync(join(dir, "sessions.db"))
+  planning.exec("CREATE TABLE tool_call_state (session_id TEXT NOT NULL, tool_call_id TEXT NOT NULL, tool_call_json TEXT, tool_call_update_json TEXT, PRIMARY KEY (session_id, tool_call_id))")
+  planning
+    .prepare("INSERT INTO sessions (id, hidden, last_activity_at, working_directory, model, title, created_at, main_chain_id) VALUES (?, 0, ?, ?, ?, ?, ?, ?)")
+    .run("session-3", 30, "/work", "swe-1-6", "Planned", 20, 27)
+  const planNode = planning.prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+  const planCall = planning.prepare("INSERT INTO tool_call_state (session_id, tool_call_id, tool_call_json, tool_call_update_json) VALUES ('session-3', ?, ?, ?)")
+  const planPath = "/Users/me/.devin/plans/plan-1.md"
+  const rendered = (body) => `---\nagent: devin\nsession: session-3\n---\n# Create hello.txt\n\n${body}`
+  const writePlan = (id, body) => {
+    planCall.run(id, JSON.stringify({ toolCallId: id, title: "Updated plan: Create hello.txt", kind: "edit", content: [{ type: "diff", path: planPath, newText: rendered(body) }], rawInput: { file_path: planPath }, _meta: { "cognition.ai/isPlanFileEdit": true, "cognition.ai/inferenceToolName": "write_plan" } }),
+      JSON.stringify({ toolCallId: id, status: "completed" }))
+    return { id, name: "write_plan", arguments: { title: "Create hello.txt", summary: "", plan: body } }
+  }
+  planCall.run("exit_plan_mode:0#3", JSON.stringify({ toolCallId: "exit_plan_mode:0#3", title: "Exit plan mode", kind: "switch_mode", rawInput: { plan: "Write hello.txt" }, _meta: { "cognition.ai/isExitPlan": true, "cognition.ai/planFilePath": planPath } }),
+    JSON.stringify({ toolCallId: "exit_plan_mode:0#3", status: "completed" }))
+  planNode.run(1021, "session-3", 21, null, JSON.stringify({ role: "user", content: "Plan hello.txt" }), 21)
+  planNode.run(1022, "session-3", 22, 21, JSON.stringify({ role: "assistant", content: "", tool_calls: [writePlan("write_plan:0#1", "Write hello.txt")] }), 22)
+  planNode.run(1023, "session-3", 23, 22, JSON.stringify({ role: "tool", tool_call_id: "write_plan:0#1", content: "Plan saved" }), 23)
+  planNode.run(1024, "session-3", 24, 23, JSON.stringify({ role: "assistant", content: "", tool_calls: [writePlan("write_plan:0#2", "Write hello.txt containing hi")] }), 24)
+  planNode.run(1025, "session-3", 25, 24, JSON.stringify({ role: "tool", tool_call_id: "write_plan:0#2", content: "Plan saved" }), 25)
+  planNode.run(1026, "session-3", 26, 25, JSON.stringify({ role: "assistant", content: "", tool_calls: [{ id: "exit_plan_mode:0#3", name: "exit_plan_mode", arguments: { plan: "Write hello.txt" } }] }), 26)
+  planNode.run(1027, "session-3", 27, 26, JSON.stringify({ role: "tool", tool_call_id: "exit_plan_mode:0#3", content: "User approved the plan" }), 27)
+  planning.close()
+  const planned = await provider.read(`${join(dir, "sessions.db")}#session-3`)
+  const plans = planned.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).filter((block) => block.type === "proposed-plan")
+  assert.deepEqual(plans, [{ type: "proposed-plan", id: "devin:session-3:write_plan:0#1", text: "# Create hello.txt\n\nWrite hello.txt containing hi", status: "proposed" }],
+    "a plan reads as the live card: one card per plan file under its first edit's id, revised in place, without front matter")
+  console.log("Devin plans read as the cards the live session showed")
   provider.close()
   console.log("Devin CLI tests clean: streamed rows, tools, thinking, locks, and incremental follow verified.")
 } finally {
