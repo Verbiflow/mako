@@ -1,7 +1,8 @@
 import type { Readable, Writable } from "node:stream"
 import type { AnyMessage, SessionUpdate, Stream } from "@agentclientprotocol/sdk"
+import { z } from "zod"
 import { hostWarn } from "./host-log.js"
-import type { JsonObject } from "./codex-app-json.js"
+import type { JsonObject, JsonValue } from "./codex-app-json.js"
 
 /**
  * Every `session/update` kind the SDK declares. A kind an SDK upgrade adds
@@ -39,9 +40,10 @@ export interface LossySessionUpdate {
   paths: string[]
 }
 
-interface Parser {
-  safeParse(value: unknown): { success: boolean; data?: unknown }
-}
+type Parser = Pick<z.ZodType, "safeParse">
+
+const JsonObjectSchema = z.record(z.string(), z.json())
+const KindSchema = z.string().catch("(none)")
 
 let notificationSchema: Promise<Parser | undefined> | undefined
 
@@ -57,7 +59,7 @@ export function acpSessionNotificationSchema(): Promise<Parser | undefined> {
       if (!module.zSessionNotification) throw new Error("zSessionNotification is not exported")
       return module.zSessionNotification
     })
-    .catch((error: unknown) => {
+    .catch((error) => {
       hostWarn("acp", "session updates are not screened", { error: error instanceof Error ? error.message : String(error) })
       return undefined
     })
@@ -84,18 +86,21 @@ export async function screenSessionUpdates(
         controller.enqueue(message)
         return
       }
-      const params = isObject(message.params) ? message.params : {}
+      const params = JsonObjectSchema.safeParse(message.params).data ?? {}
       const update = isObject(params["update"]) ? params["update"] : {}
-      const kind = typeof update["sessionUpdate"] === "string" ? update["sessionUpdate"] : "(none)"
+      const kind = KindSchema.parse(update["sessionUpdate"])
       const parsed = schema.safeParse(message.params)
       if (!parsed.success) {
         refused({ params, kind, known: Object.hasOwn(SESSION_UPDATE_KINDS, kind) })
         return
       }
       controller.enqueue(message)
-      if (!lossy || !isObject(parsed.data)) return
+      if (!lossy) return
+      // The SDK leaves a value it refused as `undefined`; as JSON that key is missing.
+      const accepted: JsonValue = JSON.parse(JSON.stringify(parsed.data ?? null))
+      if (!isObject(accepted)) return
       const paths = new Set<string>()
-      lostValues(update, parsed.data["update"], "", paths)
+      lostValues(update, accepted["update"], "", paths)
       if (paths.size) lossy({ kind, paths: [...paths] })
     },
   }))
@@ -106,7 +111,7 @@ export async function screenSessionUpdates(
 const MAX_LOST_PATHS = 8
 
 /** Where `parsed` lacks or replaced a value `raw` carried. Null carries nothing to lose. */
-function lostValues(raw: unknown, parsed: unknown, path: string, paths: Set<string>): void {
+function lostValues(raw: JsonValue | undefined, parsed: JsonValue | undefined, path: string, paths: Set<string>): void {
   if (paths.size >= MAX_LOST_PATHS || raw === null || raw === undefined) return
   if (Array.isArray(raw)) {
     if (!Array.isArray(parsed) || parsed.length !== raw.length) {
@@ -128,8 +133,8 @@ function lostValues(raw: unknown, parsed: unknown, path: string, paths: Set<stri
   if (raw !== parsed) paths.add(path || "(update)")
 }
 
-function isObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+function isObject(value: JsonValue | undefined): value is JsonObject {
+  return value instanceof Object && !Array.isArray(value)
 }
 
 /** Node pipe bytes at the SDK's Web Streams boundary, with backpressure. */

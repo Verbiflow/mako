@@ -274,7 +274,7 @@ async function readUsage(provider: AccountProvider, name: string): Promise<Accou
   const capability = providerHost.accountCapabilities.get(provider)
   if (!capability)
     return { status: "unavailable", detail: `Native usage is unavailable for ${provider}` }
-  return capability.accountUsage(name).catch((error: unknown) => ({
+  return capability.accountUsage(name).catch((error) => ({
     status: "error" as const,
     detail: error instanceof Error ? error.message : String(error),
   }))
@@ -353,7 +353,7 @@ export function accountUsageSpent(harness: string, throttleMs = SPENT_THROTTLE_M
   const last = spentAt.get(harness) ?? 0
   if (Date.now() - last < throttleMs) return false
   spentAt.set(harness, Date.now())
-  for (const key of [...usageCache.keys()])
+  for (const key of usageCache.keys())
     if (key.startsWith(`${harness}:`)) usageCache.delete(key)
   return true
 }
