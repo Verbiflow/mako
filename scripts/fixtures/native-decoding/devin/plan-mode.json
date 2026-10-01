@@ -1,6 +1,6 @@
 {
   "harness": "devin",
-  "source": "Shapes from devin 3000.10.23's saved sessions (tool_call_state) and its binary's option ids; plan text invented. The permission request's toolCall is assumed to repeat the exit_plan_mode call, as ACP's does; a capture should confirm it.",
+  "source": "Shapes from devin 3000.10.23's saved sessions (tool_call_state) and its binary's option ids; plan text invented. The permission request's bare toolCall, carrying only the exit_plan_mode call's id, is as captured in plan-approved.json.",
   "about": "Plan mode: write_plan revisions replace one card, exit_plan_mode's permission builds that card, and a revision after the rejected exit opens a new card.",
   "session": {},
   "steps": [
@@ -38,7 +38,8 @@
             "kind": "tool",
             "id": "call_write_1",
             "title": "Updated plan: Add a greeting",
-            "toolKind": "write_plan",
+            "name": "write_plan",
+            "toolKind": "edit",
             "status": "pending",
             "output": "(undefined)",
             "attachments": "(undefined)",
@@ -129,7 +130,8 @@
             "kind": "tool",
             "id": "call_write_2",
             "title": "Updated plan: Add a greeting",
-            "toolKind": "write_plan",
+            "name": "write_plan",
+            "toolKind": "edit",
             "status": "pending",
             "output": "(undefined)",
             "attachments": "(undefined)",
@@ -219,7 +221,8 @@
             "kind": "tool",
             "id": "call_exit_1",
             "title": "Exit plan mode",
-            "toolKind": "exit_plan_mode",
+            "name": "exit_plan_mode",
+            "toolKind": "switch_mode",
             "status": "pending",
             "details": [
               {
@@ -239,22 +242,7 @@
         "params": {
           "sessionId": "devin-session-1",
           "toolCall": {
-            "toolCallId": "call_exit_1",
-            "title": "Exit plan mode",
-            "kind": "switch_mode",
-            "locations": [
-              {
-                "path": "/Users/me/.devin/plans/plan-2b7389.md"
-              }
-            ],
-            "rawInput": {
-              "plan": "Add hello() and test it."
-            },
-            "_meta": {
-              "cognition.ai/isExitPlan": true,
-              "cognition.ai/planFilePath": "/Users/me/.devin/plans/plan-2b7389.md",
-              "cognition.ai/inferenceToolName": "exit_plan_mode"
-            }
+            "toolCallId": "call_exit_1"
           },
           "options": [
             {
@@ -287,7 +275,7 @@
             "type": "ask",
             "ask": {
               "request": {
-                "title": "Exit plan mode",
+                "title": "Build the proposed plan?",
                 "kind": "switch_mode",
                 "options": [
                   {
@@ -396,7 +384,8 @@
             "kind": "tool",
             "id": "call_write_3",
             "title": "Updated plan: Add a greeting",
-            "toolKind": "write_plan",
+            "name": "write_plan",
+            "toolKind": "edit",
             "status": "pending",
             "output": "(undefined)",
             "attachments": "(undefined)",

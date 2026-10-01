@@ -1,0 +1,1583 @@
+{
+  "harness": "devin",
+  "source": "devin 3000.10.23 (deb81600), captured through Mako with MAKO_NATIVE_CAPTURE=devin in an isolated home; config, command and usage updates removed",
+  "about": "Plan mode, captured: write_plan proposes a card, exit_plan_mode's bare permission request builds it with plan_accept_edits, and Devin reports accept-edits after the approval. Devin's front matter is not part of the plan.",
+  "session": {
+    "settings": {
+      "model": null
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "_cognition.ai/mcp/serversChanged",
+        "params": {}
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "_cognition.ai/mcp/serversChanged",
+          "reason": "unknown",
+          "raw": {
+            "method": "_cognition.ai/mcp/serversChanged",
+            "params": {}
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "currentModeId": "accept-edits",
+            "sessionUpdate": "current_mode_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "accept-edits"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "currentModeId": "plan",
+            "sessionUpdate": "current_mode_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "plan"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "title": "Plan creating hello.txt containing the word hi. The plan is one step; ask not...",
+            "sessionUpdate": "session_info_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "title": "Plan creating hello.txt containing the word hi. The plan is one step; ask not..."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "The user wants a file named `hello.txt` with the content \"hi\". My plan is to create this file directly, without asking any questions. I'm currently in plan mode and will exit it after creating the file.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_thought_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "text": "The user wants a file named `hello.txt` with the content \"hi\". My plan is to create this file directly, without asking any questions. I'm currently in plan mode and will exit it after creating the file."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/thinking_complete",
+        "params": {
+          "durationMs": 9,
+          "blockIndex": 0,
+          "sessionId": "standing-marigold"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "_cognition.ai/thinking_complete",
+          "reason": "unknown",
+          "raw": {
+            "method": "_cognition.ai/thinking_complete",
+            "params": {
+              "durationMs": 9,
+              "blockIndex": 0,
+              "sessionId": "standing-marigold"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "title": "Updated plan: Create hello.txt",
+            "kind": "edit",
+            "content": [
+              {
+                "path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+                "newText": "---\nagent: devin-local\nsession: standing-marigold\ncreated: 2026-10-01T06:11:59Z\n---\n# Create hello.txt\n\nCreate a file named hello.txt containing the word \"hi\".\n\n## Implementation Steps\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\n\n## Verification\n- Read the file back and confirm its contents are `hi`.\n",
+                "type": "diff"
+              }
+            ],
+            "rawInput": {
+              "file_path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+              "content": "# Create hello.txt\n\nCreate a file named hello.txt containing the word \"hi\".\n\n## Implementation Steps\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\n\n## Verification\n- Read the file back and confirm its contents are `hi`.\n"
+            },
+            "_meta": {
+              "cognition.ai/isPlanFileEdit": true,
+              "cognition.ai/inferenceToolName": "write_plan"
+            },
+            "sessionUpdate": "tool_call"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "title": "Updated plan: Create hello.txt",
+            "name": "write_plan",
+            "toolKind": "edit",
+            "status": "pending",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+                "oldText": null,
+                "newText": "---\nagent: devin-local\nsession: standing-marigold\ncreated: 2026-10-01T06:11:59Z\n---\n# Create hello.txt\n\nCreate a file named hello.txt containing the word \"hi\".\n\n## Implementation Steps\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\n\n## Verification\n- Read the file back and confirm its contents are `hi`.\n"
+              }
+            ],
+            "input": "{\n  \"file_path\": \"/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md\",\n  \"content\": \"# Create hello.txt\\n\\nCreate a file named hello.txt containing the word \\\"hi\\\".\\n\\n## Implementation Steps\\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\\n\\n## Verification\\n- Read the file back and confirm its contents are `hi`.\\n\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "devin:standing-marigold:write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "text": "# Create hello.txt\n\nCreate a file named hello.txt containing the word \"hi\".\n\n## Implementation Steps\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\n\n## Verification\n- Read the file back and confirm its contents are `hi`.\n",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "status": "in_progress",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write_plan"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "title": "(undefined)",
+            "status": "in_progress",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "status": "in_progress",
+            "content": [
+              {
+                "path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+                "newText": "---\nagent: devin-local\nsession: standing-marigold\ncreated: 2026-10-01T06:11:59Z\n---\n# Create hello.txt\n\nCreate a file named hello.txt containing the word \"hi\".\n\n## Implementation Steps\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\n\n## Verification\n- Read the file back and confirm its contents are `hi`.\n",
+                "type": "diff"
+              }
+            ],
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write_plan"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "title": "(undefined)",
+            "status": "in_progress",
+            "input": "(undefined)",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+                "oldText": null,
+                "newText": "---\nagent: devin-local\nsession: standing-marigold\ncreated: 2026-10-01T06:11:59Z\n---\n# Create hello.txt\n\nCreate a file named hello.txt containing the word \"hi\".\n\n## Implementation Steps\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\n\n## Verification\n- Read the file back and confirm its contents are `hi`.\n"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "status": "completed",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write_plan"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "write_plan:0#d91cbde2c53d4639842be3b216713034",
+            "title": "(undefined)",
+            "status": "completed",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "title": "**Plan:** Create `hello.txt` containing the text `hi` in the current directory.",
+            "sessionUpdate": "session_info_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "title": "**Plan:** Create `hello.txt` containing the text `hi` in the current directory."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "The plan is complete. I'm now exiting plan mode.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_thought_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "text": "The plan is complete. I'm now exiting plan mode."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/thinking_complete",
+        "params": {
+          "durationMs": 9,
+          "blockIndex": 1,
+          "sessionId": "standing-marigold"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "_cognition.ai/thinking_complete",
+          "reason": "unknown",
+          "raw": {
+            "method": "_cognition.ai/thinking_complete",
+            "params": {
+              "durationMs": 9,
+              "blockIndex": 1,
+              "sessionId": "standing-marigold"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "exit_plan_mode:0#17ad20b5b551485a8d8a382dbf0256f7",
+            "title": "Exit plan mode",
+            "kind": "switch_mode",
+            "locations": [
+              {
+                "path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md"
+              }
+            ],
+            "rawInput": {
+              "plan": "Create `hello.txt` in the current working directory containing the text `hi`, then verify by reading it back."
+            },
+            "_meta": {
+              "cognition.ai/isExitPlan": true,
+              "cognition.ai/planFilePath": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+              "cognition.ai/inferenceToolName": "exit_plan_mode"
+            },
+            "sessionUpdate": "tool_call"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "exit_plan_mode:0#17ad20b5b551485a8d8a382dbf0256f7",
+            "title": "Exit plan mode",
+            "name": "exit_plan_mode",
+            "toolKind": "switch_mode",
+            "status": "pending",
+            "details": [
+              {
+                "type": "location",
+                "path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+                "line": "(undefined)"
+              }
+            ],
+            "input": "{\n  \"plan\": \"Create `hello.txt` in the current working directory containing the text `hi`, then verify by reading it back.\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "request": "session/request_permission",
+        "params": {
+          "sessionId": "standing-marigold",
+          "toolCall": {
+            "toolCallId": "exit_plan_mode:0#17ad20b5b551485a8d8a382dbf0256f7"
+          },
+          "options": [
+            {
+              "optionId": "plan_accept_edits",
+              "name": "Yes, implement plan and accept edits",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "plan_bypass",
+              "name": "Yes, implement plan and bypass permissions",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "reject_once",
+              "name": "No, plan needs changes",
+              "kind": "reject_once"
+            }
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "ask",
+            "ask": {
+              "request": {
+                "title": "Build the proposed plan?",
+                "kind": "switch_mode",
+                "options": [
+                  {
+                    "optionId": "plan_accept_edits",
+                    "name": "Yes, implement plan and accept edits",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "plan_bypass",
+                    "name": "Yes, implement plan and bypass permissions",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "reject_once",
+                    "name": "No, plan needs changes",
+                    "kind": "reject_once"
+                  }
+                ],
+                "implementsPlan": {
+                  "plan": "devin:standing-marigold:write_plan:0#d91cbde2c53d4639842be3b216713034",
+                  "approve": "plan_accept_edits"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "currentModeId": "accept-edits",
+            "sessionUpdate": "current_mode_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "accept-edits"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "exit_plan_mode:0#17ad20b5b551485a8d8a382dbf0256f7",
+            "status": "in_progress",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "exit_plan_mode"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "exit_plan_mode:0#17ad20b5b551485a8d8a382dbf0256f7",
+            "title": "(undefined)",
+            "status": "in_progress",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "exit_plan_mode:0#17ad20b5b551485a8d8a382dbf0256f7",
+            "status": "completed",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "exit_plan_mode"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "exit_plan_mode:0#17ad20b5b551485a8d8a382dbf0256f7",
+            "title": "(undefined)",
+            "status": "completed",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "currentModeId": "accept-edits",
+            "sessionUpdate": "current_mode_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "accept-edits"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "Okay, the plan is to create a file named `hello.txt` and write the string \"hi\" into it in the current working directory.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_thought_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "text": "Okay, the plan is to create a file named `hello.txt` and write the string \"hi\" into it in the current working directory."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "Creating",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "Creating"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": " the file now",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": " the file now"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/thinking_complete",
+        "params": {
+          "durationMs": 4,
+          "blockIndex": 2,
+          "sessionId": "standing-marigold"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "_cognition.ai/thinking_complete",
+          "reason": "unknown",
+          "raw": {
+            "method": "_cognition.ai/thinking_complete",
+            "params": {
+              "durationMs": 4,
+              "blockIndex": 2,
+              "sessionId": "standing-marigold"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": ".",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "title": "Wrote ./hello.txt",
+            "kind": "edit",
+            "content": [
+              {
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt",
+                "newText": "hi",
+                "type": "diff"
+              }
+            ],
+            "rawInput": {
+              "file_path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt",
+              "content": "hi"
+            },
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write"
+            },
+            "sessionUpdate": "tool_call"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "title": "Wrote ./hello.txt",
+            "name": "write",
+            "toolKind": "edit",
+            "status": "pending",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt",
+                "oldText": null,
+                "newText": "hi"
+              }
+            ],
+            "input": "{\n  \"file_path\": \"/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt\",\n  \"content\": \"hi\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "status": "in_progress",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "title": "(undefined)",
+            "status": "in_progress",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "status": "in_progress",
+            "content": [
+              {
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt",
+                "newText": "hi",
+                "type": "diff"
+              }
+            ],
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "title": "(undefined)",
+            "status": "in_progress",
+            "input": "(undefined)",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt",
+                "oldText": null,
+                "newText": "hi"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "status": "completed",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "write"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "write:0#a5d9ab6eca864eeeb19b6a3758a89be3",
+            "title": "(undefined)",
+            "status": "completed",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "I'm double-checking the logic by reading it back.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_thought_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "text": "I'm double-checking the logic by reading it back."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/thinking_complete",
+        "params": {
+          "durationMs": 14,
+          "blockIndex": 3,
+          "sessionId": "standing-marigold"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "_cognition.ai/thinking_complete",
+          "reason": "unknown",
+          "raw": {
+            "method": "_cognition.ai/thinking_complete",
+            "params": {
+              "durationMs": 14,
+              "blockIndex": 3,
+              "sessionId": "standing-marigold"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "title": "Read file",
+            "kind": "read",
+            "locations": [
+              {
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt"
+              }
+            ],
+            "rawInput": {
+              "file_path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt"
+            },
+            "_meta": {
+              "cognition.ai/inferenceToolName": "read"
+            },
+            "sessionUpdate": "tool_call"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "title": "Read file",
+            "name": "read",
+            "toolKind": "read",
+            "status": "pending",
+            "details": [
+              {
+                "type": "location",
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt",
+                "line": "(undefined)"
+              }
+            ],
+            "input": "{\n  \"file_path\": \"/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "status": "in_progress",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "read"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "title": "(undefined)",
+            "status": "in_progress",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "status": "in_progress",
+            "_meta": {
+              "cognition.ai/inferenceToolName": "read"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "title": "(undefined)",
+            "status": "in_progress",
+            "input": "(undefined)",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "toolCallId": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "status": "completed",
+            "content": [
+              {
+                "content": {
+                  "text": "1 lines",
+                  "type": "text"
+                },
+                "type": "content"
+              }
+            ],
+            "_meta": {
+              "cognition.ai/inferenceToolName": "read"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "read:0#5bbdb4e5b8654ab09e408fe067ae342e",
+            "title": "(undefined)",
+            "status": "completed",
+            "input": "(undefined)",
+            "output": "1 lines",
+            "attachments": "(undefined)",
+            "details": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "Done",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "Done"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": ". `",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": ". `"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "hello.txt` created",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "hello.txt` created"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": " at",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": " at"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": " `/private/tmp",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": " `/private/tmp"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "/devin-mako-e2",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "/devin-mako-e2"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "e-cwd-PlJ",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "e-cwd-PlJ"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": "kma/hello.txt` containing",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "kma/hello.txt` containing"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "standing-marigold",
+          "update": {
+            "content": {
+              "text": " `hi`.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": " `hi`."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/turn_stats",
+        "params": {
+          "sessionId": "standing-marigold",
+          "turnClientMessageId": "69731d7d-c7f7-461c-862e-8aa1c3fdb2b4",
+          "responseDimensions": [
+            {
+              "uid": "agent_messages",
+              "groupTitle": "Response Statistics",
+              "label": "Agent messages",
+              "kind": {
+                "type": "cumulativeMetric",
+                "value": 5,
+                "prefix": "",
+                "tail": " message",
+                "pluralTail": " messages"
+              }
+            },
+            {
+              "uid": "model",
+              "groupTitle": "Response Statistics",
+              "label": "Model",
+              "kind": {
+                "type": "metric",
+                "value": "SWE-2 High"
+              }
+            },
+            {
+              "uid": "input_tokens",
+              "groupTitle": "Token Usage",
+              "label": "Input tokens",
+              "kind": {
+                "type": "cumulativeMetric",
+                "value": 30361,
+                "prefix": "",
+                "tail": " token",
+                "pluralTail": " tokens"
+              }
+            },
+            {
+              "uid": "output_tokens",
+              "groupTitle": "Token Usage",
+              "label": "Output tokens",
+              "kind": {
+                "type": "cumulativeMetric",
+                "value": 511,
+                "prefix": "",
+                "tail": " token",
+                "pluralTail": " tokens"
+              }
+            },
+            {
+              "uid": "cached_input_tokens",
+              "groupTitle": "Token Usage",
+              "label": "Cached input tokens",
+              "kind": {
+                "type": "cumulativeMetric",
+                "value": 30720,
+                "prefix": "",
+                "tail": " token",
+                "pluralTail": " tokens"
+              }
+            }
+          ],
+          "turnRequestId": "3aa58395-990d-4573-8c60-098d4e8fe74d"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "_cognition.ai/turn_stats",
+          "reason": "unknown",
+          "raw": {
+            "method": "_cognition.ai/turn_stats",
+            "params": {
+              "sessionId": "standing-marigold",
+              "turnClientMessageId": "69731d7d-c7f7-461c-862e-8aa1c3fdb2b4",
+              "responseDimensions": [
+                {
+                  "uid": "agent_messages",
+                  "groupTitle": "Response Statistics",
+                  "label": "Agent messages",
+                  "kind": {
+                    "type": "cumulativeMetric",
+                    "value": 5,
+                    "prefix": "",
+                    "tail": " message",
+                    "pluralTail": " messages"
+                  }
+                },
+                {
+                  "uid": "model",
+                  "groupTitle": "Response Statistics",
+                  "label": "Model",
+                  "kind": {
+                    "type": "metric",
+                    "value": "SWE-2 High"
+                  }
+                },
+                {
+                  "uid": "input_tokens",
+                  "groupTitle": "Token Usage",
+                  "label": "Input tokens",
+                  "kind": {
+                    "type": "cumulativeMetric",
+                    "value": 30361,
+                    "prefix": "",
+                    "tail": " token",
+                    "pluralTail": " tokens"
+                  }
+                },
+                {
+                  "uid": "output_tokens",
+                  "groupTitle": "Token Usage",
+                  "label": "Output tokens",
+                  "kind": {
+                    "type": "cumulativeMetric",
+                    "value": 511,
+                    "prefix": "",
+                    "tail": " token",
+                    "pluralTail": " tokens"
+                  }
+                },
+                {
+                  "uid": "cached_input_tokens",
+                  "groupTitle": "Token Usage",
+                  "label": "Cached input tokens",
+                  "kind": {
+                    "type": "cumulativeMetric",
+                    "value": 30720,
+                    "prefix": "",
+                    "tail": " token",
+                    "pluralTail": " tokens"
+                  }
+                }
+              ],
+              "turnRequestId": "3aa58395-990d-4573-8c60-098d4e8fe74d"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/agent_stopped",
+        "params": {
+          "cause": "complete",
+          "stats": {
+            "toolCalls": 4,
+            "filesChanged": 2,
+            "commandsRun": 0,
+            "inputTokens": 12631,
+            "outputTokens": 45,
+            "ttftMs": 734,
+            "tokensPerSec": 266.27218934911247,
+            "totalTimeMs": 903,
+            "requestId": "3aa58395-990d-4573-8c60-098d4e8fe74d",
+            "modelLabel": "SWE-2 High",
+            "responseDimensions": [
+              {
+                "uid": "agent_messages",
+                "groupTitle": "Response Statistics",
+                "label": "Agent messages",
+                "kind": {
+                  "type": "cumulativeMetric",
+                  "value": 5,
+                  "prefix": "",
+                  "tail": " message",
+                  "pluralTail": " messages"
+                }
+              },
+              {
+                "uid": "model",
+                "groupTitle": "Response Statistics",
+                "label": "Model",
+                "kind": {
+                  "type": "metric",
+                  "value": "SWE-2 High"
+                }
+              },
+              {
+                "uid": "input_tokens",
+                "groupTitle": "Token Usage",
+                "label": "Input tokens",
+                "kind": {
+                  "type": "cumulativeMetric",
+                  "value": 30361,
+                  "prefix": "",
+                  "tail": " token",
+                  "pluralTail": " tokens"
+                }
+              },
+              {
+                "uid": "output_tokens",
+                "groupTitle": "Token Usage",
+                "label": "Output tokens",
+                "kind": {
+                  "type": "cumulativeMetric",
+                  "value": 511,
+                  "prefix": "",
+                  "tail": " token",
+                  "pluralTail": " tokens"
+                }
+              },
+              {
+                "uid": "cached_input_tokens",
+                "groupTitle": "Token Usage",
+                "label": "Cached input tokens",
+                "kind": {
+                  "type": "cumulativeMetric",
+                  "value": 30720,
+                  "prefix": "",
+                  "tail": " token",
+                  "pluralTail": " tokens"
+                }
+              }
+            ]
+          },
+          "sessionId": "standing-marigold"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "_cognition.ai/agent_stopped",
+          "reason": "unknown",
+          "raw": {
+            "method": "_cognition.ai/agent_stopped",
+            "params": {
+              "cause": "complete",
+              "stats": {
+                "toolCalls": 4,
+                "filesChanged": 2,
+                "commandsRun": 0,
+                "inputTokens": 12631,
+                "outputTokens": 45,
+                "ttftMs": 734,
+                "tokensPerSec": 266.27218934911247,
+                "totalTimeMs": 903,
+                "requestId": "3aa58395-990d-4573-8c60-098d4e8fe74d",
+                "modelLabel": "SWE-2 High",
+                "responseDimensions": [
+                  {
+                    "uid": "agent_messages",
+                    "groupTitle": "Response Statistics",
+                    "label": "Agent messages",
+                    "kind": {
+                      "type": "cumulativeMetric",
+                      "value": 5,
+                      "prefix": "",
+                      "tail": " message",
+                      "pluralTail": " messages"
+                    }
+                  },
+                  {
+                    "uid": "model",
+                    "groupTitle": "Response Statistics",
+                    "label": "Model",
+                    "kind": {
+                      "type": "metric",
+                      "value": "SWE-2 High"
+                    }
+                  },
+                  {
+                    "uid": "input_tokens",
+                    "groupTitle": "Token Usage",
+                    "label": "Input tokens",
+                    "kind": {
+                      "type": "cumulativeMetric",
+                      "value": 30361,
+                      "prefix": "",
+                      "tail": " token",
+                      "pluralTail": " tokens"
+                    }
+                  },
+                  {
+                    "uid": "output_tokens",
+                    "groupTitle": "Token Usage",
+                    "label": "Output tokens",
+                    "kind": {
+                      "type": "cumulativeMetric",
+                      "value": 511,
+                      "prefix": "",
+                      "tail": " token",
+                      "pluralTail": " tokens"
+                    }
+                  },
+                  {
+                    "uid": "cached_input_tokens",
+                    "groupTitle": "Token Usage",
+                    "label": "Cached input tokens",
+                    "kind": {
+                      "type": "cumulativeMetric",
+                      "value": 30720,
+                      "prefix": "",
+                      "tail": " token",
+                      "pluralTail": " tokens"
+                    }
+                  }
+                ]
+              },
+              "sessionId": "standing-marigold"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
