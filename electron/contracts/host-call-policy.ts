@@ -46,6 +46,7 @@ const reads = [
   "mako:checkout-heads",
   "mako:chat-folders",
   "mako:workspace-moves",
+  "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
   "mako:thread-continuation-resolve",
@@ -127,6 +128,8 @@ const replays = [
   "mako:workspace-move-answer",
   /** Forgetting a project that isn't remembered is a no-op. */
   "mako:workspace-move-forget",
+  /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
+  "mako:plan-build-record",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

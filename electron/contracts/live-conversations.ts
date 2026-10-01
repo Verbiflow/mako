@@ -29,6 +29,8 @@ export interface LiveStartOptions {
   threadPath?: string
   displayPrompt?: string
   modeId?: string
+  /** The access level to launch at when `modeId` is a native mode a launch-only harness enters live, such as Plan. */
+  launchModeId?: string
   tuning?: SessionSettings
   /** The Thread-store Session this conversation starts in: an empty one a window's `+` tab created. */
   session?: string

@@ -2,6 +2,7 @@ import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { WorkspaceMoves } from "./workspace-moves.js"
+import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import {
   type ControlActivity,
@@ -70,6 +71,8 @@ export type HostEventBody =
   | { type: "worktrees-changed" }
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
   | { type: "workspace-moves"; moves: WorkspaceMoves }
+  /** The host's record of built plans changed; window-wide. */
+  | { type: "plan-builds"; builds: PlanBuilds }
   /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
   | { type: "workspace-moved"; from: string; to: string; branch?: string; changed: number }
   | { type: "live-batch"; batch: LiveBatch }

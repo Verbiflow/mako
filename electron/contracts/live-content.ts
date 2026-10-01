@@ -54,6 +54,9 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     kind: z.literal("tool"),
     id: z.string(),
     title: z.string(),
+    /** The harness's own tool name, which `identifyTool` resolves; ACP calls it nothing. */
+    name: z.string().optional(),
+    /** ACP's kind for the call (`execute`, `read`), when the harness speaks ACP. */
     toolKind: z.string().optional(),
     status: z.string(),
     input: z.string().optional(),
@@ -120,6 +123,7 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
     historyVersion: z.string().optional(),
     id: z.string(),
     title: z.string(),
+    name: z.string().optional(),
     toolKind: z.string().optional(),
     status: z.string(),
     input: z.string().optional(),
@@ -300,6 +304,7 @@ export function reduceLiveUpdates(
           id: update.id,
           title: update.title,
           status: update.status,
+          name: update.name,
           toolKind: update.toolKind,
           input: update.input,
           output: update.output,

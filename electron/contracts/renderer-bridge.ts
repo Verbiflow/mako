@@ -10,6 +10,7 @@ import type { ThreadGroup } from "./thread-groups.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
 import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
+import type { PlanBuild, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppOutputChunk, AppOutputCursor, AppOutputKey, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -202,6 +203,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     workspaceMoves: () => invokeTrustedHost<WorkspaceMoves>("mako:workspace-moves"),
     answerWorkspaceMove: (id: string, answer: WorkspaceMoveAnswer) => invokeTrustedHost<void>("mako:workspace-move-answer", id, answer),
     forgetWorkspaceMoves: (project: string) => invokeTrustedHost<void>("mako:workspace-move-forget", project),
+    planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
+    recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     threadCreateSession: (operationId: string, thread: string) =>
       invokeTrustedHost<ThreadPlacement>("mako:thread-create-session", operationId, thread),
     threadControls: (target: ThreadTarget) =>

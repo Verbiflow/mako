@@ -117,6 +117,8 @@ export interface LiveSessionState {
   status: "starting" | "ready" | "running" | "failed" | "closed"
   modes: LiveSessionMode[]
   currentMode: string | null
+  /** The access level a launch-only harness's process runs under, whatever native mode, such as Plan, it is in now. */
+  launchMode?: string
   /** Slash commands the provider advertised for this session, when it does. */
   commands?: LiveSessionCommand[]
   /** Exact context reading the provider last reported; absent until it does. */

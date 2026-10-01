@@ -1,5 +1,6 @@
 import type { ProposedPlan } from "@mako/sessions/content"
 import type { TranscriptEvent } from "@mako/sessions/events"
+import type { ToolIdentity } from "@mako/sessions/tool-identity"
 import type {
   AttachmentContent,
   ToolDetail,
@@ -78,8 +79,10 @@ export type Block =
       type: "toolCall"
       id?: string
       name?: string
-      /** The provider's own kind for the call (`edit`, `execute`, a tool name) — it picks the body family when no name-keyed view exists. */
+      /** ACP's kind for the call (`edit`, `execute`), when the harness speaks ACP. */
       kind?: string
+      /** What the call is, resolved where the harness is known; `pairTools` resolves it otherwise. */
+      tool?: ToolIdentity
       arguments?: unknown
     }
   | {

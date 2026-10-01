@@ -1,15 +1,14 @@
 // Generated from host handler parameter types by scripts/generate-host-inputs.mjs.
 // Regenerate after changing a handler's arguments; never edit this table by hand.
 import { z } from "zod"
-import { TranscriptDepthSchema, TranscriptSourceSchema } from "./transcript-document.js"
 
 export const hostCallInputs = {
   "mako:abort": z.tuple([]),
   "mako:account-capture": z.tuple([z.string(), z.string()]),
   "mako:account-remove": z.tuple([z.string(), z.string()]),
+  "mako:account-reset": z.tuple([z.string(), z.string(), z.string()]),
   "mako:account-select": z.tuple([z.string(), z.union([z.null(), z.string()])]),
   "mako:account-usage": z.tuple([z.string(), z.string()]),
-  "mako:account-reset": z.tuple([z.string(), z.string(), z.string().min(8).max(128)]),
   "mako:accounts": z.tuple([]),
   "mako:activate-tab": z.tuple([z.string()]),
   "mako:appshot-capture": z.tuple([
@@ -26,8 +25,8 @@ export const hostCallInputs = {
   "mako:browser-extension-setup": z.tuple([]),
   "mako:build-update": z.tuple([]),
   "mako:capabilities": z.tuple([]),
+  "mako:chat-folders": z.tuple([z.array(z.string())]),
   "mako:check-updates": z.tuple([]),
-  "mako:chat-folders": z.tuple([z.array(z.string()).max(2000)]),
   "mako:checkout-heads": z.tuple([z.array(z.string())]),
   "mako:clear-crashes": z.tuple([]),
   "mako:clear-queue": z.tuple([]),
@@ -112,6 +111,7 @@ export const hostCallInputs = {
   "mako:github-status": z.tuple([]),
   "mako:harness-availability": z.tuple([]),
   "mako:harness-descriptors": z.tuple([]),
+  "mako:harness-install": z.tuple([z.string()]),
   "mako:harness-profiles": z.tuple([z.boolean().optional()]),
   "mako:harness-start": z.tuple([
     z.string(),
@@ -130,7 +130,6 @@ export const hostCallInputs = {
     z.string().optional(),
     z.boolean().optional(),
   ]),
-  "mako:harness-install": z.tuple([z.string()]),
   "mako:harness-update": z.tuple([z.string()]),
   "mako:harness-updates": z.tuple([z.boolean().optional()]),
   "mako:host-log-path": z.tuple([]),
@@ -280,6 +279,7 @@ export const hostCallInputs = {
       ]),
       thread: z.union([z.literal("new"), z.literal("parent")]).optional(),
       worktree: z.boolean().optional(),
+      move: z.boolean().optional(),
     }),
   ]),
   "mako:live-locate": z.tuple([z.string(), z.string()]),
@@ -399,6 +399,7 @@ export const hostCallInputs = {
       threadPath: z.string().optional(),
       displayPrompt: z.string().optional(),
       modeId: z.string().optional(),
+      launchModeId: z.string().optional(),
       tuning: z
         .object({
           model: z.string().optional(),
@@ -546,6 +547,15 @@ export const hostCallInputs = {
   ]),
   "mako:open-url": z.tuple([z.string()]),
   "mako:pick-folder": z.tuple([]),
+  "mako:plan-build-record": z.tuple([
+    z.string(),
+    z.object({
+      at: z.number(),
+      conversation: z.string().optional(),
+      thread: z.string().optional(),
+    }),
+  ]),
+  "mako:plan-builds": z.tuple([]),
   "mako:plugins-dir": z.tuple([]),
   "mako:prompt": z.tuple([
     z.string(),
@@ -710,21 +720,21 @@ export const hostCallInputs = {
   "mako:terminal-resize": z.tuple([z.string(), z.number(), z.number()]),
   "mako:terminal-write": z.tuple([z.string(), z.string()]),
   "mako:thread-abort-run": z.tuple([z.string()]),
-  "mako:thread-app": z.tuple([z.string().min(1)]),
+  "mako:thread-app": z.tuple([z.string()]),
   "mako:thread-app-check": z.tuple([
-    z.string().min(1),
+    z.string(),
     z.union([z.literal("full"), z.literal("quick")]),
   ]),
-  "mako:thread-app-make-room": z.tuple([z.string().min(1)]),
+  "mako:thread-app-make-room": z.tuple([z.string()]),
   "mako:thread-app-output": z.tuple([
-    z.string().min(1),
     z.string(),
-    z.object({ file: z.string(), offset: z.number().int().nonnegative() }).optional(),
+    z.string(),
+    z.object({ file: z.string(), offset: z.number() }).optional(),
   ]),
-  "mako:thread-app-restart": z.tuple([z.string().min(1)]),
-  "mako:thread-app-start": z.tuple([z.string().min(1)]),
-  "mako:thread-app-stop": z.tuple([z.string().min(1)]),
-  "mako:thread-app-take-turn": z.tuple([z.string().min(1)]),
+  "mako:thread-app-restart": z.tuple([z.string()]),
+  "mako:thread-app-start": z.tuple([z.string()]),
+  "mako:thread-app-stop": z.tuple([z.string()]),
+  "mako:thread-app-take-turn": z.tuple([z.string()]),
   "mako:thread-archive": z.tuple([
     z.object({
       id: z.string(),
@@ -785,7 +795,6 @@ export const hostCallInputs = {
   ]),
   "mako:thread-groups": z.tuple([]),
   "mako:thread-open": z.tuple([z.string()]),
-  "mako:transcript-document": z.tuple([TranscriptSourceSchema, TranscriptDepthSchema]),
   "mako:thread-owner-resolve": z.tuple([z.string()]),
   "mako:thread-page": z.tuple([
     z.string(),
@@ -814,6 +823,13 @@ export const hostCallInputs = {
     z
       .object({ cwd: z.string().optional(), harness: z.string().optional() })
       .optional(),
+  ]),
+  "mako:transcript-document": z.tuple([
+    z.union([
+      z.object({ kind: z.literal("live"), id: z.string() }),
+      z.object({ kind: z.literal("file"), path: z.string() }),
+    ]),
+    z.union([z.literal("full"), z.literal("concise")]),
   ]),
   "mako:unwatch-file": z.tuple([]),
   "mako:update-state": z.tuple([]),
@@ -870,9 +886,12 @@ export const hostCallInputs = {
   ]),
   "mako:utility-model-settings": z.tuple([]),
   "mako:watch-file": z.tuple([z.string()]),
+  "mako:workspace-move-answer": z.tuple([
+    z.string(),
+    z.union([z.literal("allow"), z.literal("always"), z.literal("deny")]),
+  ]),
+  "mako:workspace-move-forget": z.tuple([z.string()]),
   "mako:workspace-moves": z.tuple([]),
-  "mako:workspace-move-answer": z.tuple([z.string().uuid(), z.enum(["allow", "always", "deny"])]),
-  "mako:workspace-move-forget": z.tuple([z.string().min(1)]),
   "mako:worktree-ahead": z.tuple([z.string()]),
   "mako:worktree-inventory": z.tuple([]),
   "mako:worktree-merge": z.tuple([z.string()]),
