@@ -74,8 +74,9 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
    */
   providerTurns?(): AcpProviderTurnObserver
   /**
-   * What one of the provider's vendor notifications (`_`-prefixed method)
-   * means in Mako's shared vocabulary. Pure, so it is tested on recorded
+   * What one of the provider's vendor notifications (`_`-prefixed method),
+   * or a `session/update` of a kind ACP does not declare, means in Mako's
+   * shared vocabulary. Pure, so it is tested on recorded
    * payloads. `undefined` for a method the provider does not own.
    */
   decodeNotification?(method: string, params: JsonObject): AcpNotificationDecoding | undefined
@@ -147,6 +148,8 @@ export interface AcpNotificationDecoding {
   /** `[]` for a notification deliberately not shown; `undefined` for one the provider does not know. */
   notices: NativeNotice[] | undefined
   state?: Pick<Partial<LiveSessionState>, "title">
+  /** The native event's own id, when the provider gives one; it names the notification's markers. */
+  id?: string
 }
 
 /** Vendor notifications about turns the agent started itself. */

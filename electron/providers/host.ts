@@ -3,6 +3,7 @@ import type { ProviderLiveDriver } from "./live-driver.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderConnectionCapability } from "./connection-capability.js"
+import type { HarnessRecord } from "./harness-definition.js"
 import type { ProviderMcpSource } from "./mcp-source.js"
 import type { NativeRunner } from "./native-runner.js"
 import type { ProviderProcessProbe } from "./process-probe.js"
@@ -14,6 +15,8 @@ import { ProviderRegistry } from "./registry.js"
 import { validateLiveDriver } from "./live-driver.js"
 
 export interface ProviderHost {
+  /** Every installed harness, with what it said it has no capability for. */
+  harnesses: ProviderRegistry<HarnessRecord>
   artifactPreviews: ProviderRegistry<ProviderArtifactPreview>
   liveDrivers: ProviderRegistry<ProviderLiveDriver>
   nativeRunners: ProviderRegistry<NativeRunner>
@@ -34,6 +37,7 @@ export type ProviderModule = (host: ProviderHost) => void
 
 export function createProviderHost(): ProviderHost {
   return {
+    harnesses: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
     liveDrivers: new ProviderRegistry(validateLiveDriver),
     nativeRunners: new ProviderRegistry(),

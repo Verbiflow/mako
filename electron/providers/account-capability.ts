@@ -2,6 +2,7 @@ import type {
   AccountUsage,
   AccountProviderInfo,
   HarnessAccount,
+  ResetCreditOutcome,
   SelectedAccount,
 } from "../account-types.js"
 import type { ProviderCapability } from "./registry.js"
@@ -22,6 +23,11 @@ interface AccountCapabilityBase
     env: NodeJS.ProcessEnv
   ): SelectedAccount
   accountUsage(name: string): Promise<AccountUsage>
+  /**
+   * Spend one of the account's reset credits to empty its windows. The same
+   * `attempt` repeated after a lost answer spends nothing more.
+   */
+  useResetCredit?(name: string, attempt: string): Promise<ResetCreditOutcome>
 }
 
 export interface SelectableAccountCapability extends AccountCapabilityBase {
