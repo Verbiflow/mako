@@ -1,0 +1,287 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "about": "Automatic compaction counted from where it started, retries classified, and a turn that fails on the usage limit.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "compact-turn"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "compact-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "compact-turn",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "thread/tokenUsage/updated",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn",
+          "tokenUsage": {
+            "total": {
+              "totalTokens": 900000
+            },
+            "last": {
+              "totalTokens": 120000
+            },
+            "modelContextWindow": 400000
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 120000,
+              "size": 400000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn",
+          "item": {
+            "type": "contextCompaction",
+            "id": "auto"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "compacting"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "thread/tokenUsage/updated",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn",
+          "tokenUsage": {
+            "total": {
+              "totalTokens": 900000
+            },
+            "last": {
+              "totalTokens": 9000
+            },
+            "modelContextWindow": 400000
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 9000,
+              "size": 400000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn",
+          "item": {
+            "type": "contextCompaction",
+            "id": "auto"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "compaction-item",
+            "turnId": "compact-turn"
+          }
+        },
+        {
+          "kind": "compacted",
+          "compaction": {
+            "tokensBefore": 120000
+          },
+          "source": "auto"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "thread/compacted",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "error",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn",
+          "willRetry": true,
+          "error": {
+            "message": "Selected model is at capacity.",
+            "codexErrorInfo": "serverOverloaded",
+            "additionalDetails": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "retrying",
+            "reason": "Server overloaded"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "error",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn",
+          "willRetry": true,
+          "error": {
+            "message": "Reconnecting... 3/5",
+            "codexErrorInfo": {
+              "responseStreamDisconnected": {
+                "httpStatusCode": 503
+              }
+            },
+            "additionalDetails": "unexpected status 503"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "retrying",
+            "attempt": 3,
+            "maxAttempts": 5
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "error",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "compact-turn",
+          "willRetry": true,
+          "error": {
+            "message": "Reconnecting... waiting for network",
+            "codexErrorInfo": null,
+            "additionalDetails": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "retrying",
+            "reason": "Waiting for network"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "compact-turn",
+            "status": "failed",
+            "items": [],
+            "error": {
+              "message": "You've hit your usage limit. Try again at 6:26 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Turn failed",
+            "detail": "Usage limit reached",
+            "body": "You've hit your usage limit. Try again at 6:26 PM.",
+            "tone": "error"
+          },
+          "source": "compact-turn:failed"
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "compact-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "failed",
+            "lastStop": "failed",
+            "error": "You've hit your usage limit. Try again at 6:26 PM."
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "compact-turn",
+            "stop": "failed",
+            "error": "You've hit your usage limit. Try again at 6:26 PM."
+          }
+        }
+      ]
+    }
+  ]
+}

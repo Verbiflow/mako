@@ -1,0 +1,151 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "about": "A proposed plan streams as one artifact and the completed item replaces the streamed text.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "plan-turn"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "plan-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "plan-turn",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "plan-turn",
+          "item": {
+            "type": "plan",
+            "id": "proposal",
+            "text": ""
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "codex:plan-turn:proposal",
+            "text": "",
+            "status": "drafting",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/plan/delta",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "plan-turn",
+          "itemId": "proposal",
+          "delta": "# Initial plan"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "codex:plan-turn:proposal",
+            "text": "# Initial plan",
+            "status": "drafting"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "plan-turn",
+          "item": {
+            "type": "plan",
+            "id": "proposal",
+            "text": "# Revised plan\n\n1. Keep the public API.\n2. Move parsing to the boundary."
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "codex:plan-turn:proposal",
+            "text": "# Revised plan\n\n1. Keep the public API.\n2. Move parsing to the boundary.",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "plan-turn",
+            "status": "completed",
+            "error": null,
+            "items": []
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "plan-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "plan-turn",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

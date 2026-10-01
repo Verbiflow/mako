@@ -1,0 +1,401 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "about": "Tool rows: web search, sleep, MCP and dynamic tool calls, an added file and a hook prompt Codex keeps to itself.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "tool-turn"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "tool-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "tool-turn",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "webSearch",
+            "id": "search",
+            "query": "",
+            "action": null,
+            "results": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:tool-turn:search",
+            "title": "Web search",
+            "toolKind": "web_search",
+            "status": "pending",
+            "input": "{\n  \"query\": \"\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "webSearch",
+            "id": "search",
+            "query": "electron utility process",
+            "action": {
+              "type": "search",
+              "query": "electron utility process",
+              "queries": null
+            },
+            "results": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:tool-turn:search",
+            "title": "electron utility process",
+            "input": "{\n  \"type\": \"search\",\n  \"query\": \"electron utility process\",\n  \"queries\": null\n}",
+            "status": "completed",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "sleep",
+            "id": "nap",
+            "durationMs": 90000
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:tool-turn:nap",
+            "title": "Sleep 1m 30s",
+            "toolKind": "sleep",
+            "status": "completed",
+            "input": "(undefined)"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:tool-turn:nap",
+            "status": "completed",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "mcpToolCall",
+            "id": "mcp",
+            "server": "linear",
+            "tool": "get_issue",
+            "status": "inProgress",
+            "arguments": {
+              "id": "MAK-1"
+            },
+            "result": null,
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:tool-turn:mcp",
+            "title": "linear: get_issue",
+            "toolKind": "get_issue",
+            "status": "pending",
+            "input": "{\n  \"id\": \"MAK-1\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "mcpToolCall",
+            "id": "mcp",
+            "server": "linear",
+            "tool": "get_issue",
+            "status": "completed",
+            "arguments": {
+              "id": "MAK-1"
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "MAK-1: Fix the flaky test"
+                }
+              ]
+            },
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:tool-turn:mcp",
+            "status": "completed",
+            "output": "{\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"MAK-1: Fix the flaky test\"\n    }\n  ]\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "mcpToolCall",
+            "id": "mcp-failed",
+            "server": "linear",
+            "tool": "update_issue",
+            "status": "failed",
+            "arguments": {
+              "id": "MAK-1"
+            },
+            "result": null,
+            "error": {
+              "message": "permission denied"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:tool-turn:mcp-failed",
+            "title": "linear: update_issue",
+            "toolKind": "update_issue",
+            "status": "failed",
+            "input": "{\n  \"id\": \"MAK-1\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:tool-turn:mcp-failed",
+            "status": "failed",
+            "output": "permission denied"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "dynamicToolCall",
+            "id": "dyn",
+            "namespace": "mako",
+            "tool": "open_file",
+            "status": "completed",
+            "arguments": {
+              "path": "README.md"
+            },
+            "contentItems": [
+              {
+                "type": "inputText",
+                "text": "opened"
+              }
+            ],
+            "success": true
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:tool-turn:dyn",
+            "title": "mako.open_file",
+            "toolKind": "open_file",
+            "status": "completed",
+            "input": "{\n  \"path\": \"README.md\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:tool-turn:dyn",
+            "status": "completed",
+            "output": "[\n  {\n    \"type\": \"inputText\",\n    \"text\": \"opened\"\n  }\n]"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "fileChange",
+            "id": "add",
+            "status": "completed",
+            "changes": [
+              {
+                "path": "/tmp/project/new.ts",
+                "kind": {
+                  "type": "add"
+                },
+                "diff": "export {}\n"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:tool-turn:add",
+            "title": "Edit /tmp/project/new.ts",
+            "toolKind": "apply_patch",
+            "status": "completed",
+            "input": "{\n  \"path\": \"/tmp/project/new.ts\",\n  \"paths\": [\n    \"/tmp/project/new.ts\"\n  ]\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:tool-turn:add",
+            "status": "completed",
+            "output": "Add /tmp/project/new.ts\n+export {}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "hookPrompt",
+            "id": "hook",
+            "fragments": []
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "tool-turn",
+            "status": "completed",
+            "error": null,
+            "items": []
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "tool-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "tool-turn",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

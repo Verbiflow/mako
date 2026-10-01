@@ -1,0 +1,170 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "about": "A resumed thread's turns replay as the transcript it already had, without live-only side effects.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "replay": {
+          "thread": {
+            "id": "thread-1",
+            "cwd": "/tmp/project",
+            "turns": [
+              {
+                "id": "old-1",
+                "status": "completed",
+                "error": null,
+                "items": [
+                  {
+                    "type": "userMessage",
+                    "id": "u1",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "What does range() return?"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "agentMessage",
+                    "id": "a1",
+                    "text": "An array from start up to, not including, end."
+                  }
+                ]
+              },
+              {
+                "id": "old-2",
+                "status": "failed",
+                "error": {
+                  "message": "stream disconnected"
+                },
+                "items": [
+                  {
+                    "type": "userMessage",
+                    "id": "u2",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Run the tests"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "commandExecution",
+                    "id": "c2",
+                    "command": "npm test",
+                    "cwd": "/tmp/project",
+                    "status": "completed",
+                    "aggregatedOutput": "ok\n",
+                    "exitCode": 0
+                  },
+                  {
+                    "type": "plan",
+                    "id": "p2",
+                    "text": "# Plan\n\nShip it."
+                  },
+                  {
+                    "type": "contextCompaction",
+                    "id": "k2"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "user",
+            "text": "What does range() return?",
+            "attachments": []
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "codex:old-1:a1",
+            "text": "An array from start up to, not including, end.",
+            "replace": true
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "user",
+            "text": "Run the tests",
+            "attachments": []
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:old-2:c2",
+            "title": "npm test",
+            "toolKind": "exec_command",
+            "status": "completed",
+            "input": "{\n  \"command\": \"npm test\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:old-2:c2",
+            "status": "completed",
+            "output": "ok\n"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "codex:old-2:p2",
+            "text": "# Plan\n\nShip it.",
+            "status": "proposed",
+            "replace": true
+          }
+        },
+        {
+          "kind": "compacted",
+          "source": "k2"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "new-1"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "new-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "new-1",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    }
+  ]
+}

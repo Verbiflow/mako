@@ -1,0 +1,272 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "about": "Bookkeeping is known and quiet; a notification or item Mako has no meaning for is kept with its record; a broken known item names itself; another thread's turn is a subagent's; account limits go to the account.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-1",
+          "status": {
+            "type": "active"
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/diff/updated",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "t",
+          "diff": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "hook/started",
+        "params": {
+          "threadId": "thread-1"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "rawResponseItem/completed",
+        "params": {
+          "threadId": "thread-1"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "future/notification",
+        "params": {
+          "threadId": "thread-1",
+          "detail": {
+            "anything": true
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "future/notification",
+          "reason": "unknown",
+          "raw": {
+            "threadId": "thread-1",
+            "detail": {
+              "anything": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "quiet"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "quiet"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "quiet",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "quiet",
+          "item": {
+            "type": "futureItem",
+            "id": "future",
+            "payload": {
+              "x": 1
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "item/futureItem",
+          "reason": "unknown",
+          "raw": {
+            "type": "futureItem",
+            "id": "future",
+            "payload": {
+              "x": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "quiet",
+          "item": {
+            "type": "commandExecution",
+            "id": "broken"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "item/commandExecution/invalid",
+          "reason": "unreadable",
+          "raw": {
+            "threadId": "thread-1",
+            "turnId": "quiet",
+            "item": {
+              "type": "commandExecution",
+              "id": "broken"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "child-thread",
+          "turn": {
+            "id": "child-turn"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "subagent-turn",
+            "threadId": "child-thread",
+            "completed": false
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "child-thread",
+          "turn": {
+            "id": "child-turn",
+            "status": "completed",
+            "error": null,
+            "items": []
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "subagent-turn",
+            "threadId": "child-thread",
+            "completed": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "account/rateLimits/updated",
+        "params": {
+          "rateLimits": {
+            "limitId": "codex",
+            "primary": {
+              "usedPercent": 41,
+              "windowDurationMins": 300,
+              "resetsAt": 1900000000
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "usage",
+          "windows": [
+            {
+              "usedPercent": 41,
+              "windowMinutes": 300,
+              "resetsAt": 1900000000000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "quiet",
+            "status": "completed",
+            "error": null,
+            "items": []
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "quiet"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "quiet",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

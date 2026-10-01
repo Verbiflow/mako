@@ -1,0 +1,374 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "about": "Streams that refine a row in place: a checklist plan, raw reasoning, a patch revised while it is written, MCP progress, a strict-review notice and a server request Codex closed.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "stream-turn"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "stream-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "stream-turn",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "autoApprovalReview/strictReviewRequired",
+        "params": {
+          "threadId": "thread-1"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "This request needs extra safety checks, so some tool calls may take longer.",
+            "tone": "warning"
+          },
+          "source": "autoApprovalReview/strictReviewRequired:a4c735f6"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/plan/updated",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "plan": [
+            {
+              "step": "Read the parser",
+              "status": "completed"
+            },
+            {
+              "step": "Fix the boundary",
+              "status": "inProgress"
+            },
+            {
+              "step": "Run the tests",
+              "status": "pending"
+            }
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "plan",
+            "entries": [
+              {
+                "content": "Read the parser",
+                "status": "completed"
+              },
+              {
+                "content": "Fix the boundary",
+                "status": "in_progress"
+              },
+              {
+                "content": "Run the tests",
+                "status": "pending"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "item": {
+            "type": "reasoning",
+            "id": "raw",
+            "summary": [],
+            "content": []
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "item/reasoning/textDelta",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "itemId": "raw",
+          "delta": "Raw reasoning text."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "codex:stream-turn:raw",
+            "text": "Raw reasoning text."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "item": {
+            "type": "fileChange",
+            "id": "edit",
+            "status": "inProgress",
+            "changes": [
+              {
+                "path": "/tmp/project/a.ts",
+                "kind": {
+                  "type": "update",
+                  "move_path": null
+                },
+                "diff": "@@ -1 +1 @@\n-a\n+b\n"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:stream-turn:edit",
+            "title": "Edit /tmp/project/a.ts",
+            "toolKind": "apply_patch",
+            "status": "pending",
+            "input": "{\n  \"path\": \"/tmp/project/a.ts\",\n  \"paths\": [\n    \"/tmp/project/a.ts\"\n  ]\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/fileChange/patchUpdated",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "itemId": "edit",
+          "changes": [
+            {
+              "path": "/tmp/project/a.ts",
+              "kind": {
+                "type": "update",
+                "move_path": null
+              },
+              "diff": "@@ -1 +1 @@\n-a\n+c\n"
+            }
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:stream-turn:edit",
+            "output": "Update /tmp/project/a.ts\n@@ -1 +1 @@\n-a\n+c"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/fileChange/outputDelta",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "itemId": "edit",
+          "delta": "Success. Updated the following files:\nM a.ts\n"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:stream-turn:edit",
+            "output": "Update /tmp/project/a.ts\n@@ -1 +1 @@\n-a\n+c\n\nSuccess. Updated the following files:\nM a.ts\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "item": {
+            "type": "fileChange",
+            "id": "edit",
+            "status": "completed",
+            "changes": [
+              {
+                "path": "/tmp/project/a.ts",
+                "kind": {
+                  "type": "update",
+                  "move_path": null
+                },
+                "diff": "@@ -1 +1 @@\n-a\n+c\n"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:stream-turn:edit",
+            "status": "completed",
+            "output": "Update /tmp/project/a.ts\n@@ -1 +1 @@\n-a\n+c"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "item": {
+            "type": "mcpToolCall",
+            "id": "mcp",
+            "server": "docs",
+            "tool": "search",
+            "status": "inProgress",
+            "arguments": {
+              "q": "zod"
+            },
+            "result": null,
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:stream-turn:mcp",
+            "title": "docs: search",
+            "toolKind": "search",
+            "status": "pending",
+            "input": "{\n  \"q\": \"zod\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/mcpToolCall/progress",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "stream-turn",
+          "itemId": "mcp",
+          "message": "Searching 3 sources"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:stream-turn:mcp",
+            "output": "Searching 3 sources\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "serverRequest/resolved",
+        "params": {
+          "threadId": "thread-1",
+          "requestId": 7
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "server-request-resolved",
+            "requestId": 7
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "stream-turn",
+            "status": "completed",
+            "error": null,
+            "items": []
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "stream-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "stream-turn",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

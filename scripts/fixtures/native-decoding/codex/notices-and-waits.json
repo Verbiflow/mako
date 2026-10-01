@@ -1,0 +1,420 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "about": "Notices become markers once each, in Mako's words; waits start and end with their own events or the output they held.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "notice-turn"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "notice-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "notice-turn",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "warning",
+        "params": {
+          "threadId": "thread-1",
+          "message": "Heads up: long threads can be less accurate."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "Heads up: long threads can be less accurate.",
+            "tone": "warning"
+          },
+          "source": "warning:2d8f050c"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "warning",
+        "params": {
+          "threadId": "thread-1",
+          "message": "Heads up: long threads can be less accurate."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "guardianWarning",
+        "params": {
+          "threadId": "thread-1",
+          "message": "Automatic approval review approved (risk: low, authorization: high): fine"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "guardianWarning",
+        "params": {
+          "threadId": "thread-1",
+          "message": "Automatic approval review denied (risk: high, authorization: low): writes outside the project"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "Automatic approval review denied (risk: high, authorization: low): writes outside the project",
+            "tone": "warning"
+          },
+          "source": "guardianWarning:68731276"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "configWarning",
+        "params": {
+          "summary": "Unknown key `foo`",
+          "details": "Remove it from config.toml",
+          "path": "/tmp/config.toml"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "Unknown key `foo`",
+            "body": "Remove it from config.toml",
+            "tone": "warning"
+          },
+          "source": "configWarning:b2d10309"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "deprecationNotice",
+        "params": {
+          "summary": "`--full-auto` is deprecated",
+          "details": null
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "`--full-auto` is deprecated",
+            "tone": "warning"
+          },
+          "source": "deprecationNotice:e9d027e7"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "model/rerouted",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "fromModel": "gpt-5.5",
+          "toModel": "gpt-5.4",
+          "reason": "highRiskCyberActivity"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Model changed",
+            "detail": "gpt-5.5 → gpt-5.4 · cybersecurity safety check"
+          },
+          "source": "model/rerouted:0a9c678f"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "mcpServer/startupStatus/updated",
+        "params": {
+          "threadId": null,
+          "name": "linear",
+          "status": "starting",
+          "error": null,
+          "failureReason": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "mcpServer/startupStatus/updated",
+        "params": {
+          "threadId": null,
+          "name": "linear",
+          "status": "failed",
+          "error": null,
+          "failureReason": "reauthenticationRequired"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "MCP server failed",
+            "detail": "linear · sign-in required",
+            "tone": "warning"
+          },
+          "source": "mcpServer/startupStatus/updated:3ed86755"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "item": {
+            "type": "enteredReviewMode",
+            "id": "review-in",
+            "review": "current changes"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Review mode started",
+            "detail": "current changes"
+          },
+          "source": "review-in"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "item": {
+            "type": "exitedReviewMode",
+            "id": "review-out",
+            "review": "No issues found.\n\nThe change is correct."
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Review mode ended",
+            "body": "No issues found.\n\nThe change is correct."
+          },
+          "source": "review-out"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "model/safetyBuffering/updated",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "other-turn",
+          "model": "gpt-5.5",
+          "useCases": [],
+          "reasons": [],
+          "showBufferingUi": true,
+          "fasterModel": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "model/safetyBuffering/updated",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "model": "gpt-5.5",
+          "useCases": [],
+          "reasons": [],
+          "showBufferingUi": true,
+          "fasterModel": null
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "waiting",
+            "label": "Checking the response"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "itemId": "answer",
+          "delta": "Checked."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": null
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "codex:notice-turn:answer",
+            "text": "Checked."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/autoApprovalReview/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "reviewId": "r1"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "waiting",
+            "label": "Reviewing the approval"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/autoApprovalReview/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "reviewId": "r1"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": null
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "modelProvider/authRecoveryStarted",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "provider": "openai",
+          "message": "Refreshing"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "waiting",
+            "label": "Refreshing sign-in"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "modelProvider/authRecoveryCompleted",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "notice-turn",
+          "provider": "openai",
+          "message": "Done"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": null
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "notice-turn",
+            "status": "completed",
+            "error": null,
+            "items": []
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "notice-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "notice-turn",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}
