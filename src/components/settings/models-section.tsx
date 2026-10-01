@@ -248,7 +248,7 @@ function HarnessDefaults({ harness }: { harness: string }) {
               onChange={chooseModel}
             />
           </SettingRow>
-          {options.map((option) => (
+          {options.filter((option) => option.role !== "plan").map((option) => (
             <OptionRow
               key={option.id}
               option={option}
