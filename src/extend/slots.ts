@@ -11,6 +11,7 @@ import type {
   ToolDetail,
 } from "@mako/sessions"
 import type { AttachmentInput } from "@/lib/attachments"
+import type { ToolIdentity, ToolKind } from "@mako/sessions/tool-identity"
 
 /** A slot whose contributions receive nothing from the render site. */
 export type NoProps = Record<never, never>
@@ -88,9 +89,13 @@ export function registerSlot<K extends SlotName>(
 
 export interface ToolCall {
   id: string
+  /** The harness's own name for the call; a view registered under it wins. */
   name: string
-  /** The provider's own kind — picks the body family when the name has no view. */
+  /** ACP's kind for the call, when the harness speaks ACP. */
   kind?: string
+  /** What the call is in the shared vocabulary; labels, glyphs and kind views read it. */
+  tool: ToolIdentity
+  /** The arguments the tool ran with: a wrapper's inner arguments when it had one. */
   arguments?: unknown
   result?: string
   attachments?: AttachmentContent[]
@@ -130,13 +135,13 @@ export function registerToolView(name: string, view: ToolView) {
 }
 
 /**
- * Views keyed by the provider's own kind for a call — `edit`, `execute` —
- * used only when the tool's name has no view of its own. A new tool name
- * keeps a real body without registering anything.
+ * Views keyed by the shared tool kind (`shell`, `edit`), used when neither the
+ * native name nor the tool a wrapper ran has a view of its own. Every
+ * harness's shell is a `shell`, so one view serves them all.
  */
 const toolKindViews = new Registry<ToolView>()
 
-export function registerToolKindView(kind: string, view: ToolView) {
+export function registerToolKindView(kind: ToolKind, view: ToolView) {
   return toolKindViews.register(kind, view)
 }
 
@@ -150,11 +155,8 @@ function lookup(views: Registry<ToolView>, key: string): ToolView | undefined {
   return undefined
 }
 
-export function useToolView(call: Pick<ToolCall, "name" | "kind">): ToolView | undefined {
+export function useToolView(call: Pick<ToolCall, "name" | "tool">): ToolView | undefined {
   const views = useRegistry(toolViews)
   const kindViews = useRegistry(toolKindViews)
-  const direct = lookup(views, call.name)
-  if (direct) return direct
-  if (!call.kind) return undefined
-  return lookup(kindViews, call.kind)
+  return lookup(views, call.name) ?? (call.tool.tool ? lookup(views, call.tool.tool) : undefined) ?? kindViews.get(call.tool.kind)
 }
