@@ -911,7 +911,7 @@ export function installMockBridge() {
       const day = 24 * hour
       const now = Date.now()
       const devinReset = loadedAt + 25_000
-      const fixtures: Record<string, AccountUsage> = {
+      const fixtures = new Map(Object.entries({
         "claude:default": {
           status: "ok",
           plan: "max",
@@ -982,8 +982,8 @@ export function installMockBridge() {
           ],
         },
         "opencode:anthropic": { status: "unavailable", detail: "API keys have no plan limits" },
-      }
-      return fixtures[`${harness}:${name}`] ?? { status: "unavailable" }
+      } satisfies Record<string, AccountUsage>))
+      return fixtures.get(`${harness}:${name}`) ?? { status: "unavailable" }
     },
     }
     })(),
