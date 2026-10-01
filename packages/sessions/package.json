@@ -17,7 +17,8 @@
     "./thread-schema": "./dist/thread-schema.js",
     "./settings": "./dist/settings.js",
     "./model-catalog": "./dist/model-catalog.js",
-    "./codex-presentation": "./dist/providers/codex-presentation.js"
+    "./codex-presentation": "./dist/providers/codex-presentation.js",
+    "./tool-identity": "./dist/tool-identity.js"
   },
   "files": [
     "dist"
