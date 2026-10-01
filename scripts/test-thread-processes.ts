@@ -345,13 +345,16 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   // Over the same loopback MCP server and per-conversation token every agent gets.
   const grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => null, undefined, tools)
   cleanups.push(async () => grants.close())
-  const connect = async (id: string) => {
+  const connect = async (id: string, query = "") => {
     const grant = grants.mint("binding", id)
     const client = new Client({ name: "agent", version: "1" })
     assert.ok(grant.makoUrl)
-    await client.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
+    await client.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl + query), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
     return client
   }
+  const withQuery = await connect(conversation, "?codemode=false")
+  assert.ok((await withQuery.listTools()).tools.some((tool) => tool.name === "app_status"), "a client that adds a query to the address, as OpenCode does, still reaches the tools")
+  await withQuery.close()
   const agent = await connect(conversation)
   const listedTools = (await agent.listTools()).tools
   assert.deepEqual(listedTools.map((tool) => tool.name), ["app_status", "app_start", "app_stop", "app_restart", "app_logs", "app_check", "recipe_guide", "recipe_save", "port_holder"])
@@ -482,9 +485,30 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   writeFileSync(join(bare, "server.mjs"), readFileSync(server, "utf8"))
   const setupRecipe = (quick: string) =>
     RecipeSchema.parse({ values: { PORT: "{port}" }, processes: { web: { command: "node server.mjs", port: "{port}" } }, checks: { quick } })
+  // What the desk shows while app_start is still waiting for the app to come up.
+  const appStepsDuring = async (start: Promise<string>) => {
+    const seen = new Set<string | undefined>()
+    let settled: string | undefined
+    void start.then((text) => { settled = text })
+    while (settled === undefined) {
+      const view = await desk.view(bare)
+      if (settled === undefined) seen.add(view.kind === "setting-up" ? view.progress?.app : view.kind)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return { seen: [...seen], said: settled }
+  }
   await deskTools.save(setupConversation, setupRecipe("node -e \"process.exit(1)\""))
   assert.deepEqual(await desk.view(bare), settingUp({ recipe: "done", app: "waiting", checks: "waiting" }), "a saved recipe ticks the first step; the setup goes on while its turn does")
-  assert.match(await deskTools.start(setupConversation), /web: running/)
+  writeFileSync(join(bare, "dies.mjs"), `import { createServer } from "node:http"\ncreateServer((_, response) => response.end("up")).listen(Number(process.env.PORT), "127.0.0.1", () => setTimeout(() => process.exit(3), 600))\n`)
+  await deskTools.save(setupConversation, RecipeSchema.parse({ values: { PORT: "{port}" }, processes: { web: { command: "node dies.mjs", port: "{port}" } }, checks: { quick: "true" } }))
+  const dying = await appStepsDuring(deskTools.start(setupConversation))
+  assert.match(dying.said, /web: crashed \(exit 3\)/)
+  assert.ok(dying.seen.includes("running") && !dying.seen.includes("done"), `a server that answers its port and dies a moment later never ticks the app step (saw ${dying.seen.join(", ")})`)
+  assert.equal((await desk.view(bare)).kind === "setting-up" && (await desk.view(bare)).progress?.app, "failed")
+  await deskTools.save(setupConversation, setupRecipe("node -e \"process.exit(1)\""))
+  const coming = await appStepsDuring(deskTools.start(setupConversation))
+  assert.match(coming.said, /web: running/)
+  assert.ok(coming.seen.includes("running") && !coming.seen.includes("done"), `the app step ticks when app_start says the app is up, not when its port first answers (saw ${coming.seen.join(", ")})`)
   assert.deepEqual(await desk.view(bare), settingUp({ recipe: "done", app: "done", checks: "waiting" }), "its app coming up ticks the second")
   await deskTools.stop(setupConversation)
   assert.equal((await desk.view(bare)).kind === "setting-up" && (await desk.view(bare)).progress?.app, "done", "stopping the app again leaves that step ticked")

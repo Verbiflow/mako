@@ -113,6 +113,13 @@ interface Unprepared {
   shown: boolean
 }
 
+interface Setup {
+  conversation: string
+  since: number
+  /** A start in the conversation's app came up the way `app_start` reports it: every process still up a moment past its port. */
+  appStarted: boolean
+}
+
 type StartOutcome =
   | { kind: "nothing" }
   | ({ kind: "blocked" } & Unprepared)
@@ -147,10 +154,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   /**
    * Projects an agent is setting up, by main checkout: the conversation that
-   * read the guide, when it did, and whether its app has been seen running,
-   * since a stopped process leaves no record to read that from later.
+   * read the guide, when it did, and whether a start of its Thread's app has
+   * come up, since a stopped process leaves no record to read that from later.
    */
-  const setups = new Map<string, { conversation: string; since: number; appStarted: boolean }>()
+  const setups = new Map<string, Setup>()
   const context = async (conversationId: string): Promise<Context & { read: Read }> => {
     const cwd = deps.cwd(conversationId)
     if (!cwd) throw new Error("Mako isn't running this conversation.")
@@ -314,6 +321,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     line.delete(app)
     const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
     const statuses = await deps.processes.settle(app, picked.map((name) => runKey("process", name)), settleMs)
+    if (Object.keys(current.recipe.processes).every((name) => statuses.find((entry) => entry.name === name)?.state.kind === "running"))
+      for (const setup of setups.values()) {
+        const cwd = deps.cwd(setup.conversation)
+        if (cwd && (await deps.environment(setup.conversation, cwd).catch(() => undefined))?.app === app) setup.appStarted = true
+      }
     const lines = await Promise.all(picked.map(async (name) => {
       const refused = result.refused.find((entry) => entry.name === name)
       if (refused) return `${name}: not started. ${refused.reason}`
@@ -399,7 +411,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
    * ready, whether that Thread's processes came up, and how its checks ended.
    * Nothing depends on the agent saying so.
    */
-  const setupProgress = async (setup: { conversation: string; since: number; appStarted: boolean }): Promise<SetupProgress> => {
+  const setupProgress = async (setup: Setup): Promise<SetupProgress> => {
     const cwd = deps.cwd(setup.conversation)
     const environment = cwd ? await deps.environment(setup.conversation, cwd) : undefined
     const read = cwd && environment ? await readRecipe(await checkoutOf(cwd), environment, deps.recipesRoot).catch(() => undefined) : undefined
@@ -408,7 +420,6 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const failed = (entry: RunStatus) => entry.state.kind === "ended" || (entry.state.kind === "exited" && entry.state.code !== 0)
     const working = (entry: RunStatus) => entry.state.kind === "starting" || entry.state.kind === "running"
     const processes = Object.keys(read.recipe.processes).map((name) => runs.find((entry) => entry.kind === "process" && entry.name === name))
-    if (processes.length && processes.every((entry) => entry?.state.kind === "running")) setup.appStarted = true
     const app: SetupStep = setup.appStarted ? "done"
       : processes.some((entry) => entry && failed(entry)) ? "failed"
       : processes.some((entry) => entry && working(entry)) ? "running"

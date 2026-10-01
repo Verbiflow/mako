@@ -530,9 +530,9 @@ const MAKO_TOOL_LABELS = new Map([
   ["workspace_remove", "Remove worktree"],
 ])
 
-/** Claude Code names an MCP tool `mcp__mako__app_start`; Codex's `mako: app_start` arrives here as `mako.app_start`. */
-function makoToolLabel(name: string): string | undefined {
-  const tool = /^(?:mcp__mako__|mako\.)(\w+)$/.exec(name)?.[1]
+/** Claude Code names an MCP tool `mcp__mako__app_start`; Codex's `mako: app_start` arrives here as `mako.app_start`; Devin asks to run `mako: app_start`. */
+export function makoToolLabel(name: string): string | undefined {
+  const tool = /^(?:mcp__mako__|mako\.|mako: )(\w+)$/.exec(name)?.[1]
   return tool ? MAKO_TOOL_LABELS.get(tool) : undefined
 }
 

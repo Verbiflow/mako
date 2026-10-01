@@ -15,6 +15,7 @@ import {
 import {
   argAt,
   isSubagentLaunch,
+  makoToolLabel,
   normalizeToolOutput,
   pairTools,
   parseToolExecutionOutput,
@@ -400,6 +401,9 @@ assert.equal(
 assert.equal(toolLabel("exec_command"), "Shell")
 assert.equal(toolLabel("TaskUpdate"), "Update task")
 assert.equal(toolLabel("WAIT"), "Wait for command")
+for (const asked of ["mcp__mako__app_start", "mako.app_start", "mako: app_start"])
+  assert.equal(makoToolLabel(asked), "Start app", `an approval for ${asked} names the Mako tool`)
+assert.equal(makoToolLabel("mako: shell"), undefined, "a name Mako doesn't serve stays as the agent wrote it")
 assert.equal(
   isSubagentLaunch({
     id: "wait",

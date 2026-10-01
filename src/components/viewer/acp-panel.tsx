@@ -28,7 +28,7 @@ import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/l
 import { describePromptRecovery } from "../../../electron/contracts/prompt-recovery"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { liveToolName } from "@/lib/tools"
+import { liveToolName, makoToolLabel } from "@/lib/tools"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import {
   CheckCheckIcon,
@@ -326,6 +326,7 @@ function Permission() {
 function PermissionInput({ permission }: { permission: LivePermissionRequest }) {
   if (permission.questions)
     return <QuestionPermission permission={permission} />
+  const makoTool = makoToolLabel(permission.title)
   return (
     <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
@@ -337,7 +338,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
         ) : (
           <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
         )}
-        <span className="min-w-0 truncate font-mono">{permission.title}</span>
+        <span className={cn("min-w-0 truncate", !makoTool && "font-mono")}>{makoTool ?? permission.title}</span>
       </p>
       <p className="pt-0.5 pb-2 text-label text-faint">
         {permission.kind === "authentication" ? "Continue with the provider's sign-in flow. Your prompt waits until sign-in succeeds." : "Choose how long to allow it."}

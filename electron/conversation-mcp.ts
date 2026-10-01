@@ -33,9 +33,11 @@ const MAKO_INSTRUCTIONS = [
 
 type Route = "computer" | "mako"
 
+/** By path alone: OpenCode adds its own query (`?codemode=false`) to every server's address. */
 function routeOf(url: string | undefined): Route | undefined {
-  if (url === "/computer") return "computer"
-  if (url === "/mako") return "mako"
+  const path = url?.split("?", 1)[0]
+  if (path === "/computer") return "computer"
+  if (path === "/mako") return "mako"
   return undefined
 }
 
