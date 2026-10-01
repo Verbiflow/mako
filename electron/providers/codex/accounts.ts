@@ -14,25 +14,24 @@ import {
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type {
-  AccountUsage,
-  ClassifiedUsageWindows,
-  HarnessAccount,
-  UsageWindow,
-} from "../../account-types.js"
+import type { AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
 import {
   accountDir,
   accountsRoot,
+  childProcessEnv,
   cleanAccountName,
   ensureSharedLinks,
   jsonFields,
   jwtClaims,
-  numberValue,
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
 import type { JsonValue } from "../../codex-app-json.js"
 import type { SelectableAccountCapability } from "../account-capability.js"
+import { chatGptUsage } from "../chatgpt-usage.js"
+import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
+import { resolveCodexExecutable } from "./executable.js"
+import { parseCodexRateLimits, parseResetOutcome } from "./rate-limits.js"
 
 /** Env vars that would override file credentials and cross accounts. */
 const AUTH_ENV = ["OPENAI_API_KEY"]
@@ -142,11 +141,6 @@ interface RouterAccount {
   authJson: string
 }
 
-interface CodexUsageResponse {
-  plan?: string
-  windows: UsageWindow[]
-}
-
 function parseCodexAuthValue(value: JsonValue | undefined): CodexAuth {
   const tokens = valueFields(valueFields(value)?.get("tokens"))
   if (!tokens) return {}
@@ -175,45 +169,6 @@ function parseRouterAccount(contents: string): RouterAccount {
       ? JSON.stringify(Object.fromEntries(authFields))
       : "{}",
   }
-}
-
-function parseBackendWindow(value: JsonValue | undefined): UsageWindow | null {
-  const fields = valueFields(value)
-  if (!fields) return null
-  const usedPercent = numberValue(fields.get("used_percent"))
-  if (usedPercent === undefined) return null
-  const windowSeconds = numberValue(fields.get("limit_window_seconds")) ?? 0
-  const resetSeconds = numberValue(fields.get("reset_after_seconds"))
-  return {
-    usedPercent,
-    windowMinutes: Math.round(windowSeconds / 60),
-    resetsAt:
-      resetSeconds === undefined ? null : Date.now() + resetSeconds * 1000,
-  }
-}
-
-function parseUsageResponse(contents: string): CodexUsageResponse {
-  const fields = jsonFields(contents)
-  const rateLimit = valueFields(fields.get("rate_limit"))
-  const windows = [
-    parseBackendWindow(rateLimit?.get("primary_window")),
-    parseBackendWindow(rateLimit?.get("secondary_window")),
-  ]
-    .filter((entry): entry is UsageWindow => entry !== null)
-    .sort((a, b) => a.windowMinutes - b.windowMinutes)
-  const plan = stringValue(fields.get("plan_type"))
-  return plan === undefined ? { windows } : { plan, windows }
-}
-
-export function classifyCodexWindows(
-  windows: UsageWindow[]
-): ClassifiedUsageWindows {
-  const session =
-    windows.find((window) => window.windowMinutes <= 24 * 60) ?? null
-  const weekly =
-    [...windows].reverse().find((window) => window.windowMinutes > 24 * 60) ??
-    null
-  return { session, weekly }
 }
 
 async function accountEmail(dir: string): Promise<string | undefined> {
@@ -388,43 +343,6 @@ async function accountEnv(
   return env
 }
 
-async function chatGptUsage(
-  accessToken: string,
-  accountId: string | undefined
-): Promise<AccountUsage> {
-  try {
-    const headers = new Headers({ Authorization: `Bearer ${accessToken}` })
-    if (accountId) headers.set("ChatGPT-Account-Id", accountId)
-    const response = await fetch("https://chatgpt.com/backend-api/wham/usage", {
-      headers,
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (response.status === 401) {
-      return {
-        status: "stale-token",
-        detail: "Refreshes the next time Codex runs",
-      }
-    }
-    if (!response.ok)
-      return { status: "error", detail: `HTTP ${response.status}` }
-    // Codex names windows by position, not duration; sort by length so
-    // "session" is always the shorter one whatever the backend calls it.
-    const usage = parseUsageResponse(await response.text())
-    const windows = classifyCodexWindows(usage.windows)
-    return {
-      status: "ok",
-      plan: usage.plan,
-      session: windows.session,
-      weekly: windows.weekly,
-    }
-  } catch (error) {
-    return {
-      status: "error",
-      detail: error instanceof Error ? error.message : String(error),
-    }
-  }
-}
-
 async function usageForDir(dir: string): Promise<AccountUsage> {
   let auth: CodexAuth
   try {
@@ -438,10 +356,17 @@ async function usageForDir(dir: string): Promise<AccountUsage> {
     return { status: "missing-credentials" }
   }
   if (!auth.accessToken) return { status: "missing-credentials" }
-  return chatGptUsage(auth.accessToken, auth.accountId)
+  return chatGptUsage(auth.accessToken, auth.accountId, "Codex")
 }
 
+/**
+ * Codex answers for itself: its app-server reads the limits and reset
+ * credits under the account's own home and refreshes the sign-in to do it.
+ * The usage endpoint with the stored token covers a Codex that can't start.
+ */
 async function accountUsage(name: string): Promise<AccountUsage> {
+  const fromCodex = await codexAppServerUsage(name).catch(() => null)
+  if (fromCodex?.status === "ok") return fromCodex
   // Router-managed accounts resolve by identity, not by a Mako-owned dir.
   const routed = (await subrouterAccounts()).find(
     (account) => account.name === name
@@ -450,6 +375,32 @@ async function accountUsage(name: string): Promise<AccountUsage> {
     routed?.dir ??
     (name === "default" ? defaultHome() : accountDir("codex", name))
   return usageForDir(dir)
+}
+
+async function codexAppServerUsage(name: string): Promise<AccountUsage | null> {
+  const env = await accountEnv(name === "default" ? null : name, childProcessEnv(process.env))
+  const executable = await resolveCodexExecutable(env)
+  if (!executable) return null
+  return parseCodexRateLimits(await rpcRequest(executable, ["app-server"], "account/rateLimits/read", env, false))
+}
+
+/**
+ * Spend one of the account's reset credits through Codex itself. Codex
+ * keys the spend on `attempt`, so the same attempt after a lost answer
+ * spends nothing more, and it spends nothing when no window needs it.
+ */
+async function useResetCredit(name: string, attempt: string): Promise<ResetCreditOutcome> {
+  const env = await accountEnv(name === "default" ? null : name, childProcessEnv(process.env))
+  const executable = await resolveCodexExecutable(env)
+  if (!executable) throw new Error("Codex is not installed")
+  const answer = await withDiscoveryRpc(
+    { command: executable, args: ["app-server"], env, jsonrpc: false, priority: "launch" },
+    (rpc) => rpc.request("account/rateLimitResetCredit/consume", { idempotencyKey: attempt })
+  )
+  const outcome = parseResetOutcome(answer)
+  if (!outcome)
+    throw new Error("Codex answered in a way Mako doesn't know. Check the account's limits before trying again.")
+  return outcome
 }
 
 export const codexAccountCapability: SelectableAccountCapability = {
@@ -466,4 +417,5 @@ export const codexAccountCapability: SelectableAccountCapability = {
       ? { name: selection, dir: env.CODEX_HOME }
       : { name: "default" },
   accountUsage,
+  useResetCredit,
 }
