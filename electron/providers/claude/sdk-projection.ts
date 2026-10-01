@@ -158,7 +158,7 @@ export class ClaudeProjection {
             kind: "tool",
             id: tool.id,
             title: tool.name,
-            toolKind: tool.name,
+            name: tool.name,
             status: "running",
           },
         ]
@@ -239,7 +239,7 @@ export class ClaudeProjection {
               kind: "tool",
               id: block.id,
               title: block.name,
-              toolKind: block.name,
+              name: block.name,
               status: "running",
               input: JSON.stringify(block.input),
             },

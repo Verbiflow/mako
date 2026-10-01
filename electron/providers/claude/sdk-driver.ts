@@ -34,7 +34,7 @@ import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
-import { ProviderStartupWatch, STARTUP_TOTAL_MS } from "../../provider-startup.js"
+import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../../provider-startup.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { claudeAuthDiagnostics } from "./auth-diagnostics.js"
@@ -372,6 +372,7 @@ export function createClaudeSdkDriver(
   return {
     provider: "claude",
     approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question", ...(dependencies.prepareApprovals ? ["tool-permission" as const] : [])], coverage: "Parent AskUserQuestion results in the saved branch; parent tool decisions from the bundled runtime's local native event exporter, retained before delivery. Existing telemetry configuration, custom runtimes, child tools and MCP elicitation retain submission evidence unless a matching observer is available. Missing native events never confirm an answer." },
+    planning: { via: "mode", mode: "plan", proposal: "ExitPlanMode's `plan` input, built by answering its permission request" },
     approvalAnswerDigest: claudeApprovalAnswerDigest,
     observesNativeAgents: true,
     canResume: true,
@@ -467,9 +468,9 @@ export function createClaudeSdkDriver(
             PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [notices.hook] }],
           },
           spawnClaudeCodeProcess: (options) => {
-            const child = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
+            const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
             if (!startupFinished) {
-              startupWatch = new ProviderStartupWatch(child, { harness: "Claude" })
+              startupWatch = new ProviderStartupWatch(child, { harness: "Claude", stderr })
               observeSpawn(startupWatch)
               hostLog("claude-sdk", "process spawned", {
                 conversation: conversationId, pid: child.pid, ms: Date.now() - startedAt,
@@ -477,10 +478,9 @@ export function createClaudeSdkDriver(
             }
             exited = new Promise<void>((resolve) => {
               child.once("exit", (code, signal) => {
-                hostLog("claude-sdk", "process exited", {
-                  conversation: conversationId, pid: child.pid, code, signal,
-                  ms: Date.now() - startedAt,
-                })
+                const fields = { conversation: conversationId, pid: child.pid, code, signal, ms: Date.now() - startedAt }
+                if (code === 0 || signal === "SIGTERM") hostLog("claude-sdk", "process exited", fields)
+                else hostWarn("claude-sdk", "process exited", { ...fields, stderr: stderrDetail(stderr()) })
                 resolve()
               })
               child.once("error", () => resolve())
@@ -694,6 +694,9 @@ export function createClaudeSdkDriver(
     },
     async cancel(id) {
       const live = requireLive(id)
+      // Stop interrupts and then closes the process, which exits non-zero; this
+      // line is what tells that exit from a crash in the log.
+      hostLog("claude-sdk", "stop requested", { conversation: id, approvalsOpen: live.permissions.open })
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([

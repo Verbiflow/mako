@@ -15,7 +15,11 @@ export function spawnClaudeProcess(options: SpawnOptions, owner?: string) {
     signal: options.signal,
     windowsHide: true,
   }, owner ? { kind: "claude:sdk", owner } : undefined)
-  // Diagnostics may contain provider input. Drain without forwarding to host logs.
-  child.stderr.resume()
-  return child
+  // Diagnostics may contain provider input, so only a bounded tail is kept,
+  // for the one line that explains an abnormal exit.
+  let stderr = ""
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-4000)
+  })
+  return { child, stderr: () => stderr }
 }

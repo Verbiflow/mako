@@ -52,6 +52,10 @@ export class ClaudePermissions {
     this.emit = emit
   }
 
+  get open(): number {
+    return this.pending.size
+  }
+
   respond(id: string, response: LivePermissionResponse): ApprovalSubmission {
     const resolve = this.pending.get(id)
     if (!resolve) return { kind: "not-submitted", pending: false, reason: "request-ended" }
