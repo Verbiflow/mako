@@ -1,7 +1,8 @@
-import type { SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { SDKAssistantMessage, SDKMessage, SDKModelRefusalFallbackMessage } from "@anthropic-ai/claude-agent-sdk"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mock } from "node:test"
+import type { JsonObject } from "../electron/codex-app-json.ts"
 import { reduceLiveUpdates, type LiveUpdate } from "../electron/contracts/live-content.ts"
 import { createLiveEngine, type EngineLive } from "../electron/live-engine.ts"
 import { ClaudeProjection, claudeRetracted } from "../electron/providers/claude/sdk-projection.ts"
@@ -146,7 +147,8 @@ try {
     "the refused reply leaves the transcript and the fallback's stays")
   console.log("PASS: Claude's retraction of a refused reply removes the blocks that reply put in the transcript")
 
-  const stream = (event: unknown) => ({ type: "stream_event", parent_tool_use_id: null, uuid: randomUUID(), session_id: "fixture", event }) as SDKMessage
+  // SAFETY: each fixture spells out the stream-event fields the projection reads for its `type`.
+  const stream = (event: JsonObject) => ({ type: "stream_event", parent_tool_use_id: null, uuid: randomUUID(), session_id: "fixture", event }) as SDKMessage
   const streamed = new ClaudeProjection()
   const refusedStream = [
     stream({ type: "message_start", message: { id: "msg-cut" } }),
@@ -163,7 +165,19 @@ try {
   blocks = reduceLiveUpdates([], [{ kind: "user", text: "Write the parser" }, ...refusedStream, ...withdrawn])
   assert.deepEqual(blocks.map((block) => block.type === "text" ? block.text : block.type), ["user", "Here is"])
   streamed.project(retry)
-  const notice = { type: "system", subtype: "model_refusal_fallback", retracted_message_uuids: [] } as unknown as SDKMessage
+  const notice: SDKModelRefusalFallbackMessage = {
+    type: "system",
+    subtype: "model_refusal_fallback",
+    trigger: "refusal",
+    direction: "retry",
+    original_model: "claude-opus",
+    fallback_model: "claude-sonnet",
+    request_id: null,
+    retracted_message_uuids: [],
+    content: "",
+    uuid: randomUUID(),
+    session_id: "fixture",
+  }
   assert.deepEqual(streamed.withdraw(notice), [], "the turn-end notice finds nothing left to withdraw")
   assert.deepEqual(streamed.withdraw(message("uuid-plain", "msg-plain", "Hi")), [], "an ordinary reply withdraws nothing")
   console.log("PASS: A refused reply that only streamed leaves the transcript when Claude falls back")

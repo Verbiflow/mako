@@ -451,7 +451,7 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
     const [a, b] = await Promise.all([accountUsage("grok", "default"), accountUsage("grok", "default")])
     assert.equal(calls, 1, "readers asking at once share one request")
     assert.equal(a, b)
-    assert.ok(a.status === "ok" && typeof a.readAt === "number", "a good reading carries when it was taken")
+    assert.ok(a.status === "ok" && a.readAt !== undefined, "a good reading carries when it was taken")
     await accountUsage("grok", "default")
     assert.equal(calls, 1, "a fresh reading is served from the cache")
     await new Promise((resolve) => setTimeout(resolve, 100))

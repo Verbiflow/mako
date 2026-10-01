@@ -31,6 +31,9 @@ const families = {
   artifactPreview: "artifactPreviews",
 } as const satisfies Record<HarnessFamily, Exclude<keyof ProviderHost, "harnesses">>
 
+// SAFETY: `families` satisfies a record over exactly the HarnessFamily keys.
+const familyNames = Object.keys(families) as HarnessFamily[]
+
 const registry = (family: HarnessFamily): ProviderRegistry<ProviderCapability> => providerHost[families[family]]
 
 const harnesses = providerHost.harnesses.list()
@@ -39,7 +42,7 @@ assert.deepEqual(
   ["claude", "codex", "cursor", "grok", "devin", "opencode"]
 )
 
-for (const family of Object.keys(families) as HarnessFamily[]) {
+for (const family of familyNames) {
   for (const capability of registry(family).list()) {
     assert.ok(
       providerHost.harnesses.get(capability.provider),
@@ -51,28 +54,36 @@ for (const family of Object.keys(families) as HarnessFamily[]) {
 const matrix: string[] = []
 for (const { provider, absent } of harnesses) {
   const row: string[] = []
-  for (const family of Object.keys(families) as HarnessFamily[]) {
+  for (const family of familyNames) {
     const present = registry(family).get(provider) !== undefined
     const reason = absent[family]
     assert.notEqual(present, reason !== undefined, `${provider} must give its ${family} or say why it has none`)
     if (reason) assert.ok(reason.reason.length > 0, `${provider} says why it has no ${family}`)
     row.push(present ? "yes" : reason?.absent === "mako" ? "gap" : "-")
   }
-  matrix.push(`${provider.padEnd(9)} ${row.map((cell, index) => cell.padEnd(Object.keys(families)[index]!.length + 1)).join("")}`)
+  matrix.push(`${provider.padEnd(9)} ${row.map((cell, index) => cell.padEnd(familyNames[index]!.length + 1)).join("")}`)
   assert.ok(readableHarnesses().includes(provider), `${provider} has a saved-history reader in @mako/sessions`)
   assert.ok(registry("live").get(provider), `${provider} has a live driver`)
 }
 
 const host = createProviderHost()
-const stub = { provider: "other" } as unknown as HarnessDefinition["profile"]
-const definition = {
-  ...Object.fromEntries((Object.keys(families) as HarnessFamily[]).map((family) => [family, lacks("test")])),
+const definition: HarnessDefinition = {
   provider: "example",
   live: providerHost.liveDrivers.get("codex")!,
-  profile: stub,
-} as HarnessDefinition
+  profile: providerHost.profiles.get("codex")!,
+  accounts: lacks("test"),
+  acp: lacks("test"),
+  nativeRunner: lacks("test"),
+  processProbe: lacks("test"),
+  mcp: lacks("test"),
+  skills: lacks("test"),
+  sessionEmitter: lacks("test"),
+  connection: lacks("test"),
+  updates: lacks("test"),
+  artifactPreview: lacks("test"),
+}
 assert.throws(() => installHarness(host, definition), /example's live capability is filed under codex/)
 
-console.log(`${"".padEnd(10)}${Object.keys(families).join(" ")}`)
+console.log(`${"".padEnd(10)}${familyNames.join(" ")}`)
 for (const line of matrix) console.log(line)
 console.log("PASS: every harness names each capability family, and has a live driver and a saved-history reader")

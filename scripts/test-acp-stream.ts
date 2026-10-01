@@ -8,6 +8,7 @@ import {
   type LossySessionUpdate,
   type RefusedSessionUpdate,
 } from "../electron/acp-stream.ts"
+import type { JsonObject } from "../electron/codex-app-json.ts"
 
 // A provider that closed its stdin but is still running: a write fails with
 // EPIPE, which Node reports through the callback and as a pipe `error` event.
@@ -48,7 +49,7 @@ console.log(
 )
 
 assert.ok(await acpSessionNotificationSchema(), "the SDK's own session/update schema loads from the installed package")
-const update = (value: object) => ({ jsonrpc: "2.0" as const, method: "session/update", params: { sessionId: "s", update: value } })
+const update = (value: JsonObject) => ({ jsonrpc: "2.0" as const, method: "session/update", params: { sessionId: "s", update: value } })
 const sent = [
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "kept" } }),
   update({ sessionUpdate: "auto_compact_started", tokens_used: 1 }),
