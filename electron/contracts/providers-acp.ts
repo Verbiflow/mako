@@ -173,6 +173,12 @@ export interface LivePermissionRequest {
   kind?: string
   options: Array<{ optionId: string; name: string; kind?: string }>
   questions?: LiveInputQuestion[]
+  /**
+   * The adapter's statement that approving this request implements the
+   * proposed plan `plan`, by answering `approve`. Building that plan answers
+   * this request rather than sending a second prompt.
+   */
+  implementsPlan?: { plan: string; approve: string }
 }
 
 export type LivePermissionResponse =
