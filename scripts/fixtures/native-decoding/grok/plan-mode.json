@@ -1,0 +1,549 @@
+{
+  "harness": "grok",
+  "source": "grok 1.0.44 `agent stdio --permission-mode plan`, against a scripted model (no real usage), 2026-09-30",
+  "about": "Plan mode: the agent writes plan.md after asking, calls exit_plan_mode with its own copy, asks the client to approve the file's content, and completes with the approved plan.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "title": "Plan adding a greeting.",
+            "sessionUpdate": "session_info_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "title": "Plan adding a greeting."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "toolCallId": "call_2",
+            "title": "write",
+            "rawInput": {
+              "file_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+              "content": "# Plan: Add a greeting\n\nFrom the file.\n"
+            },
+            "_meta": {
+              "x.ai/tool": {
+                "version": 1,
+                "name": "write",
+                "kind": "write",
+                "namespace": "opencode",
+                "label": "Write",
+                "read_only": false
+              }
+            },
+            "sessionUpdate": "tool_call"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_2",
+            "title": "write",
+            "toolKind": "(undefined)",
+            "status": "pending",
+            "details": "(undefined)",
+            "input": "{\n  \"file_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "toolCallId": "call_2",
+            "kind": "edit",
+            "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+            "content": [
+              {
+                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "oldText": "",
+                "newText": "# Plan: Add a greeting\n\nFrom the file.\n",
+                "type": "diff"
+              }
+            ],
+            "locations": [
+              {
+                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md"
+              }
+            ],
+            "rawInput": {
+              "variant": "Write",
+              "file_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+              "content": "# Plan: Add a greeting\n\nFrom the file.\n"
+            },
+            "_meta": {
+              "x.ai/tool": {
+                "version": 1,
+                "name": "write",
+                "kind": "write",
+                "namespace": "opencode",
+                "label": "Write",
+                "read_only": false,
+                "input": {
+                  "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md"
+                }
+              }
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_2",
+            "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+            "status": "(undefined)",
+            "input": "{\n  \"variant\": \"Write\",\n  \"file_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
+            "output": "(undefined)",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "oldText": "",
+                "newText": "# Plan: Add a greeting\n\nFrom the file.\n"
+              },
+              {
+                "type": "location",
+                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "line": "(undefined)"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "request": "session/request_permission",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "toolCall": {
+            "toolCallId": "call_2",
+            "kind": "edit",
+            "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+            "rawInput": {
+              "variant": "Write",
+              "file_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+              "content": "# Plan: Add a greeting\n\nFrom the file.\n"
+            },
+            "_meta": {
+              "x.ai/tool": {
+                "version": 1,
+                "name": "write",
+                "kind": "write",
+                "namespace": "opencode",
+                "label": "Write",
+                "read_only": false,
+                "input": {
+                  "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md"
+                }
+              }
+            }
+          },
+          "options": [
+            {
+              "optionId": "allow-edits-session",
+              "name": "Yes, allow all edits during this session",
+              "kind": "allow_always"
+            },
+            {
+              "optionId": "allow-once",
+              "name": "Yes",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "reject-once",
+              "name": "No, and tell Grok what to do differently",
+              "kind": "reject_once"
+            }
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "ask",
+            "ask": {
+              "request": {
+                "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+                "kind": "edit",
+                "options": [
+                  {
+                    "optionId": "allow-edits-session",
+                    "name": "Yes, allow all edits during this session",
+                    "kind": "allow_always"
+                  },
+                  {
+                    "optionId": "allow-once",
+                    "name": "Yes",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "reject-once",
+                    "name": "No, and tell Grok what to do differently",
+                    "kind": "reject_once"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "toolCallId": "call_2",
+            "status": "completed",
+            "content": [
+              {
+                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "oldText": "",
+                "newText": "# Plan: Add a greeting\n\nFrom the file.\n",
+                "_meta": {
+                  "details": [
+                    {
+                      "old_string": "",
+                      "old_line": 1,
+                      "new_string": "# Plan: Add a greeting\n\nFrom the file.\n",
+                      "new_line": 1,
+                      "context_before": "",
+                      "context_after": "",
+                      "line_prefix": ""
+                    }
+                  ]
+                },
+                "type": "diff"
+              }
+            ],
+            "rawOutput": {
+              "type": "SearchReplace",
+              "EditsApplied": {
+                "old_string": "",
+                "new_string": "# Plan: Add a greeting\n\nFrom the file.\n",
+                "tool_output_for_prompt": "The file /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md has been created.",
+                "tool_output_for_prompt_concise": "The file /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md has been created.",
+                "absolute_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "edits": {
+                  "details": [
+                    {
+                      "old_string": "",
+                      "old_line": 1,
+                      "new_string": "# Plan: Add a greeting\n\nFrom the file.\n",
+                      "new_line": 1,
+                      "context_before": "",
+                      "context_after": "",
+                      "line_prefix": ""
+                    }
+                  ]
+                }
+              }
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_2",
+            "title": "(undefined)",
+            "status": "completed",
+            "input": "(undefined)",
+            "output": "{\n  \"type\": \"SearchReplace\",\n  \"EditsApplied\": {\n    \"old_string\": \"\",\n    \"new_string\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\",\n    \"tool_output_for_prompt\": \"The file /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md has been created.\",\n    \"tool_output_for_prompt_concise\": \"The file /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md has been created.\",\n    \"absolute_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n    \"edits\": {\n      \"details\": [\n        {\n          \"old_string\": \"\",\n          \"old_line\": 1,\n          \"new_string\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\",\n          \"new_line\": 1,\n          \"context_before\": \"\",\n          \"context_after\": \"\",\n          \"line_prefix\": \"\"\n        }\n      ]\n    }\n  }\n}",
+            "attachments": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "oldText": "",
+                "newText": "# Plan: Add a greeting\n\nFrom the file.\n"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "toolCallId": "call_3",
+            "title": "exit_plan_mode",
+            "rawInput": {
+              "planContent": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello()`.\n"
+            },
+            "_meta": {
+              "x.ai/tool": {
+                "version": 1,
+                "name": "exit_plan_mode",
+                "kind": "exit_plan",
+                "namespace": "grok_build",
+                "label": "Exit Plan Mode",
+                "read_only": true
+              }
+            },
+            "sessionUpdate": "tool_call"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_3",
+            "title": "exit_plan_mode",
+            "toolKind": "(undefined)",
+            "status": "pending",
+            "details": "(undefined)",
+            "input": "{\n  \"planContent\": \"# Plan: Add a greeting\\n\\n## Steps\\n1. Add `hello()`.\\n\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "grok:01a0f597-8738-71a1-af27-c41317465be0:call_3",
+            "text": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello()`.\n",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "toolCallId": "call_3",
+            "kind": "other",
+            "title": "Plan: Exit",
+            "locations": [],
+            "rawInput": {
+              "variant": "ExitPlanMode"
+            },
+            "_meta": {
+              "x.ai/tool": {
+                "version": 1,
+                "name": "exit_plan_mode",
+                "kind": "exit_plan",
+                "namespace": "grok_build",
+                "label": "Exit Plan Mode",
+                "read_only": true
+              }
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_3",
+            "title": "Plan: Exit",
+            "status": "(undefined)",
+            "input": "{\n  \"variant\": \"ExitPlanMode\"\n}",
+            "details": "(undefined)",
+            "output": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "request": "_x.ai/exit_plan_mode",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "toolCallId": "call_3",
+          "planContent": "# Plan: Add a greeting\n\nFrom the file.\n"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "grok:01a0f597-8738-71a1-af27-c41317465be0:call_3",
+            "text": "# Plan: Add a greeting\n\nFrom the file.\n",
+            "status": "proposed",
+            "replace": true
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "ask",
+            "ask": {
+              "request": {
+                "title": "Build the proposed plan?",
+                "kind": "switch_mode",
+                "options": [
+                  {
+                    "optionId": "approved",
+                    "name": "Yes, build it",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "keep-planning",
+                    "name": "No, keep planning",
+                    "kind": "reject_once"
+                  },
+                  {
+                    "optionId": "abandoned",
+                    "name": "Abandon the plan",
+                    "kind": "reject_always"
+                  }
+                ],
+                "implementsPlan": {
+                  "plan": "grok:01a0f597-8738-71a1-af27-c41317465be0:call_3",
+                  "approve": "approved"
+                }
+              },
+              "answers": [
+                {
+                  "optionId": "approved",
+                  "result": {
+                    "outcome": "approved"
+                  }
+                },
+                {
+                  "optionId": "keep-planning",
+                  "result": {
+                    "outcome": "rejected"
+                  }
+                },
+                {
+                  "optionId": "abandoned",
+                  "result": {
+                    "outcome": "abandoned"
+                  }
+                }
+              ],
+              "dismissed": {
+                "outcome": "rejected"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "toolCallId": "call_3",
+            "status": "completed",
+            "title": "Plan mode exited",
+            "content": [
+              {
+                "content": {
+                  "text": "Plan file: /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                  "type": "text"
+                },
+                "type": "content"
+              }
+            ],
+            "rawOutput": {
+              "type": "ExitPlanMode",
+              "PlanReady": {
+                "message": "Your plan has been approved. You can now start coding.",
+                "plan_content": "# Plan: Add a greeting\n\nFrom the file.\n",
+                "plan_file_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md"
+              }
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_3",
+            "title": "Plan mode exited",
+            "status": "completed",
+            "input": "(undefined)",
+            "output": "Plan file: /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+            "attachments": "(undefined)",
+            "details": "(undefined)"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "grok:01a0f597-8738-71a1-af27-c41317465be0:call_3",
+            "text": "# Plan: Add a greeting\n\nFrom the file.\n",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "01a0f597-8738-71a1-af27-c41317465be0",
+          "update": {
+            "content": {
+              "text": "Done.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "Done."
+          }
+        }
+      ]
+    }
+  ]
+}
