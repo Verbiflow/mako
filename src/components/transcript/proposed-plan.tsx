@@ -3,7 +3,9 @@ import type { ProposedPlan } from "@mako/sessions/content"
 import {
   CheckIcon,
   ChevronDownIcon,
+  HammerIcon,
   MoreHorizontalIcon,
+  SquarePlusIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -27,7 +29,16 @@ import {
   proposedPlanMarkdown,
   proposedPlanTitle,
 } from "@/lib/proposed-plan"
+import { Action } from "@/components/ui/kit"
 import { downloadPlan, draftPlanReply, savePlan } from "@/state/plans"
+import {
+  buildPlan,
+  buildPlanInNewSession,
+  useLatestPlan,
+  usePlanAwaitingApproval,
+} from "@/state/plan-mode"
+import { usePlanBuild } from "@/state/plan-builds"
+import { acp, useAcp } from "@/state/acp"
 
 export function ProposedPlanCard({
   plan,
@@ -36,9 +47,21 @@ export function ProposedPlanCard({
   plan: ProposedPlan
   streaming?: boolean
 }) {
-  const [expanded, setExpanded] = useState(false)
-  const [actionsOpen, setActionsOpen] = useState(false)
   const source = useTranscriptSource()
+  const latest = useLatestPlan(source)
+  const superseded = latest !== undefined && latest !== plan.id
+  const awaiting = usePlanAwaitingApproval(source, plan)
+  const built = usePlanBuild(plan)
+  const builtHere = Boolean(built && (
+    (built.conversation && built.conversation === source.liveId) ||
+    (built.thread && built.thread === source.threadPath)))
+  const builtIn = built && !builtHere ? built.conversation : undefined
+  const canOpenBuild = useAcp((state) => builtIn !== undefined && state.conversations[builtIn] !== undefined)
+  const [building, setBuilding] = useState<"here" | "new" | null>(null)
+  // The newest plan opens as the document it is; earlier revisions stay folded.
+  const [opened, setOpened] = useState<boolean | null>(null)
+  const expanded = opened ?? !superseded
+  const [actionsOpen, setActionsOpen] = useState(false)
   const focus = useWorkspaceFocus()
   const [saving, setSaving] = useState(false)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -49,11 +72,23 @@ export function ProposedPlanCard({
   const { copied, copy } = useCopy(proposedPlanMarkdown(plan))
   const complete = plan.status === "proposed"
   const title = proposedPlanTitle(plan.text)
+  // A turn waiting on its plan approval is still running, but its plan is complete.
   const canDraft =
     complete &&
-    !streaming &&
+    (!streaming || awaiting) &&
     !plan.truncated &&
     Boolean(source.liveId || source.threadPath)
+  const start = (where: "here" | "new") => {
+    if (building) return
+    setBuilding(where)
+    void (where === "here" ? buildPlan(source, plan) : buildPlanInNewSession(source, plan))
+      .catch((failure) =>
+        toast.error("The plan was not built", {
+          description: failure instanceof Error ? failure.message : String(failure),
+        })
+      )
+      .finally(() => setBuilding(null))
+  }
   const prepare = (intent: "implement" | "revise") => {
     try {
       draftPlanReply(source, plan, intent)
@@ -77,7 +112,7 @@ export function ProposedPlanCard({
           type="button"
           aria-expanded={expanded}
           className="pressable flex min-w-0 flex-1 items-start gap-2 text-left"
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setOpened(!expanded)}
         >
           <ChevronDownIcon
             className={`mt-0.5 size-3.5 shrink-0 text-faint ${expanded ? "rotate-180" : ""}`}
@@ -85,11 +120,17 @@ export function ProposedPlanCard({
           <span className="min-w-0">
             <span className="block font-medium">{title}</span>
             <span className="mt-1 block text-label text-faint">
-              {complete
-                ? "Proposed plan"
-                : streaming
+              {!complete
+                ? streaming
                   ? "Writing plan…"
-                  : "Incomplete plan"}
+                  : "Incomplete plan"
+                : built
+                  ? builtHere ? "Built in this session" : "Built in another session"
+                  : superseded
+                    ? "Earlier plan · a newer one follows"
+                    : awaiting
+                      ? "Proposed plan · waiting for your approval"
+                      : "Proposed plan"}
             </span>
           </span>
         </button>
@@ -156,27 +197,52 @@ export function ProposedPlanCard({
           portion; request a shorter plan before continuing.
         </p>
       ) : null}
-      {source.liveId || source.threadPath ? (
-        <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-3 py-2">
-          <button
-            type="button"
-            disabled={!canDraft}
-            className="pressable rounded-md border border-hairline px-2 py-1 text-ui hover:bg-fill-hover disabled:opacity-40"
-            onClick={() => prepare("implement")}
+      {(source.liveId || source.threadPath) && !superseded ? (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-hairline px-3 py-2">
+          {built ? (
+            <span className="mr-auto flex items-center gap-1.5 text-label text-faint">
+              <CheckIcon className="size-3.5" />
+              {builtHere ? "Built in this session" : "Built in another session"}
+              {canOpenBuild && builtIn ? (
+                <button
+                  type="button"
+                  className="pressable rounded px-1 text-ui underline-offset-2 hover:underline"
+                  onClick={() => acp.activate(builtIn)}
+                >
+                  Open
+                </button>
+              ) : null}
+            </span>
+          ) : null}
+          <Action
+            tone={built ? "outline" : "solid"}
+            disabled={!canDraft || building !== null}
+            onClick={() => start("here")}
+            title={
+              awaiting
+                ? "Approve the plan the agent is waiting on; it builds in this session"
+                : "Leave plan mode and build this plan in this session"
+            }
           >
-            Draft implementation
-          </button>
-          <button
-            type="button"
-            disabled={!canDraft}
-            className="pressable rounded-md px-2 py-1 text-ui text-faint hover:bg-fill-hover disabled:opacity-40"
+            <HammerIcon />
+            {building === "here" ? "Building…" : awaiting ? "Approve and build" : built ? "Build again" : "Build"}
+          </Action>
+          <Action
+            tone={built ? undefined : "outline"}
+            disabled={!canDraft || building !== null}
+            onClick={() => start("new")}
+            title="Open a new session in this Thread with the plan attached, ready to send"
+          >
+            <SquarePlusIcon />
+            {building === "new" ? "Opening…" : "Build in new session"}
+          </Action>
+          <Action
+            disabled={!canDraft || building !== null}
             onClick={() => prepare("revise")}
+            title="Draft a revision request in the composer to add your feedback"
           >
-            Draft revision
-          </button>
-          <span className="text-label text-faint">
-            Review in the composer before sending
-          </span>
+            Revise
+          </Action>
         </div>
       ) : null}
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
