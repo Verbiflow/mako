@@ -216,17 +216,14 @@ try {
   assert.equal(kept.error, false, `a page screenshot keeps refs: ${kept.text}`)
   const blind = await js(`await tab.click({x:5,y:5,view:"viewport"})`)
   assert.equal(blind.error, true)
-  assert.equal(JSON.parse(blind.text).code, "missing-view")
+  assert.match(blind.text, /^Error missing-view /)
 
-  const listed = (await js(`await control.tabs("live")`)).value()
-  assert.ok(listed.pages.length >= 1)
-  for (const page of listed.pages)
-    assert.deepEqual(Object.keys(page).sort(), [
-      "claimed",
-      "tab",
-      "title",
-      "url",
-    ])
+  const listed = (await js(`(await control.tabs("live")).pages.map((page) => Object.keys(page).sort().join())`)).value()
+  assert.ok(listed.length >= 1)
+  for (const keys of listed) assert.equal(keys, "claimed,tab,title,url")
+  const printedTabs = (await js(`await control.tabs("live")`)).text
+  assert.match(printedTabs, /^tabs in live: /)
+  assert.match(printedTabs, /^[0-9A-F]{32} "dropped:A" data:text\/html,\S+ claimed$/m, "a tab prints as one line, its ID first")
 
   const saved = await js(
     `artifacts.save("buttons", await tab.evaluate(() => [...document.querySelectorAll("button")].map((button) => button.innerText)))`
