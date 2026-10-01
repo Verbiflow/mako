@@ -28,7 +28,7 @@ import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/l
 import { describePromptRecovery } from "../../../electron/contracts/prompt-recovery"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { liveToolName, makoToolLabel } from "@/lib/tools"
+import { identifyTool } from "@mako/sessions/tool-identity"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import {
   CheckCheckIcon,
@@ -235,7 +235,7 @@ function AcpActivity({
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
     // The approval notice owns this status; do not repeat it in the transcript.
     if (approval) return { kind: "idle" as const, label: "" }
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, preparing, quietForMs, native: live?.nativeActivity })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, preparing, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
@@ -326,13 +326,15 @@ function Permission() {
 function PermissionInput({ permission }: { permission: LivePermissionRequest }) {
   if (permission.questions)
     return <QuestionPermission permission={permission} />
-  const makoTool = makoToolLabel(permission.title)
+  // Devin and Codex ask to run `mako: app_start`; the row names Mako's own tools in words.
+  const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
+  const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
     <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         {permission.kind ? (
           <ToolGlyph
-            name={liveToolName(permission.kind, permission.title)}
+            kind={tool.kind}
             className="size-3.5 shrink-0 text-caution/90"
           />
         ) : (
