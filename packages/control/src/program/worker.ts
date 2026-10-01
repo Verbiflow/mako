@@ -11,8 +11,10 @@ import { z } from "zod"
 import type { JsonObject, JsonValue } from "../json.js"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { controlClient } from "../control/client.js"
+import { presentation } from "../control/present.js"
 import { artifactFileName } from "./artifacts.js"
 import { computerHelpers, type ComputerHelpers } from "../computer/steps.js"
+import { withMethodHint } from "./hints.js"
 import { ControlRepl, syntaxError } from "./repl.js"
 import { checkpointTask, recallTask } from "./task-state.js"
 
@@ -126,6 +128,37 @@ interface RunContext {
   mode: "script" | "repl"
 }
 const runs = new AsyncLocalStorage<RunContext>()
+/** Runs are serialized, so at most one is in progress. */
+let current: RunContext | undefined
+/** Errors thrown in the REPL's own context are not this realm's Error. */
+function errorMessage(error: unknown): string {
+  return typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+    ? error.message
+    : String(error)
+}
+function fail(context: RunContext, error: unknown) {
+  if (!context.active) return
+  context.active = false
+  port.postMessage({
+    kind: "error",
+    runId: context.runId,
+    message: withMethodHint(errorMessage(error)),
+    fault: controlFaultData(error),
+  })
+}
+/**
+ * A timer or promise a cell left behind can throw after the cell returned.
+ * That fails the cell in progress, or is reported when the next one starts;
+ * either way the worker, its bindings and `state` stay.
+ */
+const late: string[] = []
+function lateFailure(error: unknown) {
+  const message = errorMessage(error)
+  if (current?.active) fail(current, new Error(`A callback threw outside the awaited program: ${message}`))
+  else if (late.length < 10) late.push(message)
+}
+process.on("uncaughtException", lateFailure)
+process.on("unhandledRejection", lateFailure)
 const call = (
   namespace: string,
   action: string,
@@ -197,6 +230,7 @@ port.on("message", (raw) => {
 
   const runId = message.runId
   const context: RunContext = { runId, active: true, requests: new Set(), mode: message.mode }
+  current = context
   const apiFor = (namespace: string, actions: readonly string[]) =>
     Object.fromEntries(
       actions.map((action) => [
@@ -226,6 +260,11 @@ port.on("message", (raw) => {
   void runs.run(context, () =>
     Promise.resolve()
       .then(async () => {
+        if (late.length)
+          output(
+            "output",
+            `After an earlier cell returned, its callbacks threw; bindings and state were kept: ${late.splice(0).join("; ")}`
+          )
         if (message.mode === "repl") {
           if (message.namespace !== "control") throw new ControlFault("unsupported-operation", "Persistent agent JavaScript requires the unified control SDK.", "not-dispatched")
           if (!repl) {
@@ -236,15 +275,13 @@ port.on("message", (raw) => {
           repl ??= new ControlRepl({
             control: Object.freeze({ ...client, rewriteDocumentation }),
             state,
-            // Several arguments print as one line, strings as text, the way
-            // console.log does; a single value keeps its JSON form.
+            // Arguments print as one line, each in its printed form: strings
+            // as text, SDK results and record lists compactly, the rest as JSON.
             console: {
-              log: (...values: JsonValue[]) =>
+              log: (...values: unknown[]) =>
                 output(
                   "output",
-                  values.length === 1
-                    ? values[0]
-                    : values.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join(" ")
+                  values.map((value) => presentation(value) ?? JSON.stringify(value) ?? String(value)).join(" ")
                 ),
             },
             emitImage: (value: JsonValue) => output("image", value),
@@ -255,7 +292,11 @@ port.on("message", (raw) => {
             checkpoint: (value: Record<string, JsonValue>) => checkpointTask(state, z.record(z.string(), z.json()).parse(value)),
             recall: () => recallTask(state),
           })
-          return repl.evaluate(message.source)
+          const shown = await repl.evaluate(message.source)
+          if (!("text" in shown)) return shown.value
+          // Unawaited actions fail the cell below, and their error replaces the value.
+          if (!context.requests.size) output("output", shown.text)
+          return null
         }
         const run = (() => {
           try {
@@ -301,18 +342,11 @@ port.on("message", (raw) => {
       })
       .then(
         (value) => {
+          if (!context.active) return
           context.active = false
           port.postMessage({ kind: "done", runId, value })
         },
-        (error) => {
-          context.active = false
-          port.postMessage({
-            kind: "error",
-            runId,
-            message: error instanceof Error ? error.message : String(error),
-            fault: controlFaultData(error),
-          })
-        }
+        (error) => fail(context, error)
       )
   )
 })

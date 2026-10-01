@@ -84,7 +84,13 @@ export interface ControlProgramExecution {
 export class ControlProgramError extends Error {
   readonly code?: string
   readonly outcome?: ControlFaultData["outcome"]
-  constructor(readonly output: ControlProgramOutput[], readonly cause: Error) {
+  /** `effects` names the cell's state-changing calls that ran before it
+   * failed; an unfinished one is suffixed " (outcome unknown)". */
+  constructor(
+    readonly output: ControlProgramOutput[],
+    readonly cause: Error,
+    readonly effects: readonly string[] = []
+  ) {
     super(cause.message)
     this.name = "ControlProgramError"
     const fault = controlFaultData(cause)
@@ -93,6 +99,25 @@ export class ControlProgramError extends Error {
       this.outcome = fault.outcome
     }
   }
+}
+
+const OUTCOME_TEXT: Record<ControlFaultData["outcome"], string> = {
+  "not-dispatched": "nothing dispatched",
+  rejected: "rejected",
+  unknown: "outcome unknown",
+}
+
+/** How an agent reads a failed cell: one line naming the fault, then what the
+ * cell had already changed, when anything. A plain script error reads as JS. */
+export function programErrorText(error: unknown): string {
+  const cause = error instanceof ControlProgramError ? error.cause : error
+  const fault = controlFaultData(cause)
+  const message = cause instanceof Error ? cause.message : String(cause)
+  const lines = [fault ? `Error ${fault.code} (${OUTCOME_TEXT[fault.outcome]}): ${message}` : `Error: ${message}`]
+  const effects = error instanceof ControlProgramError ? error.effects : []
+  if (effects.length)
+    lines.push(`Before failing, this cell ran: ${effects.join(", ")}. Observe before acting again; do not rerun the cell.`)
+  return lines.join("\n")
 }
 
 export interface ControlProgramFault {
@@ -120,6 +145,9 @@ export interface ControlProgramOptions {
     namespace: string
   ): Promise<JsonValue>
   image(value: JsonValue): ControlProgramOutput[]
+  /** A short name for a call that may have changed something, such as
+   * "click e12"; undefined for reads. Named in a failed cell's error. */
+  effect?(command: JsonObject, namespace: string): string | undefined
   fault(detail: ControlProgramFault): Error
   /** Test override; production cells yield after ten seconds. */
   yieldAfterMs?: number
@@ -311,6 +339,15 @@ export class ControlProgramRuntime {
       let inlineImages = 0
       let inlineImageBytes = 0
       let finished = false
+      const effects: string[] = []
+      const unfinished = new Map<number, { command: JsonObject; namespace: string }>()
+      const effect = (call: { command: JsonObject; namespace: string }) => {
+        try {
+          return this.options.effect?.(call.command, call.namespace)
+        } catch {
+          return String(call.command.action)
+        }
+      }
       /**
        * A program's own rejection (`retainWorker`) leaves the worker and its
        * `state` in place: the worker reported it in order and is idle. Only
@@ -331,7 +368,11 @@ export class ControlProgramRuntime {
             this.worker = undefined
             void worker.terminate()
           }
-          void Promise.all(output).then(blocks => reject(new ControlProgramError(blocks, error)), reject)
+          for (const call of unfinished.values()) {
+            const name = effect(call)
+            if (name) effects.push(`${name} (outcome unknown)`)
+          }
+          void Promise.all(output).then(blocks => reject(new ControlProgramError(blocks, error, effects)), reject)
         } else Promise.all(output).then(resolve, reject)
       }
       const receipt = (pending: Promise<{ artifact: true }>) =>
@@ -397,28 +438,35 @@ export class ControlProgramRuntime {
         const value = parsed.data
         if (value.runId !== runId || finished) return
         if (value.kind === "call") {
+          unfinished.set(value.id, value)
           void Promise.resolve()
             .then(() =>
               this.options.call(value.command, active, value.namespace)
             )
             .then(
               (result) => {
-                if (!finished)
-                  worker.postMessage({
-                    kind: "reply",
-                    id: value.id,
-                    value: result,
-                  })
+                if (finished) return
+                unfinished.delete(value.id)
+                const name = effect(value)
+                if (name) effects.push(name)
+                worker.postMessage({
+                  kind: "reply",
+                  id: value.id,
+                  value: result,
+                })
               },
               (error) => {
-                if (!finished)
-                  worker.postMessage({
-                    kind: "reply",
-                    id: value.id,
-                    fault: controlFaultData(error),
-                    error:
-                      error instanceof Error ? error.message : String(error),
-                  })
+                if (finished) return
+                unfinished.delete(value.id)
+                const fault = controlFaultData(error)
+                const name = (fault?.outcome ?? "unknown") === "unknown" ? effect(value) : undefined
+                if (name) effects.push(`${name} (outcome unknown)`)
+                worker.postMessage({
+                  kind: "reply",
+                  id: value.id,
+                  fault,
+                  error: error instanceof Error ? error.message : String(error),
+                })
               }
             )
         } else if (value.kind === "output") appendText("log", value.value)

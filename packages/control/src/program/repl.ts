@@ -5,6 +5,7 @@ import { constants, createContext, type Context } from "node:vm"
 import { z } from "zod"
 import { ControlFault, controlFaultData } from "../control/fault.js"
 import type { controlClient } from "../control/client.js"
+import { presentation } from "../control/present.js"
 import type { checkpointTask, recallTask } from "./task-state.js"
 import type { JsonValue } from "../json.js"
 
@@ -13,7 +14,7 @@ interface ReplBindings {
     rewriteDocumentation(): Promise<void>
   }
   state: Record<string, JsonValue>
-  console: { log(...values: JsonValue[]): void }
+  console: { log(...values: unknown[]): void }
   emitImage(value: JsonValue): void
   artifacts: {
     save(name: string, value: JsonValue): { path: string; bytes: number }
@@ -84,6 +85,21 @@ export function replSource(source: string): string {
   return rewritten
 }
 
+const PRESENT_VALUE = "mako.control.presentValue"
+const shownSchema = z.union([
+  z.object({ text: z.string() }).strict(),
+  z.object({ json: z.string().optional() }).strict(),
+])
+function showValue(value: unknown): z.infer<typeof shownSchema> {
+  let text: string | undefined
+  try {
+    text = presentation(value)
+  } catch {
+    text = undefined
+  }
+  return text ? { text } : { json: JSON.stringify(value) }
+}
+
 /** V8 owns REPL syntax, lexical bindings and top-level await. Source changes are
  * limited to replSource. No inspector listener or network port. This is trusted
  * code, not an OS sandbox. */
@@ -126,6 +142,7 @@ export class ControlRepl {
             setImmediate,
             clearImmediate,
             queueMicrotask,
+            [Symbol.for(PRESENT_VALUE)]: showValue,
           },
           {
             name: "mako-control",
@@ -143,7 +160,8 @@ export class ControlRepl {
     })()
   }
 
-  async evaluate(source: string): Promise<JsonValue> {
+  /** A cell's value: the text it prints as, or JSON when it has no printed form. */
+  async evaluate(source: string): Promise<{ text: string } | { value: JsonValue }> {
     const contextId = await this.ready
     if (!this.context) throw new Error("Control REPL context was lost")
     const objectGroup = `mako-cell-${++this.sequence}`
@@ -203,31 +221,36 @@ export class ControlRepl {
           : new Error(message)
       }
       const result = evaluated.result
-      if (result.type === "undefined") return null
+      if (result.type === "undefined") return { value: null }
+      if (result.type === "string" && result.value !== "")
+        return { text: z.string().parse(result.value) }
       if (result.objectId) {
-        // Honour the SDK's compact toJSON views instead of serializing private
-        // handle fields or duplicating the full accessibility tree.
-        const serialized = await this.inspector.post("Runtime.callFunctionOn", {
+        // The SDK's printed forms and compact toJSON views, never private
+        // handle fields or the full accessibility tree.
+        const shown = await this.inspector.post("Runtime.callFunctionOn", {
           objectId: result.objectId,
-          functionDeclaration: "function() { return JSON.stringify(this); }",
+          functionDeclaration: `function() { return globalThis[Symbol.for("${PRESENT_VALUE}")](this); }`,
           returnByValue: true,
           objectGroup,
         })
-        if (serialized.exceptionDetails)
+        if (shown.exceptionDetails)
           throw new Error(
             "Program output is not JSON. Print a compact value with console.log instead."
           )
-        return serialized.result.value === undefined
-          ? null
-          : z
-              .json()
-              .parse(JSON.parse(z.string().parse(serialized.result.value)))
+        const value = shownSchema.parse(shown.result.value)
+        if ("text" in value) return value
+        return {
+          value:
+            value.json === undefined
+              ? null
+              : z.json().parse(JSON.parse(value.json)),
+        }
       }
       if (result.unserializableValue)
         throw new Error(
           `Program output is not JSON (${result.unserializableValue}). Print a string instead.`
         )
-      return z.json().parse(result.value ?? null)
+      return { value: z.json().parse(result.value ?? null) }
     } finally {
       await this.inspector.post("Runtime.releaseObjectGroup", { objectGroup })
     }

@@ -1,6 +1,7 @@
 export {
   ControlProgramRuntime,
   ControlProgramError,
+  programErrorText,
   type ControlProgramExecution,
   ControlProgramRequestSchema,
   ControlProgramInputSchema,
