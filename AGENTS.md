@@ -52,10 +52,13 @@ A decoder turns one native message into the shared `Decoded` events in
 so recorded messages always decode the same way. An empty list means "known,
 deliberately silent"; `unknown` carries the raw record, which the engine
 keeps (first of each kind per host life) in `native-unknown.jsonl` beside the
-host log. Codex, Grok and Devin are on this contract. Claude, Cursor and
-OpenCode still decode inside their drivers, and `test-harness-definitions.ts`
-lists exactly those three, so a new harness ships with a decoder and
-fixtures (build order: `docs/meta-harness/harness-integration.md`).
+host log. Every harness is on this contract, and `test-harness-definitions.ts`
+requires a decoder and fixtures of each, so a new harness ships with both
+(build order: `docs/meta-harness/harness-integration.md`). A driver keeps
+what is not the message's own meaning: binding turns, answering requests,
+reading native state back, ordering content behind an async lookup. What it
+must act on comes out of the decoder as an `effect` (OpenCode's `turn`,
+`request`, `catalog`, `mcp`, `model` and `agent-call`; Cursor's `agent`).
 ACP harnesses share `AcpDecoder` (`electron/acp-decoder.ts`), which the live
 client and the fixtures both run. What differs per harness is declared on
 `ProviderAcpSource`: `plans()` (plan cards and which permission approves
@@ -69,6 +72,32 @@ fixture before committing it. A fixture written from wire strings rather than
 captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
+
+A marker about the harness's setup rather than the current turn (an MCP
+server that didn't start, a configuration warning, an imported setting, a
+failed start hook) is `setup: true`; build MCP failures with
+`mcpServerFailedEvent`. Harnesses repeat these on every thread load or turn
+(Claude's `system/init`), and every wake or restart opens a new live session,
+so the shared reducer in `electron/contracts/live-content.ts` keeps one per
+conversation (`sameSetupEvent`). Don't deduplicate them per decoder instead,
+and leave `setup` off turn facts such as failures, model changes and
+compaction.
+
+Each harness reports MCP servers that didn't start in its own way; every
+report becomes one `mcpServerFailedEvent` per server, with the reason in the
+same words ("could not be launched", "sign-in required"). Codex and Claude
+decode it in their decoders. An ACP source declares `mcpStartup`
+(`grok/mcp-startup.ts`, `devin/mcp-startup.ts`), consulted before
+`decodeNotification`, which may keep per-launch state: Grok gives no status
+for a server it could not launch, so it is named once the first response
+completes, and Devin says each failure twice. Both report while the session
+is still opening, and the ACP SDK does not order vendor notifications
+against the `session/new` response, so `acp.ts` holds notices said before
+the session has an id and treats a startup notice naming no session (Devin
+sends `""`) as the connection's. The Cursor SDK (1.0.31) reports no MCP
+startup at all; a failed server shows only when a tool call to it fails.
+`test:provider-turns` replays both harnesses' recorded startup through the
+host.
 
 Tool calls are identified once, in `@mako/sessions/tool-identity`. Each
 harness declares its native tool names, wrappers (Grok's `use_tool`, Cursor's
@@ -1218,12 +1247,20 @@ Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11
 against the installed CLIs: Devin advertises all five tiers
 natively. Grok reads `--permission-mode` at launch, so its tiers are
-launch-only. Grok also applies Claude Code's `permissions.defaultMode` (from
-`~/.claude/settings*.json` and the project's own), and that mode replaces
-`--permission-mode default`, which is Ask; explicit Auto and Full still win.
-`grok/claude-permissions.ts` reads the same files at launch: the session reports
-the tier Grok really runs at and opens with a "Grok overrides Ask" warning
-naming the file. An ACP source reports this through `AcpLaunch.access` and
+launch-only. Grok (1.0.44, verified live 2026-10-01) merges permission
+rules from `~/.grok/config.toml` `[permission]` (string lists or `rules`
+tables), `managed_config.toml`, `~/.claude/settings*.json`, and, only in a
+folder trusted in `~/.grok/trusted_folders.toml` (its real path or its git
+root), the project's `.claude/settings*.json` and `.grok/config.toml` up to
+the repository root. Deny beats ask beats allow at every tier, Full included.
+The nearest Claude `defaultMode` replaces `--permission-mode default`, which
+is Ask; explicit Auto and Full still win, and Grok's own `[ui]
+permission_mode` does not. `grok/permission-policy.ts` reads the same
+sources with the same trust rule at launch: the session reports the tier Grok
+really runs at, a "Grok overrides Ask" warning names the file, a "Grok
+permission rules" setup notice lists the rules by effect and file, and a
+"Grok skips project permissions" notice names project files an untrusted
+folder ignores. An ACP source reports this through `AcpLaunch.access` and
 `notices`. OpenCode supports v2 only (2.x and known v2 prereleases); runtime
 admission and update policy share `isOpenCodeV2`. Do not restore v1 execution,
 model discovery or update feeds. OpenCode Ask/Edit/Full presets use per-process native JSONC configuration on the Build agent;
@@ -1241,9 +1278,10 @@ and decisions.
 
 ### Plan mode
 
-Plan is one composer control (the Plan chip, Shift+Tab, the palette's
-"Toggle plan mode") over two native shapes, resolved by `planControl` in
-`src/state/plan-mode.ts`:
+Plan is one composer control (Shift+Tab, the palette's "Toggle plan mode",
+the "Plan mode" row in the model menu) over two native shapes, resolved by
+`planControl` in `src/state/plan-mode.ts`. The composer's Plan pill shows
+only while plan mode is on, and clicking it turns plan mode off:
 
 - A **setting**: a boolean model option with `role: "plan"`, sent per turn
   and independent of access, so Plan with full access is valid. Codex sends
@@ -1449,8 +1487,14 @@ not found" for the CLI's own `chats/` stores, so those rows continued
 through `cursor-agent -p --resume`, which forked each new turn into a second
 store. The SDK retries its stream itself, enforces the access ladder itself,
 and imports any `cursor-agent` store it is asked to continue; there is no
-ACP source, native runner or CLI model list for Cursor, and a new Cursor
-thread never waits on sign-in state to choose a transport.
+ACP source or CLI model list for Cursor, and a new Cursor thread never
+waits on sign-in state to choose a transport. Its native runner
+(`sdk/native-runner.ts`) is the same child in one-shot mode,
+`child.js --headless <spec>`: it prints the reply's text, exits 0 when the
+run finished and 1 with the reason as the last stderr line otherwise, and
+cancels the run on SIGTERM. The spec carries the live driver's own model
+selection; with none chosen it is the account's default, because local SDK
+agents refuse a run without a model.
 
 The SDK runs in a child (`child.ts`, spawned through the host's bundled
 `LSUIElement` Helper with `ELECTRON_RUN_AS_NODE`) over an NDJSON wire (`wire.ts`) so a backend

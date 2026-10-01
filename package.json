@@ -54,7 +54,7 @@
     "test:kiri-engine": "node scripts/test-prepare-kiri.mjs && tsx scripts/test-kiri-engine.ts",
     "test:commit-generation": "tsx scripts/test-commit-generation.ts && tsx scripts/test-commit-models.ts && tsx scripts/test-utility-token-count.ts && tsx scripts/test-commit-connections.ts && tsx scripts/test-utility-model-location.ts && tsx scripts/test-utility-model-catalog.ts",
     "test:accounts": "tsx scripts/test-account-usage.ts && tsx scripts/test-account-routing.ts && tsx scripts/test-account-keychain.ts && tsx scripts/test-claude-credential-source.ts && esbuild scripts/test-account-limits-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-account-limits-ui.mjs --log-level=warning && node node_modules/.tmp/test-account-limits-ui.mjs",
-    "test:acp-registry": "tsx scripts/test-acp-registry.ts && tsx scripts/test-access-modes.ts && tsx scripts/test-turn-recovery-contract.ts && tsx scripts/test-acp-stream.ts && tsx scripts/test-acp-prompt-turn.ts && tsx scripts/test-devin-permissions.ts && tsx scripts/test-devin-session-mcp.ts && tsx scripts/test-devin-resume.ts && tsx scripts/test-opencode-resume.ts && tsx scripts/test-opencode-installation.ts && tsx scripts/test-opencode-projection.ts && tsx scripts/test-native-source.ts && tsx scripts/test-cursor-resume.ts && tsx scripts/test-cursor-sdk.ts && tsx scripts/test-cursor-auth.ts && npm run test:cursor-recovery",
+    "test:acp-registry": "tsx scripts/test-acp-registry.ts && tsx scripts/test-access-modes.ts && tsx scripts/test-turn-recovery-contract.ts && tsx scripts/test-acp-stream.ts && tsx scripts/test-acp-prompt-turn.ts && tsx scripts/test-devin-permissions.ts && tsx scripts/test-devin-session-mcp.ts && tsx scripts/test-devin-resume.ts && tsx scripts/test-opencode-resume.ts && tsx scripts/test-opencode-installation.ts && tsx scripts/test-opencode-projection.ts && tsx scripts/test-native-source.ts && tsx scripts/test-cursor-resume.ts && tsx scripts/test-cursor-sdk.ts && tsx scripts/test-cursor-native-runner.ts && tsx scripts/test-cursor-auth.ts && npm run test:cursor-recovery",
     "test:cursor-recovery": "npm run build:electron && tsx scripts/test-cursor-stale-run.ts",
     "test:automations": "tsx scripts/test-automations.ts && tsx scripts/test-automation-watchers.mjs",
     "test:codex-protocol": "tsx scripts/test-codex-protocol.ts",
@@ -109,7 +109,7 @@
     "test:update-local": "node scripts/test-update-local.mjs",
     "release": "npm run package:mac",
     "test:live-prompt-delivery": "tsx scripts/test-prompt-recovery.ts && tsx scripts/test-live-prompt-delivery.ts && tsx scripts/test-cursor-delivery.ts",
-    "test:live": "npm run test:live-prompt-delivery && tsx scripts/test-live-conversations.ts && tsx scripts/test-live-markers.ts && tsx scripts/test-interrupted-turn.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
+    "test:live": "npm run test:live-prompt-delivery && tsx scripts/test-live-conversations.ts && tsx scripts/test-live-markers.ts && tsx scripts/test-replay-setup-notices.ts && tsx scripts/test-interrupted-turn.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
     "verify:sessions": "npm run typecheck && npm test --workspace @mako/sessions && npm run test:live && npm run test:codex-protocol && npm run test:providers && npm run test:host && npm run test:stage && npm run test:performance && npm run lint && npm run build",
     "test:transfer-scheduling": "node --import tsx scripts/test-transfer-scheduling.ts",
     "test:conversation-control": "node scripts/test-catalog-readiness.mjs && npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts && npm run test:thread-store",
@@ -154,7 +154,7 @@
     "test:opencode-live": "tsx scripts/test-opencode-live.ts",
     "test:turn-recovery-live": "npm run build:electron && node scripts/test-turn-recovery-live.mjs",
     "test:grok-modes-live": "npm run build:electron && node scripts/test-grok-modes-live.mjs",
-    "test:proposed-plans": "tsx scripts/test-proposed-plans.ts && tsx scripts/test-plan-mode.ts && tsx scripts/test-plan-builds.ts",
+    "test:proposed-plans": "tsx scripts/test-proposed-plans.ts && tsx scripts/test-plan-mode.ts && tsx scripts/test-plan-builds.ts && tsx scripts/test-plan-approvals.ts",
     "test:prompt-delivery": "esbuild scripts/test-prompt-delivery.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-prompt-delivery.mjs && node --max-old-space-size=256 node_modules/.tmp/test-prompt-delivery.mjs",
     "test:message-queue": "tsx scripts/test-message-queue.ts && tsx scripts/test-send-discovery.ts && tsx scripts/test-claude-discovery.ts && tsx scripts/test-profile-transport.ts && tsx scripts/test-send-recovery.ts && npm run test:prompt-delivery",
     "test:packaged-startup": "node scripts/test-packaged-startup.mjs",
@@ -176,6 +176,7 @@
     "@kiri/client": "file:vendor/kiri-client-0.2.12.tgz",
     "@lydell/node-pty": "1.2.0-beta.15",
     "@mako/control": "^0.1.0",
+    "@mako/control-runtime": "0.1.0",
     "@mako/relay": "^0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@opencode/client": "2.0.1",
@@ -190,10 +191,10 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "sharp": "0.35.3",
+    "smol-toml": "^1.9.0",
     "ws": "8.21.3",
     "yaml": "^2.9.0",
-    "zod": "4.4.3",
-    "@mako/control-runtime": "0.1.0"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@chenglou/pretext": "0.0.9",
@@ -257,7 +258,7 @@
     "appId": "dev.mako.app",
     "productName": "Mako",
     "artifactName": "${productName}-${arch}.${ext}",
-    "copyright": "Copyright \u00a9 2026 Verbiflow",
+    "copyright": "Copyright © 2026 Verbiflow",
     "directories": {
       "output": "release",
       "buildResources": "build"
