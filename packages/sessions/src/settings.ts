@@ -23,8 +23,13 @@ const optionFields = {
   id: z.string(),
   wireId: z.string().optional(),
   label: z.string(),
-  /** Provider-assigned semantics; consumers must not infer them from labels. */
-  role: z.enum(["reasoning", "speed", "context"]).optional(),
+  /**
+   * Provider-assigned semantics; consumers must not infer them from labels.
+   * `plan` is the harness's plan mode when it is independent of access
+   * (Codex's collaboration mode): a per-session setting sent with every
+   * turn, shown as the composer's Plan control rather than a model option.
+   */
+  role: z.enum(["reasoning", "speed", "context", "plan"]).optional(),
   /** A provider may expose a setting that cannot be changed in this transport. */
   disabledReason: z.string().optional(),
   change: z.literal("launch").optional(),

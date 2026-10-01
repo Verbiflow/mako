@@ -37,6 +37,19 @@ export interface CursorSdkModelListItem {
   variants?: readonly CursorSdkModelVariant[]
 }
 
+/**
+ * Cursor plans through the SDK's conversation mode, chosen per send beside
+ * the model rather than as one of its parameters, so every model can plan and
+ * the access the session runs under stays Agent.
+ */
+export const CURSOR_PLAN_OPTION: ModelOption = {
+  kind: "boolean",
+  id: "plan",
+  label: "Plan mode",
+  role: "plan",
+  current: false,
+}
+
 export interface CursorSdkModelSelection {
   id: string
   params?: { id: string; value: string }[]
@@ -183,6 +196,8 @@ export function normalizeCursorSdkModels(
     }
     byId.set(item.id, model)
   }
+  // After the twins fold: they are told apart by having no options of their own.
+  for (const model of byId.values()) model.options.push(CURSOR_PLAN_OPTION)
   const models = [...byId.values()]
   const catalog: HarnessModelCatalog = { models }
   if (defaultModel) catalog.defaultModel = defaultModel
@@ -235,6 +250,7 @@ export function cursorSdkSelection(
       dropped.push(id)
       continue
     }
+    if (option.role === "plan") continue
     const wire = option.wireId ?? option.id
     if (value === true || value === false) {
       const on = option.kind === "select" ? option.booleanValues?.on ?? "true" : "true"
@@ -254,10 +270,14 @@ export function cursorSdkSelection(
   return { selection, dropped }
 }
 
-/** The settings a run reported, expressed in Mako's option ids. */
+/**
+ * The settings a run reported, expressed in Mako's option ids. A run reports
+ * its model only; `plan` is the mode Mako last sent, carried beside it.
+ */
 export function cursorSdkReportedSettings(
   selection: CursorSdkModelSelection,
-  models: readonly SessionModel[]
+  models: readonly SessionModel[],
+  plan?: SettingValue
 ): SessionSettings {
   const model = modelByIdentity(models, selection.id)
   const options: Record<string, SettingValue> = {}
@@ -267,6 +287,7 @@ export function cursorSdkReportedSettings(
     const id = option?.id ?? mapped?.id ?? param.id
     options[id] = param.value
   }
+  if (plan === true || plan === false) options.plan = plan
   const settings: SessionSettings = { model: model?.id ?? selection.id }
   if (Object.keys(options).length > 0) settings.options = options
   return settings

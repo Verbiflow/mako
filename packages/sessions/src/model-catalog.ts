@@ -258,6 +258,19 @@ export function normalizeClaudeModels(
   return catalog
 }
 
+/**
+ * Codex plans through its collaboration mode, chosen per turn and
+ * independent of approvals and sandbox, so Plan with full access is valid.
+ * Every model can plan; the app-server applies the model's own settings.
+ */
+export const CODEX_PLAN_OPTION: HarnessModelOption = {
+  kind: "boolean",
+  id: "plan",
+  label: "Plan mode",
+  role: "plan",
+  current: false,
+}
+
 /** Codex's legacy speed name and canonical request tier describe the same choice. */
 export function codexServiceTier(value: string): string {
   return value === "fast" ? "priority" : value
@@ -348,6 +361,7 @@ export function normalizeCodexModels(
         values: tiers,
       })
     }
+    options.push(CODEX_PLAN_OPTION)
     const model: HarnessModel = {
       id,
       label: presentString(row.displayName) ?? id,
