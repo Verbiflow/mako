@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { PAGE_GROUPING_ROLES as GROUPING_ROLES } from "@mako/control/browser"
-import { nameMatches, type NameMatch } from "@mako/control/control/scope"
+import { inScope, nameMatches, scopeLabel, type ControlScope, type NameMatch } from "@mako/control/control/scope"
 import { z } from "zod"
 import type { BrowserTarget } from "./contracts/browser-control.js"
 import type { JsonObject, JsonValue } from "./json.js"
@@ -16,6 +16,10 @@ const accessibilityText = z
   .transform((value) => String(value))
   .nullish()
 
+const relatedNodes = z
+  .object({ relatedNodes: z.array(z.object({ backendDOMNodeId: z.number().optional() })).optional() })
+  .optional()
+
 export const AccessibilityNodeSchema = z.object({
   nodeId: z.string(),
   parentId: z.string().optional(),
@@ -26,7 +30,15 @@ export const AccessibilityNodeSchema = z.object({
     .object({
       value: accessibilityText,
       sources: z
-        .array(z.object({ type: z.string(), value: z.unknown().optional(), superseded: z.boolean().optional() }))
+        .array(
+          z.object({
+            type: z.string(),
+            value: z.unknown().optional(),
+            superseded: z.boolean().optional(),
+            nativeSourceValue: relatedNodes,
+            attributeValue: relatedNodes,
+          })
+        )
         .optional(),
     })
     .optional(),
@@ -46,7 +58,7 @@ type AccessibilityNode = z.infer<typeof AccessibilityNodeSchema>
 export function scopeAccessibilityNodes(
   nodes: AccessibilityNode[],
   scope: {
-    within: Array<{ role: string; name: NameMatch }>
+    within: ControlScope[]
     match?: { role: string; name: NameMatch }
   }
 ): AccessibilityNode[] {
@@ -60,14 +72,11 @@ export function scopeAccessibilityNodes(
     }
   for (const container of scope.within) {
     const matches = selected.filter(
-      (node) =>
-        !node.ignored &&
-        node.role?.value === container.role &&
-        nameMatches(node.name?.value ?? "", container.name)
+      (node) => !node.ignored && inScope(node.role?.value, node.name?.value ?? "", container)
     )
     if (matches.length !== 1)
       throw new Error(
-        `Scope requires one ${container.role} ${JSON.stringify(container.name)}; found ${matches.length}. Observe and disambiguate the container.`
+        `Scope requires one ${scopeLabel(container)}; found ${matches.length}. ${matches.length ? "Add its name or an outer within scope" : "Observe and copy the container's role and name"}.`
       )
     const descendants = new Set<string>()
     const pending = [...(children.get(matches[0]!.nodeId) ?? [])]
@@ -227,11 +236,30 @@ const unspaced = (value: string | null | undefined) => (value ?? "").replace(/\s
 /** Cells and rows Chromium names by concatenating their contents; their own
  * rows already show that text. */
 const CONTENT_NAMED_ROLES = new Set(["cell", "gridcell", "row"])
+const nameSource = (node: AccessibilityNode) =>
+  node.name?.sources?.find((candidate) => candidate.value !== undefined && !candidate.superseded)
 function ownName(node: AccessibilityNode, role: string | null): string | null | undefined {
   const name = node.name?.value
   if (role === null || !CONTENT_NAMED_ROLES.has(role)) return name
-  const source = node.name?.sources?.find((candidate) => candidate.value !== undefined && !candidate.superseded)
-  return source?.type === "contents" ? undefined : name
+  return nameSource(node)?.type === "contents" ? undefined : name
+}
+
+/** The elements that name another node, such as a <label> or an
+ * aria-labelledby target, keyed by DOM node, with the names they gave. */
+function labellingNames(nodes: AccessibilityNode[]): Map<number, string> {
+  const names = new Map<number, string>()
+  for (const node of nodes) {
+    const source = nameSource(node)
+    const name = spaced(node.name?.value)
+    if (node.ignored || source?.type !== "relatedElement" || !name) continue
+    for (const related of [
+      ...(source.nativeSourceValue?.relatedNodes ?? []),
+      ...(source.attributeValue?.relatedNodes ?? []),
+    ])
+      if (related.backendDOMNodeId !== undefined)
+        names.set(related.backendDOMNodeId, `${names.get(related.backendDOMNodeId) ?? ""}\n${name}`)
+  }
+  return names
 }
 
 /** Bound the serialized result, not just node count: page-controlled names can
@@ -333,7 +361,8 @@ export function browserObservation(input: {
   }
   // Each node's place in the outline: the depth its children appear at and the
   // name and shown label of its nearest shown named ancestor, whose text it may
-  // repeat.
+  // repeat. A label's text repeats the name it gave its control.
+  const labelling = labellingNames(input.nodes)
   const outline = new Map<string, { childDepth: number; named: string }>()
   const structural: Array<{
     node: AccessibilityNode
@@ -354,7 +383,8 @@ export function browserObservation(input: {
     for (let index = descendants.length - 1; index >= 0; index--)
       pending.push(descendants[index]!)
     const parent = (node.parentId && outline.get(node.parentId)) || { childDepth: 0, named: "" }
-    outline.set(node.nodeId, parent)
+    const gave = (node.backendDOMNodeId !== undefined && labelling.get(node.backendDOMNodeId)) || ""
+    outline.set(node.nodeId, { ...parent, named: parent.named + gave })
     if (node.ignored) continue
     const role = node.role?.value ?? null
     if (role !== null && SKIPPED_ROLES.has(role)) continue
@@ -373,7 +403,7 @@ export function browserObservation(input: {
     const label = role !== null && LABELLED_ROLES.has(role) ? visibleText(node) : ""
     outline.set(node.nodeId, {
       childDepth: parent.childDepth + 1,
-      named: name || label ? `${name}\n${label}` : parent.named,
+      named: (name || label ? `${name}\n${label}` : parent.named) + gave,
     })
     structural.push({
       node,

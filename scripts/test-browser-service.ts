@@ -923,7 +923,11 @@ try {
 
   {
     const fromContents = (value: string) => ({ value, sources: [{ type: "contents", value: { value } }] })
-    const ax = (nodeId: number, parentId: number | undefined, role: string, name?: string | ReturnType<typeof fromContents>, properties?: Array<{ name: string; value: { value: string } }>) => ({
+    const labelledBy = (value: string, label: number) => ({
+      value,
+      sources: [{ type: "relatedElement", value: { value }, nativeSourceValue: { relatedNodes: [{ backendDOMNodeId: label }] } }],
+    })
+    const ax = (nodeId: number, parentId: number | undefined, role: string, name?: string | { value: string; sources: unknown[] }, properties?: Array<{ name: string; value: { value: string } }>) => ({
       nodeId: String(nodeId),
       ...(parentId === undefined ? {} : { parentId: String(parentId) }),
       ignored: false,
@@ -964,7 +968,17 @@ try {
       ax(43, 42, "StaticText", "Story title"),
       ax(44, 40, "StaticText", "Summary 5 hrs ago"),
       ax(50, 1, "dialog", "Story title"),
-      ax(51, 50, "button", "Close")
+      ax(51, 50, "button", "Close"),
+      ax(60, 1, "LabelText"),
+      ax(61, 60, "StaticText", "Name "),
+      ax(62, 60, "textbox", labelledBy("Name", 60)),
+      ax(63, 1, "LabelText"),
+      ax(64, 63, "StaticText", "Email"),
+      ax(65, 63, "StaticText", "Required"),
+      ax(66, 1, "textbox", labelledBy("Email", 63)),
+      ax(67, 1, "heading", "Search", [{ name: "level", value: { value: "2" } }]),
+      ax(68, 67, "StaticText", "Search"),
+      ax(69, 1, "searchbox", labelledBy("Search", 67))
     )
     const page = z
       .object({ nodes: z.array(PageObservationNodeSchema) })
@@ -982,8 +996,13 @@ try {
         'eN link "Photo of the pier Story title Summary 5 hrs ago"',
         'eN dialog "Story title"',
         '  eN button "Close"',
+        'eN textbox "Name"',
+        "text: Required",
+        'eN textbox "Email"',
+        "eN heading \"Search\" level=2",
+        'eN searchbox "Search"',
       ],
-      "prose prints as text with inline links; cells named from their contents, single-row groups, and text or content a control's name already holds print once"
+      "prose prints as text with inline links; cells named from their contents, single-row groups, and text or content a control's name already holds print once, as does a label's text in the control it names; the labelling element keeps its own row"
     )
     assert.equal(page.nodes.find((node) => node.role === "StaticText")?.ref !== undefined, true, "text rows keep refs for programs")
     fixture.axNodes.splice(0, fixture.axNodes.length, ...saved)

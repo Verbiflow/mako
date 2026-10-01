@@ -38,12 +38,23 @@ export const isExactName = (name: NameMatch): name is string =>
 export const ControlSelectorSchema = z
   .object({ role: z.string().min(1), name: NameMatchSchema })
   .strict()
+/** A container to read inside. Landmarks such as main and banner are often
+ * unnamed, so the name may be left out; the scope still needs exactly one. */
+export const ControlScopeSchema = z
+  .object({ role: z.string().min(1), name: NameMatchSchema.optional() })
+  .strict()
 export const ControlReadScopeSchema = z.object({
-  within: z.array(ControlSelectorSchema).max(8).default([]),
+  within: z.array(ControlScopeSchema).max(8).default([]),
   match: ControlSelectorSchema.optional(),
 })
 export type ControlSelector = z.infer<typeof ControlSelectorSchema>
+export type ControlScope = z.infer<typeof ControlScopeSchema>
 export type ControlReadScope = z.input<typeof ControlReadScopeSchema>
+
+export const inScope = (role: string | null | undefined, name: string | undefined, scope: ControlScope) =>
+  role === scope.role && (scope.name === undefined || nameMatches(name, scope.name))
+export const scopeLabel = (scope: ControlScope) =>
+  scope.name === undefined ? scope.role : `${scope.role} ${JSON.stringify(scope.name)}`
 
 /** Scope fresh evidence by ancestry. Never manufacture a new ref from an old one. */
 export function scopeControlNodes(
@@ -53,14 +64,12 @@ export function scopeControlNodes(
   let selected = [...nodes]
   for (const container of scope.within ?? []) {
     const matches = selected.flatMap((node, index) =>
-      node.role === container.role && nameMatches(node.name, container.name)
-        ? [index]
-        : []
+      inScope(node.role, node.name, container) ? [index] : []
     )
     if (matches.length !== 1)
       throw new ControlFault(
         matches.length ? "target-ambiguous" : "target-not-found",
-        `Scope requires one ${container.role} ${JSON.stringify(container.name)}; found ${matches.length}. Observe and disambiguate the container with an outer within scope. Nothing was dispatched.`,
+        `Scope requires one ${scopeLabel(container)}; found ${matches.length}. ${matches.length ? "Add its name or an outer within scope" : "Observe and copy the container's role and name"}. Nothing was dispatched.`,
         "not-dispatched"
       )
     const index = matches[0]!

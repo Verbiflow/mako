@@ -98,7 +98,8 @@ Source: every Local Control SDK call stored in Mako's conversation databases
 does not store. Thread `dd30d560` alone made 661 calls. Fixed locally on
 September 30; none of this is installed yet. U13–U22 came from a second pass the
 same evening that measured what agents receive from each call and reviewed the
-API's design.
+API's design; U23 from the fresh agents that then tried it; U24 from running
+the documentation's example against real Chromium.
 
 | ID / problem found | Current disposition | Closure check |
 | --- | --- | --- |
@@ -124,6 +125,8 @@ API's design.
 | U20 — `expect` on a tab took only element expectations, and waits could not check the title. | **Fixed locally.** `tab.expect({url,title,text,selector,hidden,networkIdle})` waits for a page condition. `waitFor` takes `title`, and an empty condition is refused. | `test-control-page-verbs.ts`. |
 | U21 — Native refs were the driver's element tokens (`s1a2b3c4:17`). | **Fixed locally.** Native observations print `n<k>` aliases, translated to the driver's token before dispatch and in raw `element_token`. They belong to that window's latest observation only. | `test-computer-tools.ts`. |
 | U22 — A data or signed URL printed whole in every observation header. | **Fixed locally.** Past 200 characters the header shows the first 160 and says `… (N chars in .page.url)`; the value keeps the whole URL. | `test-control-page-verbs.ts` (a data URL longer than 2 KB). |
+| U23 — Found by two fresh agents on the new forms. An unnamed container such as `main` could not be a `within` scope, and the refusal buried why. Nothing said that `evaluate` expires refs, and the stale-ref error blamed an "action". `view.select()` read like an array. Receipts said `activate` for `click`. `inspect` printed dense JSON that repeated inline styles. | **Fixed locally.** A `within` scope may leave out the name when only one container has that role; an ambiguous one is refused with "Add its name or an outer within scope". A stale page ref names the call that changed the tab, such as `(evaluate)` or `(pressKey "Escape")`, even when another client made it. The docs list which calls keep refs and which expire them, and say that `select` keeps its rows in `.nodes` and that `text:` rows are `StaticText`. Receipts and failed-cell lists name the SDK call (`click e2`, `setValue e4`). `inspect` prints the element, its box, then the styles and attributes asked for. | `test-control-page-verbs.ts` (unnamed and ambiguous scopes, receipt text, inspection text), `test-control-repl.ts` (stale ref names `pressKey "Escape"` made through the CLI). |
+| U24 — Found running the documentation's example cell on real Chromium. A form printed each label twice: `text: Name`, then `textbox "Name"`. A ref no read had printed, such as a typo, was reported as expired by a page change. A page wait in a hidden tab, which is where task tabs run, saw new text about 1,000 ms late, because it polled with page timers that Chrome runs about once a second. An invalid wait selector failed as a multi-line schema dump marked outcome unknown. | **Fixed locally.** A label's text is left out when the control it names already holds it, using Chromium's name sources (`<label>`, `for=` and `aria-labelledby`); the labelling element keeps its own row. A never-printed ref says "No read of this tab has printed ref". Waits poll every 50 ms from the session, at a slower pace on pages where reading the text is slow; measured lag in a hidden tab fell from about 1,000 ms to 17–53 ms, and a text wait across a navigation still succeeds. An invalid selector is `invalid-request` with the CSS error. The documentation now opens with an example task cell, then short sections, one fact per line. | `test-browser-service.ts` (wrapped, `for=` and `aria-labelledby` labels), `test-control-repl.ts` (never-printed ref), `test-control-page-verbs.ts` (wait lag under 400 ms in a hidden tab, measured 21 ms; invalid selector). |
 
 **Fresh-agent check (source build, not installed).** Two new agents did the same
 seven-step task through the MCP `js` tool against real Chromium: open a page,
@@ -147,7 +150,31 @@ the docs. Its other reports were then fixed:
 - `console.log` with several arguments double-encoded;
 - `waitFor` can't prove an action caused text that was already there.
 
-Remaining: repeat on the installed candidate.
+**Fresh-agent check on the new forms (source build, not installed).** The same
+seven-step task gained one reading step: find the owner of a card in an activity
+table and follow their link. Two new agents did it through the MCP `js` tool
+against real Chromium, with only the tool description. Neither needed help, and
+both read the outline, `text:` lines and `[name](e12)` links without explanation.
+Run 3 took 9 calls with 3 errors, all its own read-side mistakes (U23). After
+those fixes, run 4 took 7 calls with 1 error: it clicked a ref after an
+`evaluate`, which the stale-ref error now names. It also reported that nothing
+said a receipt prints only as a cell's value, that text rows were undocumented,
+that `inspect` output was noisy and that the documentation read as a few dense
+paragraphs; all four are fixed (U23, U24). Running the documentation's new
+example cell then found U24. The one report left is the benchmark's own: it
+saved artifacts in a temporary folder.
+
+Run 5 used the restructured documentation and the U24 fixes. It took 6 calls
+with no errors and no help lookups, and every answer was right. Its reports led
+to these fixes:
+- The first cell's own result now follows a `This cell's output:` line, since it
+  was easy to miss under the documentation.
+- The example's intro sentence is plain prose.
+- Two compressed sentences about repeated text and refless lines are spelled out.
+- The docs now say that element `expect` takes `within`, what `absent:true`
+  means, and that `hidden:true` waits until the text and selector are gone.
+
+Remaining: the installed candidate.
 
 ## How to close an issue
 

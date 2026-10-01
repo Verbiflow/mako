@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { readFile, readdir } from "node:fs/promises"
 import { z } from "zod"
-import { ControlSelectorSchema } from "@mako/control/control/scope"
+import { ControlScopeSchema, ControlSelectorSchema } from "@mako/control/control/scope"
 import {
   ControlTargetSchema,
   RecordingOptionsSchema,
@@ -38,7 +38,7 @@ export const CONTROL_HELP_TOPICS = [
 ] as const
 const jsonObject = z.record(z.string(), z.json())
 const elementSelectorSchema = ControlSelectorSchema.extend({
-  within: z.array(ControlSelectorSchema).optional(),
+  within: z.array(ControlScopeSchema).optional(),
 }).strict()
 /** The ref-free forms of dispatch operations; the locator supplies the ref. */
 const locatorOperationSchema = z.discriminatedUnion("kind", [

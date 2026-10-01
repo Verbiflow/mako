@@ -75,6 +75,7 @@ try {
   assert.match(text(first), /^Mako browser and computer use/, "documentation is plain text, not a JSON string")
   assert.doesNotMatch(text(first).split("\n\n")[0]!, /\\n/)
   assert.match(text(first), /^fixture "Fixture Chrome" disconnected → await control\.connectBrowser\("fixture"\)$/m, "a browser prints as one line, its ID first")
+  assert.match(text(first), /\n\nThis cell's output:\nfixture "Fixture Chrome"/, "the first cell's own output is set apart from the documentation")
   assert.equal(fixture.calls.length, 0, "discovery does not connect")
   summary.firstCallBytes = Buffer.byteLength(JSON.stringify(first))
   const imported = await js(
@@ -154,11 +155,13 @@ try {
   ).length
   const stale = await js("await tab.click(field.ref)")
   assert.equal(stale.isError, true)
-  assert.match(text(stale), /not from a read of this tab since its last action/)
+  assert.match(text(stale), /not from a read of this tab since it last changed \(pressKey "Escape"\)/, "a stale ref names the call that expired it, even from another client")
   assert.equal(
     fixture.calls.filter((c) => c.method.startsWith("Input.")).length,
     dispatched
   )
+  const unknown = await js('await tab.click("e999")')
+  assert.match(text(unknown), /No read of this tab has printed ref "e999"; use a ref from its latest observe\(\), or a locator/, "a ref the tab never had is not reported as expired")
   const ordinary = await js(
     'console.log("evidence-before-error"); throw new Error("ordinary failure")'
   )
@@ -273,7 +276,7 @@ const native = new ControlProgramRuntime({
       })
       .parse(value),
   ],
-  effect: (command) => (command.action === "dispatch" ? "set-text e1" : undefined),
+  effect: (command) => (command.action === "dispatch" ? "setValue e1" : undefined),
   fault: (d) => new ControlFault(d.code, d.message, d.outcome),
 })
 const evaluate = (code: string, active = signal) =>
@@ -332,8 +335,8 @@ try {
     assert.fail("a malformed receipt fails the cell")
   } catch (error) {
     assert.ok(error instanceof ControlProgramError, String(error))
-    assert.deepEqual(error.effects, ["set-text e1"], "reads are not named; the dispatched call is")
-    assert.match(programErrorText(error), /\nBefore failing, this cell ran: set-text e1\. Observe before acting again; do not rerun the cell\.$/)
+    assert.deepEqual(error.effects, ["setValue e1"], "reads are not named; the dispatched call is")
+    assert.match(programErrorText(error), /\nBefore failing, this cell ran: setValue e1\. Observe before acting again; do not rerun the cell\.$/)
   }
   await evaluate('void setTimeout(() => { throw new Error("late boom") }, 20)')
   await delay(80)

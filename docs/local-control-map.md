@@ -97,7 +97,7 @@ They come from reading every SDK call agents made through Mako. The changes:
 
 `scripts/test-control-page-verbs.ts` checks them against a real Chromium it launches itself. Two fresh agents finished a seven-step page task with at most one help lookup, no raw CDP and no sleeps. The next installed candidate must include them; then repeat that fresh-agent task on it.
 
-**September 30, second pass ([U13–U22](local-control-agent-issues.md#september-30-usage-audit)): what agents read, in source, not installed.**
+**September 30, second pass ([U13–U24](local-control-agent-issues.md#september-30-usage-audit)): what agents read, in source, not installed.**
 Every result now prints in a form made for what it is, and keeps its full value
 for code. The changes:
 - page observations print as a reading outline, with prose as `text:` lines and
@@ -117,8 +117,38 @@ first read of GitHub, MDN and Wikipedia pages takes 49–58% fewer tokens. All
 `packages/control` tests and the browser, REPL, CLI, page-verb, computer-tool,
 owner, modal, input-error and package suites pass. `test-control-api-e2e` was
 not rerun: it drives the stale `dist-electron`, and rebuilding it would compile
-other agents' uncommitted work. Next: a fresh agent repeats the seven-step task
-on these forms, then the installed candidate carries them.
+other agents' uncommitted work.
+
+Two fresh agents then did the seven-step task, plus a table-reading step, with
+no help lookups. They read the outline without explanation. The first took 9
+calls with 3 errors, and the fixes for its reports followed (U23). Those fixes
+were:
+- unnamed `within` scopes;
+- a stale-ref error that names the call that changed the tab;
+- receipts named by SDK call;
+- a printed form for `inspect`;
+- documentation of which calls expire refs.
+
+The second agent took 7 calls with 1 error. Its main complaint was the
+documentation's dense paragraphs. The once-per-session documentation now opens
+with an example task cell, followed by short sections with one fact per line:
+1,602 o200k tokens, against 1,335 at the previous commit.
+
+Running that example cell on real Chromium found four more problems (U24), now
+fixed:
+- A form printed each label twice. Label text is now left out when it names a
+  control that already holds it.
+- A ref no read had printed was reported as expired.
+- Page waits in hidden task tabs were about 1,000 ms late. They now poll from
+  the session every 50 ms, and measured lag is 17–53 ms.
+- An invalid wait selector failed as a schema dump.
+
+A third fresh agent (run 5) then did the task on the restructured documentation
+in 6 calls, with no errors and no help lookups. Following its reports:
+- the first cell's result now follows a `This cell's output:` line;
+- the docs say how `within`, `absent` and `hidden` behave in `expect`.
+
+Next: the installed candidate carries all of this.
 
 **Next (September 29): candidate from `dac8a05` installs when the default host is idle (`release/rollout-20260929`).**
 Both earlier jobs stopped the same way. The host quit for the install, Mako was
@@ -657,12 +687,15 @@ Where printing lives:
 - **Discovery lines.** `control/discovery.ts`.
 - **Receipts.** `operationLabel` in `control/contract.ts`.
 - **The page outline** has two halves:
-  - what a row is: `browserObservation` in `control-runtime/src/browser-observation.ts` handles pruning, names taken from contents, single-row collapse and `depth`;
+  - what a row is: `browserObservation` in `control-runtime/src/browser-observation.ts` handles pruning, names taken from contents, label text (`labellingNames`), single-row collapse and `depth`;
   - how rows print: `pageOutlineLines` in `packages/control/src/browser/observation.ts` handles `text:` lines, inline links and printed refs.
   - The two share `PAGE_GROUPING_ROLES`.
 - **Stable `e<n>` refs.** `refIds` and `binding.refs` in `browser-service.ts`.
 - **Native `n<k>` aliases.** `withNativeTokens` in `control-session.ts`, applied before `beginControlMutation`.
-- **Failures.** `programErrorText` and the effect list in `program/runtime.ts`; the method hints in `program/hints.ts`.
+- **Failures.** `programErrorText` and the effect list in `program/runtime.ts`; the method hints in `program/hints.ts`; `lastControlChange` in `control-session.ts` names the call behind a stale page ref, and `issuedPageRefs` tells a stale ref from one never printed.
+- **Page waits.** The `wait` command in `browser-service.ts` polls from the session (`WAIT_POLL_MS`), not with page timers, which Chrome slows to about once a second in hidden tabs.
+- **Scopes.** `ControlScopeSchema`, `inScope` and `scopeLabel` in `scope.ts`; `browser-service.ts` sends unnamed scopes down the snapshot path, since `queryAXTree` needs a name.
+- **Inspection.** `inspectionText` in `client.ts`.
 
 Native screenshots now validate supported options, honor resizing/format requests
 and retain exact returned-image coordinate mapping. Native recording capabilities

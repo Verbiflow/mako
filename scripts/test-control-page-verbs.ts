@@ -147,6 +147,13 @@ try {
   )
   assert.equal(missed.error, true)
   assert.match(missed.text, /^Error assertion-failed \(nothing dispatched\): Not established within 300 ms/)
+  const lag = await js(
+    `await tab.evaluate("setTimeout(()=>{document.body.append('Appeared late');window.appearedAt=Date.now()},300)"); await tab.waitFor({text:"Appeared late"},{timeoutMs:5000}); [Date.now() - await tab.evaluate("window.appearedAt"), await tab.evaluate("document.visibilityState")]`
+  )
+  const [lagMs, visibility] = lag.value() as [number, string]
+  assert.ok(lagMs < 400, `a ${visibility} tab's wait sees new text within one poll, not at its throttled timers: ${lagMs} ms`)
+  const badSelector = await js(`await tab.waitFor({selector:"[[bad"},{timeoutMs:500})`)
+  assert.match(badSelector.text, /^Error invalid-request \(nothing dispatched\): selector "\[\[bad" is not valid CSS: /, badSelector.text)
   const titled = await js(`await tab.expect({title:"Live"})`)
   assert.equal(titled.error, false, titled.text)
   assert.match(titled.text, /^satisfied \{"title":"Live"\} after \d+ ms$/, "expect takes a page condition")
@@ -167,6 +174,15 @@ try {
   )
   assert.equal(live.error, false, live.text)
   assert.deepEqual(live.value(), ["Inbox 3"])
+  const receipt = await js(`await tab.locator({role:"button",name:{prefix:"Inbox"}}).click()`)
+  assert.match(receipt.text, /^dispatched click e\d+ · page · \w+/, "a receipt names the call that made it")
+  const unnamed = await js(`await tab.observe({within:[{role:"list"}]})`)
+  assert.equal(unnamed.error, false, unnamed.text)
+  assert.match(unnamed.text, /^scope list$/m, unnamed.text)
+  assert.match(unnamed.text, /listitem "Card A"/, "an unnamed container that is the only one of its role scopes a read")
+  const ambiguous = await js(`await tab.observe({within:[{role:"button"}]})`)
+  assert.equal(ambiguous.error, true)
+  assert.match(ambiguous.text, /Scope requires one button; found \d+\. Add its name or an outer within scope/, ambiguous.text)
 
   assert.equal(
     (await js(`await tab.evaluate((a, b) => a + b, 2, 3)`)).value(),
@@ -183,11 +199,17 @@ try {
     `await tab.locator({role:"link",name:"Docs"}).inspect({attributes:["href"],styles:["color"]})`
   )
   assert.equal(inspected.error, false, inspected.text)
-  const facts = inspected.value()
-  assert.deepEqual(
-    [facts.tag, facts.attributes.href, facts.styles.color, facts.visible],
-    ["a", "/docs", "rgb(255, 0, 0)", true]
+  assert.match(
+    inspected.text,
+    /^a "Docs" · \d+×\d+ at \d+,\d+ · visible\nstyles color: rgb\(255, 0, 0\)\nattributes href="\/docs"$/,
+    "an inspection prints the element, then the styles and attributes asked for"
   )
+  const facts = await js(
+    `const facts = await tab.locator({role:"link",name:"Docs"}).inspect({styles:["color"]}); [facts.tag, facts.attributes.href, facts.styles.color, facts.visible]`
+  )
+  assert.deepEqual(facts.value(), ["a", "/docs", "rgb(255, 0, 0)", true], "the value keeps every field")
+  const styled = await js(`await tab.locator({role:"link",name:"Docs"}).inspect({styles:["color"]})`)
+  assert.doesNotMatch(styled.text, /attributes/, "unrequested attributes stay in the value when styles were asked for")
 
   const hovered = await js(
     `await tab.locator({role:"button",name:"Hover zone"}).hover(); await tab.expect({role:"menu",name:"Actions"},{timeoutMs:2000})`

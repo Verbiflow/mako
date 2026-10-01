@@ -269,7 +269,7 @@ port.on("message", (raw) => {
           if (message.namespace !== "control") throw new ControlFault("unsupported-operation", "Persistent agent JavaScript requires the unified control SDK.", "not-dispatched")
           if (!repl) {
             documentation = message.documentation
-            if (message.introduce) await rewriteDocumentation()
+            if (message.introduce && documentation) emit("output", `${documentation}\n\nThis cell's output:`)
             else if (documentation) emit("output", resetNotice)
           }
           repl ??= new ControlRepl({

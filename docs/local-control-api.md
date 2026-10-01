@@ -18,7 +18,7 @@ documentation again. Ordinary errors, and callbacks that throw after their cell
 returned, preserve bindings; a late throw is reported at the start of the next cell.
 A timeout, cancellation or worker failure resets bindings and prints a one-line
 notice instead of the documentation. A failed cell prints one line,
-`Error code (outcome): message`, then `Before failing, this cell ran: set-text e4, navigate`
+`Error code (outcome): message`, then `Before failing, this cell ran: setValue e4, navigate`
 when earlier calls in it may have changed something. Those effects stand: observe
 the exact target before deciding what to do next, never replay a program.
 Calling a method this SDK lacks under its Playwright name (`fill`, `goto`,
@@ -190,8 +190,9 @@ for code:
 | Result | Prints as |
 | --- | --- |
 | Page observation | `page "title" url · viewport`, then an indented outline: `e12 button "Save" disabled` |
-| Action receipt | `dispatched set-text e4 · route · delivery`, plus guard/settling/focus only when unusual |
+| Action receipt (a cell's value or a logged value) | `dispatched setValue e4 · route · delivery`, named by the call that made it, plus guard/settling/focus only when unusual |
 | Screenshot | size, bytes, view token and coordinate mapping, never pixels |
+| `inspect` | `a "Docs" · 34×18 at 8,120 · visible`, then the styles and attributes asked for |
 | `browsers()`, `tabs()`, `apps()`, `windows()` | one target per line, the ID to copy first |
 | `waitFor`, page-condition `expect` | `satisfied {...} after N ms` |
 | Failure | `Error code (outcome): message`, then effects the cell already had |
@@ -211,11 +212,14 @@ e17 table
 
 Each fact prints once. The outline leaves out the document root, layout tables,
 unnamed wrappers and formatting roles; text, images, headings and named groups
-that the enclosing control's name or visible label already contains; and the
+that the enclosing control's name or visible label already contains; a label's
+text that the control it names already holds, so a form prints
+`e1 textbox "Name"` once rather than under a `text: Name` line; and the
 names cells and rows take from their contents. An unnamed list, item, row or
 cell holding a single row gives its place to that row. Leaves with no name,
 value or interactivity are pruned. Text lines and unnamed grouping lines print
-no ref; every node keeps its ref in `view.nodes`. States print as words
+no ref; every node keeps its ref in `view.nodes`, where a `text:` line's rows
+have role `StaticText` and their text in `name`. States print as words
 (`checked`, `expanded=false`, `focused`). `visibleText=` prints only when the
 name does not already contain the shown label, `value=` only when it differs
 from the name, `url=` only for an unnamed link. `interactive`, `query` and
@@ -229,13 +233,21 @@ pages, which stops at the per-read size limit, takes 49–58% fewer tokens.
 
 Page refs are `e<n>`, unique across the task and never reused. A ref names one
 DOM node of the current document: later reads show the same node under the same
-ref, and the session accepts any page ref read since that tab's last action.
-After an action, or a navigation, observe again or use a locator. Native refs
-are `n<n>` aliases for the driver's element tokens and belong to that window's
-latest observation only.
+ref, and the session accepts any page ref read since that tab's last change.
+Reads keep refs: `observe`, `screenshot`, `inspect`, `expect` and `waitFor`.
+Everything that can change the page expires them, which includes `evaluate`,
+`cdp`, `hover`, `scroll` and navigation as well as clicks and typing. Then
+observe again or use a locator. The refusal names the call that changed the tab,
+or says that no read of the tab printed the ref at all. Native refs are `n<n>`
+aliases for the driver's element tokens and belong to that window's latest
+observation only.
 
-Return `.nodes` when structured JSON is needed, `.select(...)` for a subset, or
-`.diff(previous)` for changed lines. A program's own values print as compact
+A `within` scope is an observed role and name, or the role alone when only one
+container has it, such as `within:[{role:'main'}]`. An ambiguous or missing
+scope is refused before anything runs.
+
+`.nodes` is the array of rows. `.select(...)` prints a subset and keeps it in
+its own `.nodes`, and `.diff(previous)` prints changed lines. A program's own values print as compact
 JSON, unchanged.
 
 ```js
@@ -354,6 +366,12 @@ await state.tab.locator({role: 'button', name: 'More'}).hover();
 await state.tab.locator({role: 'listitem', name: 'Card'}).dragTo(state.tab.locator({role: 'region', name: 'Done'}));
 await state.tab.locator({role: 'button', name: 'Far away'}).scrollIntoView();
 ```
+
+A page wait checks the page every 50 ms from the session, never from page
+timers: Chrome runs a hidden tab's timers about once a second, which would make
+each wait in a background task tab up to a second late. It slows its pace on pages where
+reading the text takes longer, and an invalid `selector` is refused as
+`invalid-request`.
 
 `inspect` is read-only. `hover`, `drag` and `scrollIntoView` return
 `{status:'dispatched', verification:'not-requested', result}`. `drag` handles both

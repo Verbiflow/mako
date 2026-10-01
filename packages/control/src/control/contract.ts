@@ -124,8 +124,20 @@ export const ControlOperationSchema = z.discriminatedUnion("kind", [
 ])
 export type ControlOperation = z.infer<typeof ControlOperationSchema>
 
-/** What an operation did and to what, as receipts and failed cells name it:
- * `set-text e4`, `pointer e9`, `pointer 120,80`, `press-key "Enter"`. */
+/** The SDK call that dispatches each operation kind; `click(ref)` activates. */
+const OPERATION_METHODS: Record<ControlOperation["kind"], string> = {
+  "set-text": "setValue",
+  activate: "click",
+  "press-key": "pressKey",
+  pointer: "click",
+  scroll: "scroll",
+  "select-option": "selectOption",
+  command: "command",
+}
+
+/** What an operation did and to what, as receipts and failed cells name it,
+ * by the call that made it: `setValue e4`, `click e9`, `click 120,80 right`,
+ * `pressKey "Enter"`. */
 export function operationLabel(operation: z.input<typeof ControlOperationSchema>): string {
   const at = "at" in operation ? operation.at : undefined
   const subject =
@@ -137,7 +149,9 @@ export function operationLabel(operation: z.input<typeof ControlOperationSchema>
           ? `${Math.round(at.x)},${Math.round(at.y)}`
           : undefined
   const key = "key" in operation ? JSON.stringify(operation.key) : undefined
-  return [operation.kind, subject, key].filter(Boolean).join(" ")
+  const button = "button" in operation && operation.button !== "left" ? operation.button : undefined
+  const count = "count" in operation && operation.count !== undefined && operation.count > 1 ? `count=${operation.count}` : undefined
+  return [OPERATION_METHODS[operation.kind], subject, key, button, count].filter(Boolean).join(" ")
 }
 
 export const ControlTargetsRequestSchema = z.discriminatedUnion("kind", [

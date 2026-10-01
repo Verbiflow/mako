@@ -29,7 +29,7 @@ import {
   OBSERVATION_BUDGET_BYTES,
 } from "./browser-observation.js"
 import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
-import { isExactName, nameMatches } from "@mako/control/control/scope"
+import { inScope, isExactName, scopeLabel } from "@mako/control/control/scope"
 import {
   BrowserFault,
   browserCommandEffect,
@@ -132,9 +132,10 @@ const cookieList = z.object({
 })
 const isolatedWorld = z.object({ executionContextId: z.number() })
 const pdfResult = z.object({ data: z.string() })
-const waitResult = z.object({ result: z.object({ value: z.boolean() }) })
-/** One page-side poll never outlives the connection's request timeout. */
-const WAIT_SLICE_MS = 20_000
+const waitResult = z.object({ result: z.object({ value: z.union([z.boolean(), z.string()]) }) })
+/** Waits poll from here: a hidden tab runs its own timers about once a
+ * second, which would make every page-side poll a second late. */
+const WAIT_POLL_MS = 50
 interface DialogState {
   type: string
   message: string
@@ -1694,12 +1695,14 @@ export class BrowserService {
                 returnByValue: true,
               })
             ).result.value
-          const exactNames = [...command.within, ...(command.match ? [command.match] : [])].every((scope) => isExactName(scope.name))
+          const exactNames = [...command.within, ...(command.match ? [command.match] : [])].every(
+            (scope) => scope.name !== undefined && isExactName(scope.name)
+          )
           if (visibility === "hidden" || !exactNames) {
             // queryAXTree waits for a visual lifecycle update, which Chromium
             // can throttle for occluded pages. A synchronous snapshot remains
             // read-only and does not activate or change focus on the page.
-            // queryAXTree also matches only exact names.
+            // queryAXTree also matches only exact names, and needs one.
             const snapshot = z
               .object({ nodes: z.array(AccessibilityNodeSchema) })
               .parse(await send("Accessibility.getFullAXTree"))
@@ -1723,13 +1726,12 @@ export class BrowserService {
               (node) =>
                 node.backendDOMNodeId !== backendNodeId &&
                 !node.ignored &&
-                node.role?.value === scope.role &&
-                nameMatches(node.name?.value ?? "", scope.name)
+                inScope(node.role?.value, node.name?.value ?? "", scope)
             )
             if (matches.length !== 1 || !matches[0]?.backendDOMNodeId)
               fault(
                 "invalid-request",
-                `Scope requires one ${scope.role} ${JSON.stringify(scope.name)}; found ${matches.length}. Observe and disambiguate the container.`
+                `Scope requires one ${scopeLabel(scope)}; found ${matches.length}. Observe and disambiguate the container.`
               )
             backendNodeId = matches[0]!.backendDOMNodeId!
           }
@@ -2501,23 +2503,23 @@ export class BrowserService {
         const conditions = command.for
         const domCondition =
           conditions.selector !== undefined || conditions.text !== undefined
-        for (;;) {
-          signal.throwIfAborted()
-          const remaining = deadline - Date.now()
-          if (remaining <= 0)
-            return { satisfied: false, elapsedMs: Date.now() - started }
-          let dom = true
+        const check = `(()=>{const wantSelector=${JSON.stringify(conditions.selector ?? null)};const wantText=${JSON.stringify(conditions.text ?? null)};const hidden=${conditions.hidden};let found;try{found=wantSelector===null?null:!!document.querySelector(wantSelector)}catch(e){return String(e.message)}const s=found===null?true:found!==hidden;const t=wantText===null?true:(!!document.body&&document.body.innerText.includes(wantText))!==hidden;return s&&t})()`
+        let pause = WAIT_POLL_MS
+        const settled = async () => {
           if (domCondition) {
-            const slice = Math.min(remaining, WAIT_SLICE_MS)
-            const result = waitResult.parse(
-              await send("Runtime.evaluate", {
-                expression: `(async()=>{const deadline=performance.now()+${slice};const wantSelector=${JSON.stringify(conditions.selector ?? null)};const wantText=${JSON.stringify(conditions.text ?? null)};const hidden=${conditions.hidden};const check=()=>{const s=wantSelector===null?true:(!!document.querySelector(wantSelector))!==hidden;const t=wantText===null?true:(!!document.body&&document.body.innerText.includes(wantText))!==hidden;return s&&t};for(;;){if(check())return true;if(performance.now()>deadline)return false;await new Promise(r=>setTimeout(r,100))}})()`,
-                awaitPromise: true,
-                returnByValue: true,
-              })
+            const checked = Date.now()
+            const dom = await send("Runtime.evaluate", { expression: check, returnByValue: true }).then(
+              (result) => waitResult.parse(result).result.value,
+              (error: unknown) => {
+                // A navigation replaces the document mid-check; the next poll reads the new one.
+                if (error instanceof Error && /context was destroyed|Cannot find context/i.test(error.message)) return false
+                throw error
+              }
             )
-            dom = result.result.value
-            if (!dom) continue
+            if (typeof dom === "string") fault("invalid-request", `selector ${JSON.stringify(conditions.selector)} is not valid CSS: ${dom}`)
+            // Large pages make innerText slow; poll no more than a third of the time.
+            pause = Math.max(WAIT_POLL_MS, 2 * (Date.now() - checked))
+            if (!dom) return false
           }
           let url = true
           if (conditions.url !== undefined || conditions.title !== undefined) {
@@ -2536,9 +2538,14 @@ export class BrowserService {
               idle = binding.network.inflight.size === 0
             }
           }
-          if (dom && url && idle)
-            return { satisfied: true, elapsedMs: Date.now() - started }
-          await new Promise((resolve) => setTimeout(resolve, 100))
+          return url && idle
+        }
+        for (;;) {
+          signal.throwIfAborted()
+          if (await settled()) return { satisfied: true, elapsedMs: Date.now() - started }
+          const remaining = deadline - Date.now()
+          if (remaining <= 0) return { satisfied: false, elapsedMs: Date.now() - started }
+          await new Promise((resolve) => setTimeout(resolve, Math.min(pause, remaining)))
         }
       }
       case "history": {

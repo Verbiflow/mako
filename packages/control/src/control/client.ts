@@ -11,6 +11,7 @@ import {
   ControlReadScopeSchema,
   nameMatches,
   scopeControlNodes,
+  scopeLabel,
   type ControlReadScope,
   type NameMatch,
 } from "./scope.js"
@@ -218,6 +219,45 @@ function visibleTextHint(nodes: readonly PageObservationNode[], role: string, na
   return `${JSON.stringify(name)} is ${relation} of ${named}. A string name matches the accessible name exactly, so use locator({role:${JSON.stringify(role)},name:${JSON.stringify(shown[0]!.name ?? "")}}) or name:{contains:${JSON.stringify(name)}}; nothing was dispatched.`
 }
 
+const inspectionSchema = z.looseObject({
+  tag: z.string(),
+  text: z.string(),
+  textLength: z.number().optional(),
+  attributes: z.record(z.string(), z.string()),
+  box: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+  visible: z.boolean(),
+  inViewport: z.boolean(),
+  styles: z.record(z.string(), z.string()).optional(),
+  value: z.string().optional(),
+  checked: z.boolean().optional(),
+  disabled: z.boolean().optional(),
+})
+
+/** What was asked for first: the element, its place, then requested styles.
+ * Attributes print when requested or when no styles were; the default set
+ * repeats inline styles. */
+function inspectionText(
+  inspection: z.infer<typeof inspectionSchema>,
+  options: { attributes?: string[]; styles?: string[] }
+): string {
+  const { box } = inspection
+  const facts = [
+    `${Math.round(box.width)}×${Math.round(box.height)} at ${Math.round(box.x)},${Math.round(box.y)}`,
+    inspection.visible ? (inspection.inViewport ? "visible" : "visible, off-screen") : "hidden",
+    ...(inspection.value !== undefined ? [`value=${JSON.stringify(inspection.value)}`] : []),
+    ...(inspection.checked !== undefined ? [inspection.checked ? "checked" : "unchecked"] : []),
+    ...(inspection.disabled ? ["disabled"] : []),
+    ...(inspection.textLength ? [`text is ${inspection.textLength} chars; .text holds the first 2000`] : []),
+  ]
+  const lines = [`${inspection.tag} ${JSON.stringify(inspection.text)} · ${facts.join(" · ")}`]
+  const styles = Object.entries(inspection.styles ?? {})
+  if (styles.length) lines.push(`styles ${styles.map(([name, value]) => `${name}: ${value}`).join("; ")}`)
+  const attributes = Object.entries(inspection.attributes)
+  if (attributes.length && (options.attributes || !options.styles?.length))
+    lines.push(`attributes ${attributes.map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(" ")}`)
+  return lines.join("\n")
+}
+
 /** The header an agent reads above an observation's rows: where the page is,
  * how much of it the rows cover and how to read the rest. */
 function observationHeader(data: ControlObservationData, returned: number): string[] {
@@ -235,7 +275,7 @@ function observationHeader(data: ControlObservationData, returned: number): stri
   }
   const within = data.scope?.within ?? []
   if (within.length || data.scope?.match)
-    head.push(`scope ${[...within.map((scope) => `${scope.role} ${JSON.stringify(scope.name)}`), ...(data.scope?.match ? [`match ${data.scope.match.role} ${JSON.stringify(data.scope.match.name)}`] : [])].join(" › ")}`)
+    head.push(`scope ${[...within.map(scopeLabel), ...(data.scope?.match ? [`match ${data.scope.match.role} ${JSON.stringify(data.scope.match.name)}`] : [])].join(" › ")}`)
   const first = (data.offset ?? 0) + 1
   const rows = `rows ${first}–${first + returned - 1} of ${data.matched ?? "more"}`
   if (data.nextOffset != null)
@@ -923,8 +963,11 @@ export class TabHandle extends ControlHandle {
   }
   /** Reads an observed element's tag, text, attributes, box and chosen
    * computed styles without changing the page. */
-  inspect(ref: string, options: { attributes?: string[]; styles?: string[] } = {}) {
-    return this.raw("inspect", { ref, ...options })
+  async inspect(ref: string, options: { attributes?: string[]; styles?: string[] } = {}) {
+    const value = await this.raw("inspect", { ref, ...options })
+    const inspection = inspectionSchema.safeParse(value)
+    if (!inspection.success || typeof value !== "object" || value === null || Array.isArray(value)) return value
+    return presented(value, () => inspectionText(inspection.data, options))
   }
   private async dispatched(action: string, args: JsonObject) {
     const result = await this.raw(action, args)
