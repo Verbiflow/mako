@@ -2,8 +2,10 @@ import { z } from "zod"
 import { ProposedPlanSchema } from "@mako/sessions/content"
 import type { ProposedPlan } from "@mako/sessions/content"
 
+/** The plan's heading, without the "Plan:" agents often lead it with; the UI already says it is a plan. */
 export function proposedPlanTitle(text: string): string {
-  return /^#\s+(.+)$/m.exec(text)?.[1]?.trim() || "Proposed plan"
+  const heading = /^#\s+(.+)$/m.exec(text)?.[1]?.trim()
+  return heading?.replace(/^plan\s*[:—–-]\s*/i, "").trim() || heading || "Proposed plan"
 }
 export function proposedPlanFilename(text: string): string {
   const slug = proposedPlanTitle(text)
