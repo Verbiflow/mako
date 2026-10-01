@@ -52,8 +52,16 @@ A decoder turns one native message into the shared `Decoded` events in
 so recorded messages always decode the same way. An empty list means "known,
 deliberately silent"; `unknown` carries the raw record, which the engine
 keeps (first of each kind per host life) in `native-unknown.jsonl` beside the
-host log. Codex is the first harness on this contract; the others still
-decode inside their drivers. To change a decoder, run Mako with
+host log. Codex, Grok and Devin are on this contract. Claude, Cursor and
+OpenCode still decode inside their drivers, and `test-harness-definitions.ts`
+lists exactly those three, so a new harness ships with a decoder and
+fixtures (build order: `docs/meta-harness/harness-integration.md`).
+ACP harnesses share `AcpDecoder` (`electron/acp-decoder.ts`), which the live
+client and the fixtures both run. What differs per harness is declared on
+`ProviderAcpSource`: `plans()` (plan cards and which permission approves
+them), `requests` (extension requests the agent sends the client; any other
+gets "method not found") and `permissionTitle`. `acpDecoderSource(source)`
+registers the recorded-message decoder from the same hooks. To change a decoder, run Mako with
 `MAKO_NATIVE_CAPTURE=<harness>` to record real messages, inspect them with
 `npm run decode -- <capture>`, turn the case into a fixture with `--fixture`,
 then run `npm run test:decoders`. Captures hold conversation content: read a
@@ -1233,14 +1241,29 @@ Settings defaults skip `role: "plan"`. A plan chosen for a session that has
 not started is pending in `src/state/plan-choice.ts`. It is taken at launch,
 restored if the launch fails, and never saved as the harness default.
 
+Every harness turns its plan into a `proposed-plan` update with a stable id:
+Codex's plan item, Cursor's `createPlan`, Claude's `ExitPlanMode`, Grok's
+`exit_plan_mode` and its `_x.ai/exit_plan_mode` approval request
+(`grok/plans.ts`), Devin's plan-file edits and `exit_plan_mode`
+(`devin/plans.ts`), and the final reply of OpenCode's plan agent
+(`OpenCodeContent`, which retracts that step's text parts).
+
 Build answers the native plan approval when one is waiting for that plan
-(`LivePermissionRequest.implementsPlan`, set by Claude's `ExitPlanMode`), and
-sends no prompt as well: a second prompt would run the work twice. Without an
-approval it leaves plan mode and sends the implement request. An earlier plan
-revision never answers the current approval. "Build in new session" cancels
-the planning session, then opens a session in the same Thread with the plan
-attached and plan off. `scripts/test-plan-mode.ts` covers the mapping, locks,
-pending choices and both build paths.
+(`LivePermissionRequest.implementsPlan`, set by Claude's `ExitPlanMode` and
+by the Grok and Devin plan decoders), and sends no prompt as well: a second
+prompt would run the work twice. Without an approval it leaves plan mode and
+sends the implement request. An earlier plan revision never answers the
+current approval. "Build in new session" cancels the planning session, then
+opens a session in the same Thread with the plan attached and plan off.
+`scripts/test-plan-mode.ts` covers the mapping, locks, pending choices and
+both build paths.
+
+A build is recorded in `src/state/plan-builds.ts` once it is confirmed: an
+`implementsPlan` approval answered with its approve option, or a sent message
+carrying the plan's implement request (from the card or the composer). The
+card then reads "Built in this session" or "Built in another session", Build
+becomes "Build again", and an open building session gets "Open build
+session". The record is per desk, in `localStorage`, newest 200 plans.
 
 How a catalogued thread is continued is the host's decision, not the
 renderer's. `electron/contracts/thread-continuation.ts` turns one ref plus
