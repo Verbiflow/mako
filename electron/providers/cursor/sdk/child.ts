@@ -72,6 +72,8 @@ interface ActiveTurn {
   replay: SdkChildLine[]
   replayCharacters: number
   replayTruncated: boolean
+  /** The next message's `seq`. */
+  messages: number
 }
 
 /** A turn's replay keeps its latest lines within this budget; text streamed as deltas is also in its messages. */
@@ -317,7 +319,10 @@ function forwardMessage(turn: string, message: SDKMessage): void {
     log("warn", `dropped an SDK message of type ${message.type} the wire does not describe (${wire.refused})`)
     return
   }
-  const line = { event: "message", turn, message: wire.message } as const
+  const seq = active?.turn === turn ? active.messages++ : undefined
+  const line = seq === undefined
+    ? { event: "message", turn, message: wire.message } as const
+    : { event: "message", turn, seq, message: wire.message } as const
   write(line)
   remember(line)
 }
@@ -453,7 +458,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
       run = await open.handle.send(message, { ...options, local: { force: true } })
       log("warn", "recovered a run left active by an earlier process")
     }
-    active = { turn: params.turn, run, replay: [], replayCharacters: 0, replayTruncated: false }
+    active = { turn: params.turn, run, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0 }
     void pump(params.turn, run)
     if (cancelWhileSending) await run.cancel().catch((cause) => log("warn", `could not stop a run Stop asked for while it started: ${cursorSdkWireError(cause).message}`))
     return { runId: run.id }

@@ -202,8 +202,8 @@ function compactionCompleted(engine: Engine, live: Live): void {
   engine.activity(live, null)
 }
 
-function summarised(engine: Engine, live: Live, summary: string): void {
-  engine.compacted(live, { summary })
+function summarised(engine: Engine, live: Live, summary: string, id: string | undefined): void {
+  engine.compacted(live, { summary }, id)
   live.compaction = live.compaction === "awaiting-summary" ? "idle" : "marked"
 }
 
@@ -301,7 +301,7 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
       }
       engine.emitUpdates(live, live.projection.message(event.message))
       const summary = compactionSummary(event.message)
-      if (summary) summarised(engine, live, summary)
+      if (summary) summarised(engine, live, summary, event.seq === undefined ? undefined : `${event.turn}:${event.seq}`)
       const agent = live.agents.project(event.message)
       if (agent) engine.emitAgent(live, agent)
       return

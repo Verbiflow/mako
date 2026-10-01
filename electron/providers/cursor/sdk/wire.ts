@@ -390,7 +390,11 @@ export type SdkResponse = z.infer<typeof SdkResponseSchema>
 // Events: child → host, unsolicited.
 
 export const SdkEventSchema = z.discriminatedUnion("event", [
-  z.object({ event: z.literal("message"), turn: z.string(), message: SdkMessageSchema }),
+  /**
+   * `seq` counts the turn's messages from 0 and travels with a replayed
+   * message unchanged, so the host can tell a message it was shown before.
+   */
+  z.object({ event: z.literal("message"), turn: z.string(), seq: z.number().int().nonnegative().optional(), message: SdkMessageSchema }),
   z.object({ event: z.literal("delta"), turn: z.string(), delta: SdkDeltaSchema }),
   z.object({ event: z.literal("result"), turn: z.string(), result: SdkRunResultSchema }),
   z.object({ event: z.literal("login-url"), url: z.string() }),
