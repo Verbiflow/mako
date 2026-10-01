@@ -1,6 +1,9 @@
 // Explicit deterministic fixture page. Normal verification still uses the real host.
 import { useState, useSyncExternalStore } from "react"
 import type { ThreadEntry } from "@mako/sessions"
+import { mcpServerFailedEvent } from "@mako/sessions/events"
+import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
+import { acpBlocksToMessages } from "@/lib/acp-blocks"
 import { Prose } from "@/components/transcript/markdown"
 import { TranscriptAttachment } from "@/components/transcript/attachment"
 import { TranscriptSourceContext } from "@/components/transcript/source-context"
@@ -117,6 +120,31 @@ const providerTurnEntries: ThreadEntry[] = [
   { kind: "assistant", blocks: [{ type: "text", text: "The watcher exited with code 1 after the fixture server closed." }] },
 ]
 const providerTurnExchanges = toExchanges(threadToMessages(providerTurnEntries, 0, "claude"))
+const mcpFailure = (server: string, reason: string): LiveUpdate => ({ kind: "event", ...mcpServerFailedEvent(server, reason) })
+const configWarning: LiveUpdate = {
+  kind: "event", label: "Warning", detail: "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings.",
+  body: "unknown keys: model_reasoning_summary_format, experimental_resume", tone: "warning", setup: true,
+}
+// A Codex session start's setup report, then markers that belong to the work.
+// The second prompt follows a wake that reports the same setup again.
+const eventBlocks = reduceLiveUpdates([], [
+  configWarning,
+  { kind: "user", text: "The selected options are not available together for Claude Opus 5.5. Why?" },
+  mcpFailure("wisprflow", "sign-in required"),
+  mcpFailure("todoist", "sign-in required"),
+  mcpFailure("axiom", "sign-in required"),
+  mcpFailure("paper", "MCP startup failed: handshaking with MCP server failed: connection closed: initialize response\nCaused by: process exited with status 1"),
+  { kind: "text", id: "a1", text: "Variant matching required every option, including Plan, to be encoded by a variant." },
+  { kind: "event", label: "Model changed", detail: "gpt-6-astra → gpt-5.5 · capacity" },
+  { kind: "text", id: "a2", text: "Fixed: only encoded parameters pick a variant." },
+  { kind: "user", text: "Run the suite" },
+  configWarning,
+  mcpFailure("wisprflow", "sign-in required"),
+  mcpFailure("axiom", "sign-in required"),
+  { kind: "event", label: "Context compacted", detail: "Automatic · 182k → 24k tokens · took 8s", body: "The conversation so far: fixing variant matching." },
+  { kind: "event", label: "Turn failed", detail: "stream disconnected before completion", tone: "error" },
+])
+const eventExchanges = toExchanges(acpBlocksToMessages(eventBlocks, false, "codex").messages)
 // One Thread per harness, each call as its native store records it, read
 // through the same history path a real Thread takes.
 const harnessToolExchanges = [...new Set(HARNESS_TOOL_SAMPLES.flatMap((sample) => sample.source.harness ?? []))].flatMap((harness) =>
@@ -136,7 +164,7 @@ const table =
   "| File | Confidence | Result |\n| --- | --- | --- |\n| `src/app.ts:12` | Confirmed | A complete readable result without splitting the header |\n| `package.json` | Confirmed | 3 checks passed |"
 export function Fixtures() {
   const [mode, setMode] = useState<
-    "Media" | "Code and diagrams" | "Tool results" | "Tables" | "Provider turns" | "Harness tools"
+    "Media" | "Code and diagrams" | "Tool results" | "Tables" | "Provider turns" | "Harness tools" | "Event markers"
   >("Media")
   const count = useSyncExternalStore(subscribe, () => reads)
   return (
@@ -145,7 +173,7 @@ export function Fixtures() {
         <header className="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-hairline bg-shell p-4">
           <h1 className="text-title font-semibold">Transcript fixtures</h1>
           {(
-            ["Media", "Code and diagrams", "Tool results", "Tables", "Provider turns", "Harness tools"] as const
+            ["Media", "Code and diagrams", "Tool results", "Tables", "Provider turns", "Harness tools", "Event markers"] as const
           ).map((value) => (
             <button
               key={value}
@@ -197,6 +225,13 @@ export function Fixtures() {
                 identity="harness-tools-fixture"
                 source={source}
                 exchanges={harnessToolExchanges}
+                empty={null}
+              />
+            ) : mode === "Event markers" ? (
+              <ConversationTimeline
+                identity="event-marker-fixture"
+                source={source}
+                exchanges={eventExchanges}
                 empty={null}
               />
             ) : mode === "Provider turns" ? (

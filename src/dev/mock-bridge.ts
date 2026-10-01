@@ -263,6 +263,15 @@ export function installMockBridge() {
       planBuilds = { ...planBuilds, [planId]: build }
       emit({ type: "plan-builds", builds: planBuilds })
     },
+    claimPlanBuild: async (_claimId, planId, target, seen) => {
+      const current = planBuilds[planId]
+      if ((current?.at ?? null) !== seen) return { claimed: false, current }
+      const build = { ...target, at: Date.now() }
+      planBuilds = { ...planBuilds, [planId]: build }
+      emit({ type: "plan-builds", builds: planBuilds })
+      return { claimed: true, build }
+    },
+    releasePlanBuild: async () => {},
     threadCreateSession: async () => {
       throw new Error("The mock desk has no Thread store, so it can't add a session to a Thread.")
     },
