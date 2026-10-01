@@ -1,5 +1,6 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk"
 import { z } from "zod"
+import { PLAN_APPROVAL_TITLE } from "../../acp-decoder.js"
 import type { JsonObject } from "../../codex-app-json.js"
 import type { LiveUpdate } from "../../contracts/live-content.js"
 import type { AcpPlanDecoder, AcpVendorRequest, AcpVendorRequests } from "../acp-source.js"
@@ -65,7 +66,7 @@ function exitPlanRequest(params: JsonObject): AcpVendorRequest | undefined {
     updates: proposedPlan(plan, planContent ?? ""),
     ask: {
       request: {
-        title: "Build the proposed plan?",
+        title: PLAN_APPROVAL_TITLE,
         kind: "switch_mode",
         options: [
           { optionId: "approved", name: "Yes, build it", kind: "allow_once" },

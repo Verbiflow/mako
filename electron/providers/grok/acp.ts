@@ -4,10 +4,12 @@ import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { GrokAgents } from "./agents.js"
+import { grokAskOverride } from "./claude-permissions.js"
 import { grokNotification } from "./notifications.js"
 import { grokPlans, grokRequests } from "./plans.js"
+import { grokToolName } from "./tool-name.js"
 import { resolveExecutable } from "../../executable.js"
-import type { ProviderAcpSource } from "../acp-source.js"
+import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
 import type { AccessTier } from "../../contracts/access.js"
 
 /**
@@ -16,11 +18,23 @@ import type { AccessTier } from "../../contracts/access.js"
  * after it), so Grok advertises no steering. In every permission mode except
  * always-approve the ACP server denies tool calls instead of sending
  * session/request_permission, so the host cannot approve on the user's
- * behalf; the tier is fixed by the launch flag. Grok 1.0.44 in plan mode does
- * send session/request_permission, for writing its plan.md (traced
- * 2026-09-30), so permission requests still need answering. Grok reports no session
- * modes over ACP, so the default is pinned explicitly: without it an
- * unchosen session ran Grok's own default while the desk reported nothing.
+ * behalf; the tier is fixed by the launch flag.
+ *
+ * Probed 2026-09-30 against grok 1.0.44 with a scripted model: `default`
+ * asks before edits and writing commands and runs read-only ones, `auto`
+ * runs edits and read-only commands and asks before writing ones, and
+ * `bypassPermissions` asks nothing. `acceptEdits` and `dontAsk` still ask
+ * before an edit over ACP, so no tier stands on them. Permission modes are
+ * launch-only: `session/set_mode` accepts `bypassPermissions` and changes
+ * nothing. Plan is not: `session/set_mode` takes `plan`, which refuses every
+ * edit but the plan file, and `default`, which returns to the launch tier.
+ * Grok reports both through `current_mode_update`, as it does when the
+ * agent enters plan itself or leaves it on an approved or abandoned plan; a
+ * rejected plan keeps it in plan. It lists no session modes, and a loaded
+ * session starts outside plan. The `--permission-mode plan` flag is weaker:
+ * it asks before an edit instead of refusing it, so Mako does not launch
+ * with it. The default tier is pinned explicitly: without it an unchosen
+ * session ran Grok's own default while the desk reported nothing.
  */
 /**
  * Grok writes `<workspace>/<id>/updates.jsonl` (`chat_history.jsonl` before
@@ -51,9 +65,7 @@ export function grokSessionSource(
 
 function grokPermissionMode(tier: AccessTier): string | undefined {
   switch (tier) {
-    case "plan":
-      return "plan"
-    case "deny":
+    case "ask":
       return "default"
     case "auto":
       return "auto"
@@ -111,7 +123,8 @@ const GrokTurnCompletedSchema = z.object({
 
 export const grokAcpSource: ProviderAcpSource = {
   provider: "grok",
-  approvalEvidence: { kind: "submission-only", reason: "ACP can forward requests if offered; tested native modes denied tools without an interactive ask. Exact decision observation and broader question coverage remain unverified." },
+  approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
+  planning: { via: "mode", mode: "plan", proposal: "exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request" },
   async observeAgents({ env, ...input }) {
     const observer = new GrokAgents({ ...input, home: env.GROK_HOME ?? join(homedir(), ".grok") })
     await observer.ready
@@ -169,13 +182,21 @@ export const grokAcpSource: ProviderAcpSource = {
   decodeNotification: grokNotification,
   plans: grokPlans,
   requests: grokRequests,
+  toolName: grokToolName,
   canResume: true,
   locateSession: ({ nativeId, cwd }) => grokSessionSource(nativeId, cwd),
   launchOptionIds: ["effort"],
-  access: { launch: ["plan", "deny", "auto", "full"], default: "deny" },
+  access: {
+    unlisted: [{ id: "plan", name: "Plan", description: "Reads and writes only its plan file until you approve the plan." }],
+    native: { plan: "plan" },
+    launchNativeMode: "default",
+    launch: ["ask", "auto", "full"],
+    default: "ask",
+  },
   available: () => resolveExecutable("grok") !== null,
   async launch(options) {
     const permissionMode = options.access ? grokPermissionMode(options.access) : undefined
+    const override = options.access === "ask" ? grokAskOverride(options.cwd, options.env?.HOME || homedir()) : undefined
     const args = [
       ...(permissionMode ? ["--permission-mode", permissionMode] : []),
       "agent",
@@ -184,12 +205,17 @@ export const grokAcpSource: ProviderAcpSource = {
     const effort = z.string().optional().parse(options.tuning?.options?.effort)
     if (effort) args.push("--reasoning-effort", effort)
     args.push("stdio")
-    return {
+    const launch: AcpLaunch = {
       command: "grok",
       args,
       configureEnvironment(env) {
         env.GROK_DISABLE_AUTOUPDATER = "1"
       },
     }
+    if (override) {
+      launch.notices = [override.notice]
+      if (override.access) launch.access = override.access
+    }
+    return launch
   },
 }
