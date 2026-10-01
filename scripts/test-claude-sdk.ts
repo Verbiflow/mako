@@ -312,7 +312,8 @@ for (const confirmed of [true, false]) {
     await postCompact?.({ hook_event_name: "PostCompact", trigger: "manual", compact_summary: "Kept: the parser plan.",
       session_id: "compact-fixture", transcript_path: "/disposable/compact-fixture.jsonl", cwd: "/disposable" },
     undefined, { signal: new AbortController().signal })
-    messages.send({ type: "system", subtype: "compact_boundary", uuid: randomUUID(), session_id: "compact-fixture", compact_metadata: { trigger: "manual", pre_tokens: 1000, post_tokens: 200 } })
+    const boundary = randomUUID()
+    messages.send({ type: "system", subtype: "compact_boundary", uuid: boundary, session_id: "compact-fixture", compact_metadata: { trigger: "manual", pre_tokens: 1000, post_tokens: 200, duration_ms: 8_200 } })
     for (let index = 0; index < 2; index++) {
       // A Claude Code newer than the SDK types: the message arrives as parsed JSON.
       const future: SDKMessage = JSON.parse(JSON.stringify({ type: "system", subtype: "future_notice", uuid: randomUUID(), session_id: "compact-fixture" }))
@@ -330,8 +331,8 @@ for (const confirmed of [true, false]) {
       "the retry counts down to when Claude tries again")
     assert.deepEqual(
       compactEvents.flatMap((event) => event.type === "live-update" ? [event.update] : []),
-      [{ kind: "event", label: "Context compacted", detail: "Manual · 1k → 200 tokens", body: "Kept: the parser plan." }],
-      "the boundary is a transcript event with its trigger, tokens and the hook's summary, not assistant text"
+      [{ kind: "event", id: boundary, label: "Context compacted", detail: "Manual · 1k → 200 tokens · took 8s", body: "Kept: the parser plan." }],
+      "the boundary is a transcript event with its trigger, tokens, Claude's own duration and the hook's summary, not assistant text"
     )
   }
   const result = {

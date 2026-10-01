@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -37,6 +37,9 @@ async function check() {
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
   const { liveStart, livePrompt, liveCancel, liveClose } = await import(join(repo, "dist-electron/acp.js"))
   const { advancePromptDelivery } = await import(join(repo, "dist-electron/contracts/prompt-delivery.js"))
+  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
+  const hostLogFile = join(root, "host.log")
+  installHostLog(hostLogFile)
   // Sessions the agent has written to; a new session is not on disk until its first turn.
   const written = new Set()
   const fixture = (provider, source) => providerHost.acpSources.register({
@@ -122,13 +125,29 @@ async function check() {
   assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-activity" ? [event.activity] : []), [{ kind: "compacting" }, null],
     "Grok's auto-compaction shows while it runs and ends with its marker; another session's does not")
   assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    [{ kind: "event", label: "Context compacted", detail: "Automatic · 404k → 21k tokens" }])
+    [{ kind: "event", label: "Context compacted", detail: "Automatic · 404k → 21k tokens · took 1m 34s" }])
   const titles = since(beforeNative).flatMap((event) => event.type === "live-session" && event.session.title ? [event.session.title] : [])
   // The SDK dispatches vendor notifications through more handlers than session
   // updates, so the two channels are not ordered against each other.
   assert.ok(titles.includes("Compacted fixture"), "Grok's generated title names the thread")
   assert.ok(titles.includes("Renamed by the agent"), "ACP's session_info_update names the thread")
   console.log("PASS: Grok's vendor notifications reach the conversation as activity, a marker and a title")
+
+  const beforeRefused = grok.events.length
+  await grok.prompt("refused-updates")
+  await grok.until("the text after the refused updates", () => grok.updates().some((update) => update.kind === "text" && update.text === "Still streaming."))
+  const refusedActivity = since(beforeRefused).flatMap((event) => event.type === "live-activity" ? [event.activity] : [])
+  // The replayed completion ends compacting again; the host publishes a repeated report once.
+  assert.deepEqual(refusedActivity, [{ kind: "compacting" }, null, null],
+    "Grok's kinds on ACP's own method reach its decoder instead of being dropped by the SDK")
+  assert.deepEqual(since(beforeRefused).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
+    [{ kind: "event", id: "fixture-2", label: "Context compacted", detail: "Automatic · 1k → 200 tokens · took 4s" }],
+    "the replayed completion, named by Grok's event id, is drawn once")
+  const logged = await readFile(hostLogFile, "utf8")
+  assert.match(logged, /native event not handled.*kind=session\/update\/mystery_update/, "an undeclared kind is on record")
+  assert.match(logged, /native event not handled.*kind=session\/update\/tool_call\/invalid/, "a malformed known kind is on record under its own name")
+  assert.doesNotMatch(logged, /Error handling notification/, "the SDK never sees, or prints, an update it would refuse")
+  console.log("PASS: session/update the ACP SDK would refuse reaches the provider's decoder or the unknown-event log, and a replayed marker is drawn once")
   await grok.close()
 
   const devin = await conversation("provider-turn-devin")

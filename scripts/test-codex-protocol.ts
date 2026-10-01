@@ -395,6 +395,14 @@ for (const confirmed of [false, true]) {
 }
 console.log("PASS: Codex compaction requires the matching turn and native compaction boundary")
 
+const limits: JsonObject[] = []
+context.protocol.rateLimits = (params) => limits.push(params)
+const spent = { rateLimits: { limitId: "codex", primary: { usedPercent: 41, windowDurationMins: 300, resetsAt: 1_900_000_000 } } }
+notify("account/rateLimits/updated", spent)
+assert.deepEqual(limits, [spent], "the account's limits go to the account, not the ignore list")
+context.protocol.rateLimits = undefined
+console.log("PASS: Codex rate-limit updates reach the account")
+
 const activities: unknown[] = []
 const unhandled: string[] = []
 let compactions = 0
@@ -421,7 +429,11 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
   const markers: TranscriptEvent[] = []
   const patches: Array<Partial<LiveSessionState>> = []
   const updateState = context.protocol.updateState
-  context.protocol.event = (marker) => markers.push(marker)
+  const markerIds: (string | undefined)[] = []
+  context.protocol.event = (marker, id) => {
+    markers.push(marker)
+    markerIds.push(id)
+  }
   context.protocol.updateState = (patch) => { patches.push(patch); updateState(patch) }
   activities.length = 0
   unhandled.length = 0
@@ -463,6 +475,7 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
     { label: "Review mode ended", body: "No issues found.\n\nThe change is correct." },
   ], "each notice is marked once, in Mako's words")
   markers.length = 0
+  markerIds.length = 0
 
   notify("model/safetyBuffering/updated", { threadId: "thread-1", turnId: "other-turn", model: "gpt-5.5", useCases: [], reasons: [], showBufferingUi: true, fasterModel: null })
   notify("model/safetyBuffering/updated", { threadId: "thread-1", turnId: "notice-turn", model: "gpt-5.5", useCases: [], reasons: [], showBufferingUi: true, fasterModel: null })
@@ -483,10 +496,11 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
   ], "a wait ends with its own end or the output it held, and never ends compaction")
   activities.length = 0
   const compacted: unknown[] = []
-  context.protocol.compacted = (compaction) => compacted.push(compaction)
+  context.protocol.compacted = (compaction, id) => compacted.push([compaction, id])
   usage(9_000, 400_000)
   notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "contextCompaction", id: "auto-2" } })
-  assert.deepEqual(compacted, [{ tokensBefore: 120_000 }], "the marker counts from where compaction started, not Codex's post-compaction estimate")
+  assert.deepEqual(compacted, [[{ tokensBefore: 120_000 }, "auto-2"]],
+    "the marker counts from where compaction started, not Codex's post-compaction estimate, and is named by Codex's item")
 
   notify("error", { threadId: "thread-1", turnId: "notice-turn", willRetry: true, error: {
     message: "Selected model is at capacity.", codexErrorInfo: "serverOverloaded", additionalDetails: null,
@@ -547,6 +561,7 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
     message: "You've hit your usage limit. Try again at 6:26 PM.", codexErrorInfo: "usageLimitExceeded", additionalDetails: null,
   } } })
   assert.deepEqual(markers, [{ label: "Turn failed", detail: "Usage limit reached", body: "You've hit your usage limit. Try again at 6:26 PM.", tone: "error" }])
+  assert.deepEqual(markerIds, ["notice-turn:failed"], "a turn's failure is named by its turn, so a replayed completion is drawn once")
   assert.equal(state.status, "failed")
   context.protocol.updateState = updateState
   context.protocol.event = undefined

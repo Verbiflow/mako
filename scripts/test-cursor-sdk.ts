@@ -671,6 +671,9 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     assert.deepEqual(activity, ["compacting", "idle", "idle"])
     assert.deepEqual(await turn([delta("summary-started"), delta("summary-completed")]), ["Context compacted"],
       "a compaction whose summary never came is still marked, at the turn's end")
+    const numbered = (text: string, seq: number) => (turn: string): SdkEvent => ({ event: "message", turn, seq, message: { ...run, type: "task", text } })
+    assert.deepEqual(await turn([numbered("Kept the plan.", 4), numbered("Kept the plan.", 4), numbered("Kept the tests.", 5)]),
+      ["Context compacted | Kept the plan.", "Context compacted | Kept the tests."], "the child's replay of a message it already sent is drawn once")
 
     assert.deepEqual(await turn([], { status: "error", error: { message: "Model overloaded", code: "resource_exhausted" } }),
       ["Turn failed | Model overloaded | error"])

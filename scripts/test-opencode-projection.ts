@@ -381,19 +381,24 @@ process.stdin.on("end", () => process.exit(0))
     push(event("session.step.ended", { sessionID: root, assistantMessageID, finish: "stop", cost: 0, tokens: { input: 150_000, output: 500, reasoning: 0, cache: { read: 0, write: 0 } } }))
     push(event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" }))
     push(event("session.compaction.delta", { sessionID: root, text: "Sum" }))
-    push(event("session.compaction.ended", { sessionID: root, reason: "auto", text: "Summary of the work so far.", recent: "" }))
+    const compacted = event("session.compaction.ended", { sessionID: root, reason: "auto", text: "Summary of the work so far.", recent: "" })
+    push(compacted)
+    push(compacted)
     assert.deepEqual(await until("the compaction", () => markers().find(marker => marker.label === "Context compacted")),
-      { kind: "event", label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
+      { kind: "event", id: compacted.id, label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
 
     push(event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" }))
-    push(event("session.compaction.failed", { sessionID: root, reason: "auto", error: { type: "compaction.failed", message: "The model could not summarize" } }))
+    const failed = event("session.compaction.failed", { sessionID: root, reason: "auto", error: { type: "compaction.failed", message: "The model could not summarize" } })
+    push(failed)
     assert.deepEqual(await until("the failed compaction", () => markers().find(marker => marker.label === "Compaction failed")),
-      { kind: "event", label: "Compaction failed", detail: "The model could not summarize", tone: "warning" }, "an automatic compaction that fails leaves its trace")
+      { kind: "event", id: failed.id, label: "Compaction failed", detail: "The model could not summarize", tone: "warning" }, "an automatic compaction that fails leaves its trace")
     assert.equal(activities().at(-1), null, "compacting ends with the failure")
+    assert.equal(markers().filter(marker => marker.label === "Context compacted").length, 1, "OpenCode's event replayed is drawn once")
 
-    push(event("session.execution.interrupted", { sessionID: root, reason: "inactivity" }))
+    const interrupted = event("session.execution.interrupted", { sessionID: root, reason: "inactivity" })
+    push(interrupted)
     assert.deepEqual(await until("OpenCode's stop", () => markers().find(marker => marker.label === "Stopped by OpenCode")),
-      { kind: "event", label: "Stopped by OpenCode", detail: "the workspace was idle too long" })
+      { kind: "event", id: interrupted.id, label: "Stopped by OpenCode", detail: "the workspace was idle too long" })
     await until("the stopped turn to settle", () => session()?.status === "ready")
 
     mcpServers = [{ name: "docs", status: { status: "failed", error: "spawn docs-mcp ENOENT" } }]

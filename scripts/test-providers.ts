@@ -367,10 +367,14 @@ assert.deepEqual(
   [
     ["claude", "selectable"],
     ["codex", "selectable"],
+    ["cursor", "observed"],
+    ["grok", "observed"],
+    ["devin", "observed"],
     ["opencode", "observed"],
   ]
 )
-assert.equal(providerHost.accountCapabilities.get("cursor"), undefined)
+assert.equal((await providerHost.accountCapabilities.get("cursor")?.accountEnv("default", { PATH: "/bin" }))?.PATH, "/bin",
+  "an observed account leaves the harness's environment as it is")
 const accountCapability: ProviderAccountCapability =
   providerHost.accountCapabilities.get("claude")!
 assert.equal(accountCapability.mode, "selectable")

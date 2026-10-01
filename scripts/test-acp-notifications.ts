@@ -28,11 +28,15 @@ assert.deepEqual(grok({ sessionUpdate: "auto_compact_started", tokens_used: 4038
   kind: `${GROK}/auto_compact_started`,
   notices: [{ kind: "activity", activity: { kind: "compacting" } }],
   state: undefined,
-})
+  id: "e",
+}, "Grok's event id names the event, so a replay of it is drawn once")
+assert.equal(grokNotification(GROK, { sessionId: "grok-session", update: { sessionUpdate: "auto_compact_started" } })?.id, undefined)
 assert.deepEqual(notices({ sessionUpdate: "auto_compact_completed", tokens_before: 403803, tokens_after: 21289, elapsed_ms: 94952, summary_preview: null }), [
   { kind: "activity", activity: null },
-  { kind: "event", event: { label: "Context compacted", detail: "Automatic · 404k → 21k tokens" } },
+  { kind: "event", event: { label: "Context compacted", detail: "Automatic · 404k → 21k tokens · took 1m 34s" } },
 ])
+assert.deepEqual(grokNotification("session/update", { sessionId: "grok-session", update: { sessionUpdate: "auto_compact_started" } })?.kind,
+  "session/update/auto_compact_started", "Grok's own kinds sent on ACP's method, which the SDK refuses, decode the same")
 assert.deepEqual(notices({ sessionUpdate: "auto_compact_completed", tokens_before: 1000, tokens_after: 200, summary_preview: "Kept the plan" }), [
   { kind: "activity", activity: null },
   { kind: "event", event: { label: "Context compacted", detail: "Automatic · 1k → 200 tokens", body: "Kept the plan" } },
@@ -56,12 +60,12 @@ assert.deepEqual(notices({ sessionUpdate: "retry_state", state: "exhausted", att
   { kind: "event", event: { label: "Turn failed", detail: "Rate limited", tone: "error" } },
 ])
 assert.deepEqual(grok({ sessionUpdate: "retry_state", state: "paused" }), {
-  sessionId: "grok-session", kind: `${GROK}/retry_state/paused`, notices: undefined, state: undefined,
+  sessionId: "grok-session", kind: `${GROK}/retry_state/paused`, notices: undefined, state: undefined, id: "e",
 }, "an unknown retry state is logged under its own name")
 console.log("PASS: Grok retry state reads as retrying, and exhausted retries fail the turn")
 
 assert.deepEqual(grok({ sessionUpdate: "session_summary_generated", session_summary: " Fix the flaky build " }), {
-  sessionId: "grok-session", kind: `${GROK}/session_summary_generated`, notices: [], state: { title: "Fix the flaky build" },
+  sessionId: "grok-session", kind: `${GROK}/session_summary_generated`, notices: [], state: { title: "Fix the flaky build" }, id: "e",
 })
 assert.deepEqual(notices({ sessionUpdate: "model_auto_switched", previous_model_id: "grok-4.7", new_model_id: "grok-4.6", reason: "rate_limited" }), [
   { kind: "event", event: { label: "Model changed", detail: "grok-4.7 → grok-4.6 · Rate limited" } },
@@ -79,7 +83,7 @@ for (const sessionUpdate of ["hook_execution", "hook_run_started", "memory_dream
   "compaction_checkpoint", "session_recap", "subagent_progress", "background_tasks", "turn_completed", "subagent_spawned", "subagent_finished"])
   assert.deepEqual(notices({ sessionUpdate }), [], `${sessionUpdate} is known and shows nothing`)
 assert.deepEqual(grok({ sessionUpdate: "scheduled_task_fired" }), {
-  sessionId: "grok-session", kind: `${GROK}/scheduled_task_fired`, notices: undefined, state: undefined,
+  sessionId: "grok-session", kind: `${GROK}/scheduled_task_fired`, notices: undefined, state: undefined, id: "e",
 }, "an unknown update is logged by its own kind, not only by the channel it came on")
 assert.deepEqual(grokNotification(GROK, { sessionId: "grok-session" }), { kind: GROK, notices: undefined })
 assert.deepEqual(grokNotification("_x.ai/fs/index/delta", {}), { kind: "_x.ai/fs/index/delta", notices: [] })
@@ -141,7 +145,14 @@ assert.deepEqual(devinNotices("_cognition.ai/compaction", { status: "failed" }),
   { kind: "event", event: { label: "Compaction failed", tone: "warning" } },
 ])
 assert.deepEqual(devin("_cognition.ai/compaction", { status: "paused" }), { sessionId: "devin-session", kind: "_cognition.ai/compaction/paused", notices: undefined })
-console.log("PASS: Devin compaction reads as compacting, then a marker carrying its summary")
+// Devin sends no event ids; the summary names its compaction, so a replay repeats the id.
+const summarized = devin("_cognition.ai/compaction", { status: "completed", summary: "## Request and intent\nFaster builds." })
+assert.match(summarized?.id ?? "", /^compaction:[0-9a-f]{16}$/)
+assert.equal(devin("_cognition.ai/compaction", { status: "completed", summary: "## Request and intent\nFaster builds." })?.id, summarized?.id)
+assert.notEqual(devin("_cognition.ai/compaction", { status: "completed", summary: "## Request and intent\nSlower builds." })?.id, summarized?.id)
+assert.equal(devin("_cognition.ai/compaction", { status: "completed" })?.id, undefined)
+assert.equal(devin("_cognition.ai/compaction", { status: "started", summary: "same" })?.id, undefined)
+console.log("PASS: Devin compaction reads as compacting, then a marker carrying its summary, named by that summary")
 
 assert.deepEqual(devinNotices("_cognition.ai/connection_retry", { attempt: 2, maxAttempts: 5, isStreamRetry: true }), [
   { kind: "activity", activity: { kind: "retrying", attempt: 2, maxAttempts: 5, reason: "Stream interrupted" } },
