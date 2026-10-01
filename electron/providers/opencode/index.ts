@@ -26,6 +26,7 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
       return join(app.getPath("userData"), "approval-evidence")
     },
   }),
+  decoder: notBuilt("Its content decodes in OpenCodeContent, but turn, state and request events still decode inside the live driver"),
   profile: openCodeProfileLoader,
   accounts: openCodeAccountCapability,
   acp: lacks("Runs on OpenCode’s native API"),

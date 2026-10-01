@@ -440,7 +440,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return
       case "session.step.ended":
         if (event.data.sessionID === root) { live.context = contextTokens(event.data.tokens); usage(live) }
-        return
+        break
       case "session.usage.updated":
         if (event.data.sessionID === root) { live.cost = event.data.cost; usage(live) }
         return

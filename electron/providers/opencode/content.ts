@@ -4,6 +4,7 @@ import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "@mak
 import { isAbsolute, join } from "node:path"
 import { z } from "zod"
 import type { LiveUpdate } from "../../shared.js"
+import { OPENCODE_PLAN_AGENT } from "./access.js"
 
 const Edit = z.object({ path: z.string().optional(), filePath: z.string().optional(), oldString: z.string().optional(), newString: z.string().optional(), content: z.string().optional() })
 const Todo = z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() })) })
@@ -14,6 +15,9 @@ const MAX_OPEN_TOOLS = 4096
 type ToolEvent = Extract<OpenCodeEvent, { type: `session.tool.${string}` }>
 type ToolInput = Extract<ToolEvent, { type: "session.tool.called" }>["data"]["input"]
 interface Tool { sessionID: string; name: string; title: string; input: ToolInput }
+interface Step { agent: string; texts: Map<number, string> }
+type StepEnded = Extract<OpenCodeEvent, { type: "session.step.ended" }>
+const MAX_OPEN_STEPS = 64
 
 /** Native names become the transcript's shared vocabulary; unknown names stay themselves. */
 export function openCodeToolKind(name: string): string {
@@ -51,6 +55,8 @@ function toolTitle(name: string, input: ToolInput): string {
 export class OpenCodeContent {
   private readonly tools = new Map<string, Tool>()
   private readonly titles = new Map<string, string>()
+  /** The root's running steps: the agent of each, and its finished text parts by ordinal. */
+  private readonly steps = new Map<string, Step>()
   private readonly root: string
   private readonly cwd: string
   constructor(root: string, cwd: string) {
@@ -93,14 +99,23 @@ export class OpenCodeContent {
       case "session.tool.success":
       case "session.tool.failed":
         return this.tool(event)
+      case "session.step.started":
+        if (event.data.sessionID === this.root) {
+          if (this.steps.size >= MAX_OPEN_STEPS) this.steps.delete(this.steps.keys().next().value!)
+          this.steps.set(event.data.assistantMessageID, { agent: event.data.agent, texts: new Map() })
+        }
+        return []
+      case "session.text.ended":
+        if (event.data.sessionID === this.root) this.steps.get(event.data.assistantMessageID)?.texts.set(event.data.ordinal, event.data.text)
+        return []
+      case "session.step.ended":
+        return this.stepEnded(event)
       // Their content arrives as the deltas and tool results above.
       case "session.text.started":
-      case "session.text.ended":
       case "session.reasoning.started":
       case "session.reasoning.ended":
       case "session.tool.input.delta":
       case "session.tool.input.ended":
-      case "session.step.started":
       case "session.step.streamed":
       case "session.step.failed":
       case "session.status":
@@ -110,6 +125,26 @@ export class OpenCodeContent {
         unknown?.(event.type)
         return []
     }
+  }
+
+  /**
+   * OpenCode's Plan agent has no plan tool: it is told to discuss the plan in
+   * the conversation and to ask its questions with the question tool (opencode
+   * 2.0.1). So the reply of a Plan step that ends the turn is its plan, and
+   * the streamed text folds into the plan card.
+   */
+  private stepEnded(event: StepEnded): LiveUpdate[] {
+    const { sessionID, assistantMessageID, finish } = event.data
+    const step = sessionID === this.root ? this.steps.get(assistantMessageID) : undefined
+    this.steps.delete(assistantMessageID)
+    if (step?.agent !== OPENCODE_PLAN_AGENT || finish !== "stop" || step.texts.size === 0) return []
+    const ordinals = [...step.texts.keys()].sort((a, b) => a - b)
+    const text = ordinals.map((ordinal) => step.texts.get(ordinal)!.trim()).filter(Boolean).join("\n\n")
+    if (!text) return []
+    return [
+      { kind: "retract", ids: ordinals.map((ordinal) => `${assistantMessageID}:${ordinal}`) },
+      { kind: "proposed-plan", id: `opencode:${assistantMessageID}`, text, status: "proposed", replace: true },
+    ]
   }
 
   /** Rows a session left open when its execution stopped without finishing them. */

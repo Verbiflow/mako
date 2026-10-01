@@ -3,6 +3,8 @@ import type { LiveSessionMode } from "../../shared.js"
 
 /** The native agent the launch presets configure. It is shown as the preset, never by name. */
 export const OPENCODE_BASE_AGENT = "build"
+/** OpenCode's read-only planning agent, Mako's plan mode. */
+export const OPENCODE_PLAN_AGENT = "plan"
 const LAUNCH_TIERS = ["ask", "edits", "full"] as const satisfies readonly AccessTier[]
 
 function launchMode(tier: AccessTier): LiveSessionMode {
@@ -12,7 +14,7 @@ function launchMode(tier: AccessTier): LiveSessionMode {
 
 /** The ladder before a session reports its own agents. */
 export const openCodeModes: readonly LiveSessionMode[] = [
-  { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },
+  { id: OPENCODE_PLAN_AGENT, name: "Plan", access: "plan", enforcement: "provider" },
   ...LAUNCH_TIERS.map(launchMode),
 ]
 export const OPENCODE_DEFAULT_MODE = accessModeId("ask")
@@ -22,8 +24,8 @@ export function openCodeSessionModes(agents: ReadonlyArray<{ id: string; name: s
   const modes: LiveSessionMode[] = []
   for (const agent of agents) {
     if (agent.id === OPENCODE_BASE_AGENT) continue
-    const mode: LiveSessionMode = agent.id === "plan"
-      ? { id: "plan", name: "Plan", access: "plan", enforcement: "provider" }
+    const mode: LiveSessionMode = agent.id === OPENCODE_PLAN_AGENT
+      ? { id: OPENCODE_PLAN_AGENT, name: "Plan", access: "plan", enforcement: "provider" }
       : { id: agent.id, name: agent.name || agent.id }
     if (agent.description) mode.description = agent.description
     modes.push(mode)
