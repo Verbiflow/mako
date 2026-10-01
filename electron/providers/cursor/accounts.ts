@@ -31,14 +31,16 @@ function cents(value: JsonValue | undefined): number | undefined {
   return amount === undefined ? undefined : amount / 100
 }
 
+export interface CursorPeriodUsage {
+  window: UsageWindow | null
+  onDemand: UsageBalance | null
+}
+
 /**
  * `DashboardService/GetCurrentPeriodUsage`: the included usage of the billing
  * cycle as one percentage, and the on-demand pool the team or user allows.
  */
-export function parseCursorPeriodUsage(contents: string): {
-  window: UsageWindow | null
-  onDemand: UsageBalance | null
-} {
+export function parseCursorPeriodUsage(contents: string): CursorPeriodUsage {
   const fields = jsonFields(contents)
   const start = int64(fields.get("billingCycleStart"))
   const end = int64(fields.get("billingCycleEnd"))
