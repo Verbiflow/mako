@@ -17,6 +17,8 @@ import { updates, updatesStore } from "@/state/updates"
 import { application, applicationStore } from "@/state/application"
 import { openInterfacePreview, reloadInterface } from "@/state/development"
 import { stage } from "@/state/stage"
+import { hiddenAppProject } from "@/state/project-setup"
+import { showSetupFor } from "@/state/thread-app"
 import { surfaces } from "@/extend/surfaces"
 import { tabsStore } from "@/state/tabs"
 import {
@@ -309,6 +311,18 @@ const DESK_COMMANDS: DeskCommand[] = [
     title: "Refresh git status",
     section: "Workspace",
     run: () => void actions.refreshGit(),
+  },
+  {
+    id: "workspace.show-run-app",
+    title: "Show Run app",
+    section: "Workspace",
+    hint: "Bring back the app control you hid for this project",
+    keywords: "app setup recipe hidden unhide",
+    when: () => Boolean(hiddenAppProject()),
+    run: () => {
+      const project = hiddenAppProject()
+      if (project) showSetupFor(project.root)
+    },
   },
   {
     id: "model.pick",

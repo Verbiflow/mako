@@ -2210,7 +2210,7 @@ app.whenReady().then(async () => {
     launchedWith: (id) => threadEnvironments.launchedWith(id),
     conversation: (id) => {
       const session = liveConversations.snapshot(id)?.session
-      return session && { title: session.title || "Untitled conversation", harness: session.harness }
+      return session && { title: session.title || "Untitled conversation", harness: session.harness, working: session.status === "running" }
     },
     folder: (cwd, claim) => threadEnvironments.forFolder(cwd, claim),
     processes: threadProcesses,

@@ -4,8 +4,14 @@
 // elsewhere (one copy at a time, running in another Thread: it reads as
 // stopped, and Run asks first), and
 // demo (a start that installs and runs, then crashes soon after its log is
-// opened, as when the agent's edit lands).
+// opened, as when the agent's edit lands),
+// setup (not set up; Set up starts a scripted setup Thread, and the strip
+// follows it to a running app), and
+// setup-fallback (the same, with Codex chosen for setting up but signed out).
 import { toast } from "sonner"
+import { setPref } from "@/state/prefs"
+import { threadsStore } from "@/state/thread-store"
+import type { SetupProgress } from "../../electron/contracts/thread-app"
 import {
   installThreadAppDriver,
   putThreadApp,
@@ -132,6 +138,18 @@ const FULL_PASS = [
 
 type Ready = Extract<ThreadAppView, { kind: "ready" }>
 
+/** Where the scripted setup Thread has got to, as the host would learn it from Mako's tools. */
+export type MockSetupMoment =
+  | { at: "started"; conversation: string; title: string; harness: string; cwd: string }
+  | { at: "progress"; progress: Partial<SetupProgress> }
+  | { at: "done" }
+
+let setupMoment: ((moment: MockSetupMoment) => void) | undefined
+
+export function mockSetupMoment(moment: MockSetupMoment): void {
+  setupMoment?.(moment)
+}
+
 export function installMockThreadApp(): void {
   const scenario = new URLSearchParams(location.search).get("app")
   if (!scenario) return
@@ -245,8 +263,59 @@ export function installMockThreadApp(): void {
     },
   })
 
+  // The project folder's Threads and the setup Thread's worktree see the same setup; once it's done,
+  // the worktree's copy runs and the folder's is ready to run.
+  let setupCwd: string | undefined
+  setupMoment = (moment) => {
+    const view = threadAppStore.get().byCwd[CWD]
+    const both = (next: ThreadAppView) => {
+      putThreadApp(CWD, next)
+      if (setupCwd) putThreadApp(setupCwd, next)
+    }
+    if (moment.at === "started") {
+      setupCwd = moment.cwd
+      both({
+        kind: "setting-up",
+        project: "mako",
+        root: CWD,
+        thread: { title: moment.title, harness: moment.harness, conversation: moment.conversation },
+        progress: { recipe: "waiting", app: "waiting", checks: "waiting" },
+      })
+    } else if (moment.at === "progress" && view?.kind === "setting-up" && view.progress) {
+      both({ ...view, progress: { ...view.progress, ...moment.progress } })
+    } else if (moment.at === "done") {
+      emit("process:web", START)
+      emit("check:quick", QUICK_PASS)
+      emit("check:full", FULL_PASS)
+      const checks: Ready["checks"] = [
+        { tier: "quick", command: "npm run typecheck && npm run lint", state: "passed", at: Date.now() },
+        { tier: "full", command: "npm run test:dev-live", state: "passed", at: Date.now() },
+      ]
+      putThreadApp(CWD, { ...ready("stopped"), checks: checks.map((check) => ({ tier: check.tier, command: check.command, state: "never" as const })) })
+      const inPlace = setupCwd === CWD
+      const port = inPlace ? PORT : PORT + 10
+      if (setupCwd)
+        putThreadApp(setupCwd, {
+          ...ready("running"),
+          address: inPlace ? ready("running").address : { host: "mako-set-up.thread.localhost", port },
+          startedAt: Date.now(),
+          processes: [{ name: "web", state: "running", port, memoryBytes: 642 * MB }],
+          checks,
+        })
+    }
+  }
+
   const minutes = (count: number) => Date.now() - count * 60_000
   switch (scenario) {
+    case "setup":
+    case "setup-here":
+      putThreadApp(CWD, { kind: "none", project: "mako", root: CWD })
+      break
+    case "setup-fallback":
+      setPref("composerHarness", "codex")
+      threadsStore.set({ composerHarness: "codex" })
+      putThreadApp(CWD, { kind: "none", project: "mako", root: CWD })
+      break
     case "none":
       putThreadApp(CWD, { kind: "none", project: "mako", root: CWD })
       break

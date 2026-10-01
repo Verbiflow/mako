@@ -15,6 +15,7 @@ import { Action, Blank } from "@/components/ui/kit"
 import { useDeskCommands } from "@/desk/use-desk-commands"
 import { actions, store, useSession } from "@/state/session"
 import { applicationStore } from "@/state/application"
+import { followFirstRunAgent } from "@/state/default-agent"
 import { hostConnectionStore } from "@/state/host-connection"
 import { bindTheme, prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { PlugZapIcon } from "lucide-react"
@@ -31,6 +32,7 @@ export function AppShell() {
   const railRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => bindTheme(), [])
+  useEffect(() => followFirstRunAgent(), [])
 
   useEffect(() => {
     let active = true

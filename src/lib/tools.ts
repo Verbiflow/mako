@@ -363,7 +363,7 @@ export function primaryArgument<Content>(value: Content): string {
     "command", "cmd", "path", "file_path", "filePath", "notebook_path",
     "file", "filename", "pattern", "glob_pattern", "query", "search_query",
     "url", "uri", "directory", "directory_path", "cwd", "skill", "title",
-    "description", "task", "prompt",
+    "description", "task", "prompt", "tier", "processes", "process", "check",
   ]) {
     const value = args[key]
     const text = stringContent(value)
@@ -513,8 +513,31 @@ export function subagentResultText(
     : result
 }
 
+/** The tools on Mako's `mako` server, by their own names. */
+const MAKO_TOOL_LABELS = new Map([
+  ["recipe_guide", "Setup guide"],
+  ["recipe_save", "Save recipe"],
+  ["app_status", "App status"],
+  ["app_start", "Start app"],
+  ["app_stop", "Stop app"],
+  ["app_restart", "Restart app"],
+  ["app_logs", "App logs"],
+  ["app_check", "Check app"],
+  ["port_holder", "Port holder"],
+  ["workspace_status", "Workspace"],
+  ["workspace_move", "Move to worktree"],
+  ["workspace_merge", "Merge worktree"],
+  ["workspace_remove", "Remove worktree"],
+])
+
+/** Claude Code names an MCP tool `mcp__mako__app_start`; Codex's `mako: app_start` arrives here as `mako.app_start`. */
+function makoToolLabel(name: string): string | undefined {
+  const tool = /^(?:mcp__mako__|mako\.)(\w+)$/.exec(name)?.[1]
+  return tool ? MAKO_TOOL_LABELS.get(tool) : undefined
+}
+
 export function toolLabel(name: string): string {
-  const label = NORMALIZED_TOOL_LABELS.get(name.toLowerCase())
+  const label = NORMALIZED_TOOL_LABELS.get(name.toLowerCase()) ?? makoToolLabel(name)
   if (label) return label
   if (name.startsWith("mako_computer_")) {
     return `Computer ${name.slice("mako_computer_".length).replaceAll("_", " ")}`

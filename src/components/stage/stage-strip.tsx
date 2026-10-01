@@ -196,7 +196,7 @@ export function StageStrip({
           )
         })}
       </div>
-      <AppControl cwd={checkoutCwd} />
+      <AppControl cwd={checkoutCwd} focused={!bound} />
       <CheckoutChip cwd={checkoutCwd} />
       {!canClosePane ? (
         <div className="flex shrink-0 items-center gap-0.5 px-1">

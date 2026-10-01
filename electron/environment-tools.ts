@@ -4,7 +4,7 @@ import { childProcessEnv } from "./accounts-common.js"
 import { applyControlEnvironment } from "./control-launch.js"
 import type { AppKey, ThreadEnvironment } from "./contracts/thread-environments.js"
 import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "./contracts/thread-environments.js"
-import type { AppActionOutcome, AppCheckView, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, ThreadAppView } from "./contracts/thread-app.js"
+import type { AppActionOutcome, AppCheckView, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { carryReport } from "./worktree-carry.js"
@@ -41,8 +41,8 @@ interface Deps {
   environment(conversationId: string, cwd: string): Promise<ThreadEnvironment | undefined>
   /** What the conversation's agent process was started with. */
   launchedWith(conversationId: string): ThreadEnvironment | undefined
-  /** A conversation Mako runs now, to name the Thread setting a project up; undefined once it's gone. */
-  conversation?(conversationId: string): { title: string; harness: string } | undefined
+  /** A conversation Mako runs now, to name the Thread setting a project up and say whether its turn is still going; undefined once it's gone. */
+  conversation?(conversationId: string): { title: string; harness: string; working: boolean } | undefined
   /** The app in a folder, for a person at the desk; `claim` gives it ports if it has none. */
   folder?(cwd: string, claim: boolean): Promise<FolderApp>
   processes: ThreadProcesses
@@ -65,7 +65,7 @@ export interface EnvironmentTools {
   check(conversationId: string, tier: CheckTier): Promise<string>
   port(conversationId: string, port: number): Promise<string>
   save(conversationId: string, recipe: Recipe): Promise<string>
-  /** How to set up the recipe; the project shows as being set up by this conversation until one is saved. */
+  /** How to set up the recipe; the project shows as being set up by this conversation until its checks pass or its turn ends with one saved. */
   guide(conversationId: string): Promise<string>
   /** The same app, for a person at the desk, by folder. */
   desk: DeskApp
@@ -145,8 +145,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }, deps.lineMs ?? LINE_MS)
     lineTimer.unref?.()
   }
-  /** Projects an agent is setting up, by main checkout: the conversation that read the guide. */
-  const setups = new Map<string, string>()
+  /**
+   * Projects an agent is setting up, by main checkout: the conversation that
+   * read the guide, when it did, and whether its app has been seen running,
+   * since a stopped process leaves no record to read that from later.
+   */
+  const setups = new Map<string, { conversation: string; since: number; appStarted: boolean }>()
   const context = async (conversationId: string): Promise<Context & { read: Read }> => {
     const cwd = deps.cwd(conversationId)
     if (!cwd) throw new Error("Mako isn't running this conversation.")
@@ -389,6 +393,35 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     return "its inputs changed"
   }
+  /**
+   * How far a setup has got, read from what Mako itself did for the setup
+   * conversation's Thread since it read the guide: whether a recipe reads as
+   * ready, whether that Thread's processes came up, and how its checks ended.
+   * Nothing depends on the agent saying so.
+   */
+  const setupProgress = async (setup: { conversation: string; since: number; appStarted: boolean }): Promise<SetupProgress> => {
+    const cwd = deps.cwd(setup.conversation)
+    const environment = cwd ? await deps.environment(setup.conversation, cwd) : undefined
+    const read = cwd && environment ? await readRecipe(await checkoutOf(cwd), environment, deps.recipesRoot).catch(() => undefined) : undefined
+    if (!environment || read?.kind !== "ready") return { recipe: "running", app: "waiting", checks: "waiting" }
+    const runs = (await deps.processes.status(environment.app)).filter((entry) => (entry.startedAt ?? 0) >= setup.since)
+    const failed = (entry: RunStatus) => entry.state.kind === "ended" || (entry.state.kind === "exited" && entry.state.code !== 0)
+    const working = (entry: RunStatus) => entry.state.kind === "starting" || entry.state.kind === "running"
+    const processes = Object.keys(read.recipe.processes).map((name) => runs.find((entry) => entry.kind === "process" && entry.name === name))
+    if (processes.length && processes.every((entry) => entry?.state.kind === "running")) setup.appStarted = true
+    const app: SetupStep = setup.appStarted ? "done"
+      : processes.some((entry) => entry && failed(entry)) ? "failed"
+      : processes.some((entry) => entry && working(entry)) ? "running"
+      : "waiting"
+    const checks = (["quick", "full"] as const).filter((tier) => read.recipe.checks[tier]).map((tier) => runs.find((entry) => entry.kind === "check" && entry.name === tier))
+    const passed = (entry: RunStatus | undefined) => entry?.state.kind === "exited" && entry.state.code === 0
+    const checkStep: SetupStep = checks.length && checks.every(passed) ? "done"
+      : checks.some((entry) => entry && working(entry)) ? "running"
+      : checks.some((entry) => entry && failed(entry)) ? "failed"
+      : checks.some(passed) ? "running"
+      : "waiting"
+    return { recipe: "done", app, checks: checkStep }
+  }
   const deskView = async (cwd: string): Promise<ThreadAppView> => {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
     const found = await deps.folder(cwd, false)
@@ -399,11 +432,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     } catch (error) {
       read = { kind: "invalid", checkout: found.checkout, message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` }
     }
+    const setup = setups.get(found.root)
+    const thread = setup && deps.conversation?.(setup.conversation)
+    if (setup && !thread) setups.delete(found.root)
+    if (setup && thread) {
+      const progress = await setupProgress(setup)
+      // Done once its checks pass, or once its turn ends with a recipe saved; a turn
+      // that ends without one is the agent asking something, so the setup stands.
+      if (progress.recipe === "done" && (progress.checks === "done" || !thread.working)) setups.delete(found.root)
+      else return { kind: "setting-up", project: found.project, root: found.root, thread: { title: thread.title, harness: thread.harness, conversation: setup.conversation }, progress }
+    }
     if (read.kind !== "ready") {
-      const setup = setups.get(found.root)
-      const thread = setup ? deps.conversation?.(setup) : undefined
-      if (setup && !thread) setups.delete(found.root)
-      if (setup && thread) return { kind: "setting-up", project: found.project, root: found.root, thread: { ...thread, conversation: setup } }
       if (read.kind === "none") return { kind: "none", project: found.project, root: found.root }
       return { kind: "invalid", project: found.project, root: found.root, message: read.message }
     }
@@ -497,7 +536,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     desk,
     async guide(conversationId) {
       const cwd = deps.cwd(conversationId)
-      if (cwd) setups.set(await projectRoot(await checkoutOf(cwd)), conversationId)
+      if (cwd) {
+        const root = await projectRoot(await checkoutOf(cwd))
+        if (setups.get(root)?.conversation !== conversationId)
+          setups.set(root, { conversation: conversationId, since: (deps.now ?? Date.now)(), appStarted: false })
+      }
       return ENVIRONMENT_GUIDE
     },
     async status(conversationId) {
@@ -566,7 +609,6 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const { environment, checkout, read } = await context(conversationId)
       const carried = await carryReport(recipe, await projectRoot(checkout))
       const saved = await saveRecipe(deps.recipesRoot, checkout, recipe, environment)
-      setups.delete(await projectRoot(checkout))
       const after = await readRecipe(checkout, environment, deps.recipesRoot)
       if (after.kind !== "ready") throw new Error(`Saved to ${saved.file}, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
       const running = (await deps.processes.status(environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))

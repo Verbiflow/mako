@@ -404,6 +404,15 @@ export const acp = {
     return sent
   },
 
+  /** A new Thread in a worktree of its own whatever the choice for new Threads, named for its job. */
+  async startInWorktree(harness: string, cwd: string, prompt: string, title: string): Promise<boolean> {
+    if (!hasBridge()) return false
+    const starting = beginStart({ harness, cwd, title, blocks: [{ type: "user", text: prompt }], hiddenUserPrompt: null, worktree: true })
+    const sent = await launch(starting, { title, worktree: true }, prompt)
+    if (sent) void refreshWorktrees().catch(() => {})
+    return sent
+  },
+
   /** A new Thread from the composer, in its own worktree when that's the choice for new Threads. */
   startThread(harness: string, cwd: string, prompt: string, attachments: PromptAttachment[] = []): Promise<boolean> {
     return acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, prefsStore.get().newThreadsInWorktree)

@@ -31,6 +31,15 @@ export interface AppPrepareView {
   exit?: { code: number; at: number }
 }
 
+export type SetupStep = "waiting" | "running" | "done" | "failed"
+
+/** A setup Thread's way to a working app: its recipe saved, the app started from it, both checks passed. */
+export interface SetupProgress {
+  recipe: SetupStep
+  app: SetupStep
+  checks: SetupStep
+}
+
 export type ThreadAppView =
   | { kind: "none"; project: string; root: string }
   | { kind: "invalid"; project: string; root: string; message: string }
@@ -38,8 +47,10 @@ export type ThreadAppView =
       kind: "setting-up"
       project: string
       root: string
-      /** The Thread working out the recipe, until it saves one. */
+      /** The Thread setting it up: from reading the guide until its checks pass, or its turn ends with a recipe saved. */
       thread: { title: string; harness: string; conversation: string }
+      /** How far it has got, from what Mako ran for that Thread. */
+      progress?: SetupProgress
     }
   | {
       kind: "ready"

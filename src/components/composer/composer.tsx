@@ -1,5 +1,7 @@
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { gitConflictAttachment } from "@/state/git-conflicts"
+import { APP_SETUP_CONTEXT } from "@/lib/app-setup-context"
+import { appSetupAttachment } from "@/state/project-setup"
 import { AttachmentStrip } from "./attachments"
 import { useComposerClipboard } from "./composer-clipboard"
 import { InterruptedSends } from "./interrupted-sends"
@@ -604,6 +606,12 @@ export function Composer() {
       if (value === GIT_CONFLICT_CONTEXT) {
         const file = gitConflictAttachment()
         if (!file) { toast.info("No conflicts remain in the selected repository."); return }
+        replacement = attachments.add([file])
+        if (!replacement) return
+      }
+      if (value === APP_SETUP_CONTEXT) {
+        const file = appSetupAttachment()
+        if (!file) { toast.info("The app is being set up already."); return }
         replacement = attachments.add([file])
         if (!replacement) return
       }

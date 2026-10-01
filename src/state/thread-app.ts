@@ -81,7 +81,14 @@ export function putThreadApp(cwd: string, view: ThreadAppView | undefined): void
 }
 
 export function hideSetupFor(root: string): void {
-  const hidden = [...new Set([...threadAppStore.get().hidden, root])]
+  saveHidden([...new Set([...threadAppStore.get().hidden, root])])
+}
+
+export function showSetupFor(root: string): void {
+  saveHidden(threadAppStore.get().hidden.filter((hidden) => hidden !== root))
+}
+
+function saveHidden(hidden: string[]): void {
   localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden))
   threadAppStore.set({ hidden })
 }

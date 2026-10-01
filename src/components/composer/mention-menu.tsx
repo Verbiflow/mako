@@ -1,7 +1,8 @@
 import { useGitPush } from "@/state/git-push"
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
+import { APP_SETUP_CONTEXT, appSetupRow } from "@/lib/app-setup-context"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { GitMergeIcon, BookOpenIcon, FileIcon, PlugIcon, SlashIcon } from "lucide-react"
+import { GitMergeIcon, BookOpenIcon, FileIcon, PlayIcon, PlugIcon, SlashIcon } from "lucide-react"
 import { harnessTitle } from "@/components/composer/harness-title"
 import { SkillSourceMark } from "@/components/composer/reference-chip"
 import { Chip, Eyebrow, Keys } from "@/components/ui/kit"
@@ -29,6 +30,7 @@ import { mcpTransportsFor } from "../../../electron/contracts/mcp-reach"
 import { UNIVERSAL_SKILL_PROVIDER } from "../../../electron/contracts/skill-reach"
 import { useWorkspaceFiles } from "@/state/files"
 import { mcp, useMcp } from "@/state/mcp"
+import { useComposerAppView } from "@/state/project-setup"
 import { useProviders } from "@/state/providers"
 import { useSession } from "@/state/session"
 import { skills, useSkills } from "@/state/skills"
@@ -110,12 +112,21 @@ export function MentionMenu({
   }, [capabilities, workspaceCwd])
 
   const threads = useThreads((state) => state.threads)
+  const appView = useComposerAppView()
   const { files } = useWorkspaceFiles(kind === "@")
 
   const referenceGroups = useMemo<Group[]>(() => {
     if (capabilities) return []
     const conflicts = git?.files.filter(file => file.status === "conflicted").length ?? 0
+    const app = appSetupRow(appView)
     const candidates = [
+      ...(app ? [{
+        value: APP_SETUP_CONTEXT,
+        title: app.title,
+        hint: app.hint,
+        icon: <PlayIcon className="size-3.5" />,
+        key: `app setup run start recipe environment ports check ${app.title} ${app.hint}`,
+      }] : []),
       ...(git?.root && (conflicts || blockedPull) ? [{
         value: GIT_CONFLICT_CONTEXT,
         title: "Git conflicts",
@@ -150,7 +161,7 @@ export function MentionMenu({
     ]
     const rows = rankReferences(candidates, query)
     return rows.length ? [{ label: "Context", rows }] : []
-  }, [blockedPull, capabilities, files, git, query, threads])
+  }, [appView, blockedPull, capabilities, files, git, query, threads])
 
   const capabilityGroups = useMemo<Group[]>(() => {
     if (!capabilities) return []

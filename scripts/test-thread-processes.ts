@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { z } from "zod"
 import { ThreadIdSchema, type Actor } from "../electron/contracts/thread-identity.js"
+import type { SetupProgress } from "../electron/contracts/thread-app.js"
 import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { environmentTools } from "../electron/environment-tools.js"
@@ -410,11 +411,12 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   store.registerJournal({ conversationId: setupConversation, createdAt: Date.now(), bindings: [], harness: "codex" }, service)
   const bare = realpathSync(mkdtempSync(join(root, "bare-")))
   let setupLive = true
+  let setupWorking = true
   const deskTools = environmentTools({
     cwd: (id) => id === setupConversation ? bare : undefined,
     environment,
     launchedWith: () => undefined,
-    conversation: (id) => id === setupConversation && setupLive ? { title: "Set up the app", harness: "codex" } : undefined,
+    conversation: (id) => id === setupConversation && setupLive ? { title: "Set up the app", harness: "codex", working: setupWorking } : undefined,
     folder: deskFolder,
     processes,
     recipesRoot: projectRecipes,
@@ -463,15 +465,39 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(brokenView.kind, "invalid")
   assert.match(brokenView.kind === "invalid" ? brokenView.message : "", /not JSON/)
   assert.deepEqual(await desk.view(bare), { kind: "none", project: basename(bare), root: bare })
+  // Setting up: the steps are read from what Mako ran for the setup conversation's Thread, not from the agent.
+  const settingUp = (progress: SetupProgress) =>
+    ({ kind: "setting-up", project: basename(bare), root: bare, thread: { title: "Set up the app", harness: "codex", conversation: setupConversation }, progress })
+  const setupApp = (await environment(setupConversation, bare))!.app
+  cleanups.push(() => processes.discard(setupApp))
   await deskTools.guide(setupConversation)
-  assert.deepEqual(await desk.view(bare), { kind: "setting-up", project: basename(bare), root: bare, thread: { title: "Set up the app", harness: "codex", conversation: setupConversation } }, "reading the guide marks the project as being set up")
+  assert.deepEqual(await desk.view(bare), settingUp({ recipe: "running", app: "waiting", checks: "waiting" }), "reading the guide marks the project as being set up")
+  setupWorking = false
+  assert.equal((await desk.view(bare)).kind, "setting-up", "a turn that ends before a recipe is saved is the agent asking something; the setup stands")
+  setupWorking = true
   setupLive = false
   assert.equal((await desk.view(bare)).kind, "none", "until that conversation ends")
   setupLive = true
   await deskTools.guide(setupConversation)
-  writeFileSync(join(bare, "server.mjs"), "")
-  await deskTools.save(setupConversation, RecipeSchema.parse({ processes: { web: { command: "node server.mjs", port: "{port}" } } }))
-  assert.equal((await desk.view(bare)).kind, "ready", "or it saves the recipe")
+  writeFileSync(join(bare, "server.mjs"), readFileSync(server, "utf8"))
+  const setupRecipe = (quick: string) =>
+    RecipeSchema.parse({ values: { PORT: "{port}" }, processes: { web: { command: "node server.mjs", port: "{port}" } }, checks: { quick } })
+  await deskTools.save(setupConversation, setupRecipe("node -e \"process.exit(1)\""))
+  assert.deepEqual(await desk.view(bare), settingUp({ recipe: "done", app: "waiting", checks: "waiting" }), "a saved recipe ticks the first step; the setup goes on while its turn does")
+  assert.match(await deskTools.start(setupConversation), /web: running/)
+  assert.deepEqual(await desk.view(bare), settingUp({ recipe: "done", app: "done", checks: "waiting" }), "its app coming up ticks the second")
+  await deskTools.stop(setupConversation)
+  assert.equal((await desk.view(bare)).kind === "setting-up" && (await desk.view(bare)).progress?.app, "done", "stopping the app again leaves that step ticked")
+  await deskTools.check(setupConversation, "quick")
+  assert.deepEqual(await desk.view(bare), settingUp({ recipe: "done", app: "done", checks: "failed" }), "a failing check shows as failed")
+  await deskTools.save(setupConversation, setupRecipe("node -e \"process.exit(0)\""))
+  await deskTools.check(setupConversation, "quick")
+  assert.equal((await desk.view(bare)).kind, "ready", "its checks passing ends the setup")
+  await deskTools.guide(setupConversation)
+  assert.equal((await desk.view(bare)).kind, "setting-up", "reading the guide again, to change the recipe, sets it up again")
+  setupWorking = false
+  assert.equal((await desk.view(bare)).kind, "ready", "and its turn ending with a recipe saved ends that")
+  setupWorking = true
   // An install stopped before it finished runs again on the next start instead of reading as failed.
   const install = `echo installed >> ${installs}`
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, prepare: [{ command: install, inputs: ["package-lock.json"] }] }))

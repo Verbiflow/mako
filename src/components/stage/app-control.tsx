@@ -1,11 +1,21 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react"
-import { ENVIRONMENT_SETUP_PROMPT, environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
+import { CheckIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import type { SetupStep } from "../../../electron/contracts/thread-app"
+import { environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
+import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { desktop } from "@/state/desktop"
+import {
+  setUpInThisThread,
+  setupAgentLabel,
+  startProjectSetup,
+  useSetupAgent,
+  useThreadAgent,
+  type SetupAgent,
+} from "@/state/project-setup"
 import { actions } from "@/state/session"
 import {
   checkMark,
@@ -19,6 +29,7 @@ import {
   processMark,
   sendToAgent,
   showAppOutput,
+  showSetupFor,
   threadAppDriver,
   useThreadApp,
   type AppCheckView,
@@ -31,7 +42,7 @@ import {
 type Ready = Extract<ThreadAppView, { kind: "ready" }>
 
 const trigger =
-  "pressable flex h-6 shrink-0 items-center gap-1.5 overflow-hidden rounded-md px-2 text-label whitespace-nowrap " +
+  "pressable flex h-6 shrink-0 items-center overflow-hidden rounded-md px-2 text-label font-medium whitespace-nowrap " +
   "[transition:transform_var(--duration-press)_var(--ease-out),width_220ms_var(--ease-out),background-color_120ms_ease,color_120ms_ease] " +
   "hover:bg-fill-hover data-[state=open]:bg-fill-hover"
 
@@ -71,7 +82,7 @@ function useNow(): number {
  * checkout. It names one state; its menu says what's running and what was
  * checked, and each row opens that output in the terminal dock.
  */
-export function AppControl({ cwd }: { cwd: string | undefined }) {
+export function AppControl({ cwd, focused }: { cwd: string | undefined; focused: boolean }) {
   const view = useThreadApp((state) => (cwd ? state.byCwd[cwd] : undefined))
   const hidden = useThreadApp((state) => view?.kind === "none" && state.hidden.includes(view.root))
   useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
@@ -81,8 +92,8 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
     return (
       <Menu modal={false}>
         <MenuTrigger asChild>
-          <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5 text-faint hover:text-foreground data-[state=open]:text-foreground")}>
-            <span key={state} className="changing-label">Run app</span>
+          <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5", triggerTone(view))}>
+            <TriggerLabel view={view} />
           </button>
         </MenuTrigger>
         <MenuContent align="end" className="w-80" onCloseAutoFocus={(event) => event.preventDefault()}>
@@ -100,10 +111,10 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
       <button
         type="button"
         data-app-control="stopped"
-        className={cn(trigger, "mr-0.5 text-faint hover:text-foreground")}
+        className={cn(trigger, "mr-0.5", triggerTone(view))}
         onClick={() => threadAppDriver()?.start(cwd)}
       >
-        <span key={state} className="changing-label">Run app</span>
+        <TriggerLabel view={view} />
       </button>
     )
   }
@@ -116,7 +127,7 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
       </MenuTrigger>
       <MenuContent align="end" className="w-80" onCloseAutoFocus={(event) => event.preventDefault()}>
         {view.kind === "none" ? (
-          <NoneMenu view={view} />
+          <NoneMenu cwd={cwd} view={view} focused={focused} />
         ) : view.kind === "invalid" ? (
           <InvalidMenu view={view} />
         ) : view.kind === "setting-up" ? (
@@ -132,17 +143,39 @@ export function AppControl({ cwd }: { cwd: string | undefined }) {
 function triggerTone(view: ThreadAppView): string {
   if (view.kind === "invalid" || (view.kind === "ready" && view.phase === "crashed")) return "text-negative"
   if (view.kind === "ready" && view.phase === "waiting") return "text-caution"
-  if (view.kind === "ready" && view.phase === "running") return "text-muted-foreground hover:text-foreground data-[state=open]:text-foreground"
-  return "text-faint hover:text-muted-foreground data-[state=open]:text-foreground"
+  return "text-muted-foreground hover:text-foreground data-[state=open]:text-foreground"
 }
 
 function TriggerLabel({ view }: { view: ThreadAppView }) {
   const [label, working] = triggerParts(view)
   return (
     <span key={label} className="changing-label">
-      {working ? <Shimmer text={label} /> : label}
+      <span className="flex items-center gap-1.5">
+        <TriggerIcon view={view} />
+        {working ? <Shimmer text={label} /> : label}
+      </span>
     </span>
   )
+}
+
+/** What the control would do or is doing: run, working, running, waiting or failed. */
+function TriggerIcon({ view }: { view: ThreadAppView }) {
+  const icon = "size-3 shrink-0"
+  switch (view.kind === "ready" ? view.phase : view.kind) {
+    case "setting-up":
+    case "preparing":
+    case "starting":
+      return <LoaderCircleIcon aria-hidden className={cn(icon, "animate-spin")} strokeWidth={2.5} />
+    case "running":
+      return <PlayIcon aria-hidden className={cn(icon, "fill-current text-positive")} strokeWidth={2.5} />
+    case "invalid":
+    case "crashed":
+      return <TriangleAlertIcon aria-hidden className={icon} strokeWidth={2.25} />
+    case "waiting":
+      return <HourglassIcon aria-hidden className={icon} strokeWidth={2.25} />
+    default:
+      return <PlayIcon aria-hidden className={cn(icon, "fill-current")} strokeWidth={2.5} />
+  }
 }
 
 /** The words on the control, and whether they name work still under way. */
@@ -151,6 +184,8 @@ function triggerParts(view: ThreadAppView): [string, boolean] {
   if (view.kind === "invalid") return ["Can't run app", false]
   if (view.kind === "setting-up") return ["Setting up", true]
   switch (view.phase) {
+    case "stopped":
+      return ["Run app", false]
     case "preparing":
       return ["Installing", true]
     case "starting":
@@ -194,18 +229,50 @@ function Action({ children, ...props }: { children: ReactNode } & Omit<Parameter
   return <MenuItem {...props}>{children}</MenuItem>
 }
 
-function NoneMenu({ view }: { view: Extract<ThreadAppView, { kind: "none" }> }) {
+/**
+ * Two ways to set a project up: the Thread on screen asks its own agent, on
+ * whatever model it's on; a new Thread does it in a worktree of its own.
+ */
+function NoneMenu({ cwd, view, focused }: { cwd: string; view: Extract<ThreadAppView, { kind: "none" }>; focused: boolean }) {
+  const fresh = useSetupAgent()
+  const here = useThreadAgent()
+  const hide = () => {
+    hideSetupFor(view.root)
+    toast(`Run app is hidden for ${view.project}`, { action: { label: "Undo", onClick: () => showSetupFor(view.root) } })
+  }
   return (
     <>
-      <Head title="Not set up">Mako doesn't know how to run {view.project} yet.</Head>
-      <Action data-app-action="set-up" onSelect={() => void newThreadWith(view.root, ENVIRONMENT_SETUP_PROMPT)}>
-        Set up in a new Thread
-      </Action>
+      <Head title={`${view.project} isn't set up to run yet`}>
+        An agent works out how it installs, starts and gets checked. That's done once; then every Thread can run its own copy.
+        {fresh?.standingInFor ? ` ${harnessLabel(fresh.standingInFor)} isn't signed in, so ${harnessLabel(fresh.harness)} stands in for it.` : null}
+        {fresh ? null : " Sign in to an agent in Settings first."}
+      </Head>
+      {focused && here ? (
+        <SetupChoice action="set-up-here" agent={here} onSelect={() => void setUpInThisThread(cwd)}>
+          Set up in this Thread
+        </SetupChoice>
+      ) : null}
+      {fresh ? (
+        <SetupChoice action="set-up" agent={fresh} onSelect={() => void startProjectSetup(view.root, view.project)}>
+          Set up in a new Thread
+        </SetupChoice>
+      ) : null}
       <MenuSeparator />
-      <Action className="text-muted-foreground" onSelect={() => hideSetupFor(view.root)}>
-        Don't offer this for {view.project}
+      <Action data-app-action="hide" className="text-muted-foreground" onSelect={hide}>
+        {view.project} has no app to run
       </Action>
     </>
+  )
+}
+
+function SetupChoice({ action, agent, onSelect, children }: { action: string; agent: SetupAgent; onSelect: () => void; children: ReactNode }) {
+  return (
+    <MenuItem data-app-action={action} className="group gap-3" onSelect={onSelect}>
+      <span className="shrink-0 whitespace-nowrap">{children}</span>
+      <span className="min-w-0 flex-1 truncate text-right text-label text-faint transition-colors duration-100 group-data-[highlighted]:text-muted-foreground">
+        {setupAgentLabel(agent)}
+      </span>
+    </MenuItem>
   )
 }
 
@@ -238,11 +305,31 @@ function SettingUpMenu({ view }: { view: Extract<ThreadAppView, { kind: "setting
       <Head title="Setting up">
         “{view.thread.title}” is working out how to run {view.project}. Every Thread of it gets the app once that's saved.
       </Head>
+      {view.progress ? (
+        <>
+          <MenuSeparator />
+          <SetupRow step={view.progress.recipe}>Recipe saved</SetupRow>
+          <SetupRow step={view.progress.app}>App started</SetupRow>
+          <SetupRow step={view.progress.checks}>Checks passed</SetupRow>
+        </>
+      ) : null}
       <MenuSeparator />
       <Action data-app-action="open-setup" onSelect={() => void openConversation(view.thread.conversation)}>
         Open “{view.thread.title}”
       </Action>
     </>
+  )
+}
+
+/** One step of the setup: shown, not clicked; the Thread itself is one action below. */
+function SetupRow({ step, children }: { step: SetupStep; children: ReactNode }) {
+  return (
+    <div data-setup-step={step} className="flex min-h-8 items-center gap-2 px-2">
+      <AppMark mark={step} />
+      <span className={cn("min-w-0 flex-1 truncate transition-colors duration-200", step === "waiting" ? "text-faint" : "text-foreground")}>
+        {children}
+      </span>
+    </div>
   )
 }
 

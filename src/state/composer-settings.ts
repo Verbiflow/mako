@@ -278,6 +278,12 @@ export function resolveComposerSettings(
   return composerSettingsInput(target, profile).resolved
 }
 
+/** The name of the model a send to `target` would use; one outside the catalog goes by its id. */
+export function composerModelName(target: ComposerTarget): string | undefined {
+  const { model, resolved } = composerSettingsInput(target)
+  return model?.label ?? resolved.settings.model
+}
+
 /** Snapshot the user's intent before awaiting discovery. */
 export async function settingsForSend(
   target: ComposerTarget

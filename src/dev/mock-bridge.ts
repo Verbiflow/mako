@@ -1,10 +1,15 @@
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
+import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
+import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
-import { reduceLiveUpdates } from "../../electron/contracts/live-content"
+import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
+import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
+import { playSetupTurn } from "./mock-setup-turn"
+import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
 import type {
   ThreadContextOptions,
@@ -36,6 +41,8 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
+
+const SETUP_WORKTREE_ROOT = "/Users/you/.mako/worktrees"
 
 /** The fixture projects' checkouts: one on its default branch, one mid-feature, one mid-rebase. */
 const MOCK_HEADS = new Map<string, CheckoutHead>([
@@ -145,6 +152,34 @@ export function installMockBridge() {
     capabilities,
   })
 
+  const scene = new URLSearchParams(location.search).get("app")
+  const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
+  /** The setup Thread's worktree, once its Session has started in one. */
+  let setupWorktree: ThreadWorktree | undefined
+  const profiles = () =>
+    MOCK_PROFILES.map((profile) =>
+      scene === "setup-fallback" && profile.id === "codex" ? { ...profile, available: false, error: "Not signed in" } : profile
+    )
+  /** A scripted turn's next updates, delivered the way the host batches them. */
+  const pushLive = (id: string, updates: LiveUpdate[], finished = false) => {
+    const snapshot = liveSnapshots.get(id)
+    if (!snapshot) return
+    const session: LiveSessionState = finished ? { ...snapshot.session, status: "ready" } : snapshot.session
+    const requests = finished ? snapshot.requests.map((request) => ({ ...request, status: "completed" as const })) : snapshot.requests
+    const next = { ...snapshot, session, requests, revision: snapshot.revision + 1, blocks: reduceLiveUpdates(snapshot.blocks, updates) }
+    liveSnapshots.set(id, next)
+    acpSessions.set(id, session)
+    emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, requests } })
+  }
+  /** The scripted setup turn, played in the conversation that was asked, wherever it runs. */
+  const beginSetup = (id: string, title: string, harness: string, cwd: string) => {
+    mockSetupMoment({ at: "started", conversation: id, title, harness, cwd })
+    playSetupTurn(
+      (updates) => pushLive(id, updates),
+      () => pushLive(id, [], true)
+    )
+  }
+
   const archivedThreads = new Set<string>()
   let archiveRevision = 0
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
@@ -160,10 +195,15 @@ export function installMockBridge() {
       external: false,
     }),
     threadGroups: async () => [],
-    worktrees: async () => ({ root: "/mock/worktrees", worktrees: [] }),
+    worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: setupWorktree ? [setupWorktree] : [] }),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
-      Object.fromEntries(folders.map((folder) => [folder, MOCK_HEADS.get(folder) ?? null])),
+      Object.fromEntries(
+        folders.map((folder) => [
+          folder,
+          folder === setupWorktree?.path ? { kind: "branch" as const, name: setupWorktree.branch } : (MOCK_HEADS.get(folder) ?? null),
+        ])
+      ),
     threadApp: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
@@ -616,18 +656,19 @@ export function installMockBridge() {
       ],
       truncated: 0,
     }),
-    listPlugins: async () => [
-      {
-        id: "thread-counter",
-        source:
-          "export function setup(){ mako.registerSlot('rail.footer', () => React.createElement('div', { style: { padding: '6px 10px', fontSize: 10.5, opacity: 0.5 } }, 'plugin: ' + mako.threads.read().threads.length + ' threads')) }",
-      },
-      {
-        id: "broken-example",
-        source:
-          "export function setup(){ throw new Error('deliberate failure for the demo') }",
-      },
-    ],
+    listPlugins: async () => {
+      const plugins = [
+        {
+          id: "thread-counter",
+          source:
+            "export function setup(){ mako.registerSlot('rail.footer', () => React.createElement('div', { style: { padding: '6px 10px', fontSize: 10.5, opacity: 0.5 } }, 'plugin: ' + mako.threads.read().threads.length + ' threads')) }",
+        },
+      ]
+      // A recorded scene leaves out the demo's failing plugin and its notice.
+      if (!setupScene)
+        plugins.push({ id: "broken-example", source: "export function setup(){ throw new Error('deliberate failure for the demo') }" })
+      return plugins
+    },
     pluginsDir: async () => "/tmp/mako/plugins",
     writePlugin: async () => {},
     deletePlugin: async () => {},
@@ -918,7 +959,7 @@ export function installMockBridge() {
                   resetsAt: Date.now() + 2 * 86_400_000,
                 },
               },
-    harnessProfiles: async () => MOCK_PROFILES,
+    harnessProfiles: async () => profiles(),
     harnessAvailability: async () => ({
       codex: true,
       claude: true,
@@ -1046,12 +1087,40 @@ export function installMockBridge() {
         settings: options.tuning,
       }
       acpSessions.set(session.id, session)
-      const request: LiveRequest | undefined = options.initialRequest
-        ? { ...options.initialRequest, status: "completed" }
-        : undefined
       const base = options.threadPath
         ? ((await window.mako?.pageThread(options.threadPath)) ?? null)
         : null
+      if (setupScene && options.initialRequest?.text === ENVIRONMENT_SETUP_PROMPT) {
+        if (options.worktree) {
+          setupWorktree = {
+            path: `${SETUP_WORKTREE_ROOT}/mako-set-up`,
+            thread: ThreadIdSchema.parse(crypto.randomUUID()),
+            repoRoot: cwd,
+            project: cwd,
+            branch: "mako/set-up",
+            base: "4f1c2e9",
+            createdAt: Date.now(),
+          }
+        }
+        const working: LiveSessionState = { ...session, cwd: setupWorktree?.path ?? cwd, status: "running" }
+        acpSessions.set(session.id, working)
+        const snapshot: LiveSnapshot = {
+          session: working,
+          revision: 0,
+          createdAt: Date.now(),
+          threadPath: options.threadPath,
+          base,
+          permissions: [],
+          requests: [{ ...options.initialRequest, status: "dispatching" }],
+          blocks: [{ type: "user", requestId: options.initialRequest.id, text: options.initialRequest.text }],
+        }
+        liveSnapshots.set(session.id, snapshot)
+        beginSetup(session.id, options.title ?? "Set up", harness, working.cwd)
+        return snapshot
+      }
+      const request: LiveRequest | undefined = options.initialRequest
+        ? { ...options.initialRequest, status: "completed" }
+        : undefined
       const snapshot: LiveSnapshot = {
         session,
         revision: 0,
@@ -1385,6 +1454,14 @@ export function installMockBridge() {
     ) => {
       const snapshot = liveSnapshots.get(id)
       if (!snapshot) throw new Error("Mock session is closed")
+      if (setupScene && text === ENVIRONMENT_SETUP_PROMPT) {
+        const asked: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
+        const session: LiveSessionState = { ...snapshot.session, status: "running" }
+        liveSnapshots.set(id, { ...snapshot, session, requests: [...snapshot.requests, asked] })
+        pushLive(id, [{ kind: "user", requestId, text }])
+        beginSetup(id, snapshot.session.title ?? "Set up", snapshot.session.harness, session.cwd)
+        return asked
+      }
       const request: LiveRequest = {
         id: requestId,
         text,
@@ -1505,7 +1582,7 @@ export function installMockBridge() {
       cwd: "/Users/you/mako",
     }),
     harnessTuning: async (harness: string) =>
-      MOCK_PROFILES.find((profile) => profile.id === harness) ?? {
+      profiles().find((profile) => profile.id === harness) ?? {
         id: harness,
         label: harness,
         available: false,
