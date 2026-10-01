@@ -8,6 +8,7 @@ import { CompactionControl } from "@/components/composer/compaction-control"
 import { compactionAvailable } from "../../../electron/contracts/recovery"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { Shimmer } from "@/components/ui/shimmer"
+import { durationText } from "@mako/sessions/events"
 import { TransferStatus } from "./transfer-status"
 import { LiveActionStatus } from "./live-action-status"
 import { loadEarlierLive } from "@/state/live-recovery"
@@ -263,17 +264,9 @@ function NativeClock({ since, retryAt }: { since: number; retryAt?: number }) {
     return () => clearInterval(timer)
   }, [])
   const text = retryAt !== undefined && retryAt > now
-    ? `next try in ${clockDuration(retryAt - now)}`
-    : now - since >= 1_000 ? clockDuration(now - since) : undefined
+    ? `next try in ${durationText(retryAt - now + 999)}`
+    : now - since >= 1_000 ? durationText(now - since) : undefined
   return text ? <span className="tabular shrink-0 text-faint">· {text}</span> : null
-}
-
-function clockDuration(milliseconds: number): string {
-  const seconds = Math.ceil(milliseconds / 1_000)
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`
-  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`
 }
 
 /** A spare worktree is ready in well under this; only a checkout made on the spot is worth naming. */
