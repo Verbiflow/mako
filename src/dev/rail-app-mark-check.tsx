@@ -1,35 +1,52 @@
 import type { ReactNode } from "react"
-import { FolderGit2Icon, FolderOpenIcon } from "lucide-react"
+import { FolderGit2Icon, FolderOpenIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon } from "lucide-react"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { cn } from "@/lib/utils"
 
 /**
- * Where the sidebar says a Thread's app is running: three placements on the
- * rail's own classes, for choosing one before the rail changes. Served by
- * `scripts/rail-app-mark.html`; `?theme=light` for the light theme.
+ * Where the sidebar says a Thread's app is running, on the rail's own
+ * classes, for choosing before the rail changes: the strip's own app icons,
+ * beside words in place of the time. Served by `scripts/rail-app-mark.html`;
+ * `?theme=light` for the light theme.
  */
 
-type App = "running" | "starting" | "waiting" | "crashed" | null
-type Row = { title: string; harness: string; worktree: boolean; working?: boolean; app: App; time: string; tip: string }
+type App = "running" | "starting" | "waiting" | "crashed"
+type Row = { title: string; harness: string; worktree: boolean; working?: boolean; app?: App; time: string; tip: string }
 
 const ROWS: Row[] = [
   { title: "Fix checkout totals", harness: "claude", worktree: true, app: "running", time: "4m", tip: "App running at fix-checkout-totals.thread.localhost:20180" },
   { title: "Add order history page", harness: "codex", worktree: true, working: true, app: "running", time: "now", tip: "App running at add-order-history.thread.localhost:20190" },
+  { title: "Seed demo accounts", harness: "claude", worktree: true, app: "starting", time: "now", tip: "App starting" },
   { title: "Update payment copy", harness: "cursor", worktree: true, app: "crashed", time: "12m", tip: "App crashed (exit 1) 3m ago. Open the Thread for its log." },
   { title: "Bump dependencies", harness: "opencode", worktree: true, app: "waiting", time: "1m", tip: "App waiting for memory; it starts by itself once there's room" },
-  { title: "Explain the cart reducer", harness: "grok", worktree: false, app: null, time: "2h", tip: "Uses the project folder's app" },
-  { title: "Refactor search ranking", harness: "devin", worktree: true, app: null, time: "1d", tip: "No app running" },
+  { title: "Explain the cart reducer", harness: "grok", worktree: false, time: "2h", tip: "Uses the project folder's app" },
+  { title: "Refactor search ranking", harness: "devin", worktree: true, time: "1d", tip: "No app running" },
 ]
 
-const WORDS = { running: "App running", starting: "App starting", waiting: "App waiting", crashed: "App crashed" } satisfies Record<Exclude<App, null>, string>
+const WORDS = { running: "App running", starting: "App starting", waiting: "App waiting", crashed: "App crashed" } satisfies Record<App, string>
 
-function AppWords({ app, className }: { app: Exclude<App, null>; className?: string }) {
-  return <span data-app-mark={app} className={cn("shrink-0 text-label", app === "crashed" ? "text-muted-foreground" : "text-faint", className)}>{WORDS[app]}</span>
+/** The strip's own icon for each state (`TriggerIcon` in `app-control.tsx`), at the rail's 12px. */
+function AppIcon({ app }: { app: App }) {
+  const icon = "size-3 shrink-0"
+  const mark =
+    app === "running" ? <PlayIcon className={cn(icon, "fill-current text-positive")} strokeWidth={2.5} />
+    : app === "starting" ? <LoaderCircleIcon className={cn(icon, "animate-spin text-faint")} strokeWidth={2.5} />
+    : app === "waiting" ? <HourglassIcon className={cn(icon, "text-muted-foreground")} strokeWidth={2.25} />
+    : <TriangleAlertIcon className={cn(icon, "text-muted-foreground")} strokeWidth={2.25} />
+  return <span data-app-mark={app} role="img" aria-label={WORDS[app]} className="flex shrink-0 items-center">{mark}</span>
+}
+
+function AppWords({ app }: { app: App }) {
+  return <span data-app-mark={app} className={cn("shrink-0 text-label", app === "crashed" ? "text-muted-foreground" : "text-faint")}>{WORDS[app]}</span>
 }
 
 function Time({ value }: { value: string }) {
   return <span className="tabular shrink-0 text-label text-faint">{value}</span>
+}
+
+function Working() {
+  return <span className="flex shrink-0 items-center text-muted-foreground"><ActivityMark state="working" size={20} /></span>
 }
 
 function RowShell({ row, children }: { row: Row; children: ReactNode }) {
@@ -43,11 +60,7 @@ function RowShell({ row, children }: { row: Row; children: ReactNode }) {
   )
 }
 
-function Working() {
-  return <span className="flex shrink-0 items-center text-muted-foreground"><ActivityMark state="working" size={20} /></span>
-}
-
-function Header({ trailing }: { trailing?: ReactNode }) {
+function Header({ trailing }: { trailing: ReactNode }) {
   return (
     <div className="relative flex h-7 w-full items-center rounded-md">
       <span className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch px-1.5">
@@ -65,13 +78,30 @@ function FolderRunning() {
   return (
     <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
       <ActivityMark state="working" size={20} />
-      <span>1 running</span>
+      <span>2 running</span>
     </span>
   )
 }
 
-/** A: the app's words take the time's place; a working row keeps its orb, and the app is in its tip. */
-function OptionA() {
+/** The icon sits before the row's time or orb, so nothing else moves. */
+function IconOption() {
+  return (
+    <>
+      <Header trailing={<span className="flex items-center gap-2"><AppIcon app="running" /><FolderRunning /></span>} />
+      <div className="ml-[13px] border-l border-hairline pl-1">
+        {ROWS.map((row) => (
+          <RowShell key={row.title} row={row}>
+            {row.app ? <AppIcon app={row.app} /> : null}
+            {row.working ? <Working /> : <Time value={row.time} />}
+          </RowShell>
+        ))}
+      </div>
+    </>
+  )
+}
+
+/** Words in place of the time, for comparison. */
+function WordsOption() {
   return (
     <>
       <Header trailing={<span className="flex items-center gap-2"><AppWords app="running" /><FolderRunning /></span>} />
@@ -86,57 +116,23 @@ function OptionA() {
   )
 }
 
-/** B: the app's words sit before whatever the row already shows. */
-function OptionB() {
-  return (
-    <>
-      <Header trailing={<span className="flex items-center gap-2"><AppWords app="running" /><FolderRunning /></span>} />
-      <div className="ml-[13px] border-l border-hairline pl-1">
-        {ROWS.map((row) => (
-          <RowShell key={row.title} row={row}>
-            {row.app ? <AppWords app={row.app} /> : null}
-            {row.working ? <Working /> : <Time value={row.time} />}
-          </RowShell>
-        ))}
-      </div>
-    </>
-  )
-}
-
-/** C: rows stay as they are; the project's header counts its running apps, and says when one crashed. */
-function OptionC() {
-  return (
-    <>
-      <Header trailing={<span className="flex items-center gap-2"><span className="shrink-0 text-label text-faint">3 apps</span><FolderRunning /></span>} />
-      <div className="ml-[13px] border-l border-hairline pl-1">
-        {ROWS.map((row) => (
-          <RowShell key={row.title} row={row}>
-            {row.working ? <Working /> : row.app === "crashed" ? <AppWords app="crashed" /> : <Time value={row.time} />}
-          </RowShell>
-        ))}
-      </div>
-    </>
-  )
-}
-
 const OPTIONS = [
-  { id: "a", name: "A. In place of the time", note: "An idle row reads its app's state instead of its time. A working row keeps its orb; hovering names the app. The project folder's own app shows on the project's header.", body: <OptionA /> },
-  { id: "b", name: "B. Before the time", note: "Every row with an app says so, before its time or orb. Most informative, and titles lose about 70px.", body: <OptionB /> },
-  { id: "c", name: "C. On the project only", note: "Rows change only when an app crashed. The header counts the project's running apps; hovering lists which Threads.", body: <OptionC /> },
+  { id: "icon", name: "Icon", note: "The strip's own app icons: running, starting, waiting for memory, crashed. Each row keeps its time and its orb; hovering names the state and the address. The project folder's own app shows on its header.", body: <IconOption /> },
+  { id: "words", name: "Words, for comparison", note: "The same states in words, in place of the time. A working row keeps its orb and loses its app; the header can't fit both.", body: <WordsOption /> },
 ]
 
 export function RailAppMarkPage() {
   return (
     <div className="min-h-svh bg-shell p-8 text-foreground">
       <h1 className="text-ui font-medium">Sidebar: which Threads have their app running</h1>
-      <p className="mt-1 max-w-[52rem] text-label text-muted-foreground">
-        The same six Threads under each option. Four have an app of their own: running, running while the agent works, crashed, and waiting for memory. One uses the project folder's app, which is running, and one has none. Nothing shows for a Thread with no app.
+      <p className="mt-1 max-w-[40rem] text-label text-muted-foreground">
+        The same seven Threads under each option. Five have an app of their own: running, running while the agent works, starting, crashed, and waiting for memory. One uses the project folder's app, which is running, and one has none. Nothing shows for a Thread with no app.
       </p>
       <div className="mt-6 flex gap-8">
         {OPTIONS.map((option) => (
           <section key={option.id} data-option={option.id} className="w-[264px] shrink-0">
             <h2 className="mb-1 text-ui font-medium text-foreground">{option.name}</h2>
-            <p className="mb-3 min-h-[4.5rem] text-label text-muted-foreground">{option.note}</p>
+            <p className="mb-3 min-h-[6rem] text-label text-muted-foreground">{option.note}</p>
             <div className="overflow-hidden rounded-lg border border-hairline bg-shell py-1 pr-1 pl-1.5">{option.body}</div>
           </section>
         ))}
