@@ -1,6 +1,6 @@
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
-import { installThreadAppDriver, putThreadApp, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
+import { installThreadAppDriver, putAppMarks, putThreadApp, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
 import type { AppActionOutcome, AppOutputCursor } from "../../electron/contracts/thread-app"
 
 /** While something is changing, the control follows it closely; otherwise it looks now and then. */
@@ -76,6 +76,28 @@ export function installHostThreadApp(): void {
       })
   }
 
+  /** The sidebar's marks: one look at every app on this Mac, closer while one is starting. */
+  let markWatchers = 0
+  let markTimer: ReturnType<typeof setTimeout> | undefined
+  /** Bumped whenever a look starts over, so an older answer still on its way neither lands nor schedules another. */
+  let markLook = 0
+  const refreshMarks = async () => {
+    clearTimeout(markTimer)
+    const look = ++markLook
+    let wait = SETTLED_MS
+    try {
+      const marks = await mako.threadAppMarks()
+      if (look !== markLook || !markWatchers) return
+      putAppMarks(marks)
+      if (marks.some((mark) => mark.state === "starting")) wait = BUSY_MS
+    } catch {
+      if (look !== markLook || !markWatchers) return
+      putAppMarks([])
+      wait = UNAVAILABLE_MS
+    }
+    markTimer = setTimeout(() => void refreshMarks(), document.visibilityState === "hidden" ? HIDDEN_MS : wait)
+  }
+
   installThreadAppDriver({
     start: (cwd) => act(cwd, "starting", () => mako.startThreadApp(cwd)),
     stop: (cwd) => act(cwd, "stopped", () => mako.stopThreadApp(cwd)),
@@ -118,6 +140,7 @@ export function installHostThreadApp(): void {
       if (entry) entry.count += 1
       else {
         watched.set(cwd, { count: 1 })
+        threadAppStore.set({ followed: [...watched.keys()] })
         void refresh(cwd)
       }
       return () => {
@@ -125,12 +148,26 @@ export function installHostThreadApp(): void {
         if (!current || --current.count > 0) return
         clearTimeout(current.timer)
         watched.delete(cwd)
+        threadAppStore.set({ followed: [...watched.keys()] })
+      }
+    },
+    watchMarks: () => {
+      if (++markWatchers === 1) void refreshMarks()
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        if (--markWatchers > 0) return
+        clearTimeout(markTimer)
+        markLook += 1
       }
     },
   })
 
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") for (const cwd of watched.keys()) schedule(cwd, 0)
+    if (document.visibilityState !== "visible") return
+    for (const cwd of watched.keys()) schedule(cwd, 0)
+    if (markWatchers) void refreshMarks()
   })
 }
 

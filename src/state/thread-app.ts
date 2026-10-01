@@ -5,7 +5,7 @@ import { getMako } from "@/lib/bridge"
 import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
-import type { AppCheckView, AppOutputKey, AppPrepareView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
+import type { AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
 
 /**
  * A folder's app, as the strip and the terminal dock show it. Keyed by the
@@ -15,6 +15,7 @@ import type { AppCheckView, AppOutputKey, AppPrepareView, AppProcessView, Thread
 
 export type {
   AppCheckView,
+  AppMark,
   AppOutputKey,
   AppPhase,
   AppPrepareView,
@@ -37,10 +38,16 @@ export interface ThreadAppDriver {
   subscribeOutput(cwd: string, key: AppOutputKey, listener: (text: string, reset: boolean) => void): () => void
   /** Keep the app in this folder current while something shows it. */
   watch?(cwd: string): () => void
+  /** Keep every checkout's mark current while the sidebar shows them. */
+  watchMarks?(): () => void
 }
 
 interface ThreadAppState {
   byCwd: Record<string, ThreadAppView>
+  /** The sidebar's marks: every checkout whose app isn't stopped. */
+  marks: Record<string, AppMark>
+  /** Folders whose view the driver keeps current now; any other view may be old. */
+  followed: string[]
   /** The app output in the terminal dock instead of a shell, if any. */
   shown?: { cwd: string; key: AppOutputKey }
   /** Projects whose people said the strip shouldn't offer setup, by root. */
@@ -58,8 +65,29 @@ function readHidden(): string[] {
   }
 }
 
-export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, hidden: readHidden() })
+export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, marks: {}, followed: [], hidden: readHidden() })
 export const useThreadApp = createHook(threadAppStore)
+
+export function putAppMarks(marks: readonly AppMark[]): void {
+  const next = Object.fromEntries(marks.map((mark) => [mark.checkout, mark]))
+  const current = threadAppStore.get().marks
+  const same = Object.keys(next).length === Object.keys(current).length &&
+    marks.every((mark) => current[mark.checkout]?.state === mark.state && current[mark.checkout]?.port === mark.port)
+  if (!same) threadAppStore.set({ marks: next })
+}
+
+/**
+ * A checkout's mark. The strip's own view of a folder, polled closely while
+ * it shows, wins over the sidebar's slower look, so the two never disagree.
+ */
+export function appMarkOf(state: ThreadAppState, checkout: string): Omit<AppMark, "checkout"> | undefined {
+  const view = state.followed.includes(checkout) ? state.byCwd[checkout] : undefined
+  if (view?.kind !== "ready") return view ? undefined : state.marks[checkout]
+  if (view.phase === "stopped") return undefined
+  if (view.phase !== "running") return { state: view.phase === "preparing" ? "starting" : view.phase }
+  const port = view.processes.find((process) => process.state === "running" && process.port !== undefined)?.port
+  return port === undefined ? { state: "running" } : { state: "running", port }
+}
 
 let driver: ThreadAppDriver | undefined
 

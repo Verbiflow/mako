@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import type { AppOutputChunk, AppOutputCursor, ThreadAppView } from "../electron/contracts/thread-app"
+import type { AppMark, AppOutputChunk, AppOutputCursor, ThreadAppView } from "../electron/contracts/thread-app"
 
 /**
  * The strip's app control and the dock's output, driven by a host: a click
@@ -31,6 +31,9 @@ let hostView: ThreadAppView = ready("stopped")
 let failing = false
 let views = 0
 let releaseStart: (() => void) | undefined
+const WORKTREE = "/work/shop-worktree"
+let hostMarks: AppMark[] = [{ checkout: CWD, state: "crashed" }, { checkout: WORKTREE, state: "running", port: 20_020 }]
+let markLooks = 0
 const reads: (AppOutputCursor | undefined)[] = []
 const chunks: AppOutputChunk[] = [
   { text: "listening\n", cursor: { file: "1:1", offset: 10 }, reset: true },
@@ -48,6 +51,10 @@ const bridge = {
     releaseStart = () => resolve({ problems: [] })
   }),
   stopThreadApp: async () => {},
+  threadAppMarks: async (): Promise<AppMark[]> => {
+    markLooks += 1
+    return hostMarks
+  },
   threadAppOutput: async (_cwd: string, _key: string, cursor?: AppOutputCursor) => {
     reads.push(cursor)
     const next = chunks.shift()
@@ -72,7 +79,7 @@ Object.defineProperty(globalThis, "document", { configurable: true, value: {
 } })
 
 const { installHostThreadApp } = await import("../src/state/thread-app-host")
-const { threadAppDriver, threadAppStore } = await import("../src/state/thread-app")
+const { appMarkOf, threadAppDriver, threadAppStore } = await import("../src/state/thread-app")
 installHostThreadApp()
 const driver = threadAppDriver()!
 const phase = () => {
@@ -114,4 +121,25 @@ const asked = views
 await wait(1_500)
 assert.equal(views, asked)
 
-console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled")
+// The sidebar's marks: one look at every app while the rail shows them, and none after.
+failing = false
+assert.equal(markLooks, 0, "nothing asks for marks until the rail does")
+const unwatchMarks = driver.watchMarks!()
+await until(() => Object.keys(threadAppStore.get().marks).length === 2, "the first marks")
+assert.deepEqual(appMarkOf(threadAppStore.get(), WORKTREE), { checkout: WORKTREE, state: "running", port: 20_020 })
+assert.deepEqual(appMarkOf(threadAppStore.get(), CWD), { checkout: CWD, state: "crashed" }, "a folder the strip doesn't follow takes the sidebar's look")
+hostView = ready("running")
+const unwatchAgain = driver.watch!(CWD)
+await until(() => appMarkOf(threadAppStore.get(), CWD)?.state === "running", "the strip's view")
+assert.deepEqual(appMarkOf(threadAppStore.get(), CWD), { state: "running", port: 20_010 }, "the strip's closer view of its folder wins, so the two never disagree")
+unwatchAgain()
+assert.equal(appMarkOf(threadAppStore.get(), CWD)?.state, "crashed", "once the strip lets go, its view may be old, and the sidebar's look stands")
+hostMarks = [{ checkout: WORKTREE, state: "starting" }]
+await until(() => appMarkOf(threadAppStore.get(), WORKTREE)?.state === "starting", "a later look")
+assert.equal(appMarkOf(threadAppStore.get(), CWD), undefined, "an app that stopped loses its mark")
+unwatchMarks()
+const looked = markLooks
+await wait(1_500)
+assert.equal(markLooks, looked, "once the rail goes, nothing asks")
+
+console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled; the sidebar's marks come from one look while the rail shows them, the strip's view of its folder wins, and nothing is asked once the rail goes")

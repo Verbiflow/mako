@@ -4,11 +4,11 @@ import { childProcessEnv } from "./accounts-common.js"
 import { applyControlEnvironment } from "./control-launch.js"
 import type { AppKey, ThreadEnvironment } from "./contracts/thread-environments.js"
 import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "./contracts/thread-environments.js"
-import type { AppActionOutcome, AppCheckView, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
+import type { AppActionOutcome, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { carryReport } from "./worktree-carry.js"
-import { memoryPressure, runKey, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
+import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
   checkoutOf,
   inputsDigest,
@@ -87,6 +87,8 @@ export interface DeskApp {
   /** For a recipe that runs one copy at a time: stops the copy another checkout runs, then starts this one. */
   takeTurn(cwd: string): Promise<AppActionOutcome>
   output(cwd: string, key: AppOutputKey, cursor?: AppOutputCursor): Promise<AppOutputChunk>
+  /** Every checkout on this Mac whose app isn't stopped, for the sidebar. */
+  marks(): Promise<AppMark[]>
 }
 
 interface Context {
@@ -555,6 +557,24 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (!found.environment) return empty
       return deps.processes.readLog(found.app, outputRun(key), cursor)
     },
+    async marks() {
+      const marks: AppMark[] = []
+      const seen = new Set<AppKey>()
+      for (const entry of await deps.processes.overview()) {
+        seen.add(entry.app)
+        const state = markState(entry.runs) ?? (line.has(entry.app) ? "waiting" : undefined)
+        if (!entry.checkout || !state) continue
+        const mark: AppMark = { checkout: entry.checkout, state }
+        const port = entry.runs.find((run) => run.kind === "process" && run.state.kind === "running" && run.port !== undefined)?.port
+        if (state === "running" && port !== undefined) mark.port = port
+        marks.push(mark)
+      }
+      for (const app of line.keys()) {
+        const checkout = seen.has(app) ? undefined : deps.processes.checkoutOf(app)
+        if (checkout) marks.push({ checkout, state: "waiting" })
+      }
+      return marks
+    },
   }
   return {
     desk,
@@ -658,6 +678,20 @@ function outputRun(key: AppOutputKey): string {
   if (key === "prepare") return PREPARE_KEY
   if (key.startsWith("check:")) return runKey("check", key.slice("check:".length))
   return runKey("process", key.slice("process:".length))
+}
+
+/** The desk view's phase from an app's runs alone, as `deskView` orders it; nothing for a stopped app. */
+function markState(runs: AppOverview["runs"]): AppMark["state"] | undefined {
+  const up = (run: AppOverview["runs"][number]) => run.state.kind === "running" || run.state.kind === "starting"
+  const installing = runs.find((run) => run.kind === "prepare" && runKey(run.kind, run.name) === PREPARE_KEY)
+  const processes = runs.filter((run) => run.kind === "process")
+  const lastStart = Math.max(0, ...processes.map((run) => run.startedAt ?? 0))
+  if (installing && up(installing)) return "starting"
+  if (installing?.state.kind === "exited" && installing.state.code !== 0 && installing.state.at >= lastStart) return "crashed"
+  if (processes.some((run) => run.state.kind === "exited")) return "crashed"
+  if (processes.some((run) => run.state.kind === "starting")) return "starting"
+  if (processes.some((run) => run.state.kind === "running")) return "running"
+  return undefined
 }
 
 function processView(name: string, port: number | undefined, status: RunStatus | undefined): AppProcessView {

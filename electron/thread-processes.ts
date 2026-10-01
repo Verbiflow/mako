@@ -91,6 +91,13 @@ interface Row {
   command: string
 }
 
+/** An app with records, where it last ran and how each of its runs is. */
+export interface AppOverview {
+  app: AppKey
+  checkout?: string
+  runs: Pick<RunStatus, "kind" | "name" | "state" | "startedAt" | "port">[]
+}
+
 /** An app with anything running, for room and idle decisions. */
 export interface ActiveApp {
   app: AppKey
@@ -326,6 +333,27 @@ export class ThreadProcesses {
         memoryBytes += held.reduce((sum, row) => sum + row.rssKb * 1024, 0)
       }
       if (alive.length) found.push({ app: app.data, usedAt: await this.usedAt(app.data), memoryBytes, runs: alive })
+    }
+    return found
+  }
+
+  /** Every app on this Mac with records, from one look at the process table, for marking them all at once. */
+  async overview(): Promise<AppOverview[]> {
+    const rows = await processTable()
+    const found: AppOverview[] = []
+    for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
+      const app = AppKeySchema.safeParse(folder)
+      if (!app.success) continue
+      const runs = Object.entries(await this.runs(app.data).catch(() => ({})))
+      if (!runs.length) continue
+      const entry: AppOverview = { app: app.data, runs: await Promise.all(runs.map(async ([key, record]) => {
+        const run: AppOverview["runs"][number] = { kind: record.kind, name: record.name, state: await this.state(app.data, key, record, rows), startedAt: record.at }
+        if (record.port !== undefined) run.port = record.port
+        return run
+      })) }
+      const checkout = this.checkoutOf(app.data)
+      if (checkout) entry.checkout = checkout
+      found.push(entry)
     }
     return found
   }

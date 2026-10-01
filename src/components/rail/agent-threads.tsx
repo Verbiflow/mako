@@ -7,6 +7,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { LiveAgentRow } from "@/components/rail/active-threads"
+import { AppMarkIcon } from "@/components/rail/app-mark"
+import { threadAppDriver } from "@/state/thread-app"
 import type { AcpPresence } from "@/state/acp-presence"
 import { ThreadRow } from "@/components/rail/thread-row"
 import { HARNESS_LABEL, harnessLabel } from "@/components/rail/harness-meta"
@@ -157,6 +159,7 @@ export function AgentThreads() {
   // Extra pages unfolded per folder — More reveals a handful at a time,
   // not the whole archive in one avalanche.
   const [pages, setPages] = useState<Record<string, number>>({})
+  useEffect(() => threadAppDriver()?.watchMarks?.(), [])
   const deferred = useDeferredValue(query)
   const nativeRefs = useThreads((state) => state.threads)
   const liveAgents = useAcp(selectAcpPresence, sameAcpPresence)
@@ -1077,6 +1080,7 @@ function FolderSection({
         {/* The main checkout's own branch; it gives way before the name does. */}
         {head ? <CheckoutLabel head={head} className="min-w-8 shrink-[4] text-label text-faint/80" /> : null}
         <span className="flex-1" />
+        {folder.cwd ? <AppMarkIcon checkout={folder.cwd} /> : null}
         <FolderActivity folder={folder} />
         {/* Open, the newest row already shows this time. */}
         {closed && !folder.priority && folder.latest ? (

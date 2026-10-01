@@ -12,7 +12,7 @@ import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
-import type { AppActionOutcome, AppOutputChunk, AppOutputCursor, AppOutputKey, ThreadAppView } from "./thread-app.js"
+import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
@@ -192,6 +192,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     takeTurnForThreadApp: (cwd: string) => invokeTrustedHost<AppActionOutcome>("mako:thread-app-take-turn", cwd),
     threadAppOutput: (cwd: string, key: AppOutputKey, cursor?: AppOutputCursor) =>
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
+    threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
     chatFolders: (paths: string[]) => invokeTrustedHost<ChatFolders>("mako:chat-folders", paths),
     removeWorktree: (path: string) => invokeTrustedHost<ThreadWorktrees>("mako:worktree-remove", path),
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),

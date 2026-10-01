@@ -78,6 +78,14 @@ export type ThreadAppView =
       elsewhere?: string
     }
 
+/** A checkout's app as the sidebar marks it. A stopped app has no mark. */
+export interface AppMark {
+  checkout: string
+  state: "running" | "starting" | "waiting" | "crashed"
+  /** Where its first process listens, while it runs. */
+  port?: number
+}
+
 /** One output the dock can show: the install step, a process, or a check. */
 export type AppOutputKey = "prepare" | `process:${string}` | `check:${"quick" | "full"}`
 

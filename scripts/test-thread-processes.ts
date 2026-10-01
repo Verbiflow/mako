@@ -426,14 +426,21 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
     settleMs: settle,
   })
   const { desk } = deskTools
+  const projectApp = (await deskFolder(project, false)).app
+  const markHere = async (on = desk) => {
+    const mark = (await on.marks()).find((entry) => entry.checkout === processes.checkoutOf(projectApp))
+    return mark && { state: mark.state, port: mark.port }
+  }
   const failedView = await desk.view(project)
   assert.equal(failedView.kind === "ready" && failedView.phase, "crashed", "a failed install shows as the app failing")
+  assert.deepEqual(await markHere(), { state: "crashed", port: undefined }, "the sidebar marks it the same way")
   assert.deepEqual(failedView.kind === "ready" && failedView.prepare && [failedView.prepare.reason, failedView.prepare.exit?.code], ["the recipe's install step changed", 1])
   assert.match((await desk.output(project, "prepare")).text, /resolving\nnpm ERR! missing peer/)
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
   assert.deepEqual(await desk.start(project), { problems: [] })
   const up = await desk.view(project)
   assert.equal(up.kind === "ready" && up.phase, "running", "a start after the recipe's repair leaves the old failure behind")
+  assert.deepEqual(await markHere(), { state: "running", port: toolBase }, "the sidebar marks it running, with where it listens")
   assert.deepEqual(up.kind === "ready" && up.address, { host: launched!.host, port: toolBase }, "the desk shows the folder's own address, shared with its agents")
   assert.deepEqual(up.kind === "ready" && up.processes.map((entry) => [entry.name, entry.state, entry.port]), [["web", "running", toolBase], ["api", "running", toolBase + 1]])
   assert.equal(up.kind === "ready" && up.prepare, undefined)
@@ -452,6 +459,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   await desk.stop(project)
   const stoppedView = await desk.view(project)
   assert.equal(stoppedView.kind === "ready" && stoppedView.phase, "stopped")
+  assert.equal(await markHere(), undefined, "a stopped app has no mark")
   assert.equal(stoppedView.kind === "ready" && stoppedView.checks[0]?.state, "passed", "stopping keeps what the checks found")
   assert.equal(await portListening(toolBase), false)
   const fresh = realpathSync(mkdtempSync(join(root, "fresh-")))
@@ -568,6 +576,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   await new Promise((resolve) => setTimeout(resolve, 400))
   assert.equal(await portListening(toolBase), false, "nothing starts while memory stays critical")
   assert.equal((await lineTools.desk.view(project)).kind === "ready" && (await lineTools.desk.view(project)).phase, "waiting")
+  assert.deepEqual(await markHere(lineTools.desk), { state: "waiting", port: undefined }, "a start waiting in line is marked waiting")
   short = false
   const deadline = Date.now() + settle
   while (!(await portListening(toolBase)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))

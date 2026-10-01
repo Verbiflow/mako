@@ -726,6 +726,7 @@ export const hostCallInputs = {
     z.union([z.literal("full"), z.literal("quick")]),
   ]),
   "mako:thread-app-make-room": z.tuple([z.string()]),
+  "mako:thread-app-marks": z.tuple([]),
   "mako:thread-app-output": z.tuple([
     z.string(),
     z.string(),

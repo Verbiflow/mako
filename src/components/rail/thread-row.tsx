@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
@@ -160,6 +161,11 @@ export const ThreadRow = memo(function ThreadRow({
   const branch = useWorktrees((state) => {
     const workingIn = workingFolder(state, ref)
     return worktreeAt(state.worktrees, workingIn)?.worktree.branch ?? worktreeAt(state.outside, workingIn)?.worktree.branch
+  })
+  // A worktree's app is its Thread's own; the project folder's app is marked on the folder's header.
+  const checkout = useWorktrees((state) => {
+    const workingIn = workingFolder(state, ref)
+    return (worktreeAt(state.worktrees, workingIn) ?? worktreeAt(state.outside, workingIn))?.worktree.path
   })
   const project = useWorktrees((state) => projectFolder(ref.worktrees, ref.cwd) ?? (ref.cwd ? state.folderMap(ref.cwd) : undefined))
   const active = useSession((state) => state.meta?.sessionFile === ref.path)
@@ -374,6 +380,7 @@ export const ThreadRow = memo(function ThreadRow({
           <ThreadActions {...menu} />
           <Detach path={ref.path} />
         </span>
+        {checkout ? <AppMarkIcon checkout={checkout} /> : null}
         <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
       </div>
     </ThreadContextMenu>

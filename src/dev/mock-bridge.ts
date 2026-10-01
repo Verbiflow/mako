@@ -4,6 +4,7 @@ import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
+import { RAIL_WORKTREES, railCwd } from "./mock-rail-worktrees"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
@@ -201,14 +202,14 @@ export function installMockBridge() {
       external: false,
     }),
     threadGroups: async () => [],
-    worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: setupWorktree ? [setupWorktree] : [] }),
+    worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
       Object.fromEntries(
-        folders.map((folder) => [
-          folder,
-          folder === setupWorktree?.path ? { kind: "branch" as const, name: setupWorktree.branch } : (MOCK_HEADS.get(folder) ?? null),
-        ])
+        folders.map((folder) => {
+          const own = folder === setupWorktree?.path ? setupWorktree : scene === "rail" ? RAIL_WORKTREES.find((worktree) => worktree.path === folder) : undefined
+          return [folder, own ? { kind: "branch" as const, name: own.branch } : (MOCK_HEADS.get(folder) ?? null)]
+        })
       ),
     threadApp: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
@@ -220,6 +221,7 @@ export function installMockBridge() {
     makeRoomForThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
     takeTurnForThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
+    threadAppMarks: async () => [],
     removeWorktree: async () => {
       throw new Error("The mock desk has no worktrees to remove.")
     },
@@ -702,10 +704,11 @@ export function installMockBridge() {
     userAvatar: async () =>
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mPcv2H9fwAHmwM6iEyzTAAAAABJRU5ErkJggg==",
     openUrl: async () => {},
-    threads: async () => ({
-      ...mockThreads(),
-      activity: {},
-    }),
+    threads: async () => {
+      const fixture = mockThreads()
+      const threads = scene === "rail" ? fixture.threads.map((ref) => ({ ...ref, cwd: railCwd(ref.path, ref.cwd) })) : fixture.threads
+      return { ...fixture, threads, activity: {} }
+    },
     openThread: async (path: string) => ({
       ref:
         mockThreads().threads.find((ref) => ref.path === path) ??

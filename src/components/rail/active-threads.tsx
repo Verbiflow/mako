@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { AppMarkIcon } from "@/components/rail/app-mark"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
@@ -12,6 +13,7 @@ import { acp } from "@/state/acp"
 import type { AcpPresence } from "@/state/acp-presence"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { openFoldedThread } from "@/state/thread-sessions"
+import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
 
 export function LiveAgentRow({
@@ -27,6 +29,7 @@ export function LiveAgentRow({
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(presence, state.threadOf))
   const [since] = useState(() => performance.now())
+  const checkout = useWorktrees((state) => worktreeAt(state.worktrees, presence.cwd)?.worktree.path)
   const label =
     presence.status === "needs-permission"
       ? "Needs your approval"
@@ -110,6 +113,7 @@ export function LiveAgentRow({
         >
           <ThreadActions {...menu} />
         </span>
+        {checkout ? <AppMarkIcon checkout={checkout} /> : null}
         <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
           <ActivityMark state={state} size={20} />
         </span>

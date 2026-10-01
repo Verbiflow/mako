@@ -8,13 +8,17 @@
 // setup (not set up; Set up starts a scripted setup Thread, and the strip
 // follows it to a running app), and
 // setup-fallback (the same, with Codex chosen for setting up but signed out), and
-// setup-asking (not set up, after a setup Thread's turn ended without a recipe).
+// setup-asking (not set up, after a setup Thread's turn ended without a recipe), and
+// rail (running, with four of the api project's Threads in worktrees whose
+// apps run, start, crash and wait, for the sidebar's marks).
 import { toast } from "sonner"
 import { setPref } from "@/state/prefs"
 import { threadsStore } from "@/state/thread-store"
 import type { SetupProgress } from "../../electron/contracts/thread-app"
+import { RAIL_MARKS } from "./mock-rail-worktrees"
 import {
   installThreadAppDriver,
+  putAppMarks,
   putThreadApp,
   threadAppStore,
   type AppOutputKey,
@@ -154,6 +158,8 @@ export function mockSetupMoment(moment: MockSetupMoment): void {
 export function installMockThreadApp(): void {
   const scenario = new URLSearchParams(location.search).get("app")
   if (!scenario) return
+  // The strip follows the folder on screen, as the host's driver does, so the sidebar marks it from the strip's view.
+  threadAppStore.set({ followed: [CWD] })
   const outputs = new Map<AppOutputKey, string>()
   const listeners = new Map<AppOutputKey, Set<(text: string, reset: boolean) => void>>()
   const timers = new Set<ReturnType<typeof setTimeout>>()
@@ -363,6 +369,8 @@ export function installMockThreadApp(): void {
       break
     case "running":
     case "check-failed":
+    case "rail":
+      if (scenario === "rail") putAppMarks(RAIL_MARKS)
       emit("process:web", [...START, ...EDITS])
       putThreadApp(CWD, {
         ...ready("running"),
