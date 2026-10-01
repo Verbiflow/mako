@@ -7,6 +7,7 @@ import type {
   SessionUpdate,
 } from "@agentclientprotocol/sdk"
 import { normalizeAcpOptions } from "./harnesses.js"
+import { decoded, type Decoded } from "./contracts/native-decoding.js"
 import type { LiveSessionState, LiveUpdate, LiveDriverEvent } from "./shared.js"
 
 interface AcpToolOutputBoundary {
@@ -32,7 +33,25 @@ export function forward<LiveSession extends { id: string }>(
   toolName?: string,
   unhandled?: (kind: string) => void
 ): void {
-  const raw = notification.update
+  for (const item of decodeAcpUpdate(notification.update, { settings: currentSettings, toolName })) {
+    if (item.kind === "update") emit({ type: "live-update", id: live.id, update: item.update })
+    else if (item.kind === "state") updateState(live, item.patch)
+    else if (item.kind === "unknown") unhandled?.(item.type)
+  }
+}
+
+/** What an update needs beyond itself: the session's settings and the provider's name for a tool. */
+export interface AcpUpdateContext {
+  settings?: SessionSettings
+  toolName?: string
+}
+
+/**
+ * One ACP session update in the shared vocabulary. Pure, like every
+ * decoder. Usage and the command list are the host's to read, so they
+ * decode to nothing here; an unknown kind is reported as `session/update/<kind>`.
+ */
+export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = {}): Decoded[] {
   let update: LiveUpdate
   switch (raw.sessionUpdate) {
     case "user_message_chunk":
@@ -64,7 +83,7 @@ export function forward<LiveSession extends { id: string }>(
         kind: "tool",
         id: raw.toolCallId,
         title: raw.title ?? "tool",
-        toolKind: toolName ?? raw.kind,
+        toolKind: context.toolName ?? raw.kind,
         status: raw.status ?? "pending",
         ...toolContent(raw.content),
         details: withLocations(
@@ -105,38 +124,32 @@ export function forward<LiveSession extends { id: string }>(
       }
       break
     case "current_mode_update":
-      updateState(live, { currentMode: raw.currentModeId })
-      return
+      return [decoded.state({ currentMode: raw.currentModeId })]
     case "config_option_update":
-      updateState(live, {
+      return [decoded.state({
         configOptions: normalizeAcpOptions(raw.configOptions),
         settings: acpObservedSettings(
           raw.configOptions,
-          currentSettings?.model
+          context.settings?.model
         ),
-      })
-      return
+      })]
     case "session_info_update": {
       // A cleared title keeps the one the thread has; `updatedAt` is the agent's own bookkeeping.
       const title = raw.title?.trim()
-      if (title) updateState(live, { title })
-      return
+      return title ? [decoded.state({ title })] : []
     }
     // The host reads these before forwarding: the context reading and the command list.
     case "usage_update":
     case "available_commands_update":
-      return
+      return []
     default:
-      unhandled?.(raw.sessionUpdate)
-      return
+      return [decoded.unknown(raw.sessionUpdate, null)]
   }
-  if (
-    (update.kind !== "text" && update.kind !== "user") ||
+  return (update.kind !== "text" && update.kind !== "user") ||
     update.text ||
     (update.kind === "user" && update.attachments?.length)
-  ) {
-    emit({ type: "live-update", id: live.id, update })
-  }
+    ? [decoded.update(update)]
+    : []
 }
 
 function parseAcpToolOutput(

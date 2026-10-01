@@ -147,6 +147,7 @@ const MetadataSchema = z.object({
         })
       ),
       questions: z.array(LiveInputQuestionSchema).optional(),
+      implementsPlan: z.object({ plan: z.string(), approve: z.string() }).optional(),
     })
   ),
 })

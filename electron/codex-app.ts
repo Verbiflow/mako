@@ -10,7 +10,7 @@ import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch
 import { CodexAgents } from "./providers/codex/agents.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { codexInteractiveConfig, codexWireSettings } from "./providers/codex/settings.js"
+import { codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./providers/codex/settings.js"
 import { codexInput } from "./providers/codex/input.js"
 import type {
   ProviderSteerInput,
@@ -26,7 +26,8 @@ import { homedir } from "node:os"
 import { setTimeout as delay } from "node:timers/promises"
 import { accountEnv, observeAccountUsage, selectedAccount } from "./accounts.js"
 import { mergeWindows } from "./contracts/account-usage.js"
-import { codexUpdatedWindows } from "./providers/codex/rate-limits.js"
+import { CodexDecoder } from "./providers/codex/decoder.js"
+import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable } from "./executable.js"
 import { codexMcpConfig, mergeCodexConfig } from "./mcp-runtime.js"
@@ -55,7 +56,6 @@ import {
   type ProtocolContext,
 } from "./codex-app-protocol.js"
 import type {
-  ItemTracker,
   PendingRpc,
   ProtocolCallbacks,
   RpcParams,
@@ -97,7 +97,8 @@ type Live = {
   nextRequestId: number
   pending: Map<string, PendingRpc>
   serverRequests: Map<string, PendingServerRequest>
-  items: Map<string, ItemTracker>
+  decoder: CodexDecoder
+  capture: NativeCapture | null
   background: ProtocolContext["background"]
   subagentTurns: Map<string, Array<() => void>>
   stdoutLines: LineAssembler
@@ -192,7 +193,11 @@ async function startCodex(
     nextRequestId: 0,
     pending: new Map(),
     serverRequests: new Map(),
-    items: new Map(),
+    decoder: new CodexDecoder({
+      get threadId() { return live.threadId },
+      get state() { return live.state },
+    }),
+    capture: nativeCapture("codex", id, () => ({ threadId: live.threadId })),
     background: { running: new Set() },
     subagentTurns: new Map(),
     settling: [],
@@ -222,10 +227,9 @@ async function startCodex(
         if (live.replayUpdates) emitUpdate(live, markerUpdate(marker, markerId))
         else engine.event(live, marker, markerId)
       },
-      unhandled: (kind) => engine.unhandled(live, kind),
-      rateLimits: (params) => {
-        const windows = codexUpdatedWindows(params)
-        if (windows.length === 0) return
+      unhandled: (kind, reason, raw) =>
+        raw === undefined ? engine.unhandled(live, kind) : engine.unknown(live, kind, reason ?? "unknown", raw),
+      usage: (windows) => {
         void account.then((name) =>
           observeAccountUsage("codex", name, (previous) => mergeWindows(previous, windows, Date.now())))
       },
@@ -311,7 +315,7 @@ export async function codexAppPrompt(
   tuning: Tuning | undefined,
   dispatch: PromptDispatch
 ): Promise<void> {
-  const { live, threadId } = preparePrompt(dispatch, () => {
+  const { live, threadId, collaboration } = preparePrompt(dispatch, () => {
     const live = sessions.get(id)
     if (!live?.threadId || live.exited)
       throw new Error("This Codex session is not running")
@@ -322,7 +326,7 @@ export async function codexAppPrompt(
     if (text.length > MAX_PROMPT_CHARS)
       throw new Error("The prompt is too large for the Codex app-server adapter")
 
-    return { live, threadId: live.threadId }
+    return { live, threadId: live.threadId, collaboration: codexCollaborationMode(tuning, live.state.settings?.model) }
   })
   const sequence = ++live.promptSequence
   live.interruptWhenStarted = false
@@ -340,6 +344,7 @@ export async function codexAppPrompt(
       input: codexInput(text, attachments),
       cwd: live.cwd,
       ...codexWireSettings(tuning),
+      ...collaboration,
       ...codexTurnAccess(live.access),
     })
     dispatch.report({ kind: "accepted", source: "native-response", referenceId: result.turn.id })
@@ -602,7 +607,7 @@ function disposeLive(live: Live, error: Error): void {
   }
   live.pending.clear()
   live.serverRequests.clear()
-  live.items.clear()
+  live.decoder.forgetItems()
   live.stdoutLines = new LineAssembler(MAX_STDOUT_BUFFER)
   for (const settle of live.settling.splice(0)) settle()
   for (const waiters of live.subagentTurns.values()) for (const settle of waiters) settle()

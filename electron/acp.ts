@@ -45,6 +45,7 @@ import {
   CreateElicitationRequest as ElicitationRequest,
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
   type Client,
   type ClientSideConnection as Connection,
   type ContentBlock,
@@ -67,7 +68,9 @@ import { errorMessage } from "./live-runtime.js"
 import { basename, join } from "node:path"
 import { acpObservedSettings, applyAcpSettings } from "./acp-config.js"
 import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
-import { forward } from "./acp-notifications.js"
+import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord } from "./acp-decoder.js"
+import { nativeCapture } from "./native-capture.js"
+import { deliverDecoded } from "./contracts/native-decoding.js"
 import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
 import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpTuning } from "./providers/acp-source.js"
@@ -366,34 +369,49 @@ async function startAcp(
     })
   })
 
+  const decoder = new AcpDecoder(source, () => live.state.settings)
+  const capture = nativeCapture(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }))
+  /** Records a message as `acpDecoderSource` reads it: `{ method, params }`, or `{ request, params }` for one the agent waits on. */
+  const record = (message: AcpNotificationRecord | AcpRequestRecord) => {
+    if (capture) capture.record(JSON.parse(JSON.stringify(message)))
+  }
+  // A state patch goes through `update`, which settles waiters once the turn ends.
+  const sink = { ...engine.sink<never>(live, { effect: () => undefined }), patch: (patch: Partial<LiveSessionState>) => update(live, patch) }
   const client: Client = {
     async requestPermission(params: RequestPermissionRequest) {
-      const requestId = `${id}-perm-${live.pendingPermissions.size}-${Date.now()}`
+      record({ request: "session/request_permission", params })
       const request: LivePermissionRequest = {
-        id: requestId,
+        id: `${id}-perm-${live.pendingPermissions.size}-${Date.now()}`,
         native: await approvals?.identify(params).catch(() => undefined),
         sessionId: id,
-        title:
-          params.toolCall?.title ??
-          spec.permissionTitle?.(params) ??
-          "The agent wants to use a tool",
-        kind: params.toolCall?.kind ?? undefined,
-        options: params.options.map((option) => ({
-          optionId: option.optionId,
-          name: option.name,
-          kind: option.kind,
-        })),
+        ...decoder.permission(params).request,
       }
       const response = await engine.ask(live, request)
       const chosen = response.kind === "choice" ? response.optionId : null
       if (chosen === null) return { outcome: { outcome: "cancelled" as const } }
       return { outcome: { outcome: "selected" as const, optionId: chosen } }
     },
+    async extMethod(method: string, params: JsonObject) {
+      record({ request: method, params })
+      const vendor = decoder.request(method, params)
+      if (!vendor || vendor.sessionId !== live.sessionId) {
+        engine.unknown(live, method, vendor ? "unreadable" : "unknown", params)
+        throw RequestError.methodNotFound(method)
+      }
+      engine.emitUpdates(live, vendor.updates)
+      const response = await engine.ask(live, {
+        id: `${id}-request-${live.pendingPermissions.size}-${Date.now()}`,
+        sessionId: id,
+        ...vendor.ask.request,
+      })
+      return acpAnswer(vendor.ask, response.kind === "choice" ? response.optionId : null)
+    },
     async unstable_createElicitation(params: CreateElicitationRequest) {
       return requestElicitation(live, params, approvals?.identifyElicitation?.(params))
     },
     async sessionUpdate(params: SessionNotification) {
       if (live.sessionId && params.sessionId !== live.sessionId) return
+      record({ method: "session/update", params })
       reportBackground(background?.sessionUpdate?.(params))
       announceProviderTurn(providerTurns?.updateCause?.(params))
       if (live.agents?.observe(params) === "child") return
@@ -440,11 +458,10 @@ async function startAcp(
       }
       if (live.turn && !live.providerTurn && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate))
         live.turnReceipt?.()
-      forward(live, params, live.emit, update, live.state.settings,
-        params.update.sessionUpdate === "tool_call" ? source?.toolName?.(params.update) : undefined,
-        (kind) => engine.unhandled(live, kind))
+      deliverDecoded(decoder.update(params), sink)
     },
     async extNotification(method: string, params: JsonObject) {
+      record({ method, params })
       const report = background?.extension?.(method, params)
       reportBackground(report)
       const observed = observeProviderTurn(method, params)

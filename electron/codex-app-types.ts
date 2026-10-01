@@ -12,6 +12,8 @@ import type { SandboxPolicy } from "./providers/codex/generated/v2/SandboxPolicy
 import type { TurnSteerParams } from "./providers/codex/generated/v2/TurnSteerParams.js"
 import type { ThreadCompactStartParams } from "./providers/codex/generated/v2/ThreadCompactStartParams.js"
 import type { TurnInterruptParams } from "./providers/codex/generated/v2/TurnInterruptParams.js"
+import type { NativeCapture } from "./native-capture.js"
+import type { CodexDecoder } from "./providers/codex/decoder.js"
 
 export type Tuning = SessionSettings
 
@@ -193,10 +195,10 @@ export interface ProtocolCallbacks {
   compacted?(compaction?: import("@mako/sessions/events").Compaction, id?: string): void
   /** A transcript marker: a warning, a failed turn, a review boundary. */
   event?(marker: import("@mako/sessions/events").TranscriptEvent, id?: string): void
-  /** A notification or item this protocol does not translate. */
-  unhandled?(kind: string): void
-  /** `account/rateLimits/updated`: where the session's account stands after spending. */
-  rateLimits?(params: JsonObject): void
+  /** A notification or item the decoder has no meaning for, with its raw record. */
+  unhandled?(kind: string, reason?: "unknown" | "unreadable", raw?: JsonValue): void
+  /** `account/rateLimits/updated`: the windows the session's account just reported. */
+  usage?(windows: import("./account-types.js").UsageWindow[]): void
   observeAgents(item: CodexAgentItem, replay: boolean): void
   observeAgentTurn?(nativeId: string): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void
@@ -212,7 +214,10 @@ export interface ProtocolContext {
   state: LiveSessionState
   nextRequestId: number
   pending: Map<string, PendingRpc>
-  items: Map<string, ItemTracker>
+  /** What Codex's notifications mean; holds stream assembly for this session. */
+  decoder: CodexDecoder
+  /** Records each notification as it arrived when `MAKO_NATIVE_CAPTURE` asks. */
+  capture?: NativeCapture | null
   /**
    * Command items whose terminal outlived their turn. `raced` collects
    * completions that arrive while a terminal list is in flight.
@@ -220,12 +225,6 @@ export interface ProtocolContext {
   background: { running: Set<string>; raced?: Set<string> }
   /** Waiters for a subagent's turn to settle, by the subagent's thread. */
   subagentTurns?: Map<string, Array<() => void>>
-  /** Context tokens when the running compaction started. */
-  compactingFrom?: number
-  /** The label of the waiting activity this protocol set and has yet to end. */
-  waiting?: string
-  /** Notices already shown this session; a repeat adds nothing. */
-  notices?: Set<string>
   stdoutLines: LineAssembler
   exited: boolean
   protocol: ProtocolCallbacks

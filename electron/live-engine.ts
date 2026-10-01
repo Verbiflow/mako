@@ -11,7 +11,9 @@ import type {
   NativeNotice,
 } from "./shared.js"
 import { compactionEvent, type Compaction, type TranscriptEvent } from "@mako/sessions/events"
-import { hostLog } from "./host-log.js"
+import type { JsonValue } from "./codex-app-json.js"
+import type { DecodedSink } from "./contracts/native-decoding.js"
+import { retainUnknown, type UnknownReason } from "./native-unknown.js"
 
 /** What a live engine's per-session record must carry to share the runtime. */
 export interface EngineLive {
@@ -59,6 +61,13 @@ export interface LiveEngineApi<Live extends EngineLive> {
    * without a line per occurrence.
    */
   unhandled(live: Live, kind: string): void
+  /** Like `unhandled`, keeping the first raw record of each kind (`native-unknown.ts`). */
+  unknown(live: Live, kind: string, reason: UnknownReason, raw: JsonValue): void
+  /**
+   * Where a harness decoder's events go for this session. `effect` takes
+   * the harness's own facts; `usage` the plan-limit windows it reported.
+   */
+  sink<Effect>(live: Live, handlers: { effect(effect: Effect): void; usage?(windows: import("./account-types.js").UsageWindow[]): void }): DecodedSink<Effect>
   /**
    * Put a request to the desk and wait for its answer. The pending entry
    * is removed when the answer arrives; `release` answers whatever is
@@ -77,8 +86,6 @@ export interface LiveEngineApi<Live extends EngineLive> {
  * keeps only protocol translation — turning session/new, turn/start, or SDK
  * callbacks into these calls.
  */
-const unhandled = new Set<string>()
-
 /**
  * How long after compacting stops its completion still belongs to it. Cursor
  * ends the activity before its summary arrives; a completion much later is
@@ -134,11 +141,21 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
     event(live, compactionEvent(measured), id)
     activity(live, null)
   }
+  /** Patch the session's state and report the new whole. */
+  const patch = (live: Live, change: Partial<LiveSessionState>): void => {
+    if (change.status !== undefined && change.status !== "running") stopCompacting(live)
+    live.state = { ...live.state, ...change }
+    live.emit({ type: "live-session", session: live.state })
+  }
+  const emitUpdate = (live: Live, update: LiveUpdate): void => {
+    live.emit({ type: "live-update", id: live.state.id, update })
+  }
+  const emitUpdates = (live: Live, updates: LiveUpdate[]): void => {
+    if (updates.length === 0) return
+    live.emit({ type: "live-updates", id: live.state.id, updates })
+  }
   const unhandledEvent = (live: Live, kind: string): void => {
-    const key = `${live.state.harness}\0${kind}`
-    if (unhandled.has(key)) return
-    unhandled.add(key)
-    hostLog("live", "native event not handled", { harness: live.state.harness, kind })
+    retainUnknown(live.state.harness, kind, "unknown")
   }
 
   return {
@@ -148,21 +165,9 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
       return sessions.get(id)?.state ?? null
     },
 
-    /** Patch the session's state and report the new whole. */
-    patch(live: Live, patch: Partial<LiveSessionState>): void {
-      if (patch.status !== undefined && patch.status !== "running") stopCompacting(live)
-      live.state = { ...live.state, ...patch }
-      live.emit({ type: "live-session", session: live.state })
-    },
-
-    emitUpdate(live: Live, update: LiveUpdate): void {
-      live.emit({ type: "live-update", id: live.state.id, update })
-    },
-
-    emitUpdates(live: Live, updates: LiveUpdate[]): void {
-      if (updates.length === 0) return
-      live.emit({ type: "live-updates", id: live.state.id, updates })
-    },
+    patch,
+    emitUpdate,
+    emitUpdates,
 
     emitAgent(live: Live, agent: NativeAgentObservation): void {
       live.emit({ type: "live-agent", id: live.state.id, agent })
@@ -182,6 +187,21 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
       }
     },
     unhandled: unhandledEvent,
+    unknown(live: Live, kind: string, reason: UnknownReason, raw: JsonValue): void {
+      retainUnknown(live.state.harness, kind, reason, raw)
+    },
+    sink(live, handlers) {
+      return {
+        updates: (updates) => updates.length === 1 ? emitUpdate(live, updates[0]!) : emitUpdates(live, updates),
+        patch: (change) => patch(live, change),
+        activity: (observation) => activity(live, observation),
+        marker: (marker, source) => event(live, marker, source),
+        compacted: (compaction, source) => compacted(live, compaction, source),
+        usage: (windows) => handlers.usage?.(windows),
+        unknown: (kind, reason, raw) => retainUnknown(live.state.harness, kind, reason, raw),
+        effect: (effect) => handlers.effect(effect),
+      }
+    },
 
     /**
      * Put a request to the desk and wait for its answer. The pending entry
