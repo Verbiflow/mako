@@ -199,9 +199,12 @@ import { RuntimeUpdates } from "./runtime-updates.js"
 import { bindLineageDirect, chainOf } from "./lineage.js"
 import {
   accountUsage,
+  accountUsageSpent,
+  onAccountUsage,
   captureAccount,
   accountCatalog,
   removeAccount,
+  useResetCredit,
   selectAccount,
   type AccountHarness,
   type AccountProvider,
@@ -731,8 +734,40 @@ async function moveOntoOwnBranch(id: string): Promise<void> {
   )
 }
 
+/** Live sessions mid-turn, by id, with the harness that is spending. */
+const spending = new Map<string, string>()
+
+/** A session write older than this is the catalog catching up, not use. */
+const RECENT_WRITE_MS = 2 * 60_000
+/** A harness busy outside Mako writes constantly; its limits are read again at most this often. */
+const STORE_SPEND_THROTTLE_MS = 60_000
+
+/**
+ * Every harness's turn ends here, live or headless; its limits moved. So
+ * does any write to its session store, from Mako or a terminal elsewhere.
+ */
+function noteSpend(event: HostEvent) {
+  let ended: string | undefined
+  let throttle: number | undefined
+  if (event.type === "live-batch" && event.batch.session) {
+    const session = event.batch.session
+    if (session.status === "running") spending.set(session.id, session.harness)
+    else if (spending.delete(session.id)) ended = session.harness
+  } else if (event.type === "thread-run" && event.run.status !== "running") {
+    ended = event.run.harness
+  } else if (event.type === "thread-ref" && Date.now() - Date.parse(event.ref.updatedAt ?? "") < RECENT_WRITE_MS) {
+    ended = event.ref.harness
+    throttle = STORE_SPEND_THROTTLE_MS
+  }
+  if (ended !== undefined && accountUsageSpent(ended, throttle))
+    emit({ type: "account-usage-spent", harness: ended })
+}
+
+onAccountUsage((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
+
 function emit(event: HostEvent, client?: string) {
   if (hostClosing) return
+  noteSpend(event)
   if (event.type === "threads" || event.type === "thread-ref")
     liveConversations?.discoverNativePaths()
   if (event.type === "live-batch") workspaceMoves?.settled(event.batch.id)
@@ -1375,6 +1410,9 @@ function bindIpc() {
   )
   handle("mako:account-usage", (_e, harness: AccountProvider, name: string) =>
     accountUsage(harness, name)
+  )
+  handle("mako:account-reset", (_e, harness: AccountProvider, name: string, attempt: string) =>
+    useResetCredit(harness, name, attempt)
   )
 
   // The picker opens on what is known; each provider's discovery arrives as

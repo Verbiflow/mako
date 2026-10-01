@@ -24,7 +24,9 @@ import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { setTimeout as delay } from "node:timers/promises"
-import { accountEnv } from "./accounts.js"
+import { accountEnv, observeAccountUsage, selectedAccount } from "./accounts.js"
+import { mergeWindows } from "./contracts/account-usage.js"
+import { codexUpdatedWindows } from "./providers/codex/rate-limits.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable } from "./executable.js"
 import { codexMcpConfig, mergeCodexConfig } from "./mcp-runtime.js"
@@ -69,7 +71,7 @@ import type {
   McpRegistrySnapshot,
 } from "./shared.js"
 import { createLiveEngine } from "./live-engine.js"
-import { compactionEvent } from "@mako/sessions/events"
+import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
 
 type Live = {
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }
@@ -146,6 +148,7 @@ async function startCodex(
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
   const env = await trace.step("account", () => accountEnv("codex", process.env))
+  const account = selectedAccount("codex").then((selected) => selected.name, () => "default")
   if (options.conversationTools)
     env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
   applyControlEnvironment(env, options.conversationTools?.control)
@@ -211,12 +214,21 @@ async function startCodex(
       updateState: (patch) => updateState(live, patch),
       emitUpdate: (update) => emitUpdate(live, update),
       activity: (activity) => engine.activity(live, activity),
-      compacted: (compaction) => {
-        emitUpdate(live, { kind: "event", ...compactionEvent(compaction) })
-        engine.activity(live, null)
+      compacted: (compaction, markerId) => {
+        if (live.replayUpdates) emitUpdate(live, markerUpdate(compactionEvent(compaction), markerId))
+        else engine.compacted(live, compaction, markerId)
       },
-      event: (marker) => emitUpdate(live, { kind: "event", ...marker }),
+      event: (marker, markerId) => {
+        if (live.replayUpdates) emitUpdate(live, markerUpdate(marker, markerId))
+        else engine.event(live, marker, markerId)
+      },
       unhandled: (kind) => engine.unhandled(live, kind),
+      rateLimits: (params) => {
+        const windows = codexUpdatedWindows(params)
+        if (windows.length === 0) return
+        void account.then((name) =>
+          observeAccountUsage("codex", name, (previous) => mergeWindows(previous, windows, Date.now())))
+      },
       observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
       observeAgents: (item, replay) => {
         for (const agent of live.agents.project(item, replay))
@@ -605,6 +617,11 @@ function clearStartupWatch(live: Live): void {
 function updateState(live: Live, patch: Partial<LiveSessionState>): void {
   engine.patch(live, patch)
   if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
+}
+
+/** A marker held with the history replayed at startup, which is published as one batch. */
+function markerUpdate(marker: TranscriptEvent, id: string | undefined): LiveUpdate {
+  return id ? { kind: "event", id, ...marker } : { kind: "event", ...marker }
 }
 
 function emitUpdate(live: Live, update: LiveUpdate): void {

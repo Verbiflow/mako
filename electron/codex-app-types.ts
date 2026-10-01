@@ -189,11 +189,14 @@ export interface ProtocolCallbacks {
   updateState(patch: Partial<LiveSessionState>): void
   emitUpdate(update: LiveUpdate): void
   activity?(activity: import("./contracts/native-activity.js").NativeActivityObservation | null): void
-  compacted?(compaction?: import("@mako/sessions/events").Compaction): void
+  /** `id` is the native item or turn the marker stands for. */
+  compacted?(compaction?: import("@mako/sessions/events").Compaction, id?: string): void
   /** A transcript marker: a warning, a failed turn, a review boundary. */
-  event?(marker: import("@mako/sessions/events").TranscriptEvent): void
+  event?(marker: import("@mako/sessions/events").TranscriptEvent, id?: string): void
   /** A notification or item this protocol does not translate. */
   unhandled?(kind: string): void
+  /** `account/rateLimits/updated`: where the session's account stands after spending. */
+  rateLimits?(params: JsonObject): void
   observeAgents(item: CodexAgentItem, replay: boolean): void
   observeAgentTurn?(nativeId: string): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void

@@ -36,15 +36,23 @@ export interface LiveEngineApi<Live extends EngineLive> {
   emitAgent(live: Live, agent: NativeAgentObservation): void
   /** What the turn is doing without output, or `null` once it stops. */
   activity(live: Live, activity: NativeActivityObservation | null): void
-  /** The provider compacted the conversation: the transcript marks it and compacting ends. */
-  compacted(live: Live, compaction?: Compaction): void
-  /** A marker in the transcript: a provider notice, warning or failure. */
-  event(live: Live, event: TranscriptEvent): void
+  /**
+   * The provider compacted the conversation: the transcript marks it and
+   * compacting ends. Without a duration from the provider, the marker says
+   * how long it took since the provider said it was compacting.
+   */
+  compacted(live: Live, compaction?: Compaction, id?: string): void
+  /**
+   * A marker in the transcript: a provider notice, warning or failure. `id`
+   * names the native event, so the same event replayed is drawn once.
+   */
+  event(live: Live, event: TranscriptEvent, id?: string): void
   /**
    * Apply what a harness decoder made of one native event; `undefined`
    * means the decoder does not know it, and `kind` is logged as unhandled.
+   * `source` is the native event's own id, which names its markers.
    */
-  observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined): void
+  observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined, source?: string): void
   /**
    * A native event this engine does not translate. Logged once per harness
    * and kind for the host's life, so a new provider event is on record
@@ -71,14 +79,59 @@ export interface LiveEngineApi<Live extends EngineLive> {
  */
 const unhandled = new Set<string>()
 
+/**
+ * How long after compacting stops its completion still belongs to it. Cursor
+ * ends the activity before its summary arrives; a completion much later is
+ * another compaction whose start went unreported.
+ */
+const COMPACTION_LINGER_MS = 60_000
+
+/** Marker ids remembered per conversation to drop a replayed event; far more than a turn draws. */
+const MAX_DRAWN_MARKERS = 512
+
+/** When the provider last said it was compacting, and when it stopped saying so. */
+interface Compacting {
+  since: number
+  until?: number
+}
+
 export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live> {
   const sessions = new Map<string, Live>()
-  const activity = (live: Live, observation: NativeActivityObservation | null): void =>
+  const compacting = new WeakMap<Live, Compacting>()
+  /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
+  const stopCompacting = (live: Live): void => {
+    const held = compacting.get(live)
+    if (held && held.until === undefined) held.until = Date.now()
+  }
+  const activity = (live: Live, observation: NativeActivityObservation | null): void => {
+    const held = compacting.get(live)
+    if (observation?.kind === "compacting") {
+      if (!held || held.until !== undefined) compacting.set(live, { since: Date.now() })
+    } else if (observation?.kind !== "retrying") stopCompacting(live)
     live.emit({ type: "live-activity", id: live.state.id, activity: observation })
-  const event = (live: Live, marker: TranscriptEvent): void =>
-    live.emit({ type: "live-update", id: live.state.id, update: { kind: "event", ...marker } })
-  const compacted = (live: Live, compaction?: Compaction): void => {
-    event(live, compactionEvent(compaction))
+  }
+  const drawn = new WeakMap<Live, Set<string>>()
+  /** Whether this native event already has its marker; the first one drawn stands. */
+  const repeated = (live: Live, id: string): boolean => {
+    let ids = drawn.get(live)
+    if (!ids) drawn.set(live, ids = new Set())
+    if (ids.has(id)) return true
+    ids.add(id)
+    if (ids.size > MAX_DRAWN_MARKERS) ids.delete(ids.values().next().value!)
+    return false
+  }
+  const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
+    if (id && repeated(live, id)) return
+    live.emit({ type: "live-update", id: live.state.id, update: id ? { kind: "event", id, ...marker } : { kind: "event", ...marker } })
+  }
+  const compacted = (live: Live, compaction?: Compaction, id?: string): void => {
+    const held = compacting.get(live)
+    compacting.delete(live)
+    const until = held?.until ?? Date.now()
+    const measured = held && compaction?.durationMs === undefined && Date.now() - until < COMPACTION_LINGER_MS
+      ? { ...compaction, durationMs: until - held.since }
+      : compaction
+    event(live, compactionEvent(measured), id)
     activity(live, null)
   }
   const unhandledEvent = (live: Live, kind: string): void => {
@@ -97,6 +150,7 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
 
     /** Patch the session's state and report the new whole. */
     patch(live: Live, patch: Partial<LiveSessionState>): void {
+      if (patch.status !== undefined && patch.status !== "running") stopCompacting(live)
       live.state = { ...live.state, ...patch }
       live.emit({ type: "live-session", session: live.state })
     },
@@ -117,12 +171,14 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
     activity,
     compacted,
     event,
-    observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined): void {
+    observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined, source?: string): void {
       if (!notices) return unhandledEvent(live, kind)
+      let markers = 0
+      const id = () => source && (markers++ === 0 ? source : `${source}:${markers}`)
       for (const notice of notices) {
         if (notice.kind === "activity") activity(live, notice.activity)
-        else if (notice.kind === "compacted") compacted(live, notice.compaction)
-        else event(live, notice.event)
+        else if (notice.kind === "compacted") compacted(live, notice.compaction, id())
+        else event(live, notice.event, id())
       }
     },
     unhandled: unhandledEvent,

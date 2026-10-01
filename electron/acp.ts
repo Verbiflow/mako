@@ -38,7 +38,7 @@ import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { pathToFileURL } from "node:url"
-import { acpReadable, acpWritable } from "./acp-stream.js"
+import { acpReadable, acpWritable, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
 import { app } from "electron"
 import {
   ClientSideConnection,
@@ -454,10 +454,23 @@ async function startAcp(
     },
   }
   /** A notification for another session is not this conversation's; an unknown one is logged either way. */
-  function applyNotification({ sessionId, kind, notices, state }: AcpNotificationDecoding): void {
+  function applyNotification({ sessionId, kind, notices, state, id: source }: AcpNotificationDecoding): void {
     if (notices && (!live.sessionId || sessionId !== live.sessionId)) return
-    engine.observe(live, kind, notices)
+    engine.observe(live, kind, notices, source)
     if (notices && state) update(live, state)
+  }
+  /**
+   * An update the SDK would have dropped. The provider's decoder reads a kind
+   * of its own; anything else is logged, a malformed known kind under its own name.
+   */
+  function refusedUpdate({ params, kind, known }: RefusedSessionUpdate): void {
+    const decoded = known ? undefined : source?.decodeNotification?.("session/update", params)
+    if (decoded) applyNotification(decoded)
+    else engine.unhandled(live, known ? `session/update/${kind}/invalid` : `session/update/${kind}`)
+  }
+  /** The SDK kept this update but not all of it; each lost place is logged once. */
+  function lossyUpdate({ kind, paths }: LossySessionUpdate): void {
+    for (const path of paths) engine.unhandled(live, `session/update/${kind}/lost/${path}`)
   }
   const background = source?.observeBackground?.()
   live.background = background
@@ -488,7 +501,7 @@ async function startAcp(
 
   const connection = new ClientSideConnection(
     () => client,
-    ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout))
+    await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate)
   )
   live.connection = connection
 

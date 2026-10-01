@@ -40,6 +40,10 @@ export type {
   AccountProvider,
   AccountUsage,
   HarnessAccount,
+  UsageBalance,
+  UsageResetCredits,
+  ResetCreditOutcome,
+  UsageWindow,
 } from "./account-types.js"
 
 export * from "./contracts/native-agents.js"

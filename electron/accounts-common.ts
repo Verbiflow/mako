@@ -194,6 +194,8 @@ export function parseUsageReset(value: JsonValue | undefined): number | null {
 export interface JwtClaims {
   email?: string
   accountId?: string
+  /** Unix ms from `exp`. */
+  expiresAt?: number
 }
 
 export function jwtClaims(token: string | undefined): JwtClaims {
@@ -216,9 +218,11 @@ export function jwtClaims(token: string | undefined): JwtClaims {
       stringValue(fields.get("chatgpt_account_id")) ??
       stringValue(nested?.get("chatgpt_account_id")) ??
       stringValue(firstOrganization?.get("id"))
+    const expiry = numberValue(fields.get("exp"))
     const claims: JwtClaims = {}
     if (email !== undefined) claims.email = email
     if (accountId !== undefined) claims.accountId = accountId
+    if (expiry !== undefined) claims.expiresAt = expiry * 1000
     return claims
   } catch {
     return {}

@@ -122,7 +122,6 @@ const IGNORED_NOTIFICATIONS = new Set([
   "account/updated",
   "account/login/completed",
   "account/gatewayOAuth/changed",
-  "account/rateLimits/updated",
   "remoteControl/status/changed",
   "externalAgentConfig/import/progress",
   "externalAgentConfig/import/completed",
@@ -206,6 +205,10 @@ function processLine(context: ProtocolContext, line: string): void {
     return
   }
   if (IGNORED_NOTIFICATIONS.has(message.method)) return
+  if (message.method === "account/rateLimits/updated") {
+    context.protocol.rateLimits?.(message.params)
+    return
+  }
   const notification = parseNotification(message.method, message.params)
   if (notification) handleNotification(context, notification)
   else context.protocol.unhandled?.(message.method)
@@ -444,7 +447,7 @@ function completeTurn(context: ProtocolContext, turn: Turn): void {
   const error = turn.error?.message || undefined
   const stop = turn.status === "inProgress" ? "completed" : turn.status
   if (error || stop === "failed")
-    context.protocol.event?.(codexFailureEvent(turn.error?.variant, error))
+    context.protocol.event?.(codexFailureEvent(turn.error?.variant, error), `${turn.id}:failed`)
   context.currentTurnId = null
   context.waiting = undefined
   context.protocol.clearTurnServerRequests(turn.id)
@@ -748,11 +751,11 @@ function handleItem(
     case "enteredReviewMode":
       if (completed) {
         const line = firstLine(item.review)
-        context.protocol.event?.(event("Review mode started", line, item.review === line ? undefined : item.review))
+        context.protocol.event?.(event("Review mode started", line, item.review === line ? undefined : item.review), item.id)
       }
       return
     case "exitedReviewMode":
-      if (completed) context.protocol.event?.(event("Review mode ended", undefined, item.review))
+      if (completed) context.protocol.event?.(event("Review mode ended", undefined, item.review), item.id)
       return
     case "hookPrompt":
       return
@@ -771,7 +774,7 @@ function handleItem(
       return
     case "contextCompaction":
       if (replay) {
-        if (completed) context.protocol.compacted?.()
+        if (completed) context.protocol.compacted?.(undefined, item.id)
         return
       }
       context.waiting = undefined
@@ -779,7 +782,7 @@ function handleItem(
         // Codex reports the compacted estimate before this item completes.
         const tokensBefore = context.compactingFrom
         context.compactingFrom = undefined
-        context.protocol.compacted?.(tokensBefore ? { tokensBefore } : undefined)
+        context.protocol.compacted?.(tokensBefore ? { tokensBefore } : undefined, item.id)
       } else {
         context.compactingFrom = context.state.usage?.used
         context.protocol.activity?.({ kind: "compacting" })
