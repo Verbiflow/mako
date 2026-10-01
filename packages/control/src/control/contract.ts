@@ -124,6 +124,22 @@ export const ControlOperationSchema = z.discriminatedUnion("kind", [
 ])
 export type ControlOperation = z.infer<typeof ControlOperationSchema>
 
+/** What an operation did and to what, as receipts and failed cells name it:
+ * `set-text e4`, `pointer e9`, `pointer 120,80`, `press-key "Enter"`. */
+export function operationLabel(operation: z.input<typeof ControlOperationSchema>): string {
+  const at = "at" in operation ? operation.at : undefined
+  const subject =
+    "ref" in operation && operation.ref !== undefined
+      ? operation.ref
+      : at && "ref" in at
+        ? at.ref
+        : at
+          ? `${Math.round(at.x)},${Math.round(at.y)}`
+          : undefined
+  const key = "key" in operation ? JSON.stringify(operation.key) : undefined
+  return [operation.kind, subject, key].filter(Boolean).join(" ")
+}
+
 export const ControlTargetsRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("apps"), all: z.boolean().default(false) }).strict(),
   z
@@ -144,12 +160,15 @@ export const ControlObserveRequestSchema = z
     query: z.string().max(200).optional(),
     interactive: z.boolean().default(false),
     max: z.number().int().min(1).max(1000).default(250),
+    offset: z.number().int().min(0).optional(),
     maxDepth: z.number().int().min(1).max(25).optional(),
   })
   .strict()
   .superRefine((request, context) => {
     if (request.maxDepth !== undefined && request.target.kind !== "window")
       context.addIssue({ code: "custom", path: ["maxDepth"], message: "maxDepth is a native window read limit; browser observations use within/match scopes." })
+    if (request.offset !== undefined && request.target.kind !== "page")
+      context.addIssue({ code: "custom", path: ["offset"], message: "offset pages through a browser observation; native windows use maxDepth or within." })
   })
 export type ControlObserveRequest = z.infer<typeof ControlObserveRequestSchema>
 

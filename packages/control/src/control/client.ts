@@ -14,10 +14,13 @@ import {
   type ControlReadScope,
   type NameMatch,
 } from "./scope.js"
+import { PRESENT, presented } from "./present.js"
+import { appsValue, browsersValue, tabsValue, windowsValue } from "./discovery.js"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import {
   ControlOperationSchema,
+  operationLabel,
   pointerOperationSchema,
   ControlTargetSchema,
   PageTargetSchema,
@@ -30,6 +33,7 @@ import {
   PageObservationNodeSchema,
   PageNodeSelectorSchema,
   pageNodeLines,
+  pageOutlineLine,
   selectPageNodes,
   type PageNodeSelector,
   type PageObservationNode,
@@ -58,6 +62,22 @@ export const ControlObservationSchema = z.object({
     omitted: z.number().nonnegative().nullable(),
     textComplete: z.boolean(),
   }),
+  page: z.object({ title: z.string(), url: z.string() }).optional(),
+  viewport: z
+    .object({
+      width: z.number(),
+      height: z.number(),
+      scrollX: z.number(),
+      scrollY: z.number(),
+      contentWidth: z.number(),
+      contentHeight: z.number(),
+      pagesAbove: z.number(),
+      pagesBelow: z.number(),
+    })
+    .nullish(),
+  offset: z.number().int().nonnegative().optional(),
+  nextOffset: z.number().int().nullish(),
+  matched: z.number().int().optional(),
 })
 export type ControlObservationData = z.infer<typeof ControlObservationSchema>
 const selectorSchema = ControlSelectorSchema.extend({
@@ -143,6 +163,20 @@ const expectationSchema = selectorSchema
     "Absence cannot have a value or states"
   )
 export type ElementExpectation = z.input<typeof expectationSchema>
+/** What a tab can wait for without naming an element. */
+const pageConditionSchema = z
+  .object({
+    text: z.string().optional(),
+    selector: z.string().optional(),
+    url: z.string().optional(),
+    title: z.string().optional(),
+    hidden: z.boolean().optional(),
+    networkIdle: z.boolean().optional(),
+  })
+  .strict()
+  .refine((condition) => [condition.text, condition.selector, condition.url, condition.title, condition.networkIdle].some((value) => value !== undefined && value !== false))
+export type PageCondition = z.input<typeof pageConditionSchema>
+export type PageWaitResult = { satisfied: boolean; elapsedMs: number }
 
 export interface ControlExpectationResult {
   status: "matched"
@@ -175,11 +209,46 @@ function visibleTextHint(nodes: readonly PageObservationNode[], role: string, na
   return `${JSON.stringify(name)} is the visible text of ${named}. A string name matches the accessible name exactly, so use locator({role:${JSON.stringify(role)},name:${JSON.stringify(shown[0]!.name ?? "")}}) or name:{contains:${JSON.stringify(name)}}; nothing was dispatched.`
 }
 
+/** The header an agent reads above an observation's rows: where the page is,
+ * how much of it the rows cover and how to read the rest. */
+function observationHeader(data: ControlObservationData, returned: number): string[] {
+  const head: string[] = []
+  const viewport = data.viewport
+  const place = viewport
+    ? ` · ${viewport.width}×${viewport.height} at y=${Math.round(viewport.scrollY)} of ${Math.round(viewport.contentHeight)}${viewport.pagesBelow ? `, ${viewport.pagesBelow} pages below` : ""}`
+    : ""
+  if (data.page) head.push(`page ${JSON.stringify(data.page.title)} ${data.page.url}${place}`)
+  const within = data.scope?.within ?? []
+  if (within.length || data.scope?.match)
+    head.push(`scope ${[...within.map((scope) => `${scope.role} ${JSON.stringify(scope.name)}`), ...(data.scope?.match ? [`match ${data.scope.match.role} ${JSON.stringify(data.scope.match.name)}`] : [])].join(" › ")}`)
+  if (data.nextOffset != null)
+    head.push(`rows ${data.offset ?? 0}–${(data.offset ?? 0) + returned - 1} of ${data.matched ?? "more"}; observe({offset:${data.nextOffset}}) reads on, or narrow with within, match or query`)
+  else if (data.offset) head.push(`rows from offset ${data.offset}`)
+  else if (!data.coverage.complete && data.coverage.omitted)
+    head.push(`${data.coverage.omitted} more elements not shown; narrow with within, match or maxDepth`)
+  else if (!data.coverage.complete) head.push("filtered read: absence here proves nothing")
+  if (!data.coverage.textComplete) head.push("some long text is shortened; inspect(ref) reads it whole")
+  if (!returned) head.push("no elements")
+  return head
+}
+
 /** Structured evidence stays local; returning an observation emits its compact view once. */
 export class ControlObservation {
   readonly data: ControlObservationData
   constructor(value: JsonValue | ControlObservationData) {
     this.data = ControlObservationSchema.parse(value)
+  }
+  get page() {
+    return this.data.page
+  }
+  get viewport() {
+    return this.data.viewport ?? undefined
+  }
+  get nextOffset() {
+    return this.data.nextOffset ?? undefined
+  }
+  [PRESENT]() {
+    return [...observationHeader(this.data, this.nodes.length), ...this.lines].join("\n")
   }
   get target() {
     return this.data.target
@@ -233,7 +302,14 @@ export class ControlObservation {
       lines: pageNodeLines(nodes),
       coverage: this.coverage,
     }
-    return { ...compact, nodes, toJSON: () => compact }
+    return presented(
+      { ...compact, nodes, toJSON: () => compact },
+      () =>
+        [
+          `selected ${counts.returned - counts.context} of ${counts.matched}${counts.context ? `, with ${counts.context} ancestors for context` : ""}${counts.omitted ? `; ${counts.omitted} more match, raise max` : ""}`,
+          ...compact.lines,
+        ].join("\n")
+    )
   }
   diff(previous: ControlObservation) {
     if (JSON.stringify(previous.target) !== JSON.stringify(this.target))
@@ -311,12 +387,10 @@ export class ControlObservation {
   }
   toJSON() {
     return {
-      target: this.target,
-      observation: this.observation,
-      lineage: this.data.lineage,
+      ...(this.data.page ? { page: this.data.page } : {}),
       lines: this.lines,
       coverage: this.coverage,
-      scope: this.data.scope,
+      ...(this.data.nextOffset != null ? { nextOffset: this.data.nextOffset } : {}),
     }
   }
 }
@@ -356,6 +430,52 @@ export const ExecutionReceiptSchema = z.object({
   result: z.json().optional(),
 })
 export type ExecutionReceipt = z.infer<typeof ExecutionReceiptSchema>
+
+/** What was sent and how; the rest of the receipt prints only when unusual. */
+function receiptText(operation: z.input<typeof ControlOperationSchema>, receipt: ExecutionReceipt): string {
+  const parts = [`dispatched ${operationLabel(operation)} · ${receipt.route} · ${receipt.delivery}`]
+  if (JSON.stringify(receipt.guard) !== '{"status":"settled"}') parts.push(`guard ${JSON.stringify(receipt.guard)}`)
+  if (receipt.settling) parts.push(`settling ${receipt.settling.status} after ${receipt.settling.elapsed_ms} ms`)
+  if (receipt.focus_change)
+    parts.push(`focus moved from pid ${receipt.focus_change.previous_pid} to ${receipt.focus_change.current_pid ?? "none"}${receipt.focus_change.restoration_attempted ? ", restore attempted" : ""}`)
+  if (receipt.result !== undefined && receipt.result !== null) parts.push(`result ${JSON.stringify(receipt.result)}`)
+  return parts.join(" · ")
+}
+
+const ShotSchema = z.looseObject({
+  view: z.string(),
+  mimeType: z.string(),
+  data: z.string(),
+  coordinates: z
+    .looseObject({
+      units: z.string().optional(),
+      imageWidth: z.number().optional(),
+      imageHeight: z.number().optional(),
+      imageScaleX: z.number().optional(),
+      imageScaleY: z.number().optional(),
+      pageX: z.number().optional(),
+      pageY: z.number().optional(),
+      viewportPageX: z.number().optional(),
+      viewportPageY: z.number().optional(),
+    })
+    .optional(),
+})
+/** A screenshot prints as its geometry and view token, never its pixels. */
+function screenshotValue(value: JsonValue) {
+  const shot = ShotSchema.safeParse(value)
+  if (!shot.success || typeof value !== "object" || value === null) return value
+  return presented(value, () => {
+    const { coordinates: c, mimeType, view, data } = shot.data
+    const size = c?.imageWidth && c.imageHeight ? `${c.imageWidth}×${c.imageHeight} ` : ""
+    const offsetX = (c?.pageX ?? 0) - (c?.viewportPageX ?? 0)
+    const offsetY = (c?.pageY ?? 0) - (c?.viewportPageY ?? 0)
+    const mapping =
+      c && ((c.imageScaleX ?? 1) !== 1 || (c.imageScaleY ?? 1) !== 1 || offsetX || offsetY)
+        ? `click x = imageX/${c.imageScaleX ?? 1}${offsetX ? ` + ${offsetX}` : ""}, y = imageY/${c.imageScaleY ?? 1}${offsetY ? ` + ${offsetY}` : ""}`
+        : "image pixels are click coordinates"
+    return `screenshot ${mimeType} ${size}(${Math.round((data.length * 3) / 4 / 1024)} KB) view ${view} · ${mapping} with {x,y,view:shot.view} · emitImage(shot) shows it`
+  })
+}
 export type ObserveOptions = ControlReadScope & {
   query?: string
   interactive?: boolean
@@ -438,7 +558,7 @@ export class ControlHandle {
   protected async perform(
     operation: z.input<typeof ControlOperationSchema>
   ): Promise<ExecutionReceipt> {
-    return ExecutionReceiptSchema.parse(
+    const receipt = ExecutionReceiptSchema.parse(
       await this.call("dispatch", {
         target: this.target,
         operation: controlInput(
@@ -448,6 +568,7 @@ export class ControlHandle {
         ),
       })
     )
+    return presented(receipt, () => receiptText(operation, receipt))
   }
   setValue(ref: string, value: string) {
     return this.perform({ kind: "set-text", ref, text: value })
@@ -495,14 +616,19 @@ export class ControlHandle {
   events(options: { after?: number; limit?: number } = {}) {
     return this.call("events", { target: this.target, ...options })
   }
+  expect(expectation: ElementExpectation, options?: { timeoutMs?: number; everyMs?: number }): Promise<ControlExpectationResult>
+  expect(condition: PageCondition, options?: { timeoutMs?: number }): Promise<PageWaitResult>
   async expect(
-    expectation: ElementExpectation,
+    expectation: ElementExpectation | PageCondition,
     options: { timeoutMs?: number; everyMs?: number } = {}
-  ): Promise<ControlExpectationResult> {
+  ): Promise<ControlExpectationResult | PageWaitResult> {
+    const page = pageConditionSchema.safeParse(expectation)
+    if (page.success && this instanceof TabHandle)
+      return this.waitFor(page.data, { timeoutMs: Math.max(100, options.timeoutMs ?? 5000) })
     const wanted = controlInput(
       expectationSchema.safeParse(regexNames(expectation)),
       "expectation",
-      'Use {role:"textbox",name:"Name",value:"Ada"}; optional within, states, absent.'
+      `Use {role:"textbox",name:"Name",value:"Ada"}; optional within, states, absent.${this instanceof TabHandle ? " A page condition is {url?,title?,text?,selector?,hidden?} on its own, without role or name." : ""}`
     )
     const timing = controlInput(
       z
@@ -551,14 +677,20 @@ export class ControlHandle {
             ([key, value]) => node[key] === value
           )
       if (matched)
-        return {
-          status: "matched" as const,
-          target: this.target,
-          observation: view.observation,
-          expectation: wanted,
-          evidence: node ?? null,
-          coverage: view.coverage,
-        }
+        return presented(
+          {
+            status: "matched" as const,
+            target: this.target,
+            observation: view.observation,
+            expectation: wanted,
+            evidence: node ?? null,
+            coverage: view.coverage,
+          },
+          () =>
+            wanted.absent
+              ? `matched: no ${wanted.role} ${JSON.stringify(wanted.name)}`
+              : `matched ${node ? pageOutlineLine(node) : wanted.role}`
+        )
       if (Date.now() >= deadline)
         throw new ControlFault(
           "assertion-failed",
@@ -712,11 +844,13 @@ export class WindowHandle extends ControlHandle {
   override observe(options: NativeObserveOptions = {}) {
     return super.observe(options)
   }
-  screenshot(options: NativeScreenshotOptions = {}) {
-    return this.call("capture", {
-      target: this.target,
-      options: { ...options },
-    })
+  async screenshot(options: NativeScreenshotOptions = {}) {
+    return screenshotValue(
+      await this.call("capture", {
+        target: this.target,
+        options: { ...options },
+      })
+    )
   }
   private nativeTarget() {
     const target = WindowControlTargetSchema.parse(this.target)
@@ -750,8 +884,8 @@ export class TabHandle extends ControlHandle {
   ) {
     return this.raw("navigate", { url, ...options })
   }
-  screenshot(options: JsonObject = {}) {
-    return this.call("capture", { target: this.target, options })
+  async screenshot(options: JsonObject = {}) {
+    return screenshotValue(await this.call("capture", { target: this.target, options }))
   }
   upload(ref: string, files: string[]) {
     return this.raw("upload", { ref, files })
@@ -777,7 +911,11 @@ export class TabHandle extends ControlHandle {
   }
   private async dispatched(action: string, args: JsonObject) {
     const result = await this.raw(action, args)
-    return { status: "dispatched" as const, action, verification: "not-requested" as const, result }
+    const subject = [args.ref, ...[args.at, args.from, args.to].map((at) => (typeof at === "object" && at !== null && "ref" in at ? at.ref : at && JSON.stringify(at)))]
+    return presented(
+      { status: "dispatched" as const, action, verification: "not-requested" as const, result },
+      () => `dispatched ${[action, ...subject.filter(Boolean)].join(" ")}${result !== null && result !== undefined ? ` · result ${JSON.stringify(result)}` : ""}`
+    )
   }
   hover(at: string | Point) {
     return this.dispatched("hover", { at: pointerAt(at) })
@@ -793,7 +931,7 @@ export class TabHandle extends ControlHandle {
   /** Waits until every given condition holds; throws assertion-failed at the
    * deadline. Text is a substring of the page's visible text. */
   async waitFor(
-    condition: { text?: string; selector?: string; url?: string; hidden?: boolean; networkIdle?: boolean },
+    condition: PageCondition,
     options: { timeoutMs?: number } = {}
   ) {
     const timeoutMs = controlInput(
@@ -801,16 +939,21 @@ export class TabHandle extends ControlHandle {
       "wait timeout",
       "Use {timeoutMs:10000}; 100–55000."
     )
+    const wanted = controlInput(
+      pageConditionSchema.safeParse(condition),
+      "page condition",
+      'Use {url:"/done"}, {title:"Inbox"}, {text:"Saved"} or {selector:".toast",hidden:true}; text, url and title are substrings.'
+    )
     const result = z
       .object({ satisfied: z.boolean(), elapsedMs: z.number() })
-      .parse(await this.raw("wait", { for: { ...condition }, timeoutMs }))
+      .parse(await this.raw("wait", { for: { ...wanted }, timeoutMs }))
     if (!result.satisfied)
       throw new ControlFault(
         "assertion-failed",
         `Not established within ${timeoutMs} ms: ${JSON.stringify(condition)}. Observe or screenshot to see the page's state; nothing was dispatched.`,
         "not-dispatched"
       )
-    return result
+    return presented(result, () => `satisfied ${JSON.stringify(condition)} after ${result.elapsedMs} ms`)
   }
   dialog(
     options: {
@@ -888,8 +1031,8 @@ export class AppHandle {
       "Use a numeric pid from control.apps(); then await control.app({pid}).windows()."
     )
   }
-  windows() {
-    return this.call("targets", { kind: "windows", pid: this.pid })
+  async windows() {
+    return windowsValue(await this.call("targets", { kind: "windows", pid: this.pid }))
   }
   window(windowId: number) {
     return new WindowHandle(
@@ -994,9 +1137,9 @@ export function controlClient(call: ControlCall) {
       if (options.takeover !== undefined) args.takeover = options.takeover
       return bindPage(await call("page", { name: "select", args }))
     },
-    apps: (options: { all?: boolean } = {}) => call("targets", { kind: "apps", ...options }),
-    windows: (pid: number) => call("targets", { kind: "windows", pid }),
-    browsers: () => call("targets", { kind: "browsers" }),
+    apps: async (options: { all?: boolean } = {}) => appsValue(await call("targets", { kind: "apps", ...options })),
+    windows: async (pid: number) => windowsValue(await call("targets", { kind: "windows", pid })),
+    browsers: async () => browsersValue(await call("targets", { kind: "browsers" })),
     connectBrowser: async (browser: string) =>
       z
         .object({
@@ -1004,7 +1147,8 @@ export function controlClient(call: ControlCall) {
           generation: z.string().min(1),
         })
         .parse(await call("connect", { browser })),
-    tabs: (browser: string, options: { all?: boolean } = {}) => call("targets", { kind: "pages", browser, ...options }),
+    tabs: async (browser: string, options: { all?: boolean } = {}) =>
+      tabsValue(await call("targets", { kind: "pages", browser, ...options })),
     native: (name: string, args: JsonObject = {}) =>
       call("native", { name, args }),
     command: async (options: {

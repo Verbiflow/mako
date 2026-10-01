@@ -13,6 +13,7 @@ export {
   TopologyRiskSchema,
   WindowControlTargetSchema,
   planControlOperation,
+  operationLabel,
   type ControlOperation,
   type ControlPlan,
   type ControlTarget,
@@ -56,6 +57,8 @@ export {
   type ElementExpectation,
   type Point,
 } from "./client.js"
+
+export { PRESENT, presentation, presented } from "./present.js"
 
 export {
   ControlFault,
