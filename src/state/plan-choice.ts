@@ -76,8 +76,11 @@ export interface PlanStart {
  */
 export function withNativePlan(plan: NativePlan | undefined, start: PlanStart): PlanStart {
   if (!plan) return start
-  if (plan.kind === "mode")
-    return { ...start, modeId: plan.mode, ...(start.modeId && start.modeId !== plan.mode ? { launchModeId: start.modeId } : {}) }
+  if (plan.kind === "mode") {
+    const planned: PlanStart = { ...start, modeId: plan.mode }
+    if (start.modeId && start.modeId !== plan.mode) planned.launchModeId = start.modeId
+    return planned
+  }
   return { ...start, tuning: { ...start.tuning, options: { ...start.tuning.options, [plan.option]: true } } }
 }
 
