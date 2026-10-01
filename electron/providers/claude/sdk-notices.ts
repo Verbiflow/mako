@@ -48,7 +48,7 @@ export class ClaudeNotices {
           ? [{ kind: "event", event: compactionFailedEvent(message.compact_error) }, { kind: "activity", activity: null }]
           : [{ kind: "activity", activity: null }]
       case "compact_boundary": {
-        const { trigger, pre_tokens, post_tokens } = message.compact_metadata
+        const { trigger, pre_tokens, post_tokens, duration_ms } = message.compact_metadata
         const summary = this.summary
         this.compacting = false
         this.summary = undefined
@@ -56,6 +56,7 @@ export class ClaudeNotices {
           trigger: trigger === "auto" ? "automatic" : "manual",
           tokensBefore: pre_tokens,
           tokensAfter: post_tokens,
+          durationMs: duration_ms,
           summary,
         } }]
       }

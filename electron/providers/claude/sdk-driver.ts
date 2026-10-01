@@ -8,6 +8,7 @@ import type {
   Options,
   Query,
   SDKMessage,
+  SDKRateLimitInfo,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -26,6 +27,8 @@ import {
   claudeInputContent,
 } from "./input.js"
 import { ClaudeProjection } from "./sdk-projection.js"
+import { claudeRateLimitWindow } from "./accounts.js"
+import { mergeWindows } from "../../contracts/account-usage.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
@@ -63,7 +66,17 @@ interface Receipt {
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
 }
+/** A turn reported where its account stands: the meter moves without a request. */
+function observeLimits(live: Live, info: SDKRateLimitInfo): void {
+  const window = claudeRateLimitWindow(info)
+  if (!window) return
+  void Promise.all([live.account, import("../../accounts.js")]).then(([name, accounts]) =>
+    accounts.observeAccountUsage("claude", name, (previous) => mergeWindows(previous, [window], Date.now())))
+}
+
 interface Live {
+  /** The account this session spends, resolved beside its start. */
+  account: Promise<string>
   compaction?: { actionId: string; runId: string; confirmed: boolean }
   notices: ClaudeNotices
   /** The model and context of the main loop's latest request, for the usage its turn's result reports. */
@@ -145,7 +158,7 @@ function acknowledge(live: Live, message: SDKMessage): void {
 
 /** Claude's own reports, and the session state they move outside a turn's content. */
 function observe(engine: Engine, live: Live, message: SDKMessage): void {
-  engine.observe(live, claudeMessageKind(message), live.notices.decode(message))
+  engine.observe(live, claudeMessageKind(message), live.notices.decode(message), message.uuid)
   if (message.type === "assistant") {
     const { model, usage } = message.message
     if (!message.parent_tool_use_id && model !== "<synthetic>")
@@ -237,6 +250,9 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (message.type === "system" && message.subtype === "init" &&
         (live.state.status === "ready" || live.state.status === "failed"))
         openProviderTurn(engine, live)
+      if (message.type === "rate_limit_event") observeLimits(live, message.rate_limit_info)
+      const withdrawn = live.projection.withdraw(message)
+      if (withdrawn.length) engine.emitUpdates(live, withdrawn)
       const updates = live.projection.project(message)
       if (updates.length)
         engine.emitUpdates(live, updates)
@@ -477,6 +493,9 @@ export function createClaudeSdkDriver(
         },
       }) } catch (error) { await disposeApprovals(); throw error }
       const live: Live = {
+        account: import("../../accounts.js")
+          .then((accounts) => accounts.selectedAccount("claude"))
+          .then((account) => account.name, () => "default"),
         query,
         exited: () => exited,
         input,

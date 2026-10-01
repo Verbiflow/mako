@@ -12,18 +12,90 @@ interface BlockSlot {
   finalized: boolean
 }
 
+/**
+ * The messages Claude withdrew: a fallback reply names the refused messages
+ * it replaces, and the fallback notice at the turn's end lists them all.
+ */
+export function claudeRetracted(message: SDKMessage): readonly string[] {
+  if (message.type === "assistant") return message.supersedes ?? []
+  if (message.type === "system" && message.subtype === "model_refusal_fallback") return message.retracted_message_uuids ?? []
+  return []
+}
+
 /** SDK-owned message types are projected once into the shared transcript contract. */
 export class ClaudeProjection {
   private readonly streams = new Map<string, string>()
   private readonly blocks = new Map<string, BlockSlot[]>()
   private readonly finalized = new Set<string>()
   private readonly tools = new Map<string, { id: string; input: string }>()
+  /** The blocks each SDK message put in the transcript, by the message's uuid, for Claude to retract. */
+  private readonly sources = new Map<string, string[]>()
+  /**
+   * Blocks streamed this turn by API message id, until that message arrives
+   * whole. A refused reply can stop mid-stream and never arrive: it then has
+   * no uuid, and this is the only record of what it drew.
+   */
+  private readonly unfinished = new Map<string, Set<string>>()
 
   reset(): void {
     this.streams.clear()
     this.blocks.clear()
     this.finalized.clear()
     this.tools.clear()
+    this.sources.clear()
+    this.unfinished.clear()
+  }
+
+  /**
+   * Claude retried a refused reply on a fallback model and withdrew what the
+   * refused one had sent: those messages' blocks leave the transcript, and
+   * so does any reply that only streamed before it was refused. Call before
+   * projecting `message`, whose own stream is never withdrawn.
+   */
+  withdraw(message: SDKMessage): LiveUpdate[] {
+    const refusal =
+      (message.type === "assistant" && message.supersedes !== undefined) ||
+      (message.type === "system" && message.subtype === "model_refusal_fallback")
+    if (!refusal) return []
+    const own = message.type === "assistant" ? message.message.id : undefined
+    const streamed = [...this.unfinished]
+      .filter(([id]) => id !== own)
+      .flatMap(([id, blocks]) => {
+        this.unfinished.delete(id)
+        return [...blocks]
+      })
+    return this.retract(claudeRetracted(message), streamed)
+  }
+
+  /** Unknown or already withdrawn uuids change nothing. */
+  retract(uuids: readonly string[], streamed: readonly string[] = []): LiveUpdate[] {
+    const ids = uuids.flatMap((uuid) => {
+      const blocks = this.sources.get(uuid) ?? []
+      this.sources.delete(uuid)
+      return blocks
+    })
+    ids.push(...streamed.filter((id) => !ids.includes(id)))
+    return ids.length ? [{ kind: "retract", ids }] : []
+  }
+
+  private streamed(message: string, id: string): void {
+    let blocks = this.unfinished.get(message)
+    if (!blocks) {
+      blocks = new Set()
+      this.unfinished.set(message, blocks)
+      if (this.unfinished.size > 64)
+        this.unfinished.delete(this.unfinished.keys().next().value ?? "")
+    }
+    blocks.add(id)
+  }
+
+  private remember(uuid: string, updates: LiveUpdate[]): LiveUpdate[] {
+    const ids = updates.flatMap((update) =>
+      (update.kind === "text" || update.kind === "thinking" || update.kind === "tool" || update.kind === "tool-update") && update.id ? [update.id] : [])
+    if (ids.length === 0) return updates
+    this.sources.set(uuid, ids)
+    if (this.sources.size > 4096) this.sources.delete(this.sources.keys().next().value ?? "")
+    return updates
   }
 
   private slots(id: string): BlockSlot[] {
@@ -77,6 +149,7 @@ export class ClaudeProjection {
         event.content_block.type === "tool_use"
       ) {
         const tool = event.content_block
+        this.streamed(stream, tool.id)
         this.tools.set(id, { id: tool.id, input: "" })
         if (this.tools.size > 4096)
           this.tools.delete(this.tools.keys().next().value ?? "")
@@ -91,10 +164,14 @@ export class ClaudeProjection {
         ]
       }
       if (event.type !== "content_block_delta") return []
-      if (event.delta.type === "text_delta")
+      if (event.delta.type === "text_delta") {
+        this.streamed(stream, id)
         return [{ kind: "text", id, text: event.delta.text }]
-      if (event.delta.type === "thinking_delta")
+      }
+      if (event.delta.type === "thinking_delta") {
+        this.streamed(stream, id)
         return [{ kind: "thinking", id, text: event.delta.thinking }]
+      }
       if (event.delta.type === "input_json_delta") {
         const tool = this.tools.get(id)
         if (!tool || tool.input.length >= MAX_TOOL) return []
@@ -103,7 +180,13 @@ export class ClaudeProjection {
       }
       return []
     }
+    if (message.type === "result") {
+      // A turn's streams have all arrived whole or been withdrawn by now.
+      this.unfinished.clear()
+      return []
+    }
     if (message.type === "assistant") {
+      this.unfinished.delete(message.message.id)
       if (this.finalized.has(message.uuid)) return []
       this.finalized.add(message.uuid)
       if (this.finalized.size > 4096)
@@ -115,7 +198,7 @@ export class ClaudeProjection {
         if (text.trim() === "No response requested.") return []
       }
       const slots = this.slots(message.message.id)
-      return message.message.content.flatMap((block): LiveUpdate[] => {
+      return this.remember(message.uuid, message.message.content.flatMap((block): LiveUpdate[] => {
         let slot = slots.find(
           (candidate) =>
             !candidate.finalized &&
@@ -163,10 +246,10 @@ export class ClaudeProjection {
             ...claudeProposedPlan(block),
           ]
         return []
-      })
+      }))
     }
     if (message.type === "user" && Array.isArray(message.message.content)) {
-      return message.message.content.flatMap((block): LiveUpdate[] => {
+      const results = message.message.content.flatMap((block): LiveUpdate[] => {
         if (block.type !== "tool_result") return []
         const text: string[] = []
         const attachments: AttachmentContent[] = []
@@ -199,6 +282,7 @@ export class ClaudeProjection {
           },
         ]
       })
+      return message.uuid ? this.remember(message.uuid, results) : results
     }
     return []
   }

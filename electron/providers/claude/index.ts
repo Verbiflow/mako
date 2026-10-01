@@ -1,4 +1,5 @@
 import { emitClaudeSession } from "@mako/sessions"
+import { installHarness, lacks } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { claudeLiveDriver } from "./live-driver.js"
 import { claudeAccountCapability } from "./accounts.js"
@@ -10,21 +11,24 @@ import { claudeSkillSource } from "./skills.js"
 import type { RuntimeUpdateSource } from "../update-source.js"
 import { claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
 
-export const installClaude: ProviderModule = (host) => {
-  host.accountCapabilities.register(claudeAccountCapability)
-  host.nativeRunners.register(claudeNativeRunner)
-  host.liveDrivers.register(claudeLiveDriver)
-  host.profiles.register(claudeProfileLoader)
-  host.processProbes.register(claudeProcessProbe)
-  host.mcpSources.register(claudeMcpSource)
-  host.skillSources.register(claudeSkillSource)
-  host.sessionEmitters.register({
+export const installClaude: ProviderModule = (host) => installHarness(host, {
+  provider: "claude",
+  live: claudeLiveDriver,
+  profile: claudeProfileLoader,
+  accounts: claudeAccountCapability,
+  acp: lacks("Runs on the Claude Agent SDK"),
+  nativeRunner: claudeNativeRunner,
+  processProbe: claudeProcessProbe,
+  mcp: claudeMcpSource,
+  skills: claudeSkillSource,
+  sessionEmitter: {
     provider: "claude",
     emit: (thread) => emitClaudeSession(thread, {}),
-  })
+  },
+  connection: lacks("Signs in through Claude Code’s own login"),
   // The row sessions run first; the user's own `claude` is shown beside it
   // with its own updater, because updating it does not change sessions.
-  host.updateSources.register({
+  updates: {
     provider: "claude",
     primary: true,
     binary: (env) => claudeRuntime(env)?.executable ?? null,
@@ -39,8 +43,9 @@ export const installClaude: ProviderModule = (host) => {
         ...claudeReleasePolicy,
       },
     ],
-  })
-}
+  },
+  artifactPreview: lacks("Writes no artifact Mako previews"),
+})
 
 const claudeReleasePolicy = {
   npmPackage: "@anthropic-ai/claude-code",

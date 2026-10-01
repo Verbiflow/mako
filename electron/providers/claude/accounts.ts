@@ -1,3 +1,5 @@
+import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
+import { claudeProbeUsage } from "./usage-probe.js"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import {
@@ -14,9 +16,11 @@ import { join } from "node:path"
 import type {
   AccountUsage,
   HarnessAccount,
+  UsageBalance,
   UsageWindow,
 } from "../../account-types.js"
 import {
+  childProcessEnv,
   accountDir,
   accountsRoot,
   cleanAccountName,
@@ -30,6 +34,8 @@ import {
   valueFields,
   writeKeychain,
 } from "../../accounts-common.js"
+import type { JsonValue } from "../../codex-app-json.js"
+import { orderWindows } from "../../contracts/account-usage.js"
 import type { SelectableAccountCapability } from "../account-capability.js"
 
 /** Env vars that would override file credentials and cross accounts. */
@@ -46,7 +52,7 @@ function defaultHome(env: NodeJS.ProcessEnv = process.env) {
 }
 function hasCredentials(contents: string): boolean {
   try {
-    return Boolean(parseAccessToken(contents))
+    return Boolean(parseCredential(contents).accessToken)
   } catch {
     return false
   }
@@ -69,11 +75,6 @@ interface RouterProfile {
   dir: string
 }
 
-interface ClaudeUsageResponse {
-  session: UsageWindow | null
-  weekly: UsageWindow | null
-}
-
 function parseClaudeConfig(contents: string): string | undefined {
   const account = valueFields(jsonFields(contents).get("oauthAccount"))
   return stringValue(account?.get("emailAddress"))
@@ -90,14 +91,26 @@ function parseRouterProfiles(contents: string): RouterProfile[] {
   return parsed
 }
 
-function parseAccessToken(contents: string): string | undefined {
+interface ClaudeCredential {
+  accessToken?: string
+  /** "pro", "max", "team" — Claude writes the plan beside the token. */
+  plan?: string
+}
+
+function parseCredential(contents: string): ClaudeCredential {
   const oauth = valueFields(jsonFields(contents).get("claudeAiOauth"))
-  return stringValue(oauth?.get("accessToken"))
+  const credential: ClaudeCredential = {}
+  const accessToken = stringValue(oauth?.get("accessToken"))
+  const plan = stringValue(oauth?.get("subscriptionType"))
+  if (accessToken !== undefined) credential.accessToken = accessToken
+  if (plan !== undefined) credential.plan = plan
+  return credential
 }
 
 function parseUsageWindow(
-  value: Parameters<typeof valueFields>[0],
-  windowMinutes: number
+  value: JsonValue | undefined,
+  windowMinutes: number,
+  scope?: string
 ): UsageWindow | null {
   const fields = valueFields(value)
   if (!fields) return null
@@ -105,19 +118,73 @@ function parseUsageWindow(
     numberValue(fields.get("utilization")) ??
     numberValue(fields.get("used_percentage"))
   if (used === undefined || !Number.isFinite(used)) return null
-  return {
+  const window: UsageWindow = {
     usedPercent: used,
     windowMinutes,
     resetsAt: parseUsageReset(fields.get("resets_at")),
   }
+  if (scope !== undefined) window.scope = scope
+  return window
 }
 
-function parseUsageResponse(contents: string): ClaudeUsageResponse {
-  const fields = jsonFields(contents)
+/** Pay-as-you-go spend past the plan; Claude reports it in cents. */
+function parseExtraUsage(value: JsonValue | undefined): UsageBalance | null {
+  const fields = valueFields(value)
+  if (!fields || fields.get("is_enabled") !== true) return null
+  const limit = numberValue(fields.get("monthly_limit"))
+  if (limit === undefined || limit <= 0) return null
+  const used = numberValue(fields.get("used_credits")) ?? 0
   return {
-    session: parseUsageWindow(fields.get("five_hour"), 300),
-    weekly: parseUsageWindow(fields.get("seven_day"), 10_080),
+    label: "Extra usage",
+    remaining: Math.max(0, limit - used) / 100,
+    total: limit / 100,
+    unit: "usd",
   }
+}
+
+/** Claude's OAuth usage API; each window is its own field, null when unused. */
+export function parseClaudeUsage(
+  contents: string
+): Extract<AccountUsage, { status: "ok" }> {
+  const fields = jsonFields(contents)
+  const windows = [
+    parseUsageWindow(fields.get("five_hour"), 300),
+    parseUsageWindow(fields.get("seven_day"), 10_080),
+    parseUsageWindow(fields.get("seven_day_opus"), 10_080, "Opus"),
+    parseUsageWindow(fields.get("seven_day_sonnet"), 10_080, "Sonnet"),
+  ].filter((window): window is UsageWindow => window !== null)
+  const usage: Extract<AccountUsage, { status: "ok" }> = {
+    status: "ok",
+    windows: orderWindows(windows),
+  }
+  const extra = parseExtraUsage(fields.get("extra_usage"))
+  if (extra) usage.balances = [extra]
+  return usage
+}
+
+/** The windows a streamed `rate_limit_event` can name, as `parseClaudeUsage` names them. */
+const STREAMED_WINDOWS: Partial<Record<NonNullable<SDKRateLimitInfo["rateLimitType"]>, [number, string?]>> = {
+  five_hour: [300],
+  seven_day: [10_080],
+  seven_day_opus: [10_080, "Opus"],
+  seven_day_sonnet: [10_080, "Sonnet"],
+}
+
+/**
+ * A turn's `rate_limit_event`: one window, its use as a 0–1 fraction and
+ * its reset in Unix seconds. Buckets the usage reading doesn't show are left out.
+ */
+export function claudeRateLimitWindow(info: SDKRateLimitInfo): UsageWindow | null {
+  const known = info.rateLimitType ? STREAMED_WINDOWS[info.rateLimitType] : undefined
+  if (!known || typeof info.utilization !== "number" || !Number.isFinite(info.utilization)) return null
+  const [windowMinutes, scope] = known
+  const window: UsageWindow = {
+    usedPercent: info.utilization * 100,
+    windowMinutes,
+    resetsAt: info.resetsAt ? info.resetsAt * 1000 : null,
+  }
+  if (scope !== undefined) window.scope = scope
+  return window
 }
 
 /** Where a Claude account dir keeps its state file. */
@@ -335,13 +402,28 @@ async function accountEnv(
 
 async function usageForEnv(env: NodeJS.ProcessEnv): Promise<AccountUsage> {
   const raw = await readCredentials(env)
-  let token: string | null = null
+  let credential: ClaudeCredential = {}
   try {
-    token = raw ? (parseAccessToken(raw) ?? null) : null
+    if (raw) credential = parseCredential(raw)
   } catch {
     // A corrupt credentials file reads as no credentials, not a crash.
   }
+  const token = credential.accessToken
   if (!token) return { status: "missing-credentials" }
+  let usage = await claudeOAuthUsage(token, "Claude Code")
+  // The stored token expired since Claude last ran; Claude refreshes its own.
+  if (usage.status === "stale-token")
+    usage = (await claudeProbeUsage(childProcessEnv(env), parseClaudeUsage)) ?? usage
+  return usage.plan === undefined && credential.plan !== undefined
+    ? { ...usage, plan: credential.plan }
+    : usage
+}
+
+/** Claude's usage API for any Claude subscription token, OpenCode's included. */
+export async function claudeOAuthUsage(
+  token: string,
+  harnessLabel: string
+): Promise<AccountUsage> {
   try {
     const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
@@ -355,13 +437,12 @@ async function usageForEnv(env: NodeJS.ProcessEnv): Promise<AccountUsage> {
       // Claude rotates the token itself; this is a wait, not a failure.
       return {
         status: "stale-token",
-        detail: "Refreshes the next time Claude Code runs",
+        detail: `Usage returns after this account’s next ${harnessLabel} run`,
       }
     }
     if (!response.ok)
       return { status: "error", detail: `HTTP ${response.status}` }
-    const usage = parseUsageResponse(await response.text())
-    return { status: "ok", session: usage.session, weekly: usage.weekly }
+    return parseClaudeUsage(await response.text())
   } catch (error) {
     return {
       status: "error",
