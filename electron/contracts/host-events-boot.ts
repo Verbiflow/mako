@@ -8,6 +8,7 @@ import {
   type BrowserControlStatus,
 } from "@mako/control-runtime/contracts"
 import type { NativeRequest } from "./native-requests.js"
+import type { AccountUsage } from "../account-types.js"
 import type { LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
   ThreadEntry as CatalogThreadEntry,
@@ -122,6 +123,9 @@ export type HostEventBody =
     }
   /** A native resume (the thread's own CLI) started, finished, or failed. */
   | { type: "thread-run"; run: ThreadRunState }
+  /** A turn on this harness ended; its accounts' plan limits have moved. */
+  | { type: "account-usage-spent"; harness: string }
+  | { type: "account-usage"; harness: string; name: string; usage: AccountUsage }
   | { type: "native-requests"; requests: NativeRequest[] }
   | { type: "browser-control"; browsers: BrowserControlStatus[] }
   | { type: "control-activity"; activity: ControlActivity }

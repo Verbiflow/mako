@@ -76,8 +76,15 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("plan"), entries: plan }),
   /** The provider started a turn on its own; `reason` is what it reported as the cause. */
   z.object({ kind: z.literal("provider-turn"), reason: z.string() }),
-  /** A marker the provider gave the conversation (`TranscriptEvent`); a saved history's `event` entry. */
-  z.object({ kind: z.literal("event"), ...transcriptEvent }),
+  /**
+   * A marker the provider gave the conversation (`TranscriptEvent`); a saved
+   * history's `event` entry. `id` names the native event it came from: the
+   * same id again in the turn replaces the marker, so a replayed or amended
+   * event is drawn once.
+   */
+  z.object({ kind: z.literal("event"), id: z.string().optional(), ...transcriptEvent }),
+  /** The provider withdrew content it had sent: the turn's text, thinking and tool blocks with these ids go. */
+  z.object({ kind: z.literal("retract"), ids: z.array(z.string()).min(1) }),
 ])
 export type LiveUpdate = z.infer<typeof LiveUpdateSchema>
 export const LiveBlockSchema = z.discriminatedUnion("type", [
@@ -123,7 +130,7 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("plan"), entries: plan }),
   z.object({ type: z.literal("provider-turn"), reason: z.string() }),
-  z.object({ type: z.literal("event"), ...transcriptEvent }),
+  z.object({ type: z.literal("event"), id: z.string().optional(), ...transcriptEvent }),
 ])
 export type LiveBlock = z.infer<typeof LiveBlockSchema>
 
@@ -332,9 +339,30 @@ export function reduceLiveUpdates(
         turnStart = next.length
         replace(-1, { type: "provider-turn", reason: update.reason })
         break
-      case "event":
-        replace(-1, { type: "event", label: update.label, detail: update.detail, body: update.body, tone: update.tone })
+      case "event": {
+        const block: LiveBlock = { type: "event", label: update.label, detail: update.detail, body: update.body, tone: update.tone }
+        if (update.id) block.id = update.id
+        replace(update.id ? findCurrent((candidate) => candidate.type === "event" && candidate.id === update.id) : -1, block)
         break
+      }
+      case "retract": {
+        const ids = new Set(update.ids)
+        let kept = turnStart + 1
+        for (let index = turnStart + 1; index < next.length; index++) {
+          const block = next[index]!
+          const withdrawn = (block.type === "text" || block.type === "thinking" || block.type === "tool") && block.id !== undefined && ids.has(block.id)
+          if (withdrawn) from = Math.min(from, kept)
+          else next[kept++] = block
+        }
+        if (kept === next.length) break
+        next.length = kept
+        tools.clear()
+        for (let index = turnStart + 1; index < next.length; index++) {
+          const block = next[index]!
+          if (block.type === "tool") tools.set(block.id, index)
+        }
+        break
+      }
     }
   }
   if (from === blocks.length && next.length === blocks.length) return blocks

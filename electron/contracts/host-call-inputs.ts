@@ -9,6 +9,7 @@ export const hostCallInputs = {
   "mako:account-remove": z.tuple([z.string(), z.string()]),
   "mako:account-select": z.tuple([z.string(), z.union([z.null(), z.string()])]),
   "mako:account-usage": z.tuple([z.string(), z.string()]),
+  "mako:account-reset": z.tuple([z.string(), z.string(), z.string().min(8).max(128)]),
   "mako:accounts": z.tuple([]),
   "mako:activate-tab": z.tuple([z.string()]),
   "mako:appshot-capture": z.tuple([

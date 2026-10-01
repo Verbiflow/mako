@@ -111,6 +111,7 @@ import type {
   AccountProvider,
   AccountUsage,
   AccountCatalog,
+  ResetCreditOutcome,
 } from "../accounts.js"
 
 export interface BridgeTransport {
@@ -393,6 +394,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:account-remove", harness, name),
     accountUsage: (harness: AccountProvider, name: string) =>
       invokeTrustedHost<AccountUsage>("mako:account-usage", harness, name),
+    useResetCredit: (harness: AccountProvider, name: string, attempt: string) =>
+      invokeTrustedHost<ResetCreditOutcome>("mako:account-reset", harness, name, attempt),
 
     /* The Agents settings section. */
     harnessProfiles: (force?: boolean) =>
